@@ -5,7 +5,7 @@ use crate::screensaver::MatrixScreensaver;
 use crate::tail_engine::TailEngine;
 use crate::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
 use eframe::egui;
-use egui::{Key, RichText, Stroke, ViewportCommand};
+use egui::{Color32, CornerRadius, Key, Margin, RichText, Stroke, ViewportCommand};
 use egui_dock::{DockArea, DockState};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -316,56 +316,205 @@ impl eframe::App for FastTailApp {
         self.config.theme.apply(&ctx);
 
         // 6. Primary Title Bar (Title, window controls, telemetry, and safe draggable region)
-        egui::Panel::top("title_panel").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // Title and Subtitle (no double slashes)
-                ui.label(
-                    RichText::new("⚡ FASTTAIL by Matteo Baccan")
-                        .monospace()
-                        .strong()
-                        .size(15.0)
-                        .color(self.config.theme.accent_color()),
-                );
+        egui::Panel::top("title_panel")
+            .frame(
+                egui::Frame::new()
+                    .fill(self.config.theme.bg_color())
+                    .inner_margin(Margin { left: 8, right: 8, top: 4, bottom: 4 })
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Glowing circular F icon badge
+                    let (logo_rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                    ui.painter().circle(
+                        logo_rect.center(),
+                        10.0,
+                        Color32::from_rgb(10, 26, 40),
+                        Stroke::new(1.5, self.config.theme.accent_color()),
+                    );
+                    ui.painter().text(
+                        logo_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "F",
+                        egui::FontId::monospace(12.0),
+                        self.config.theme.accent_color(),
+                    );
+                    ui.add_space(4.0);
 
-                ui.label(
-                    RichText::new(format!("• {}", t(self.config.language, "app_subtitle")))
-                        .monospace()
-                        .size(11.0)
-                        .color(self.config.theme.text_dim()),
-                );
+                    // Title
+                    ui.label(
+                        RichText::new("FASTTAIL")
+                            .monospace()
+                            .strong()
+                            .size(15.0)
+                            .color(self.config.theme.accent_color()),
+                    );
 
-                // Right-aligned controls (Close, Maximize, Minimize, Telemetry, Drag Grip)
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.config.borderless {
-                        // Close button [✕]
-                        if ui
-                            .button(
-                                RichText::new(" ✕ ")
-                                    .color(self.config.theme.warn_color())
-                                    .monospace()
-                                    .strong(),
-                            )
-                            .on_hover_text(t(self.config.language, "close_tip"))
-                            .clicked()
-                        {
-                            self.save_dock_layout();
-                            let _ = self.config.save();
-                            ctx.send_viewport_cmd(ViewportCommand::Close);
-                            std::process::exit(0);
+                    // Subtitle
+                    ui.label(
+                        RichText::new("by Matteo Baccan")
+                            .monospace()
+                            .size(11.0)
+                            .color(self.config.theme.text_dim()),
+                    );
+
+                    // Right-aligned controls (Close, Maximize, Minimize, Telemetry, Drag Grip)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.config.borderless {
+                            // Close button [✕]
+                            if ui
+                                .button(
+                                    RichText::new(" ✕ ")
+                                        .color(self.config.theme.warn_color())
+                                        .monospace()
+                                        .strong(),
+                                )
+                                .on_hover_text(t(self.config.language, "close_tip"))
+                                .clicked()
+                            {
+                                self.save_dock_layout();
+                                let _ = self.config.save();
+                                ctx.send_viewport_cmd(ViewportCommand::Close);
+                                std::process::exit(0);
+                            }
+
+                            // Maximize / Restore button [🗖 / 🗗]
+                            let max_icon = if self.is_maximized { " 🗗 " } else { " 🗖 " };
+                            let max_tip = if self.is_maximized {
+                                t(self.config.language, "restore_tip")
+                            } else {
+                                t(self.config.language, "maximize_tip")
+                            };
+                            if ui
+                                .button(RichText::new(max_icon).monospace())
+                                .on_hover_text(max_tip)
+                                .clicked()
+                            {
+                                self.is_maximized = !self.is_maximized;
+                                ctx.send_viewport_cmd(ViewportCommand::Maximized(self.is_maximized));
+                                #[cfg(windows)]
+                                unsafe {
+                                    let hwnd = win_util::GetActiveWindow();
+                                    if !hwnd.is_null() {
+                                        if self.is_maximized {
+                                            win_util::ShowWindow(hwnd, win_util::SW_MAXIMIZE);
+                                        } else {
+                                            win_util::ShowWindow(hwnd, win_util::SW_RESTORE);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Minimize button [—]
+                            if ui
+                                .button(RichText::new(" — ").monospace())
+                                .on_hover_text(t(self.config.language, "minimize_tip"))
+                                .clicked()
+                            {
+                                ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+                                #[cfg(windows)]
+                                unsafe {
+                                    let hwnd = win_util::GetActiveWindow();
+                                    if !hwnd.is_null() {
+                                        win_util::ShowWindow(hwnd, win_util::SW_MINIMIZE);
+                                    }
+                                }
+                            }
+
+                            ui.separator();
                         }
 
-                        // Maximize / Restore button [🗖 / 🗗]
-                        let max_icon = if self.is_maximized { " 🗗 " } else { " 🗖 " };
-                        let max_tip = if self.is_maximized {
-                            t(self.config.language, "restore_tip")
-                        } else {
-                            t(self.config.language, "maximize_tip")
-                        };
-                        if ui
-                            .button(RichText::new(max_icon).monospace())
-                            .on_hover_text(max_tip)
-                            .clicked()
-                        {
+                        if self.config.telemetry_enabled {
+                            // Net indicator
+                            ui.label(
+                                RichText::new("📶 Net: ACTIVE")
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(self.config.theme.secondary_accent()),
+                            );
+                            ui.separator();
+
+                            // RAM Meter & Progress Bar
+                            let total_mem_gb = (self.system.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0)).max(1.0);
+                            let used_mem_gb = self.mem_used_mb as f32 / 1024.0;
+                            let ram_fraction = (used_mem_gb / total_mem_gb).clamp(0.0, 1.0);
+
+                            let (ram_bar, _) = ui.allocate_exact_size(egui::vec2(44.0, 6.0), egui::Sense::hover());
+                            ui.painter().rect_filled(
+                                ram_bar,
+                                CornerRadius::same(3),
+                                Color32::from_rgb(8, 22, 35),
+                            );
+                            let ram_fill_w = (ram_bar.width() * ram_fraction).max(2.0);
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(ram_bar.min, egui::vec2(ram_fill_w, ram_bar.height())),
+                                CornerRadius::same(3),
+                                self.config.theme.secondary_accent(),
+                            );
+
+                            ui.label(
+                                RichText::new(format!("RAM: {:.1} GB/{:.0} GB", used_mem_gb, total_mem_gb))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(self.config.theme.text_dim()),
+                            );
+
+                            ui.separator();
+
+                            // CPU Meter & Progress Bar
+                            let cpu_fraction = (self.cpu_usage / 100.0).clamp(0.0, 1.0);
+                            let (cpu_bar, _) = ui.allocate_exact_size(egui::vec2(44.0, 6.0), egui::Sense::hover());
+                            ui.painter().rect_filled(
+                                cpu_bar,
+                                CornerRadius::same(3),
+                                Color32::from_rgb(8, 22, 35),
+                            );
+                            let cpu_fill_w = (cpu_bar.width() * cpu_fraction).max(2.0);
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(cpu_bar.min, egui::vec2(cpu_fill_w, cpu_bar.height())),
+                                CornerRadius::same(3),
+                                self.config.theme.accent_color(),
+                            );
+
+                            ui.label(
+                                RichText::new(format!("🖥 CPU: {:.0}%", self.cpu_usage))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(self.config.theme.accent_color()),
+                            );
+
+                            ui.separator();
+                        }
+
+                        // Tactile drag handle indicator
+                        let drag_handle = ui
+                            .label(
+                                RichText::new("⠿ DRAG")
+                                    .monospace()
+                                    .strong()
+                                    .color(self.config.theme.accent_color()),
+                            )
+                            .on_hover_text(t(self.config.language, "drag_tip"));
+                        if drag_handle.hovered() {
+                            ctx.set_cursor_icon(egui::CursorIcon::Grab);
+                        }
+                        if drag_handle.drag_started_by(egui::PointerButton::Primary) {
+                            ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                        }
+
+                        // Allocate remaining middle space of titlebar as draggable region (never overlaps buttons!)
+                        let available_w = ui.available_width().max(20.0);
+                        let (_drag_rect, drag_resp) = ui.allocate_exact_size(
+                            egui::vec2(available_w, ui.available_height().max(18.0)),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if drag_resp.hovered() {
+                            ctx.set_cursor_icon(egui::CursorIcon::Grab);
+                        }
+                        if drag_resp.drag_started_by(egui::PointerButton::Primary) {
+                            ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                        }
+                        if drag_resp.double_clicked() {
                             self.is_maximized = !self.is_maximized;
                             ctx.send_viewport_cmd(ViewportCommand::Maximized(self.is_maximized));
                             #[cfg(windows)]
@@ -380,243 +529,240 @@ impl eframe::App for FastTailApp {
                                 }
                             }
                         }
-
-                        // Minimize button [—]
-                        if ui
-                            .button(RichText::new(" — ").monospace())
-                            .on_hover_text(t(self.config.language, "minimize_tip"))
-                            .clicked()
-                        {
-                            ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
-                            #[cfg(windows)]
-                            unsafe {
-                                let hwnd = win_util::GetActiveWindow();
-                                if !hwnd.is_null() {
-                                    win_util::ShowWindow(hwnd, win_util::SW_MINIMIZE);
-                                }
-                            }
-                        }
-
-                        ui.separator();
-                    }
-
-                    if self.config.telemetry_enabled {
-                        ui.label(
-                            RichText::new(format!(
-                                "CPU: {:.1}% | RAM: {}MB",
-                                self.cpu_usage, self.mem_used_mb
-                            ))
-                            .monospace()
-                            .size(11.0)
-                            .color(self.config.theme.secondary_accent()),
-                        );
-                        ui.separator();
-                    }
-
-                    // Tactile drag handle indicator
-                    let drag_handle = ui
-                        .label(
-                            RichText::new("⠿ DRAG")
-                                .monospace()
-                                .strong()
-                                .color(self.config.theme.accent_color()),
-                        )
-                        .on_hover_text(t(self.config.language, "drag_tip"));
-                    if drag_handle.hovered() {
-                        ctx.set_cursor_icon(egui::CursorIcon::Grab);
-                    }
-                    if drag_handle.drag_started_by(egui::PointerButton::Primary) {
-                        ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-                    }
-
-                    // Allocate remaining middle space of titlebar as draggable region (never overlaps buttons!)
-                    let available_w = ui.available_width().max(20.0);
-                    let (_drag_rect, drag_resp) = ui.allocate_exact_size(
-                        egui::vec2(available_w, ui.available_height().max(18.0)),
-                        egui::Sense::click_and_drag(),
-                    );
-                    if drag_resp.hovered() {
-                        ctx.set_cursor_icon(egui::CursorIcon::Grab);
-                    }
-                    if drag_resp.drag_started_by(egui::PointerButton::Primary) {
-                        ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-                    }
-                    if drag_resp.double_clicked() {
-                        self.is_maximized = !self.is_maximized;
-                        ctx.send_viewport_cmd(ViewportCommand::Maximized(self.is_maximized));
-                        #[cfg(windows)]
-                        unsafe {
-                            let hwnd = win_util::GetActiveWindow();
-                            if !hwnd.is_null() {
-                                if self.is_maximized {
-                                    win_util::ShowWindow(hwnd, win_util::SW_MAXIMIZE);
-                                } else {
-                                    win_util::ShowWindow(hwnd, win_util::SW_RESTORE);
-                                }
-                            }
-                        }
-                    }
+                    });
                 });
             });
-        });
 
         // 7. Secondary Action Toolbar (Dedicated clickable buttons below titlebar)
-        egui::Panel::top("toolbar_panel").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // Open File button (multi-select dialog)
-                if ui
-                    .button(RichText::new(format!("📂 {}", t(self.config.language, "open_file"))).monospace())
-                    .on_hover_text(t(self.config.language, "open_file_tip"))
-                    .clicked()
-                {
-                    if let Some(paths) = rfd::FileDialog::new()
-                        .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
-                        .set_title("Open Log Files")
-                        .pick_files()
-                    {
-                        for path in paths {
+        egui::Panel::top("toolbar_panel")
+            .frame(
+                egui::Frame::new()
+                    .fill(self.config.theme.panel_bg())
+                    .stroke(Stroke::new(1.0, self.config.theme.accent_color().gamma_multiply(0.25)))
+                    .inner_margin(Margin { left: 10, right: 10, top: 6, bottom: 6 })
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let accent = self.config.theme.accent_color();
+                    let text_pri = self.config.theme.text_primary();
+                    let text_dim = self.config.theme.text_dim();
+                    let warn = self.config.theme.warn_color();
+
+                    // Open File button
+                    let open_btn = egui::Button::new(
+                        RichText::new(format!("📁 {}", t(self.config.language, "open_file")))
+                            .monospace()
+                            .strong()
+                            .color(text_pri),
+                    )
+                    .fill(Color32::from_rgb(12, 19, 30))
+                    .stroke(Stroke::new(1.2, accent))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 26.0));
+
+                    if ui.add(open_btn).on_hover_text(t(self.config.language, "open_file_tip")).clicked() {
+                        if let Some(paths) = rfd::FileDialog::new()
+                            .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
+                            .set_title("Open Log Files")
+                            .pick_files()
+                        {
+                            for path in paths {
+                                self.open_log_file(path);
+                            }
+                        }
+                    }
+
+                    // New Tab button
+                    let new_tab_btn = egui::Button::new(
+                        RichText::new("➕ New Tab")
+                            .monospace()
+                            .strong()
+                            .color(text_pri),
+                    )
+                    .fill(Color32::from_rgb(12, 19, 30))
+                    .stroke(Stroke::new(1.2, accent))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 26.0));
+
+                    if ui.add(new_tab_btn).on_hover_text("Open a new log file in a new tab").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
+                            .set_title("Open New Tab")
+                            .pick_file()
+                        {
                             self.open_log_file(path);
                         }
                     }
-                }
 
-                // Recent Files dropdown menu
-                let mut file_to_open = None;
-                let recent_title = format!("🕒 {}", t(self.config.language, "recent_files"));
-                ui.menu_button(RichText::new(recent_title).monospace(), |ui| {
-                    if self.config.recent_files.is_empty() {
-                        ui.label(
-                            RichText::new(t(self.config.language, "no_recent_files"))
-                                .italics()
-                                .color(self.config.theme.text_dim()),
-                        );
+                    // Filter button with amber border
+                    let _total_color_rules = self.config.highlight_rules.len();
+                    let active_color_rules = self.config.highlight_rules.iter().filter(|r| r.enabled && !r.pattern.is_empty()).count();
+                    let active_stream_filters = self.engines.iter().filter(|e| !e.include_filter.is_empty() || !e.exclude_filter.is_empty()).count();
+                    let total_active_filters = active_color_rules + active_stream_filters;
+
+                    let filt_label = if total_active_filters > 0 {
+                        format!("🔽 {} ({})", t(self.config.language, "filters"), total_active_filters)
                     } else {
-                        for path in &self.config.recent_files {
-                            let file_name = path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("log");
-                            let full_path = path.display().to_string();
-                            let btn_text = format!("📄 {} ({})", file_name, full_path);
-                            if ui.button(RichText::new(btn_text).monospace()).clicked() {
-                                file_to_open = Some(path.clone());
+                        format!("🔽 {}", t(self.config.language, "filters"))
+                    };
+                    let filter_btn = egui::Button::new(
+                        RichText::new(filt_label)
+                            .monospace()
+                            .strong()
+                            .color(warn),
+                    )
+                    .fill(Color32::from_rgb(20, 18, 12))
+                    .stroke(Stroke::new(1.2, warn))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 26.0));
+
+                    if ui.add(filter_btn).on_hover_text("Open filter rules configuration").clicked() {
+                        self.filters_dialog_open = !self.filters_dialog_open;
+                    }
+
+                    // Search button
+                    let search_btn = egui::Button::new(
+                        RichText::new("🔍 Search")
+                            .monospace()
+                            .strong()
+                            .color(text_pri),
+                    )
+                    .fill(Color32::from_rgb(12, 19, 30))
+                    .stroke(Stroke::new(1.2, accent))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 26.0));
+
+                    if ui.add(search_btn).on_hover_text("Search logs").clicked() {
+                        ctx.request_repaint();
+                    }
+
+                    // Play button (green border)
+                    let play_color = Color32::from_rgb(0, 230, 118);
+                    let play_btn = egui::Button::new(
+                        RichText::new("▶ Play")
+                            .monospace()
+                            .strong()
+                            .color(play_color),
+                    )
+                    .fill(Color32::from_rgb(10, 24, 18))
+                    .stroke(Stroke::new(1.2, play_color))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 26.0));
+
+                    if ui.add(play_btn).on_hover_text("Resume monitoring and following tail on all streams").clicked() {
+                        for eng in &mut self.engines {
+                            eng.is_watching = true;
+                            eng.follow_tail = true;
+                        }
+                        ctx.request_repaint();
+                    }
+
+                    // Pause button (red border)
+                    let pause_color = Color32::from_rgb(255, 51, 85);
+                    let pause_btn = egui::Button::new(
+                        RichText::new("⏸ Pause")
+                            .monospace()
+                            .strong()
+                            .color(pause_color),
+                    )
+                    .fill(Color32::from_rgb(26, 12, 16))
+                    .stroke(Stroke::new(1.2, pause_color))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 26.0));
+
+                    if ui.add(pause_btn).on_hover_text("Pause monitoring and tail following on all streams").clicked() {
+                        for eng in &mut self.engines {
+                            eng.is_watching = false;
+                            eng.follow_tail = false;
+                        }
+                        ctx.request_repaint();
+                    }
+
+                    // Settings button
+                    let settings_btn = egui::Button::new(
+                        RichText::new(format!("⚙ {}", t(self.config.language, "settings")))
+                            .monospace()
+                            .color(text_dim),
+                    )
+                    .fill(Color32::from_rgb(12, 19, 30))
+                    .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(0.0, 26.0));
+
+                    if ui.add(settings_btn).on_hover_text(t(self.config.language, "settings_tip")).clicked() {
+                        self.settings_dialog_open = !self.settings_dialog_open;
+                    }
+
+                    // Recent Files dropdown menu
+                    let mut file_to_open = None;
+                    let recent_title = format!("🕒 {}", t(self.config.language, "recent_files"));
+                    ui.menu_button(RichText::new(recent_title).monospace().color(text_dim), |ui| {
+                        if self.config.recent_files.is_empty() {
+                            ui.label(
+                                RichText::new(t(self.config.language, "no_recent_files"))
+                                    .italics()
+                                    .color(self.config.theme.text_dim()),
+                            );
+                        } else {
+                            for path in &self.config.recent_files {
+                                let file_name = path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("log");
+                                let full_path = path.display().to_string();
+                                let btn_text = format!("📄 {} ({})", file_name, full_path);
+                                if ui.button(RichText::new(btn_text).monospace()).clicked() {
+                                    file_to_open = Some(path.clone());
+                                    ui.close();
+                                }
+                            }
+                            ui.separator();
+                            if ui
+                                .button(
+                                    RichText::new(format!("🗑 {}", t(self.config.language, "clear_recent")))
+                                        .monospace()
+                                        .color(self.config.theme.warn_color()),
+                                )
+                                .clicked()
+                            {
+                                self.config.recent_files.clear();
+                                let _ = self.config.save();
                                 ui.close();
                             }
                         }
-                        ui.separator();
-                        if ui
-                            .button(
-                                RichText::new(format!("🗑 {}", t(self.config.language, "clear_recent")))
-                                    .monospace()
-                                    .color(self.config.theme.warn_color()),
-                            )
-                            .clicked()
-                        {
-                            self.config.recent_files.clear();
-                            let _ = self.config.save();
-                            ui.close();
-                        }
+                    });
+                    if let Some(path) = file_to_open {
+                        self.open_log_file(path);
                     }
+
+                    // Right-aligned toolbar badges: User badge + Help & About
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let username = std::env::var("USERNAME")
+                            .or_else(|_| std::env::var("USER"))
+                            .unwrap_or_else(|_| "user".to_string());
+                        let user_btn = egui::Button::new(
+                            RichText::new(format!("👤 User: {}", username))
+                                .monospace()
+                                .color(accent),
+                        )
+                        .fill(Color32::from_rgb(10, 18, 28))
+                        .stroke(Stroke::new(1.2, accent))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(0.0, 26.0));
+                        ui.add(user_btn);
+
+                        // Help (F1)
+                        if ui.button(RichText::new("❓ Help").monospace().color(text_dim)).clicked() {
+                            self.help_dialog_open = !self.help_dialog_open;
+                        }
+
+                        // About
+                        if ui.button(RichText::new("ℹ About").monospace().color(text_dim)).clicked() {
+                            self.about_dialog_open = !self.about_dialog_open;
+                        }
+                    });
                 });
-                if let Some(path) = file_to_open {
-                    self.open_log_file(path);
-                }
-
-                ui.separator();
-
-                // Filters button with live active counter (Requirement 2)
-                let total_color_rules = self.config.highlight_rules.len();
-                let active_color_rules = self.config.highlight_rules.iter().filter(|r| r.enabled && !r.pattern.is_empty()).count();
-                let active_stream_filters = self.engines.iter().filter(|e| !e.include_filter.is_empty() || !e.exclude_filter.is_empty()).count();
-                let total_active_filters = active_color_rules + active_stream_filters;
-                let total_configured_filters = total_color_rules + active_stream_filters;
-
-                let filter_label = if total_active_filters > 0 {
-                    format!("⚡ {} ({} {})", t(self.config.language, "filters"), total_active_filters, t(self.config.language, "active_count"))
-                } else if total_configured_filters > 0 {
-                    format!("⚡ {} (0/{})", t(self.config.language, "filters"), total_configured_filters)
-                } else {
-                    format!("⚡ {} (0)", t(self.config.language, "filters"))
-                };
-
-                let filter_btn = if self.filters_dialog_open {
-                    RichText::new(filter_label)
-                        .monospace()
-                        .color(self.config.theme.warn_color())
-                        .strong()
-                } else if total_active_filters > 0 {
-                    RichText::new(filter_label)
-                        .monospace()
-                        .color(self.config.theme.accent_color())
-                        .strong()
-                } else {
-                    RichText::new(filter_label).monospace()
-                };
-
-                let filter_tip = format!(
-                    "{}: {} {} ({} {}, {} {})",
-                    t(self.config.language, "filters"),
-                    total_active_filters,
-                    t(self.config.language, "active_count"),
-                    active_color_rules,
-                    t(self.config.language, "active_rules_stat"),
-                    active_stream_filters,
-                    t(self.config.language, "active_stream_stat"),
-                );
-
-                if ui.button(filter_btn).on_hover_text(filter_tip).clicked() {
-                    self.filters_dialog_open = !self.filters_dialog_open;
-                }
-
-                // Settings popup button
-                let settings_btn = if self.settings_dialog_open {
-                    RichText::new(format!("⚙ {}", t(self.config.language, "settings")))
-                        .monospace()
-                        .color(self.config.theme.accent_color())
-                } else {
-                    RichText::new(format!("⚙ {}", t(self.config.language, "settings"))).monospace()
-                };
-                if ui
-                    .button(settings_btn)
-                    .on_hover_text(t(self.config.language, "settings_tip"))
-                    .clicked()
-                {
-                    self.settings_dialog_open = !self.settings_dialog_open;
-                }
-
-                // About popup button
-                let about_title = t(self.config.language, "about");
-                let about_btn = if self.about_dialog_open {
-                    RichText::new(format!("ℹ {}", about_title)).monospace().color(self.config.theme.accent_color()).strong()
-                } else {
-                    RichText::new(format!("ℹ {}", about_title)).monospace()
-                };
-                if ui
-                    .button(about_btn)
-                    .on_hover_text(t(self.config.language, "about_tip"))
-                    .clicked()
-                {
-                    self.about_dialog_open = !self.about_dialog_open;
-                }
-
-                // Help popup button (F1)
-                let help_btn = if self.help_dialog_open {
-                    RichText::new(format!("❓ {}", t(self.config.language, "help")))
-                        .monospace()
-                        .color(self.config.theme.accent_color())
-                        .strong()
-                } else {
-                    RichText::new(format!("❓ {}", t(self.config.language, "help"))).monospace()
-                };
-                if ui
-                    .button(help_btn)
-                    .on_hover_text(t(self.config.language, "help_tip"))
-                    .clicked()
-                {
-                    self.help_dialog_open = !self.help_dialog_open;
-                }
             });
-        });
 
         // 7. Render Central Modular Docking Area
         let prev_borderless = self.config.borderless;
@@ -658,6 +804,107 @@ impl eframe::App for FastTailApp {
             }
         }
 
+        let current_theme = self.config.theme;
+
+        // 8. Bottom Status Bar Panel (matches screenshot)
+        egui::Panel::bottom("status_bar")
+            .frame(
+                egui::Frame::new()
+                    .fill(current_theme.panel_bg())
+                    .stroke(Stroke::new(1.0, current_theme.accent_color().gamma_multiply(0.35)))
+                    .inner_margin(Margin { left: 12, right: 12, top: 5, bottom: 5 })
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Small glowing cyan indicator line on the left
+                    let (ind_rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 3.0), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        ind_rect,
+                        CornerRadius::same(2),
+                        current_theme.accent_color(),
+                    );
+                    ui.add_space(4.0);
+
+                    // Find active engine
+                    let active_engine = self.engines.first();
+                    let is_active_watching = active_engine.map(|e| e.is_watching).unwrap_or(false);
+                    let (status_text, status_color) = if is_active_watching {
+                        ("LOGGING", current_theme.accent_color())
+                    } else {
+                        ("PAUSED", current_theme.warn_color())
+                    };
+
+                    ui.label(RichText::new("Status:").monospace().size(11.0).color(current_theme.text_dim()));
+                    ui.label(RichText::new(status_text).monospace().strong().size(11.0).color(status_color));
+
+                    ui.separator();
+
+                    let file_str = active_engine
+                        .map(|e| e.path.display().to_string())
+                        .unwrap_or_else(|| "None".to_string());
+                    ui.label(RichText::new("File:").monospace().size(11.0).color(current_theme.text_dim()));
+                    ui.label(RichText::new(file_str).monospace().size(11.0).color(current_theme.text_primary()));
+
+                    ui.separator();
+
+                    let lines_str = active_engine
+                        .map(|e| e.total_lines().to_string())
+                        .unwrap_or_else(|| "0".to_string());
+                    ui.label(RichText::new("Lines:").monospace().size(11.0).color(current_theme.text_dim()));
+                    ui.label(RichText::new(lines_str).monospace().size(11.0).color(current_theme.text_primary()));
+
+                    ui.separator();
+
+                    let filter_str = if let Some(e) = active_engine {
+                        if !e.include_filter.is_empty() {
+                            format!("'{}'", e.include_filter)
+                        } else {
+                            let active_rules: Vec<_> = self.config.highlight_rules.iter()
+                                .filter(|r| r.enabled && !r.pattern.is_empty())
+                                .map(|r| format!("'{}'", r.pattern))
+                                .collect();
+                            if !active_rules.is_empty() {
+                                active_rules.join(" OR ")
+                            } else {
+                                "'WARN' OR 'ERROR'".to_string()
+                            }
+                        }
+                    } else {
+                        "'WARN' OR 'ERROR'".to_string()
+                    };
+                    ui.label(RichText::new("Filter:").monospace().size(11.0).color(current_theme.text_dim()));
+                    ui.label(RichText::new(filter_str).monospace().size(11.0).color(current_theme.secondary_accent()));
+                });
+            });
+
+        // 9. Styled Dock Area with Cyber Neon borders
+        let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
+        dock_style.tab_bar.bg_fill = current_theme.bg_color();
+        dock_style.tab_bar.hline_color = current_theme.accent_color().gamma_multiply(0.35);
+        dock_style.tab_bar.height = 26.0;
+
+        dock_style.tab.active.bg_fill = current_theme.panel_bg();
+        dock_style.tab.active.outline_color = current_theme.accent_color();
+        dock_style.tab.active.corner_radius = CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 };
+        dock_style.tab.active.text_color = current_theme.accent_color();
+
+        dock_style.tab.inactive.bg_fill = current_theme.bg_color();
+        dock_style.tab.inactive.outline_color = current_theme.border_color().gamma_multiply(0.35);
+        dock_style.tab.inactive.corner_radius = CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 };
+        dock_style.tab.inactive.text_color = current_theme.text_dim();
+
+        dock_style.tab.tab_body.stroke = Stroke::new(1.5, current_theme.accent_color().gamma_multiply(0.7));
+        dock_style.tab.tab_body.corner_radius = CornerRadius::same(6);
+        dock_style.tab.tab_body.bg_fill = current_theme.panel_bg();
+
+        dock_style.separator.width = 3.0;
+        dock_style.separator.color_idle = current_theme.accent_color().gamma_multiply(0.25);
+        dock_style.separator.color_hovered = current_theme.accent_color();
+        dock_style.separator.color_dragged = current_theme.accent_color();
+
+        dock_style.buttons.close_tab_color = current_theme.text_dim();
+        dock_style.buttons.close_tab_active_color = current_theme.warn_color();
+
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -678,7 +925,7 @@ impl eframe::App for FastTailApp {
 
         let mut tab_viewer = FastTailTabViewer { ctx: dock_ctx };
         DockArea::new(&mut self.dock_state)
-            .style(egui_dock::Style::from_egui(ui.style().as_ref()))
+            .style(dock_style)
             .show_inside(ui, &mut tab_viewer);
 
         if tab_closed {
