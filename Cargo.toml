@@ -1,0 +1,52 @@
+[package]
+name = "fasttail"
+version = "0.1.0"
+edition = "2021"
+authors = ["Matteo Baccan"]
+description = "Ultra-fast multi-stream log monitor and tail viewer with Cyberpunk UI aesthetic"
+license = "MIT"
+repository = "https://github.com/matteobaccan/FastTail"
+homepage = "https://github.com/matteobaccan/FastTail"
+
+[dependencies]
+# UI Framework & Docking
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow"] }
+egui = "0.31"
+egui_dock = { version = "0.16", features = ["serde"] }
+
+# File I/O & Streaming
+memmap2 = "0.9"
+notify = "8.0"
+
+# Data, Serialization & Parsing
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ron = "0.8"
+toml = "0.8"
+regex = "1.11"
+rfd = "0.15"
+
+# Telemetry
+sysinfo = "0.33"
+
+# Windows Specific
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[features]
+default = []
+audio = ["dep:rodio"]
+
+[dependencies.rodio]
+version = "0.20"
+optional = true
+
+[dev-dependencies]
+tempfile = "3.17"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
