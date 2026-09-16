@@ -65,20 +65,20 @@ Whether you are monitoring multi-gigabyte production server logs, analyzing raw 
 
 | Shortcut | Description |
 | :--- | :--- |
-| Space | Toggle Follow mode (Auto-scroll to latest line) |
-| Ctrl + F | Focus search bar in active log stream |
-| F3 / Shift + F3 | Navigate to Next / Previous search match |
-| Home | Scroll horizontally to the far left |
-| End | Scroll horizontally to the far right |
-| PgUp / PgDown | Scroll viewport up / down by one page |
-| Ctrl + Home | Jump to line 0 (top of file) and pause follow |
-| Ctrl + End | Jump to latest line (bottom of file) and resume follow |
-| Ctrl + / Ctrl = | Zoom in (Increase font size) |
-| Ctrl - | Zoom out (Decrease font size) |
-| Ctrl 0 | Reset font size to default (13 pt) |
-| Ctrl + MouseWheel| Dynamically scale font size |
-| F1 | Open Help & Keyboard Shortcuts dialog |
-| Esc | Close active dialog or popup |
+| `Space` | Toggle Follow mode (Auto-scroll to latest line) |
+| `Ctrl + F` | Focus search bar in active log stream |
+| `F3` / `Shift + F3` | Navigate to Next / Previous search match |
+| `Home` | Scroll horizontally to the far left |
+| `End` | Scroll horizontally to the far right |
+| `PgUp` / `PgDown` | Scroll viewport up / down by one page |
+| `Ctrl + Home` | Jump to line 0 (top of file) and pause follow |
+| `Ctrl + End` | Jump to latest line (bottom of file) and resume follow |
+| `Ctrl +` / `Ctrl =` | Zoom in (Increase font size) |
+| `Ctrl -` | Zoom out (Decrease font size) |
+| `Ctrl 0` | Reset font size to default (13 pt) |
+| `Ctrl + MouseWheel` | Dynamically scale font size |
+| `F1` | Open Help & Keyboard Shortcuts dialog |
+| `Esc` | Close active dialog or popup |
 
 ---
 
@@ -88,7 +88,7 @@ Whether you are monitoring multi-gigabyte production server logs, analyzing raw 
 - [Rust](https://rustup.rs/) (version 1.80+ recommended)
 
 ### Build from Source
-`ash
+```bash
 git clone https://github.com/matteobaccan/FastTail.git
 cd FastTail
 
@@ -97,9 +97,9 @@ cargo run
 
 # Build optimized release binary
 cargo build --release
-`
+```
 
-The compiled standalone executable will be located at 	arget/release/fasttail (or asttail.exe on Windows).
+The compiled standalone executable will be located at `target/release/fasttail` (or `target/release/fasttail.exe` on Windows).
 
 ---
 
