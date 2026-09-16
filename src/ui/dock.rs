@@ -654,29 +654,55 @@ fn render_hex_stream(
     let row_height = (font_size * 1.45).max(16.0);
 
     // Dynamic Hex column header
-    let mut header_str = String::from("OFFSET    ");
+    let offset_header = "OFFSET    ";
+    let mut hex_header = String::with_capacity(bytes_per_row * 3 + 8);
     for i in 0..bytes_per_row {
         use std::fmt::Write;
-        let _ = write!(&mut header_str, "{:02X} ", i);
+        let _ = write!(&mut hex_header, "{:02X} ", i);
         if (i + 1) % 8 == 0 && (i + 1) < bytes_per_row {
-            header_str.push(' ');
+            hex_header.push(' ');
         }
     }
-    header_str.push_str("  |");
+    let mut ascii_header = String::with_capacity(bytes_per_row + 2);
+    ascii_header.push('|');
     for _ in 0..bytes_per_row {
-        header_str.push('.');
+        ascii_header.push('.');
     }
-    header_str.push('|');
+    ascii_header.push('|');
 
+    // Ensure max_detected_width accommodates full hex line so horizontal scroll works
+    let total_chars = offset_header.len() + hex_header.len() + ascii_header.len();
+    let expected_hex_width = (total_chars as f32) * (font_size * 0.65) + 60.0;
+    if engine.max_detected_width < expected_hex_width {
+        engine.max_detected_width = expected_hex_width;
+    }
+
+    let header_height = row_height + 4.0;
     ScrollArea::horizontal()
-        .auto_shrink([false, false])
+        .id_salt("hex_header_scroll")
+        .auto_shrink([false, true])
+        .max_height(header_height)
         .horizontal_scroll_offset(engine.current_scroll_x)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             ui.set_min_width(engine.max_detected_width);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(header_str)
+                    RichText::new(offset_header)
+                        .monospace()
+                        .size(font_size)
+                        .color(theme.accent_color())
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(&hex_header)
+                        .monospace()
+                        .size(font_size)
+                        .color(theme.accent_color())
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(&ascii_header)
                         .monospace()
                         .size(font_size)
                         .color(theme.accent_color())
@@ -706,6 +732,7 @@ fn render_hex_stream(
     };
 
     let mut scroll_area = ScrollArea::both()
+        .id_salt("hex_rows_scroll")
         .auto_shrink([false, false])
         .stick_to_bottom(engine.follow_tail);
 
