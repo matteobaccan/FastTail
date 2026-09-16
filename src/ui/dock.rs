@@ -48,15 +48,24 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .and_then(|n| n.to_str())
                     .unwrap_or("log");
                 if let Some((idx, engine)) = self.ctx.engines.iter().enumerate().find(|(_, e)| &e.path == path) {
-                    let status_dot = if engine.follow_tail { "▶" } else { "■" };
+                    let watch_icon = if engine.is_watching { "▶" } else { "■" };
+                    let data_dot = if engine.has_new_data { "●" } else { "○" };
+                    let title_text = format!("[#{}] {} {} {}", idx + 1, watch_icon, file_name, data_dot);
+                    let color = if engine.has_new_data {
+                        self.ctx.theme.accent_color()
+                    } else if engine.is_watching {
+                        self.ctx.theme.text_primary()
+                    } else {
+                        self.ctx.theme.warn_color()
+                    };
                     WidgetText::RichText(
-                        RichText::new(format!("[#{}] {} 📄 {}", idx + 1, status_dot, file_name))
+                        RichText::new(title_text)
                             .monospace()
                             .strong()
-                            .color(if engine.follow_tail { self.ctx.theme.accent_color() } else { self.ctx.theme.warn_color() }),
+                            .color(color),
                     )
                 } else {
-                    WidgetText::RichText(RichText::new(format!("📄 {} ({})", file_name, t(*self.ctx.language, "closed"))).monospace())
+                    WidgetText::RichText(RichText::new(format!("{} ({})", file_name, t(*self.ctx.language, "closed"))).monospace())
                 }
             }
             FastTailTab::Filters => WidgetText::RichText(
@@ -82,6 +91,8 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
             FastTailTab::LogStream(path) => {
                 let mut new_size_unit = None;
                 if let Some(engine) = self.ctx.engines.iter_mut().find(|e| &e.path == path) {
+                    // Mark new data as viewed/cleared
+                    engine.has_new_data = false;
                     render_log_stream(
                         ui,
                         engine,
@@ -353,7 +364,8 @@ fn render_log_stream(
                 // Ctrl + End: Jump to bottom & follow
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::End) {
                     engine.follow_tail = true;
-                    engine.requested_scroll_y = Some(f32::MAX);
+                    let max_y = (engine.total_lines() as f32 * row_height).max(0.0);
+                    engine.requested_scroll_y = Some(max_y);
                 }
                 // Home (horizontal start)
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
@@ -361,7 +373,8 @@ fn render_log_stream(
                 }
                 // End (horizontal end)
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::End) {
-                    engine.requested_scroll_x = Some(f32::MAX);
+                    let target_x = (engine.max_detected_width - ui.available_width() + 100.0).max(0.0);
+                    engine.requested_scroll_x = Some(target_x);
                 }
                 // Arrow navigation
                 if i.key_pressed(egui::Key::ArrowUp) {
@@ -378,16 +391,18 @@ fn render_log_stream(
                 if i.key_pressed(egui::Key::ArrowRight) {
                     engine.requested_scroll_x = Some(engine.current_scroll_x + 40.0);
                 }
-                // PageUp / PageDown
+                // PageUp / PageDown: screen-based paging
+                let visible_lines = ((ui.available_height() / row_height).floor() as usize).max(1);
+                let current_line = (engine.current_scroll_y / row_height).round() as usize;
                 if i.key_pressed(egui::Key::PageUp) {
                     engine.follow_tail = false;
-                    let step = ui.available_height().max(100.0) * 0.9;
-                    engine.requested_scroll_y = Some((engine.current_scroll_y - step).max(0.0));
+                    let target_line = current_line.saturating_sub(visible_lines);
+                    engine.requested_scroll_y = Some(target_line as f32 * row_height);
                 }
                 if i.key_pressed(egui::Key::PageDown) {
                     engine.follow_tail = false;
-                    let step = ui.available_height().max(100.0) * 0.9;
-                    engine.requested_scroll_y = Some(engine.current_scroll_y + step);
+                    let target_line = current_line + visible_lines;
+                    engine.requested_scroll_y = Some(target_line as f32 * row_height);
                 }
             });
         }
@@ -498,6 +513,7 @@ fn render_log_stream(
     }
 
     let scroll_output = scroll_area.show_rows(ui, row_height, total_lines, |ui, row_range| {
+        ui.set_min_width(engine.max_detected_width);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for row_idx in row_range {
             let is_visible = if engine.view_mode == crate::tail_engine::ViewMode::Filtered {
@@ -582,6 +598,10 @@ fn render_log_stream(
             }
         }
     });
+    let measured_width = scroll_output.content_size.x;
+    if measured_width > engine.max_detected_width {
+        engine.max_detected_width = measured_width;
+    }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
 
@@ -671,6 +691,7 @@ fn render_hex_stream(
     }
 
     let scroll_output = scroll_area.show_rows(ui, row_height, total_rows, |ui, row_range| {
+        ui.set_min_width(engine.max_detected_width);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for row_idx in row_range {
             let offset = row_idx * bytes_per_row;
@@ -755,6 +776,10 @@ fn render_hex_stream(
             });
         }
     });
+    let measured_width = scroll_output.content_size.x;
+    if measured_width > engine.max_detected_width {
+        engine.max_detected_width = measured_width;
+    }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
 }

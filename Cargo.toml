@@ -49,5 +49,5 @@ tempfile = "3.17"
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
-strip = true
+panic = "unwind"
+debug = 1

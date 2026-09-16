@@ -623,6 +623,41 @@ impl eframe::App for FastTailApp {
         let prev_theme = self.config.theme;
         let prev_lang = self.config.language;
         let mut tab_closed = false;
+        // Keyboard shortcut: Alt + 1..9 to switch focus to tab #1..9
+        let mut switch_to_tab = None;
+        ctx.input(|i| {
+            if i.modifiers.alt && !i.modifiers.ctrl {
+                let num_keys = [
+                    (egui::Key::Num1, 0),
+                    (egui::Key::Num2, 1),
+                    (egui::Key::Num3, 2),
+                    (egui::Key::Num4, 3),
+                    (egui::Key::Num5, 4),
+                    (egui::Key::Num6, 5),
+                    (egui::Key::Num7, 6),
+                    (egui::Key::Num8, 7),
+                    (egui::Key::Num9, 8),
+                ];
+                for (key, idx) in num_keys {
+                    if i.key_pressed(key) {
+                        switch_to_tab = Some(idx);
+                        break;
+                    }
+                }
+            }
+        });
+
+        if let Some(idx) = switch_to_tab {
+            if idx < self.engines.len() {
+                let path = self.engines[idx].path.clone();
+                let tab = FastTailTab::LogStream(path);
+                if let Some(locator) = self.dock_state.find_tab(&tab) {
+                    self.dock_state.set_active_tab(locator);
+                    ctx.request_repaint();
+                }
+            }
+        }
+
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,

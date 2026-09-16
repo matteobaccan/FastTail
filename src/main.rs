@@ -5,6 +5,8 @@ use fasttail::config::FastTailConfig;
 use fasttail::ui::FastTailApp;
 
 fn main() -> eframe::Result<()> {
+    fasttail::crash_handler::install_crash_handler();
+
     let config = FastTailConfig::load();
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

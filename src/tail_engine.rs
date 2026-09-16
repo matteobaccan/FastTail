@@ -1,15 +1,26 @@
 use crate::audio::SoundAlertPreset;
 use egui::Color32;
-use memmap2::Mmap;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Instant;
+
+fn open_file_shared(path: &Path) -> Result<File, std::io::Error> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(7); // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    }
+    options.open(path)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FileEncoding {
@@ -148,13 +159,13 @@ impl HighlightRule {
 
 pub struct TailEngine {
     pub path: PathBuf,
-    file: File,
-    mmap: Option<Mmap>,
+    pub buffer: Vec<u8>,
     pub line_offsets: Vec<u64>,
     pub file_size: u64,
     pub last_modified: Option<std::time::SystemTime>,
     pub follow_tail: bool,
     pub is_watching: bool,
+    pub has_new_data: bool,
     pub view_mode: ViewMode,
     pub hex_columns: usize,
     pub size_unit: SizeUnit,
@@ -172,6 +183,8 @@ pub struct TailEngine {
     pub requested_scroll_y: Option<f32>,
     pub current_scroll_x: f32,
     pub current_scroll_y: f32,
+    pub max_line_bytes: usize,
+    pub max_detected_width: f32,
     pub last_sound_alert_time: Instant,
     _watcher: Option<RecommendedWatcher>,
     rx: Receiver<notify::Result<Event>>,
@@ -183,27 +196,30 @@ pub struct TailEngine {
 impl TailEngine {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
         let path_buf = path.as_ref().to_path_buf();
-        let file = File::open(&path_buf)?;
-        let metadata = file.metadata()?;
+        let metadata = std::fs::metadata(&path_buf)?;
         let file_size = metadata.len();
         let last_modified = metadata.modified().ok();
 
-        let mmap = if file_size > 0 {
-            Some(unsafe { Mmap::map(&file)? })
-        } else {
-            None
-        };
+        let mut buffer = Vec::new();
+        if file_size > 0 {
+            let mut file = open_file_shared(&path_buf)?;
+            if let Ok(size_usize) = usize::try_from(file_size) {
+                buffer.reserve_exact(size_usize);
+            }
+            file.read_to_end(&mut buffer)?;
+            // `file` dropped here, closing file handle immediately!
+        }
 
-        let (detected_encoding, is_binary) = if let Some(ref m) = mmap {
-            if m.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        let (detected_encoding, is_binary) = if !buffer.is_empty() {
+            if buffer.starts_with(&[0xEF, 0xBB, 0xBF]) {
                 (FileEncoding::Utf8, false)
-            } else if m.starts_with(&[0xFF, 0xFE]) {
+            } else if buffer.starts_with(&[0xFF, 0xFE]) {
                 (FileEncoding::UnicodeLe, false)
-            } else if m.starts_with(&[0xFE, 0xFF]) {
+            } else if buffer.starts_with(&[0xFE, 0xFF]) {
                 (FileEncoding::UnicodeBe, false)
             } else {
-                let sample_len = m.len().min(512);
-                let sample = &m[..sample_len];
+                let sample_len = buffer.len().min(512);
+                let sample = &buffer[..sample_len];
                 if sample.len() >= 4 && sample.iter().step_by(2).all(|&b| b != 0) && sample.iter().skip(1).step_by(2).all(|&b| b == 0) {
                     (FileEncoding::UnicodeLe, false)
                 } else if sample.len() >= 4 && sample.iter().step_by(2).all(|&b| b == 0) && sample.iter().skip(1).step_by(2).all(|&b| b != 0) {
@@ -232,13 +248,13 @@ impl TailEngine {
 
         let mut engine = Self {
             path: path_buf,
-            file,
-            mmap,
+            buffer,
             line_offsets: Vec::new(),
             file_size,
             last_modified,
             follow_tail: true,
             is_watching: true,
+            has_new_data: false,
             view_mode,
             hex_columns: 16,
             size_unit: SizeUnit::Bytes,
@@ -256,6 +272,8 @@ impl TailEngine {
             requested_scroll_y: None,
             current_scroll_x: 0.0,
             current_scroll_y: 0.0,
+            max_line_bytes: 0,
+            max_detected_width: 0.0,
             last_sound_alert_time: Instant::now(),
             _watcher: watcher,
             rx,
@@ -269,12 +287,11 @@ impl TailEngine {
     }
 
     pub fn get_bytes(&self, offset: usize, len: usize) -> Option<&[u8]> {
-        let mmap = self.mmap.as_ref()?;
-        if offset >= mmap.len() {
+        if offset >= self.buffer.len() {
             return None;
         }
-        let end = (offset + len).min(mmap.len());
-        Some(&mmap[offset..end])
+        let end = (offset + len).min(self.buffer.len());
+        Some(&self.buffer[offset..end])
     }
 
     pub fn total_hex_rows(&self, bytes_per_row: usize) -> usize {
@@ -301,7 +318,8 @@ impl TailEngine {
     }
 
     pub fn release_mmap(&mut self) {
-        self.mmap = None;
+        self.buffer.clear();
+        self.buffer.shrink_to_fit();
     }
 
     pub fn set_highlight_rules(&mut self, rules: Vec<HighlightRule>) {
@@ -363,11 +381,12 @@ impl TailEngine {
 
     pub fn rebuild_line_index(&mut self) {
         self.line_offsets.clear();
-        let mmap = match self.mmap {
-            Some(ref m) if !m.is_empty() => m,
-            _ => return,
-        };
+        let mmap = &self.buffer;
+        if mmap.is_empty() {
+            return;
+        }
 
+        let mut max_bytes = 0usize;
         match self.encoding {
             FileEncoding::Utf8 | FileEncoding::Ascii | FileEncoding::Ansi => {
                 let start_offset = if self.encoding == FileEncoding::Utf8 && mmap.starts_with(&[0xEF, 0xBB, 0xBF]) {
@@ -378,10 +397,22 @@ impl TailEngine {
                 if start_offset < mmap.len() {
                     self.line_offsets.push(start_offset as u64);
                 }
+                let mut prev_offset = start_offset;
                 for (i, &byte) in mmap.iter().enumerate().skip(start_offset) {
-                    if byte == b'\n' && i + 1 < mmap.len() {
-                        self.line_offsets.push((i + 1) as u64);
+                    if byte == b'\n' {
+                        let len = i.saturating_sub(prev_offset);
+                        if len > max_bytes {
+                            max_bytes = len;
+                        }
+                        if i + 1 < mmap.len() {
+                            self.line_offsets.push((i + 1) as u64);
+                            prev_offset = i + 1;
+                        }
                     }
+                }
+                let last_len = mmap.len().saturating_sub(prev_offset);
+                if last_len > max_bytes {
+                    max_bytes = last_len;
                 }
             }
             FileEncoding::UnicodeLe => {
@@ -389,13 +420,24 @@ impl TailEngine {
                 if start_offset < mmap.len() {
                     self.line_offsets.push(start_offset as u64);
                 }
+                let mut prev_offset = start_offset;
                 let mut i = start_offset;
                 while i + 1 < mmap.len() {
-                    if mmap[i] == 0x0A && mmap[i + 1] == 0x00
-                        && i + 2 < mmap.len() {
-                            self.line_offsets.push((i + 2) as u64);
+                    if mmap[i] == 0x0A && mmap[i + 1] == 0x00 {
+                        let len = (i.saturating_sub(prev_offset)) / 2;
+                        if len > max_bytes {
+                            max_bytes = len;
                         }
+                        if i + 2 < mmap.len() {
+                            self.line_offsets.push((i + 2) as u64);
+                            prev_offset = i + 2;
+                        }
+                    }
                     i += 2;
+                }
+                let last_len = (mmap.len().saturating_sub(prev_offset)) / 2;
+                if last_len > max_bytes {
+                    max_bytes = last_len;
                 }
             }
             FileEncoding::UnicodeBe => {
@@ -403,16 +445,30 @@ impl TailEngine {
                 if start_offset < mmap.len() {
                     self.line_offsets.push(start_offset as u64);
                 }
+                let mut prev_offset = start_offset;
                 let mut i = start_offset;
                 while i + 1 < mmap.len() {
-                    if mmap[i] == 0x00 && mmap[i + 1] == 0x0A
-                        && i + 2 < mmap.len() {
-                            self.line_offsets.push((i + 2) as u64);
+                    if mmap[i] == 0x00 && mmap[i + 1] == 0x0A {
+                        let len = (i.saturating_sub(prev_offset)) / 2;
+                        if len > max_bytes {
+                            max_bytes = len;
                         }
+                        if i + 2 < mmap.len() {
+                            self.line_offsets.push((i + 2) as u64);
+                            prev_offset = i + 2;
+                        }
+                    }
                     i += 2;
+                }
+                let last_len = (mmap.len().saturating_sub(prev_offset)) / 2;
+                if last_len > max_bytes {
+                    max_bytes = last_len;
                 }
             }
         }
+        self.max_line_bytes = max_bytes;
+        let estimated_width = (max_bytes as f32) * 8.5 + 120.0;
+        self.max_detected_width = self.max_detected_width.max(estimated_width);
     }
 
     pub fn poll_updates(&mut self) {
@@ -454,22 +510,22 @@ impl TailEngine {
     fn refresh_file(&mut self) {
         if let Ok(metadata) = std::fs::metadata(&self.path) {
             let new_size = metadata.len();
-            self.last_modified = metadata.modified().ok();
-
-            if new_size != self.file_size {
-                if let Ok(new_file) = File::open(&self.path) {
-                    self.file = new_file;
-                }
-            }
+            let new_modified = metadata.modified().ok();
 
             if new_size < self.file_size {
                 // File was truncated or rotated! Reset completely.
                 self.file_size = new_size;
-                self.mmap = if new_size > 0 {
-                    unsafe { Mmap::map(&self.file).ok() }
-                } else {
-                    None
-                };
+                self.last_modified = new_modified;
+                self.max_line_bytes = 0;
+                self.max_detected_width = 0.0;
+                self.buffer.clear();
+                if new_size > 0 {
+                    if let Ok(mut file) = open_file_shared(&self.path) {
+                        let _ = file.read_to_end(&mut self.buffer);
+                        // file is dropped and closed immediately!
+                    }
+                }
+                self.has_new_data = true;
                 self.rebuild_line_index();
                 return;
             }
@@ -479,13 +535,45 @@ impl TailEngine {
                 let added_bytes = new_size - self.file_size;
                 self.bytes_read_since_tick += added_bytes;
                 self.file_size = new_size;
+                self.last_modified = new_modified;
 
-                // Remap to include new bytes
-                if let Ok(new_mmap) = unsafe { Mmap::map(&self.file) } {
-                    self.mmap = Some(new_mmap);
-                    self.rebuild_line_index();
-                    self.check_sound_alerts(prev_lines_count);
+                if let Ok(mut file) = open_file_shared(&self.path) {
+                    let mut prefix = [0u8; 64];
+                    let check_len = self.buffer.len().min(64);
+                    let is_rewrite = if check_len > 0 && file.read_exact(&mut prefix[..check_len]).is_ok() {
+                        prefix[..check_len] != self.buffer[..check_len]
+                    } else {
+                        false
+                    };
+
+                    if is_rewrite {
+                        self.buffer.clear();
+                        let _ = file.seek(SeekFrom::Start(0));
+                        let _ = file.read_to_end(&mut self.buffer);
+                    } else if file.seek(SeekFrom::Start(self.buffer.len() as u64)).is_ok() {
+                        let _ = file.read_to_end(&mut self.buffer);
+                    } else {
+                        self.buffer.clear();
+                        let _ = file.read_to_end(&mut self.buffer);
+                    }
+                    // file is dropped and closed immediately!
                 }
+                self.has_new_data = true;
+                self.rebuild_line_index();
+                self.check_sound_alerts(prev_lines_count);
+                return;
+            }
+
+            // In-place modification where size remains identical but timestamp changed
+            if new_modified != self.last_modified {
+                self.last_modified = new_modified;
+                if let Ok(mut file) = open_file_shared(&self.path) {
+                    self.buffer.clear();
+                    let _ = file.read_to_end(&mut self.buffer);
+                    // file is dropped and closed immediately!
+                }
+                self.has_new_data = true;
+                self.rebuild_line_index();
             }
         }
     }
@@ -527,7 +615,10 @@ impl TailEngine {
         if idx >= self.line_offsets.len() {
             return None;
         }
-        let mmap = self.mmap.as_ref()?;
+        let mmap = &self.buffer;
+        if mmap.is_empty() {
+            return None;
+        }
         let start = self.line_offsets[idx] as usize;
         let next_start = if idx + 1 < self.line_offsets.len() {
             self.line_offsets[idx + 1] as usize

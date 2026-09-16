@@ -72,7 +72,9 @@ Whether you are monitoring multi-gigabyte production server logs, analyzing raw 
 | `F3` / `Shift + F3` | Navigate to Next / Previous search match |
 | `Home` | Scroll horizontally to the far left |
 | `End` | Scroll horizontally to the far right |
-| `PgUp` / `PgDown` | Scroll viewport up / down by one page |
+| `↑` / `↓` / `←` / `→` | Scroll viewport line-by-line or column-by-column |
+| `PgUp` / `PgDown` | Scroll viewport by one full screen page of lines |
+| `Alt + 1..9` | Switch focus directly to file tab #1 through #9 |
 | `Ctrl + Home` | Jump to line 0 (top of file) and pause follow |
 | `Ctrl + End` | Jump to latest line (bottom of file) and resume follow |
 | `Ctrl +` / `Ctrl =` | Zoom in (Increase font size) |

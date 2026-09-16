@@ -23,6 +23,17 @@ fn main() {
     };
     println!("cargo:rustc-env=BUILD_TIMESTAMP={}", timestamp);
 
+    // Full Git commit hash
+    let git_commit = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=GIT_COMMIT_HASH={}", git_commit);
+
     // Git tag / commit hash
     let git_tag = Command::new("git")
         .args(["describe", "--tags", "--always", "--dirty"])

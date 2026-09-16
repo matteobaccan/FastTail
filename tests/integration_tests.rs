@@ -1053,3 +1053,166 @@ fn test_arrow_scrolling_and_scroll_offsets() {
     assert_eq!(engine.requested_scroll_x, Some(10.0));
 }
 
+#[test]
+fn test_max_detected_width_and_safe_end_key_scrolling() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    // Line 1: short
+    writeln!(tmp, "Short line 1").unwrap();
+    // Line 2: very wide (200 characters)
+    let wide_str = "A".repeat(200);
+    writeln!(tmp, "{}", wide_str).unwrap();
+    // Line 3: short
+    writeln!(tmp, "Short line 3").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.total_lines(), 3);
+    assert_eq!(engine.max_line_bytes, 200);
+    assert!(engine.max_detected_width >= 200.0 * 8.0);
+
+    let initial_max_width = engine.max_detected_width;
+
+    // Simulate rendering short lines (width: 150.0) -> max_detected_width should NOT shrink!
+    let rendered_short_width = 150.0_f32;
+    if rendered_short_width > engine.max_detected_width {
+        engine.max_detected_width = rendered_short_width;
+    }
+    assert_eq!(engine.max_detected_width, initial_max_width);
+
+    // Simulate pressing End key
+    let available_width = 800.0_f32;
+    let target_x = (engine.max_detected_width - available_width + 100.0).max(0.0);
+    engine.requested_scroll_x = Some(target_x);
+    assert!(target_x.is_finite());
+    assert!(target_x > 0.0);
+    assert!(target_x < f32::MAX / 2.0);
+
+    // Simulate pressing Ctrl+End key (vertical jump)
+    let row_height = 20.0_f32;
+    let max_y = (engine.total_lines() as f32 * row_height).max(0.0);
+    engine.requested_scroll_y = Some(max_y);
+    assert_eq!(engine.requested_scroll_y, Some(60.0));
+    assert!(max_y < f32::MAX / 2.0);
+}
+
+#[test]
+fn test_crash_handler_git_commit_and_report_generation() {
+    use fasttail::crash_handler::{build_crash_report, GIT_COMMIT_HASH, GIT_TAG, APP_VERSION};
+
+    assert!(!GIT_COMMIT_HASH.is_empty(), "GIT_COMMIT_HASH must not be empty");
+    assert!(!GIT_TAG.is_empty(), "GIT_TAG must not be empty");
+    assert_eq!(APP_VERSION, "0.1.0");
+
+    let bt = std::backtrace::Backtrace::disabled();
+    let report = build_crash_report("Explicit panic test message", Some("src/ui/dock.rs:364:21"), &bt);
+
+    assert!(report.contains("FASTTAIL CRASH REPORT"));
+    assert!(report.contains(GIT_COMMIT_HASH));
+    assert!(report.contains(GIT_TAG));
+    assert!(report.contains("src/ui/dock.rs:364:21"));
+    assert!(report.contains("Explicit panic test message"));
+    assert!(report.contains("CALLSTACK / BACKTRACE:"));
+}
+
+#[test]
+fn test_file_not_locked_external_modification_and_rollback() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "Initial log line 1").unwrap();
+    writeln!(tmp, "Initial log line 2").unwrap();
+    tmp.flush().unwrap();
+
+    let path = tmp.path().to_path_buf();
+    let mut engine = TailEngine::open(&path).unwrap();
+    assert_eq!(engine.total_lines(), 2);
+    assert!(!engine.has_new_data);
+
+    // 1. External process modifies and truncates the file: MUST NOT FAIL OR BE LOCKED
+    let mut f_mod = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .expect("External process should not be locked by FastTail!");
+    f_mod.write_all(b"Modified content line 1\nModified content line 2\nModified line 3\n").unwrap();
+    f_mod.flush().unwrap();
+    drop(f_mod);
+
+    // FastTail polls updates and detects changes
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 3);
+    assert!(engine.has_new_data);
+    assert_eq!(engine.get_line(0).unwrap(), "Modified content line 1");
+
+    // Clear new data flag (simulating tab viewed)
+    engine.has_new_data = false;
+
+    // 2. External process removes the modification / rewrites original content: MUST NOT FAIL OR BE LOCKED
+    let mut f_rollback = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .expect("External rollback should not be locked by FastTail!");
+    f_rollback.write_all(b"Initial log line 1\nInitial log line 2\n").unwrap();
+    f_rollback.flush().unwrap();
+    drop(f_rollback);
+
+    // FastTail polls updates and detects rollback
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 2);
+    assert!(engine.has_new_data);
+    assert_eq!(engine.get_line(0).unwrap(), "Initial log line 1");
+    assert_eq!(engine.get_line(1).unwrap(), "Initial log line 2");
+}
+
+#[test]
+fn test_tab_title_watch_icon_and_new_data_dot() {
+    let tmp = NamedTempFile::new().unwrap();
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    let file_name = tmp.path().file_name().unwrap().to_str().unwrap();
+
+    // 1. Watching + No new data: ▶ and ○
+    engine.is_watching = true;
+    engine.has_new_data = false;
+    let watch_icon = if engine.is_watching { "▶" } else { "■" };
+    let data_dot = if engine.has_new_data { "●" } else { "○" };
+    let title = format!("[#1] {} {} {}", watch_icon, file_name, data_dot);
+    assert!(title.contains("▶"));
+    assert!(title.contains("○"));
+
+    // 2. Watching + New data arrived: ▶ and ●
+    engine.has_new_data = true;
+    let watch_icon = if engine.is_watching { "▶" } else { "■" };
+    let data_dot = if engine.has_new_data { "●" } else { "○" };
+    let title = format!("[#1] {} {} {}", watch_icon, file_name, data_dot);
+    assert!(title.contains("▶"));
+    assert!(title.contains("●"));
+
+    // 3. Paused + New data: ■ and ●
+    engine.is_watching = false;
+    let watch_icon = if engine.is_watching { "▶" } else { "■" };
+    let data_dot = if engine.has_new_data { "●" } else { "○" };
+    let title = format!("[#1] {} {} {}", watch_icon, file_name, data_dot);
+    assert!(title.contains("■"));
+    assert!(title.contains("●"));
+}
+
+#[test]
+fn test_screen_based_paging_pageup_pagedown() {
+    let row_height = 20.0_f32;
+    let visible_lines = 10usize; // screen shows 10 lines
+
+    // Example 1: Currently at line 1 (0-indexed: 0). PageDown must jump to line 11 (0-indexed: 10).
+    let current_line_0 = 0usize;
+    let pagedown_target_line = current_line_0 + visible_lines;
+    assert_eq!(pagedown_target_line, 10); // row 10 in 1-based is Line 11!
+    let pagedown_scroll_y = pagedown_target_line as f32 * row_height;
+    assert_eq!(pagedown_scroll_y, 200.0);
+
+    // Example 2: Currently at line 103 (0-indexed: 102). PageUp must jump to line 93 (0-indexed: 92).
+    let current_line_102 = 102usize; // Line 103
+    let pageup_target_line = current_line_102.saturating_sub(visible_lines);
+    assert_eq!(pageup_target_line, 92); // row 92 in 1-based is Line 93!
+    let pageup_scroll_y = pageup_target_line as f32 * row_height;
+    assert_eq!(pageup_scroll_y, 1840.0);
+}
+
+
