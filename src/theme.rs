@@ -124,6 +124,7 @@ impl CyberTheme {
             visuals,
             ..Default::default()
         };
-        ctx.set_style(style);
+        ctx.set_style_of(egui::Theme::Dark, style.clone());
+        ctx.set_style_of(egui::Theme::Light, style);
     }
 }

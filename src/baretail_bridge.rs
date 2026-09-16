@@ -50,34 +50,9 @@ pub fn detect_baretail_config() -> Option<BareTailConfig> {
                     }
                 }
 
-                // 2. Default standard BareTail color highlights if BareTail key is present
-                // (BareTail users rely on Error=Red, Warn=Yellow/Orange, Info=Cyan, OK=Green)
-                config.highlight_rules.push(HighlightRule::new(
-                    "ERROR",
-                    [255, 255, 255],
-                    [200, 30, 30],
-                    false,
-                ));
-                config.highlight_rules.push(HighlightRule::new(
-                    "FATAL",
-                    [255, 255, 255],
-                    [180, 0, 0],
-                    false,
-                ));
-                config.highlight_rules.push(HighlightRule::new(
-                    "WARN",
-                    [0, 0, 0],
-                    [255, 180, 0],
-                    false,
-                ));
-                config.highlight_rules.push(HighlightRule::new(
-                    "INFO",
-                    [0, 220, 255],
-                    [10, 25, 40],
-                    false,
-                ));
-
-                return Some(config);
+                if !config.recent_files.is_empty() || !config.highlight_rules.is_empty() {
+                    return Some(config);
+                }
             }
         }
     }

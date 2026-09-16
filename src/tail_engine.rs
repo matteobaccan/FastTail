@@ -68,6 +68,7 @@ pub enum SizeUnit {
     Bytes,
     MB,
     GB,
+    Hex,
 }
 
 fn default_true() -> bool {
@@ -305,7 +306,8 @@ impl TailEngine {
         self.size_unit = match self.size_unit {
             SizeUnit::Bytes => SizeUnit::MB,
             SizeUnit::MB => SizeUnit::GB,
-            SizeUnit::GB => SizeUnit::Bytes,
+            SizeUnit::GB => SizeUnit::Hex,
+            SizeUnit::Hex => SizeUnit::Bytes,
         };
     }
 
@@ -314,6 +316,7 @@ impl TailEngine {
             SizeUnit::Bytes => format!("{} B", self.file_size),
             SizeUnit::MB => format!("{:.2} MB", self.file_size as f64 / (1024.0 * 1024.0)),
             SizeUnit::GB => format!("{:.3} GB", self.file_size as f64 / (1024.0 * 1024.0 * 1024.0)),
+            SizeUnit::Hex => format!("0x{:X}", self.file_size),
         }
     }
 

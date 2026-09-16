@@ -29,6 +29,8 @@ pub struct FastTailConfig {
     pub open_files: Vec<PathBuf>,
     pub recent_files: Vec<PathBuf>,
     pub highlight_rules: Vec<HighlightRule>,
+    #[serde(default)]
+    pub baretail_import: bool,
     pub baretail_prompt_shown: bool,
     #[serde(default)]
     pub dock_layout: Option<String>,
@@ -58,6 +60,7 @@ impl Default for FastTailConfig {
             open_files: Vec::new(),
             recent_files: Vec::new(),
             highlight_rules: Vec::new(),
+            baretail_import: false,
             baretail_prompt_shown: false,
             dock_layout: None,
         }
@@ -109,6 +112,7 @@ impl FastTailConfig {
             SizeUnit::Bytes => "Bytes",
             SizeUnit::MB => "MB",
             SizeUnit::GB => "GB",
+            SizeUnit::Hex => "Hex",
         };
 
         conf.with_section(Some("general"))
@@ -122,6 +126,7 @@ impl FastTailConfig {
             .set("show_line_numbers", self.show_line_numbers.to_string())
             .set("font_size", self.font_size.to_string())
             .set("size_unit", unit_str)
+            .set("baretail_import", self.baretail_import.to_string())
             .set("baretail_prompt_shown", self.baretail_prompt_shown.to_string());
 
         if !self.open_files.is_empty() {
@@ -210,8 +215,14 @@ impl FastTailConfig {
                 cfg.size_unit = match s.to_lowercase().as_str() {
                     "mb" => SizeUnit::MB,
                     "gb" => SizeUnit::GB,
+                    "hex" => SizeUnit::Hex,
                     _ => SizeUnit::Bytes,
                 };
+            }
+            if let Some(s) = general.get("baretail_import") {
+                if let Ok(v) = s.parse::<bool>() {
+                    cfg.baretail_import = v;
+                }
             }
             if let Some(s) = general.get("baretail_prompt_shown") {
                 if let Ok(v) = s.parse::<bool>() {

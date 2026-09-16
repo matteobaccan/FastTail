@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FastTailTab {
     LogStream(PathBuf),
     Filters,
@@ -40,6 +40,10 @@ pub struct FastTailTabViewer<'a> {
 impl<'a> TabViewer for FastTailTabViewer<'a> {
     type Tab = FastTailTab;
 
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(&*tab)
+    }
+
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         match tab {
             FastTailTab::LogStream(path) => {
@@ -58,27 +62,27 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     } else {
                         self.ctx.theme.warn_color()
                     };
-                    WidgetText::RichText(
+                    WidgetText::from(
                         RichText::new(title_text)
                             .monospace()
                             .strong()
                             .color(color),
                     )
                 } else {
-                    WidgetText::RichText(RichText::new(format!("{} ({})", file_name, t(*self.ctx.language, "closed"))).monospace())
+                    WidgetText::from(RichText::new(format!("{} ({})", file_name, t(*self.ctx.language, "closed"))).monospace())
                 }
             }
-            FastTailTab::Filters => WidgetText::RichText(
+            FastTailTab::Filters => WidgetText::from(
                 RichText::new(format!("🔍 {}", t(*self.ctx.language, "filters")))
                     .monospace()
                     .color(self.ctx.theme.accent_color()),
             ),
-            FastTailTab::Highlights => WidgetText::RichText(
+            FastTailTab::Highlights => WidgetText::from(
                 RichText::new(format!("⚡ {}", t(*self.ctx.language, "highlight_rules")))
                     .monospace()
                     .color(self.ctx.theme.warn_color()),
             ),
-            FastTailTab::Settings => WidgetText::RichText(
+            FastTailTab::Settings => WidgetText::from(
                 RichText::new(format!("⚙️ {}", t(*self.ctx.language, "settings")))
                     .monospace()
                     .color(self.ctx.theme.text_primary()),
@@ -136,7 +140,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
         }
     }
 
-    fn on_close(&mut self, tab: &mut Self::Tab) -> bool {
+    fn on_close(&mut self, tab: &mut Self::Tab) -> egui_dock::tab_viewer::OnCloseResponse {
         match tab {
             FastTailTab::LogStream(path) => {
                 self.ctx.open_files.retain(|p| p != path);
@@ -147,7 +151,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 *self.ctx.tab_closed = true;
             }
         }
-        true
+        egui_dock::tab_viewer::OnCloseResponse::Close
     }
 }
 
@@ -201,6 +205,7 @@ fn render_log_stream(
 
         if ui.button(follow_text).on_hover_text(t(lang, "tip_follow_tail")).clicked() {
             engine.follow_tail = !engine.follow_tail;
+            ui.ctx().request_repaint();
         }
 
         ui.separator();
@@ -218,6 +223,7 @@ fn render_log_stream(
         };
         if ui.button(monitor_text).on_hover_text(t(lang, "tip_monitor")).clicked() {
             engine.is_watching = !engine.is_watching;
+            ui.ctx().request_repaint();
         }
 
         ui.separator();
@@ -230,23 +236,29 @@ fn render_log_stream(
         };
         if ui.button(lines_text).on_hover_text(t(lang, "show_lines")).clicked() {
             *show_line_numbers = !*show_line_numbers;
+            ui.ctx().request_repaint();
         }
 
         ui.separator();
 
-        // Mode Switcher (TXT vs HEX)
+        // Mode Switcher (TXT vs HEX) - min_size prevents layout jumping, request_repaint prevents lost clicks
         let is_hex = engine.view_mode == crate::tail_engine::ViewMode::Hex;
         let mode_label = if is_hex {
             RichText::new("🔢 HEX").color(theme.secondary_accent()).monospace().strong()
         } else {
             RichText::new("🔤 TXT").color(theme.accent_color()).monospace()
         };
-        if ui.button(mode_label).on_hover_text(t(lang, "tip_view_mode")).clicked() {
+        if ui
+            .add(egui::Button::new(mode_label).min_size(egui::vec2(66.0, 18.0)))
+            .on_hover_text(t(lang, "tip_view_mode"))
+            .clicked()
+        {
             engine.view_mode = if is_hex {
                 crate::tail_engine::ViewMode::Text
             } else {
                 crate::tail_engine::ViewMode::Hex
             };
+            ui.ctx().request_repaint();
         }
 
         // Filtered view is a feature/characteristic of TXT!
@@ -268,6 +280,7 @@ fn render_log_stream(
                 } else {
                     crate::tail_engine::ViewMode::Filtered
                 };
+                ui.ctx().request_repaint();
             }
         }
 
@@ -281,6 +294,7 @@ fn render_log_stream(
                     for enc in crate::tail_engine::FileEncoding::all() {
                         if ui.selectable_value(&mut curr_enc, *enc, enc.name()).clicked() {
                             engine.set_encoding(*enc);
+                            ui.ctx().request_repaint();
                         }
                     }
                 });
@@ -293,28 +307,30 @@ fn render_log_stream(
             if ui.button(" -8 ").on_hover_text(t(lang, "hex_cols_dec")).clicked()
                 && engine.hex_columns > 8 {
                     engine.hex_columns -= 8;
+                    ui.ctx().request_repaint();
                 }
             ui.label(RichText::new(format!("{}", engine.hex_columns)).monospace().strong());
             if ui.button(" +8 ").on_hover_text(t(lang, "hex_cols_inc")).clicked()
                 && engine.hex_columns < 64 {
                     engine.hex_columns += 8;
+                    ui.ctx().request_repaint();
                 }
         }
 
         ui.separator();
 
-        // Lines count stat (duplicate bytes number removed in HEX mode)
+        // Lines count stat
         let lines_stat = match engine.view_mode {
             crate::tail_engine::ViewMode::Text | crate::tail_engine::ViewMode::Filtered => {
                 format!("{}: {}", t(lang, "lines"), engine.total_lines())
             }
             crate::tail_engine::ViewMode::Hex => {
-                format!("HEX: {}", engine.total_hex_rows(engine.hex_columns))
+                format!("{}: {}", t(lang, "lines"), engine.total_hex_rows(engine.hex_columns))
             }
         };
         ui.label(RichText::new(lines_stat).monospace().color(theme.text_dim()));
 
-        // Clickable File Size toggle (Bytes -> MB -> GB -> Bytes)
+        // Clickable File Size toggle (Bytes -> MB -> GB -> Hex -> Bytes)
         let size_str = engine.format_size();
         let size_btn = ui.button(
             RichText::new(format!("📦 {}", size_str))
@@ -324,6 +340,7 @@ fn render_log_stream(
         if size_btn.clicked() {
             engine.next_size_unit();
             *new_size_unit = Some(engine.size_unit);
+            ui.ctx().request_repaint();
         }
 
         if engine.throughput_bps > 0.0 {
@@ -351,7 +368,7 @@ fn render_log_stream(
         }
 
         // Keyboard navigation shortcuts when user is not actively typing in an input
-        if !ui.ctx().wants_keyboard_input() {
+        if !ui.ctx().egui_wants_keyboard_input() {
             ui.input(|i| {
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::F) {
                     search_resp.request_focus();

@@ -366,7 +366,7 @@ fn test_theme_visuals_generation() {
     let ctx = egui::Context::default();
     for theme in &[CyberTheme::Tron, CyberTheme::Matrix, CyberTheme::Blade] {
         theme.apply(&ctx);
-        let visuals = ctx.style().visuals.clone();
+        let visuals = ctx.style_of(ctx.theme()).visuals.clone();
         assert!(visuals.dark_mode);
     }
 }
@@ -763,7 +763,12 @@ fn test_size_unit_cycling_and_format() {
     assert_eq!(engine.size_unit, SizeUnit::GB);
     assert_eq!(engine.format_size(), "0.001 GB");
 
-    // Click 3: GB -> Bytes
+    // Click 3: GB -> Hex
+    engine.next_size_unit();
+    assert_eq!(engine.size_unit, SizeUnit::Hex);
+    assert_eq!(engine.format_size(), "0x100000");
+
+    // Click 4: Hex -> Bytes
     engine.next_size_unit();
     assert_eq!(engine.size_unit, SizeUnit::Bytes);
     assert_eq!(engine.format_size(), "1048576 B");
@@ -858,6 +863,11 @@ fn test_config_size_unit_persistence() {
     let serialized = toml::to_string(&config).expect("serialize config with size_unit");
     let deserialized: FastTailConfig = toml::from_str(&serialized).expect("deserialize config with size_unit");
     assert_eq!(deserialized.size_unit, SizeUnit::GB);
+
+    config.size_unit = SizeUnit::Hex;
+    let serialized = toml::to_string(&config).expect("serialize config with size_unit");
+    let deserialized: FastTailConfig = toml::from_str(&serialized).expect("deserialize config with size_unit");
+    assert_eq!(deserialized.size_unit, SizeUnit::Hex);
 }
 
 #[test]
@@ -901,7 +911,8 @@ fn test_config_ini_persistence() {
     config.borderless = true;
     config.show_line_numbers = false;
     config.font_size = 16.5;
-    config.size_unit = SizeUnit::MB;
+    config.size_unit = SizeUnit::Hex;
+    config.baretail_import = false;
     config.open_files = vec![PathBuf::from("open1.log"), PathBuf::from("open2.log")];
     config.recent_files = vec![PathBuf::from("recent1.log"), PathBuf::from("recent2.log")];
     config.dock_layout = Some("LayoutTestRon".to_string());
@@ -931,7 +942,8 @@ fn test_config_ini_persistence() {
     assert_eq!(loaded.borderless, true);
     assert_eq!(loaded.show_line_numbers, false);
     assert_eq!(loaded.font_size, 16.5);
-    assert_eq!(loaded.size_unit, SizeUnit::MB);
+    assert_eq!(loaded.size_unit, SizeUnit::Hex);
+    assert_eq!(loaded.baretail_import, false);
     assert_eq!(loaded.dock_layout.as_deref(), Some("LayoutTestRon"));
     assert_eq!(loaded.recent_files.len(), 2);
     assert_eq!(loaded.recent_files[0], PathBuf::from("recent1.log"));

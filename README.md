@@ -9,6 +9,10 @@
     <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/language-Rust-orange.svg?style=flat-square" alt="Rust 2021" /></a>
     <a href="https://github.com/matteobaccan/FastTail"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platforms" /></a>
   </p>
+
+  <p>
+    <img src="assets/screenshots/fasttail_main_view.png" alt="FastTail Main Interface" width="850" />
+  </p>
 </div>
 
 ---

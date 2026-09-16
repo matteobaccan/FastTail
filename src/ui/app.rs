@@ -91,8 +91,8 @@ impl FastTailApp {
         system.refresh_cpu_usage();
         system.refresh_memory();
 
-        // Check for BareTail config on Windows if prompt wasn't shown yet
-        let baretail_config = if !config.baretail_prompt_shown {
+        // Check for BareTail config on Windows if enabled (only done once, then disabled in fasttail.ini)
+        let baretail_config = if config.baretail_import && !config.baretail_prompt_shown {
             detect_baretail_config()
         } else {
             None
@@ -174,7 +174,7 @@ impl FastTailApp {
                 // Already open, select tab
                 let tab = FastTailTab::LogStream(path.clone());
                 if let Some(locator) = self.dock_state.find_tab(&tab) {
-                    self.dock_state.set_active_tab(locator);
+                    let _ = self.dock_state.set_active_tab(locator);
                 }
                 return;
             }
@@ -217,7 +217,9 @@ impl FastTailApp {
 }
 
 impl eframe::App for FastTailApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+
         // 1. Detect user activity to reset screensaver & handle window closing
         ctx.input(|i| {
             if i.viewport().close_requested() {
@@ -254,8 +256,8 @@ impl eframe::App for FastTailApp {
             }
 
             // Keyboard shortcut: Ctrl + Mouse Wheel (Zoom in/out font)
-            if i.modifiers.ctrl && i.raw_scroll_delta.y != 0.0 {
-                if i.raw_scroll_delta.y > 0.0 {
+            if i.modifiers.ctrl && i.smooth_scroll_delta.y != 0.0 {
+                if i.smooth_scroll_delta.y > 0.0 {
                     self.config.font_size = (self.config.font_size + 1.0).min(32.0);
                 } else {
                     self.config.font_size = (self.config.font_size - 1.0).max(8.0);
@@ -279,9 +281,7 @@ impl eframe::App for FastTailApp {
             // Drag & drop file support (single or multiple)
             if !i.raw.dropped_files.is_empty() {
                 for file in &i.raw.dropped_files {
-                    if let Some(ref path) = file.path {
-                        self.open_log_file(path.clone());
-                    }
+                    self.open_log_file(file.path().to_path_buf());
                 }
             }
         });
@@ -313,10 +313,10 @@ impl eframe::App for FastTailApp {
         );
 
         // 5. Apply theme visuals
-        self.config.theme.apply(ctx);
+        self.config.theme.apply(&ctx);
 
         // 6. Primary Title Bar (Title, window controls, telemetry, and safe draggable region)
-        egui::TopBottomPanel::top("title_panel").show(ctx, |ui| {
+        egui::Panel::top("title_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Title and Subtitle (no double slashes)
                 ui.label(
@@ -461,7 +461,7 @@ impl eframe::App for FastTailApp {
         });
 
         // 7. Secondary Action Toolbar (Dedicated clickable buttons below titlebar)
-        egui::TopBottomPanel::top("toolbar_panel").show(ctx, |ui| {
+        egui::Panel::top("toolbar_panel").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Open File button (multi-select dialog)
                 if ui
@@ -500,7 +500,7 @@ impl eframe::App for FastTailApp {
                             let btn_text = format!("📄 {} ({})", file_name, full_path);
                             if ui.button(RichText::new(btn_text).monospace()).clicked() {
                                 file_to_open = Some(path.clone());
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                         ui.separator();
@@ -514,7 +514,7 @@ impl eframe::App for FastTailApp {
                         {
                             self.config.recent_files.clear();
                             let _ = self.config.save();
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 });
@@ -652,7 +652,7 @@ impl eframe::App for FastTailApp {
                 let path = self.engines[idx].path.clone();
                 let tab = FastTailTab::LogStream(path);
                 if let Some(locator) = self.dock_state.find_tab(&tab) {
-                    self.dock_state.set_active_tab(locator);
+                    let _ = self.dock_state.set_active_tab(locator);
                     ctx.request_repaint();
                 }
             }
@@ -678,8 +678,8 @@ impl eframe::App for FastTailApp {
 
         let mut tab_viewer = FastTailTabViewer { ctx: dock_ctx };
         DockArea::new(&mut self.dock_state)
-            .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
-            .show(ctx, &mut tab_viewer);
+            .style(egui_dock::Style::from_egui(ui.style().as_ref()))
+            .show_inside(ui, &mut tab_viewer);
 
         if tab_closed {
             self.save_dock_layout();
@@ -711,11 +711,11 @@ impl eframe::App for FastTailApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .frame(
-                    egui::Frame::window(&ctx.style())
+                    egui::Frame::window(&ctx.style_of(ctx.theme()))
                         .fill(theme.bg_color())
                         .stroke(Stroke::new(2.0_f32, theme.border_color())),
                 )
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     ui.label(
                         RichText::new(t(lang, "baretail_desc"))
                             .monospace()
@@ -755,6 +755,7 @@ impl eframe::App for FastTailApp {
                                 self.open_log_file(p.clone());
                             }
 
+                            self.config.baretail_import = false;
                             self.config.baretail_prompt_shown = true;
                             let _ = self.config.save();
                             self.baretail_dialog_open = false;
@@ -768,6 +769,7 @@ impl eframe::App for FastTailApp {
                             )
                             .clicked()
                         {
+                            self.config.baretail_import = false;
                             self.config.baretail_prompt_shown = true;
                             let _ = self.config.save();
                             self.baretail_dialog_open = false;
@@ -796,11 +798,11 @@ impl eframe::App for FastTailApp {
             .default_width(460.0)
             .default_height(400.0)
             .frame(
-                egui::Frame::window(&ctx.style())
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(theme.panel_bg())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             )
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     crate::ui::dock::render_settings_content(
                         ui,
@@ -856,11 +858,11 @@ impl eframe::App for FastTailApp {
             .default_width(540.0)
             .default_height(460.0)
             .frame(
-                egui::Frame::window(&ctx.style())
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(theme.panel_bg())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             )
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     crate::ui::dock::render_highlights_content(
                         ui,
@@ -902,11 +904,11 @@ impl eframe::App for FastTailApp {
             .resizable(false)
             .default_width(440.0)
             .frame(
-                egui::Frame::window(&ctx.style())
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(theme.panel_bg())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             )
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
                     ui.label(
@@ -1013,11 +1015,11 @@ impl eframe::App for FastTailApp {
             .default_width(580.0)
             .default_height(500.0)
             .frame(
-                egui::Frame::window(&ctx.style())
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(theme.panel_bg())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             )
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(
@@ -1155,13 +1157,13 @@ impl eframe::App for FastTailApp {
         }
 
         // 12. Render Matrix Screensaver if activated
-        let viewport = ctx.screen_rect();
-        self.screensaver.render(ctx, viewport);
+        let viewport = ctx.content_rect();
+        self.screensaver.render(&ctx, viewport);
 
         // 12. Borderless Window Resize Anchors & Visual Frames (Edges & Corners)
         let is_maximized = self.is_maximized || ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         if self.config.borderless && !is_maximized {
-            let screen = ctx.screen_rect();
+            let screen = ctx.content_rect();
             let border: f32 = 8.0;
 
             let resize_zones = [
