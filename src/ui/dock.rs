@@ -377,6 +377,8 @@ fn render_log_stream(
                     engine.requested_scroll_x = Some(target_x);
                 }
                 // Arrow navigation
+                // Arrow navigation (Ctrl + Left/Right moves by 5x)
+                let h_step = if i.modifiers.ctrl { 200.0 } else { 40.0 };
                 if i.key_pressed(egui::Key::ArrowUp) {
                     engine.follow_tail = false;
                     engine.requested_scroll_y = Some((engine.current_scroll_y - row_height).max(0.0));
@@ -386,10 +388,10 @@ fn render_log_stream(
                     engine.requested_scroll_y = Some(engine.current_scroll_y + row_height);
                 }
                 if i.key_pressed(egui::Key::ArrowLeft) {
-                    engine.requested_scroll_x = Some((engine.current_scroll_x - 40.0).max(0.0));
+                    engine.requested_scroll_x = Some((engine.current_scroll_x - h_step).max(0.0));
                 }
                 if i.key_pressed(egui::Key::ArrowRight) {
-                    engine.requested_scroll_x = Some(engine.current_scroll_x + 40.0);
+                    engine.requested_scroll_x = Some(engine.current_scroll_x + h_step);
                 }
                 // PageUp / PageDown: screen-based paging
                 let visible_lines = ((ui.available_height() / row_height).floor() as usize).max(1);
@@ -649,15 +651,22 @@ fn render_hex_stream(
     }
     header_str.push('|');
 
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(header_str)
-                .monospace()
-                .size(font_size)
-                .color(theme.accent_color())
-                .strong(),
-        );
-    });
+    ScrollArea::horizontal()
+        .auto_shrink([false, false])
+        .horizontal_scroll_offset(engine.current_scroll_x)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .show(ui, |ui| {
+            ui.set_min_width(engine.max_detected_width);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(header_str)
+                        .monospace()
+                        .size(font_size)
+                        .color(theme.accent_color())
+                        .strong(),
+                );
+            });
+        });
     ui.separator();
 
     // Support text search or hex byte search
