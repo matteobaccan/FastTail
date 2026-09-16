@@ -43,10 +43,20 @@ impl FileEncoding {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ViewMode {
+    #[default]
     Text,
     Hex,
+    Filtered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SizeUnit {
+    #[default]
+    Bytes,
+    MB,
+    GB,
 }
 
 fn default_true() -> bool {
@@ -65,6 +75,8 @@ pub struct HighlightStyle {
 pub struct HighlightRule {
     pub pattern: String,
     pub is_regex: bool,
+    #[serde(default)]
+    pub case_sensitive: bool,
     pub fg_color: [u8; 3],
     pub bg_color: [u8; 3],
     #[serde(default)]
@@ -82,6 +94,7 @@ impl HighlightRule {
         Self {
             pattern: pattern.to_string(),
             is_regex,
+            case_sensitive: false,
             fg_color: fg,
             bg_color: bg,
             bold: false,
@@ -102,6 +115,7 @@ impl HighlightRule {
         Self {
             pattern: pattern.to_string(),
             is_regex,
+            case_sensitive: false,
             fg_color: fg,
             bg_color: bg,
             bold,
@@ -116,17 +130,16 @@ impl HighlightRule {
         fg: [u8; 3],
         bg: [u8; 3],
         is_regex: bool,
-        bold: bool,
-        italic: bool,
         sound_alert: SoundAlertPreset,
     ) -> Self {
         Self {
             pattern: pattern.to_string(),
             is_regex,
+            case_sensitive: false,
             fg_color: fg,
             bg_color: bg,
-            bold,
-            italic,
+            bold: false,
+            italic: false,
             sound_alert,
             enabled: true,
         }
@@ -143,9 +156,13 @@ pub struct TailEngine {
     pub follow_tail: bool,
     pub is_watching: bool,
     pub view_mode: ViewMode,
+    pub hex_columns: usize,
+    pub size_unit: SizeUnit,
     pub encoding: FileEncoding,
     pub include_filter: String,
     pub exclude_filter: String,
+    pub filter_case_sensitive: bool,
+    pub filter_is_regex: bool,
     include_regex: Option<Regex>,
     exclude_regex: Option<Regex>,
     pub highlight_rules: Vec<HighlightRule>,
@@ -153,6 +170,8 @@ pub struct TailEngine {
     pub expanded_json_lines: HashSet<usize>,
     pub requested_scroll_x: Option<f32>,
     pub requested_scroll_y: Option<f32>,
+    pub current_scroll_x: f32,
+    pub current_scroll_y: f32,
     pub last_sound_alert_time: Instant,
     _watcher: Option<RecommendedWatcher>,
     rx: Receiver<notify::Result<Event>>,
@@ -221,9 +240,13 @@ impl TailEngine {
             follow_tail: true,
             is_watching: true,
             view_mode,
+            hex_columns: 16,
+            size_unit: SizeUnit::Bytes,
             encoding: detected_encoding,
             include_filter: String::new(),
             exclude_filter: String::new(),
+            filter_case_sensitive: false,
+            filter_is_regex: false,
             include_regex: None,
             exclude_regex: None,
             highlight_rules: Vec::new(),
@@ -231,6 +254,8 @@ impl TailEngine {
             expanded_json_lines: HashSet::new(),
             requested_scroll_x: None,
             requested_scroll_y: None,
+            current_scroll_x: 0.0,
+            current_scroll_y: 0.0,
             last_sound_alert_time: Instant::now(),
             _watcher: watcher,
             rx,
@@ -256,7 +281,23 @@ impl TailEngine {
         if bytes_per_row == 0 || self.file_size == 0 {
             return 0;
         }
-        ((self.file_size as usize) + bytes_per_row - 1) / bytes_per_row
+        (self.file_size as usize).div_ceil(bytes_per_row)
+    }
+
+    pub fn next_size_unit(&mut self) {
+        self.size_unit = match self.size_unit {
+            SizeUnit::Bytes => SizeUnit::MB,
+            SizeUnit::MB => SizeUnit::GB,
+            SizeUnit::GB => SizeUnit::Bytes,
+        };
+    }
+
+    pub fn format_size(&self) -> String {
+        match self.size_unit {
+            SizeUnit::Bytes => format!("{} B", self.file_size),
+            SizeUnit::MB => format!("{:.2} MB", self.file_size as f64 / (1024.0 * 1024.0)),
+            SizeUnit::GB => format!("{:.3} GB", self.file_size as f64 / (1024.0 * 1024.0 * 1024.0)),
+        }
     }
 
     pub fn release_mmap(&mut self) {
@@ -268,7 +309,10 @@ impl TailEngine {
             .iter()
             .map(|r| {
                 let re = if r.is_regex {
-                    Regex::new(&r.pattern).ok()
+                    regex::RegexBuilder::new(&r.pattern)
+                        .case_insensitive(!r.case_sensitive)
+                        .build()
+                        .ok()
                 } else {
                     None
                 };
@@ -278,22 +322,38 @@ impl TailEngine {
         self.highlight_rules = rules;
     }
 
+    pub fn refresh_filters(&mut self) {
+        if self.filter_is_regex {
+            self.include_regex = if self.include_filter.is_empty() {
+                None
+            } else {
+                regex::RegexBuilder::new(&self.include_filter)
+                    .case_insensitive(!self.filter_case_sensitive)
+                    .build()
+                    .ok()
+            };
+            self.exclude_regex = if self.exclude_filter.is_empty() {
+                None
+            } else {
+                regex::RegexBuilder::new(&self.exclude_filter)
+                    .case_insensitive(!self.filter_case_sensitive)
+                    .build()
+                    .ok()
+            };
+        } else {
+            self.include_regex = None;
+            self.exclude_regex = None;
+        }
+    }
+
     pub fn set_include_filter(&mut self, filter: &str) {
         self.include_filter = filter.to_string();
-        self.include_regex = if filter.is_empty() {
-            None
-        } else {
-            Regex::new(filter).ok()
-        };
+        self.refresh_filters();
     }
 
     pub fn set_exclude_filter(&mut self, filter: &str) {
         self.exclude_filter = filter.to_string();
-        self.exclude_regex = if filter.is_empty() {
-            None
-        } else {
-            Regex::new(filter).ok()
-        };
+        self.refresh_filters();
     }
 
     pub fn set_encoding(&mut self, encoding: FileEncoding) {
@@ -331,11 +391,10 @@ impl TailEngine {
                 }
                 let mut i = start_offset;
                 while i + 1 < mmap.len() {
-                    if mmap[i] == 0x0A && mmap[i + 1] == 0x00 {
-                        if i + 2 < mmap.len() {
+                    if mmap[i] == 0x0A && mmap[i + 1] == 0x00
+                        && i + 2 < mmap.len() {
                             self.line_offsets.push((i + 2) as u64);
                         }
-                    }
                     i += 2;
                 }
             }
@@ -346,11 +405,10 @@ impl TailEngine {
                 }
                 let mut i = start_offset;
                 while i + 1 < mmap.len() {
-                    if mmap[i] == 0x00 && mmap[i + 1] == 0x0A {
-                        if i + 2 < mmap.len() {
+                    if mmap[i] == 0x00 && mmap[i + 1] == 0x0A
+                        && i + 2 < mmap.len() {
                             self.line_offsets.push((i + 2) as u64);
                         }
-                    }
                     i += 2;
                 }
             }
@@ -539,7 +597,7 @@ impl TailEngine {
                     }
                 }
                 let slice = &mmap[start..end];
-                let u16_iter = slice.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]));
+                let u16_iter = slice.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]]));
                 let s = char::decode_utf16(u16_iter)
                     .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
                     .collect::<String>();
@@ -554,7 +612,7 @@ impl TailEngine {
                     }
                 }
                 let slice = &mmap[start..end];
-                let u16_iter = slice.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]]));
+                let u16_iter = slice.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]));
                 let s = char::decode_utf16(u16_iter)
                     .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
                     .collect::<String>();
@@ -564,23 +622,40 @@ impl TailEngine {
     }
 
     pub fn matches_filter(&self, line: &str) -> bool {
+        let mut lower_line: Option<String> = None;
+
         // Exclude check first
         if !self.exclude_filter.is_empty() {
-            if let Some(ref re) = self.exclude_regex {
-                if re.is_match(line) {
-                    return false;
+            let matches_exclude = if self.filter_is_regex {
+                if let Some(ref re) = self.exclude_regex {
+                    re.is_match(line)
+                } else {
+                    false
                 }
-            } else if line.contains(&self.exclude_filter) {
+            } else if self.filter_case_sensitive {
+                line.contains(&self.exclude_filter)
+            } else {
+                let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
+                lower.contains(&self.exclude_filter.to_lowercase())
+            };
+            if matches_exclude {
                 return false;
             }
         }
 
         // Include check
         if !self.include_filter.is_empty() {
-            if let Some(ref re) = self.include_regex {
-                re.is_match(line)
-            } else {
+            if self.filter_is_regex {
+                if let Some(ref re) = self.include_regex {
+                    re.is_match(line)
+                } else {
+                    false
+                }
+            } else if self.filter_case_sensitive {
                 line.contains(&self.include_filter)
+            } else {
+                let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
+                lower.contains(&self.include_filter.to_lowercase())
             }
         } else {
             true
@@ -588,14 +663,18 @@ impl TailEngine {
     }
 
     pub fn match_highlight(&self, line: &str) -> Option<HighlightStyle> {
+        let mut lower_line: Option<String> = None;
         for (re_opt, rule) in &self.compiled_highlights {
             if !rule.enabled {
                 continue;
             }
             let is_match = if let Some(re) = re_opt {
                 re.is_match(line)
-            } else {
+            } else if rule.case_sensitive {
                 line.contains(&rule.pattern)
+            } else {
+                let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
+                lower.contains(&rule.pattern.to_lowercase())
             };
 
             if is_match {
@@ -645,6 +724,70 @@ impl TailEngine {
                     if let Some(parent) = self.get_line(curr) {
                         if !Self::is_stacktrace_continuation(&parent) {
                             return self.matches_filter(&parent);
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub fn is_line_visible_filtered(&self, idx: usize) -> bool {
+        if let Some(line) = self.get_line(idx) {
+            let mut lower_line: Option<String> = None;
+
+            // Must not match exclude filter if set
+            if !self.exclude_filter.is_empty() {
+                let matches_exclude = if self.filter_is_regex {
+                    if let Some(ref re) = self.exclude_regex {
+                        re.is_match(&line)
+                    } else {
+                        false
+                    }
+                } else if self.filter_case_sensitive {
+                    line.contains(&self.exclude_filter)
+                } else {
+                    let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
+                    lower.contains(&self.exclude_filter.to_lowercase())
+                };
+                if matches_exclude {
+                    return false;
+                }
+            }
+
+            // Must match include filter (if set) OR match any enabled highlight rule
+            let has_include = !self.include_filter.is_empty();
+            let matches_include = if has_include {
+                if self.filter_is_regex {
+                    if let Some(ref re) = self.include_regex {
+                        re.is_match(&line)
+                    } else {
+                        false
+                    }
+                } else if self.filter_case_sensitive {
+                    line.contains(&self.include_filter)
+                } else {
+                    let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
+                    lower.contains(&self.include_filter.to_lowercase())
+                }
+            } else {
+                false
+            };
+
+            let matches_highlight = self.match_highlight(&line).is_some();
+
+            if matches_include || matches_highlight {
+                return true;
+            }
+
+            // Also check multiline stack trace continuation
+            if Self::is_stacktrace_continuation(&line) {
+                let mut curr = idx;
+                while curr > 0 {
+                    curr -= 1;
+                    if let Some(parent) = self.get_line(curr) {
+                        if !Self::is_stacktrace_continuation(&parent) {
+                            return self.is_line_visible_filtered(curr);
                         }
                     }
                 }

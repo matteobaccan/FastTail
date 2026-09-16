@@ -2,5 +2,15 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "groupName": "egui ecosystem",
+      "matchPackageNames": [
+        "egui",
+        "eframe",
+        "egui_dock"
+      ]
+    }
   ]
 }

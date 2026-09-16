@@ -99,13 +99,13 @@ impl FastTailApp {
         };
         let baretail_dialog_open = baretail_config.is_some();
 
-        // Restore saved dock layout from config, or start clean with log stream
+        // Restore saved dock layout from config, or start clean
         let dock_state: DockState<FastTailTab> = config
             .dock_layout
             .as_ref()
             .and_then(|ron_str| ron::from_str(ron_str).ok())
             .unwrap_or_else(|| {
-                DockState::new(vec![FastTailTab::LogStream(0)])
+                DockState::new(vec![])
             });
 
         let mut app = Self {
@@ -128,21 +128,39 @@ impl FastTailApp {
             last_dock_save: Instant::now(),
         };
 
-        // Open any recent files saved in config
-        for path in app.config.recent_files.clone() {
+        // Open any files saved as open from the previous session
+        for path in app.config.open_files.clone() {
             app.open_log_file(path);
+        }
+
+        // Open any files passed as CLI arguments
+        for arg in std::env::args_os().skip(1) {
+            let path = PathBuf::from(arg);
+            if path.exists() {
+                app.open_log_file(path);
+            }
         }
 
         app
     }
 
     pub fn save_dock_layout(&mut self) {
+        let mut current_open = Vec::new();
+        for (_, tab) in self.dock_state.iter_all_tabs() {
+            if let FastTailTab::LogStream(p) = tab {
+                if !current_open.contains(p) {
+                    current_open.push(p.clone());
+                }
+            }
+        }
+        self.config.open_files = current_open;
+
         if let Ok(ron_str) = ron::to_string(&self.dock_state) {
             if self.config.dock_layout.as_deref() != Some(&ron_str) {
                 self.config.dock_layout = Some(ron_str);
-                let _ = self.config.save();
             }
         }
+        let _ = self.config.save();
     }
 
     pub fn open_log_file(&mut self, path: PathBuf) {
@@ -154,16 +172,25 @@ impl FastTailApp {
         for eng in &self.engines {
             if eng.path == path {
                 // Already open, select tab
+                let tab = FastTailTab::LogStream(path.clone());
+                if let Some(locator) = self.dock_state.find_tab(&tab) {
+                    self.dock_state.set_active_tab(locator);
+                }
                 return;
             }
         }
 
         if let Ok(mut engine) = TailEngine::open(&path) {
             engine.set_highlight_rules(self.config.highlight_rules.clone());
-            let idx = self.engines.len();
+            engine.size_unit = self.config.size_unit;
             self.engines.push(engine);
 
             crate::audio::play_sound(crate::audio::CyberSound::BlipAttach, self.config.sound_enabled);
+
+            // Add to open_files
+            if !self.config.open_files.contains(&path) {
+                self.config.open_files.push(path.clone());
+            }
 
             // Keep recent files in MRU order (most recent at top, max 15)
             self.config.recent_files.retain(|p| p != &path);
@@ -173,12 +200,16 @@ impl FastTailApp {
             }
             let _ = self.config.save();
 
-            let tab = FastTailTab::LogStream(idx);
+            let tab = FastTailTab::LogStream(path);
             let already_in_dock = self.dock_state.find_tab(&tab).is_some();
             if !already_in_dock {
-                self.dock_state
-                    .main_surface_mut()
-                    .push_to_first_leaf(tab);
+                if self.dock_state.iter_all_tabs().count() == 0 {
+                    self.dock_state = egui_dock::DockState::new(vec![tab]);
+                } else {
+                    self.dock_state
+                        .main_surface_mut()
+                        .push_to_first_leaf(tab);
+                }
             }
             self.save_dock_layout();
         }
@@ -314,7 +345,7 @@ impl eframe::App for FastTailApp {
                                     .monospace()
                                     .strong(),
                             )
-                            .on_hover_text("Chiudi FastTail (salva automaticamente lo stato)")
+                            .on_hover_text(t(self.config.language, "close_tip"))
                             .clicked()
                         {
                             self.save_dock_layout();
@@ -325,9 +356,14 @@ impl eframe::App for FastTailApp {
 
                         // Maximize / Restore button [🗖 / 🗗]
                         let max_icon = if self.is_maximized { " 🗗 " } else { " 🗖 " };
+                        let max_tip = if self.is_maximized {
+                            t(self.config.language, "restore_tip")
+                        } else {
+                            t(self.config.language, "maximize_tip")
+                        };
                         if ui
                             .button(RichText::new(max_icon).monospace())
-                            .on_hover_text(if self.is_maximized { "Ripristina dimensioni finestra originali" } else { "Ingrandisci finestra a schermo intero" })
+                            .on_hover_text(max_tip)
                             .clicked()
                         {
                             self.is_maximized = !self.is_maximized;
@@ -348,7 +384,7 @@ impl eframe::App for FastTailApp {
                         // Minimize button [—]
                         if ui
                             .button(RichText::new(" — ").monospace())
-                            .on_hover_text("Riduci finestra a icona sulla barra delle applicazioni")
+                            .on_hover_text(t(self.config.language, "minimize_tip"))
                             .clicked()
                         {
                             ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
@@ -385,7 +421,7 @@ impl eframe::App for FastTailApp {
                                 .strong()
                                 .color(self.config.theme.accent_color()),
                         )
-                        .on_hover_text("Trascina con il tasto sinistro per spostare la finestra (doppio click per ingrandire/ripristinare)");
+                        .on_hover_text(t(self.config.language, "drag_tip"));
                     if drag_handle.hovered() {
                         ctx.set_cursor_icon(egui::CursorIcon::Grab);
                     }
@@ -430,7 +466,7 @@ impl eframe::App for FastTailApp {
                 // Open File button (multi-select dialog)
                 if ui
                     .button(RichText::new(format!("📂 {}", t(self.config.language, "open_file"))).monospace())
-                    .on_hover_text("Apri uno o più file di log dal disco (selezione multipla supportata)")
+                    .on_hover_text(t(self.config.language, "open_file_tip"))
                     .clicked()
                 {
                     if let Some(paths) = rfd::FileDialog::new()
@@ -518,11 +554,14 @@ impl eframe::App for FastTailApp {
                 };
 
                 let filter_tip = format!(
-                    "{}: {} attivi ({} regole colore, {} filtri stream)",
+                    "{}: {} {} ({} {}, {} {})",
                     t(self.config.language, "filters"),
                     total_active_filters,
+                    t(self.config.language, "active_count"),
                     active_color_rules,
-                    active_stream_filters
+                    t(self.config.language, "active_rules_stat"),
+                    active_stream_filters,
+                    t(self.config.language, "active_stream_stat"),
                 );
 
                 if ui.button(filter_btn).on_hover_text(filter_tip).clicked() {
@@ -539,21 +578,22 @@ impl eframe::App for FastTailApp {
                 };
                 if ui
                     .button(settings_btn)
-                    .on_hover_text("Apri Impostazioni: Tema grafico, Lingua, Dimensione Font, Screensaver, Finestra senza bordi")
+                    .on_hover_text(t(self.config.language, "settings_tip"))
                     .clicked()
                 {
                     self.settings_dialog_open = !self.settings_dialog_open;
                 }
 
                 // About popup button
+                let about_title = t(self.config.language, "about");
                 let about_btn = if self.about_dialog_open {
-                    RichText::new("ℹ About").monospace().color(self.config.theme.accent_color()).strong()
+                    RichText::new(format!("ℹ {}", about_title)).monospace().color(self.config.theme.accent_color()).strong()
                 } else {
-                    RichText::new("ℹ About").monospace()
+                    RichText::new(format!("ℹ {}", about_title)).monospace()
                 };
                 if ui
                     .button(about_btn)
-                    .on_hover_text("Informazioni su FastTail, versione, autore e repository GitHub")
+                    .on_hover_text(t(self.config.language, "about_tip"))
                     .clicked()
                 {
                     self.about_dialog_open = !self.about_dialog_open;
@@ -570,7 +610,7 @@ impl eframe::App for FastTailApp {
                 };
                 if ui
                     .button(help_btn)
-                    .on_hover_text("Guida comandi, scorciatoie da tastiera e gestione filtri (F1)")
+                    .on_hover_text(t(self.config.language, "help_tip"))
                     .clicked()
                 {
                     self.help_dialog_open = !self.help_dialog_open;
@@ -582,9 +622,10 @@ impl eframe::App for FastTailApp {
         let prev_borderless = self.config.borderless;
         let prev_theme = self.config.theme;
         let prev_lang = self.config.language;
-
+        let mut tab_closed = false;
         let dock_ctx = DockContext {
             engines: &mut self.engines,
+            open_files: &mut self.config.open_files,
             theme: &mut self.config.theme,
             language: &mut self.config.language,
             global_rules: &mut self.config.highlight_rules,
@@ -595,13 +636,19 @@ impl eframe::App for FastTailApp {
             borderless: &mut self.config.borderless,
             show_line_numbers: &mut self.config.show_line_numbers,
             font_size: &mut self.config.font_size,
+            size_unit: &mut self.config.size_unit,
             search_query: &mut self.search_query,
+            tab_closed: &mut tab_closed,
         };
 
         let mut tab_viewer = FastTailTabViewer { ctx: dock_ctx };
         DockArea::new(&mut self.dock_state)
             .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
             .show(ctx, &mut tab_viewer);
+
+        if tab_closed {
+            self.save_dock_layout();
+        }
 
         if self.config.borderless != prev_borderless {
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!self.config.borderless));
@@ -808,9 +855,10 @@ impl eframe::App for FastTailApp {
         if self.about_dialog_open {
             let mut is_open = true;
             let theme = self.config.theme;
+            let lang = self.config.language;
 
             egui::Window::new(
-                RichText::new("ℹ About FastTail")
+                RichText::new(format!("ℹ {} FastTail", t(lang, "about")))
                     .monospace()
                     .color(theme.accent_color()),
             )
@@ -849,7 +897,7 @@ impl eframe::App for FastTailApp {
                     .num_columns(2)
                     .spacing([16.0, 8.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Versione:").monospace().strong());
+                        ui.label(RichText::new(t(lang, "about_version")).monospace().strong());
                         ui.label(
                             RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                                 .monospace()
@@ -857,7 +905,7 @@ impl eframe::App for FastTailApp {
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new("Git Tag:").monospace().strong());
+                        ui.label(RichText::new(t(lang, "about_git_tag")).monospace().strong());
                         ui.label(
                             RichText::new(env!("GIT_TAG"))
                                 .monospace()
@@ -865,7 +913,7 @@ impl eframe::App for FastTailApp {
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new("Data Compilazione:").monospace().strong());
+                        ui.label(RichText::new(t(lang, "about_build_date")).monospace().strong());
                         ui.label(
                             RichText::new(env!("BUILD_TIMESTAMP"))
                                 .monospace()
@@ -873,7 +921,7 @@ impl eframe::App for FastTailApp {
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new("Autore:").monospace().strong());
+                        ui.label(RichText::new(t(lang, "about_author")).monospace().strong());
                         ui.label(
                             RichText::new("Matteo Baccan")
                                 .monospace()
@@ -881,7 +929,7 @@ impl eframe::App for FastTailApp {
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new("Repository:").monospace().strong());
+                        ui.label(RichText::new(t(lang, "about_repo")).monospace().strong());
                         ui.hyperlink_to(
                             RichText::new("github.com/matteobaccan/FastTail")
                                 .monospace()
@@ -890,9 +938,9 @@ impl eframe::App for FastTailApp {
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new("Licenza:").monospace().strong());
+                        ui.label(RichText::new(t(lang, "about_license")).monospace().strong());
                         ui.label(
-                            RichText::new("MIT / Apache 2.0")
+                            RichText::new("MIT")
                                 .monospace()
                                 .color(theme.text_dim()),
                         );
@@ -903,7 +951,7 @@ impl eframe::App for FastTailApp {
                 ui.separator();
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Next-Gen Real-Time Log Tail & Binary Hex Streaming Monitor")
+                    RichText::new(t(lang, "about_tagline"))
                         .monospace()
                         .size(10.5)
                         .color(theme.text_dim()),
@@ -959,7 +1007,7 @@ impl eframe::App for FastTailApp {
                     // Category 1: Zoom & Font Size
                     ui.group(|ui| {
                         ui.label(
-                            RichText::new("🔍 ZOOM & DIMENSIONE CARATTERI")
+                            RichText::new(t(lang, "help_cat_zoom"))
                                 .monospace()
                                 .strong()
                                 .color(theme.warn_color()),
@@ -969,20 +1017,20 @@ impl eframe::App for FastTailApp {
                             .num_columns(2)
                             .spacing([18.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label(RichText::new("CTRL +  o  CTRL =").monospace().strong());
-                                ui.label(RichText::new("Aumenta dimensione font del log (+1 pt)").monospace());
+                                ui.label(RichText::new("CTRL +  /  CTRL =").monospace().strong());
+                                ui.label(RichText::new(t(lang, "help_zoom_in")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("CTRL -").monospace().strong());
-                                ui.label(RichText::new("Riduci dimensione font del log (-1 pt)").monospace());
+                                ui.label(RichText::new(t(lang, "help_zoom_out")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("CTRL 0").monospace().strong());
-                                ui.label(RichText::new("Reimposta dimensione font predefinita (13 pt)").monospace());
+                                ui.label(RichText::new(t(lang, "help_zoom_reset")).monospace());
                                 ui.end_row();
 
-                                ui.label(RichText::new("CTRL + Rotellina").monospace().strong());
-                                ui.label(RichText::new("Zoom fluido rapido con rotellina del mouse").monospace());
+                                ui.label(RichText::new("CTRL + Wheel").monospace().strong());
+                                ui.label(RichText::new(t(lang, "help_zoom_wheel")).monospace());
                                 ui.end_row();
                             });
                     });
@@ -992,7 +1040,7 @@ impl eframe::App for FastTailApp {
                     // Category 2: Navigazione & Streaming
                     ui.group(|ui| {
                         ui.label(
-                            RichText::new("🧭 NAVIGAZIONE & STREAMING LOG")
+                            RichText::new(t(lang, "help_cat_nav"))
                                 .monospace()
                                 .strong()
                                 .color(theme.warn_color()),
@@ -1002,28 +1050,28 @@ impl eframe::App for FastTailApp {
                             .num_columns(2)
                             .spacing([18.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label(RichText::new("Barra Spaziatrice").monospace().strong());
-                                ui.label(RichText::new("Attiva o mette in pausa Follow Tail (scorrimento continuo all'ultima riga)").monospace());
+                                ui.label(RichText::new(t(lang, "help_key_space")).monospace().strong());
+                                ui.label(RichText::new(t(lang, "help_desc_space")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("CTRL F").monospace().strong());
-                                ui.label(RichText::new("Attiva la casella di ricerca nel log corrente").monospace());
+                                ui.label(RichText::new(t(lang, "help_desc_search")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("F3  /  Shift + F3").monospace().strong());
-                                ui.label(RichText::new("Cerca occorrenza successiva / precedente").monospace());
+                                ui.label(RichText::new(t(lang, "help_desc_find_next")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("F1").monospace().strong());
-                                ui.label(RichText::new("Apre o chiude questa schermata di guida").monospace());
+                                ui.label(RichText::new(t(lang, "help_desc_f1")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("Esc").monospace().strong());
-                                ui.label(RichText::new("Chiude le finestre popup attive").monospace());
+                                ui.label(RichText::new(t(lang, "help_desc_esc")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("Drag & Drop").monospace().strong());
-                                ui.label(RichText::new("Trascina file di log direttamente nella finestra per aprirli").monospace());
+                                ui.label(RichText::new(t(lang, "help_desc_drag_drop")).monospace());
                                 ui.end_row();
                             });
                     });
@@ -1033,34 +1081,34 @@ impl eframe::App for FastTailApp {
                     // Category 3: Filtri & Priorità
                     ui.group(|ui| {
                         ui.label(
-                            RichText::new("⚡ FILTRI DI COLORE & VISIBILITÀ")
+                            RichText::new(t(lang, "help_cat_filters"))
                                 .monospace()
                                 .strong()
                                 .color(theme.warn_color()),
                         );
                         ui.separator();
                         ui.label(
-                            RichText::new("• Ordine di valutazione: le regole di colore vengono valutate rigorosamente dall'alto in basso e il programma si ferma alla prima regola che corrisponde.")
+                            RichText::new(t(lang, "help_filter_order"))
                                 .monospace()
                                 .color(theme.text_primary()),
                         );
                         ui.label(
-                            RichText::new("• Riordinamento: usa i tasti ⬆ e ⬇ in ciascuna riga per modificare l'ordine di priorità delle regole.")
+                            RichText::new(t(lang, "help_filter_reorder"))
                                 .monospace()
                                 .color(theme.secondary_accent()),
                         );
                         ui.label(
-                            RichText::new("• Grassetto e Corsivo: spunta 'B' (Grassetto) o 'I' (Corsivo) per personalizzare lo stile del testo evidenziato.")
+                            RichText::new(t(lang, "help_filter_styles"))
                                 .monospace()
                                 .color(theme.accent_color()),
                         );
                         ui.label(
-                            RichText::new("• Filtri di visibilità: usa Includi (Regex) ed Escludi (Regex) sopra il buffer per mostrare solo le righe pertinenti.")
+                            RichText::new(t(lang, "help_filter_visibility"))
                                 .monospace()
                                 .color(theme.text_primary()),
                         );
                         ui.label(
-                            RichText::new("• File Recenti: clicca sul pulsante 🕒 nella barra degli strumenti per riaprire all'istante i file utilizzati di recente.")
+                            RichText::new(t(lang, "help_filter_recent"))
                                 .monospace()
                                 .color(theme.secondary_accent()),
                         );

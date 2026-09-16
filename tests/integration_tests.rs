@@ -1,3 +1,9 @@
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::bool_assert_comparison,
+    clippy::write_with_newline
+)]
+
 use fasttail::config::FastTailConfig;
 use fasttail::i18n::{t, Language};
 use fasttail::screensaver::MatrixScreensaver;
@@ -177,6 +183,19 @@ fn test_new_i18n_keys() {
         assert_ne!(t(*lang, "show_lines"), "Unknown");
         assert_ne!(t(*lang, "monitor_on"), "Unknown");
         assert_ne!(t(*lang, "monitor_off"), "Unknown");
+        assert_ne!(t(*lang, "view_mode_filtered"), "Unknown");
+        assert_ne!(t(*lang, "hex_columns"), "Unknown");
+        assert_ne!(t(*lang, "sound_alert"), "Unknown");
+        assert_ne!(t(*lang, "sound_test_tip"), "Unknown");
+        assert_ne!(t(*lang, "tip_size_unit"), "Unknown");
+        assert_ne!(t(*lang, "hex_cols_dec"), "Unknown");
+        assert_ne!(t(*lang, "hex_cols_inc"), "Unknown");
+        assert_ne!(t(*lang, "font_dec_tip"), "Unknown");
+        assert_ne!(t(*lang, "font_inc_tip"), "Unknown");
+        assert_ne!(t(*lang, "font_reset_tip"), "Unknown");
+        assert_ne!(t(*lang, "tip_regex_checkbox"), "Unknown");
+        assert_ne!(t(*lang, "case_sensitive"), "Unknown");
+        assert_ne!(t(*lang, "case_sensitive_tip"), "Unknown");
     }
 }
 
@@ -185,13 +204,14 @@ fn test_dock_state_serialization_and_restore() {
     use egui_dock::DockState;
     use fasttail::ui::dock::FastTailTab;
 
-    let dock_state = DockState::new(vec![FastTailTab::LogStream(0), FastTailTab::Settings]);
+    let test_path = std::path::PathBuf::from("test.log");
+    let dock_state = DockState::new(vec![FastTailTab::LogStream(test_path.clone()), FastTailTab::Settings]);
     let ron_str = ron::to_string(&dock_state).expect("serialize dock state with ron");
     assert!(!ron_str.is_empty());
 
     let restored: DockState<FastTailTab> = ron::from_str(&ron_str).expect("deserialize dock state with ron");
     assert!(restored.find_tab(&FastTailTab::Settings).is_some());
-    assert!(restored.find_tab(&FastTailTab::LogStream(0)).is_some());
+    assert!(restored.find_tab(&FastTailTab::LogStream(test_path)).is_some());
 
     let mut config = FastTailConfig::default();
     config.dock_layout = Some(ron_str);
@@ -424,6 +444,64 @@ fn test_i18n_exhaustive_coverage() {
         "italic",
         "move_up",
         "move_down",
+        "view_mode_filtered",
+        "hex_columns",
+        "sound_alert",
+        "sound_test_tip",
+        "close_tip",
+        "restore_tip",
+        "maximize_tip",
+        "minimize_tip",
+        "drag_tip",
+        "open_file_tip",
+        "settings_tip",
+        "about_tip",
+        "help_tip",
+        "tip_search_box",
+        "tip_add_rule",
+        "tip_size_unit",
+        "hex_cols_dec",
+        "hex_cols_inc",
+        "font_dec_tip",
+        "font_inc_tip",
+        "font_reset_tip",
+        "tip_regex_checkbox",
+        "about",
+        "about_version",
+        "about_git_tag",
+        "about_build_date",
+        "about_author",
+        "about_repo",
+        "about_license",
+        "about_tagline",
+        "help_cat_zoom",
+        "help_zoom_in",
+        "help_zoom_out",
+        "help_zoom_reset",
+        "help_zoom_wheel",
+        "help_cat_nav",
+        "help_key_space",
+        "help_desc_space",
+        "help_desc_search",
+        "help_desc_find_next",
+        "help_desc_f1",
+        "help_desc_esc",
+        "help_desc_drag_drop",
+        "help_cat_filters",
+        "help_filter_order",
+        "help_filter_reorder",
+        "help_filter_styles",
+        "help_filter_visibility",
+        "help_filter_recent",
+        "active_rules_stat",
+        "active_stream_stat",
+        "hint_rule_pattern",
+        "preview",
+        "closed",
+        "view_mode_all",
+        "tip_view_filtered",
+        "case_sensitive",
+        "case_sensitive_tip",
     ];
 
     for lang in &[Language::En, Language::It, Language::Fr, Language::Es, Language::Zh] {
@@ -661,6 +739,317 @@ fn test_font_size_and_recent_files_config() {
     assert_eq!(deserialized.recent_files[0], PathBuf::from("C:\\logs\\app_19.log"));
 }
 
+#[test]
+fn test_size_unit_cycling_and_format() {
+    use fasttail::tail_engine::SizeUnit;
 
+    let mut tmp = NamedTempFile::new().unwrap();
+    // Write 1024 * 1024 bytes (1 MB)
+    let payload = vec![b'A'; 1024 * 1024];
+    tmp.write_all(&payload).unwrap();
+    tmp.flush().unwrap();
 
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.size_unit, SizeUnit::Bytes);
+    assert_eq!(engine.format_size(), "1048576 B");
+
+    // Click 1: Bytes -> MB
+    engine.next_size_unit();
+    assert_eq!(engine.size_unit, SizeUnit::MB);
+    assert_eq!(engine.format_size(), "1.00 MB");
+
+    // Click 2: MB -> GB
+    engine.next_size_unit();
+    assert_eq!(engine.size_unit, SizeUnit::GB);
+    assert_eq!(engine.format_size(), "0.001 GB");
+
+    // Click 3: GB -> Bytes
+    engine.next_size_unit();
+    assert_eq!(engine.size_unit, SizeUnit::Bytes);
+    assert_eq!(engine.format_size(), "1048576 B");
+}
+
+#[test]
+fn test_view_mode_filtered() {
+    use fasttail::tail_engine::{HighlightRule, ViewMode};
+
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "2026-09-16 [INFO] System initialized").unwrap();
+    writeln!(tmp, "2026-09-16 [WARN] Memory high").unwrap();
+    writeln!(tmp, "2026-09-16 [ERROR] NullPointerException").unwrap();
+    writeln!(tmp, "    at com.example.App.main(App.java:42)").unwrap();
+    writeln!(tmp, "2026-09-16 [INFO] Heartbeat probe").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.view_mode, ViewMode::Text);
+
+    // Switch to filtered view
+    engine.view_mode = ViewMode::Filtered;
+
+    // With no filters or highlight rules, nothing matches
+    assert!(!engine.is_line_visible_filtered(0));
+    assert!(!engine.is_line_visible_filtered(1));
+    assert!(!engine.is_line_visible_filtered(2));
+    assert!(!engine.is_line_visible_filtered(3));
+    assert!(!engine.is_line_visible_filtered(4));
+
+    // Set include filter to "ERROR"
+    engine.set_include_filter("ERROR");
+    assert!(!engine.is_line_visible_filtered(0)); // INFO
+    assert!(!engine.is_line_visible_filtered(1)); // WARN
+    assert!(engine.is_line_visible_filtered(2));  // ERROR matches!
+    assert!(engine.is_line_visible_filtered(3));  // Multiline stacktrace continuation matches parent!
+    assert!(!engine.is_line_visible_filtered(4)); // INFO
+
+    // Test highlight rule match triggers visibility in filtered mode
+    engine.set_include_filter("");
+    let rule = HighlightRule::new("Memory", [255, 200, 0], [0, 0, 0], false);
+    engine.set_highlight_rules(vec![rule]);
+    assert!(!engine.is_line_visible_filtered(0));
+    assert!(engine.is_line_visible_filtered(1));  // Matches highlight rule "Memory"!
+    assert!(!engine.is_line_visible_filtered(2));
+}
+
+#[test]
+fn test_hex_columns_stepping() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    // 64 bytes
+    let payload = [0xAAu8; 64];
+    tmp.write_all(&payload).unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    // Default columns = 16
+    assert_eq!(engine.hex_columns, 16);
+    assert_eq!(engine.total_hex_rows(engine.hex_columns), 4);
+
+    // Step down to 8
+    engine.hex_columns = (engine.hex_columns - 8).max(8);
+    assert_eq!(engine.hex_columns, 8);
+    assert_eq!(engine.total_hex_rows(engine.hex_columns), 8);
+
+    // Step down cannot go below 8
+    engine.hex_columns = if engine.hex_columns > 8 { engine.hex_columns - 8 } else { engine.hex_columns };
+    assert_eq!(engine.hex_columns, 8);
+
+    // Step up to 24
+    engine.hex_columns = (engine.hex_columns + 8).min(64);
+    assert_eq!(engine.hex_columns, 16);
+    engine.hex_columns = (engine.hex_columns + 8).min(64);
+    assert_eq!(engine.hex_columns, 24);
+    // 64 bytes with 24 bytes per row -> ceil(64 / 24) = 3 rows
+    assert_eq!(engine.total_hex_rows(engine.hex_columns), 3);
+}
+
+#[test]
+fn test_config_size_unit_persistence() {
+    use fasttail::tail_engine::SizeUnit;
+
+    let mut config = FastTailConfig::default();
+    assert_eq!(config.size_unit, SizeUnit::Bytes);
+
+    config.size_unit = SizeUnit::MB;
+    let serialized = toml::to_string(&config).expect("serialize config with size_unit");
+    let deserialized: FastTailConfig = toml::from_str(&serialized).expect("deserialize config with size_unit");
+    assert_eq!(deserialized.size_unit, SizeUnit::MB);
+
+    config.size_unit = SizeUnit::GB;
+    let serialized = toml::to_string(&config).expect("serialize config with size_unit");
+    let deserialized: FastTailConfig = toml::from_str(&serialized).expect("deserialize config with size_unit");
+    assert_eq!(deserialized.size_unit, SizeUnit::GB);
+}
+
+#[test]
+fn test_txt_vs_hex_and_filtered_submode() {
+    use fasttail::tail_engine::ViewMode;
+
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "Line 1: Normal info").unwrap();
+    writeln!(tmp, "Line 2: Target line").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    // Initially in ViewMode::Text
+    assert_eq!(engine.view_mode, ViewMode::Text);
+
+    // Toggle Filtered mode (characteristic of TXT)
+    engine.view_mode = ViewMode::Filtered;
+    assert_eq!(engine.view_mode, ViewMode::Filtered);
+
+    // Toggle back to All lines in TXT
+    engine.view_mode = ViewMode::Text;
+    assert_eq!(engine.view_mode, ViewMode::Text);
+
+    // Switch to HEX
+    engine.view_mode = ViewMode::Hex;
+    assert_eq!(engine.view_mode, ViewMode::Hex);
+}
+
+#[test]
+fn test_config_ini_persistence() {
+    use fasttail::tail_engine::SizeUnit;
+    use std::path::PathBuf;
+
+    let mut config = FastTailConfig::default();
+    config.theme = CyberTheme::Blade;
+    config.language = Language::Fr;
+    config.screensaver_enabled = false;
+    config.screensaver_timeout_mins = 15;
+    config.telemetry_enabled = false;
+    config.sound_enabled = true;
+    config.borderless = true;
+    config.show_line_numbers = false;
+    config.font_size = 16.5;
+    config.size_unit = SizeUnit::MB;
+    config.open_files = vec![PathBuf::from("open1.log"), PathBuf::from("open2.log")];
+    config.recent_files = vec![PathBuf::from("recent1.log"), PathBuf::from("recent2.log")];
+    config.dock_layout = Some("LayoutTestRon".to_string());
+    config.highlight_rules = vec![
+        HighlightRule {
+            pattern: "FATAL".to_string(),
+            is_regex: false,
+            case_sensitive: true,
+            fg_color: [255, 0, 0],
+            bg_color: [50, 0, 0],
+            bold: true,
+            italic: false,
+            sound_alert: fasttail::audio::SoundAlertPreset::None,
+            enabled: true,
+        },
+    ];
+
+    let ini_obj = config.to_ini();
+    let loaded = FastTailConfig::from_ini(&ini_obj);
+
+    assert_eq!(loaded.theme, CyberTheme::Blade);
+    assert_eq!(loaded.language, Language::Fr);
+    assert_eq!(loaded.screensaver_enabled, false);
+    assert_eq!(loaded.screensaver_timeout_mins, 15);
+    assert_eq!(loaded.telemetry_enabled, false);
+    assert_eq!(loaded.sound_enabled, true);
+    assert_eq!(loaded.borderless, true);
+    assert_eq!(loaded.show_line_numbers, false);
+    assert_eq!(loaded.font_size, 16.5);
+    assert_eq!(loaded.size_unit, SizeUnit::MB);
+    assert_eq!(loaded.dock_layout.as_deref(), Some("LayoutTestRon"));
+    assert_eq!(loaded.recent_files.len(), 2);
+    assert_eq!(loaded.recent_files[0], PathBuf::from("recent1.log"));
+    assert_eq!(loaded.highlight_rules.len(), 1);
+    assert_eq!(loaded.highlight_rules[0].pattern, "FATAL");
+    assert_eq!(loaded.highlight_rules[0].case_sensitive, true);
+}
+
+#[test]
+fn test_open_files_closed_not_in_open_files() {
+    use std::path::PathBuf;
+
+    let mut config = FastTailConfig::default();
+    let file1 = PathBuf::from("file1.log");
+    let file2 = PathBuf::from("file2.log");
+
+    config.open_files.push(file1.clone());
+    config.open_files.push(file2.clone());
+    config.recent_files.push(file1.clone());
+    config.recent_files.push(file2.clone());
+
+    // User closes file1
+    config.open_files.retain(|p| p != &file1);
+
+    assert_eq!(config.open_files.len(), 1);
+    assert_eq!(config.open_files[0], file2);
+    // Recent files still contains both
+    assert_eq!(config.recent_files.len(), 2);
+    assert!(config.recent_files.contains(&file1));
+    assert!(config.recent_files.contains(&file2));
+}
+
+#[test]
+fn test_case_sensitive_and_insensitive_filters() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "Line 1: error in module").unwrap();
+    writeln!(tmp, "Line 2: ERROR in database").unwrap();
+    writeln!(tmp, "Line 3: Error in network").unwrap();
+    writeln!(tmp, "Line 4: OK info line").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+
+    // Default: non-regex, case-insensitive
+    engine.filter_is_regex = false;
+    engine.filter_case_sensitive = false;
+    engine.set_include_filter("error");
+
+    assert!(engine.is_line_visible(0)); // "error"
+    assert!(engine.is_line_visible(1)); // "ERROR"
+    assert!(engine.is_line_visible(2)); // "Error"
+    assert!(!engine.is_line_visible(3)); // "OK"
+
+    // Switch to case-sensitive
+    engine.filter_case_sensitive = true;
+    engine.set_include_filter("ERROR");
+
+    assert!(!engine.is_line_visible(0)); // "error" does NOT match "ERROR"
+    assert!(engine.is_line_visible(1));  // "ERROR" matches
+    assert!(!engine.is_line_visible(2)); // "Error" does NOT match
+    assert!(!engine.is_line_visible(3));
+}
+
+#[test]
+fn test_highlight_rule_case_sensitivity() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "warning: low memory").unwrap();
+    writeln!(tmp, "WARNING: high load").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+
+    // Case-insensitive rule
+    let mut rule_ci = HighlightRule::new("WARNING", [255, 255, 0], [0, 0, 0], false);
+    rule_ci.case_sensitive = false;
+    engine.set_highlight_rules(vec![rule_ci]);
+
+    assert!(engine.match_highlight("warning: low memory").is_some());
+    assert!(engine.match_highlight("WARNING: high load").is_some());
+
+    // Case-sensitive rule
+    let mut rule_cs = HighlightRule::new("WARNING", [255, 255, 0], [0, 0, 0], false);
+    rule_cs.case_sensitive = true;
+    engine.set_highlight_rules(vec![rule_cs]);
+
+    assert!(engine.match_highlight("warning: low memory").is_none());
+    assert!(engine.match_highlight("WARNING: high load").is_some());
+}
+
+#[test]
+fn test_arrow_scrolling_and_scroll_offsets() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    for i in 0..50 {
+        writeln!(tmp, "Line {}: sample log data", i).unwrap();
+    }
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.current_scroll_y, 0.0);
+    assert_eq!(engine.current_scroll_x, 0.0);
+
+    let row_height = 20.0;
+    // Arrow Down simulation
+    engine.requested_scroll_y = Some(engine.current_scroll_y + row_height);
+    assert_eq!(engine.requested_scroll_y, Some(20.0));
+
+    // Arrow Up simulation
+    engine.current_scroll_y = 60.0;
+    engine.requested_scroll_y = Some((engine.current_scroll_y - row_height).max(0.0));
+    assert_eq!(engine.requested_scroll_y, Some(40.0));
+
+    // Arrow Right simulation
+    engine.requested_scroll_x = Some(engine.current_scroll_x + 40.0);
+    assert_eq!(engine.requested_scroll_x, Some(40.0));
+
+    // Arrow Left simulation
+    engine.current_scroll_x = 50.0;
+    engine.requested_scroll_x = Some((engine.current_scroll_x - 40.0).max(0.0));
+    assert_eq!(engine.requested_scroll_x, Some(10.0));
+}
 

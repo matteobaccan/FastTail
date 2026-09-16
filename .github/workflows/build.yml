@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -50,7 +50,9 @@ jobs:
             libxcb1-dev \
             libxcursor-dev \
             libxrandr-dev \
-            libxi-dev
+            libxi-dev \
+            libxkbcommon-dev \
+            libwayland-dev
 
       - name: Run Test Suite
         run: cargo test --verbose
@@ -65,7 +67,7 @@ jobs:
           cp "${{ matrix.binary_path }}" "dist/${{ matrix.artifact_name }}"
 
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}

@@ -42,20 +42,22 @@ Whether you are monitoring multi-gigabyte production server logs, analyzing raw 
 
 ## 📊 Comparison with Other Tail Tools
 
-| Feature | FastTail | BareTail (Free/Pro) | Tailviewer | SnakeTail | 	ail -f / CLI |
+| Feature | FastTail | BareTail (Free/Pro) | Tailviewer | SnakeTail | `tail -f` / CLI |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Engine / Architecture** | **Rust (memmap2)** | Win32 C++ (2006) | .NET / C# | C# / WPF | POSIX C |
+| **Engine / Architecture** | **Rust (`memmap2`)** | Win32 C++ (2006) | .NET / C# | C# / WPF | POSIX C |
+| **Binary Size** | **~6 MB (Single binary)** | ~220 KB | ~45 MB | ~1.5 MB | ~50 KB |
+| **Runtime Dependencies** | **Zero (Standalone native)** | Zero (Win32 native) | .NET Runtime required | .NET Framework / WPF | POSIX coreutils |
 | **Large Files (>50 GB)** | **Instant (<100ms)** | Good | Slow / High RAM | Moderate | Fast |
 | **Cross-Platform** | **Windows, Linux, macOS** | Windows only | Windows only | Windows only | Linux/macOS |
 | **User Interface** | **Cyberpunk UI (GPU)** | Win32 Classic | Modern Windows | Classic Windows | Terminal CLI |
 | **Multi-Tab / Docking** | **Full Modular Docking** | Tabs only | Tabs & Panels | Tabs & Splits | Multiple terms |
-| **Binary Hex View** | **Yes (Multiples of 8)** | No | Plugin required | No | No (xxd) |
-| **Filtered View Mode** | **Yes (Direct Stream)** | Pro version only | Yes | Yes | grep pipe |
+| **Binary Hex View** | **Yes (Multiples of 8)** | No | Plugin required | No | No (`xxd`) |
+| **Filtered View Mode** | **Yes (Direct Stream)** | Pro version only | Yes | Yes | `grep` pipe |
 | **Highlighting Styles** | **FG, BG, Bold, Italic** | FG, BG | FG, BG | FG, BG | ANSI codes |
 | **Rule Priority Reordering**| **Yes (⬆ / ⬇ Top-Down)** | Limited | Yes | Yes | N/A |
-| **Sound Alerts** | **Presets (Beep/Chime/Crit)** | No | Plugins | Limited | Bell (\a) |
+| **Sound Alerts** | **Presets (Beep/Chime/Crit)** | No | Plugins | Limited | Bell (`\a`) |
 | **Encoding Support** | **ASCII, ANSI, UTF-8, UTF-16 LE/BE** | ANSI, UTF-8, Unicode | UTF-8, ANSI | UTF-8, ANSI | Terminal enc |
-| **JSON Formatter** | **Inline Pretty-Print** | No | Plugin required | No | jq pipe |
+| **JSON Formatter** | **Inline Pretty-Print** | No | Plugin required | No | `jq` pipe |
 | **Screensaver Mode** | **Matrix Digital Rain** | No | No | No | No |
 | **Open Source & License** | **MIT License** | Proprietary | MIT | GPL | Open Source |
 

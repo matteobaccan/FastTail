@@ -10,7 +10,7 @@ homepage = "https://github.com/matteobaccan/FastTail"
 
 [dependencies]
 # UI Framework & Docking
-eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow"] }
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 egui = "0.31"
 egui_dock = { version = "0.16", features = ["serde"] }
 
@@ -21,24 +21,25 @@ notify = "8.0"
 # Data, Serialization & Parsing
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-ron = "0.8"
-toml = "0.8"
+ron = "0.12"
+toml = "1.0"
+rust-ini = "0.21"
 regex = "1.11"
-rfd = "0.15"
+rfd = "0.17"
 
 # Telemetry
-sysinfo = "0.33"
+sysinfo = "0.39"
 
 # Windows Specific
 [target.'cfg(windows)'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 
 [features]
 default = []
 audio = ["dep:rodio"]
 
 [dependencies.rodio]
-version = "0.20"
+version = "0.22"
 optional = true
 
 [dev-dependencies]

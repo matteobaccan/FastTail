@@ -120,8 +120,10 @@ impl CyberTheme {
         visuals.window_stroke = Stroke::new(1.5_f32, border);
         visuals.window_corner_radius = egui::CornerRadius::same(2);
 
-        let mut style = Style::default();
-        style.visuals = visuals;
+        let style = Style {
+            visuals,
+            ..Default::default()
+        };
         ctx.set_style(style);
     }
 }
