@@ -162,6 +162,27 @@ impl HighlightRule {
 /// Upper bound on remembered search hits, keeps F3 navigation responsive on huge files.
 const MAX_SEARCH_MATCHES: usize = 20_000;
 
+/// Efficient case-insensitive substring search.
+/// For ASCII haystack and pre-lowercased needle, avoids heap allocation by checking ASCII byte windows.
+#[inline]
+fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    if haystack.is_ascii() && needle_lower.is_ascii() {
+        let h_bytes = haystack.as_bytes();
+        let n_bytes = needle_lower.as_bytes();
+        if n_bytes.len() > h_bytes.len() {
+            return false;
+        }
+        h_bytes
+            .windows(n_bytes.len())
+            .any(|w| w.eq_ignore_ascii_case(n_bytes))
+    } else {
+        haystack.to_lowercase().contains(needle_lower)
+    }
+}
+
 pub struct TailEngine {
     pub path: PathBuf,
     pub buffer: Vec<u8>,
@@ -200,7 +221,7 @@ pub struct TailEngine {
     include_filter_lower: String,
     exclude_filter_lower: String,
     pub highlight_rules: Vec<HighlightRule>,
-    compiled_highlights: Vec<(Option<Regex>, HighlightRule)>,
+    compiled_highlights: Vec<(Option<Regex>, String, HighlightRule)>,
     pub expanded_json_lines: HashSet<usize>,
     pub requested_scroll_x: Option<f32>,
     pub requested_scroll_y: Option<f32>,
@@ -395,7 +416,8 @@ impl TailEngine {
                 } else {
                     None
                 };
-                (re, r.clone())
+                let lower = r.pattern.to_lowercase();
+                (re, lower, r.clone())
             })
             .collect();
         self.highlight_rules = rules;
@@ -690,12 +712,14 @@ impl TailEngine {
 
         for idx in start_idx..total {
             if let Some(line) = self.get_line(idx) {
-                for (re_opt, rule) in &self.compiled_highlights {
+                for (re_opt, pat_lower, rule) in &self.compiled_highlights {
                     if rule.enabled && rule.sound_alert != SoundAlertPreset::None {
                         let is_match = if let Some(re) = re_opt {
                             re.is_match(&line)
-                        } else {
+                        } else if rule.case_sensitive {
                             line.contains(&rule.pattern)
+                        } else {
+                            contains_case_insensitive(&line, pat_lower)
                         };
                         if is_match {
                             rule.sound_alert.play();
@@ -822,8 +846,6 @@ impl TailEngine {
     }
 
     pub fn matches_filter(&self, line: &str) -> bool {
-        let mut lower_line: Option<String> = None;
-
         // Exclude check first
         if !self.exclude_filter.is_empty() {
             let matches_exclude = if self.filter_is_regex {
@@ -835,8 +857,7 @@ impl TailEngine {
             } else if self.filter_case_sensitive {
                 line.contains(&self.exclude_filter)
             } else {
-                let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
-                lower.contains(&self.exclude_filter.to_lowercase())
+                contains_case_insensitive(line, &self.exclude_filter_lower)
             };
             if matches_exclude {
                 return false;
@@ -854,8 +875,7 @@ impl TailEngine {
             } else if self.filter_case_sensitive {
                 line.contains(&self.include_filter)
             } else {
-                let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
-                lower.contains(&self.include_filter.to_lowercase())
+                contains_case_insensitive(line, &self.include_filter_lower)
             }
         } else {
             true
@@ -863,8 +883,7 @@ impl TailEngine {
     }
 
     pub fn match_highlight(&self, line: &str) -> Option<HighlightStyle> {
-        let mut lower_line: Option<String> = None;
-        for (re_opt, rule) in &self.compiled_highlights {
+        for (re_opt, pat_lower, rule) in &self.compiled_highlights {
             if !rule.enabled {
                 continue;
             }
@@ -873,8 +892,7 @@ impl TailEngine {
             } else if rule.case_sensitive {
                 line.contains(&rule.pattern)
             } else {
-                let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
-                lower.contains(&rule.pattern.to_lowercase())
+                contains_case_insensitive(line, pat_lower)
             };
 
             if is_match {
@@ -975,8 +993,6 @@ impl TailEngine {
 
     pub fn is_line_visible(&self, idx: usize) -> bool {
         if let Some(line) = self.get_line(idx) {
-            let mut lower_line: Option<String> = None;
-
             // Must not match exclude filter if set
             if !self.exclude_filter.is_empty() {
                 let matches_exclude = if self.filter_is_regex {
@@ -988,8 +1004,7 @@ impl TailEngine {
                 } else if self.filter_case_sensitive {
                     line.contains(&self.exclude_filter)
                 } else {
-                    let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
-                    lower.contains(&self.exclude_filter_lower)
+                    contains_case_insensitive(&line, &self.exclude_filter_lower)
                 };
                 if matches_exclude {
                     return false;
@@ -1007,8 +1022,7 @@ impl TailEngine {
                 } else if self.filter_case_sensitive {
                     line.contains(&self.include_filter)
                 } else {
-                    let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
-                    lower.contains(&self.include_filter_lower)
+                    contains_case_insensitive(&line, &self.include_filter_lower)
                 }
             } else {
                 true
@@ -1051,18 +1065,7 @@ impl TailEngine {
         let q_lower = query.to_lowercase();
 
         let check_match = |line: &str| -> bool {
-            if line.is_ascii() && q_lower.is_ascii() {
-                let q_bytes = q_lower.as_bytes();
-                let l_bytes = line.as_bytes();
-                if q_bytes.len() > l_bytes.len() {
-                    return false;
-                }
-                l_bytes
-                    .windows(q_bytes.len())
-                    .any(|w| w.eq_ignore_ascii_case(q_bytes))
-            } else {
-                line.to_lowercase().contains(&q_lower)
-            }
+            contains_case_insensitive(line, &q_lower)
         };
 
         if self.is_filter_active() {
