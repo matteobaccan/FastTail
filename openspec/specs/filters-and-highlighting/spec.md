@@ -20,6 +20,13 @@ The application SHALL provide real-time filtering directly in the stream control
 - **WHEN** a filter is active and the writer appends lines
 - **THEN** only the appended lines are evaluated against the filters, and matching ones appear at the bottom without re-scanning the whole file.
 
+### Requirement: Automatic Filter Activation
+Filtering SHALL activate automatically whenever either the include or exclude filter input contains text, without a manual mode switch button.
+
+#### Scenario: User types in filter box
+- **WHEN** the user enters a string in the include or exclude filter field
+- **THEN** filtering immediately applies to the stream, and clearing both fields restores all lines.
+
 ### Requirement: Multi-Rule Highlighting with Font Styles and Sound Alerts
 The application SHALL allow defining multiple highlight rules with custom foreground color, background color, bold text toggle, italic text toggle, and sound alert preset (None, Beep, Chime, Warning, Critical).
 

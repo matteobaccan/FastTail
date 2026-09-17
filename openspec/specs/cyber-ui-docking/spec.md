@@ -8,6 +8,27 @@ Provides a responsive, high-contrast Cyberpunk docking UI with virtualized rende
 ### Requirement: Cyberpunk UI Styling and Branding
 The application SHALL present a clean, high-contrast Cyberpunk UI featuring customizable themes (Tron, Matrix, Blade, Light), without double slashes (//) in UI labels. The main application window title SHALL be `FastTail v<version> by Matteo Baccan`.
 
+### Requirement: Titlebar Dragging and Move Cursor
+When hovering over or dragging the main application titlebar to reposition the window, the cursor SHALL be set to the 4-directional move cursor.
+
+#### Scenario: User hovers over titlebar drag region
+- **WHEN** the mouse hovers over the titlebar region not occupied by buttons
+- **THEN** the cursor icon switches to the move cursor and dragging moves the window smoothly.
+
+### Requirement: Header Application Version Display
+The main application window titlebar SHALL display the current crate version alongside the brand name and author.
+
+#### Scenario: Window titlebar displays version
+- **WHEN** the application opens
+- **THEN** the top navigation bar displays `FastTail v<version> by Matteo Baccan`.
+
+### Requirement: Clickable External Hyperlinks in About Dialog
+The About dialog SHALL provide clickable hyperlinks to the GitHub repository and to `https://www.baccan.it`, and SHALL show the git tag and build timestamp of the running binary.
+
+#### Scenario: User clicks website or repository link
+- **WHEN** the user opens the About dialog and clicks the GitHub repository or `www.baccan.it` link
+- **THEN** the default web browser opens the respective URL.
+
 ### Requirement: Localized Tooltips
 All interactive buttons, sliders, and controls SHALL provide informative tooltips fully localized in the currently selected user language (English, Italian, French, Spanish, Chinese).
 
