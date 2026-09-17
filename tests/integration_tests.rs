@@ -83,7 +83,12 @@ fn test_json_and_multiline_intelligence() {
 
 #[test]
 fn test_themes_and_palettes() {
-    for theme in &[CyberTheme::Tron, CyberTheme::Matrix, CyberTheme::Blade, CyberTheme::Light] {
+    for theme in &[
+        CyberTheme::Tron,
+        CyberTheme::Matrix,
+        CyberTheme::Blade,
+        CyberTheme::Light,
+    ] {
         let bg = theme.bg_color();
         let border = theme.border_color();
         let accent = theme.accent_color();
@@ -94,7 +99,13 @@ fn test_themes_and_palettes() {
 
 #[test]
 fn test_i18n_translations_and_fallback() {
-    for lang in &[Language::En, Language::It, Language::Fr, Language::Es, Language::Zh] {
+    for lang in &[
+        Language::En,
+        Language::It,
+        Language::Fr,
+        Language::Es,
+        Language::Zh,
+    ] {
         let title = t(*lang, "follow_tail");
         assert!(!title.is_empty());
         assert_ne!(title, "Unknown");
@@ -142,7 +153,10 @@ fn test_config_serialization() {
     assert_eq!(deserialized.theme, CyberTheme::Matrix);
     assert_eq!(deserialized.language, Language::It);
     assert_eq!(deserialized.screensaver_timeout_mins, 5);
-    assert!(deserialized.highlight_rules.iter().any(|r| r.pattern == "CRITICAL"));
+    assert!(deserialized
+        .highlight_rules
+        .iter()
+        .any(|r| r.pattern == "CRITICAL"));
     assert_eq!(deserialized.borderless, false);
     assert_eq!(deserialized.show_line_numbers, true);
 }
@@ -173,12 +187,21 @@ fn test_is_watching_pause_and_resume() {
     engine.poll_updates();
     // Now it updates to 2 lines
     assert_eq!(engine.total_lines(), 2);
-    assert_eq!(engine.get_line(1).as_deref(), Some("Line 2: Ignored while paused"));
+    assert_eq!(
+        engine.get_line(1).as_deref(),
+        Some("Line 2: Ignored while paused")
+    );
 }
 
 #[test]
 fn test_new_i18n_keys() {
-    for lang in &[Language::En, Language::It, Language::Fr, Language::Es, Language::Zh] {
+    for lang in &[
+        Language::En,
+        Language::It,
+        Language::Fr,
+        Language::Es,
+        Language::Zh,
+    ] {
         assert_ne!(t(*lang, "borderless"), "Unknown");
         assert_ne!(t(*lang, "show_lines"), "Unknown");
         assert_ne!(t(*lang, "monitor_on"), "Unknown");
@@ -227,9 +250,14 @@ fn test_dock_state_serialization_and_restore() {
 
     let restored_ron = loaded_cfg.dock_layout.expect("dock_layout should be Some");
     assert_eq!(ron_str, restored_ron, "RON strings must match exactly");
-    let restored_state: DockState<FastTailTab> = ron::from_str(&restored_ron).expect("RON from INI must deserialize");
-    assert!(restored_state.find_tab(&FastTailTab::LogStream(path1)).is_some());
-    assert!(restored_state.find_tab(&FastTailTab::LogStream(path2)).is_some());
+    let restored_state: DockState<FastTailTab> =
+        ron::from_str(&restored_ron).expect("RON from INI must deserialize");
+    assert!(restored_state
+        .find_tab(&FastTailTab::LogStream(path1))
+        .is_some());
+    assert!(restored_state
+        .find_tab(&FastTailTab::LogStream(path2))
+        .is_some());
 }
 
 #[test]
@@ -258,13 +286,19 @@ fn test_tail_engine_empty_file() {
     assert_eq!(engine.get_line(0).as_deref(), None);
 
     // Append to empty file
-    let mut f = std::fs::OpenOptions::new().write(true).open(tmp.path()).unwrap();
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(tmp.path())
+        .unwrap();
     writeln!(f, "First line after empty").unwrap();
     f.flush().unwrap();
 
     engine.poll_updates();
     assert_eq!(engine.total_lines(), 1);
-    assert_eq!(engine.get_line(0).as_deref(), Some("First line after empty"));
+    assert_eq!(
+        engine.get_line(0).as_deref(),
+        Some("First line after empty")
+    );
 }
 
 #[test]
@@ -325,7 +359,9 @@ fn test_tail_engine_highlights_priority() {
 
     engine.set_highlight_rules(vec![rule1, rule2]);
 
-    let style1 = engine.match_highlight("CRITICAL ERROR in payment gateway").unwrap();
+    let style1 = engine
+        .match_highlight("CRITICAL ERROR in payment gateway")
+        .unwrap();
     // Rule 1 has priority over Rule 2
     assert_eq!(style1.fg, egui::Color32::from_rgb(255, 0, 0));
     assert_eq!(style1.bg, egui::Color32::from_rgb(0, 0, 0));
@@ -338,7 +374,9 @@ fn test_tail_engine_highlights_priority() {
     let rule2 = HighlightRule::new("ERROR", [255, 255, 0], [10, 10, 10], false);
     engine.set_highlight_rules(vec![disabled_rule1, rule2]);
 
-    let style2 = engine.match_highlight("CRITICAL ERROR in payment gateway").unwrap();
+    let style2 = engine
+        .match_highlight("CRITICAL ERROR in payment gateway")
+        .unwrap();
     assert_eq!(style2.fg, egui::Color32::from_rgb(255, 255, 0));
     assert_eq!(style2.bg, egui::Color32::from_rgb(10, 10, 10));
 }
@@ -518,7 +556,13 @@ fn test_i18n_exhaustive_coverage() {
         "case_sensitive_tip",
     ];
 
-    for lang in &[Language::En, Language::It, Language::Fr, Language::Es, Language::Zh] {
+    for lang in &[
+        Language::En,
+        Language::It,
+        Language::Fr,
+        Language::Es,
+        Language::Zh,
+    ] {
         for key in &all_keys {
             let translation = t(*lang, key);
             assert!(
@@ -555,7 +599,10 @@ fn test_filter_naming_and_translation_consistency() {
 #[test]
 fn test_config_starts_with_empty_filters() {
     let config = FastTailConfig::default();
-    assert!(config.highlight_rules.is_empty(), "Filters must start empty by default");
+    assert!(
+        config.highlight_rules.is_empty(),
+        "Filters must start empty by default"
+    );
 
     // Creating a new filter rule should start with an empty pattern and regex disabled
     let new_rule = HighlightRule::new("", [255, 255, 255], [0, 100, 200], false);
@@ -570,7 +617,7 @@ fn test_tail_engine_binary_hex_streaming() {
     let sample_bytes: [u8; 20] = [
         0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x57, 0x6F, // Hello Wo
         0x72, 0x6C, 0x64, 0x21, 0x00, 0xFF, 0xFE, 0x0A, // rld!....
-        0xDE, 0xAD, 0xBE, 0xEF,                         // ....
+        0xDE, 0xAD, 0xBE, 0xEF, // ....
     ];
     tmp.write_all(&sample_bytes).unwrap();
     tmp.flush().unwrap();
@@ -588,7 +635,8 @@ fn test_tail_engine_binary_hex_streaming() {
     assert_eq!(second_row, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
     // Append 10 more bytes to test live binary streaming
-    tmp.write_all(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A]).unwrap();
+    tmp.write_all(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A])
+        .unwrap();
     tmp.flush().unwrap();
 
     engine.poll_updates();
@@ -617,7 +665,9 @@ fn test_tail_engine_binary_auto_detection() {
 
     // Binary file containing null byte should auto-detect ViewMode::Hex
     let mut bin_file = NamedTempFile::new().unwrap();
-    bin_file.write_all(&[0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00]).unwrap();
+    bin_file
+        .write_all(&[0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00])
+        .unwrap();
     bin_file.flush().unwrap();
     let bin_engine = TailEngine::open(bin_file.path()).unwrap();
     assert_eq!(bin_engine.view_mode, ViewMode::Hex);
@@ -640,7 +690,9 @@ fn test_tail_engine_encodings() {
     // 2. ANSI (Latin-1 / Windows-1252)
     let mut f_ansi = NamedTempFile::new().unwrap();
     // 'C', 'a', 'f', 0xE9 (é in Latin-1), '\n'
-    f_ansi.write_all(&[b'C', b'a', b'f', 0xE9, b'\n', b'O', b'k', b'\n']).unwrap();
+    f_ansi
+        .write_all(&[b'C', b'a', b'f', 0xE9, b'\n', b'O', b'k', b'\n'])
+        .unwrap();
     f_ansi.flush().unwrap();
     let mut engine_ansi = TailEngine::open(f_ansi.path()).unwrap();
     engine_ansi.set_encoding(FileEncoding::Ansi);
@@ -651,7 +703,9 @@ fn test_tail_engine_encodings() {
     // 3. UTF-8 (with BOM)
     let mut f_utf8 = NamedTempFile::new().unwrap();
     f_utf8.write_all(&[0xEF, 0xBB, 0xBF]).unwrap(); // UTF-8 BOM
-    f_utf8.write_all("Prima riga UTF-8\nSeconda riga 🚀\n".as_bytes()).unwrap();
+    f_utf8
+        .write_all("Prima riga UTF-8\nSeconda riga 🚀\n".as_bytes())
+        .unwrap();
     f_utf8.flush().unwrap();
     let engine_utf8 = TailEngine::open(f_utf8.path()).unwrap();
     assert_eq!(engine_utf8.encoding, FileEncoding::Utf8);
@@ -670,7 +724,10 @@ fn test_tail_engine_encodings() {
     let engine_utf16le = TailEngine::open(f_utf16le.path()).unwrap();
     assert_eq!(engine_utf16le.encoding, FileEncoding::UnicodeLe);
     assert_eq!(engine_utf16le.total_lines(), 2);
-    assert_eq!(engine_utf16le.get_line(0).as_deref(), Some("Unicode LE Line 1"));
+    assert_eq!(
+        engine_utf16le.get_line(0).as_deref(),
+        Some("Unicode LE Line 1")
+    );
     assert_eq!(engine_utf16le.get_line(1).as_deref(), Some("Line 2"));
 
     // 5. Unicode Big Endian (UTF-16 BE with BOM)
@@ -684,7 +741,10 @@ fn test_tail_engine_encodings() {
     let engine_utf16be = TailEngine::open(f_utf16be.path()).unwrap();
     assert_eq!(engine_utf16be.encoding, FileEncoding::UnicodeBe);
     assert_eq!(engine_utf16be.total_lines(), 2);
-    assert_eq!(engine_utf16be.get_line(0).as_deref(), Some("Unicode BE Line 1"));
+    assert_eq!(
+        engine_utf16be.get_line(0).as_deref(),
+        Some("Unicode BE Line 1")
+    );
     assert_eq!(engine_utf16be.get_line(1).as_deref(), Some("Line 2"));
 }
 
@@ -699,13 +759,16 @@ fn test_highlight_rule_bold_italic_and_reordering() {
     // Rule A: match "CRITICAL" -> red fg, black bg, bold=true, italic=false
     let rule_a = HighlightRule::with_style("CRITICAL", [255, 0, 0], [0, 0, 0], false, true, false);
     // Rule B: match "Database" -> blue fg, yellow bg, bold=false, italic=true
-    let rule_b = HighlightRule::with_style("Database", [0, 0, 255], [255, 255, 0], false, false, true);
+    let rule_b =
+        HighlightRule::with_style("Database", [0, 0, 255], [255, 255, 0], false, false, true);
 
     // Initial order: [Rule A, Rule B].
     // Both match "2026-09-16 [CRITICAL] Database connection failed".
     // Evaluation order must be top-down and STOP at the first match!
     engine.set_highlight_rules(vec![rule_a.clone(), rule_b.clone()]);
-    let style_first = engine.match_highlight("2026-09-16 [CRITICAL] Database connection failed").unwrap();
+    let style_first = engine
+        .match_highlight("2026-09-16 [CRITICAL] Database connection failed")
+        .unwrap();
     assert_eq!(style_first.fg, egui::Color32::from_rgb(255, 0, 0));
     assert!(style_first.bold, "Rule A must apply bold");
     assert!(!style_first.italic, "Rule A is not italic");
@@ -716,7 +779,9 @@ fn test_highlight_rule_bold_italic_and_reordering() {
     engine.set_highlight_rules(reordered_rules);
 
     // Now Rule B comes first, so Rule B must win!
-    let style_reordered = engine.match_highlight("2026-09-16 [CRITICAL] Database connection failed").unwrap();
+    let style_reordered = engine
+        .match_highlight("2026-09-16 [CRITICAL] Database connection failed")
+        .unwrap();
     assert_eq!(style_reordered.fg, egui::Color32::from_rgb(0, 0, 255));
     assert!(!style_reordered.bold, "Rule B is not bold");
     assert!(style_reordered.italic, "Rule B must apply italic");
@@ -743,14 +808,20 @@ fn test_font_size_and_recent_files_config() {
 
     assert_eq!(config.recent_files.len(), 15);
     // Most recent is app_19.log
-    assert_eq!(config.recent_files[0], PathBuf::from("C:\\logs\\app_19.log"));
+    assert_eq!(
+        config.recent_files[0],
+        PathBuf::from("C:\\logs\\app_19.log")
+    );
 
     // Serialize and deserialize
     let toml_str = toml::to_string(&config).expect("serialize config");
     let deserialized: FastTailConfig = toml::from_str(&toml_str).expect("deserialize config");
     assert_eq!(deserialized.font_size, 18.0);
     assert_eq!(deserialized.recent_files.len(), 15);
-    assert_eq!(deserialized.recent_files[0], PathBuf::from("C:\\logs\\app_19.log"));
+    assert_eq!(
+        deserialized.recent_files[0],
+        PathBuf::from("C:\\logs\\app_19.log")
+    );
 }
 
 #[test]
@@ -826,8 +897,8 @@ fn test_view_mode_filtered() {
     engine.set_include_filter("ERROR");
     assert!(!engine.is_line_visible_filtered(0)); // INFO
     assert!(!engine.is_line_visible_filtered(1)); // WARN
-    assert!(engine.is_line_visible_filtered(2));  // ERROR matches!
-    assert!(engine.is_line_visible_filtered(3));  // Multiline stacktrace continuation matches parent!
+    assert!(engine.is_line_visible_filtered(2)); // ERROR matches!
+    assert!(engine.is_line_visible_filtered(3)); // Multiline stacktrace continuation matches parent!
     assert!(!engine.is_line_visible_filtered(4)); // INFO
 
     // Highlight rules only style lines: they never bypass the include filter
@@ -835,7 +906,7 @@ fn test_view_mode_filtered() {
     engine.set_highlight_rules(vec![rule]);
     assert!(!engine.is_line_visible_filtered(0));
     assert!(!engine.is_line_visible_filtered(1)); // Matches the highlight rule but not "ERROR"
-    assert!(engine.is_line_visible_filtered(2));  // Matches include filter!
+    assert!(engine.is_line_visible_filtered(2)); // Matches include filter!
 }
 
 #[test]
@@ -857,7 +928,11 @@ fn test_hex_columns_stepping() {
     assert_eq!(engine.total_hex_rows(engine.hex_columns), 8);
 
     // Step down cannot go below 8
-    engine.hex_columns = if engine.hex_columns > 8 { engine.hex_columns - 8 } else { engine.hex_columns };
+    engine.hex_columns = if engine.hex_columns > 8 {
+        engine.hex_columns - 8
+    } else {
+        engine.hex_columns
+    };
     assert_eq!(engine.hex_columns, 8);
 
     // Step up to 24
@@ -878,17 +953,20 @@ fn test_config_size_unit_persistence() {
 
     config.size_unit = SizeUnit::MB;
     let serialized = toml::to_string(&config).expect("serialize config with size_unit");
-    let deserialized: FastTailConfig = toml::from_str(&serialized).expect("deserialize config with size_unit");
+    let deserialized: FastTailConfig =
+        toml::from_str(&serialized).expect("deserialize config with size_unit");
     assert_eq!(deserialized.size_unit, SizeUnit::MB);
 
     config.size_unit = SizeUnit::GB;
     let serialized = toml::to_string(&config).expect("serialize config with size_unit");
-    let deserialized: FastTailConfig = toml::from_str(&serialized).expect("deserialize config with size_unit");
+    let deserialized: FastTailConfig =
+        toml::from_str(&serialized).expect("deserialize config with size_unit");
     assert_eq!(deserialized.size_unit, SizeUnit::GB);
 
     config.size_unit = SizeUnit::Hex;
     let serialized = toml::to_string(&config).expect("serialize config with size_unit");
-    let deserialized: FastTailConfig = toml::from_str(&serialized).expect("deserialize config with size_unit");
+    let deserialized: FastTailConfig =
+        toml::from_str(&serialized).expect("deserialize config with size_unit");
     assert_eq!(deserialized.size_unit, SizeUnit::Hex);
 }
 
@@ -938,19 +1016,17 @@ fn test_config_ini_persistence() {
     config.open_files = vec![PathBuf::from("open1.log"), PathBuf::from("open2.log")];
     config.recent_files = vec![PathBuf::from("recent1.log"), PathBuf::from("recent2.log")];
     config.dock_layout = Some("LayoutTestRon".to_string());
-    config.highlight_rules = vec![
-        HighlightRule {
-            pattern: "FATAL".to_string(),
-            is_regex: false,
-            case_sensitive: true,
-            fg_color: [255, 0, 0],
-            bg_color: [50, 0, 0],
-            bold: true,
-            italic: false,
-            sound_alert: fasttail::audio::SoundAlertPreset::None,
-            enabled: true,
-        },
-    ];
+    config.highlight_rules = vec![HighlightRule {
+        pattern: "FATAL".to_string(),
+        is_regex: false,
+        case_sensitive: true,
+        fg_color: [255, 0, 0],
+        bg_color: [50, 0, 0],
+        bold: true,
+        italic: false,
+        sound_alert: fasttail::audio::SoundAlertPreset::None,
+        enabled: true,
+    }];
 
     let ini_obj = config.to_ini();
     let loaded = FastTailConfig::from_ini(&ini_obj);
@@ -972,7 +1048,10 @@ fn test_config_ini_persistence() {
     assert_eq!(loaded.highlight_rules.len(), 1);
     assert_eq!(loaded.highlight_rules[0].pattern, "FATAL");
     assert_eq!(loaded.highlight_rules[0].case_sensitive, true);
-    assert_eq!(loaded.highlight_rules[0].sound_alert, fasttail::audio::SoundAlertPreset::None);
+    assert_eq!(
+        loaded.highlight_rules[0].sound_alert,
+        fasttail::audio::SoundAlertPreset::None
+    );
 }
 
 #[test]
@@ -1031,10 +1110,22 @@ fn test_highlight_rule_sound_alert_ini_persistence() {
     let loaded = FastTailConfig::from_ini(&ini);
 
     assert_eq!(loaded.highlight_rules.len(), 4);
-    assert_eq!(loaded.highlight_rules[0].sound_alert, SoundAlertPreset::Critical);
-    assert_eq!(loaded.highlight_rules[1].sound_alert, SoundAlertPreset::Warning);
-    assert_eq!(loaded.highlight_rules[2].sound_alert, SoundAlertPreset::Beep);
-    assert_eq!(loaded.highlight_rules[3].sound_alert, SoundAlertPreset::Chime);
+    assert_eq!(
+        loaded.highlight_rules[0].sound_alert,
+        SoundAlertPreset::Critical
+    );
+    assert_eq!(
+        loaded.highlight_rules[1].sound_alert,
+        SoundAlertPreset::Warning
+    );
+    assert_eq!(
+        loaded.highlight_rules[2].sound_alert,
+        SoundAlertPreset::Beep
+    );
+    assert_eq!(
+        loaded.highlight_rules[3].sound_alert,
+        SoundAlertPreset::Chime
+    );
 }
 
 #[test]
@@ -1044,12 +1135,23 @@ fn test_proportional_font_row_height_scaling() {
     output.textures_delta.clear();
     let font_id_small = egui::FontId::monospace(8.0);
     let row_height_8 = ctx.fonts_mut(|f| f.row_height(&font_id_small));
-    assert!(row_height_8 < 16.0, "Font size 8.0 row height ({}) should be < 16.0", row_height_8);
+    assert!(
+        row_height_8 < 16.0,
+        "Font size 8.0 row height ({}) should be < 16.0",
+        row_height_8
+    );
 
     let font_id_10 = egui::FontId::monospace(10.0);
     let row_height_10 = ctx.fonts_mut(|f| f.row_height(&font_id_10));
-    assert!(row_height_10 < 16.0, "Font size 10.0 row height ({}) should be < 16.0", row_height_10);
-    assert!(row_height_10 > row_height_8, "Font size 10.0 row height should be greater than font size 8.0");
+    assert!(
+        row_height_10 < 16.0,
+        "Font size 10.0 row height ({}) should be < 16.0",
+        row_height_10
+    );
+    assert!(
+        row_height_10 > row_height_8,
+        "Font size 10.0 row height should be greater than font size 8.0"
+    );
 }
 
 #[test]
@@ -1102,7 +1204,7 @@ fn test_case_sensitive_and_insensitive_filters() {
     engine.set_include_filter("ERROR");
 
     assert!(!engine.is_line_visible(0)); // "error" does NOT match "ERROR"
-    assert!(engine.is_line_visible(1));  // "ERROR" matches
+    assert!(engine.is_line_visible(1)); // "ERROR" matches
     assert!(!engine.is_line_visible(2)); // "Error" does NOT match
     assert!(!engine.is_line_visible(3));
 }
@@ -1209,14 +1311,21 @@ fn test_max_detected_width_and_safe_end_key_scrolling() {
 
 #[test]
 fn test_crash_handler_git_commit_and_report_generation() {
-    use fasttail::crash_handler::{build_crash_report, GIT_COMMIT_HASH, GIT_TAG, APP_VERSION};
+    use fasttail::crash_handler::{build_crash_report, APP_VERSION, GIT_COMMIT_HASH, GIT_TAG};
 
-    assert!(!GIT_COMMIT_HASH.is_empty(), "GIT_COMMIT_HASH must not be empty");
+    assert!(
+        !GIT_COMMIT_HASH.is_empty(),
+        "GIT_COMMIT_HASH must not be empty"
+    );
     assert!(!GIT_TAG.is_empty(), "GIT_TAG must not be empty");
     assert_eq!(APP_VERSION, "0.1.0");
 
     let bt = std::backtrace::Backtrace::disabled();
-    let report = build_crash_report("Explicit panic test message", Some("src/ui/dock.rs:364:21"), &bt);
+    let report = build_crash_report(
+        "Explicit panic test message",
+        Some("src/ui/dock.rs:364:21"),
+        &bt,
+    );
 
     assert!(report.contains("FASTTAIL CRASH REPORT"));
     assert!(report.contains(GIT_COMMIT_HASH));
@@ -1244,7 +1353,9 @@ fn test_file_not_locked_external_modification_and_rollback() {
         .truncate(true)
         .open(&path)
         .expect("External process should not be locked by FastTail!");
-    f_mod.write_all(b"Modified content line 1\nModified content line 2\nModified line 3\n").unwrap();
+    f_mod
+        .write_all(b"Modified content line 1\nModified content line 2\nModified line 3\n")
+        .unwrap();
     f_mod.flush().unwrap();
     drop(f_mod);
 
@@ -1263,7 +1374,9 @@ fn test_file_not_locked_external_modification_and_rollback() {
         .truncate(true)
         .open(&path)
         .expect("External rollback should not be locked by FastTail!");
-    f_rollback.write_all(b"Initial log line 1\nInitial log line 2\n").unwrap();
+    f_rollback
+        .write_all(b"Initial log line 1\nInitial log line 2\n")
+        .unwrap();
     f_rollback.flush().unwrap();
     drop(f_rollback);
 
@@ -1369,7 +1482,11 @@ fn test_filter_virtualization_and_continuous_indexing() {
     for row in 0..13 {
         let actual = engine.get_actual_line_idx(row).unwrap();
         let content = engine.get_line(actual).unwrap();
-        assert!(!content.contains("ping"), "Excluded line found: {}", content);
+        assert!(
+            !content.contains("ping"),
+            "Excluded line found: {}",
+            content
+        );
         assert_eq!(engine.get_visible_row_of_line(actual), Some(row));
     }
 
@@ -1457,7 +1574,10 @@ fn test_search_history_management_and_ini_persistence() {
     let ini_obj = config.to_ini();
     assert!(ini_obj.section(Some("search_history")).is_some());
     assert_eq!(
-        ini_obj.section(Some("search_history")).unwrap().get("query_0"),
+        ini_obj
+            .section(Some("search_history"))
+            .unwrap()
+            .get("query_0"),
         Some("Query 5")
     );
 
@@ -1469,12 +1589,13 @@ fn test_search_history_management_and_ini_persistence() {
 
 #[test]
 fn test_markdown_mode_detection_and_rendering() {
-    let mut tmp = tempfile::Builder::new()
-        .suffix(".md")
-        .tempfile()
-        .unwrap();
+    let mut tmp = tempfile::Builder::new().suffix(".md").tempfile().unwrap();
 
-    writeln!(tmp, "# FastTail Documentation\n\nWelcome to **FastTail**!\n\n- Feature 1\n- Feature 2").unwrap();
+    writeln!(
+        tmp,
+        "# FastTail Documentation\n\nWelcome to **FastTail**!\n\n- Feature 1\n- Feature 2"
+    )
+    .unwrap();
     tmp.flush().unwrap();
 
     let mut engine = TailEngine::open(tmp.path()).unwrap();
@@ -1578,9 +1699,15 @@ fn test_dock_state_floating_window_position_roundtrip() {
     use fasttail::ui::dock::FastTailTab;
     use std::path::PathBuf;
 
-    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(PathBuf::from("test.log"))]);
-    let locator = dock.find_tab(&FastTailTab::LogStream(PathBuf::from("test.log"))).expect("find tab");
-    let surf_idx = dock.detach_tab(locator, egui::Rect::from_min_size(egui::pos2(120.0, 140.0), egui::vec2(500.0, 350.0)));
+    let mut dock: DockState<FastTailTab> =
+        DockState::new(vec![FastTailTab::LogStream(PathBuf::from("test.log"))]);
+    let locator = dock
+        .find_tab(&FastTailTab::LogStream(PathBuf::from("test.log")))
+        .expect("find tab");
+    let surf_idx = dock.detach_tab(
+        locator,
+        egui::Rect::from_min_size(egui::pos2(120.0, 140.0), egui::vec2(500.0, 350.0)),
+    );
 
     // Set position and size on window state
     if let Some(ws) = dock.get_window_state_mut(surf_idx) {
@@ -1595,7 +1722,8 @@ fn test_dock_state_floating_window_position_roundtrip() {
     assert!(ron_str.contains("720"));
     assert!(ron_str.contains("480"));
 
-    let mut loaded: DockState<FastTailTab> = ron::from_str(&ron_str).expect("deserialize dock state");
+    let mut loaded: DockState<FastTailTab> =
+        ron::from_str(&ron_str).expect("deserialize dock state");
     assert_eq!(loaded.surfaces_count(), 2);
 
     struct DummyViewer;
@@ -1697,10 +1825,10 @@ fn test_light_theme_background_colors_and_visuals() {
 #[test]
 fn test_ctrl_f_focus_and_search() {
     use egui_dock::DockState;
-    use fasttail::ui::dock::{FastTailTab, FastTailTabViewer, DockContext};
+    use fasttail::i18n::Language;
     use fasttail::tail_engine::TailEngine;
     use fasttail::theme::CyberTheme;
-    use fasttail::i18n::Language;
+    use fasttail::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -1730,7 +1858,8 @@ fn test_ctrl_f_focus_and_search() {
     let mut test_screensaver = false;
     let focused_stream = Some(path.clone());
 
-    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path.clone())]);
+    let mut dock: DockState<FastTailTab> =
+        DockState::new(vec![FastTailTab::LogStream(path.clone())]);
 
     let ctx = egui::Context::default();
 
@@ -1762,15 +1891,13 @@ fn test_ctrl_f_focus_and_search() {
 
     // Frame 2: Press Ctrl + F
     let raw_input = egui::RawInput {
-        events: vec![
-            egui::Event::Key {
-                key: egui::Key::F,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::CTRL,
-            }
-        ],
+        events: vec![egui::Event::Key {
+            key: egui::Key::F,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        }],
         ..Default::default()
     };
     let mut out2 = ctx.run_ui(raw_input, |ui| {
@@ -1854,15 +1981,13 @@ fn test_ctrl_f_focus_and_search() {
 
     // Frame 5: Press Enter
     let raw_enter = egui::RawInput {
-        events: vec![
-            egui::Event::Key {
-                key: egui::Key::Enter,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }
-        ],
+        events: vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
         ..Default::default()
     };
     let mut out5 = ctx.run_ui(raw_enter, |ui| {
@@ -1892,9 +2017,7 @@ fn test_ctrl_f_focus_and_search() {
 
     // Frame 6: Feed Event::Text("\u{0006}") while focused
     let raw_ctrl_f_char = egui::RawInput {
-        events: vec![
-            egui::Event::Text("\u{0006}".to_string())
-        ],
+        events: vec![egui::Event::Text("\u{0006}".to_string())],
         ..Default::default()
     };
     let mut out6 = ctx.run_ui(raw_ctrl_f_char, |ui| {
@@ -1921,7 +2044,10 @@ fn test_ctrl_f_focus_and_search() {
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
     });
     out6.textures_delta.clear();
-    println!("search_query after ctrl+f char: {:?}", engines[0].search_query);
+    println!(
+        "search_query after ctrl+f char: {:?}",
+        engines[0].search_query
+    );
 }
 
 #[test]
@@ -1963,9 +2089,13 @@ fn test_search_query_is_per_tab() {
     let focused_stream = Some(path1.clone());
 
     // Both tabs visible at once (side by side) so both stream panels render each frame
-    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
-    dock.main_surface_mut()
-        .split_right(NodeIndex::root(), 0.5, vec![FastTailTab::LogStream(path2.clone())]);
+    let mut dock: DockState<FastTailTab> =
+        DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
+    dock.main_surface_mut().split_right(
+        NodeIndex::root(),
+        0.5,
+        vec![FastTailTab::LogStream(path2.clone())],
+    );
 
     let ctx = egui::Context::default();
 
@@ -2000,8 +2130,14 @@ fn test_search_query_is_per_tab() {
     // First tab searched, second tab untouched
     assert_eq!(engines[0].search_query, "line 1");
     assert_eq!(engines[0].search_matches, vec![0]);
-    assert!(engines[1].search_query.is_empty(), "search query leaked into the second tab");
-    assert!(engines[1].search_matches.is_empty(), "search matches leaked into the second tab");
+    assert!(
+        engines[1].search_query.is_empty(),
+        "search query leaked into the second tab"
+    );
+    assert!(
+        engines[1].search_matches.is_empty(),
+        "search matches leaked into the second tab"
+    );
 }
 
 #[test]
@@ -2035,15 +2171,13 @@ fn test_fasttail_app_ctrl_f() {
 
     // Frame 2: Press Ctrl + F
     let raw_ctrl_f = egui::RawInput {
-        events: vec![
-            egui::Event::Key {
-                key: egui::Key::F,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::CTRL,
-            }
-        ],
+        events: vec![egui::Event::Key {
+            key: egui::Key::F,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        }],
         ..Default::default()
     };
     let mut out2 = ctx.run_ui(raw_ctrl_f, |ui| {
@@ -2059,15 +2193,13 @@ fn test_fasttail_app_ctrl_f() {
 
     // Frame 4: ArrowDown while focused to scroll/navigate
     let raw_down = egui::RawInput {
-        events: vec![
-            egui::Event::Key {
-                key: egui::Key::ArrowDown,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }
-        ],
+        events: vec![egui::Event::Key {
+            key: egui::Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
         ..Default::default()
     };
     let mut out4 = ctx.run_ui(raw_down, |ui| {
@@ -2077,15 +2209,13 @@ fn test_fasttail_app_ctrl_f() {
 
     // Frame 5: Escape to release focus
     let raw_esc = egui::RawInput {
-        events: vec![
-            egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }
-        ],
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
         ..Default::default()
     };
     let mut out5 = ctx.run_ui(raw_esc, |ui| {
@@ -2093,10 +2223,6 @@ fn test_fasttail_app_ctrl_f() {
     });
     out5.textures_delta.clear();
 }
-
-
-
-
 
 // ---------------------------------------------------------------------------
 // Regression tests for the 2026-09-17 code review findings
@@ -2108,12 +2234,22 @@ fn test_config_test_binary_detection_ignores_release_names() {
     use std::path::Path;
 
     // Cargo test binaries live in target/<profile>/deps and carry a hash suffix
-    assert!(is_test_binary(Path::new("target/debug/deps/fasttail-1a2b3c4d.exe")));
-    assert!(is_test_binary(Path::new("target/debug/deps/integration_tests-1a2b3c4d")));
+    assert!(is_test_binary(Path::new(
+        "target/debug/deps/fasttail-1a2b3c4d.exe"
+    )));
+    assert!(is_test_binary(Path::new(
+        "target/debug/deps/integration_tests-1a2b3c4d"
+    )));
     // Release artifacts published by CI must NOT be treated as test binaries
-    assert!(!is_test_binary(Path::new("C:/Tools/fasttail-windows-x86_64.exe")));
-    assert!(!is_test_binary(Path::new("/usr/local/bin/fasttail-linux-x86_64")));
-    assert!(!is_test_binary(Path::new("/Applications/fasttail-macos-arm64")));
+    assert!(!is_test_binary(Path::new(
+        "C:/Tools/fasttail-windows-x86_64.exe"
+    )));
+    assert!(!is_test_binary(Path::new(
+        "/usr/local/bin/fasttail-linux-x86_64"
+    )));
+    assert!(!is_test_binary(Path::new(
+        "/Applications/fasttail-macos-arm64"
+    )));
     assert!(!is_test_binary(Path::new("C:/Tools/fasttail.exe")));
 }
 
@@ -2177,8 +2313,16 @@ fn test_search_matches_refresh_after_append_and_keep_position() {
     engine.poll_updates();
     engine.update_search("ERROR");
 
-    assert_eq!(engine.search_matches, vec![0, 2, 3, 4], "new matches must be picked up");
-    assert_eq!(engine.current_search_line(), Some(2), "current match must be preserved");
+    assert_eq!(
+        engine.search_matches,
+        vec![0, 2, 3, 4],
+        "new matches must be picked up"
+    );
+    assert_eq!(
+        engine.current_search_line(),
+        Some(2),
+        "current match must be preserved"
+    );
     assert_eq!(engine.search_next(false), Some(3));
 }
 
@@ -2196,7 +2340,11 @@ fn test_search_matches_refresh_when_filter_changes() {
 
     engine.set_include_filter("payment");
     engine.update_search("ERROR");
-    assert_eq!(engine.search_matches, vec![0], "hidden lines must drop out of the search");
+    assert_eq!(
+        engine.search_matches,
+        vec![0],
+        "hidden lines must drop out of the search"
+    );
     assert_eq!(engine.current_search_line(), Some(0));
 
     engine.set_include_filter("");
@@ -2227,8 +2375,15 @@ fn test_include_filter_is_not_bypassed_by_highlight_rules() {
     }]);
     engine.set_include_filter("payment");
 
-    assert_eq!(engine.filtered_lines, vec![0, 2], "only include-filter matches are visible");
-    assert!(!engine.is_line_visible(1), "highlighted line without 'payment' must be hidden");
+    assert_eq!(
+        engine.filtered_lines,
+        vec![0, 2],
+        "only include-filter matches are visible"
+    );
+    assert!(
+        !engine.is_line_visible(1),
+        "highlighted line without 'payment' must be hidden"
+    );
     assert_eq!(engine.visible_line_count(), 2);
 }
 
@@ -2283,7 +2438,8 @@ fn test_html_converter_entities_pre_blocks_and_empty_links() {
     assert!(md.contains("<div class=\"x\">hi</div>"), "got: {md}");
 
     // Generics inside converted code blocks survive
-    let md = html_to_markdown("<p>Intro</p><pre><code>let v: Vec&lt;i32&gt; = vec![];</code></pre>");
+    let md =
+        html_to_markdown("<p>Intro</p><pre><code>let v: Vec&lt;i32&gt; = vec![];</code></pre>");
     assert!(md.contains("Vec<i32>"), "got: {md}");
 
     // An anchor without text keeps its url
@@ -2302,22 +2458,38 @@ fn test_markdown_text_is_cached_per_buffer_generation() {
     assert!(first.contains("# Title"));
     assert!(first.contains("**there**"));
     let first_ptr = engine.markdown_text().as_ptr();
-    assert_eq!(first_ptr, engine.markdown_text().as_ptr(), "same buffer must be served from cache");
+    assert_eq!(
+        first_ptr,
+        engine.markdown_text().as_ptr(),
+        "same buffer must be served from cache"
+    );
 
     writeln!(tmp, "<p>More <i>text</i></p>").unwrap();
     tmp.flush().unwrap();
     std::thread::sleep(Duration::from_millis(50));
     engine.poll_updates();
     let second = engine.markdown_text().to_string();
-    assert!(second.contains("*text*"), "cache must refresh after the buffer changes: {second}");
+    assert!(
+        second.contains("*text*"),
+        "cache must refresh after the buffer changes: {second}"
+    );
 }
 
 #[test]
 fn test_mode_switch_tooltips_are_localized() {
-    for lang in [Language::En, Language::It, Language::Fr, Language::Es, Language::Zh] {
+    for lang in [
+        Language::En,
+        Language::It,
+        Language::Fr,
+        Language::Es,
+        Language::Zh,
+    ] {
         for key in ["tip_mode_txt", "tip_mode_hex", "tip_mode_md"] {
             let text = t(lang, key);
-            assert!(!text.is_empty() && text != key, "missing translation {key} for {lang:?}");
+            assert!(
+                !text.is_empty() && text != key,
+                "missing translation {key} for {lang:?}"
+            );
         }
     }
     assert!(t(Language::En, "tip_mode_txt").contains("Text"));
@@ -2326,7 +2498,12 @@ fn test_mode_switch_tooltips_are_localized() {
 
 #[test]
 fn test_theme_exposes_tab_backgrounds() {
-    for theme in [CyberTheme::Tron, CyberTheme::Matrix, CyberTheme::Blade, CyberTheme::Light] {
+    for theme in [
+        CyberTheme::Tron,
+        CyberTheme::Matrix,
+        CyberTheme::Blade,
+        CyberTheme::Light,
+    ] {
         assert_ne!(theme.tab_active_bg(), theme.tab_inactive_bg());
     }
 }
@@ -2388,7 +2565,8 @@ fn test_tab_lookup_tolerates_path_case_differences() {
     let mut tab_closed = false;
     let mut test_screensaver = false;
     let focused_stream = Some(upper_path.clone());
-    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(upper_path.clone())]);
+    let mut dock: DockState<FastTailTab> =
+        DockState::new(vec![FastTailTab::LogStream(upper_path.clone())]);
 
     let ctx = egui::Context::default();
     let mut title_text = String::new();
@@ -2420,7 +2598,10 @@ fn test_tab_lookup_tolerates_path_case_differences() {
     });
     out.textures_delta.clear();
 
-    assert!(!title_text.contains(t(Language::En, "closed")), "tab must resolve its engine: {title_text}");
+    assert!(
+        !title_text.contains(t(Language::En, "closed")),
+        "tab must resolve its engine: {title_text}"
+    );
 }
 
 #[test]
@@ -2463,9 +2644,13 @@ fn test_f3_only_advances_the_focused_tab() {
     // The first tab is the "current window"
     let focused_stream = Some(path1.clone());
 
-    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
-    dock.main_surface_mut()
-        .split_right(NodeIndex::root(), 0.5, vec![FastTailTab::LogStream(path2.clone())]);
+    let mut dock: DockState<FastTailTab> =
+        DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
+    dock.main_surface_mut().split_right(
+        NodeIndex::root(),
+        0.5,
+        vec![FastTailTab::LogStream(path2.clone())],
+    );
 
     let ctx = egui::Context::default();
     let f3 = egui::RawInput {
@@ -2509,8 +2694,16 @@ fn test_f3_only_advances_the_focused_tab() {
 
     assert_eq!(engines[0].search_matches, vec![0, 1]);
     assert_eq!(engines[1].search_matches, vec![0, 1]);
-    assert_eq!(engines[0].current_match_idx, Some(1), "F3 must advance the focused tab");
-    assert_eq!(engines[1].current_match_idx, Some(0), "F3 must not touch the other tab");
+    assert_eq!(
+        engines[0].current_match_idx,
+        Some(1),
+        "F3 must advance the focused tab"
+    );
+    assert_eq!(
+        engines[1].current_match_idx,
+        Some(0),
+        "F3 must not touch the other tab"
+    );
 }
 
 #[test]
@@ -2519,7 +2712,8 @@ fn test_hex_search_matches_bytes_across_rows() {
 
     let mut tmp = NamedTempFile::new().unwrap();
     // "needle" starts at byte 15 and spans the 16-byte row boundary
-    tmp.write_all(b"AAAAAAAAAAAAAAAneedle rest of data that fills more rows").unwrap();
+    tmp.write_all(b"AAAAAAAAAAAAAAAneedle rest of data that fills more rows")
+        .unwrap();
     tmp.flush().unwrap();
 
     let mut engine = TailEngine::open(tmp.path()).unwrap();
@@ -2528,8 +2722,14 @@ fn test_hex_search_matches_bytes_across_rows() {
 
     assert_eq!(engine.search_byte_matches, vec![(15, 6)]);
     assert_eq!(engine.active_match_count(), 1);
-    assert!(engine.hex_row_matches(0, 16), "row 0 holds the first byte of the match");
-    assert!(engine.hex_row_matches(16, 32), "row 1 holds the tail of the match");
+    assert!(
+        engine.hex_row_matches(0, 16),
+        "row 0 holds the first byte of the match"
+    );
+    assert!(
+        engine.hex_row_matches(16, 32),
+        "row 1 holds the tail of the match"
+    );
     assert!(!engine.hex_row_matches(32, 48));
 
     // F3 in hex mode navigates byte offsets

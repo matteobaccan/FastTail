@@ -52,7 +52,9 @@ fn restore_dialog_geometry<'a>(
 ) -> egui::Window<'a> {
     let win = match pos {
         Some([x, y]) => win.default_pos(egui::pos2(x, y)),
-        None => win.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()),
+        None => win
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center()),
     };
     match size {
         Some([w, h]) => win.default_size(egui::vec2(w, h)),
@@ -139,9 +141,7 @@ impl FastTailApp {
             .dock_layout
             .as_ref()
             .and_then(|ron_str| ron::from_str(ron_str).ok())
-            .unwrap_or_else(|| {
-                DockState::new(vec![])
-            });
+            .unwrap_or_else(|| DockState::new(vec![]));
 
         let mut floating_window_rects = std::collections::HashMap::new();
         for (surf_index, surface) in dock_state.iter_surfaces_indexed() {
@@ -175,7 +175,10 @@ impl FastTailApp {
             let mut tabs_to_open: Vec<PathBuf> = Vec::new();
             for (_, tab) in app.dock_state.iter_all_tabs() {
                 if let FastTailTab::LogStream(p) = tab {
-                    if !tabs_to_open.iter().any(|existing| paths_equal(existing.as_path(), p.as_path())) {
+                    if !tabs_to_open
+                        .iter()
+                        .any(|existing| paths_equal(existing.as_path(), p.as_path()))
+                    {
                         tabs_to_open.push(p.clone());
                     }
                 }
@@ -213,7 +216,10 @@ impl FastTailApp {
         let mut current_open: Vec<PathBuf> = Vec::new();
         for (_, tab) in self.dock_state.iter_all_tabs() {
             if let FastTailTab::LogStream(p) = tab {
-                if !current_open.iter().any(|existing| paths_equal(existing.as_path(), p.as_path())) {
+                if !current_open
+                    .iter()
+                    .any(|existing| paths_equal(existing.as_path(), p.as_path()))
+                {
                     current_open.push(p.clone());
                 }
             }
@@ -223,7 +229,12 @@ impl FastTailApp {
         let mut dock_to_save = self.dock_state.clone();
         for (surf_index, rect) in &self.floating_window_rects {
             if let Some(ws) = dock_to_save.get_window_state_mut(*surf_index) {
-                if rect.is_positive() && rect.min.x.is_finite() && rect.min.y.is_finite() && rect.min.x > -10000.0 && rect.min.y > -10000.0 {
+                if rect.is_positive()
+                    && rect.min.x.is_finite()
+                    && rect.min.y.is_finite()
+                    && rect.min.x > -10000.0
+                    && rect.min.y > -10000.0
+                {
                     ws.set_position(rect.min);
                     ws.set_size(rect.size());
                 }
@@ -260,7 +271,10 @@ impl FastTailApp {
             engine.size_unit = self.config.size_unit;
             self.engines.push(engine);
 
-            crate::audio::play_sound(crate::audio::CyberSound::BlipAttach, self.config.sound_enabled);
+            crate::audio::play_sound(
+                crate::audio::CyberSound::BlipAttach,
+                self.config.sound_enabled,
+            );
 
             // Add to open_files
             if !self.config.open_files.iter().any(|p| paths_equal(p, &path)) {
@@ -276,20 +290,19 @@ impl FastTailApp {
             let _ = self.config.save();
 
             let tab = FastTailTab::LogStream(path.clone());
-            let already_in_dock = self.dock_state.find_tab(&tab).is_some() || self.dock_state.iter_all_tabs().any(|(_, t)| {
-                if let FastTailTab::LogStream(p) = t {
-                    paths_equal(p, &path)
-                } else {
-                    false
-                }
-            });
+            let already_in_dock = self.dock_state.find_tab(&tab).is_some()
+                || self.dock_state.iter_all_tabs().any(|(_, t)| {
+                    if let FastTailTab::LogStream(p) = t {
+                        paths_equal(p, &path)
+                    } else {
+                        false
+                    }
+                });
             if !already_in_dock {
                 if self.dock_state.iter_all_tabs().count() == 0 {
                     self.dock_state = egui_dock::DockState::new(vec![tab]);
                 } else {
-                    self.dock_state
-                        .main_surface_mut()
-                        .push_to_first_leaf(tab);
+                    self.dock_state.main_surface_mut().push_to_first_leaf(tab);
                 }
             }
             self.save_dock_layout();
@@ -300,7 +313,8 @@ impl FastTailApp {
         let ctx = ui.ctx().clone();
 
         // Fill background of the window canvas with current theme bg color
-        ui.painter().rect_filled(ui.max_rect(), 0.0, self.config.theme.bg_color());
+        ui.painter()
+            .rect_filled(ui.max_rect(), 0.0, self.config.theme.bg_color());
 
         // 0. Handle initial maximize on Windows / viewport
         if self.first_frame {
@@ -464,12 +478,18 @@ impl FastTailApp {
             .frame(
                 egui::Frame::new()
                     .fill(self.config.theme.bg_color())
-                    .inner_margin(Margin { left: 8, right: 8, top: 4, bottom: 4 })
+                    .inner_margin(Margin {
+                        left: 8,
+                        right: 8,
+                        top: 4,
+                        bottom: 4,
+                    }),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Glowing circular F icon badge
-                    let (logo_rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+                    let (logo_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
                     let logo_bg = if self.config.theme == CyberTheme::Light {
                         Color32::from_rgb(220, 235, 252)
                     } else {
@@ -532,7 +552,11 @@ impl FastTailApp {
                             }
 
                             // Maximize / Restore button [🗖 / 🗗]
-                            let max_icon = if self.config.window_maximized { " 🗗 " } else { " 🗖 " };
+                            let max_icon = if self.config.window_maximized {
+                                " 🗗 "
+                            } else {
+                                " 🗖 "
+                            };
                             let max_tip = if self.config.window_maximized {
                                 t(self.config.language, "restore_tip")
                             } else {
@@ -544,7 +568,9 @@ impl FastTailApp {
                                 .clicked()
                             {
                                 self.config.window_maximized = !self.config.window_maximized;
-                                ctx.send_viewport_cmd(ViewportCommand::Maximized(self.config.window_maximized));
+                                ctx.send_viewport_cmd(ViewportCommand::Maximized(
+                                    self.config.window_maximized,
+                                ));
                                 #[cfg(windows)]
                                 unsafe {
                                     let hwnd = win_util::GetActiveWindow();
@@ -579,44 +605,55 @@ impl FastTailApp {
 
                         if self.config.telemetry_enabled {
                             // RAM Meter & Progress Bar
-                            let total_mem_gb = (self.system.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0)).max(1.0);
+                            let total_mem_gb = (self.system.total_memory() as f32
+                                / (1024.0 * 1024.0 * 1024.0))
+                                .max(1.0);
                             let used_mem_gb = self.mem_used_mb as f32 / 1024.0;
                             let ram_fraction = (used_mem_gb / total_mem_gb).clamp(0.0, 1.0);
 
-                            let meter_bg = if self.config.theme == CyberTheme::Light { Color32::from_rgb(220, 228, 238) } else { Color32::from_rgb(8, 22, 35) };
-                            let (ram_bar, _) = ui.allocate_exact_size(egui::vec2(44.0, 6.0), egui::Sense::hover());
-                            ui.painter().rect_filled(
-                                ram_bar,
-                                CornerRadius::same(3),
-                                meter_bg,
-                            );
+                            let meter_bg = if self.config.theme == CyberTheme::Light {
+                                Color32::from_rgb(220, 228, 238)
+                            } else {
+                                Color32::from_rgb(8, 22, 35)
+                            };
+                            let (ram_bar, _) =
+                                ui.allocate_exact_size(egui::vec2(44.0, 6.0), egui::Sense::hover());
+                            ui.painter()
+                                .rect_filled(ram_bar, CornerRadius::same(3), meter_bg);
                             let ram_fill_w = (ram_bar.width() * ram_fraction).max(2.0);
                             ui.painter().rect_filled(
-                                egui::Rect::from_min_size(ram_bar.min, egui::vec2(ram_fill_w, ram_bar.height())),
+                                egui::Rect::from_min_size(
+                                    ram_bar.min,
+                                    egui::vec2(ram_fill_w, ram_bar.height()),
+                                ),
                                 CornerRadius::same(3),
                                 self.config.theme.secondary_accent(),
                             );
 
                             ui.label(
-                                RichText::new(format!("RAM: {:.1} GB/{:.0} GB", used_mem_gb, total_mem_gb))
-                                    .monospace()
-                                    .size(10.5)
-                                    .color(self.config.theme.text_dim()),
+                                RichText::new(format!(
+                                    "RAM: {:.1} GB/{:.0} GB",
+                                    used_mem_gb, total_mem_gb
+                                ))
+                                .monospace()
+                                .size(10.5)
+                                .color(self.config.theme.text_dim()),
                             );
 
                             ui.separator();
 
                             // CPU Meter & Progress Bar
                             let cpu_fraction = (self.cpu_usage / 100.0).clamp(0.0, 1.0);
-                            let (cpu_bar, _) = ui.allocate_exact_size(egui::vec2(44.0, 6.0), egui::Sense::hover());
-                            ui.painter().rect_filled(
-                                cpu_bar,
-                                CornerRadius::same(3),
-                                meter_bg,
-                            );
+                            let (cpu_bar, _) =
+                                ui.allocate_exact_size(egui::vec2(44.0, 6.0), egui::Sense::hover());
+                            ui.painter()
+                                .rect_filled(cpu_bar, CornerRadius::same(3), meter_bg);
                             let cpu_fill_w = (cpu_bar.width() * cpu_fraction).max(2.0);
                             ui.painter().rect_filled(
-                                egui::Rect::from_min_size(cpu_bar.min, egui::vec2(cpu_fill_w, cpu_bar.height())),
+                                egui::Rect::from_min_size(
+                                    cpu_bar.min,
+                                    egui::vec2(cpu_fill_w, cpu_bar.height()),
+                                ),
                                 CornerRadius::same(3),
                                 self.config.theme.accent_color(),
                             );
@@ -646,7 +683,9 @@ impl FastTailApp {
                         }
                         if drag_resp.double_clicked() {
                             self.config.window_maximized = !self.config.window_maximized;
-                            ctx.send_viewport_cmd(ViewportCommand::Maximized(self.config.window_maximized));
+                            ctx.send_viewport_cmd(ViewportCommand::Maximized(
+                                self.config.window_maximized,
+                            ));
                             #[cfg(windows)]
                             unsafe {
                                 let hwnd = win_util::GetActiveWindow();
@@ -668,8 +707,16 @@ impl FastTailApp {
             .frame(
                 egui::Frame::new()
                     .fill(self.config.theme.panel_bg())
-                    .stroke(Stroke::new(1.0, self.config.theme.accent_color().gamma_multiply(0.25)))
-                    .inner_margin(Margin { left: 10, right: 10, top: 6, bottom: 6 })
+                    .stroke(Stroke::new(
+                        1.0,
+                        self.config.theme.accent_color().gamma_multiply(0.25),
+                    ))
+                    .inner_margin(Margin {
+                        left: 10,
+                        right: 10,
+                        top: 6,
+                        bottom: 6,
+                    }),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -691,7 +738,11 @@ impl FastTailApp {
                     .corner_radius(CornerRadius::same(6))
                     .min_size(egui::vec2(0.0, 26.0));
 
-                    if ui.add(open_btn).on_hover_text(t(self.config.language, "open_file_tip")).clicked() {
+                    if ui
+                        .add(open_btn)
+                        .on_hover_text(t(self.config.language, "open_file_tip"))
+                        .clicked()
+                    {
                         if let Some(paths) = rfd::FileDialog::new()
                             .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
                             .set_title("Open Log Files")
@@ -704,32 +755,50 @@ impl FastTailApp {
                     }
 
                     // Filter button with amber border
-                    let active_color_rules = self.config.highlight_rules.iter().filter(|r| r.enabled && !r.pattern.is_empty()).count();
+                    let active_color_rules = self
+                        .config
+                        .highlight_rules
+                        .iter()
+                        .filter(|r| r.enabled && !r.pattern.is_empty())
+                        .count();
                     let filt_label = if active_color_rules > 0 {
-                        format!("⚡ {} ({})", t(self.config.language, "highlight_rules"), active_color_rules)
+                        format!(
+                            "⚡ {} ({})",
+                            t(self.config.language, "highlight_rules"),
+                            active_color_rules
+                        )
                     } else {
                         format!("⚡ {}", t(self.config.language, "highlight_rules"))
                     };
-                    let filt_bg = if is_light { Color32::from_rgb(254, 249, 235) } else { Color32::from_rgb(20, 18, 12) };
+                    let filt_bg = if is_light {
+                        Color32::from_rgb(254, 249, 235)
+                    } else {
+                        Color32::from_rgb(20, 18, 12)
+                    };
                     let filter_btn = egui::Button::new(
-                        RichText::new(filt_label)
-                            .monospace()
-                            .strong()
-                            .color(warn),
+                        RichText::new(filt_label).monospace().strong().color(warn),
                     )
                     .fill(filt_bg)
                     .stroke(Stroke::new(1.2, warn))
                     .corner_radius(CornerRadius::same(6))
                     .min_size(egui::vec2(0.0, 26.0));
 
-                    if ui.add(filter_btn).on_hover_text("Open highlight color rules").clicked() {
+                    if ui
+                        .add(filter_btn)
+                        .on_hover_text("Open highlight color rules")
+                        .clicked()
+                    {
                         self.config.filters_open = !self.config.filters_open;
                         let _ = self.config.save();
                     }
 
                     // Play button (green border)
                     let play_color = Color32::from_rgb(0, 200, 100);
-                    let play_bg = if is_light { Color32::from_rgb(235, 252, 242) } else { Color32::from_rgb(10, 24, 18) };
+                    let play_bg = if is_light {
+                        Color32::from_rgb(235, 252, 242)
+                    } else {
+                        Color32::from_rgb(10, 24, 18)
+                    };
                     let play_btn = egui::Button::new(
                         RichText::new("▶ Play")
                             .monospace()
@@ -741,7 +810,11 @@ impl FastTailApp {
                     .corner_radius(CornerRadius::same(6))
                     .min_size(egui::vec2(0.0, 26.0));
 
-                    if ui.add(play_btn).on_hover_text("Resume monitoring and following tail on all streams").clicked() {
+                    if ui
+                        .add(play_btn)
+                        .on_hover_text("Resume monitoring and following tail on all streams")
+                        .clicked()
+                    {
                         for eng in &mut self.engines {
                             eng.is_watching = true;
                             eng.follow_tail = true;
@@ -751,7 +824,11 @@ impl FastTailApp {
 
                     // Pause button (red border)
                     let pause_color = Color32::from_rgb(235, 45, 75);
-                    let pause_bg = if is_light { Color32::from_rgb(254, 240, 242) } else { Color32::from_rgb(26, 12, 16) };
+                    let pause_bg = if is_light {
+                        Color32::from_rgb(254, 240, 242)
+                    } else {
+                        Color32::from_rgb(26, 12, 16)
+                    };
                     let pause_btn = egui::Button::new(
                         RichText::new("⏸ Pause")
                             .monospace()
@@ -763,7 +840,11 @@ impl FastTailApp {
                     .corner_radius(CornerRadius::same(6))
                     .min_size(egui::vec2(0.0, 26.0));
 
-                    if ui.add(pause_btn).on_hover_text("Pause monitoring and tail following on all streams").clicked() {
+                    if ui
+                        .add(pause_btn)
+                        .on_hover_text("Pause monitoring and tail following on all streams")
+                        .clicked()
+                    {
                         for eng in &mut self.engines {
                             eng.is_watching = false;
                             eng.follow_tail = false;
@@ -782,7 +863,11 @@ impl FastTailApp {
                     .corner_radius(CornerRadius::same(6))
                     .min_size(egui::vec2(0.0, 26.0));
 
-                    if ui.add(settings_btn).on_hover_text(t(self.config.language, "settings_tip")).clicked() {
+                    if ui
+                        .add(settings_btn)
+                        .on_hover_text(t(self.config.language, "settings_tip"))
+                        .clicked()
+                    {
                         self.config.settings_open = !self.config.settings_open;
                         let _ = self.config.save();
                     }
@@ -790,15 +875,12 @@ impl FastTailApp {
                     // Recent Files dropdown menu with uniform height
                     let mut file_to_open = None;
                     let recent_title = format!("🕒 {}", t(self.config.language, "recent_files"));
-                    let recent_btn = egui::Button::new(
-                        RichText::new(recent_title)
-                            .monospace()
-                            .color(text_dim),
-                    )
-                    .fill(self.config.theme.button_bg())
-                    .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                    .corner_radius(CornerRadius::same(6))
-                    .min_size(egui::vec2(0.0, 26.0));
+                    let recent_btn =
+                        egui::Button::new(RichText::new(recent_title).monospace().color(text_dim))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(0.0, 26.0));
 
                     egui::menu::MenuButton::from_button(recent_btn).ui(ui, |ui| {
                         if self.config.recent_files.is_empty() {
@@ -809,10 +891,8 @@ impl FastTailApp {
                             );
                         } else {
                             for path in &self.config.recent_files {
-                                let file_name = path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("log");
+                                let file_name =
+                                    path.file_name().and_then(|n| n.to_str()).unwrap_or("log");
                                 let full_path = path.display().to_string();
                                 let btn_text = format!("📄 {} ({})", file_name, full_path);
                                 if ui.button(RichText::new(btn_text).monospace()).clicked() {
@@ -823,9 +903,12 @@ impl FastTailApp {
                             ui.separator();
                             if ui
                                 .button(
-                                    RichText::new(format!("🗑 {}", t(self.config.language, "clear_recent")))
-                                        .monospace()
-                                        .color(self.config.theme.warn_color()),
+                                    RichText::new(format!(
+                                        "🗑 {}",
+                                        t(self.config.language, "clear_recent")
+                                    ))
+                                    .monospace()
+                                    .color(self.config.theme.warn_color()),
                                 )
                                 .clicked()
                             {
@@ -842,31 +925,29 @@ impl FastTailApp {
                     // Right-aligned toolbar badges: Help & About with uniform height
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Help (F1)
-                        let help_btn = egui::Button::new(
-                            RichText::new("❓ Help")
-                                .monospace()
-                                .color(text_dim),
-                        )
-                        .fill(self.config.theme.button_bg())
-                        .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                        .corner_radius(CornerRadius::same(6))
-                        .min_size(egui::vec2(0.0, 26.0));
+                        let help_btn =
+                            egui::Button::new(RichText::new("❓ Help").monospace().color(text_dim))
+                                .fill(self.config.theme.button_bg())
+                                .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                                .corner_radius(CornerRadius::same(6))
+                                .min_size(egui::vec2(0.0, 26.0));
 
-                        if ui.add(help_btn).on_hover_text("Shortcuts and Help (F1)").clicked() {
+                        if ui
+                            .add(help_btn)
+                            .on_hover_text("Shortcuts and Help (F1)")
+                            .clicked()
+                        {
                             self.config.help_open = !self.config.help_open;
                             let _ = self.config.save();
                         }
 
                         // About
-                        let about_btn = egui::Button::new(
-                            RichText::new("ℹ About")
-                                .monospace()
-                                .color(text_dim),
-                        )
-                        .fill(self.config.theme.button_bg())
-                        .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                        .corner_radius(CornerRadius::same(6))
-                        .min_size(egui::vec2(0.0, 26.0));
+                        let about_btn =
+                            egui::Button::new(RichText::new("ℹ About").monospace().color(text_dim))
+                                .fill(self.config.theme.button_bg())
+                                .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                                .corner_radius(CornerRadius::same(6))
+                                .min_size(egui::vec2(0.0, 26.0));
 
                         if ui.add(about_btn).on_hover_text("About FastTail").clicked() {
                             self.config.about_open = !self.config.about_open;
@@ -923,13 +1004,22 @@ impl FastTailApp {
             .frame(
                 egui::Frame::new()
                     .fill(current_theme.panel_bg())
-                    .stroke(Stroke::new(1.0, current_theme.accent_color().gamma_multiply(0.35)))
-                    .inner_margin(Margin { left: 12, right: 12, top: 5, bottom: 5 })
+                    .stroke(Stroke::new(
+                        1.0,
+                        current_theme.accent_color().gamma_multiply(0.35),
+                    ))
+                    .inner_margin(Margin {
+                        left: 12,
+                        right: 12,
+                        top: 5,
+                        bottom: 5,
+                    }),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Small glowing cyan indicator line on the left
-                    let (ind_rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 3.0), egui::Sense::hover());
+                    let (ind_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(28.0, 3.0), egui::Sense::hover());
                     ui.painter().rect_filled(
                         ind_rect,
                         CornerRadius::same(2),
@@ -937,7 +1027,9 @@ impl FastTailApp {
                     );
                     ui.add_space(4.0);
 
-                    let active_path = if let Some((_, FastTailTab::LogStream(p))) = self.dock_state.find_active_focused() {
+                    let active_path = if let Some((_, FastTailTab::LogStream(p))) =
+                        self.dock_state.find_active_focused()
+                    {
                         Some(p.clone())
                     } else {
                         self.dock_state.iter_all_tabs().find_map(|(_, tab)| {
@@ -981,17 +1073,28 @@ impl FastTailApp {
 
         dock_style.tab.active.bg_fill = active_tab_bg;
         dock_style.tab.active.outline_color = current_theme.accent_color();
-        dock_style.tab.active.corner_radius = CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 };
+        dock_style.tab.active.corner_radius = CornerRadius {
+            nw: 6,
+            ne: 6,
+            sw: 0,
+            se: 0,
+        };
         dock_style.tab.active.text_color = current_theme.accent_color();
 
         dock_style.tab.focused = dock_style.tab.active.clone();
 
         dock_style.tab.inactive.bg_fill = inactive_tab_bg;
         dock_style.tab.inactive.outline_color = current_theme.border_color().gamma_multiply(0.2);
-        dock_style.tab.inactive.corner_radius = CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 };
+        dock_style.tab.inactive.corner_radius = CornerRadius {
+            nw: 6,
+            ne: 6,
+            sw: 0,
+            se: 0,
+        };
         dock_style.tab.inactive.text_color = current_theme.text_dim();
 
-        dock_style.tab.tab_body.stroke = Stroke::new(1.5, current_theme.accent_color().gamma_multiply(0.7));
+        dock_style.tab.tab_body.stroke =
+            Stroke::new(1.5, current_theme.accent_color().gamma_multiply(0.7));
         dock_style.tab.tab_body.corner_radius = CornerRadius::same(6);
         dock_style.tab.tab_body.bg_fill = current_theme.panel_bg();
 
@@ -1044,13 +1147,19 @@ impl FastTailApp {
             if let egui_dock::Surface::Window(..) = surface {
                 let id = egui::Id::new(format!("window {surf_index:?}"));
                 if let Some(rect) = ctx.memory(|mem| mem.area_rect(id)) {
-                    if rect.is_positive() && rect.min.x.is_finite() && rect.min.y.is_finite() && rect.min.x > -10000.0 && rect.min.y > -10000.0 {
+                    if rect.is_positive()
+                        && rect.min.x.is_finite()
+                        && rect.min.y.is_finite()
+                        && rect.min.x > -10000.0
+                        && rect.min.y > -10000.0
+                    {
                         self.floating_window_rects.insert(surf_index, rect);
                     }
                 }
             }
         }
-        self.floating_window_rects.retain(|idx, _| self.dock_state.get_window_state(*idx).is_some());
+        self.floating_window_rects
+            .retain(|idx, _| self.dock_state.get_window_state(*idx).is_some());
 
         if test_screensaver {
             self.screensaver.is_active = true;
@@ -1122,7 +1231,12 @@ impl FastTailApp {
                         {
                             // Import highlight rules
                             for rule in &bt_cfg.highlight_rules {
-                                if !self.config.highlight_rules.iter().any(|r| r.pattern == rule.pattern) {
+                                if !self
+                                    .config
+                                    .highlight_rules
+                                    .iter()
+                                    .any(|r| r.pattern == rule.pattern)
+                                {
                                     self.config.highlight_rules.push(rule.clone());
                                 }
                             }
@@ -1178,7 +1292,13 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            let win = restore_dialog_geometry(win, &ctx, self.config.settings_pos, self.config.settings_size, |win| win.default_width(460.0).default_height(400.0));
+            let win = restore_dialog_geometry(
+                win,
+                &ctx,
+                self.config.settings_pos,
+                self.config.settings_size,
+                |win| win.default_width(460.0).default_height(400.0),
+            );
 
             let resp = win.show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1198,7 +1318,11 @@ impl FastTailApp {
                 });
             });
 
-            capture_dialog_geometry(&resp, &mut self.config.settings_pos, &mut self.config.settings_size);
+            capture_dialog_geometry(
+                &resp,
+                &mut self.config.settings_pos,
+                &mut self.config.settings_size,
+            );
 
             if test_screensaver {
                 self.screensaver.is_active = true;
@@ -1225,10 +1349,20 @@ impl FastTailApp {
             let lang = self.config.language;
 
             let total_color_rules = self.config.highlight_rules.len();
-            let active_color_rules = self.config.highlight_rules.iter().filter(|r| r.enabled && !r.pattern.is_empty()).count();
+            let active_color_rules = self
+                .config
+                .highlight_rules
+                .iter()
+                .filter(|r| r.enabled && !r.pattern.is_empty())
+                .count();
 
             let popup_title = if active_color_rules > 0 {
-                format!("⚡ {} ({} {})", t(lang, "highlight_rules"), active_color_rules, t(lang, "active_count"))
+                format!(
+                    "⚡ {} ({} {})",
+                    t(lang, "highlight_rules"),
+                    active_color_rules,
+                    t(lang, "active_count")
+                )
             } else {
                 format!("⚡ {} ({})", t(lang, "highlight_rules"), total_color_rules)
             };
@@ -1247,7 +1381,13 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            let win = restore_dialog_geometry(win, &ctx, self.config.filters_pos, self.config.filters_size, |win| win.default_width(540.0).default_height(460.0));
+            let win = restore_dialog_geometry(
+                win,
+                &ctx,
+                self.config.filters_pos,
+                self.config.filters_size,
+                |win| win.default_width(540.0).default_height(460.0),
+            );
 
             let resp = win.show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1261,7 +1401,11 @@ impl FastTailApp {
                 });
             });
 
-            capture_dialog_geometry(&resp, &mut self.config.filters_pos, &mut self.config.filters_size);
+            capture_dialog_geometry(
+                &resp,
+                &mut self.config.filters_pos,
+                &mut self.config.filters_size,
+            );
 
             if self.config.filters_open != is_open {
                 self.config.filters_open = is_open;
@@ -1289,7 +1433,13 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            let win = restore_dialog_geometry(win, &ctx, self.config.about_pos, self.config.about_size, |win| win.default_width(440.0));
+            let win = restore_dialog_geometry(
+                win,
+                &ctx,
+                self.config.about_pos,
+                self.config.about_size,
+                |win| win.default_width(440.0),
+            );
 
             let resp = win.show(&ctx, |ui| {
                 ui.vertical_centered(|ui| {
@@ -1340,7 +1490,11 @@ impl FastTailApp {
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new(t(lang, "about_build_date")).monospace().strong());
+                        ui.label(
+                            RichText::new(t(lang, "about_build_date"))
+                                .monospace()
+                                .strong(),
+                        );
                         ui.label(
                             RichText::new(env!("BUILD_TIMESTAMP"))
                                 .monospace()
@@ -1375,11 +1529,7 @@ impl FastTailApp {
                         ui.end_row();
 
                         ui.label(RichText::new(t(lang, "about_license")).monospace().strong());
-                        ui.label(
-                            RichText::new("MIT")
-                                .monospace()
-                                .color(theme.text_dim()),
-                        );
+                        ui.label(RichText::new("MIT").monospace().color(theme.text_dim()));
                         ui.end_row();
                     });
 
@@ -1394,7 +1544,11 @@ impl FastTailApp {
                 );
             });
 
-            capture_dialog_geometry(&resp, &mut self.config.about_pos, &mut self.config.about_size);
+            capture_dialog_geometry(
+                &resp,
+                &mut self.config.about_pos,
+                &mut self.config.about_size,
+            );
 
             if self.config.about_open != is_open {
                 self.config.about_open = is_open;
@@ -1422,7 +1576,13 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            let win = restore_dialog_geometry(win, &ctx, self.config.help_pos, self.config.help_size, |win| win.default_width(580.0).default_height(500.0));
+            let win = restore_dialog_geometry(
+                win,
+                &ctx,
+                self.config.help_pos,
+                self.config.help_size,
+                |win| win.default_width(580.0).default_height(500.0),
+            );
 
             let resp = win.show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1492,7 +1652,11 @@ impl FastTailApp {
                             .num_columns(2)
                             .spacing([18.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label(RichText::new(t(lang, "help_key_space")).monospace().strong());
+                                ui.label(
+                                    RichText::new(t(lang, "help_key_space"))
+                                        .monospace()
+                                        .strong(),
+                                );
                                 ui.label(RichText::new(t(lang, "help_desc_space")).monospace());
                                 ui.end_row();
 
@@ -1571,7 +1735,8 @@ impl FastTailApp {
         self.screensaver.render(&ctx, viewport);
 
         // 12. Borderless Window Resize Anchors & Visual Frames (Edges & Corners)
-        let is_maximized = self.config.window_maximized || ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let is_maximized =
+            self.config.window_maximized || ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         if self.config.borderless && !is_maximized {
             let screen = ctx.content_rect();
             let border: f32 = 8.0;
@@ -1579,43 +1744,67 @@ impl FastTailApp {
             let resize_zones = [
                 // 4 Corners (larger hit targets)
                 (
-                    egui::Rect::from_min_max(screen.min, egui::pos2(screen.min.x + border * 1.5, screen.min.y + border * 1.5)),
+                    egui::Rect::from_min_max(
+                        screen.min,
+                        egui::pos2(screen.min.x + border * 1.5, screen.min.y + border * 1.5),
+                    ),
                     egui::ResizeDirection::NorthWest,
                     egui::CursorIcon::ResizeNorthWest,
                 ),
                 (
-                    egui::Rect::from_min_max(egui::pos2(screen.max.x - border * 1.5, screen.min.y), egui::pos2(screen.max.x, screen.min.y + border * 1.5)),
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.max.x - border * 1.5, screen.min.y),
+                        egui::pos2(screen.max.x, screen.min.y + border * 1.5),
+                    ),
                     egui::ResizeDirection::NorthEast,
                     egui::CursorIcon::ResizeNorthEast,
                 ),
                 (
-                    egui::Rect::from_min_max(egui::pos2(screen.min.x, screen.max.y - border * 1.5), egui::pos2(screen.min.x + border * 1.5, screen.max.y)),
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.min.x, screen.max.y - border * 1.5),
+                        egui::pos2(screen.min.x + border * 1.5, screen.max.y),
+                    ),
                     egui::ResizeDirection::SouthWest,
                     egui::CursorIcon::ResizeSouthWest,
                 ),
                 (
-                    egui::Rect::from_min_max(egui::pos2(screen.max.x - border * 2.0, screen.max.y - border * 2.0), screen.max),
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.max.x - border * 2.0, screen.max.y - border * 2.0),
+                        screen.max,
+                    ),
                     egui::ResizeDirection::SouthEast,
                     egui::CursorIcon::ResizeSouthEast,
                 ),
                 // 4 Edges
                 (
-                    egui::Rect::from_min_max(egui::pos2(screen.min.x + border * 1.5, screen.min.y), egui::pos2(screen.max.x - border * 1.5, screen.min.y + border)),
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.min.x + border * 1.5, screen.min.y),
+                        egui::pos2(screen.max.x - border * 1.5, screen.min.y + border),
+                    ),
                     egui::ResizeDirection::North,
                     egui::CursorIcon::ResizeNorth,
                 ),
                 (
-                    egui::Rect::from_min_max(egui::pos2(screen.min.x + border * 1.5, screen.max.y - border), egui::pos2(screen.max.x - border * 1.5, screen.max.y)),
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.min.x + border * 1.5, screen.max.y - border),
+                        egui::pos2(screen.max.x - border * 1.5, screen.max.y),
+                    ),
                     egui::ResizeDirection::South,
                     egui::CursorIcon::ResizeSouth,
                 ),
                 (
-                    egui::Rect::from_min_max(egui::pos2(screen.min.x, screen.min.y + border * 1.5), egui::pos2(screen.min.x + border, screen.max.y - border * 1.5)),
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.min.x, screen.min.y + border * 1.5),
+                        egui::pos2(screen.min.x + border, screen.max.y - border * 1.5),
+                    ),
                     egui::ResizeDirection::West,
                     egui::CursorIcon::ResizeWest,
                 ),
                 (
-                    egui::Rect::from_min_max(egui::pos2(screen.max.x - border, screen.min.y + border * 1.5), egui::pos2(screen.max.x, screen.max.y - border * 1.5)),
+                    egui::Rect::from_min_max(
+                        egui::pos2(screen.max.x - border, screen.min.y + border * 1.5),
+                        egui::pos2(screen.max.x, screen.max.y - border * 1.5),
+                    ),
                     egui::ResizeDirection::East,
                     egui::CursorIcon::ResizeEast,
                 ),
@@ -1623,7 +1812,8 @@ impl FastTailApp {
 
             if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
                 // Protect top-right window buttons from resize interception
-                let in_window_buttons_zone = pos.x > screen.max.x - 140.0 && pos.y < screen.min.y + 40.0;
+                let in_window_buttons_zone =
+                    pos.x > screen.max.x - 140.0 && pos.y < screen.min.y + 40.0;
                 if !in_window_buttons_zone {
                     for (rect, direction, cursor) in resize_zones {
                         if rect.contains(pos) {
@@ -1638,7 +1828,10 @@ impl FastTailApp {
             }
 
             // Draw 1px subtle cyber border frame & tactile corner grip
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("borderless_overlays")));
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("borderless_overlays"),
+            ));
             painter.rect_stroke(
                 screen,
                 egui::CornerRadius::same(0),
@@ -1676,4 +1869,3 @@ impl eframe::App for FastTailApp {
         let _ = self.config.save();
     }
 }
-

@@ -137,7 +137,11 @@ impl CyberTheme {
 
     pub fn apply(&self, ctx: &egui::Context) {
         let is_light = *self == CyberTheme::Light;
-        let mut visuals = if is_light { Visuals::light() } else { Visuals::dark() };
+        let mut visuals = if is_light {
+            Visuals::light()
+        } else {
+            Visuals::dark()
+        };
         let bg = self.bg_color();
         let panel = self.panel_bg();
         let border = self.border_color();
@@ -148,7 +152,11 @@ impl CyberTheme {
         visuals.panel_fill = panel;
         visuals.window_fill = if is_light { panel } else { bg };
         visuals.extreme_bg_color = bg;
-        visuals.faint_bg_color = if is_light { Color32::from_gray(240) } else { Color32::from_black_alpha(180) };
+        visuals.faint_bg_color = if is_light {
+            Color32::from_gray(240)
+        } else {
+            Color32::from_black_alpha(180)
+        };
 
         visuals.widgets.noninteractive.bg_fill = panel;
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, text);
@@ -160,7 +168,11 @@ impl CyberTheme {
         visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border.gamma_multiply(0.35));
         visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
 
-        visuals.widgets.hovered.bg_fill = if is_light { Color32::from_rgb(228, 236, 248) } else { panel.linear_multiply(1.25) };
+        visuals.widgets.hovered.bg_fill = if is_light {
+            Color32::from_rgb(228, 236, 248)
+        } else {
+            panel.linear_multiply(1.25)
+        };
         visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, accent);
         visuals.widgets.hovered.bg_stroke = Stroke::new(1.5_f32, accent);
         visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
@@ -182,7 +194,11 @@ impl CyberTheme {
         visuals.menu_corner_radius = egui::CornerRadius::same(6);
 
         ctx.set_visuals(visuals.clone());
-        ctx.set_theme(if is_light { egui::Theme::Light } else { egui::Theme::Dark });
+        ctx.set_theme(if is_light {
+            egui::Theme::Light
+        } else {
+            egui::Theme::Dark
+        });
 
         let style = Style {
             visuals: visuals.clone(),

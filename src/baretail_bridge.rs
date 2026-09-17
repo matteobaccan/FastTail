@@ -26,10 +26,15 @@ pub fn detect_baretail_config() -> Option<BareTailConfig> {
                 // 1. Scan for recent files (e.g. File0, File1, Recent0, etc. or MRU subkey)
                 for (name, value) in key.enum_values().flatten() {
                     let name_lower = name.to_lowercase();
-                    if name_lower.contains("file") || name_lower.contains("recent") || name_lower.contains("path") {
+                    if name_lower.contains("file")
+                        || name_lower.contains("recent")
+                        || name_lower.contains("path")
+                    {
                         let winreg::RegValue { bytes, vtype } = value;
                         if vtype == REG_SZ {
-                            if let Ok(s) = String::from_utf8(bytes.iter().filter(|&&b| b != 0).cloned().collect()) {
+                            if let Ok(s) = String::from_utf8(
+                                bytes.iter().filter(|&&b| b != 0).cloned().collect(),
+                            ) {
                                 let path = PathBuf::from(s.trim());
                                 if path.exists() && !config.recent_files.contains(&path) {
                                     config.recent_files.push(path);

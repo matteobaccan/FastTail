@@ -10,7 +10,9 @@ pub fn paths_equal_fast(a: &Path, b: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        if a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()) {
+        if a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+        {
             return true;
         }
     }

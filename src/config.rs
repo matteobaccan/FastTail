@@ -210,7 +210,10 @@ impl FastTailConfig {
             .set("theme", theme_str)
             .set("language", self.language.code())
             .set("screensaver_enabled", self.screensaver_enabled.to_string())
-            .set("screensaver_timeout_mins", self.screensaver_timeout_mins.to_string())
+            .set(
+                "screensaver_timeout_mins",
+                self.screensaver_timeout_mins.to_string(),
+            )
             .set("telemetry_enabled", self.telemetry_enabled.to_string())
             .set("sound_enabled", self.sound_enabled.to_string())
             .set("borderless", self.borderless.to_string())
@@ -218,7 +221,10 @@ impl FastTailConfig {
             .set("font_size", self.font_size.to_string())
             .set("size_unit", unit_str)
             .set("baretail_import", self.baretail_import.to_string())
-            .set("baretail_prompt_shown", self.baretail_prompt_shown.to_string());
+            .set(
+                "baretail_prompt_shown",
+                self.baretail_prompt_shown.to_string(),
+            );
 
         if !self.open_files.is_empty() {
             let mut sec = conf.with_section(Some("open_files"));
@@ -295,8 +301,20 @@ impl FastTailConfig {
             sec.set("pattern", &rule.pattern);
             sec.set("is_regex", rule.is_regex.to_string());
             sec.set("case_sensitive", rule.case_sensitive.to_string());
-            sec.set("fg", format!("{},{},{}", rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]));
-            sec.set("bg", format!("{},{},{}", rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]));
+            sec.set(
+                "fg",
+                format!(
+                    "{},{},{}",
+                    rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]
+                ),
+            );
+            sec.set(
+                "bg",
+                format!(
+                    "{},{},{}",
+                    rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]
+                ),
+            );
             sec.set("bold", rule.bold.to_string());
             sec.set("italic", rule.italic.to_string());
             sec.set("sound_alert", rule.sound_alert.name());
@@ -448,7 +466,10 @@ impl FastTailConfig {
         }
 
         if let Some(dlg) = conf.section(Some("dialogs")) {
-            if let Some(v) = dlg.get("settings_open").and_then(|s| s.parse::<bool>().ok()) {
+            if let Some(v) = dlg
+                .get("settings_open")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
                 cfg.settings_open = v;
             }
             if let Some(v) = dlg.get("filters_open").and_then(|s| s.parse::<bool>().ok()) {
@@ -491,14 +512,32 @@ impl FastTailConfig {
         while let Some(sec) = conf.section(Some(format!("highlight_{}", idx))) {
             let pattern = sec.get("pattern").unwrap_or("").to_string();
             if !pattern.is_empty() {
-                let is_regex = sec.get("is_regex").and_then(|v| v.parse().ok()).unwrap_or(false);
-                let case_sensitive = sec.get("case_sensitive").and_then(|v| v.parse().ok()).unwrap_or(false);
+                let is_regex = sec
+                    .get("is_regex")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false);
+                let case_sensitive = sec
+                    .get("case_sensitive")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false);
                 let fg_color = sec.get("fg").and_then(parse_rgb).unwrap_or([255, 255, 255]);
                 let bg_color = sec.get("bg").and_then(parse_rgb).unwrap_or([0, 0, 0]);
-                let bold = sec.get("bold").and_then(|v| v.parse().ok()).unwrap_or(false);
-                let italic = sec.get("italic").and_then(|v| v.parse().ok()).unwrap_or(false);
-                let sound_alert = sec.get("sound_alert").map(crate::audio::SoundAlertPreset::from_name).unwrap_or(crate::audio::SoundAlertPreset::None);
-                let enabled = sec.get("enabled").and_then(|v| v.parse().ok()).unwrap_or(true);
+                let bold = sec
+                    .get("bold")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false);
+                let italic = sec
+                    .get("italic")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false);
+                let sound_alert = sec
+                    .get("sound_alert")
+                    .map(crate::audio::SoundAlertPreset::from_name)
+                    .unwrap_or(crate::audio::SoundAlertPreset::None);
+                let enabled = sec
+                    .get("enabled")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(true);
 
                 rules.push(HighlightRule {
                     pattern,

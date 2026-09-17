@@ -245,9 +245,15 @@ impl TailEngine {
             } else {
                 let sample_len = buffer.len().min(512);
                 let sample = &buffer[..sample_len];
-                if sample.len() >= 4 && sample.iter().step_by(2).all(|&b| b != 0) && sample.iter().skip(1).step_by(2).all(|&b| b == 0) {
+                if sample.len() >= 4
+                    && sample.iter().step_by(2).all(|&b| b != 0)
+                    && sample.iter().skip(1).step_by(2).all(|&b| b == 0)
+                {
                     (FileEncoding::UnicodeLe, false)
-                } else if sample.len() >= 4 && sample.iter().step_by(2).all(|&b| b == 0) && sample.iter().skip(1).step_by(2).all(|&b| b != 0) {
+                } else if sample.len() >= 4
+                    && sample.iter().step_by(2).all(|&b| b == 0)
+                    && sample.iter().skip(1).step_by(2).all(|&b| b != 0)
+                {
                     (FileEncoding::UnicodeBe, false)
                 } else if sample.contains(&0) {
                     (FileEncoding::Utf8, true)
@@ -362,7 +368,10 @@ impl TailEngine {
         match self.size_unit {
             SizeUnit::Bytes => format!("{} B", self.file_size),
             SizeUnit::MB => format!("{:.2} MB", self.file_size as f64 / (1024.0 * 1024.0)),
-            SizeUnit::GB => format!("{:.3} GB", self.file_size as f64 / (1024.0 * 1024.0 * 1024.0)),
+            SizeUnit::GB => format!(
+                "{:.3} GB",
+                self.file_size as f64 / (1024.0 * 1024.0 * 1024.0)
+            ),
             SizeUnit::Hex => format!("0x{:X}", self.file_size),
         }
     }
@@ -452,7 +461,9 @@ impl TailEngine {
         let mut max_bytes = 0usize;
         match self.encoding {
             FileEncoding::Utf8 | FileEncoding::Ascii | FileEncoding::Ansi => {
-                let start_offset = if self.encoding == FileEncoding::Utf8 && mmap.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                let start_offset = if self.encoding == FileEncoding::Utf8
+                    && mmap.starts_with(&[0xEF, 0xBB, 0xBF])
+                {
                     3
                 } else {
                     0
@@ -479,7 +490,11 @@ impl TailEngine {
                 }
             }
             FileEncoding::UnicodeLe => {
-                let start_offset = if mmap.starts_with(&[0xFF, 0xFE]) { 2 } else { 0 };
+                let start_offset = if mmap.starts_with(&[0xFF, 0xFE]) {
+                    2
+                } else {
+                    0
+                };
                 if start_offset < mmap.len() {
                     self.line_offsets.push(start_offset as u64);
                 }
@@ -504,7 +519,11 @@ impl TailEngine {
                 }
             }
             FileEncoding::UnicodeBe => {
-                let start_offset = if mmap.starts_with(&[0xFE, 0xFF]) { 2 } else { 0 };
+                let start_offset = if mmap.starts_with(&[0xFE, 0xFF]) {
+                    2
+                } else {
+                    0
+                };
                 if start_offset < mmap.len() {
                     self.line_offsets.push(start_offset as u64);
                 }
@@ -533,7 +552,11 @@ impl TailEngine {
         let estimated_width = (max_bytes as f32) * 8.5 + 120.0;
         self.max_detected_width = self.max_detected_width.max(estimated_width);
         self.buffer_generation = self.buffer_generation.wrapping_add(1);
-        if self.scroll_to_line.map(|l| l >= self.total_lines()).unwrap_or(false) {
+        if self
+            .scroll_to_line
+            .map(|l| l >= self.total_lines())
+            .unwrap_or(false)
+        {
             self.scroll_to_line = None;
         }
         self.refresh_derived_state_from(unchanged_lines);
@@ -609,11 +632,12 @@ impl TailEngine {
                 if let Ok(mut file) = open_file_shared(&self.path) {
                     let mut prefix = [0u8; 64];
                     let check_len = self.buffer.len().min(64);
-                    let is_rewrite = if check_len > 0 && file.read_exact(&mut prefix[..check_len]).is_ok() {
-                        prefix[..check_len] != self.buffer[..check_len]
-                    } else {
-                        false
-                    };
+                    let is_rewrite =
+                        if check_len > 0 && file.read_exact(&mut prefix[..check_len]).is_ok() {
+                            prefix[..check_len] != self.buffer[..check_len]
+                        } else {
+                            false
+                        };
 
                     if is_rewrite {
                         self.buffer.clear();
@@ -631,7 +655,11 @@ impl TailEngine {
                 self.has_new_data = true;
                 // On a pure append every previously complete line is unchanged; the last line
                 // may have been partial, so it is re-evaluated together with the new ones.
-                let unchanged_lines = if appended_only { prev_lines_count.saturating_sub(1) } else { 0 };
+                let unchanged_lines = if appended_only {
+                    prev_lines_count.saturating_sub(1)
+                } else {
+                    0
+                };
                 self.rebuild_line_index_from(unchanged_lines);
                 self.check_sound_alerts(prev_lines_count);
                 return;
@@ -761,7 +789,11 @@ impl TailEngine {
                     }
                 }
                 let slice = &mmap[start..end];
-                let u16_iter = slice.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]]));
+                let u16_iter = slice
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]));
                 let s = char::decode_utf16(u16_iter)
                     .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
                     .collect::<String>();
@@ -776,7 +808,11 @@ impl TailEngine {
                     }
                 }
                 let slice = &mmap[start..end];
-                let u16_iter = slice.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]));
+                let u16_iter = slice
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]));
                 let s = char::decode_utf16(u16_iter)
                     .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
                     .collect::<String>();
@@ -1021,7 +1057,9 @@ impl TailEngine {
                 if q_bytes.len() > l_bytes.len() {
                     return false;
                 }
-                l_bytes.windows(q_bytes.len()).any(|w| w.eq_ignore_ascii_case(q_bytes))
+                l_bytes
+                    .windows(q_bytes.len())
+                    .any(|w| w.eq_ignore_ascii_case(q_bytes))
             } else {
                 line.to_lowercase().contains(&q_lower)
             }
@@ -1071,29 +1109,45 @@ impl TailEngine {
         self.search_matches.extend(fresh);
 
         // Byte matches: everything ending before the first changed byte is still valid
-        let start_offset = self.line_offsets.get(start).map(|&o| o as usize).unwrap_or(0);
-        let keep_bytes = self.search_byte_matches.partition_point(|&(off, len)| off + len <= start_offset);
+        let start_offset = self
+            .line_offsets
+            .get(start)
+            .map(|&o| o as usize)
+            .unwrap_or(0);
+        let keep_bytes = self
+            .search_byte_matches
+            .partition_point(|&(off, len)| off + len <= start_offset);
         self.search_byte_matches.truncate(keep_bytes);
         let rescan_from = start_offset.saturating_sub(self.search_byte_max_len.saturating_sub(1));
         let remaining = MAX_SEARCH_MATCHES.saturating_sub(self.search_byte_matches.len());
         let (fresh, max_len) = self.find_byte_matches_from(&query, rescan_from, remaining);
-        self.search_byte_matches.extend(fresh.into_iter().filter(|&(off, len)| off + len > start_offset));
+        self.search_byte_matches.extend(
+            fresh
+                .into_iter()
+                .filter(|&(off, len)| off + len > start_offset),
+        );
         self.search_byte_max_len = max_len;
         self.last_searched_query = query;
 
-        let restore = |matches_len: usize, wanted: Option<usize>, position: Option<usize>| -> Option<usize> {
-            if matches_len == 0 {
-                None
-            } else {
-                match (wanted, position) {
-                    (Some(_), Some(i)) => Some(i.min(matches_len - 1)),
-                    _ => Some(0),
+        let restore =
+            |matches_len: usize, wanted: Option<usize>, position: Option<usize>| -> Option<usize> {
+                if matches_len == 0 {
+                    None
+                } else {
+                    match (wanted, position) {
+                        (Some(_), Some(i)) => Some(i.min(matches_len - 1)),
+                        _ => Some(0),
+                    }
                 }
-            }
-        };
+            };
         self.current_match_idx = if self.view_mode == ViewMode::Hex {
-            let pos = current_byte.map(|off| match self.search_byte_matches.binary_search_by_key(&off, |&(o, _)| o) {
-                Ok(i) | Err(i) => i,
+            let pos = current_byte.map(|off| {
+                match self
+                    .search_byte_matches
+                    .binary_search_by_key(&off, |&(o, _)| o)
+                {
+                    Ok(i) | Err(i) => i,
+                }
             });
             restore(self.search_byte_matches.len(), current_byte, pos)
         } else {
@@ -1107,7 +1161,12 @@ impl TailEngine {
     /// Byte-level search used by the HEX view: the query is matched as ASCII text
     /// (case-insensitive) and, when it looks like a hex byte pattern (`0A 0D`, `0a0d`),
     /// as raw bytes as well. Returns `(matches, longest pattern length)`.
-    fn find_byte_matches_from(&self, query: &str, start: usize, limit: usize) -> (Vec<(usize, usize)>, usize) {
+    fn find_byte_matches_from(
+        &self,
+        query: &str,
+        start: usize,
+        limit: usize,
+    ) -> (Vec<(usize, usize)>, usize) {
         let mut matches = Vec::new();
         let trimmed = query.trim();
         if trimmed.is_empty() || limit == 0 || start >= self.buffer.len() {
@@ -1119,8 +1178,14 @@ impl TailEngine {
         if !text.is_empty() {
             patterns.push((text, true));
         }
-        let no_spaces: String = trimmed.chars().filter(|c| !c.is_whitespace() && *c != ':').collect();
-        if no_spaces.len() >= 2 && no_spaces.len().is_multiple_of(2) && no_spaces.chars().all(|c| c.is_ascii_hexdigit()) {
+        let no_spaces: String = trimmed
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != ':')
+            .collect();
+        if no_spaces.len() >= 2
+            && no_spaces.len().is_multiple_of(2)
+            && no_spaces.chars().all(|c| c.is_ascii_hexdigit())
+        {
             let bytes: Vec<u8> = (0..no_spaces.len())
                 .step_by(2)
                 .filter_map(|i| u8::from_str_radix(&no_spaces[i..i + 2], 16).ok())
@@ -1137,7 +1202,11 @@ impl TailEngine {
                 continue;
             }
             for (i, window) in haystack.windows(pattern.len()).enumerate() {
-                let hit = if *ci { window.eq_ignore_ascii_case(pattern) } else { window == pattern.as_slice() };
+                let hit = if *ci {
+                    window.eq_ignore_ascii_case(pattern)
+                } else {
+                    window == pattern.as_slice()
+                };
                 if hit {
                     matches.push((start + i, pattern.len()));
                     if matches.len() >= limit {
@@ -1173,7 +1242,8 @@ impl TailEngine {
     }
 
     pub fn current_search_byte(&self) -> Option<(usize, usize)> {
-        self.current_match_idx.and_then(|idx| self.search_byte_matches.get(idx).copied())
+        self.current_match_idx
+            .and_then(|idx| self.search_byte_matches.get(idx).copied())
     }
 
     /// True when any byte match overlaps the HEX row `[row_start, row_end)`.
@@ -1192,12 +1262,20 @@ impl TailEngine {
     /// like HTML. Cached per buffer generation so the conversion is not redone every frame.
     pub fn markdown_text(&mut self) -> &str {
         self.ensure_markdown_text();
-        self.markdown_text_cache.as_ref().map(|(_, s)| s.as_str()).unwrap_or("")
+        self.markdown_text_cache
+            .as_ref()
+            .map(|(_, s)| s.as_str())
+            .unwrap_or("")
     }
 
     pub fn ensure_markdown_text(&mut self) {
         let generation = self.buffer_generation;
-        if self.markdown_text_cache.as_ref().map(|(g, _)| *g == generation).unwrap_or(false) {
+        if self
+            .markdown_text_cache
+            .as_ref()
+            .map(|(g, _)| *g == generation)
+            .unwrap_or(false)
+        {
             return;
         }
         let raw = String::from_utf8_lossy(&self.buffer);
@@ -1227,7 +1305,11 @@ impl TailEngine {
         let (byte_matches, max_len) = self.find_byte_matches_from(trimmed, 0, MAX_SEARCH_MATCHES);
         self.search_byte_matches = byte_matches;
         self.search_byte_max_len = max_len;
-        self.current_match_idx = if self.active_match_count() > 0 { Some(0) } else { None };
+        self.current_match_idx = if self.active_match_count() > 0 {
+            Some(0)
+        } else {
+            None
+        };
     }
 
     /// Moves to the next hit and returns its target: a line index, or a byte offset in HEX view.
@@ -1276,6 +1358,7 @@ impl TailEngine {
     }
 
     pub fn current_search_line(&self) -> Option<usize> {
-        self.current_match_idx.and_then(|idx| self.search_matches.get(idx).copied())
+        self.current_match_idx
+            .and_then(|idx| self.search_matches.get(idx).copied())
     }
 }

@@ -68,11 +68,7 @@ pub fn format_timestamp() -> String {
     }
 }
 
-pub fn build_crash_report(
-    payload: &str,
-    location: Option<&str>,
-    backtrace: &Backtrace,
-) -> String {
+pub fn build_crash_report(payload: &str, location: Option<&str>, backtrace: &Backtrace) -> String {
     let now = format_timestamp();
     format!(
         "================================================================================\n\

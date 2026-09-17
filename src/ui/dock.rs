@@ -67,14 +67,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         match tab {
             FastTailTab::LogStream(path) => {
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("log");
-                if let Some((idx, engine)) = find_engine_index(self.ctx.engines, path).map(|i| (i, &self.ctx.engines[i])) {
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("log");
+                if let Some((idx, engine)) =
+                    find_engine_index(self.ctx.engines, path).map(|i| (i, &self.ctx.engines[i]))
+                {
                     let watch_icon = if engine.is_watching { "▶" } else { "■" };
                     let data_dot = if engine.has_new_data { "●" } else { "○" };
-                    let title_text = format!("[#{}] {} {} {}", idx + 1, watch_icon, file_name, data_dot);
+                    let title_text =
+                        format!("[#{}] {} {} {}", idx + 1, watch_icon, file_name, data_dot);
                     if engine.has_new_data {
                         WidgetText::from(
                             RichText::new(title_text)
@@ -91,14 +91,17 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     } else {
                         // Normal tabs: do not override text color, allowing egui_dock
                         // to apply dock_style.tab.active.text_color (neon accent) vs inactive (dim)
-                        WidgetText::from(
-                            RichText::new(title_text)
-                                .monospace()
-                                .strong(),
-                        )
+                        WidgetText::from(RichText::new(title_text).monospace().strong())
                     }
                 } else {
-                    WidgetText::from(RichText::new(format!("{} ({})", file_name, t(*self.ctx.language, "closed"))).monospace())
+                    WidgetText::from(
+                        RichText::new(format!(
+                            "{} ({})",
+                            file_name,
+                            t(*self.ctx.language, "closed")
+                        ))
+                        .monospace(),
+                    )
                 }
             }
             FastTailTab::Filters => WidgetText::from(
@@ -163,7 +166,13 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 render_filters_content(ui, self.ctx.engines, self.ctx.theme, *self.ctx.language);
             }
             FastTailTab::Highlights => {
-                render_highlights_content(ui, self.ctx.global_rules, self.ctx.engines, self.ctx.theme, *self.ctx.language);
+                render_highlights_content(
+                    ui,
+                    self.ctx.global_rules,
+                    self.ctx.engines,
+                    self.ctx.theme,
+                    *self.ctx.language,
+                );
             }
             FastTailTab::Settings => {
                 render_settings_content(
@@ -187,7 +196,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
         match tab {
             FastTailTab::LogStream(path) => {
                 self.ctx.open_files.retain(|p| !paths_equal_fast(p, path));
-                self.ctx.engines.retain(|e| !paths_equal_fast(&e.path, path));
+                self.ctx
+                    .engines
+                    .retain(|e| !paths_equal_fast(&e.path, path));
                 *self.ctx.tab_closed = true;
             }
             _ => {
@@ -205,7 +216,13 @@ const SEARCH_MATCH_BG: Color32 = Color32::from_rgb(255, 230, 0);
 
 /// The marker column shown while a search is active: `▶` on the current hit, `●` on the
 /// other hits, and a blank of the same width elsewhere so rows never shift.
-fn search_marker_label(ui: &mut Ui, theme: &CyberTheme, font_size: f32, matches: bool, is_active: bool) {
+fn search_marker_label(
+    ui: &mut Ui,
+    theme: &CyberTheme,
+    font_size: f32,
+    matches: bool,
+    is_active: bool,
+) {
     let (glyph, color) = if is_active {
         ("▶", theme.accent_color())
     } else if matches {
@@ -213,7 +230,13 @@ fn search_marker_label(ui: &mut Ui, theme: &CyberTheme, font_size: f32, matches:
     } else {
         ("\u{2007}", theme.text_dim()) // figure space: same advance as a digit
     };
-    ui.label(RichText::new(format!("{glyph} ")).monospace().strong().size(font_size).color(color));
+    ui.label(
+        RichText::new(format!("{glyph} "))
+            .monospace()
+            .strong()
+            .size(font_size)
+            .color(color),
+    );
 }
 
 /// Tints the whole row of a search hit, drawing behind the widgets laid out in `row_rect`.
@@ -228,14 +251,22 @@ fn paint_search_row_background(
     if !matches && !is_active {
         return;
     }
-    let base = if is_active { theme.accent_color() } else { theme.warn_color() };
+    let base = if is_active {
+        theme.accent_color()
+    } else {
+        theme.warn_color()
+    };
     let alpha = if is_active { 70 } else { 40 };
     let fill = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
     let full = egui::Rect::from_min_max(
         egui::pos2(ui.max_rect().left(), row_rect.top()),
-        egui::pos2(ui.max_rect().right().max(row_rect.right()), row_rect.bottom()),
+        egui::pos2(
+            ui.max_rect().right().max(row_rect.right()),
+            row_rect.bottom(),
+        ),
     );
-    ui.painter().set(slot, egui::Shape::rect_filled(full, 0.0, fill));
+    ui.painter()
+        .set(slot, egui::Shape::rect_filled(full, 0.0, fill));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -261,7 +292,8 @@ fn render_log_stream(
     // Synchronize search matches with the current query, debounced while the user is typing
     match engine.search_edited_at {
         Some(edited) if edited.elapsed() < SEARCH_DEBOUNCE => {
-            ui.ctx().request_repaint_after(SEARCH_DEBOUNCE - edited.elapsed());
+            ui.ctx()
+                .request_repaint_after(SEARCH_DEBOUNCE - edited.elapsed());
         }
         _ => {
             engine.search_edited_at = None;
@@ -276,7 +308,9 @@ fn render_log_stream(
             Some((target / bytes_per_row) as f32 * hex_row_height)
         } else {
             engine.scroll_to_line = Some(target);
-            engine.get_visible_row_of_line(target).map(|v_row| v_row as f32 * row_height)
+            engine
+                .get_visible_row_of_line(target)
+                .map(|v_row| v_row as f32 * row_height)
         };
         if let Some(row_y) = row_y {
             engine.requested_scroll_y = Some((row_y - viewport_height / 2.0).max(0.0));
@@ -317,7 +351,11 @@ fn render_log_stream(
                 .monospace()
         };
 
-        if ui.button(follow_text).on_hover_text(t(lang, "tip_follow_tail")).clicked() {
+        if ui
+            .button(follow_text)
+            .on_hover_text(t(lang, "tip_follow_tail"))
+            .clicked()
+        {
             engine.follow_tail = !engine.follow_tail;
             ui.ctx().request_repaint();
         }
@@ -335,7 +373,11 @@ fn render_log_stream(
                 .color(theme.warn_color())
                 .monospace()
         };
-        if ui.button(monitor_text).on_hover_text(t(lang, "tip_monitor")).clicked() {
+        if ui
+            .button(monitor_text)
+            .on_hover_text(t(lang, "tip_monitor"))
+            .clicked()
+        {
             engine.is_watching = !engine.is_watching;
             ui.ctx().request_repaint();
         }
@@ -344,11 +386,17 @@ fn render_log_stream(
 
         // Line numbers toggle
         let lines_text = if *show_line_numbers {
-            RichText::new("# 123").color(theme.accent_color()).monospace()
+            RichText::new("# 123")
+                .color(theme.accent_color())
+                .monospace()
         } else {
             RichText::new("# ---").color(theme.text_dim()).monospace()
         };
-        if ui.button(lines_text).on_hover_text(t(lang, "show_lines")).clicked() {
+        if ui
+            .button(lines_text)
+            .on_hover_text(t(lang, "show_lines"))
+            .clicked()
+        {
             *show_line_numbers = !*show_line_numbers;
             ui.ctx().request_repaint();
         }
@@ -357,36 +405,58 @@ fn render_log_stream(
 
         // Mode Switcher (TXT, HEX, MD)
         let current_mode = engine.view_mode;
-        let is_txt = current_mode == crate::tail_engine::ViewMode::Text || current_mode == crate::tail_engine::ViewMode::Filtered;
+        let is_txt = current_mode == crate::tail_engine::ViewMode::Text
+            || current_mode == crate::tail_engine::ViewMode::Filtered;
         let is_hex = current_mode == crate::tail_engine::ViewMode::Hex;
         let is_md = current_mode == crate::tail_engine::ViewMode::Markdown;
 
         let txt_style = if is_txt {
-            RichText::new("🔤 TXT").color(theme.accent_color()).monospace().strong()
+            RichText::new("🔤 TXT")
+                .color(theme.accent_color())
+                .monospace()
+                .strong()
         } else {
             RichText::new("🔤 TXT").color(theme.text_dim()).monospace()
         };
-        if ui.button(txt_style).on_hover_text(t(lang, "tip_mode_txt")).clicked() {
+        if ui
+            .button(txt_style)
+            .on_hover_text(t(lang, "tip_mode_txt"))
+            .clicked()
+        {
             engine.set_view_mode(crate::tail_engine::ViewMode::Text);
             ui.ctx().request_repaint();
         }
 
         let hex_style = if is_hex {
-            RichText::new("🔢 HEX").color(theme.secondary_accent()).monospace().strong()
+            RichText::new("🔢 HEX")
+                .color(theme.secondary_accent())
+                .monospace()
+                .strong()
         } else {
             RichText::new("🔢 HEX").color(theme.text_dim()).monospace()
         };
-        if ui.button(hex_style).on_hover_text(t(lang, "tip_mode_hex")).clicked() {
+        if ui
+            .button(hex_style)
+            .on_hover_text(t(lang, "tip_mode_hex"))
+            .clicked()
+        {
             engine.set_view_mode(crate::tail_engine::ViewMode::Hex);
             ui.ctx().request_repaint();
         }
 
         let md_style = if is_md {
-            RichText::new("📝 MD").color(theme.warn_color()).monospace().strong()
+            RichText::new("📝 MD")
+                .color(theme.warn_color())
+                .monospace()
+                .strong()
         } else {
             RichText::new("📝 MD").color(theme.text_dim()).monospace()
         };
-        if ui.button(md_style).on_hover_text(t(lang, "tip_mode_md")).clicked() {
+        if ui
+            .button(md_style)
+            .on_hover_text(t(lang, "tip_mode_md"))
+            .clicked()
+        {
             engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
             ui.ctx().request_repaint();
         }
@@ -399,7 +469,10 @@ fn render_log_stream(
                 .width(90.0)
                 .show_ui(ui, |ui| {
                     for enc in crate::tail_engine::FileEncoding::all() {
-                        if ui.selectable_value(&mut curr_enc, *enc, enc.name()).clicked() {
+                        if ui
+                            .selectable_value(&mut curr_enc, *enc, enc.name())
+                            .clicked()
+                        {
                             engine.set_encoding(*enc);
                             ui.ctx().request_repaint();
                         }
@@ -410,18 +483,34 @@ fn render_log_stream(
         // Hex column count selector (multiples of 8: 8, 16, 24, 32...)
         if engine.view_mode == crate::tail_engine::ViewMode::Hex {
             ui.separator();
-            ui.label(RichText::new(format!("{}:", t(lang, "hex_columns"))).monospace().size(11.0));
-            if ui.button(" -8 ").on_hover_text(t(lang, "hex_cols_dec")).clicked()
-                && engine.hex_columns > 8 {
-                    engine.hex_columns -= 8;
-                    ui.ctx().request_repaint();
-                }
-            ui.label(RichText::new(format!("{}", engine.hex_columns)).monospace().strong());
-            if ui.button(" +8 ").on_hover_text(t(lang, "hex_cols_inc")).clicked()
-                && engine.hex_columns < 64 {
-                    engine.hex_columns += 8;
-                    ui.ctx().request_repaint();
-                }
+            ui.label(
+                RichText::new(format!("{}:", t(lang, "hex_columns")))
+                    .monospace()
+                    .size(11.0),
+            );
+            if ui
+                .button(" -8 ")
+                .on_hover_text(t(lang, "hex_cols_dec"))
+                .clicked()
+                && engine.hex_columns > 8
+            {
+                engine.hex_columns -= 8;
+                ui.ctx().request_repaint();
+            }
+            ui.label(
+                RichText::new(format!("{}", engine.hex_columns))
+                    .monospace()
+                    .strong(),
+            );
+            if ui
+                .button(" +8 ")
+                .on_hover_text(t(lang, "hex_cols_inc"))
+                .clicked()
+                && engine.hex_columns < 64
+            {
+                engine.hex_columns += 8;
+                ui.ctx().request_repaint();
+            }
         }
 
         ui.separator();
@@ -430,27 +519,42 @@ fn render_log_stream(
         let lines_stat = match engine.view_mode {
             crate::tail_engine::ViewMode::Text | crate::tail_engine::ViewMode::Filtered => {
                 if engine.is_filter_active() {
-                    format!("{}: {} / {}", t(lang, "lines"), engine.visible_line_count(), engine.total_lines())
+                    format!(
+                        "{}: {} / {}",
+                        t(lang, "lines"),
+                        engine.visible_line_count(),
+                        engine.total_lines()
+                    )
                 } else {
                     format!("{}: {}", t(lang, "lines"), engine.total_lines())
                 }
             }
             crate::tail_engine::ViewMode::Hex => {
-                format!("{}: {}", t(lang, "lines"), engine.total_hex_rows(engine.hex_columns))
+                format!(
+                    "{}: {}",
+                    t(lang, "lines"),
+                    engine.total_hex_rows(engine.hex_columns)
+                )
             }
             crate::tail_engine::ViewMode::Markdown => {
                 format!("{}: {}", t(lang, "lines"), engine.total_lines())
             }
         };
-        ui.label(RichText::new(lines_stat).monospace().color(theme.text_dim()));
+        ui.label(
+            RichText::new(lines_stat)
+                .monospace()
+                .color(theme.text_dim()),
+        );
 
         // Clickable File Size toggle (Bytes -> MB -> GB -> Hex -> Bytes)
         let size_str = engine.format_size();
-        let size_btn = ui.button(
-            RichText::new(format!("📦 {}", size_str))
-                .monospace()
-                .color(theme.secondary_accent()),
-        ).on_hover_text(t(lang, "tip_size_unit"));
+        let size_btn = ui
+            .button(
+                RichText::new(format!("📦 {}", size_str))
+                    .monospace()
+                    .color(theme.secondary_accent()),
+            )
+            .on_hover_text(t(lang, "tip_size_unit"));
         if size_btn.clicked() {
             engine.next_size_unit();
             *new_size_unit = Some(engine.size_unit);
@@ -491,17 +595,22 @@ fn render_log_stream(
         let ctrl_f = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F);
         if is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_f)) {
             ui.ctx().memory_mut(|m| m.request_focus(search_id));
-            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), search_id).unwrap_or_default();
-            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(0),
-                egui::text::CCursor::new(search_query.chars().count()),
-            )));
+            let mut state =
+                egui::text_edit::TextEditState::load(ui.ctx(), search_id).unwrap_or_default();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(search_query.chars().count()),
+                )));
             state.store(ui.ctx(), search_id);
             ui.ctx().request_repaint();
         }
 
         // Escape inside the search input box: releases focus and restores log navigation
-        if search_resp.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        if search_resp.has_focus()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
             ui.ctx().memory_mut(|m| m.stop_text_input());
             ui.ctx().request_repaint();
         }
@@ -524,7 +633,8 @@ fn render_log_stream(
                     push_search_history(search_history, search_query);
                 } else {
                     engine.follow_tail = false;
-                    engine.requested_scroll_y = Some((engine.current_scroll_y - row_height).max(0.0));
+                    engine.requested_scroll_y =
+                        Some((engine.current_scroll_y - row_height).max(0.0));
                 }
                 ui.ctx().request_repaint();
             }
@@ -548,8 +658,10 @@ fn render_log_stream(
 
         // Enter / Shift+Enter inside the search input box
         if search_resp.has_focus() {
-            let enter_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-            let shift_enter_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter));
+            let enter_pressed =
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            let shift_enter_pressed =
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter));
             if enter_pressed || shift_enter_pressed {
                 // Enter must act on the query as typed, even inside the debounce window
                 engine.search_edited_at = None;
@@ -573,7 +685,7 @@ fn render_log_stream(
                 ui.label(
                     RichText::new("[0 / 0]")
                         .monospace()
-                        .color(theme.warn_color())
+                        .color(theme.warn_color()),
                 );
             } else {
                 let current_1based = engine.current_match_idx.map(|i| i + 1).unwrap_or(0);
@@ -581,10 +693,14 @@ fn render_log_stream(
                     RichText::new(format!("[{} / {}]", current_1based, match_count))
                         .monospace()
                         .strong()
-                        .color(theme.accent_color())
+                        .color(theme.accent_color()),
                 );
                 // Prev button (Shift+F3)
-                if ui.button(RichText::new("▲").monospace()).on_hover_text(t(lang, "search_prev")).clicked() {
+                if ui
+                    .button(RichText::new("▲").monospace())
+                    .on_hover_text(t(lang, "search_prev"))
+                    .clicked()
+                {
                     if let Some(target) = engine.search_prev(sound_enabled) {
                         scroll_to_target(engine, target);
                         push_search_history(search_history, search_query);
@@ -592,7 +708,11 @@ fn render_log_stream(
                     }
                 }
                 // Next button (F3)
-                if ui.button(RichText::new("▼").monospace()).on_hover_text(t(lang, "search_next")).clicked() {
+                if ui
+                    .button(RichText::new("▼").monospace())
+                    .on_hover_text(t(lang, "search_next"))
+                    .clicked()
+                {
                     if let Some(target) = engine.search_next(sound_enabled) {
                         scroll_to_target(engine, target);
                         push_search_history(search_history, search_query);
@@ -606,7 +726,11 @@ fn render_log_stream(
         ui.menu_button("🕒", |ui| {
             ui.set_max_width(280.0);
             if search_history.is_empty() {
-                ui.label(RichText::new(t(lang, "no_recent_files")).monospace().color(theme.text_dim()));
+                ui.label(
+                    RichText::new(t(lang, "no_recent_files"))
+                        .monospace()
+                        .color(theme.text_dim()),
+                );
             } else {
                 let mut selected = None;
                 for query_item in search_history.iter() {
@@ -624,7 +748,9 @@ fn render_log_stream(
                     ui.ctx().request_repaint();
                 }
             }
-        }).response.on_hover_text(t(lang, "search_history"));
+        })
+        .response
+        .on_hover_text(t(lang, "search_history"));
 
         if !search_query.is_empty() && ui.button("✖").clicked() {
             search_query.clear();
@@ -653,7 +779,8 @@ fn render_log_stream(
                 }
                 // End (horizontal end)
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::End) {
-                    let target_x = (engine.max_detected_width - ui.available_width() + 100.0).max(0.0);
+                    let target_x =
+                        (engine.max_detected_width - ui.available_width() + 100.0).max(0.0);
                     engine.requested_scroll_x = Some(target_x);
                 }
                 // Arrow navigation
@@ -661,7 +788,8 @@ fn render_log_stream(
                 let h_step = if i.modifiers.ctrl { 200.0 } else { 40.0 };
                 if i.key_pressed(egui::Key::ArrowUp) {
                     engine.follow_tail = false;
-                    engine.requested_scroll_y = Some((engine.current_scroll_y - row_height).max(0.0));
+                    engine.requested_scroll_y =
+                        Some((engine.current_scroll_y - row_height).max(0.0));
                 }
                 if i.key_pressed(egui::Key::ArrowDown) {
                     engine.follow_tail = false;
@@ -768,7 +896,11 @@ fn render_log_stream(
         } else {
             RichText::new("Aa").color(theme.text_dim())
         };
-        if ui.button(case_text).on_hover_text(t(lang, "case_sensitive_tip")).clicked() {
+        if ui
+            .button(case_text)
+            .on_hover_text(t(lang, "case_sensitive_tip"))
+            .clicked()
+        {
             engine.filter_case_sensitive = !engine.filter_case_sensitive;
             engine.refresh_filters();
         }
@@ -779,7 +911,11 @@ fn render_log_stream(
         } else {
             RichText::new(".*").color(theme.text_dim())
         };
-        if ui.button(regex_text).on_hover_text(t(lang, "tip_regex_checkbox")).clicked() {
+        if ui
+            .button(regex_text)
+            .on_hover_text(t(lang, "tip_regex_checkbox"))
+            .clicked()
+        {
             engine.filter_is_regex = !engine.filter_is_regex;
             engine.refresh_filters();
         }
@@ -790,7 +926,11 @@ fn render_log_stream(
     let visible_lines = engine.visible_line_count();
     if visible_lines == 0 {
         ui.centered_and_justified(|ui| {
-            ui.label(RichText::new(t(lang, "no_file_open")).monospace().color(theme.text_dim()));
+            ui.label(
+                RichText::new(t(lang, "no_file_open"))
+                    .monospace()
+                    .color(theme.text_dim()),
+            );
         });
         return;
     }
@@ -826,72 +966,94 @@ fn render_log_stream(
                 let is_json = TailEngine::is_json_line(&raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
                 let highlight = engine.match_highlight(&raw_line);
-                let matches_search = has_search && engine.search_matches.binary_search(&actual_line_idx).is_ok();
+                let matches_search = has_search
+                    && engine
+                        .search_matches
+                        .binary_search(&actual_line_idx)
+                        .is_ok();
                 let is_active_search = active_search_line == Some(actual_line_idx);
 
                 // Background painted after layout, behind the row (see SearchRowMark)
                 let row_bg = ui.painter().add(egui::Shape::Noop);
-                let row_resp = ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.set_min_height(row_height);
-                    ui.set_max_height(row_height);
+                let row_resp = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.set_min_height(row_height);
+                        ui.set_max_height(row_height);
 
-                    // Search marker column: ▶ current hit, ● other hits, blank otherwise
-                    if has_search {
-                        search_marker_label(ui, theme, font_size, matches_search, is_active_search);
-                    }
+                        // Search marker column: ▶ current hit, ● other hits, blank otherwise
+                        if has_search {
+                            search_marker_label(
+                                ui,
+                                theme,
+                                font_size,
+                                matches_search,
+                                is_active_search,
+                            );
+                        }
 
-                    // Line number
-                    if *show_line_numbers {
-                        let line_num_str = format!("{:>6} │", actual_line_idx + 1);
-                        let num_color = if is_active_search {
-                            theme.accent_color()
+                        // Line number
+                        if *show_line_numbers {
+                            let line_num_str = format!("{:>6} │", actual_line_idx + 1);
+                            let num_color = if is_active_search {
+                                theme.accent_color()
+                            } else {
+                                theme.text_dim().gamma_multiply(0.6)
+                            };
+                            ui.label(
+                                RichText::new(line_num_str)
+                                    .monospace()
+                                    .strong()
+                                    .size(font_size)
+                                    .color(num_color),
+                            );
+                        }
+
+                        // JSON toggle button
+                        if is_json {
+                            let btn_label = if is_expanded { "[-] JSON" } else { "[+] JSON" };
+                            let btn = ui.button(
+                                RichText::new(btn_label)
+                                    .monospace()
+                                    .size((font_size - 2.0).max(9.0))
+                                    .color(theme.secondary_accent()),
+                            );
+                            if btn.clicked() {
+                                toggle_json = Some((actual_line_idx, is_expanded));
+                            }
+                        }
+
+                        // Content text
+                        let mut text = RichText::new(&*raw_line).monospace().size(font_size);
+                        if is_active_search {
+                            text = text
+                                .color(Color32::BLACK)
+                                .background_color(SEARCH_ACTIVE_BG)
+                                .strong();
+                        } else if matches_search {
+                            text = text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
+                        } else if let Some(hl) = highlight {
+                            text = text.color(hl.fg).background_color(hl.bg);
+                            if hl.bold {
+                                text = text.strong();
+                            }
+                            if hl.italic {
+                                text = text.italics();
+                            }
                         } else {
-                            theme.text_dim().gamma_multiply(0.6)
-                        };
-                        ui.label(
-                            RichText::new(line_num_str)
-                                .monospace()
-                                .strong()
-                                .size(font_size)
-                                .color(num_color),
-                        );
-                    }
-
-                    // JSON toggle button
-                    if is_json {
-                        let btn_label = if is_expanded { "[-] JSON" } else { "[+] JSON" };
-                        let btn = ui.button(
-                            RichText::new(btn_label)
-                                .monospace()
-                                .size((font_size - 2.0).max(9.0))
-                                .color(theme.secondary_accent()),
-                        );
-                        if btn.clicked() {
-                            toggle_json = Some((actual_line_idx, is_expanded));
+                            text = text.color(theme.text_primary());
                         }
-                    }
-
-                    // Content text
-                    let mut text = RichText::new(&*raw_line).monospace().size(font_size);
-                    if is_active_search {
-                        text = text.color(Color32::BLACK).background_color(SEARCH_ACTIVE_BG).strong();
-                    } else if matches_search {
-                        text = text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
-                    } else if let Some(hl) = highlight {
-                        text = text.color(hl.fg).background_color(hl.bg);
-                        if hl.bold {
-                            text = text.strong();
-                        }
-                        if hl.italic {
-                            text = text.italics();
-                        }
-                    } else {
-                        text = text.color(theme.text_primary());
-                    }
-                    ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
-                }).response;
-                paint_search_row_background(ui, row_bg, row_resp.rect, theme, matches_search, is_active_search);
+                        ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
+                    })
+                    .response;
+                paint_search_row_background(
+                    ui,
+                    row_bg,
+                    row_resp.rect,
+                    theme,
+                    matches_search,
+                    is_active_search,
+                );
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
                     row_resp.scroll_to_me(Some(egui::Align::Center));
@@ -904,7 +1066,10 @@ fn render_log_stream(
                         if let Ok(pretty) = serde_json::to_string_pretty(&val) {
                             egui::Frame::NONE
                                 .fill(theme.panel_bg().linear_multiply(1.3))
-                                .stroke(Stroke::new(1.0_f32, theme.border_color().gamma_multiply(0.4)))
+                                .stroke(Stroke::new(
+                                    1.0_f32,
+                                    theme.border_color().gamma_multiply(0.4),
+                                ))
                                 .inner_margin(egui::Margin::same(6))
                                 .show(ui, |ui| {
                                     for line in pretty.lines() {
@@ -953,7 +1118,11 @@ fn render_hex_stream(
     let file_size = engine.file_size as usize;
     if file_size == 0 {
         ui.centered_and_justified(|ui| {
-            ui.label(RichText::new(t(lang, "no_file_open")).monospace().color(theme.text_dim()));
+            ui.label(
+                RichText::new(t(lang, "no_file_open"))
+                    .monospace()
+                    .color(theme.text_dim()),
+            );
         });
         return;
     }
@@ -1059,68 +1228,91 @@ fn render_hex_stream(
                     .unwrap_or(false);
 
             let row_bg = ui.painter().add(egui::Shape::Noop);
-            let row_resp = ui.horizontal(|ui| {
-                if has_search {
-                    search_marker_label(ui, theme, font_size, matches_search, is_active_search);
-                }
-
-                // Offset label (8 uppercase hex digits)
-                ui.label(
-                    RichText::new(format!("{:08X}  ", offset))
-                        .monospace()
-                        .size(font_size)
-                        .color(theme.text_dim().gamma_multiply(0.75)),
-                );
-
-                // Format hex bytes in groups of 8
-                let mut hex_str = String::with_capacity(bytes_per_row * 3 + 8);
-                for i in 0..bytes_per_row {
-                    if i > 0 && i % 8 == 0 {
-                        hex_str.push(' ');
+            let row_resp = ui
+                .horizontal(|ui| {
+                    if has_search {
+                        search_marker_label(ui, theme, font_size, matches_search, is_active_search);
                     }
-                    if i < chunk.len() {
-                        use std::fmt::Write;
-                        let _ = write!(&mut hex_str, "{:02X} ", chunk[i]);
+
+                    // Offset label (8 uppercase hex digits)
+                    ui.label(
+                        RichText::new(format!("{:08X}  ", offset))
+                            .monospace()
+                            .size(font_size)
+                            .color(theme.text_dim().gamma_multiply(0.75)),
+                    );
+
+                    // Format hex bytes in groups of 8
+                    let mut hex_str = String::with_capacity(bytes_per_row * 3 + 8);
+                    for i in 0..bytes_per_row {
+                        if i > 0 && i % 8 == 0 {
+                            hex_str.push(' ');
+                        }
+                        if i < chunk.len() {
+                            use std::fmt::Write;
+                            let _ = write!(&mut hex_str, "{:02X} ", chunk[i]);
+                        } else {
+                            hex_str.push_str("   ");
+                        }
+                    }
+
+                    // Format ASCII representation
+                    let mut ascii_str = String::with_capacity(bytes_per_row + 4);
+                    ascii_str.push('|');
+                    for &b in chunk {
+                        if (0x20..=0x7E).contains(&b) {
+                            ascii_str.push(b as char);
+                        } else {
+                            ascii_str.push('·');
+                        }
+                    }
+                    for _ in chunk.len()..bytes_per_row {
+                        ascii_str.push(' ');
+                    }
+                    ascii_str.push('|');
+
+                    let mut hex_text = RichText::new(hex_str).monospace().size(font_size);
+                    let mut ascii_text = RichText::new(ascii_str).monospace().size(font_size);
+
+                    if is_active_search {
+                        hex_text = hex_text
+                            .color(Color32::BLACK)
+                            .background_color(SEARCH_ACTIVE_BG)
+                            .strong();
+                        ascii_text = ascii_text
+                            .color(Color32::BLACK)
+                            .background_color(SEARCH_ACTIVE_BG)
+                            .strong();
+                    } else if matches_search {
+                        hex_text = hex_text
+                            .color(Color32::BLACK)
+                            .background_color(SEARCH_MATCH_BG);
+                        ascii_text = ascii_text
+                            .color(Color32::BLACK)
+                            .background_color(SEARCH_MATCH_BG);
                     } else {
-                        hex_str.push_str("   ");
+                        hex_text = hex_text.color(theme.text_primary());
+                        ascii_text = ascii_text.color(theme.secondary_accent());
                     }
-                }
 
-                // Format ASCII representation
-                let mut ascii_str = String::with_capacity(bytes_per_row + 4);
-                ascii_str.push('|');
-                for &b in chunk {
-                    if (0x20..=0x7E).contains(&b) {
-                        ascii_str.push(b as char);
-                    } else {
-                        ascii_str.push('·');
-                    }
-                }
-                for _ in chunk.len()..bytes_per_row {
-                    ascii_str.push(' ');
-                }
-                ascii_str.push('|');
+                    ui.label(hex_text);
+                    ui.label(ascii_text);
+                })
+                .response;
+            paint_search_row_background(
+                ui,
+                row_bg,
+                row_resp.rect,
+                theme,
+                matches_search,
+                is_active_search,
+            );
 
-                let mut hex_text = RichText::new(hex_str).monospace().size(font_size);
-                let mut ascii_text = RichText::new(ascii_str).monospace().size(font_size);
-
-                if is_active_search {
-                    hex_text = hex_text.color(Color32::BLACK).background_color(SEARCH_ACTIVE_BG).strong();
-                    ascii_text = ascii_text.color(Color32::BLACK).background_color(SEARCH_ACTIVE_BG).strong();
-                } else if matches_search {
-                    hex_text = hex_text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
-                    ascii_text = ascii_text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
-                } else {
-                    hex_text = hex_text.color(theme.text_primary());
-                    ascii_text = ascii_text.color(theme.secondary_accent());
-                }
-
-                ui.label(hex_text);
-                ui.label(ascii_text);
-            }).response;
-            paint_search_row_background(ui, row_bg, row_resp.rect, theme, matches_search, is_active_search);
-
-            if is_active_search && scroll_to_byte.map(|b| b >= offset && b < row_end).unwrap_or(false) {
+            if is_active_search
+                && scroll_to_byte
+                    .map(|b| b >= offset && b < row_end)
+                    .unwrap_or(false)
+            {
                 row_resp.scroll_to_me(Some(egui::Align::Center));
                 scroll_to_byte = None;
             }
@@ -1135,8 +1327,16 @@ fn render_hex_stream(
     engine.current_scroll_y = scroll_output.state.offset.y;
 }
 
-pub fn render_filters_content(ui: &mut Ui, engines: &mut [TailEngine], theme: &CyberTheme, lang: Language) {
-    let active_streams = engines.iter().filter(|e| !e.include_filter.is_empty() || !e.exclude_filter.is_empty()).count();
+pub fn render_filters_content(
+    ui: &mut Ui,
+    engines: &mut [TailEngine],
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    let active_streams = engines
+        .iter()
+        .filter(|e| !e.include_filter.is_empty() || !e.exclude_filter.is_empty())
+        .count();
 
     ui.horizontal(|ui| {
         ui.heading(
@@ -1172,12 +1372,22 @@ pub fn render_filters_content(ui: &mut Ui, engines: &mut [TailEngine], theme: &C
             .to_string();
 
         ui.group(|ui| {
-            ui.label(RichText::new(format!("📄 {}", file_name)).monospace().strong());
+            ui.label(
+                RichText::new(format!("📄 {}", file_name))
+                    .monospace()
+                    .strong(),
+            );
 
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{}:", t(lang, "filter_include"))).monospace());
                 let mut inc = engine.include_filter.clone();
-                if ui.add(egui::TextEdit::singleline(&mut inc).hint_text("ERROR|CRITICAL|Exception...")).changed() {
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut inc)
+                            .hint_text("ERROR|CRITICAL|Exception..."),
+                    )
+                    .changed()
+                {
                     engine.set_include_filter(&inc);
                 }
                 if !engine.include_filter.is_empty() && ui.button("✖").clicked() {
@@ -1192,7 +1402,11 @@ pub fn render_filters_content(ui: &mut Ui, engines: &mut [TailEngine], theme: &C
                 } else {
                     RichText::new("Aa").color(theme.text_dim())
                 };
-                if ui.button(case_text).on_hover_text(t(lang, "case_sensitive_tip")).clicked() {
+                if ui
+                    .button(case_text)
+                    .on_hover_text(t(lang, "case_sensitive_tip"))
+                    .clicked()
+                {
                     engine.filter_case_sensitive = !engine.filter_case_sensitive;
                     engine.refresh_filters();
                 }
@@ -1203,7 +1417,11 @@ pub fn render_filters_content(ui: &mut Ui, engines: &mut [TailEngine], theme: &C
                 } else {
                     RichText::new(".*").color(theme.text_dim())
                 };
-                if ui.button(regex_text).on_hover_text(t(lang, "tip_regex_checkbox")).clicked() {
+                if ui
+                    .button(regex_text)
+                    .on_hover_text(t(lang, "tip_regex_checkbox"))
+                    .clicked()
+                {
                     engine.filter_is_regex = !engine.filter_is_regex;
                     engine.refresh_filters();
                 }
@@ -1212,7 +1430,12 @@ pub fn render_filters_content(ui: &mut Ui, engines: &mut [TailEngine], theme: &C
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{}:", t(lang, "filter_exclude"))).monospace());
                 let mut exc = engine.exclude_filter.clone();
-                if ui.add(egui::TextEdit::singleline(&mut exc).hint_text("healthcheck|ping|DEBUG...")).changed() {
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut exc).hint_text("healthcheck|ping|DEBUG..."),
+                    )
+                    .changed()
+                {
                     engine.set_exclude_filter(&exc);
                 }
                 if !engine.exclude_filter.is_empty() && ui.button("✖").clicked() {
@@ -1232,7 +1455,10 @@ pub fn render_highlights_content(
     lang: Language,
 ) {
     let total_rules = global_rules.len();
-    let active_rules = global_rules.iter().filter(|r| r.enabled && !r.pattern.is_empty()).count();
+    let active_rules = global_rules
+        .iter()
+        .filter(|r| r.enabled && !r.pattern.is_empty())
+        .count();
 
     ui.horizontal(|ui| {
         ui.heading(
@@ -1241,10 +1467,15 @@ pub fn render_highlights_content(
                 .color(theme.warn_color()),
         );
         ui.label(
-            RichText::new(format!("({}/{} {})", active_rules, total_rules, t(lang, "active_count")))
-                .monospace()
-                .color(theme.accent_color())
-                .strong(),
+            RichText::new(format!(
+                "({}/{} {})",
+                active_rules,
+                total_rules,
+                t(lang, "active_count")
+            ))
+            .monospace()
+            .color(theme.accent_color())
+            .strong(),
         );
     });
 
@@ -1279,20 +1510,34 @@ pub fn render_highlights_content(
                     }
 
                     // Move Up / Move Down buttons for priority reordering (disabled when at boundary)
-                    let up_btn = ui.add_enabled(i > 0, egui::Button::new("⬆")).on_hover_text(t(lang, "move_up"));
+                    let up_btn = ui
+                        .add_enabled(i > 0, egui::Button::new("⬆"))
+                        .on_hover_text(t(lang, "move_up"));
                     if up_btn.clicked() {
                         to_move_up = Some(i);
                     }
-                    let down_btn = ui.add_enabled(i + 1 < rules_len, egui::Button::new("⬇")).on_hover_text(t(lang, "move_down"));
+                    let down_btn = ui
+                        .add_enabled(i + 1 < rules_len, egui::Button::new("⬇"))
+                        .on_hover_text(t(lang, "move_down"));
                     if down_btn.clicked() {
                         to_move_down = Some(i);
                     }
 
                     ui.label(RichText::new(format!("#{}:", i + 1)).monospace());
-                    if ui.add(egui::TextEdit::singleline(&mut rule.pattern).hint_text(t(lang, "hint_rule_pattern"))).changed() {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut rule.pattern)
+                                .hint_text(t(lang, "hint_rule_pattern")),
+                        )
+                        .changed()
+                    {
                         rules_changed = true;
                     }
-                    if ui.checkbox(&mut rule.is_regex, "Regex").on_hover_text(t(lang, "tip_regex_checkbox")).changed() {
+                    if ui
+                        .checkbox(&mut rule.is_regex, "Regex")
+                        .on_hover_text(t(lang, "tip_regex_checkbox"))
+                        .changed()
+                    {
                         rules_changed = true;
                     }
 
@@ -1302,16 +1547,28 @@ pub fn render_highlights_content(
                     } else {
                         RichText::new("Aa").color(theme.text_dim())
                     };
-                    if ui.button(case_text).on_hover_text(t(lang, "case_sensitive_tip")).clicked() {
+                    if ui
+                        .button(case_text)
+                        .on_hover_text(t(lang, "case_sensitive_tip"))
+                        .clicked()
+                    {
                         rule.case_sensitive = !rule.case_sensitive;
                         rules_changed = true;
                     }
 
                     // Bold and Italic toggles
-                    if ui.checkbox(&mut rule.bold, "B").on_hover_text(t(lang, "bold")).changed() {
+                    if ui
+                        .checkbox(&mut rule.bold, "B")
+                        .on_hover_text(t(lang, "bold"))
+                        .changed()
+                    {
                         rules_changed = true;
                     }
-                    if ui.checkbox(&mut rule.italic, "I").on_hover_text(t(lang, "italic")).changed() {
+                    if ui
+                        .checkbox(&mut rule.italic, "I")
+                        .on_hover_text(t(lang, "italic"))
+                        .changed()
+                    {
                         rules_changed = true;
                     }
 
@@ -1322,7 +1579,10 @@ pub fn render_highlights_content(
                         .width(75.0)
                         .show_ui(ui, |ui| {
                             for alert in crate::audio::SoundAlertPreset::all() {
-                                if ui.selectable_value(&mut curr_alert, *alert, alert.name()).clicked() {
+                                if ui
+                                    .selectable_value(&mut curr_alert, *alert, alert.name())
+                                    .clicked()
+                                {
                                     rule.sound_alert = *alert;
                                     rules_changed = true;
                                 }
@@ -1330,9 +1590,13 @@ pub fn render_highlights_content(
                         });
 
                     if rule.sound_alert != crate::audio::SoundAlertPreset::None
-                        && ui.button("▶").on_hover_text(t(lang, "sound_test_tip")).clicked() {
-                            rule.sound_alert.play();
-                        }
+                        && ui
+                            .button("▶")
+                            .on_hover_text(t(lang, "sound_test_tip"))
+                            .clicked()
+                    {
+                        rule.sound_alert.play();
+                    }
 
                     ui.label(RichText::new("FG:").monospace().size(11.0));
                     if ui.color_edit_button_srgb(&mut rule.fg_color).changed() {
@@ -1345,8 +1609,10 @@ pub fn render_highlights_content(
                     }
 
                     // Sample preview
-                    let fg = Color32::from_rgb(rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]);
-                    let bg = Color32::from_rgb(rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]);
+                    let fg =
+                        Color32::from_rgb(rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]);
+                    let bg =
+                        Color32::from_rgb(rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]);
                     let mut preview = RichText::new(format!(" {} ", t(lang, "preview")))
                         .color(fg)
                         .background_color(bg)
@@ -1380,8 +1646,17 @@ pub fn render_highlights_content(
         global_rules.remove(idx);
     }
 
-    if ui.button(RichText::new(t(lang, "add_rule")).monospace()).on_hover_text(t(lang, "tip_add_rule")).clicked() {
-        global_rules.push(HighlightRule::new("", [255, 255, 255], [0, 100, 200], false));
+    if ui
+        .button(RichText::new(t(lang, "add_rule")).monospace())
+        .on_hover_text(t(lang, "tip_add_rule"))
+        .clicked()
+    {
+        global_rules.push(HighlightRule::new(
+            "",
+            [255, 255, 255],
+            [0, 100, 200],
+            false,
+        ));
         rules_changed = true;
     }
 
@@ -1412,10 +1687,16 @@ pub fn render_settings_content(
     // Theme selector
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "theme"))).monospace());
-        ui.selectable_value(theme, CyberTheme::Tron, "Tron").clicked();
-        ui.selectable_value(theme, CyberTheme::Matrix, "Matrix").clicked();
-        ui.selectable_value(theme, CyberTheme::Blade, "Blade").clicked();
-        if ui.selectable_value(theme, CyberTheme::Light, t(*lang, "theme_light")).clicked() {}
+        ui.selectable_value(theme, CyberTheme::Tron, "Tron")
+            .clicked();
+        ui.selectable_value(theme, CyberTheme::Matrix, "Matrix")
+            .clicked();
+        ui.selectable_value(theme, CyberTheme::Blade, "Blade")
+            .clicked();
+        if ui
+            .selectable_value(theme, CyberTheme::Light, t(*lang, "theme_light"))
+            .clicked()
+        {}
     });
 
     ui.add_space(6.0);
@@ -1424,8 +1705,10 @@ pub fn render_settings_content(
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "language"))).monospace());
         ui.selectable_value(lang, Language::En, "English").clicked();
-        ui.selectable_value(lang, Language::It, "Italiano").clicked();
-        ui.selectable_value(lang, Language::Fr, "Français").clicked();
+        ui.selectable_value(lang, Language::It, "Italiano")
+            .clicked();
+        ui.selectable_value(lang, Language::Fr, "Français")
+            .clicked();
         ui.selectable_value(lang, Language::Es, "Español").clicked();
         if ui.selectable_value(lang, Language::Zh, "中文").clicked() {}
     });
@@ -1435,14 +1718,30 @@ pub fn render_settings_content(
     // Font size selector
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "font_size"))).monospace());
-        if ui.button(" - ").on_hover_text(t(*lang, "font_dec_tip")).clicked() {
+        if ui
+            .button(" - ")
+            .on_hover_text(t(*lang, "font_dec_tip"))
+            .clicked()
+        {
             *font_size = (*font_size - 1.0).max(8.0);
         }
-        ui.label(RichText::new(format!("{:.0} pt", *font_size)).monospace().strong());
-        if ui.button(" + ").on_hover_text(t(*lang, "font_inc_tip")).clicked() {
+        ui.label(
+            RichText::new(format!("{:.0} pt", *font_size))
+                .monospace()
+                .strong(),
+        );
+        if ui
+            .button(" + ")
+            .on_hover_text(t(*lang, "font_inc_tip"))
+            .clicked()
+        {
             *font_size = (*font_size + 1.0).min(32.0);
         }
-        if ui.button("100%").on_hover_text(t(*lang, "font_reset_tip")).clicked() {
+        if ui
+            .button("100%")
+            .on_hover_text(t(*lang, "font_reset_tip"))
+            .clicked()
+        {
             *font_size = 13.0;
         }
     });
@@ -1479,13 +1778,21 @@ fn render_markdown_stream(
 ) {
     if engine.buffer.is_empty() {
         ui.centered_and_justified(|ui| {
-            ui.label(RichText::new(t(lang, "no_file_open")).monospace().color(theme.text_dim()));
+            ui.label(
+                RichText::new(t(lang, "no_file_open"))
+                    .monospace()
+                    .color(theme.text_dim()),
+            );
         });
         return;
     }
 
     engine.ensure_markdown_text();
-    let text: &str = engine.markdown_text_cache.as_ref().map(|(_, s)| s.as_str()).unwrap_or("");
+    let text: &str = engine
+        .markdown_text_cache
+        .as_ref()
+        .map(|(_, s)| s.as_str())
+        .unwrap_or("");
 
     let mut scroll_area = ScrollArea::both()
         .auto_shrink([false, false])

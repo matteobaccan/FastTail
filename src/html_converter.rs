@@ -4,7 +4,8 @@ use std::sync::LazyLock;
 /// Compiles a regex once, on first use.
 macro_rules! re {
     ($name:ident, $pattern:expr) => {
-        static $name: LazyLock<Regex> = LazyLock::new(|| Regex::new($pattern).expect("valid static regex"));
+        static $name: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new($pattern).expect("valid static regex"));
     };
 }
 
@@ -18,8 +19,14 @@ re!(
     RE_OPENING_TAG,
     r"(?i)<(?:!doctype|html|head|body|div|p|br|hr|b|strong|i|em|u|s|del|strike|h[1-6]|a|img|table|thead|tbody|tr|th|td|ul|ol|li|pre|code|kbd|span|blockquote|section|article|header|footer|main|aside|font|mark|script|style|title)\b[^<>]*>"
 );
-re!(RE_CLOSING_TAG, r"(?i)</(?:html|head|body|div|p|b|strong|i|em|u|s|del|strike|h[1-6]|a|table|thead|tbody|tr|th|td|ul|ol|li|pre|code|kbd|span|blockquote|section|article|header|footer|main|aside|font|mark|script|style|title)\s*>");
-re!(RE_VOID_TAG, r"(?i)<(?:br|hr|img|!doctype|html|body|meta|link)\b[^<>]*>");
+re!(
+    RE_CLOSING_TAG,
+    r"(?i)</(?:html|head|body|div|p|b|strong|i|em|u|s|del|strike|h[1-6]|a|table|thead|tbody|tr|th|td|ul|ol|li|pre|code|kbd|span|blockquote|section|article|header|footer|main|aside|font|mark|script|style|title)\s*>"
+);
+re!(
+    RE_VOID_TAG,
+    r"(?i)<(?:br|hr|img|!doctype|html|body|meta|link)\b[^<>]*>"
+);
 
 /// Heuristically decides whether `text` is HTML rather than Markdown/plain text.
 ///
@@ -50,13 +57,28 @@ re!(
 re!(RE_PRE, r"(?is)<pre\b[^>]*>(.*?)</pre>");
 re!(RE_HR, r"(?i)<hr\b\s*/?>");
 re!(RE_BR, r"(?i)<br\b\s*/?>");
-re!(RE_LINK, r#"(?is)<a\b\s+[^>]*href=['"]([^'"]*)['"][^>]*>(.*?)</a>"#);
-re!(RE_IMG_SRC_ALT, r#"(?is)<img\b\s+[^>]*src=['"]([^'"]*)['"][^>]*alt=['"]([^'"]*)['"][^>]*>"#);
-re!(RE_IMG_ALT_SRC, r#"(?is)<img\b\s+[^>]*alt=['"]([^'"]*)['"][^>]*src=['"]([^'"]*)['"][^>]*>"#);
-re!(RE_IMG_SRC, r#"(?is)<img\b\s+[^>]*src=['"]([^'"]*)['"][^>]*>"#);
+re!(
+    RE_LINK,
+    r#"(?is)<a\b\s+[^>]*href=['"]([^'"]*)['"][^>]*>(.*?)</a>"#
+);
+re!(
+    RE_IMG_SRC_ALT,
+    r#"(?is)<img\b\s+[^>]*src=['"]([^'"]*)['"][^>]*alt=['"]([^'"]*)['"][^>]*>"#
+);
+re!(
+    RE_IMG_ALT_SRC,
+    r#"(?is)<img\b\s+[^>]*alt=['"]([^'"]*)['"][^>]*src=['"]([^'"]*)['"][^>]*>"#
+);
+re!(
+    RE_IMG_SRC,
+    r#"(?is)<img\b\s+[^>]*src=['"]([^'"]*)['"][^>]*>"#
+);
 re!(RE_BOLD, r"(?is)<(?:strong|b)\b[^>]*>(.*?)</(?:strong|b)>");
 re!(RE_ITALIC, r"(?is)<(?:em|i)\b[^>]*>(.*?)</(?:em|i)>");
-re!(RE_STRIKE, r"(?is)<(?:del|s|strike)\b[^>]*>(.*?)</(?:del|s|strike)>");
+re!(
+    RE_STRIKE,
+    r"(?is)<(?:del|s|strike)\b[^>]*>(.*?)</(?:del|s|strike)>"
+);
 re!(RE_CODE, r"(?is)<(?:code|kbd)\b[^>]*>(.*?)</(?:code|kbd)>");
 re!(RE_MARK, r"(?is)<mark\b[^>]*>(.*?)</mark>");
 re!(RE_UL, r"(?is)<ul\b[^>]*>(.*?)</ul>");
@@ -64,14 +86,20 @@ re!(RE_OL, r"(?is)<ol\b[^>]*>(.*?)</ol>");
 re!(RE_LI, r"(?is)<li\b[^>]*>(.*?)</li>");
 re!(RE_BLOCKQUOTE, r"(?is)<blockquote\b[^>]*>(.*?)</blockquote>");
 re!(RE_P, r"(?is)<p\b[^>]*>(.*?)</p>");
-re!(RE_BLOCK_CONTAINER, r"(?is)</?(?:div|section|article|header|footer|main|aside)\b[^>]*>");
+re!(
+    RE_BLOCK_CONTAINER,
+    r"(?is)</?(?:div|section|article|header|footer|main|aside)\b[^>]*>"
+);
 re!(RE_ANY_TAG, r"<[^>]+>");
 re!(RE_BLANK_LINES, r"\n{3,}");
 re!(RE_PLACEHOLDER, "\u{E000}PRE(\\d+)\u{E001}");
 
 static RE_HEADINGS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     (1..=6)
-        .map(|level| Regex::new(&format!(r"(?is)<h{level}\b[^>]*>(.*?)</h{level}>")).expect("valid static regex"))
+        .map(|level| {
+            Regex::new(&format!(r"(?is)<h{level}\b[^>]*>(.*?)</h{level}>"))
+                .expect("valid static regex")
+        })
         .collect()
 });
 
@@ -87,7 +115,9 @@ pub fn html_to_markdown(html: &str) -> String {
     out = RE_STYLE.replace_all(&out, "").into_owned();
 
     // 3. Remove <head> block, but extract <title> to prepend if no h1 exists
-    let title_opt = RE_TITLE.captures(&out).map(|caps| caps[1].trim().to_string());
+    let title_opt = RE_TITLE
+        .captures(&out)
+        .map(|caps| caps[1].trim().to_string());
     out = RE_HEAD.replace_all(&out, "").into_owned();
     if let Some(title) = title_opt {
         if !title.is_empty() && !RE_H1_PRESENT.is_match(&out) {
@@ -123,7 +153,9 @@ pub fn html_to_markdown(html: &str) -> String {
     for (idx, re) in RE_HEADINGS.iter().enumerate() {
         let hashes = "#".repeat(idx + 1);
         out = re
-            .replace_all(&out, |caps: &regex::Captures| format!("\n\n{} {}\n\n", hashes, caps[1].trim()))
+            .replace_all(&out, |caps: &regex::Captures| {
+                format!("\n\n{} {}\n\n", hashes, caps[1].trim())
+            })
             .into_owned();
     }
 
@@ -160,7 +192,10 @@ pub fn html_to_markdown(html: &str) -> String {
     // 12. Lists: <ul>, <ol>, <li>
     out = RE_UL
         .replace_all(&out, |caps: &regex::Captures| {
-            let items: Vec<String> = RE_LI.captures_iter(&caps[1]).map(|c| format!("* {}", c[1].trim())).collect();
+            let items: Vec<String> = RE_LI
+                .captures_iter(&caps[1])
+                .map(|c| format!("* {}", c[1].trim()))
+                .collect();
             format!("\n\n{}\n\n", items.join("\n"))
         })
         .into_owned();
@@ -201,7 +236,11 @@ pub fn html_to_markdown(html: &str) -> String {
     // 18. Restore the parked code blocks verbatim
     out = RE_PLACEHOLDER
         .replace_all(&out, |caps: &regex::Captures| {
-            caps[1].parse::<usize>().ok().and_then(|i| code_blocks.get(i).cloned()).unwrap_or_default()
+            caps[1]
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| code_blocks.get(i).cloned())
+                .unwrap_or_default()
         })
         .into_owned();
 
@@ -342,7 +381,8 @@ mod tests {
 
     #[test]
     fn test_html_headings_and_formatting() {
-        let html = "<h1>Title</h1><p>This is <b>bold</b> and <i>italic</i> and <code>code</code>.</p>";
+        let html =
+            "<h1>Title</h1><p>This is <b>bold</b> and <i>italic</i> and <code>code</code>.</p>";
         let md = html_to_markdown(html);
         assert!(md.contains("# Title"));
         assert!(md.contains("**bold**"));
@@ -361,7 +401,8 @@ mod tests {
 
     #[test]
     fn test_html_tables() {
-        let html = "<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
+        let html =
+            "<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
         let md = html_to_markdown(html);
         assert!(md.contains("| Name | Age |"));
         assert!(md.contains("| --- | --- |"));
@@ -377,7 +418,10 @@ mod tests {
 
     #[test]
     fn test_escaped_entities_are_not_double_decoded() {
-        assert_eq!(decode_html_entities("&amp;lt;b&amp;gt; &amp;#39;"), "&lt;b&gt; &#39;");
+        assert_eq!(
+            decode_html_entities("&amp;lt;b&amp;gt; &amp;#39;"),
+            "&lt;b&gt; &#39;"
+        );
     }
 
     #[test]
