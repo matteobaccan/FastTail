@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Preset sci-fi visual themes
-The application SHALL provide three curated, switchable sci-fi color themes inspired by cinematic aesthetics: **Tron**, **Matrix**, and **Blade**.
+The application SHALL provide four curated, switchable color themes: three sci-fi themes inspired by cinematic aesthetics, **Tron**, **Matrix** and **Blade**, plus a clean **Light** theme for bright environments.
 
 #### Scenario: Tron theme selection
 - **WHEN** the user selects the Tron theme
@@ -14,6 +14,10 @@ The application SHALL provide three curated, switchable sci-fi color themes insp
 #### Scenario: Blade theme selection
 - **WHEN** the user selects the Blade theme (Blade Runner noir)
 - **THEN** the UI updates immediately with dark industrial charcoal background, warm amber/neon orange primary highlights, and magenta/crimson warning accents.
+
+#### Scenario: Light theme selection
+- **WHEN** the user selects the Light theme
+- **THEN** the UI updates immediately with an off-white background, white panels, slate text and cool blue accents, keeping every widget readable in daylight.
 
 ### Requirement: Live theme switching and persistence
 The application SHALL allow switching themes dynamically at runtime without restarting the application, and SHALL persist the selected theme to the configuration file.

@@ -23,7 +23,7 @@ The application SHALL automatically detect the host operating system language on
 - **THEN** it displays the standard English text without crashing or showing blank labels.
 
 ### Requirement: Runtime language switcher
-The application SHALL provide an explicit language selector dropdown in the settings/menu, allowing users to switch languages instantly and persisting their choice in `fasttail.toml`.
+The application SHALL provide an explicit language selector dropdown in the settings/menu, allowing users to switch languages instantly and persisting their choice in `fasttail.ini`.
 
 #### Scenario: Switching language at runtime
 - **WHEN** the user selects "Español" in the language dropdown

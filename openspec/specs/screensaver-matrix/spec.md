@@ -20,7 +20,7 @@ The screensaver SHALL be enabled by default with a default timeout of 10 minutes
 
 #### Scenario: User customizes timeout duration
 - **WHEN** the user sets the idle timeout to 5 minutes in settings
-- **THEN** the screensaver activates after 5 minutes of inactivity and the setting is persisted to `fasttail.toml`.
+- **THEN** the screensaver activates after 5 minutes of inactivity and the setting is persisted to `fasttail.ini`.
 
 #### Scenario: User disables screensaver
 - **WHEN** the user toggles the screensaver off in settings

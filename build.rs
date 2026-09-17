@@ -7,7 +7,11 @@ fn main() {
     let timestamp = {
         #[cfg(windows)]
         let output = Command::new("powershell")
-            .args(["-NoProfile", "-Command", "Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC'"])
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC'",
+            ])
             .output();
 
         #[cfg(not(windows))]

@@ -38,12 +38,16 @@ The engine SHALL decode log files according to the selected encoding: ASCII, ANS
 - **WHEN** a user opens a log file formatted in UTF-16 LE
 - **THEN** the engine automatically detects the encoding and renders lines as valid UTF-8 strings in the viewport.
 
-### Requirement: View Modes: Text, Hex, and Filtered
+### Requirement: View Modes: Text, Hex, and Markdown
 The engine SHALL support three view modes selectable per stream:
-1. **TXT (Text Mode)**: Displays all log lines formatted as text with syntax highlights and JSON toggles.
-2. **HEX (Binary Hex Mode)**: Displays file bytes in hexadecimal and ASCII dump columns. Columns SHALL be configurable in multiples of 8 (starting at 16, incrementing or decrementing by 8 columns).
-3. **FILTERED (Filtered Mode)**: Displays exclusively the lines that match active include/highlight filters, suppressing all non-matching lines from the viewport.
+1. **TXT (Text Mode)**: Displays log lines as text with highlight rules and JSON toggles. Include/exclude filters apply automatically whenever their text is non-empty; there is no separate filtered mode.
+2. **HEX (Binary Hex Mode)**: Displays file bytes in hexadecimal and ASCII dump columns. Columns SHALL be configurable in multiples of 8 (starting at 16, incrementing or decrementing by 8 columns). Files detected as binary open in this mode.
+3. **MD (Markdown Mode)**: Renders the file as formatted Markdown. Files with a `.md` / `.markdown` extension open in this mode; content that contains real HTML markup is converted to Markdown before rendering, and the converted text is cached until the file changes.
 
-#### Scenario: Switching to Filtered mode
-- **WHEN** the user selects Filtered view mode on a log stream with active filters
-- **THEN** only lines matching the filter patterns are rendered, hiding noise lines while maintaining continuous streaming of new matching lines.
+#### Scenario: Opening an HTML report in Markdown mode
+- **WHEN** the user switches a stream holding an HTML document to MD view
+- **THEN** headings, paragraphs, lists, links, tables and code blocks are rendered as Markdown, with `<pre>` contents kept verbatim.
+
+#### Scenario: Markdown file containing generics in code
+- **WHEN** a README with `Vec<i32>` inside a fenced code block is opened
+- **THEN** the file is rendered as plain Markdown and the generic type is preserved, because code blocks and bare `<name>` tokens are not treated as HTML.

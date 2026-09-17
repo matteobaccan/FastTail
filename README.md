@@ -4,10 +4,10 @@
   <p><strong>Next-generation ultra-fast multi-stream log monitor & tail viewer with Cyberpunk UI aesthetic.</strong></p>
 
   <p>
-    <a href="https://github.com/matteobaccan/FastTail/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build Status" /></a>
+    <a href="https://github.com/matteobaccan/FastTail/actions/workflows/build.yml"><img src="https://github.com/matteobaccan/FastTail/actions/workflows/build.yml/badge.svg" alt="Build Status" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="MIT License" /></a>
     <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/language-Rust-orange.svg?style=flat-square" alt="Rust 2021" /></a>
-    <a href="https://github.com/matteobaccan/FastTail"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platforms" /></a>
+    <a href="https://github.com/matteobaccan/FastTail/releases"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platforms" /></a>
   </p>
 
   <p>
@@ -19,28 +19,30 @@
 
 ## ⚡ Overview
 
-**FastTail** is a modern, high-performance cross-platform log tailing application written in Rust. Designed as the ultimate successor to legacy tools like BareTail, it combines **zero-lag 64-bit memory-mapped file I/O** (memmap2) with a stunning **Cyberpunk UI** aesthetic, rich log intelligence, audio alert presets, and modular docking layouts.
+**FastTail** is a modern, high-performance cross-platform log tailing application written in Rust. Designed as the successor to legacy tools like BareTail, it combines a **zero-lag 64-bit streaming engine** with a **Cyberpunk UI**, rich log intelligence, audio alert presets and a modular docking workspace.
 
-Whether you are monitoring multi-gigabyte production server logs, analyzing raw binary firmware streams in Hex mode, or isolating errors using priority-ordered regex filters, FastTail delivers instant responsiveness with minimal memory footprint.
+Whether you are monitoring multi-gigabyte production logs, inspecting raw binary streams in Hex mode, reading Markdown or HTML reports, or isolating errors with priority-ordered highlight rules, FastTail stays instantly responsive with a minimal memory footprint.
 
 ---
 
 ## 🚀 Feature Highlights
 
-- **Zero-Lag Memory-Mapped Engine (memmap2)**: Instantly open multi-gigabyte log files (>50 GB) in milliseconds using less than 50 MB of RAM.
-- **Cyberpunk UI Themes**: Switch seamlessly between **Tron** (Obsidian & Neon Cyan), **Matrix** (Phosphor Green & Jet Black), and **Blade** (Charcoal & Amber/Magenta).
-- **Multi-Mode Log Viewing**:
-  - **TXT (Text Mode)**: Full-featured text streaming with virtualized scrolling.
-  - **HEX (Binary Mode)**: Real-time hexadecimal dump with configurable byte columns in multiples of 8 (16, 24, 32...).
-  - **FILTERED Mode**: Dedicated view showing exclusively lines matching your active filters.
-- **Multi-Encoding Support**: Automatic detection and manual selection for **ASCII**, **ANSI (Windows-1252)**, **UTF-8** (with/without BOM), **Unicode LE (UTF-16 LE)**, and **Unicode BE (UTF-16 BE)**.
-- **Multi-Rule Color Highlighting & Styles**: Configure color rules with **Bold**, **Italic**, and top-down evaluation priority (reorder with ⬆/⬇).
-- **Sound Alert Presets**: Assign audio notifications (Beep, Chime, Warning, Critical) to highlight triggers.
-- **Modular Docking Workspace (gui_dock)**: Dock, split horizontally/vertically, float, or tabulate multiple simultaneous log streams.
-- **Log Intelligence**: Automatic inline [+] JSON detection with interactive pretty-printing and multiline stack trace preservation.
-- **Matrix Digital Rain Screensaver**: Built-in 2D falling glyph animation when idle for an operator-configured timeout.
-- **BareTail Migration Bridge**: One-click import of registry configurations, highlight colors, and recent files from BareTail and BareTailPro on Windows.
-- **Multilingual Support (i18n)**: English, Italian, French, Spanish, and Chinese with native CJK font fallback.
+- **Zero-Lag Streaming Engine**: opens multi-gigabyte files in milliseconds, follows appends in real time, and handles log rotation, truncation and in-place rewrites without locking the file for the writer.
+- **Three View Modes per Stream**:
+  - **TXT**: virtualized text view with highlight rules, inline JSON pretty-printing and stack-trace grouping.
+  - **HEX**: live hexadecimal + ASCII dump with byte columns in multiples of 8 (16, 24, 32...).
+  - **MD**: rendered Markdown. `.md` files open in this mode automatically and HTML documents are converted to Markdown on the fly.
+- **Powerful Search**: a search box per stream, `F3` / `Shift+F3` navigation scoped to the focused window, match counter, wrap-around beep, last 10 queries history, matches refreshed live as the file grows. In HEX mode the query is matched at byte level (text or `0A 0D` patterns), and a marker column (`▶` current hit, `●` other hits) plus full-row highlight is shown in every view.
+- **Live Include / Exclude Filters**: plain text or regex, case-sensitive or not, applied as you type. Filtered rows are virtualized so the viewport is always full.
+- **Multi-Rule Highlighting**: foreground, background, **bold**, *italic*, top-down priority (reorder with ⬆ / ⬇), and a sound alert preset per rule (Beep, Chime, Warning, Critical).
+- **Cyberpunk Themes**: **Tron** (obsidian & neon cyan), **Matrix** (phosphor green), **Blade** (charcoal & amber/magenta) and a clean **Light** theme.
+- **Modular Docking Workspace** (egui_dock): dock, split, float or tab any number of streams. Layout, floating window positions, dialog positions and window geometry are persisted and restored.
+- **Multi-Encoding Support**: automatic detection and manual override for ASCII, ANSI (Windows-1252), UTF-8 (with/without BOM), UTF-16 LE and UTF-16 BE.
+- **Log Intelligence**: inline `[+] JSON` detection with pretty-printing, multiline stack-trace continuation kept together with its parent line.
+- **Telemetry & FX**: CPU and memory in the title bar, per-stream throughput, optional borderless window, Matrix digital rain screensaver after a configurable idle time (10 minutes by default).
+- **BareTail Migration Bridge**: one-click import of recent files and highlight colors from BareTail / BareTailPro on Windows.
+- **Multilingual UI**: English, Italian, French, Spanish and Chinese, with CJK font fallback.
+- **Crash Logger**: an unexpected panic writes `fasttail_crash.log` with version, commit and build timestamp so it can be reported.
 
 ---
 
@@ -48,66 +50,97 @@ Whether you are monitoring multi-gigabyte production server logs, analyzing raw 
 
 | Feature | FastTail | BareTail (Free/Pro) | Tailviewer | SnakeTail | `tail -f` / CLI |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Engine / Architecture** | **Rust (`memmap2`)** | Win32 C++ (2006) | .NET / C# | C# / WPF | POSIX C |
-| **Binary Size** | **~6 MB (Single binary)** | ~220 KB | ~45 MB | ~1.5 MB | ~50 KB |
-| **Runtime Dependencies** | **Zero (Standalone native)** | Zero (Win32 native) | .NET Runtime required | .NET Framework / WPF | POSIX coreutils |
-| **Large Files (>50 GB)** | **Instant (<100ms)** | Good | Slow / High RAM | Moderate | Fast |
+| **Engine / Architecture** | **Rust** | Win32 C++ (2006) | .NET / C# | C# / WPF | POSIX C |
+| **Binary Size** | **~10 MB (single binary)** | ~220 KB | ~45 MB | ~1.5 MB | ~50 KB |
+| **Runtime Dependencies** | **Zero (standalone native)** | Zero (Win32 native) | .NET Runtime required | .NET Framework / WPF | POSIX coreutils |
+| **Large Files (>50 GB)** | **Instant** | Good | Slow / High RAM | Moderate | Fast |
 | **Cross-Platform** | **Windows, Linux, macOS** | Windows only | Windows only | Windows only | Linux/macOS |
 | **User Interface** | **Cyberpunk UI (GPU)** | Win32 Classic | Modern Windows | Classic Windows | Terminal CLI |
-| **Multi-Tab / Docking** | **Full Modular Docking** | Tabs only | Tabs & Panels | Tabs & Splits | Multiple terms |
-| **Binary Hex View** | **Yes (Multiples of 8)** | No | Plugin required | No | No (`xxd`) |
-| **Filtered View Mode** | **Yes (Direct Stream)** | Pro version only | Yes | Yes | `grep` pipe |
+| **Multi-Tab / Docking** | **Full modular docking** | Tabs only | Tabs & Panels | Tabs & Splits | Multiple terms |
+| **Binary Hex View** | **Yes, with byte-level search** | No | Plugin required | No | No (`xxd`) |
+| **Markdown / HTML View** | **Yes** | No | No | No | No |
+| **Include / Exclude Filters** | **Live, text or regex** | Pro version only | Yes | Yes | `grep` pipe |
 | **Highlighting Styles** | **FG, BG, Bold, Italic** | FG, BG | FG, BG | FG, BG | ANSI codes |
-| **Rule Priority Reordering**| **Yes (⬆ / ⬇ Top-Down)** | Limited | Yes | Yes | N/A |
+| **Rule Priority Reordering**| **Yes (⬆ / ⬇ top-down)** | Limited | Yes | Yes | N/A |
 | **Sound Alerts** | **Presets (Beep/Chime/Crit)** | No | Plugins | Limited | Bell (`\a`) |
 | **Encoding Support** | **ASCII, ANSI, UTF-8, UTF-16 LE/BE** | ANSI, UTF-8, Unicode | UTF-8, ANSI | UTF-8, ANSI | Terminal enc |
-| **JSON Formatter** | **Inline Pretty-Print** | No | Plugin required | No | `jq` pipe |
-| **Screensaver Mode** | **Matrix Digital Rain** | No | No | No | No |
+| **JSON Formatter** | **Inline pretty-print** | No | Plugin required | No | `jq` pipe |
+| **Screensaver Mode** | **Matrix digital rain** | No | No | No | No |
 | **Open Source & License** | **MIT License** | Proprietary | MIT | GPL | Open Source |
 
 ---
 
 ## ⌨️ Keyboard Shortcuts Reference
 
+Search and navigation shortcuts act on the stream in the **focused dock panel** (click a panel to focus it).
+
 | Shortcut | Description |
 | :--- | :--- |
-| `Space` | Toggle Follow mode (Auto-scroll to latest line) |
-| `Ctrl + F` | Focus search bar in active log stream |
-| `F3` / `Shift + F3` | Navigate to Next / Previous search match |
-| `Home` | Scroll horizontally to the far left |
-| `End` | Scroll horizontally to the far right |
-| `↑` / `↓` / `←` / `→` | Scroll viewport line-by-line or column-by-column |
-| `PgUp` / `PgDown` | Scroll viewport by one full screen page of lines |
-| `Alt + 1..9` | Switch focus directly to file tab #1 through #9 |
-| `Ctrl + Home` | Jump to line 0 (top of file) and pause follow |
-| `Ctrl + End` | Jump to latest line (bottom of file) and resume follow |
-| `Ctrl +` / `Ctrl =` | Zoom in (Increase font size) |
-| `Ctrl -` | Zoom out (Decrease font size) |
+| `Space` | Toggle Follow mode (auto-scroll to the latest line) |
+| `Ctrl + F` | Focus the search box of the focused stream |
+| `F3` / `Shift + F3` | Next / previous search match in the focused stream |
+| `Enter` / `Shift + Enter` | Next / previous match while typing in the search box |
+| `↑` / `↓` / `←` / `→` | Scroll by one line / column (`Ctrl` + `←` / `→` scrolls 5x faster) |
+| `PgUp` / `PgDown` | Scroll by one page |
+| `Home` / `End` | Scroll horizontally to the far left / right |
+| `Ctrl + Home` | Jump to the top of the file and pause follow |
+| `Ctrl + End` | Jump to the latest line and resume follow |
+| `Alt + 1..9` | Switch to stream tab #1 through #9 |
+| `Ctrl +` / `Ctrl =` | Zoom in (increase font size) |
+| `Ctrl -` | Zoom out (decrease font size) |
 | `Ctrl 0` | Reset font size to default (13 pt) |
 | `Ctrl + MouseWheel` | Dynamically scale font size |
-| `F1` | Open Help & Keyboard Shortcuts dialog |
-| `Esc` | Close active dialog or popup |
+| `F1` | Open the Help & Keyboard Shortcuts dialog |
+| `Esc` | Close the active dialog, or leave the search box |
+
+Files can also be opened by **drag & drop** onto the window or by passing their paths as command line arguments.
+
+---
+
+## ⚙️ Configuration
+
+Settings are stored in a single `fasttail.ini` file, looked up in this order:
+
+1. the path in the `FASTTAIL_CONFIG` environment variable, if set;
+2. `fasttail.ini` in the current working directory (portable layout);
+3. `fasttail.ini` next to the executable;
+4. the per-user directory: `%APPDATA%\FastTail` on Windows, `$XDG_CONFIG_HOME/FastTail` or `~/.config/FastTail` elsewhere.
+
+New installs write next to the executable and fall back to the per-user directory when that folder is read-only (for example `Program Files`). A legacy `fasttail.toml` from older versions is migrated automatically on first start.
 
 ---
 
 ## 🛠️ Building & Installation
 
 ### Prerequisites
-- [Rust](https://rustup.rs/) (version 1.80+ recommended)
+- [Rust](https://rustup.rs/) 1.80 or newer
+- On Linux: `libasound2-dev libudev-dev pkg-config libx11-dev libxcb1-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev`
 
 ### Build from Source
 ```bash
 git clone https://github.com/matteobaccan/FastTail.git
 cd FastTail
 
-# Run development build
-cargo run
+# Run development build (optionally with files to open)
+cargo run -- app.log other.log
+
+# Run the test suite
+cargo test
 
 # Build optimized release binary
 cargo build --release
 ```
 
-The compiled standalone executable will be located at `target/release/fasttail` (or `target/release/fasttail.exe` on Windows).
+The standalone executable is written to `target/release/fasttail` (`target/release/fasttail.exe` on Windows).
+
+### Prebuilt binaries
+Every push to `main` builds Windows (x86_64, ARM64), Linux (x86_64, ARM64) and macOS (Apple Silicon) binaries in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page.
+
+---
+
+## 📐 Specifications
+
+Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting, docking UI, themes, localization, log intelligence, screensaver, telemetry and BareTail migration.
 
 ---
 

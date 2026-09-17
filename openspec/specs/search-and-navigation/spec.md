@@ -1,0 +1,46 @@
+# Search and Navigation Specification
+
+## Purpose
+Defines in-stream text search: per-stream queries, match navigation scoped to the focused window, live refresh of matches, and consistent match marking across the Text, Hex and Markdown views.
+
+## Requirements
+
+### Requirement: Per-Stream Search Query
+Each open stream SHALL own its search query, match list and current match position. Typing in the search box of one stream SHALL NOT change the query or the matches of any other stream.
+
+#### Scenario: Two streams searched independently
+- **WHEN** the user searches `ERROR` in stream A and `timeout` in stream B
+- **THEN** stream A keeps `ERROR` with its own matches and stream B keeps `timeout` with its own matches, even when both are visible side by side.
+
+### Requirement: Match Navigation Scoped to the Focused Window
+`F3` / `Shift+F3`, `Ctrl+F`, `Enter` / `Shift+Enter` in the search box and the keyboard navigation shortcuts SHALL act only on the stream shown in the focused dock panel. When no panel has been focused yet, the first stream of the main surface is treated as focused.
+
+#### Scenario: F3 with two visible streams
+- **WHEN** two streams with active searches are visible side by side and the user presses `F3`
+- **THEN** only the stream in the focused panel advances to its next match; the other stream's current match does not move.
+
+### Requirement: Match Counter, Wrap-Around and History
+The stream bar SHALL show the current match position and total (`[current / total]`), navigation SHALL wrap around at either end emitting a beep when sound effects are enabled, and the last 10 distinct queries SHALL be kept in a history dropdown persisted in the configuration file. Rescans while typing SHALL be debounced so that each keystroke does not block the interface.
+
+### Requirement: Live Refresh of Matches
+Matches SHALL be recomputed when the file grows, is truncated or rewritten, and when the include/exclude filters change. Only lines that can be displayed under the active filters are searchable. The current match SHALL stay on the same line whenever that line still matches; otherwise it moves to the nearest following match.
+
+#### Scenario: New matching lines appended
+- **WHEN** a search for `ERROR` is active and the writer appends two more `ERROR` lines
+- **THEN** the counter total grows by two and `F3` reaches the new lines, without the user editing the query.
+
+### Requirement: Match Marker Column and Row Highlight in Every View
+While a query is active, every view SHALL show a fixed-width marker column at the left of each row: `▶` on the row of the current match, `●` on rows of other matches, blank elsewhere. Matching rows SHALL be tinted across their full width, with a stronger tint on the current match. The column width SHALL not change when the current match moves.
+
+### Requirement: Byte-Level Search in HEX View
+In HEX view the query SHALL be matched against the file bytes: as ASCII text ignoring case, and additionally as a byte pattern when the query is an even-length string of hex digits (spaces and colons ignored, e.g. `0A 0D`). A hit spanning two hex rows SHALL mark both rows. `F3` / `Shift+F3` SHALL navigate between byte offsets and the counter SHALL count byte-level hits.
+
+#### Scenario: Text spanning a row boundary
+- **WHEN** the word `needle` starts at byte 15 of a stream shown with 16 bytes per row and the user searches `needle`
+- **THEN** rows `00000000` and `00000010` are both marked and the counter shows one hit.
+
+### Requirement: Search in Markdown View
+In Markdown view an active query SHALL switch the stream to its source lines, marked and highlighted exactly as in Text view, with a notice that the source is being shown. Clearing the query SHALL restore the rendered Markdown document.
+
+### Requirement: Search Cursor Preserved Across Views
+Switching a stream between Text, Hex and Markdown views SHALL keep the query and keep the current match position within the range of the list navigated by the new view.

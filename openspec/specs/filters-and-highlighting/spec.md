@@ -12,6 +12,14 @@ The application SHALL provide real-time filtering directly in the stream control
 - **WHEN** the user inputs an include regex ERROR|WARN and an exclude regex healthcheck
 - **THEN** only lines containing ERROR or WARN that do not contain healthcheck are displayed in the viewport.
 
+#### Scenario: Highlight rules do not bypass the include filter
+- **WHEN** a highlight rule for ERROR is enabled and the include filter is `payment`
+- **THEN** ERROR lines that do not contain `payment` stay hidden; highlight rules only style the lines that pass the filters.
+
+#### Scenario: Filters applied while the file grows
+- **WHEN** a filter is active and the writer appends lines
+- **THEN** only the appended lines are evaluated against the filters, and matching ones appear at the bottom without re-scanning the whole file.
+
 ### Requirement: Multi-Rule Highlighting with Font Styles and Sound Alerts
 The application SHALL allow defining multiple highlight rules with custom foreground color, background color, bold text toggle, italic text toggle, and sound alert preset (None, Beep, Chime, Warning, Critical).
 
