@@ -1,5 +1,8 @@
 # Filters and Highlighting Specification
 
+## Purpose
+Enables real-time filtering (include/exclude) and multi-rule visual and acoustic highlighting for streamed log lines with priority ordering.
+
 ## Requirements
 
 ### Requirement: Live Include and Exclude Filters

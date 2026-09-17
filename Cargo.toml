@@ -13,6 +13,7 @@ homepage = "https://github.com/matteobaccan/FastTail"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 egui = "0.36"
 egui_dock = { version = "0.21", features = ["serde"] }
+egui_commonmark = "0.25"
 
 # File I/O & Streaming
 memmap2 = "0.9"

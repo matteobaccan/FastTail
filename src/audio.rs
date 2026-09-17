@@ -22,6 +22,16 @@ impl SoundAlertPreset {
         }
     }
 
+    pub fn from_name(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "beep" => SoundAlertPreset::Beep,
+            "chime" => SoundAlertPreset::Chime,
+            "warning" => SoundAlertPreset::Warning,
+            "critical" => SoundAlertPreset::Critical,
+            _ => SoundAlertPreset::None,
+        }
+    }
+
     pub fn all() -> &'static [SoundAlertPreset] {
         &[
             SoundAlertPreset::None,

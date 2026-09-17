@@ -10,33 +10,72 @@ on:
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          # Windows
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
             artifact_name: fasttail-windows-x86_64.exe
-            binary_path: target/release/fasttail.exe
-          - os: ubuntu-latest
+            binary_path: target/x86_64-pc-windows-msvc/release/fasttail.exe
+            cross: false
+
+          - name: Windows ARM64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: fasttail-windows-arm64.exe
+            binary_path: target/aarch64-pc-windows-msvc/release/fasttail.exe
+            cross: true
+
+          # Linux
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             artifact_name: fasttail-linux-x86_64
-            binary_path: target/release/fasttail
-          - os: macos-latest
+            binary_path: target/x86_64-unknown-linux-gnu/release/fasttail
+            cross: false
+
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: fasttail-linux-arm64
+            binary_path: target/aarch64-unknown-linux-gnu/release/fasttail
+            cross: false
+
+          # macOS
+          - name: macOS x86_64 (Intel)
+            os: macos-13
+            target: x86_64-apple-darwin
             artifact_name: fasttail-macos-x86_64
-            binary_path: target/release/fasttail
+            binary_path: target/x86_64-apple-darwin/release/fasttail
+            cross: false
+
+          - name: macOS ARM64 (Apple Silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: fasttail-macos-arm64
+            binary_path: target/aarch64-apple-darwin/release/fasttail
+            cross: false
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'
@@ -54,11 +93,16 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev
 
-      - name: Run Test Suite
+      - name: Run Test Suite (Native targets)
+        if: matrix.cross != true
+        run: cargo test --target ${{ matrix.target }} --verbose
+
+      - name: Run Host Test Suite (Cross-compiled targets)
+        if: matrix.cross == true
         run: cargo test --verbose
 
       - name: Build Release Binary
-        run: cargo build --release --verbose
+        run: cargo build --release --target ${{ matrix.target }} --verbose
 
       - name: Stage Artifact
         shell: bash
@@ -67,8 +111,37 @@ jobs:
           cp "${{ matrix.binary_path }}" "dist/${{ matrix.artifact_name }}"
 
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}
           if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Flatten release artifacts
+        shell: bash
+        run: |
+          mkdir -p final-release
+          find release-artifacts -type f -exec cp {} final-release/ \;
+          ls -la final-release
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: final-release/*
+          generate_release_notes: true

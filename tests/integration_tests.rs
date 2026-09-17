@@ -83,7 +83,7 @@ fn test_json_and_multiline_intelligence() {
 
 #[test]
 fn test_themes_and_palettes() {
-    for theme in &[CyberTheme::Tron, CyberTheme::Matrix, CyberTheme::Blade] {
+    for theme in &[CyberTheme::Tron, CyberTheme::Matrix, CyberTheme::Blade, CyberTheme::Light] {
         let bg = theme.bg_color();
         let border = theme.border_color();
         let accent = theme.accent_color();
@@ -204,20 +204,32 @@ fn test_dock_state_serialization_and_restore() {
     use egui_dock::DockState;
     use fasttail::ui::dock::FastTailTab;
 
-    let test_path = std::path::PathBuf::from("test.log");
-    let dock_state = DockState::new(vec![FastTailTab::LogStream(test_path.clone()), FastTailTab::Settings]);
+    let path1 = std::path::PathBuf::from(r"C:\logs\service1\app.log");
+    let path2 = std::path::PathBuf::from(r"C:\logs\service2\debug.log");
+    let mut dock_state = DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
+    let [_left, _right] = dock_state.main_surface_mut().split_right(
+        egui_dock::NodeIndex::root(),
+        0.35,
+        vec![FastTailTab::LogStream(path2.clone())],
+    );
     let ron_str = ron::to_string(&dock_state).expect("serialize dock state with ron");
-    assert!(!ron_str.is_empty());
-
-    let restored: DockState<FastTailTab> = ron::from_str(&ron_str).expect("deserialize dock state with ron");
-    assert!(restored.find_tab(&FastTailTab::Settings).is_some());
-    assert!(restored.find_tab(&FastTailTab::LogStream(test_path)).is_some());
 
     let mut config = FastTailConfig::default();
-    config.dock_layout = Some(ron_str);
-    let toml_str = toml::to_string(&config).expect("serialize config with dock layout");
-    let restored_cfg: FastTailConfig = toml::from_str(&toml_str).expect("deserialize config with dock layout");
-    assert!(restored_cfg.dock_layout.is_some());
+    config.dock_layout = Some(ron_str.clone());
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let ini_file = tmp_dir.path().join("test.ini");
+    let ini_data = config.to_ini();
+    ini_data.write_to_file(&ini_file).expect("write INI");
+
+    let loaded_ini = ini::Ini::load_from_file(&ini_file).expect("read INI");
+    let loaded_cfg = FastTailConfig::from_ini(&loaded_ini);
+
+    let restored_ron = loaded_cfg.dock_layout.expect("dock_layout should be Some");
+    assert_eq!(ron_str, restored_ron, "RON strings must match exactly");
+    let restored_state: DockState<FastTailTab> = ron::from_str(&restored_ron).expect("RON from INI must deserialize");
+    assert!(restored_state.find_tab(&FastTailTab::LogStream(path1)).is_some());
+    assert!(restored_state.find_tab(&FastTailTab::LogStream(path2)).is_some());
 }
 
 #[test]
@@ -792,14 +804,23 @@ fn test_view_mode_filtered() {
     // Switch to filtered view
     engine.view_mode = ViewMode::Filtered;
 
-    // With no filters or highlight rules, nothing matches
-    assert!(!engine.is_line_visible_filtered(0));
-    assert!(!engine.is_line_visible_filtered(1));
-    assert!(!engine.is_line_visible_filtered(2));
-    assert!(!engine.is_line_visible_filtered(3));
-    assert!(!engine.is_line_visible_filtered(4));
+    // With no filters or highlight rules, empty filters mean no constraint: all lines visible
+    assert!(engine.is_line_visible_filtered(0));
+    assert!(engine.is_line_visible_filtered(1));
+    assert!(engine.is_line_visible_filtered(2));
+    assert!(engine.is_line_visible_filtered(3));
+    assert!(engine.is_line_visible_filtered(4));
 
-    // Set include filter to "ERROR"
+    // With empty include and non-empty exclude filter, excluded lines are hidden
+    engine.set_exclude_filter("Heartbeat");
+    assert!(engine.is_line_visible_filtered(0));
+    assert!(engine.is_line_visible_filtered(1));
+    assert!(engine.is_line_visible_filtered(2));
+    assert!(engine.is_line_visible_filtered(3));
+    assert!(!engine.is_line_visible_filtered(4)); // Excluded
+
+    // Set include filter to "ERROR" (clearing exclude filter)
+    engine.set_exclude_filter("");
     engine.set_include_filter("ERROR");
     assert!(!engine.is_line_visible_filtered(0)); // INFO
     assert!(!engine.is_line_visible_filtered(1)); // WARN
@@ -807,13 +828,12 @@ fn test_view_mode_filtered() {
     assert!(engine.is_line_visible_filtered(3));  // Multiline stacktrace continuation matches parent!
     assert!(!engine.is_line_visible_filtered(4)); // INFO
 
-    // Test highlight rule match triggers visibility in filtered mode
-    engine.set_include_filter("");
+    // Test highlight rule match triggers visibility alongside include filter
     let rule = HighlightRule::new("Memory", [255, 200, 0], [0, 0, 0], false);
     engine.set_highlight_rules(vec![rule]);
     assert!(!engine.is_line_visible_filtered(0));
     assert!(engine.is_line_visible_filtered(1));  // Matches highlight rule "Memory"!
-    assert!(!engine.is_line_visible_filtered(2));
+    assert!(engine.is_line_visible_filtered(2));  // Matches include filter!
 }
 
 #[test]
@@ -950,6 +970,84 @@ fn test_config_ini_persistence() {
     assert_eq!(loaded.highlight_rules.len(), 1);
     assert_eq!(loaded.highlight_rules[0].pattern, "FATAL");
     assert_eq!(loaded.highlight_rules[0].case_sensitive, true);
+    assert_eq!(loaded.highlight_rules[0].sound_alert, fasttail::audio::SoundAlertPreset::None);
+}
+
+#[test]
+fn test_highlight_rule_sound_alert_ini_persistence() {
+    use fasttail::audio::SoundAlertPreset;
+
+    let mut config = FastTailConfig::default();
+    config.highlight_rules = vec![
+        HighlightRule {
+            pattern: "ERR".to_string(),
+            is_regex: false,
+            case_sensitive: true,
+            fg_color: [255, 0, 0],
+            bg_color: [50, 0, 0],
+            bold: true,
+            italic: false,
+            sound_alert: SoundAlertPreset::Critical,
+            enabled: true,
+        },
+        HighlightRule {
+            pattern: "WARN".to_string(),
+            is_regex: false,
+            case_sensitive: false,
+            fg_color: [255, 200, 0],
+            bg_color: [50, 40, 0],
+            bold: false,
+            italic: true,
+            sound_alert: SoundAlertPreset::Warning,
+            enabled: true,
+        },
+        HighlightRule {
+            pattern: "INFO".to_string(),
+            is_regex: false,
+            case_sensitive: false,
+            fg_color: [0, 255, 0],
+            bg_color: [0, 50, 0],
+            bold: false,
+            italic: false,
+            sound_alert: SoundAlertPreset::Beep,
+            enabled: true,
+        },
+        HighlightRule {
+            pattern: "DEBUG".to_string(),
+            is_regex: false,
+            case_sensitive: false,
+            fg_color: [0, 200, 255],
+            bg_color: [0, 40, 50],
+            bold: false,
+            italic: false,
+            sound_alert: SoundAlertPreset::Chime,
+            enabled: true,
+        },
+    ];
+
+    let ini = config.to_ini();
+    let loaded = FastTailConfig::from_ini(&ini);
+
+    assert_eq!(loaded.highlight_rules.len(), 4);
+    assert_eq!(loaded.highlight_rules[0].sound_alert, SoundAlertPreset::Critical);
+    assert_eq!(loaded.highlight_rules[1].sound_alert, SoundAlertPreset::Warning);
+    assert_eq!(loaded.highlight_rules[2].sound_alert, SoundAlertPreset::Beep);
+    assert_eq!(loaded.highlight_rules[3].sound_alert, SoundAlertPreset::Chime);
+}
+
+#[test]
+fn test_proportional_font_row_height_scaling() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+    output.textures_delta.clear();
+    let font_id_small = egui::FontId::monospace(8.0);
+    let row_height_8 = ctx.fonts_mut(|f| f.row_height(&font_id_small));
+    assert!(row_height_8 < 16.0, "Font size 8.0 row height ({}) should be < 16.0", row_height_8);
+
+    let font_id_10 = egui::FontId::monospace(10.0);
+    let row_height_10 = ctx.fonts_mut(|f| f.row_height(&font_id_10));
+    assert!(row_height_10 < 16.0, "Font size 10.0 row height ({}) should be < 16.0", row_height_10);
+    assert!(row_height_10 > row_height_8, "Font size 10.0 row height should be greater than font size 8.0");
 }
 
 #[test]
@@ -1226,5 +1324,765 @@ fn test_screen_based_paging_pageup_pagedown() {
     let pageup_scroll_y = pageup_target_line as f32 * row_height;
     assert_eq!(pageup_scroll_y, 1840.0);
 }
+
+#[test]
+fn test_filter_virtualization_and_continuous_indexing() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    // Write 20 lines with varying content
+    for i in 0..20 {
+        if i % 3 == 0 {
+            writeln!(tmp, "Line {}: [ERROR] Serious failure", i).unwrap();
+        } else if i % 3 == 1 {
+            writeln!(tmp, "Line {}: [INFO] Normal ping probe", i).unwrap();
+        } else {
+            writeln!(tmp, "Line {}: [DEBUG] Trace telemetry", i).unwrap();
+        }
+    }
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.total_lines(), 20);
+    assert!(!engine.is_filter_active());
+    assert_eq!(engine.visible_line_count(), 20);
+
+    // 1. Filter by include: [ERROR]
+    // Indices: 0, 3, 6, 9, 12, 15, 18 => 7 lines
+    engine.set_include_filter("ERROR");
+    assert!(engine.is_filter_active());
+    assert_eq!(engine.visible_line_count(), 7);
+    for row in 0..7 {
+        let actual = engine.get_actual_line_idx(row).unwrap();
+        assert_eq!(actual, row * 3);
+        assert!(engine.get_line(actual).unwrap().contains("[ERROR]"));
+        assert_eq!(engine.get_visible_row_of_line(actual), Some(row));
+    }
+
+    // 2. Filter by exclude across entire file: discard "ping"
+    engine.set_include_filter("");
+    engine.set_exclude_filter("ping");
+    assert!(engine.is_filter_active());
+    // Lines % 3 == 1 contain "ping" (7 lines: 1, 4, 7, 10, 13, 16, 19).
+    // Remaining visible lines must be 20 - 7 = 13 lines.
+    assert_eq!(engine.visible_line_count(), 13);
+    for row in 0..13 {
+        let actual = engine.get_actual_line_idx(row).unwrap();
+        let content = engine.get_line(actual).unwrap();
+        assert!(!content.contains("ping"), "Excluded line found: {}", content);
+        assert_eq!(engine.get_visible_row_of_line(actual), Some(row));
+    }
+
+    // 3. Clear filters: returns to all 20 lines
+    engine.set_exclude_filter("");
+    assert!(!engine.is_filter_active());
+    assert_eq!(engine.visible_line_count(), 20);
+}
+
+#[test]
+fn test_search_navigation_and_wraparound() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "alpha").unwrap();
+    writeln!(tmp, "beta").unwrap();
+    writeln!(tmp, "alpha target 1").unwrap();
+    writeln!(tmp, "gamma").unwrap();
+    writeln!(tmp, "alpha target 2").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.total_lines(), 5);
+
+    // Update search query "alpha"
+    engine.update_search("alpha");
+    assert_eq!(engine.search_matches, vec![0, 2, 4]);
+    assert_eq!(engine.current_match_idx, Some(0));
+    assert_eq!(engine.current_search_line(), Some(0));
+
+    // Next match -> 2
+    let match2 = engine.search_next(false);
+    assert_eq!(match2, Some(2));
+    assert_eq!(engine.current_match_idx, Some(1));
+    assert_eq!(engine.current_search_line(), Some(2));
+
+    // Next match -> 4
+    let match3 = engine.search_next(false);
+    assert_eq!(match3, Some(4));
+    assert_eq!(engine.current_match_idx, Some(2));
+    assert_eq!(engine.current_search_line(), Some(4));
+
+    // Next match wraps around to 0
+    let wrapped_match = engine.search_next(false);
+    assert_eq!(wrapped_match, Some(0));
+    assert_eq!(engine.current_match_idx, Some(0));
+    assert_eq!(engine.current_search_line(), Some(0));
+
+    // Prev match wraps around to 4
+    let prev_wrapped = engine.search_prev(false);
+    assert_eq!(prev_wrapped, Some(4));
+    assert_eq!(engine.current_match_idx, Some(2));
+    assert_eq!(engine.current_search_line(), Some(4));
+
+    // Prev match back to 2
+    let prev_match = engine.search_prev(false);
+    assert_eq!(prev_match, Some(2));
+    assert_eq!(engine.current_match_idx, Some(1));
+
+    // Empty search clears matches
+    engine.update_search("");
+    assert!(engine.search_matches.is_empty());
+    assert_eq!(engine.current_match_idx, None);
+    assert_eq!(engine.current_search_line(), None);
+}
+
+#[test]
+fn test_search_history_management_and_ini_persistence() {
+    let mut config = FastTailConfig::default();
+    assert!(config.search_history.is_empty());
+
+    // Add 12 searches: should retain only 10, newest first, deduplicated
+    for i in 1..=12 {
+        config.add_search_history(&format!("Query {}", i));
+    }
+    assert_eq!(config.search_history.len(), 10);
+    assert_eq!(config.search_history[0], "Query 12");
+    assert_eq!(config.search_history[9], "Query 3");
+
+    // Re-adding existing query brings it to front without duplicate
+    config.add_search_history("Query 5");
+    assert_eq!(config.search_history.len(), 10);
+    assert_eq!(config.search_history[0], "Query 5");
+    assert_eq!(config.search_history[1], "Query 12");
+
+    // INI serialization & deserialization round-trip
+    let ini_obj = config.to_ini();
+    assert!(ini_obj.section(Some("search_history")).is_some());
+    assert_eq!(
+        ini_obj.section(Some("search_history")).unwrap().get("query_0"),
+        Some("Query 5")
+    );
+
+    let reloaded = FastTailConfig::from_ini(&ini_obj);
+    assert_eq!(reloaded.search_history.len(), 10);
+    assert_eq!(reloaded.search_history[0], "Query 5");
+    assert_eq!(reloaded.search_history[1], "Query 12");
+}
+
+#[test]
+fn test_markdown_mode_detection_and_rendering() {
+    let mut tmp = tempfile::Builder::new()
+        .suffix(".md")
+        .tempfile()
+        .unwrap();
+
+    writeln!(tmp, "# FastTail Documentation\n\nWelcome to **FastTail**!\n\n- Feature 1\n- Feature 2").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.view_mode, fasttail::tail_engine::ViewMode::Markdown);
+
+    // Switching modes
+    engine.view_mode = fasttail::tail_engine::ViewMode::Text;
+    assert_eq!(engine.view_mode, fasttail::tail_engine::ViewMode::Text);
+
+    engine.view_mode = fasttail::tail_engine::ViewMode::Hex;
+    assert_eq!(engine.view_mode, fasttail::tail_engine::ViewMode::Hex);
+
+    engine.view_mode = fasttail::tail_engine::ViewMode::Markdown;
+    assert_eq!(engine.view_mode, fasttail::tail_engine::ViewMode::Markdown);
+}
+
+#[test]
+fn test_f3_scroll_to_line_target_consistency() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    for i in 0..100 {
+        if i == 15 || i == 45 || i == 85 {
+            writeln!(tmp, "Row {}: target token found", i).unwrap();
+        } else {
+            writeln!(tmp, "Row {}: standard log info line", i).unwrap();
+        }
+    }
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.update_search("target token");
+    assert_eq!(engine.search_matches, vec![15, 45, 85]);
+
+    // F3 -> next match 45
+    let next = engine.search_next(false);
+    assert_eq!(next, Some(45));
+    assert_eq!(engine.scroll_to_line, Some(45));
+
+    // Next F3 -> next match 85
+    let next2 = engine.search_next(false);
+    assert_eq!(next2, Some(85));
+    assert_eq!(engine.scroll_to_line, Some(85));
+
+    // Wrap around to 15
+    let wrapped = engine.search_next(false);
+    assert_eq!(wrapped, Some(15));
+    assert_eq!(engine.scroll_to_line, Some(15));
+}
+
+#[test]
+fn test_window_bounds_and_dialog_state_ini_persistence() {
+    let mut config = FastTailConfig::default();
+    config.theme = CyberTheme::Light;
+    config.window_x = Some(150.0);
+    config.window_y = Some(75.0);
+    config.window_width = Some(1600.0);
+    config.window_height = Some(950.0);
+    config.window_maximized = true;
+    config.settings_open = true;
+    config.filters_open = true;
+    config.about_open = false;
+    config.help_open = true;
+    config.settings_pos = Some([100.0, 120.0]);
+    config.settings_size = Some([480.0, 420.0]);
+    config.filters_pos = Some([200.0, 220.0]);
+    config.filters_size = Some([560.0, 480.0]);
+    config.about_pos = Some([300.0, 320.0]);
+    config.about_size = Some([450.0, 350.0]);
+    config.help_pos = Some([400.0, 420.0]);
+    config.help_size = Some([600.0, 520.0]);
+
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let ini = config.to_ini();
+    ini.write_to_file(tmp.path()).unwrap();
+
+    let loaded_ini = ini::Ini::load_from_file(tmp.path()).unwrap();
+    let loaded = FastTailConfig::from_ini(&loaded_ini);
+
+    assert_eq!(loaded.theme, CyberTheme::Light);
+    assert_eq!(loaded.window_x, Some(150.0));
+    assert_eq!(loaded.window_y, Some(75.0));
+    assert_eq!(loaded.window_width, Some(1600.0));
+    assert_eq!(loaded.window_height, Some(950.0));
+    assert!(loaded.window_maximized);
+    assert!(loaded.settings_open);
+    assert!(loaded.filters_open);
+    assert!(!loaded.about_open);
+    assert!(loaded.help_open);
+    assert_eq!(loaded.settings_pos, Some([100.0, 120.0]));
+    assert_eq!(loaded.settings_size, Some([480.0, 420.0]));
+    assert_eq!(loaded.filters_pos, Some([200.0, 220.0]));
+    assert_eq!(loaded.filters_size, Some([560.0, 480.0]));
+    assert_eq!(loaded.about_pos, Some([300.0, 320.0]));
+    assert_eq!(loaded.about_size, Some([450.0, 350.0]));
+    assert_eq!(loaded.help_pos, Some([400.0, 420.0]));
+    assert_eq!(loaded.help_size, Some([600.0, 520.0]));
+}
+
+#[test]
+fn test_dock_state_floating_window_position_roundtrip() {
+    use egui_dock::DockState;
+    use fasttail::ui::dock::FastTailTab;
+    use std::path::PathBuf;
+
+    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(PathBuf::from("test.log"))]);
+    let locator = dock.find_tab(&FastTailTab::LogStream(PathBuf::from("test.log"))).expect("find tab");
+    let surf_idx = dock.detach_tab(locator, egui::Rect::from_min_size(egui::pos2(120.0, 140.0), egui::vec2(500.0, 350.0)));
+
+    // Set position and size on window state
+    if let Some(ws) = dock.get_window_state_mut(surf_idx) {
+        ws.set_position(egui::pos2(250.0, 180.0));
+        ws.set_size(egui::vec2(720.0, 480.0));
+    }
+
+    let ron_str = ron::to_string(&dock).expect("serialize dock state");
+    println!("RON:\n{}", ron_str);
+    assert!(ron_str.contains("250"));
+    assert!(ron_str.contains("180"));
+    assert!(ron_str.contains("720"));
+    assert!(ron_str.contains("480"));
+
+    let mut loaded: DockState<FastTailTab> = ron::from_str(&ron_str).expect("deserialize dock state");
+    assert_eq!(loaded.surfaces_count(), 2);
+
+    struct DummyViewer;
+    impl egui_dock::TabViewer for DummyViewer {
+        type Tab = FastTailTab;
+        fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+            egui::Id::new(&*tab)
+        }
+        fn title(&mut self, _tab: &mut Self::Tab) -> egui::WidgetText {
+            "title".into()
+        }
+        fn ui(&mut self, ui: &mut egui::Ui, _tab: &mut Self::Tab) {
+            ui.label("content");
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        let mut viewer = DummyViewer;
+        egui_dock::DockArea::new(&mut loaded).show_inside(ui, &mut viewer);
+    });
+    output.textures_delta.clear();
+
+    let id = egui::Id::new("window SurfaceIndex(1)");
+    let rect = ctx.memory(|mem| mem.area_rect(id));
+    println!("Restored floating window rect in egui memory: {:?}", rect);
+    assert!(rect.is_some());
+    let r = rect.unwrap();
+    assert_eq!(r.min.x, 250.0);
+    assert_eq!(r.min.y, 180.0);
+    assert_eq!(r.width(), 720.0);
+    assert_eq!(r.height(), 480.0);
+}
+
+#[test]
+fn test_html_in_markdown_mode_conversion() {
+    use fasttail::html_converter::{contains_html, html_to_markdown};
+
+    let sample_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><title>System Health</title></head>
+        <body>
+        <h1>Cluster Status</h1>
+        <p>Deployment is <b>HEALTHY</b> and <i>stable</i>.</p>
+        <p>View metric graphs at <a href="https://metrics.corp.internal">Dashboard</a>.</p>
+        <ul>
+            <li>Node 1: UP</li>
+            <li>Node 2: UP</li>
+        </ul>
+        <table>
+            <tr><th>Service</th><th>Latency</th></tr>
+            <tr><td>Auth</td><td>12ms</td></tr>
+            <tr><td>API</td><td>24ms</td></tr>
+        </table>
+        <hr/>
+        <br>
+        <pre><code>log_level=debug</code></pre>
+        </body>
+        </html>
+    "#;
+
+    assert!(contains_html(sample_html));
+    let md = html_to_markdown(sample_html);
+    println!("MD:\n{}", md);
+
+    assert!(md.contains("# Cluster Status") || md.contains("# System Health"));
+    assert!(md.contains("**HEALTHY**"));
+    assert!(md.contains("*stable*"));
+    assert!(md.contains("[Dashboard](https://metrics.corp.internal)"));
+    assert!(md.contains("* Node 1: UP"));
+    assert!(md.contains("* Node 2: UP"));
+    assert!(md.contains("| Service | Latency |"));
+    assert!(md.contains("| Auth | 12ms |"));
+    assert!(md.contains("---"));
+    assert!(md.contains("```\nlog_level=debug\n```"));
+
+    // Verify CommonMarkViewer renders the converted text without panics
+    let ctx = egui::Context::default();
+    let mut cache = egui_commonmark::CommonMarkCache::default();
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        egui_commonmark::CommonMarkViewer::new().show(ui, &mut cache, &md);
+    });
+    output.textures_delta.clear();
+}
+
+#[test]
+fn test_light_theme_background_colors_and_visuals() {
+    let theme = CyberTheme::Light;
+    assert_eq!(theme.bg_color(), egui::Color32::from_rgb(243, 245, 249));
+    assert_eq!(theme.panel_bg(), egui::Color32::from_rgb(255, 255, 255));
+    assert_eq!(theme.warn_color(), egui::Color32::from_rgb(195, 105, 0));
+
+    let ctx = egui::Context::default();
+    theme.apply(&ctx);
+    assert!(!ctx.global_style().visuals.dark_mode);
+}
+
+#[test]
+fn test_ctrl_f_focus_and_search() {
+    use egui_dock::DockState;
+    use fasttail::ui::dock::{FastTailTab, FastTailTabViewer, DockContext};
+    use fasttail::tail_engine::TailEngine;
+    use fasttail::theme::CyberTheme;
+    use fasttail::i18n::Language;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    let mut tmp = NamedTempFile::new().unwrap();
+    for i in 0..50 {
+        writeln!(tmp, "Line {}: sample log content with error and warning", i).unwrap();
+    }
+    tmp.flush().unwrap();
+
+    let path = tmp.path().to_path_buf();
+    let engine = TailEngine::open(&path).expect("open temp file");
+    let mut engines = vec![engine];
+    let mut open_files = vec![path.clone()];
+    let mut theme = CyberTheme::Tron;
+    let mut lang = Language::En;
+    let mut global_rules = Vec::new();
+    let mut screensaver_enabled = false;
+    let mut screensaver_timeout_mins = 5;
+    let mut telemetry_enabled = false;
+    let mut sound_enabled = false;
+    let mut borderless = false;
+    let mut show_line_numbers = true;
+    let mut font_size = 13.0;
+    let mut size_unit = fasttail::tail_engine::SizeUnit::Bytes;
+    let mut search_history = Vec::new();
+    let mut tab_closed = false;
+    let mut test_screensaver = false;
+
+    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path.clone())]);
+
+    let ctx = egui::Context::default();
+
+    // Frame 1: Initial render
+    let mut out1 = ctx.run_ui(Default::default(), |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out1.textures_delta.clear();
+
+    // Frame 2: Press Ctrl + F
+    let raw_input = egui::RawInput {
+        events: vec![
+            egui::Event::Key {
+                key: egui::Key::F,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }
+        ],
+        ..Default::default()
+    };
+    let mut out2 = ctx.run_ui(raw_input, |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out2.textures_delta.clear();
+
+    // Frame 3: Next frame where focus is applied
+    let mut out3 = ctx.run_ui(Default::default(), |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out3.textures_delta.clear();
+
+    // Frame 4: Type "error" in the tab's search query and run
+    engines[0].search_query.push_str("error");
+    let mut out4 = ctx.run_ui(Default::default(), |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out4.textures_delta.clear();
+    assert_eq!(engines[0].search_matches.len(), 50);
+
+    // Frame 5: Press Enter
+    let raw_enter = egui::RawInput {
+        events: vec![
+            egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }
+        ],
+        ..Default::default()
+    };
+    let mut out5 = ctx.run_ui(raw_enter, |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out5.textures_delta.clear();
+
+    // Frame 6: Feed Event::Text("\u{0006}") while focused
+    let raw_ctrl_f_char = egui::RawInput {
+        events: vec![
+            egui::Event::Text("\u{0006}".to_string())
+        ],
+        ..Default::default()
+    };
+    let mut out6 = ctx.run_ui(raw_ctrl_f_char, |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out6.textures_delta.clear();
+    println!("search_query after ctrl+f char: {:?}", engines[0].search_query);
+}
+
+#[test]
+fn test_search_query_is_per_tab() {
+    use egui_dock::{DockState, NodeIndex};
+    use fasttail::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
+
+    let mut tmp1 = NamedTempFile::new().unwrap();
+    writeln!(tmp1, "file 1 line 1").unwrap();
+    writeln!(tmp1, "file 1 line 2").unwrap();
+    tmp1.flush().unwrap();
+
+    let mut tmp2 = NamedTempFile::new().unwrap();
+    writeln!(tmp2, "file 2 line 1").unwrap();
+    writeln!(tmp2, "file 2 line 2").unwrap();
+    tmp2.flush().unwrap();
+
+    let path1 = tmp1.path().to_path_buf();
+    let path2 = tmp2.path().to_path_buf();
+    let mut engines = vec![
+        TailEngine::open(&path1).expect("open file 1"),
+        TailEngine::open(&path2).expect("open file 2"),
+    ];
+    let mut open_files = vec![path1.clone(), path2.clone()];
+    let mut theme = CyberTheme::Tron;
+    let mut lang = Language::En;
+    let mut global_rules = Vec::new();
+    let mut screensaver_enabled = false;
+    let mut screensaver_timeout_mins = 5;
+    let mut telemetry_enabled = false;
+    let mut sound_enabled = false;
+    let mut borderless = false;
+    let mut show_line_numbers = true;
+    let mut font_size = 13.0;
+    let mut size_unit = fasttail::tail_engine::SizeUnit::Bytes;
+    let mut search_history = Vec::new();
+    let mut tab_closed = false;
+    let mut test_screensaver = false;
+
+    // Both tabs visible at once (side by side) so both stream panels render each frame
+    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
+    dock.main_surface_mut()
+        .split_right(NodeIndex::root(), 0.5, vec![FastTailTab::LogStream(path2.clone())]);
+
+    let ctx = egui::Context::default();
+
+    // Type a query only in the first tab's search box
+    engines[0].search_query.push_str("line 1");
+
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out.textures_delta.clear();
+
+    // First tab searched, second tab untouched
+    assert_eq!(engines[0].search_query, "line 1");
+    assert_eq!(engines[0].search_matches, vec![0]);
+    assert!(engines[1].search_query.is_empty(), "search query leaked into the second tab");
+    assert!(engines[1].search_matches.is_empty(), "search matches leaked into the second tab");
+}
+
+#[test]
+fn test_fasttail_app_ctrl_f() {
+    use fasttail::config::FastTailConfig;
+    use fasttail::ui::FastTailApp;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    let mut tmp1 = NamedTempFile::new().unwrap();
+    writeln!(tmp1, "file 1 line 1").unwrap();
+    writeln!(tmp1, "file 1 line 2").unwrap();
+    tmp1.flush().unwrap();
+
+    let mut tmp2 = NamedTempFile::new().unwrap();
+    writeln!(tmp2, "file 2 line 1").unwrap();
+    writeln!(tmp2, "file 2 line 2").unwrap();
+    tmp2.flush().unwrap();
+
+    let mut config = FastTailConfig::default();
+    config.open_files = vec![tmp1.path().to_path_buf(), tmp2.path().to_path_buf()];
+
+    let mut app = FastTailApp::from_config(config);
+    let ctx = egui::Context::default();
+
+    // Frame 1: Initial render
+    let mut out1 = ctx.run_ui(Default::default(), |ui| {
+        app.render_ui(ui);
+    });
+    out1.textures_delta.clear();
+
+    // Frame 2: Press Ctrl + F
+    let raw_ctrl_f = egui::RawInput {
+        events: vec![
+            egui::Event::Key {
+                key: egui::Key::F,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }
+        ],
+        ..Default::default()
+    };
+    let mut out2 = ctx.run_ui(raw_ctrl_f, |ui| {
+        app.render_ui(ui);
+    });
+    out2.textures_delta.clear();
+
+    // Frame 3: Next frame (search input focused)
+    let mut out3 = ctx.run_ui(Default::default(), |ui| {
+        app.render_ui(ui);
+    });
+    out3.textures_delta.clear();
+
+    // Frame 4: ArrowDown while focused to scroll/navigate
+    let raw_down = egui::RawInput {
+        events: vec![
+            egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }
+        ],
+        ..Default::default()
+    };
+    let mut out4 = ctx.run_ui(raw_down, |ui| {
+        app.render_ui(ui);
+    });
+    out4.textures_delta.clear();
+
+    // Frame 5: Escape to release focus
+    let raw_esc = egui::RawInput {
+        events: vec![
+            egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }
+        ],
+        ..Default::default()
+    };
+    let mut out5 = ctx.run_ui(raw_esc, |ui| {
+        app.render_ui(ui);
+    });
+    out5.textures_delta.clear();
+}
+
+
 
 

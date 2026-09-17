@@ -1,5 +1,8 @@
 # Cyberpunk UI & Docking Workspace Specification
 
+## Purpose
+Provides a responsive, high-contrast Cyberpunk docking UI with virtualized rendering, draggable modal windows, theme customizability, and intuitive keyboard navigation.
+
 ## Requirements
 
 ### Requirement: Cyberpunk UI Styling and Branding

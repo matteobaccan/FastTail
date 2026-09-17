@@ -1,3 +1,4 @@
 /target
 fasttail.toml
+fasttail.ini
 *.log

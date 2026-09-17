@@ -29,8 +29,9 @@ pub struct DockContext<'a> {
     pub show_line_numbers: &'a mut bool,
     pub font_size: &'a mut f32,
     pub size_unit: &'a mut crate::tail_engine::SizeUnit,
-    pub search_query: &'a mut String,
+    pub search_history: &'a mut Vec<String>,
     pub tab_closed: &'a mut bool,
+    pub test_screensaver: &'a mut bool,
 }
 
 pub struct FastTailTabViewer<'a> {
@@ -55,19 +56,28 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     let watch_icon = if engine.is_watching { "▶" } else { "■" };
                     let data_dot = if engine.has_new_data { "●" } else { "○" };
                     let title_text = format!("[#{}] {} {} {}", idx + 1, watch_icon, file_name, data_dot);
-                    let color = if engine.has_new_data {
-                        self.ctx.theme.accent_color()
-                    } else if engine.is_watching {
-                        self.ctx.theme.text_primary()
+                    if engine.has_new_data {
+                        WidgetText::from(
+                            RichText::new(title_text)
+                                .monospace()
+                                .strong()
+                                .color(self.ctx.theme.warn_color()),
+                        )
+                    } else if !engine.is_watching {
+                        WidgetText::from(
+                            RichText::new(title_text)
+                                .monospace()
+                                .color(self.ctx.theme.warn_color()),
+                        )
                     } else {
-                        self.ctx.theme.warn_color()
-                    };
-                    WidgetText::from(
-                        RichText::new(title_text)
-                            .monospace()
-                            .strong()
-                            .color(color),
-                    )
+                        // Normal tabs: do not override text color, allowing egui_dock
+                        // to apply dock_style.tab.active.text_color (neon accent) vs inactive (dim)
+                        WidgetText::from(
+                            RichText::new(title_text)
+                                .monospace()
+                                .strong(),
+                        )
+                    }
                 } else {
                     WidgetText::from(RichText::new(format!("{} ({})", file_name, t(*self.ctx.language, "closed"))).monospace())
                 }
@@ -75,17 +85,17 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
             FastTailTab::Filters => WidgetText::from(
                 RichText::new(format!("🔍 {}", t(*self.ctx.language, "filters")))
                     .monospace()
-                    .color(self.ctx.theme.accent_color()),
+                    .strong(),
             ),
             FastTailTab::Highlights => WidgetText::from(
                 RichText::new(format!("⚡ {}", t(*self.ctx.language, "highlight_rules")))
                     .monospace()
-                    .color(self.ctx.theme.warn_color()),
+                    .strong(),
             ),
             FastTailTab::Settings => WidgetText::from(
                 RichText::new(format!("⚙️ {}", t(*self.ctx.language, "settings")))
                     .monospace()
-                    .color(self.ctx.theme.text_primary()),
+                    .strong(),
             ),
         }
     }
@@ -97,16 +107,21 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 if let Some(engine) = self.ctx.engines.iter_mut().find(|e| &e.path == path) {
                     // Mark new data as viewed/cleared
                     engine.has_new_data = false;
+                    // Each engine owns its own search query so the find box is per-tab
+                    let mut search_query = std::mem::take(&mut engine.search_query);
                     render_log_stream(
                         ui,
                         engine,
                         self.ctx.theme,
                         *self.ctx.language,
-                        self.ctx.search_query,
+                        &mut search_query,
+                        self.ctx.search_history,
+                        *self.ctx.sound_enabled,
                         self.ctx.show_line_numbers,
                         *self.ctx.font_size,
                         &mut new_size_unit,
                     );
+                    engine.search_query = search_query;
                 } else {
                     ui.label(t(*self.ctx.language, "no_file_open"));
                 }
@@ -130,6 +145,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.language,
                     self.ctx.screensaver_enabled,
                     self.ctx.screensaver_timeout_mins,
+                    self.ctx.test_screensaver,
                     self.ctx.telemetry_enabled,
                     self.ctx.sound_enabled,
                     self.ctx.borderless,
@@ -155,6 +171,16 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
     }
 }
 
+fn record_search_history(history: &mut Vec<String>, query: &str) {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    history.retain(|q| !q.eq_ignore_ascii_case(trimmed));
+    history.insert(0, trimmed.to_string());
+    history.truncate(10);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_log_stream(
     ui: &mut Ui,
@@ -162,33 +188,49 @@ fn render_log_stream(
     theme: &CyberTheme,
     lang: Language,
     search_query: &mut String,
+    search_history: &mut Vec<String>,
+    sound_enabled: bool,
     show_line_numbers: &mut bool,
     font_size: f32,
     new_size_unit: &mut Option<crate::tail_engine::SizeUnit>,
 ) {
-    let row_height = (font_size * 1.45).max(16.0);
-    // Prominent Active File Header Banner (identifies which file is currently active)
-    let file_name = engine
-        .path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("log");
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("▶ 📄 {}", file_name))
-                .monospace()
-                .strong()
-                .size(13.0)
-                .color(theme.accent_color()),
-        );
-        ui.label(
-            RichText::new(format!("({})", engine.path.display()))
-                .monospace()
-                .size(11.0)
-                .color(theme.text_dim()),
-        );
-    });
-    ui.add_space(2.0);
+    let font_id = egui::FontId::monospace(font_size);
+    let row_height = (ui.ctx().fonts_mut(|f| f.row_height(&font_id)) * 1.25).max(18.0).ceil();
+    let viewport_height = ui.available_height().max(200.0);
+
+    // Synchronize search matches with current search query
+    engine.update_search(search_query);
+
+    // Helper to scroll to a target line index (centers the line in the viewport)
+    let scroll_to_target = |engine: &mut TailEngine, line_idx: usize| {
+        engine.scroll_to_line = Some(line_idx);
+        if let Some(v_row) = engine.get_visible_row_of_line(line_idx) {
+            let line_y = v_row as f32 * row_height;
+            let target_scroll = (line_y - (viewport_height / 2.0).max(0.0)).max(0.0);
+            engine.requested_scroll_y = Some(target_scroll);
+            engine.requested_scroll_x = Some(0.0);
+            engine.follow_tail = false;
+        }
+    };
+
+    // F3 and Shift+F3 shortcuts (evaluated globally in this tab)
+    let f3_pressed = ui.input(|i| i.key_pressed(egui::Key::F3));
+    let shift_f3 = f3_pressed && ui.input(|i| i.modifiers.shift);
+    let next_f3 = f3_pressed && !ui.input(|i| i.modifiers.shift);
+
+    if next_f3 {
+        if let Some(target) = engine.search_next(sound_enabled) {
+            scroll_to_target(engine, target);
+            record_search_history(search_history, search_query);
+            ui.ctx().request_repaint();
+        }
+    } else if shift_f3 {
+        if let Some(target) = engine.search_prev(sound_enabled) {
+            scroll_to_target(engine, target);
+            record_search_history(search_history, search_query);
+            ui.ctx().request_repaint();
+        }
+    }
 
     // Stream status bar
     ui.horizontal(|ui| {
@@ -241,50 +283,43 @@ fn render_log_stream(
 
         ui.separator();
 
-        // Mode Switcher (TXT vs HEX) - min_size prevents layout jumping, request_repaint prevents lost clicks
-        let is_hex = engine.view_mode == crate::tail_engine::ViewMode::Hex;
-        let mode_label = if is_hex {
-            RichText::new("🔢 HEX").color(theme.secondary_accent()).monospace().strong()
+        // Mode Switcher (TXT, HEX, MD)
+        let current_mode = engine.view_mode;
+        let is_txt = current_mode == crate::tail_engine::ViewMode::Text || current_mode == crate::tail_engine::ViewMode::Filtered;
+        let is_hex = current_mode == crate::tail_engine::ViewMode::Hex;
+        let is_md = current_mode == crate::tail_engine::ViewMode::Markdown;
+
+        let txt_style = if is_txt {
+            RichText::new("🔤 TXT").color(theme.accent_color()).monospace().strong()
         } else {
-            RichText::new("🔤 TXT").color(theme.accent_color()).monospace()
+            RichText::new("🔤 TXT").color(theme.text_dim()).monospace()
         };
-        if ui
-            .add(egui::Button::new(mode_label).min_size(egui::vec2(66.0, 18.0)))
-            .on_hover_text(t(lang, "tip_view_mode"))
-            .clicked()
-        {
-            engine.view_mode = if is_hex {
-                crate::tail_engine::ViewMode::Text
-            } else {
-                crate::tail_engine::ViewMode::Hex
-            };
+        if ui.button(txt_style).on_hover_text("Modalità Testo").clicked() {
+            engine.view_mode = crate::tail_engine::ViewMode::Text;
             ui.ctx().request_repaint();
         }
 
-        // Filtered view is a feature/characteristic of TXT!
-        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
-            let is_filtered = engine.view_mode == crate::tail_engine::ViewMode::Filtered;
-            let filt_btn_text = if is_filtered {
-                RichText::new(format!("🔍 {}", t(lang, "view_mode_filtered")))
-                    .color(theme.warn_color())
-                    .monospace()
-                    .strong()
-            } else {
-                RichText::new(format!("🔍 {}", t(lang, "view_mode_all")))
-                    .color(theme.text_dim())
-                    .monospace()
-            };
-            if ui.button(filt_btn_text).on_hover_text(t(lang, "tip_view_filtered")).clicked() {
-                engine.view_mode = if is_filtered {
-                    crate::tail_engine::ViewMode::Text
-                } else {
-                    crate::tail_engine::ViewMode::Filtered
-                };
-                ui.ctx().request_repaint();
-            }
+        let hex_style = if is_hex {
+            RichText::new("🔢 HEX").color(theme.secondary_accent()).monospace().strong()
+        } else {
+            RichText::new("🔢 HEX").color(theme.text_dim()).monospace()
+        };
+        if ui.button(hex_style).on_hover_text("Modalità Esadecimale (HEX)").clicked() {
+            engine.view_mode = crate::tail_engine::ViewMode::Hex;
+            ui.ctx().request_repaint();
         }
 
-        // Encoding selector (relevant in Text & Filtered modes)
+        let md_style = if is_md {
+            RichText::new("📝 MD").color(theme.warn_color()).monospace().strong()
+        } else {
+            RichText::new("📝 MD").color(theme.text_dim()).monospace()
+        };
+        if ui.button(md_style).on_hover_text("Modalità Markdown (MD)").clicked() {
+            engine.view_mode = crate::tail_engine::ViewMode::Markdown;
+            ui.ctx().request_repaint();
+        }
+
+        // Encoding selector (relevant in Text & Markdown modes)
         if engine.view_mode != crate::tail_engine::ViewMode::Hex {
             let mut curr_enc = engine.encoding;
             egui::ComboBox::from_id_salt(format!("enc_sel_{}", engine.path.display()))
@@ -319,13 +354,20 @@ fn render_log_stream(
 
         ui.separator();
 
-        // Lines count stat
+        // Lines count stat (shows filtered count vs total when filtering is active)
         let lines_stat = match engine.view_mode {
             crate::tail_engine::ViewMode::Text | crate::tail_engine::ViewMode::Filtered => {
-                format!("{}: {}", t(lang, "lines"), engine.total_lines())
+                if engine.is_filter_active() {
+                    format!("{}: {} / {}", t(lang, "lines"), engine.visible_line_count(), engine.total_lines())
+                } else {
+                    format!("{}: {}", t(lang, "lines"), engine.total_lines())
+                }
             }
             crate::tail_engine::ViewMode::Hex => {
                 format!("{}: {}", t(lang, "lines"), engine.total_hex_rows(engine.hex_columns))
+            }
+            crate::tail_engine::ViewMode::Markdown => {
+                format!("{}: {}", t(lang, "lines"), engine.total_lines())
             }
         };
         ui.label(RichText::new(lines_stat).monospace().color(theme.text_dim()));
@@ -358,21 +400,164 @@ fn render_log_stream(
 
         ui.separator();
         ui.label(RichText::new("🔍").monospace());
+        let search_id = egui::Id::new("log_search_input").with(&engine.path);
+        let has_query = !search_query.trim().is_empty();
+        let match_count = engine.search_matches.len();
+
+        let extra_controls_w = if has_query { 220.0 } else { 70.0 };
+        let box_w = (ui.available_width() - extra_controls_w).clamp(160.0, 360.0);
         let search_edit = egui::TextEdit::singleline(search_query)
             .hint_text(t(lang, "search_placeholder"))
-            .desired_width(180.0)
-            .id_salt(format!("search_input_{}", engine.path.display()));
+            .desired_width(box_w)
+            .id(search_id);
         let search_resp = ui.add(search_edit).on_hover_text(t(lang, "tip_search_box"));
+
+        // Global Ctrl+F shortcut: immediately requests focus on the search input and selects all text
+        let ctrl_f = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F);
+        if ui.input_mut(|i| i.consume_shortcut(&ctrl_f)) {
+            ui.ctx().memory_mut(|m| m.request_focus(search_id));
+            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), search_id).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(search_query.chars().count()),
+            )));
+            state.store(ui.ctx(), search_id);
+            ui.ctx().request_repaint();
+        }
+
+        // Escape inside the search input box: releases focus and restores log navigation
+        if search_resp.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            ui.ctx().memory_mut(|m| m.stop_text_input());
+            ui.ctx().request_repaint();
+        }
+
+        // ArrowUp / ArrowDown / PageUp / PageDown inside search input box for seamless navigation
+        if search_resp.has_focus() {
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                if let Some(target) = engine.search_next(sound_enabled) {
+                    scroll_to_target(engine, target);
+                    record_search_history(search_history, search_query);
+                } else {
+                    engine.follow_tail = false;
+                    engine.requested_scroll_y = Some(engine.current_scroll_y + row_height);
+                }
+                ui.ctx().request_repaint();
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+                if let Some(target) = engine.search_prev(sound_enabled) {
+                    scroll_to_target(engine, target);
+                    record_search_history(search_history, search_query);
+                } else {
+                    engine.follow_tail = false;
+                    engine.requested_scroll_y = Some((engine.current_scroll_y - row_height).max(0.0));
+                }
+                ui.ctx().request_repaint();
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown)) {
+                let visible_lines = ((viewport_height / row_height).floor() as usize).max(1);
+                let current_line = (engine.current_scroll_y / row_height).round() as usize;
+                let target_line = current_line + visible_lines;
+                engine.follow_tail = false;
+                engine.requested_scroll_y = Some(target_line as f32 * row_height);
+                ui.ctx().request_repaint();
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp)) {
+                let visible_lines = ((viewport_height / row_height).floor() as usize).max(1);
+                let current_line = (engine.current_scroll_y / row_height).round() as usize;
+                let target_line = current_line.saturating_sub(visible_lines);
+                engine.follow_tail = false;
+                engine.requested_scroll_y = Some(target_line as f32 * row_height);
+                ui.ctx().request_repaint();
+            }
+        }
+
+        // Enter / Shift+Enter inside the search input box
+        if search_resp.has_focus() {
+            let enter_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            let shift_enter_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter));
+            if enter_pressed || shift_enter_pressed {
+                let target_line = if shift_enter_pressed {
+                    engine.search_prev(sound_enabled)
+                } else {
+                    engine.search_next(sound_enabled)
+                };
+                if let Some(target) = target_line {
+                    scroll_to_target(engine, target);
+                    record_search_history(search_history, search_query);
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+
+        // Match counter & Next/Prev navigation buttons
+        if has_query {
+            if match_count == 0 {
+                ui.label(
+                    RichText::new("[0 / 0]")
+                        .monospace()
+                        .color(theme.warn_color())
+                );
+            } else {
+                let current_1based = engine.current_match_idx.map(|i| i + 1).unwrap_or(0);
+                ui.label(
+                    RichText::new(format!("[{} / {}]", current_1based, match_count))
+                        .monospace()
+                        .strong()
+                        .color(theme.accent_color())
+                );
+                // Prev button (Shift+F3)
+                if ui.button(RichText::new("▲").monospace()).on_hover_text(t(lang, "search_prev")).clicked() {
+                    if let Some(target) = engine.search_prev(sound_enabled) {
+                        scroll_to_target(engine, target);
+                        record_search_history(search_history, search_query);
+                        ui.ctx().request_repaint();
+                    }
+                }
+                // Next button (F3)
+                if ui.button(RichText::new("▼").monospace()).on_hover_text(t(lang, "search_next")).clicked() {
+                    if let Some(target) = engine.search_next(sound_enabled) {
+                        scroll_to_target(engine, target);
+                        record_search_history(search_history, search_query);
+                        ui.ctx().request_repaint();
+                    }
+                }
+            }
+        }
+
+        // Search History dropdown menu (last 10 searches)
+        ui.menu_button("🕒", |ui| {
+            ui.set_max_width(280.0);
+            if search_history.is_empty() {
+                ui.label(RichText::new(t(lang, "no_recent_files")).monospace().color(theme.text_dim()));
+            } else {
+                let mut selected = None;
+                for query_item in search_history.iter() {
+                    if ui.button(RichText::new(query_item).monospace()).clicked() {
+                        selected = Some(query_item.clone());
+                        ui.close();
+                    }
+                }
+                if let Some(chosen) = selected {
+                    *search_query = chosen;
+                    engine.update_search(search_query);
+                    if let Some(target) = engine.current_search_line() {
+                        scroll_to_target(engine, target);
+                    }
+                    ui.ctx().request_repaint();
+                }
+            }
+        }).response.on_hover_text(t(lang, "search_history"));
+
         if !search_query.is_empty() && ui.button("✖").clicked() {
             search_query.clear();
+            engine.update_search(search_query);
+            ui.ctx().memory_mut(|m| m.request_focus(search_id));
+            ui.ctx().request_repaint();
         }
 
         // Keyboard navigation shortcuts when user is not actively typing in an input
         if !ui.ctx().egui_wants_keyboard_input() {
             ui.input(|i| {
-                if i.modifiers.ctrl && i.key_pressed(egui::Key::F) {
-                    search_resp.request_focus();
-                }
                 // Ctrl + Home: Jump to top
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
                     engine.follow_tail = false;
@@ -381,7 +566,7 @@ fn render_log_stream(
                 // Ctrl + End: Jump to bottom & follow
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::End) {
                     engine.follow_tail = true;
-                    let max_y = (engine.total_lines() as f32 * row_height).max(0.0);
+                    let max_y = (engine.visible_line_count() as f32 * row_height).max(0.0);
                     engine.requested_scroll_y = Some(max_y);
                 }
                 // Home (horizontal start)
@@ -432,6 +617,12 @@ fn render_log_stream(
     // If Hex streaming mode is active, render the binary hex stream
     if engine.view_mode == crate::tail_engine::ViewMode::Hex {
         render_hex_stream(ui, engine, theme, lang, search_query, font_size);
+        return;
+    }
+
+    // If Markdown mode is active, render formatted markdown stream
+    if engine.view_mode == crate::tail_engine::ViewMode::Markdown {
+        render_markdown_stream(ui, engine, theme, lang);
         return;
     }
 
@@ -508,8 +699,8 @@ fn render_log_stream(
 
     ui.separator();
 
-    let total_lines = engine.total_lines();
-    if total_lines == 0 {
+    let visible_lines = engine.visible_line_count();
+    if visible_lines == 0 {
         ui.centered_and_justified(|ui| {
             ui.label(RichText::new(t(lang, "no_file_open")).monospace().color(theme.text_dim()));
         });
@@ -518,8 +709,10 @@ fn render_log_stream(
 
     let search_lower = search_query.to_lowercase();
     let has_search = !search_lower.is_empty();
+    let active_search_line = engine.current_search_line();
 
     let mut toggle_json = None;
+    let mut clear_scroll_to_line = false;
     let mut scroll_area = ScrollArea::both()
         .auto_shrink([false, false])
         .stick_to_bottom(engine.follow_tail);
@@ -531,33 +724,54 @@ fn render_log_stream(
         scroll_area = scroll_area.vertical_scroll_offset(y);
     }
 
-    let scroll_output = scroll_area.show_rows(ui, row_height, total_lines, |ui, row_range| {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let scroll_output = scroll_area.show_rows(ui, row_height, visible_lines, |ui, row_range| {
         ui.set_min_width(engine.max_detected_width);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.spacing_mut().item_spacing.y = 0.0;
         for row_idx in row_range {
-            let is_visible = if engine.view_mode == crate::tail_engine::ViewMode::Filtered {
-                engine.is_line_visible_filtered(row_idx)
-            } else {
-                engine.is_line_visible(row_idx)
+            let actual_line_idx = match engine.get_actual_line_idx(row_idx) {
+                Some(idx) => idx,
+                None => continue,
             };
 
-            if !is_visible {
-                continue;
-            }
-            if let Some(raw_line) = engine.get_line(row_idx) {
+            if let Some(raw_line) = engine.get_line(actual_line_idx) {
                 let is_json = TailEngine::is_json_line(&raw_line);
-                let is_expanded = engine.expanded_json_lines.contains(&row_idx);
+                let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
                 let highlight = engine.match_highlight(&raw_line);
                 let matches_search = has_search && raw_line.to_lowercase().contains(&search_lower);
+                let is_active_search = active_search_line == Some(actual_line_idx);
 
-                ui.horizontal(|ui| {
+                let row_resp = ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.set_min_height(row_height);
+                    ui.set_max_height(row_height);
+
+                    // Active search match pointer indicator
+                    if is_active_search {
+                        ui.label(
+                            RichText::new("▶")
+                                .monospace()
+                                .strong()
+                                .size(font_size)
+                                .color(theme.accent_color()),
+                        );
+                    }
+
                     // Line number
                     if *show_line_numbers {
+                        let line_num_str = format!("{:>6} │", actual_line_idx + 1);
+                        let num_color = if is_active_search {
+                            theme.accent_color()
+                        } else {
+                            theme.text_dim().gamma_multiply(0.6)
+                        };
                         ui.label(
-                            RichText::new(format!("{:>6} │", row_idx + 1))
+                            RichText::new(line_num_str)
                                 .monospace()
+                                .strong()
                                 .size(font_size)
-                                .color(theme.text_dim().gamma_multiply(0.6)),
+                                .color(num_color),
                         );
                     }
 
@@ -571,14 +785,21 @@ fn render_log_stream(
                                 .color(theme.secondary_accent()),
                         );
                         if btn.clicked() {
-                            toggle_json = Some((row_idx, is_expanded));
+                            toggle_json = Some((actual_line_idx, is_expanded));
                         }
                     }
 
                     // Content text
                     let mut text = RichText::new(&*raw_line).monospace().size(font_size);
-                    if matches_search {
-                        text = text.color(Color32::BLACK).background_color(Color32::from_rgb(255, 230, 0));
+                    if is_active_search {
+                        text = text
+                            .color(Color32::BLACK)
+                            .background_color(Color32::from_rgb(0, 255, 230))
+                            .strong();
+                    } else if matches_search {
+                        text = text
+                            .color(Color32::BLACK)
+                            .background_color(Color32::from_rgb(255, 230, 0));
                     } else if let Some(hl) = highlight {
                         text = text.color(hl.fg).background_color(hl.bg);
                         if hl.bold {
@@ -591,7 +812,12 @@ fn render_log_stream(
                         text = text.color(theme.text_primary());
                     }
                     ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
-                });
+                }).response;
+
+                if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
+                    row_resp.scroll_to_me(Some(egui::Align::Center));
+                    clear_scroll_to_line = true;
+                }
 
                 // Render expanded pretty JSON
                 if is_json && is_expanded {
@@ -617,6 +843,9 @@ fn render_log_stream(
             }
         }
     });
+    if clear_scroll_to_line {
+        engine.scroll_to_line = None;
+    }
     let measured_width = scroll_output.content_size.x;
     if measured_width > engine.max_detected_width {
         engine.max_detected_width = measured_width;
@@ -651,7 +880,8 @@ fn render_hex_stream(
 
     let bytes_per_row = engine.hex_columns.max(8);
     let total_rows = engine.total_hex_rows(bytes_per_row);
-    let row_height = (font_size * 1.45).max(16.0);
+    let font_id = egui::FontId::monospace(font_size);
+    let row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
 
     // Dynamic Hex column header
     let offset_header = "OFFSET    ";
@@ -746,6 +976,7 @@ fn render_hex_stream(
     let scroll_output = scroll_area.show_rows(ui, row_height, total_rows, |ui, row_range| {
         ui.set_min_width(engine.max_detected_width);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.spacing_mut().item_spacing.y = 0.0;
         for row_idx in row_range {
             let offset = row_idx * bytes_per_row;
             let chunk = match engine.get_bytes(offset, bytes_per_row) {
@@ -1101,6 +1332,7 @@ pub fn render_settings_content(
     lang: &mut Language,
     screensaver_enabled: &mut bool,
     screensaver_timeout_mins: &mut u32,
+    test_screensaver: &mut bool,
     telemetry_enabled: &mut bool,
     sound_enabled: &mut bool,
     borderless: &mut bool,
@@ -1115,7 +1347,8 @@ pub fn render_settings_content(
         ui.label(RichText::new(format!("{}:", t(*lang, "theme"))).monospace());
         ui.selectable_value(theme, CyberTheme::Tron, "Tron").clicked();
         ui.selectable_value(theme, CyberTheme::Matrix, "Matrix").clicked();
-        if ui.selectable_value(theme, CyberTheme::Blade, "Blade").clicked() {}
+        ui.selectable_value(theme, CyberTheme::Blade, "Blade").clicked();
+        if ui.selectable_value(theme, CyberTheme::Light, t(*lang, "theme_light")).clicked() {}
     });
 
     ui.add_space(6.0);
@@ -1157,6 +1390,10 @@ pub fn render_settings_content(
         ui.horizontal(|ui| {
             ui.label(t(*lang, "screensaver_timeout"));
             ui.add(egui::DragValue::new(screensaver_timeout_mins).range(1..=120));
+            ui.add_space(8.0);
+            if ui.button(t(*lang, "test_screensaver")).clicked() {
+                *test_screensaver = true;
+            }
         });
     }
 
@@ -1165,4 +1402,51 @@ pub fn render_settings_content(
     ui.checkbox(sound_enabled, t(*lang, "sound_fx"));
     ui.checkbox(borderless, t(*lang, "borderless"));
     ui.checkbox(show_line_numbers, t(*lang, "show_lines"));
+}
+
+fn render_markdown_stream(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    if engine.buffer.is_empty() {
+        ui.centered_and_justified(|ui| {
+            ui.label(RichText::new(t(lang, "no_file_open")).monospace().color(theme.text_dim()));
+        });
+        return;
+    }
+
+    let raw_text = String::from_utf8_lossy(&engine.buffer);
+    let text = if crate::html_converter::contains_html(&raw_text) {
+        crate::html_converter::html_to_markdown(&raw_text)
+    } else {
+        raw_text.to_string()
+    };
+
+    let mut scroll_area = ScrollArea::both()
+        .auto_shrink([false, false])
+        .stick_to_bottom(engine.follow_tail);
+
+    if let Some(y) = engine.requested_scroll_y.take() {
+        scroll_area = scroll_area.vertical_scroll_offset(y);
+    }
+    if let Some(x) = engine.requested_scroll_x.take() {
+        scroll_area = scroll_area.horizontal_scroll_offset(x);
+    }
+
+    let html_renderer = |ui: &mut egui::Ui, html: &str| {
+        let converted = crate::html_converter::html_to_markdown(html);
+        ui.label(converted);
+    };
+
+    let scroll_output = scroll_area.show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        egui_commonmark::CommonMarkViewer::new()
+            .render_html_fn(Some(&html_renderer))
+            .show(ui, &mut engine.markdown_cache, &text);
+    });
+
+    engine.current_scroll_y = scroll_output.state.offset.y;
+    engine.current_scroll_x = scroll_output.state.offset.x;
 }

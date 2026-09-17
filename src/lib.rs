@@ -2,6 +2,7 @@ pub mod audio;
 pub mod baretail_bridge;
 pub mod config;
 pub mod crash_handler;
+pub mod html_converter;
 pub mod i18n;
 pub mod screensaver;
 pub mod tail_engine;

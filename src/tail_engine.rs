@@ -59,6 +59,7 @@ pub enum ViewMode {
     #[default]
     Text,
     Hex,
+    Markdown,
     Filtered,
 }
 
@@ -177,11 +178,18 @@ pub struct TailEngine {
     pub filter_is_regex: bool,
     include_regex: Option<Regex>,
     exclude_regex: Option<Regex>,
+    pub filtered_lines: Vec<usize>,
+    pub search_query: String,
+    pub search_matches: Vec<usize>,
+    pub current_match_idx: Option<usize>,
+    pub last_searched_query: String,
     pub highlight_rules: Vec<HighlightRule>,
     compiled_highlights: Vec<(Option<Regex>, HighlightRule)>,
     pub expanded_json_lines: HashSet<usize>,
     pub requested_scroll_x: Option<f32>,
     pub requested_scroll_y: Option<f32>,
+    pub scroll_to_line: Option<usize>,
+    pub markdown_cache: egui_commonmark::CommonMarkCache,
     pub current_scroll_x: f32,
     pub current_scroll_y: f32,
     pub max_line_bytes: usize,
@@ -235,8 +243,16 @@ impl TailEngine {
             (FileEncoding::Utf8, false)
         };
 
+        let is_markdown = path_buf
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false);
+
         let view_mode = if is_binary {
             ViewMode::Hex
+        } else if is_markdown {
+            ViewMode::Markdown
         } else {
             ViewMode::Text
         };
@@ -266,11 +282,18 @@ impl TailEngine {
             filter_is_regex: false,
             include_regex: None,
             exclude_regex: None,
+            filtered_lines: Vec::new(),
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            current_match_idx: None,
+            last_searched_query: String::new(),
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
             expanded_json_lines: HashSet::new(),
             requested_scroll_x: None,
             requested_scroll_y: None,
+            scroll_to_line: None,
+            markdown_cache: egui_commonmark::CommonMarkCache::default(),
             current_scroll_x: 0.0,
             current_scroll_y: 0.0,
             max_line_bytes: 0,
@@ -341,6 +364,7 @@ impl TailEngine {
             })
             .collect();
         self.highlight_rules = rules;
+        self.recompute_filtered_lines();
     }
 
     pub fn refresh_filters(&mut self) {
@@ -365,6 +389,7 @@ impl TailEngine {
             self.include_regex = None;
             self.exclude_regex = None;
         }
+        self.recompute_filtered_lines();
     }
 
     pub fn set_include_filter(&mut self, filter: &str) {
@@ -472,6 +497,7 @@ impl TailEngine {
         self.max_line_bytes = max_bytes;
         let estimated_width = (max_bytes as f32) * 8.5 + 120.0;
         self.max_detected_width = self.max_detected_width.max(estimated_width);
+        self.recompute_filtered_lines();
     }
 
     pub fn poll_updates(&mut self) {
@@ -802,31 +828,54 @@ impl TailEngine {
             || trimmed.starts_with("goroutine ")
     }
 
-    pub fn is_line_visible(&self, idx: usize) -> bool {
-        if self.include_filter.is_empty() && self.exclude_filter.is_empty() {
-            return true;
-        }
-        if let Some(line) = self.get_line(idx) {
-            if self.matches_filter(&line) {
-                return true;
-            }
-            // Multiline stack trace grouping: check if parent line matched
-            if Self::is_stacktrace_continuation(&line) {
-                let mut curr = idx;
-                while curr > 0 {
-                    curr -= 1;
-                    if let Some(parent) = self.get_line(curr) {
-                        if !Self::is_stacktrace_continuation(&parent) {
-                            return self.matches_filter(&parent);
-                        }
-                    }
-                }
-            }
-        }
-        false
+    pub fn is_filter_active(&self) -> bool {
+        !self.include_filter.is_empty() || !self.exclude_filter.is_empty()
     }
 
-    pub fn is_line_visible_filtered(&self, idx: usize) -> bool {
+    pub fn recompute_filtered_lines(&mut self) {
+        if !self.is_filter_active() {
+            self.filtered_lines.clear();
+            return;
+        }
+        let total = self.total_lines();
+        let mut indices = Vec::with_capacity(total);
+        for idx in 0..total {
+            if self.is_line_visible(idx) {
+                indices.push(idx);
+            }
+        }
+        self.filtered_lines = indices;
+    }
+
+    pub fn visible_line_count(&self) -> usize {
+        if self.is_filter_active() {
+            self.filtered_lines.len()
+        } else {
+            self.total_lines()
+        }
+    }
+
+    pub fn get_actual_line_idx(&self, visible_row: usize) -> Option<usize> {
+        if self.is_filter_active() {
+            self.filtered_lines.get(visible_row).copied()
+        } else if visible_row < self.total_lines() {
+            Some(visible_row)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_visible_row_of_line(&self, line_idx: usize) -> Option<usize> {
+        if self.is_filter_active() {
+            self.filtered_lines.iter().position(|&idx| idx == line_idx)
+        } else if line_idx < self.total_lines() {
+            Some(line_idx)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_line_visible(&self, idx: usize) -> bool {
         if let Some(line) = self.get_line(idx) {
             let mut lower_line: Option<String> = None;
 
@@ -865,7 +914,7 @@ impl TailEngine {
                     lower.contains(&self.include_filter.to_lowercase())
                 }
             } else {
-                false
+                true
             };
 
             let matches_highlight = self.match_highlight(&line).is_some();
@@ -881,7 +930,7 @@ impl TailEngine {
                     curr -= 1;
                     if let Some(parent) = self.get_line(curr) {
                         if !Self::is_stacktrace_continuation(&parent) {
-                            return self.is_line_visible_filtered(curr);
+                            return self.is_line_visible(curr);
                         }
                     }
                 }
@@ -890,19 +939,126 @@ impl TailEngine {
         false
     }
 
+    pub fn is_line_visible_filtered(&self, idx: usize) -> bool {
+        self.is_line_visible(idx)
+    }
+
     pub fn find_matches(&self, query: &str) -> Vec<usize> {
         let mut matches = Vec::new();
         if query.is_empty() {
             return matches;
         }
         let q_lower = query.to_lowercase();
-        for i in 0..self.total_lines() {
-            if let Some(line) = self.get_line(i) {
-                if line.to_lowercase().contains(&q_lower) {
-                    matches.push(i);
+        const MAX_SEARCH_MATCHES: usize = 20_000;
+
+        let check_match = |line: &str| -> bool {
+            if line.is_ascii() && q_lower.is_ascii() {
+                let q_bytes = q_lower.as_bytes();
+                let l_bytes = line.as_bytes();
+                if q_bytes.len() > l_bytes.len() {
+                    return false;
+                }
+                l_bytes.windows(q_bytes.len()).any(|w| w.eq_ignore_ascii_case(q_bytes))
+            } else {
+                line.to_lowercase().contains(&q_lower)
+            }
+        };
+
+        if self.is_filter_active() {
+            for &idx in &self.filtered_lines {
+                if let Some(line) = self.get_line(idx) {
+                    if check_match(&line) {
+                        matches.push(idx);
+                        if matches.len() >= MAX_SEARCH_MATCHES {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            for i in 0..self.total_lines() {
+                if let Some(line) = self.get_line(i) {
+                    if check_match(&line) {
+                        matches.push(i);
+                        if matches.len() >= MAX_SEARCH_MATCHES {
+                            break;
+                        }
+                    }
                 }
             }
         }
         matches
+    }
+
+    pub fn update_search(&mut self, query: &str) {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            self.search_matches.clear();
+            self.current_match_idx = None;
+            self.last_searched_query.clear();
+            return;
+        }
+        if trimmed == self.last_searched_query {
+            return;
+        }
+        self.last_searched_query = trimmed.to_string();
+        self.search_matches = self.find_matches(trimmed);
+        if !self.search_matches.is_empty() {
+            self.current_match_idx = Some(0);
+        } else {
+            self.current_match_idx = None;
+        }
+    }
+
+    pub fn search_next(&mut self, sound_enabled: bool) -> Option<usize> {
+        if self.search_matches.is_empty() {
+            return None;
+        }
+        let len = self.search_matches.len();
+        let (next_idx, wrapped) = match self.current_match_idx {
+            Some(curr) => {
+                if curr + 1 < len {
+                    (curr + 1, false)
+                } else {
+                    (0, true)
+                }
+            }
+            None => (0, false),
+        };
+        self.current_match_idx = Some(next_idx);
+        let target = self.search_matches[next_idx];
+        self.scroll_to_line = Some(target);
+        if wrapped && sound_enabled {
+            crate::audio::SoundAlertPreset::Beep.play();
+        }
+        Some(target)
+    }
+
+    pub fn search_prev(&mut self, sound_enabled: bool) -> Option<usize> {
+        if self.search_matches.is_empty() {
+            return None;
+        }
+        let len = self.search_matches.len();
+        let (prev_idx, wrapped) = match self.current_match_idx {
+            Some(curr) => {
+                if curr > 0 {
+                    (curr - 1, false)
+                } else {
+                    (len - 1, true)
+                }
+            }
+            None => (len - 1, false),
+        };
+        self.current_match_idx = Some(prev_idx);
+        let target = self.search_matches[prev_idx];
+        self.scroll_to_line = Some(target);
+        if wrapped && sound_enabled {
+            crate::audio::SoundAlertPreset::Beep.play();
+        }
+        Some(target)
+    }
+
+    pub fn current_search_line(&self) -> Option<usize> {
+        self.current_match_idx.and_then(|idx| self.search_matches.get(idx).copied())
     }
 }
