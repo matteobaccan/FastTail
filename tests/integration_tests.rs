@@ -554,6 +554,9 @@ fn test_i18n_exhaustive_coverage() {
         "md_search_source",
         "case_sensitive",
         "case_sensitive_tip",
+        "delete_rule",
+        "clear_search",
+        "clear_filter",
     ];
 
     for lang in &[

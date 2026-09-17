@@ -752,7 +752,12 @@ fn render_log_stream(
         .response
         .on_hover_text(t(lang, "search_history"));
 
-        if !search_query.is_empty() && ui.button("✖").clicked() {
+        if !search_query.is_empty()
+            && ui
+                .button("✖")
+                .on_hover_text(t(lang, "clear_search"))
+                .clicked()
+        {
             search_query.clear();
             engine.update_search(search_query);
             ui.ctx().memory_mut(|m| m.request_focus(search_id));
@@ -861,7 +866,12 @@ fn render_log_stream(
         {
             engine.set_include_filter(&inc);
         }
-        if !engine.include_filter.is_empty() && ui.button("✖").clicked() {
+        if !engine.include_filter.is_empty()
+            && ui
+                .button("✖")
+                .on_hover_text(t(lang, "clear_filter"))
+                .clicked()
+        {
             engine.set_include_filter("");
         }
 
@@ -884,7 +894,12 @@ fn render_log_stream(
         {
             engine.set_exclude_filter(&exc);
         }
-        if !engine.exclude_filter.is_empty() && ui.button("✖").clicked() {
+        if !engine.exclude_filter.is_empty()
+            && ui
+                .button("✖")
+                .on_hover_text(t(lang, "clear_filter"))
+                .clicked()
+        {
             engine.set_exclude_filter("");
         }
 
@@ -1390,7 +1405,12 @@ pub fn render_filters_content(
                 {
                     engine.set_include_filter(&inc);
                 }
-                if !engine.include_filter.is_empty() && ui.button("✖").clicked() {
+                if !engine.include_filter.is_empty()
+                    && ui
+                        .button("✖")
+                        .on_hover_text(t(lang, "clear_filter"))
+                        .clicked()
+                {
                     engine.set_include_filter("");
                 }
 
@@ -1438,7 +1458,12 @@ pub fn render_filters_content(
                 {
                     engine.set_exclude_filter(&exc);
                 }
-                if !engine.exclude_filter.is_empty() && ui.button("✖").clicked() {
+                if !engine.exclude_filter.is_empty()
+                    && ui
+                        .button("✖")
+                        .on_hover_text(t(lang, "clear_filter"))
+                        .clicked()
+                {
                     engine.set_exclude_filter("");
                 }
             });
@@ -1625,7 +1650,11 @@ pub fn render_highlights_content(
                     }
                     ui.label(preview);
 
-                    if ui.button("🗑").clicked() {
+                    if ui
+                        .button("🗑")
+                        .on_hover_text(t(lang, "delete_rule"))
+                        .clicked()
+                    {
                         to_remove = Some(i);
                         rules_changed = true;
                     }

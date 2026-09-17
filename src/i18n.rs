@@ -205,6 +205,9 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::It, "search_history") => "Cronologia ricerche (ultime 10)",
         (Language::It, "search_next") => "Successivo (F3)",
         (Language::It, "search_prev") => "Precedente (Shift+F3)",
+        (Language::It, "delete_rule") => "Elimina regola filtro colore",
+        (Language::It, "clear_search") => "Cancella testo di ricerca",
+        (Language::It, "clear_filter") => "Cancella filtro",
 
         // French
         (Language::Fr, "app_subtitle") => "SURVEILLANCE DES JOURNAUX HAUTE PERFORMANCE",
@@ -327,6 +330,9 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Fr, "search_history") => "Historique de recherche (10 derniers)",
         (Language::Fr, "search_next") => "Suivant (F3)",
         (Language::Fr, "search_prev") => "Précédent (Shift+F3)",
+        (Language::Fr, "delete_rule") => "Supprimer la règle de filtre",
+        (Language::Fr, "clear_search") => "Effacer la recherche",
+        (Language::Fr, "clear_filter") => "Effacer le filtre",
 
         // Spanish
         (Language::Es, "app_subtitle") => "MONITORIZACIÓN DE REGISTROS DE ALTO RENDIMIENTO",
@@ -449,6 +455,9 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Es, "search_history") => "Historial de búsqueda (últimas 10)",
         (Language::Es, "search_next") => "Siguiente (F3)",
         (Language::Es, "search_prev") => "Anterior (Shift+F3)",
+        (Language::Es, "delete_rule") => "Eliminar regla de filtro",
+        (Language::Es, "clear_search") => "Borrar búsqueda",
+        (Language::Es, "clear_filter") => "Borrar filtro",
 
         // Chinese (Simplified)
         (Language::Zh, "app_subtitle") => "高性能日志实时监控终端",
@@ -573,6 +582,9 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Zh, "search_history") => "搜索历史 (最近10条)",
         (Language::Zh, "search_next") => "下一个 (F3)",
         (Language::Zh, "search_prev") => "上一个 (Shift+F3)",
+        (Language::Zh, "delete_rule") => "删除颜色过滤规则",
+        (Language::Zh, "clear_search") => "清除搜索内容",
+        (Language::Zh, "clear_filter") => "清除过滤器",
 
         // Default: English fallback
         (_, "app_subtitle") => "HIGH-PERFORMANCE REAL-TIME LOG MONITOR",
@@ -697,6 +709,9 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (_, "move_down") => "Move Down",
         (_, "case_sensitive") => "Match Case",
         (_, "case_sensitive_tip") => "Toggle case-sensitive matching (Match Case)",
+        (_, "delete_rule") => "Delete color filter rule",
+        (_, "clear_search") => "Clear search text",
+        (_, "clear_filter") => "Clear filter text",
 
         // Unknown key fallback
         _ => "Unknown",
