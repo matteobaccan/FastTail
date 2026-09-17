@@ -439,7 +439,6 @@ fn test_i18n_exhaustive_coverage() {
         "tip_monitor",
         "view_mode_text",
         "view_mode_hex",
-        "tip_view_mode",
         "hex_offset",
         "hex_bytes",
         "active_count",
@@ -511,7 +510,9 @@ fn test_i18n_exhaustive_coverage() {
         "preview",
         "closed",
         "view_mode_all",
-        "tip_view_filtered",
+        "tip_mode_txt",
+        "tip_mode_hex",
+        "tip_mode_md",
         "case_sensitive",
         "case_sensitive_tip",
     ];
@@ -828,11 +829,11 @@ fn test_view_mode_filtered() {
     assert!(engine.is_line_visible_filtered(3));  // Multiline stacktrace continuation matches parent!
     assert!(!engine.is_line_visible_filtered(4)); // INFO
 
-    // Test highlight rule match triggers visibility alongside include filter
+    // Highlight rules only style lines: they never bypass the include filter
     let rule = HighlightRule::new("Memory", [255, 200, 0], [0, 0, 0], false);
     engine.set_highlight_rules(vec![rule]);
     assert!(!engine.is_line_visible_filtered(0));
-    assert!(engine.is_line_visible_filtered(1));  // Matches highlight rule "Memory"!
+    assert!(!engine.is_line_visible_filtered(1)); // Matches the highlight rule but not "ERROR"
     assert!(engine.is_line_visible_filtered(2));  // Matches include filter!
 }
 
@@ -2086,3 +2087,326 @@ fn test_fasttail_app_ctrl_f() {
 
 
 
+
+// ---------------------------------------------------------------------------
+// Regression tests for the 2026-09-17 code review findings
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_config_test_binary_detection_ignores_release_names() {
+    use fasttail::config::is_test_binary;
+    use std::path::Path;
+
+    // Cargo test binaries live in target/<profile>/deps and carry a hash suffix
+    assert!(is_test_binary(Path::new("target/debug/deps/fasttail-1a2b3c4d.exe")));
+    assert!(is_test_binary(Path::new("target/debug/deps/integration_tests-1a2b3c4d")));
+    // Release artifacts published by CI must NOT be treated as test binaries
+    assert!(!is_test_binary(Path::new("C:/Tools/fasttail-windows-x86_64.exe")));
+    assert!(!is_test_binary(Path::new("/usr/local/bin/fasttail-linux-x86_64")));
+    assert!(!is_test_binary(Path::new("/Applications/fasttail-macos-arm64")));
+    assert!(!is_test_binary(Path::new("C:/Tools/fasttail.exe")));
+}
+
+#[test]
+fn test_config_legacy_toml_without_search_history_still_loads() {
+    let legacy = r#"
+theme = "Matrix"
+language = "It"
+screensaver_enabled = true
+screensaver_timeout_mins = 7
+telemetry_enabled = false
+sound_enabled = true
+recent_files = ["old.log"]
+highlight_rules = []
+baretail_prompt_shown = true
+"#;
+    let cfg: FastTailConfig = toml::from_str(legacy).expect("legacy toml must still parse");
+    assert_eq!(cfg.theme, CyberTheme::Matrix);
+    assert_eq!(cfg.screensaver_timeout_mins, 7);
+    assert!(cfg.search_history.is_empty());
+}
+
+#[test]
+fn test_config_default_screensaver_timeout_is_ten_minutes() {
+    assert_eq!(FastTailConfig::default().screensaver_timeout_mins, 10);
+}
+
+#[test]
+fn test_push_search_history_matches_config_helper() {
+    use fasttail::config::push_search_history;
+    let mut history = vec!["old".to_string()];
+    push_search_history(&mut history, "  Error ");
+    push_search_history(&mut history, "error");
+    assert_eq!(history, vec!["error".to_string(), "old".to_string()]);
+
+    let mut cfg = FastTailConfig::default();
+    cfg.search_history = vec!["old".to_string()];
+    cfg.add_search_history("  Error ");
+    cfg.add_search_history("error");
+    assert_eq!(cfg.search_history, history);
+}
+
+#[test]
+fn test_search_matches_refresh_after_append_and_keep_position() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "ERROR one").unwrap();
+    writeln!(tmp, "info").unwrap();
+    writeln!(tmp, "ERROR two").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.update_search("ERROR");
+    assert_eq!(engine.search_matches, vec![0, 2]);
+    engine.search_next(false);
+    assert_eq!(engine.current_search_line(), Some(2));
+
+    writeln!(tmp, "ERROR three").unwrap();
+    writeln!(tmp, "ERROR four").unwrap();
+    tmp.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    engine.poll_updates();
+    engine.update_search("ERROR");
+
+    assert_eq!(engine.search_matches, vec![0, 2, 3, 4], "new matches must be picked up");
+    assert_eq!(engine.current_search_line(), Some(2), "current match must be preserved");
+    assert_eq!(engine.search_next(false), Some(3));
+}
+
+#[test]
+fn test_search_matches_refresh_when_filter_changes() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "ERROR payment failed").unwrap();
+    writeln!(tmp, "ERROR disk full").unwrap();
+    writeln!(tmp, "INFO payment ok").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.update_search("ERROR");
+    assert_eq!(engine.search_matches, vec![0, 1]);
+
+    engine.set_include_filter("payment");
+    engine.update_search("ERROR");
+    assert_eq!(engine.search_matches, vec![0], "hidden lines must drop out of the search");
+    assert_eq!(engine.current_search_line(), Some(0));
+
+    engine.set_include_filter("");
+    engine.update_search("ERROR");
+    assert_eq!(engine.search_matches, vec![0, 1]);
+}
+
+#[test]
+fn test_include_filter_is_not_bypassed_by_highlight_rules() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "ERROR payment failed").unwrap();
+    writeln!(tmp, "ERROR disk full").unwrap();
+    writeln!(tmp, "INFO payment ok").unwrap();
+    writeln!(tmp, "INFO idle").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.set_highlight_rules(vec![HighlightRule {
+        pattern: "ERROR".to_string(),
+        is_regex: false,
+        case_sensitive: false,
+        fg_color: [255, 0, 0],
+        bg_color: [0, 0, 0],
+        bold: false,
+        italic: false,
+        sound_alert: fasttail::audio::SoundAlertPreset::None,
+        enabled: true,
+    }]);
+    engine.set_include_filter("payment");
+
+    assert_eq!(engine.filtered_lines, vec![0, 2], "only include-filter matches are visible");
+    assert!(!engine.is_line_visible(1), "highlighted line without 'payment' must be hidden");
+    assert_eq!(engine.visible_line_count(), 2);
+}
+
+#[test]
+fn test_filtered_lines_incremental_update_on_append() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "keep 1").unwrap();
+    writeln!(tmp, "drop 1").unwrap();
+    write!(tmp, "kee").unwrap(); // partial last line, completed by a later append
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.set_include_filter("keep");
+    assert_eq!(engine.filtered_lines, vec![0]);
+
+    writeln!(tmp, "p 2").unwrap();
+    writeln!(tmp, "drop 2").unwrap();
+    writeln!(tmp, "keep 3").unwrap();
+    tmp.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    engine.poll_updates();
+
+    assert_eq!(engine.total_lines(), 5);
+    assert_eq!(engine.filtered_lines, vec![0, 2, 4]);
+}
+
+#[test]
+fn test_contains_html_ignores_markdown_generics_and_code() {
+    use fasttail::html_converter::contains_html;
+
+    assert!(!contains_html("let v: Vec<i32> = Vec::new();"));
+    assert!(!contains_html("Returns an Option<bool> for the flag"));
+    assert!(!contains_html("Usage: tool <path> [options]"));
+    assert!(!contains_html("```html\n<div>inside a fence</div>\n```"));
+    assert!(!contains_html("if a < b && c > d { }"));
+
+    assert!(contains_html("<p>Hello <b>world</b></p>"));
+    assert!(contains_html("<html><body>x</body></html>"));
+    assert!(contains_html("line one<br>line two"));
+}
+
+#[test]
+fn test_html_converter_entities_pre_blocks_and_empty_links() {
+    use fasttail::html_converter::{decode_html_entities, html_to_markdown};
+
+    // Escaped entities must not be double-decoded
+    assert_eq!(decode_html_entities("&amp;lt;b&amp;gt;"), "&lt;b&gt;");
+    assert_eq!(decode_html_entities("A &amp; B &lt; C"), "A & B < C");
+
+    // Tags inside <pre> are content, not markup
+    let md = html_to_markdown("<pre>&lt;div class=\"x\"&gt;hi&lt;/div&gt;</pre>");
+    assert!(md.contains("<div class=\"x\">hi</div>"), "got: {md}");
+
+    // Generics inside converted code blocks survive
+    let md = html_to_markdown("<p>Intro</p><pre><code>let v: Vec&lt;i32&gt; = vec![];</code></pre>");
+    assert!(md.contains("Vec<i32>"), "got: {md}");
+
+    // An anchor without text keeps its url
+    let md = html_to_markdown(r#"<p>See <a href="https://example.com"></a></p>"#);
+    assert!(md.contains("https://example.com"), "got: {md}");
+}
+
+#[test]
+fn test_markdown_text_is_cached_per_buffer_generation() {
+    let mut tmp = tempfile::Builder::new().suffix(".html").tempfile().unwrap();
+    writeln!(tmp, "<h1>Title</h1><p>Hello <b>there</b></p>").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    let first = engine.markdown_text().to_string();
+    assert!(first.contains("# Title"));
+    assert!(first.contains("**there**"));
+    let first_ptr = engine.markdown_text().as_ptr();
+    assert_eq!(first_ptr, engine.markdown_text().as_ptr(), "same buffer must be served from cache");
+
+    writeln!(tmp, "<p>More <i>text</i></p>").unwrap();
+    tmp.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    engine.poll_updates();
+    let second = engine.markdown_text().to_string();
+    assert!(second.contains("*text*"), "cache must refresh after the buffer changes: {second}");
+}
+
+#[test]
+fn test_mode_switch_tooltips_are_localized() {
+    for lang in [Language::En, Language::It, Language::Fr, Language::Es, Language::Zh] {
+        for key in ["tip_mode_txt", "tip_mode_hex", "tip_mode_md"] {
+            let text = t(lang, key);
+            assert!(!text.is_empty() && text != key, "missing translation {key} for {lang:?}");
+        }
+    }
+    assert!(t(Language::En, "tip_mode_txt").contains("Text"));
+    assert!(t(Language::It, "tip_mode_txt").contains("Testo"));
+}
+
+#[test]
+fn test_theme_exposes_tab_backgrounds() {
+    for theme in [CyberTheme::Tron, CyberTheme::Matrix, CyberTheme::Blade, CyberTheme::Light] {
+        assert_ne!(theme.tab_active_bg(), theme.tab_inactive_bg());
+    }
+}
+
+#[test]
+fn test_pointer_move_counts_as_user_activity_for_screensaver() {
+    use fasttail::ui::FastTailApp;
+
+    let mut config = FastTailConfig::default();
+    config.screensaver_enabled = true;
+    let mut app = FastTailApp::from_config(config);
+    let ctx = egui::Context::default();
+
+    let mut out = ctx.run_ui(Default::default(), |ui| app.render_ui(ui));
+    out.textures_delta.clear();
+
+    app.screensaver.last_input_time = std::time::Instant::now() - Duration::from_secs(90);
+    let raw = egui::RawInput {
+        events: vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))],
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(raw, |ui| app.render_ui(ui));
+    out.textures_delta.clear();
+
+    assert!(
+        app.screensaver.last_input_time.elapsed() < Duration::from_secs(5),
+        "mouse movement must reset the idle timer"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn test_tab_lookup_tolerates_path_case_differences() {
+    use egui_dock::DockState;
+    use fasttail::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
+
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "hello").unwrap();
+    tmp.flush().unwrap();
+
+    let real_path = tmp.path().to_path_buf();
+    let upper_path = std::path::PathBuf::from(real_path.to_string_lossy().to_uppercase());
+    assert_ne!(real_path, upper_path);
+
+    let mut engines = vec![TailEngine::open(&real_path).unwrap()];
+    let mut open_files = vec![real_path.clone()];
+    let mut theme = CyberTheme::Tron;
+    let mut lang = Language::En;
+    let mut global_rules = Vec::new();
+    let mut screensaver_enabled = false;
+    let mut screensaver_timeout_mins = 5;
+    let mut telemetry_enabled = false;
+    let mut sound_enabled = false;
+    let mut borderless = false;
+    let mut show_line_numbers = true;
+    let mut font_size = 13.0;
+    let mut size_unit = fasttail::tail_engine::SizeUnit::Bytes;
+    let mut search_history = Vec::new();
+    let mut tab_closed = false;
+    let mut test_screensaver = false;
+    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(upper_path.clone())]);
+
+    let ctx = egui::Context::default();
+    let mut title_text = String::new();
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut theme,
+            language: &mut lang,
+            global_rules: &mut global_rules,
+            screensaver_enabled: &mut screensaver_enabled,
+            screensaver_timeout_mins: &mut screensaver_timeout_mins,
+            telemetry_enabled: &mut telemetry_enabled,
+            sound_enabled: &mut sound_enabled,
+            borderless: &mut borderless,
+            show_line_numbers: &mut show_line_numbers,
+            font_size: &mut font_size,
+            size_unit: &mut size_unit,
+            search_history: &mut search_history,
+            tab_closed: &mut tab_closed,
+            test_screensaver: &mut test_screensaver,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        use egui_dock::TabViewer;
+        let mut tab = FastTailTab::LogStream(upper_path.clone());
+        title_text = viewer.title(&mut tab).text().to_string();
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out.textures_delta.clear();
+
+    assert!(!title_text.contains(t(Language::En, "closed")), "tab must resolve its engine: {title_text}");
+}

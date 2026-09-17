@@ -159,6 +159,9 @@ impl HighlightRule {
     }
 }
 
+/// Upper bound on remembered search hits, keeps F3 navigation responsive on huge files.
+const MAX_SEARCH_MATCHES: usize = 20_000;
+
 pub struct TailEngine {
     pub path: PathBuf,
     pub buffer: Vec<u8>,
@@ -183,6 +186,14 @@ pub struct TailEngine {
     pub search_matches: Vec<usize>,
     pub current_match_idx: Option<usize>,
     pub last_searched_query: String,
+    /// When the user last typed in the search box (used to debounce the rescan).
+    pub search_edited_at: Option<Instant>,
+    /// Bumped every time the buffer / line index is rebuilt; keys derived caches.
+    pub buffer_generation: u64,
+    /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
+    pub markdown_text_cache: Option<(u64, String)>,
+    include_filter_lower: String,
+    exclude_filter_lower: String,
     pub highlight_rules: Vec<HighlightRule>,
     compiled_highlights: Vec<(Option<Regex>, HighlightRule)>,
     pub expanded_json_lines: HashSet<usize>,
@@ -287,6 +298,11 @@ impl TailEngine {
             search_matches: Vec::new(),
             current_match_idx: None,
             last_searched_query: String::new(),
+            search_edited_at: None,
+            buffer_generation: 0,
+            markdown_text_cache: None,
+            include_filter_lower: String::new(),
+            exclude_filter_lower: String::new(),
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
             expanded_json_lines: HashSet::new(),
@@ -346,6 +362,8 @@ impl TailEngine {
     pub fn release_mmap(&mut self) {
         self.buffer.clear();
         self.buffer.shrink_to_fit();
+        self.buffer_generation = self.buffer_generation.wrapping_add(1);
+        self.markdown_text_cache = None;
     }
 
     pub fn set_highlight_rules(&mut self, rules: Vec<HighlightRule>) {
@@ -368,6 +386,8 @@ impl TailEngine {
     }
 
     pub fn refresh_filters(&mut self) {
+        self.include_filter_lower = self.include_filter.to_lowercase();
+        self.exclude_filter_lower = self.exclude_filter.to_lowercase();
         if self.filter_is_regex {
             self.include_regex = if self.include_filter.is_empty() {
                 None
@@ -408,6 +428,13 @@ impl TailEngine {
     }
 
     pub fn rebuild_line_index(&mut self) {
+        self.rebuild_line_index_from(0);
+    }
+
+    /// Rebuilds the line offsets and refreshes the derived state (filter visibility,
+    /// search matches). Lines before `unchanged_lines` are known to be identical to the
+    /// previous index, so their derived state is kept instead of being rescanned.
+    fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
         self.line_offsets.clear();
         let mmap = &self.buffer;
         if mmap.is_empty() {
@@ -497,7 +524,11 @@ impl TailEngine {
         self.max_line_bytes = max_bytes;
         let estimated_width = (max_bytes as f32) * 8.5 + 120.0;
         self.max_detected_width = self.max_detected_width.max(estimated_width);
-        self.recompute_filtered_lines();
+        self.buffer_generation = self.buffer_generation.wrapping_add(1);
+        if self.scroll_to_line.map(|l| l >= self.total_lines()).unwrap_or(false) {
+            self.scroll_to_line = None;
+        }
+        self.refresh_derived_state_from(unchanged_lines);
     }
 
     pub fn poll_updates(&mut self) {
@@ -566,6 +597,7 @@ impl TailEngine {
                 self.file_size = new_size;
                 self.last_modified = new_modified;
 
+                let mut appended_only = false;
                 if let Ok(mut file) = open_file_shared(&self.path) {
                     let mut prefix = [0u8; 64];
                     let check_len = self.buffer.len().min(64);
@@ -581,6 +613,7 @@ impl TailEngine {
                         let _ = file.read_to_end(&mut self.buffer);
                     } else if file.seek(SeekFrom::Start(self.buffer.len() as u64)).is_ok() {
                         let _ = file.read_to_end(&mut self.buffer);
+                        appended_only = true;
                     } else {
                         self.buffer.clear();
                         let _ = file.read_to_end(&mut self.buffer);
@@ -588,7 +621,10 @@ impl TailEngine {
                     // file is dropped and closed immediately!
                 }
                 self.has_new_data = true;
-                self.rebuild_line_index();
+                // On a pure append every previously complete line is unchanged; the last line
+                // may have been partial, so it is re-evaluated together with the new ones.
+                let unchanged_lines = if appended_only { prev_lines_count.saturating_sub(1) } else { 0 };
+                self.rebuild_line_index_from(unchanged_lines);
                 self.check_sound_alerts(prev_lines_count);
                 return;
             }
@@ -833,18 +869,36 @@ impl TailEngine {
     }
 
     pub fn recompute_filtered_lines(&mut self) {
+        self.refresh_derived_state_from(0);
+    }
+
+    /// Recomputes filter visibility and search matches for lines `>= unchanged_lines`,
+    /// keeping the already-computed state for the lines before it.
+    fn refresh_derived_state_from(&mut self, unchanged_lines: usize) {
+        self.recompute_filtered_lines_from(unchanged_lines);
+        self.refresh_search_from(unchanged_lines);
+    }
+
+    fn recompute_filtered_lines_from(&mut self, start: usize) {
         if !self.is_filter_active() {
             self.filtered_lines.clear();
             return;
         }
         let total = self.total_lines();
-        let mut indices = Vec::with_capacity(total);
-        for idx in 0..total {
+        let start = start.min(total);
+        if start == 0 {
+            self.filtered_lines.clear();
+        } else {
+            let keep = self.filtered_lines.partition_point(|&idx| idx < start);
+            self.filtered_lines.truncate(keep);
+        }
+        let mut fresh = Vec::new();
+        for idx in start..total {
             if self.is_line_visible(idx) {
-                indices.push(idx);
+                fresh.push(idx);
             }
         }
-        self.filtered_lines = indices;
+        self.filtered_lines.extend(fresh);
     }
 
     pub fn visible_line_count(&self) -> usize {
@@ -891,16 +945,15 @@ impl TailEngine {
                     line.contains(&self.exclude_filter)
                 } else {
                     let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
-                    lower.contains(&self.exclude_filter.to_lowercase())
+                    lower.contains(&self.exclude_filter_lower)
                 };
                 if matches_exclude {
                     return false;
                 }
             }
 
-            // Must match include filter (if set) OR match any enabled highlight rule
-            let has_include = !self.include_filter.is_empty();
-            let matches_include = if has_include {
+            // Must match the include filter when one is set (highlight rules never bypass it)
+            let matches_include = if !self.include_filter.is_empty() {
                 if self.filter_is_regex {
                     if let Some(ref re) = self.include_regex {
                         re.is_match(&line)
@@ -911,15 +964,13 @@ impl TailEngine {
                     line.contains(&self.include_filter)
                 } else {
                     let lower = lower_line.get_or_insert_with(|| line.to_lowercase());
-                    lower.contains(&self.include_filter.to_lowercase())
+                    lower.contains(&self.include_filter_lower)
                 }
             } else {
                 true
             };
 
-            let matches_highlight = self.match_highlight(&line).is_some();
-
-            if matches_include || matches_highlight {
+            if matches_include {
                 return true;
             }
 
@@ -944,12 +995,16 @@ impl TailEngine {
     }
 
     pub fn find_matches(&self, query: &str) -> Vec<usize> {
+        self.find_matches_from(query, 0, MAX_SEARCH_MATCHES)
+    }
+
+    /// Case-insensitive search over the visible lines `>= start`, at most `limit` hits.
+    fn find_matches_from(&self, query: &str, start: usize, limit: usize) -> Vec<usize> {
         let mut matches = Vec::new();
-        if query.is_empty() {
+        if query.is_empty() || limit == 0 {
             return matches;
         }
         let q_lower = query.to_lowercase();
-        const MAX_SEARCH_MATCHES: usize = 20_000;
 
         let check_match = |line: &str| -> bool {
             if line.is_ascii() && q_lower.is_ascii() {
@@ -965,22 +1020,23 @@ impl TailEngine {
         };
 
         if self.is_filter_active() {
-            for &idx in &self.filtered_lines {
+            let first = self.filtered_lines.partition_point(|&idx| idx < start);
+            for &idx in &self.filtered_lines[first..] {
                 if let Some(line) = self.get_line(idx) {
                     if check_match(&line) {
                         matches.push(idx);
-                        if matches.len() >= MAX_SEARCH_MATCHES {
+                        if matches.len() >= limit {
                             break;
                         }
                     }
                 }
             }
         } else {
-            for i in 0..self.total_lines() {
+            for i in start..self.total_lines() {
                 if let Some(line) = self.get_line(i) {
                     if check_match(&line) {
                         matches.push(i);
-                        if matches.len() >= MAX_SEARCH_MATCHES {
+                        if matches.len() >= limit {
                             break;
                         }
                     }
@@ -988,6 +1044,55 @@ impl TailEngine {
             }
         }
         matches
+    }
+
+    /// Re-runs the active search over lines `>= start` after the buffer or the filter
+    /// changed, keeping the current match on the same line whenever it still matches.
+    fn refresh_search_from(&mut self, start: usize) {
+        if self.last_searched_query.is_empty() {
+            return;
+        }
+        let current_line = self.current_search_line();
+        let query = std::mem::take(&mut self.last_searched_query);
+        let keep = self.search_matches.partition_point(|&idx| idx < start);
+        self.search_matches.truncate(keep);
+        let remaining = MAX_SEARCH_MATCHES.saturating_sub(self.search_matches.len());
+        let fresh = self.find_matches_from(&query, start, remaining);
+        self.search_matches.extend(fresh);
+        self.last_searched_query = query;
+
+        self.current_match_idx = if self.search_matches.is_empty() {
+            None
+        } else {
+            match current_line {
+                Some(line) => Some(match self.search_matches.binary_search(&line) {
+                    Ok(i) => i,
+                    Err(i) => i.min(self.search_matches.len() - 1),
+                }),
+                None => Some(0),
+            }
+        };
+    }
+
+    /// Text shown in Markdown mode: the buffer as UTF-8, converted from HTML when it looks
+    /// like HTML. Cached per buffer generation so the conversion is not redone every frame.
+    pub fn markdown_text(&mut self) -> &str {
+        self.ensure_markdown_text();
+        self.markdown_text_cache.as_ref().map(|(_, s)| s.as_str()).unwrap_or("")
+    }
+
+    pub fn ensure_markdown_text(&mut self) {
+        let generation = self.buffer_generation;
+        if self.markdown_text_cache.as_ref().map(|(g, _)| *g == generation).unwrap_or(false) {
+            return;
+        }
+        let raw = String::from_utf8_lossy(&self.buffer);
+        let text = if crate::html_converter::contains_html(&raw) {
+            crate::html_converter::html_to_markdown(&raw)
+        } else {
+            raw.into_owned()
+        };
+        self.markdown_text_cache = Some((generation, text));
     }
 
     pub fn update_search(&mut self, query: &str) {

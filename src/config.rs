@@ -4,7 +4,7 @@ use crate::theme::CyberTheme;
 use ini::Ini;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const CONFIG_FILE_NAME: &str = "fasttail.ini";
 const OLD_CONFIG_FILE_NAME: &str = "fasttail.toml";
@@ -28,6 +28,7 @@ pub struct FastTailConfig {
     #[serde(default)]
     pub open_files: Vec<PathBuf>,
     pub recent_files: Vec<PathBuf>,
+    #[serde(default)]
     pub search_history: Vec<String>,
     pub highlight_rules: Vec<HighlightRule>,
     #[serde(default)]
@@ -85,7 +86,7 @@ impl Default for FastTailConfig {
             theme: CyberTheme::Tron,
             language: Language::detect(),
             screensaver_enabled: true,
-            screensaver_timeout_mins: 2,
+            screensaver_timeout_mins: 10,
             telemetry_enabled: true,
             sound_enabled: false,
             borderless: false,
@@ -121,17 +122,56 @@ impl Default for FastTailConfig {
 }
 
 impl FastTailConfig {
+    /// Resolves where `fasttail.ini` lives, in priority order:
+    /// 1. `FASTTAIL_CONFIG` environment variable (explicit file path)
+    /// 2. a temp file for cargo test binaries, so tests never touch a real config
+    /// 3. an existing `fasttail.ini` in the working directory (portable / legacy layout)
+    /// 4. an existing `fasttail.ini` next to the executable
+    /// 5. an existing `fasttail.ini` in the per-user config directory
+    /// 6. otherwise the executable directory (falls back to the user directory on save
+    ///    when that directory is read-only, e.g. Program Files)
     pub fn config_path() -> PathBuf {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_name = exe.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if exe_name.starts_with("integration_tests") || exe_name.starts_with("fasttail-") {
-                    return std::env::temp_dir().join(CONFIG_FILE_NAME);
-                }
-                return parent.join(CONFIG_FILE_NAME);
+        if let Some(explicit) = std::env::var_os("FASTTAIL_CONFIG") {
+            if !explicit.is_empty() {
+                return PathBuf::from(explicit);
             }
         }
-        PathBuf::from(CONFIG_FILE_NAME)
+        let exe = std::env::current_exe().ok();
+        if exe.as_deref().map(is_test_binary).unwrap_or(false) {
+            return std::env::temp_dir().join(CONFIG_FILE_NAME);
+        }
+        let exe_dir = exe.as_deref().and_then(Path::parent).map(Path::to_path_buf);
+
+        let local = PathBuf::from(CONFIG_FILE_NAME);
+        if local.exists() {
+            return local;
+        }
+        if let Some(dir) = &exe_dir {
+            let candidate = dir.join(CONFIG_FILE_NAME);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+        if let Some(user) = Self::user_config_path() {
+            if user.exists() {
+                return user;
+            }
+        }
+        match exe_dir {
+            Some(dir) => dir.join(CONFIG_FILE_NAME),
+            None => local,
+        }
+    }
+
+    /// Per-user fallback location used when the install directory is not writable.
+    pub fn user_config_path() -> Option<PathBuf> {
+        #[cfg(windows)]
+        let base = std::env::var_os("APPDATA").map(PathBuf::from);
+        #[cfg(not(windows))]
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+        base.map(|b| b.join("FastTail").join(CONFIG_FILE_NAME))
     }
 
     pub fn old_toml_path() -> Option<PathBuf> {
@@ -504,19 +544,58 @@ impl FastTailConfig {
     pub fn save(&self) -> Result<(), std::io::Error> {
         let path = Self::config_path();
         let conf = self.to_ini();
-        conf.write_to_file(&path)
-            .map_err(std::io::Error::other)
+        match conf.write_to_file(&path) {
+            Ok(()) => Ok(()),
+            Err(primary_err) => {
+                // Install directory may be read-only (e.g. Program Files): fall back to the user directory
+                if let Some(user) = Self::user_config_path() {
+                    if user != path {
+                        if let Some(parent) = user.parent() {
+                            let _ = fs::create_dir_all(parent);
+                        }
+                        if conf.write_to_file(&user).is_ok() {
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(std::io::Error::other(primary_err))
+            }
+        }
     }
 
     pub fn add_search_history(&mut self, query: &str) {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        self.search_history.retain(|q| !q.eq_ignore_ascii_case(trimmed));
-        self.search_history.insert(0, trimmed.to_string());
-        self.search_history.truncate(10);
+        push_search_history(&mut self.search_history, query);
     }
+}
+
+/// Maximum number of remembered search queries.
+pub const SEARCH_HISTORY_LIMIT: usize = 10;
+
+/// Records `query` at the front of `history` (case-insensitive dedup, trimmed, capped).
+pub fn push_search_history(history: &mut Vec<String>, query: &str) {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    history.retain(|q| !q.eq_ignore_ascii_case(trimmed));
+    history.insert(0, trimmed.to_string());
+    history.truncate(SEARCH_HISTORY_LIMIT);
+}
+
+/// True when `exe` is a cargo test binary (`target/<profile>/deps/<crate>-<hash>`), so that
+/// tests keep their config in a temp file. Release artifacts such as
+/// `fasttail-windows-x86_64.exe` are NOT test binaries even though they share the prefix.
+pub fn is_test_binary(exe: &Path) -> bool {
+    let in_deps_dir = exe
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|d| d == "deps")
+        .unwrap_or(false);
+    if !in_deps_dir {
+        return false;
+    }
+    let name = exe.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+    name.starts_with("fasttail-") || name.starts_with("integration_tests-")
 }
 
 fn parse_rgb(s: &str) -> Option<[u8; 3]> {

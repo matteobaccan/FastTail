@@ -37,6 +37,26 @@ impl CyberTheme {
         }
     }
 
+    /// Background of the focused/active dock tab.
+    pub fn tab_active_bg(&self) -> Color32 {
+        match self {
+            CyberTheme::Tron => Color32::from_rgb(18, 32, 50),
+            CyberTheme::Matrix => Color32::from_rgb(10, 26, 12),
+            CyberTheme::Blade => Color32::from_rgb(38, 28, 42),
+            CyberTheme::Light => Color32::from_rgb(255, 255, 255),
+        }
+    }
+
+    /// Background of inactive dock tabs.
+    pub fn tab_inactive_bg(&self) -> Color32 {
+        match self {
+            CyberTheme::Tron => Color32::from_rgb(8, 12, 18),
+            CyberTheme::Matrix => Color32::from_rgb(4, 8, 4),
+            CyberTheme::Blade => Color32::from_rgb(14, 12, 16),
+            CyberTheme::Light => Color32::from_rgb(234, 238, 244),
+        }
+    }
+
     pub fn button_bg(&self) -> Color32 {
         match self {
             CyberTheme::Tron => Color32::from_rgb(12, 19, 30),

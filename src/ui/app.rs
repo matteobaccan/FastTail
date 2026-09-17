@@ -1,6 +1,7 @@
 use crate::baretail_bridge::{detect_baretail_config, BareTailConfig};
 use crate::config::FastTailConfig;
 use crate::i18n::t;
+use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
 use crate::tail_engine::TailEngine;
 use crate::theme::CyberTheme;
@@ -35,38 +36,43 @@ pub struct FastTailApp {
     pub last_sys_refresh: Instant,
     pub baretail_dialog_open: bool,
     pub baretail_config: Option<BareTailConfig>,
-    pub settings_dialog_open: bool,
-    pub filters_dialog_open: bool,
-    pub about_dialog_open: bool,
-    pub help_dialog_open: bool,
-    pub is_maximized: bool,
     pub last_dock_save: Instant,
     pub first_frame: bool,
     pub floating_window_rects: std::collections::HashMap<egui_dock::SurfaceIndex, egui::Rect>,
 }
 
-fn paths_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
-    if a == b {
-        return true;
+/// Applies a dialog's persisted position and size to `win`; without a saved position the
+/// dialog is centered, without a saved size `default_size` decides.
+fn restore_dialog_geometry<'a>(
+    win: egui::Window<'a>,
+    ctx: &egui::Context,
+    pos: Option<[f32; 2]>,
+    size: Option<[f32; 2]>,
+    default_size: impl FnOnce(egui::Window<'a>) -> egui::Window<'a>,
+) -> egui::Window<'a> {
+    let win = match pos {
+        Some([x, y]) => win.default_pos(egui::pos2(x, y)),
+        None => win.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()),
+    };
+    match size {
+        Some([w, h]) => win.default_size(egui::vec2(w, h)),
+        None => default_size(win),
     }
-    if let (Ok(ca), Ok(cb)) = (a.canonicalize(), b.canonicalize()) {
-        if ca == cb {
-            return true;
-        }
-        #[cfg(windows)]
-        {
-            if ca.to_string_lossy().eq_ignore_ascii_case(&cb.to_string_lossy()) {
-                return true;
-            }
-        }
-    }
-    #[cfg(windows)]
-    {
-        if a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()) {
-            return true;
+}
+
+/// Stores the rendered dialog rect back into the config so it reopens where it was.
+fn capture_dialog_geometry<R>(
+    resp: &Option<egui::InnerResponse<Option<R>>>,
+    pos: &mut Option<[f32; 2]>,
+    size: &mut Option<[f32; 2]>,
+) {
+    if let Some(inner) = resp {
+        let rect = inner.response.rect;
+        if rect.min.x > -1000.0 && rect.min.y > -1000.0 {
+            *pos = Some([rect.min.x, rect.min.y]);
+            *size = Some([rect.width(), rect.height()]);
         }
     }
-    false
 }
 
 fn setup_cjk_fonts(ctx: &egui::Context) {
@@ -148,11 +154,6 @@ impl FastTailApp {
         }
 
         let mut app = Self {
-            settings_dialog_open: config.settings_open,
-            filters_dialog_open: config.filters_open,
-            about_dialog_open: config.about_open,
-            help_dialog_open: config.help_open,
-            is_maximized: config.window_maximized,
             config,
             engines: Vec::new(),
             dock_state,
@@ -218,11 +219,6 @@ impl FastTailApp {
             }
         }
         self.config.open_files = current_open;
-        self.config.settings_open = self.settings_dialog_open;
-        self.config.filters_open = self.filters_dialog_open;
-        self.config.about_open = self.about_dialog_open;
-        self.config.help_open = self.help_dialog_open;
-        self.config.window_maximized = self.is_maximized;
 
         let mut dock_to_save = self.dock_state.clone();
         for (surf_index, rect) in &self.floating_window_rects {
@@ -329,11 +325,10 @@ impl FastTailApp {
             }
 
             if let Some(maximized) = i.viewport().maximized {
-                self.is_maximized = maximized;
                 self.config.window_maximized = maximized;
             }
 
-            if !self.is_maximized {
+            if !self.config.window_maximized {
                 if let Some(rect) = i.viewport().outer_rect {
                     if rect.min.x > -10000.0 && rect.min.y > -10000.0 {
                         self.config.window_x = Some(rect.min.x);
@@ -355,6 +350,7 @@ impl FastTailApp {
                     matches!(
                         e,
                         egui::Event::Key { pressed: true, .. }
+                            | egui::Event::PointerMoved(_)
                             | egui::Event::PointerButton { pressed: true, .. }
                             | egui::Event::MouseWheel { .. }
                             | egui::Event::Touch { .. }
@@ -405,18 +401,13 @@ impl FastTailApp {
 
             // Keyboard shortcut: F1 (Toggle Help)
             if i.key_pressed(Key::F1) {
-                self.help_dialog_open = !self.help_dialog_open;
-                self.config.help_open = self.help_dialog_open;
+                self.config.help_open = !self.config.help_open;
                 let _ = self.config.save();
             }
 
             // Keyboard shortcut: Escape (Close any open popup)
             if i.key_pressed(Key::Escape) {
                 escape_pressed = true;
-                self.help_dialog_open = false;
-                self.settings_dialog_open = false;
-                self.filters_dialog_open = false;
-                self.about_dialog_open = false;
                 self.config.help_open = false;
                 self.config.settings_open = false;
                 self.config.filters_open = false;
@@ -541,8 +532,8 @@ impl FastTailApp {
                             }
 
                             // Maximize / Restore button [🗖 / 🗗]
-                            let max_icon = if self.is_maximized { " 🗗 " } else { " 🗖 " };
-                            let max_tip = if self.is_maximized {
+                            let max_icon = if self.config.window_maximized { " 🗗 " } else { " 🗖 " };
+                            let max_tip = if self.config.window_maximized {
                                 t(self.config.language, "restore_tip")
                             } else {
                                 t(self.config.language, "maximize_tip")
@@ -552,13 +543,13 @@ impl FastTailApp {
                                 .on_hover_text(max_tip)
                                 .clicked()
                             {
-                                self.is_maximized = !self.is_maximized;
-                                ctx.send_viewport_cmd(ViewportCommand::Maximized(self.is_maximized));
+                                self.config.window_maximized = !self.config.window_maximized;
+                                ctx.send_viewport_cmd(ViewportCommand::Maximized(self.config.window_maximized));
                                 #[cfg(windows)]
                                 unsafe {
                                     let hwnd = win_util::GetActiveWindow();
                                     if !hwnd.is_null() {
-                                        if self.is_maximized {
+                                        if self.config.window_maximized {
                                             win_util::ShowWindow(hwnd, win_util::SW_MAXIMIZE);
                                         } else {
                                             win_util::ShowWindow(hwnd, win_util::SW_RESTORE);
@@ -654,13 +645,13 @@ impl FastTailApp {
                             ctx.send_viewport_cmd(ViewportCommand::StartDrag);
                         }
                         if drag_resp.double_clicked() {
-                            self.is_maximized = !self.is_maximized;
-                            ctx.send_viewport_cmd(ViewportCommand::Maximized(self.is_maximized));
+                            self.config.window_maximized = !self.config.window_maximized;
+                            ctx.send_viewport_cmd(ViewportCommand::Maximized(self.config.window_maximized));
                             #[cfg(windows)]
                             unsafe {
                                 let hwnd = win_util::GetActiveWindow();
                                 if !hwnd.is_null() {
-                                    if self.is_maximized {
+                                    if self.config.window_maximized {
                                         win_util::ShowWindow(hwnd, win_util::SW_MAXIMIZE);
                                     } else {
                                         win_util::ShowWindow(hwnd, win_util::SW_RESTORE);
@@ -732,8 +723,7 @@ impl FastTailApp {
                     .min_size(egui::vec2(0.0, 26.0));
 
                     if ui.add(filter_btn).on_hover_text("Open highlight color rules").clicked() {
-                        self.filters_dialog_open = !self.filters_dialog_open;
-                        self.config.filters_open = self.filters_dialog_open;
+                        self.config.filters_open = !self.config.filters_open;
                         let _ = self.config.save();
                     }
 
@@ -793,8 +783,7 @@ impl FastTailApp {
                     .min_size(egui::vec2(0.0, 26.0));
 
                     if ui.add(settings_btn).on_hover_text(t(self.config.language, "settings_tip")).clicked() {
-                        self.settings_dialog_open = !self.settings_dialog_open;
-                        self.config.settings_open = self.settings_dialog_open;
+                        self.config.settings_open = !self.config.settings_open;
                         let _ = self.config.save();
                     }
 
@@ -864,8 +853,7 @@ impl FastTailApp {
                         .min_size(egui::vec2(0.0, 26.0));
 
                         if ui.add(help_btn).on_hover_text("Shortcuts and Help (F1)").clicked() {
-                            self.help_dialog_open = !self.help_dialog_open;
-                            self.config.help_open = self.help_dialog_open;
+                            self.config.help_open = !self.config.help_open;
                             let _ = self.config.save();
                         }
 
@@ -881,8 +869,7 @@ impl FastTailApp {
                         .min_size(egui::vec2(0.0, 26.0));
 
                         if ui.add(about_btn).on_hover_text("About FastTail").clicked() {
-                            self.about_dialog_open = !self.about_dialog_open;
-                            self.config.about_open = self.about_dialog_open;
+                            self.config.about_open = !self.config.about_open;
                             let _ = self.config.save();
                         }
                     });
@@ -989,18 +976,8 @@ impl FastTailApp {
         dock_style.tab_bar.hline_color = current_theme.accent_color().gamma_multiply(0.35);
         dock_style.tab_bar.height = 26.0;
 
-        let active_tab_bg = match current_theme {
-            CyberTheme::Tron => Color32::from_rgb(18, 32, 50),
-            CyberTheme::Matrix => Color32::from_rgb(10, 26, 12),
-            CyberTheme::Blade => Color32::from_rgb(38, 28, 42),
-            CyberTheme::Light => Color32::from_rgb(255, 255, 255),
-        };
-        let inactive_tab_bg = match current_theme {
-            CyberTheme::Tron => Color32::from_rgb(8, 12, 18),
-            CyberTheme::Matrix => Color32::from_rgb(4, 8, 4),
-            CyberTheme::Blade => Color32::from_rgb(14, 12, 16),
-            CyberTheme::Light => Color32::from_rgb(234, 238, 244),
-        };
+        let active_tab_bg = current_theme.tab_active_bg();
+        let inactive_tab_bg = current_theme.tab_inactive_bg();
 
         dock_style.tab.active.bg_fill = active_tab_bg;
         dock_style.tab.active.outline_color = current_theme.accent_color();
@@ -1168,7 +1145,7 @@ impl FastTailApp {
         }
 
         // 9. Render Settings Dialog if open (Popup modal)
-        if self.settings_dialog_open {
+        if self.config.settings_open {
             let mut is_open = true;
             let theme = self.config.theme;
             let prev_borderless = self.config.borderless;
@@ -1176,7 +1153,7 @@ impl FastTailApp {
             let prev_lang = self.config.language;
             let mut test_screensaver = false;
 
-            let mut win = egui::Window::new(
+            let win = egui::Window::new(
                 RichText::new(format!("⚙ {}", t(self.config.language, "settings")))
                     .monospace()
                     .color(theme.accent_color()),
@@ -1190,17 +1167,7 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            if let Some([x, y]) = self.config.settings_pos {
-                win = win.default_pos(egui::pos2(x, y));
-            } else {
-                win = win.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center());
-            }
-
-            if let Some([w, h]) = self.config.settings_size {
-                win = win.default_size(egui::vec2(w, h));
-            } else {
-                win = win.default_width(460.0).default_height(400.0);
-            }
+            let win = restore_dialog_geometry(win, &ctx, self.config.settings_pos, self.config.settings_size, |win| win.default_width(460.0).default_height(400.0));
 
             let resp = win.show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1220,20 +1187,13 @@ impl FastTailApp {
                 });
             });
 
-            if let Some(inner) = resp {
-                let rect = inner.response.rect;
-                if rect.min.x > -1000.0 && rect.min.y > -1000.0 {
-                    self.config.settings_pos = Some([rect.min.x, rect.min.y]);
-                    self.config.settings_size = Some([rect.width(), rect.height()]);
-                }
-            }
+            capture_dialog_geometry(&resp, &mut self.config.settings_pos, &mut self.config.settings_size);
 
             if test_screensaver {
                 self.screensaver.is_active = true;
             }
 
-            if self.settings_dialog_open != is_open {
-                self.settings_dialog_open = is_open;
+            if self.config.settings_open != is_open {
                 self.config.settings_open = is_open;
                 let _ = self.config.save();
             }
@@ -1248,7 +1208,7 @@ impl FastTailApp {
         }
 
         // 10. Render Filters Dialog if open (Color Filters popup)
-        if self.filters_dialog_open {
+        if self.config.filters_open {
             let mut is_open = true;
             let theme = self.config.theme;
             let lang = self.config.language;
@@ -1262,7 +1222,7 @@ impl FastTailApp {
                 format!("⚡ {} ({})", t(lang, "highlight_rules"), total_color_rules)
             };
 
-            let mut win = egui::Window::new(
+            let win = egui::Window::new(
                 RichText::new(popup_title)
                     .monospace()
                     .color(theme.warn_color()),
@@ -1276,17 +1236,7 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            if let Some([x, y]) = self.config.filters_pos {
-                win = win.default_pos(egui::pos2(x, y));
-            } else {
-                win = win.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center());
-            }
-
-            if let Some([w, h]) = self.config.filters_size {
-                win = win.default_size(egui::vec2(w, h));
-            } else {
-                win = win.default_width(540.0).default_height(460.0);
-            }
+            let win = restore_dialog_geometry(win, &ctx, self.config.filters_pos, self.config.filters_size, |win| win.default_width(540.0).default_height(460.0));
 
             let resp = win.show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1300,28 +1250,21 @@ impl FastTailApp {
                 });
             });
 
-            if let Some(inner) = resp {
-                let rect = inner.response.rect;
-                if rect.min.x > -1000.0 && rect.min.y > -1000.0 {
-                    self.config.filters_pos = Some([rect.min.x, rect.min.y]);
-                    self.config.filters_size = Some([rect.width(), rect.height()]);
-                }
-            }
+            capture_dialog_geometry(&resp, &mut self.config.filters_pos, &mut self.config.filters_size);
 
-            if self.filters_dialog_open != is_open {
-                self.filters_dialog_open = is_open;
+            if self.config.filters_open != is_open {
                 self.config.filters_open = is_open;
                 let _ = self.config.save();
             }
         }
 
         // 11. Render About Dialog if open
-        if self.about_dialog_open {
+        if self.config.about_open {
             let mut is_open = true;
             let theme = self.config.theme;
             let lang = self.config.language;
 
-            let mut win = egui::Window::new(
+            let win = egui::Window::new(
                 RichText::new(format!("ℹ {} FastTail", t(lang, "about")))
                     .monospace()
                     .color(theme.accent_color()),
@@ -1335,17 +1278,7 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            if let Some([x, y]) = self.config.about_pos {
-                win = win.default_pos(egui::pos2(x, y));
-            } else {
-                win = win.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center());
-            }
-
-            if let Some([w, h]) = self.config.about_size {
-                win = win.default_size(egui::vec2(w, h));
-            } else {
-                win = win.default_width(440.0);
-            }
+            let win = restore_dialog_geometry(win, &ctx, self.config.about_pos, self.config.about_size, |win| win.default_width(440.0));
 
             let resp = win.show(&ctx, |ui| {
                 ui.vertical_centered(|ui| {
@@ -1450,28 +1383,21 @@ impl FastTailApp {
                 );
             });
 
-            if let Some(inner) = resp {
-                let rect = inner.response.rect;
-                if rect.min.x > -1000.0 && rect.min.y > -1000.0 {
-                    self.config.about_pos = Some([rect.min.x, rect.min.y]);
-                    self.config.about_size = Some([rect.width(), rect.height()]);
-                }
-            }
+            capture_dialog_geometry(&resp, &mut self.config.about_pos, &mut self.config.about_size);
 
-            if self.about_dialog_open != is_open {
-                self.about_dialog_open = is_open;
+            if self.config.about_open != is_open {
                 self.config.about_open = is_open;
                 let _ = self.config.save();
             }
         }
 
         // 12. Render Help Dialog if open
-        if self.help_dialog_open {
+        if self.config.help_open {
             let mut is_open = true;
             let theme = self.config.theme;
             let lang = self.config.language;
 
-            let mut win = egui::Window::new(
+            let win = egui::Window::new(
                 RichText::new(format!("❓ {}", t(lang, "shortcuts_title")))
                     .monospace()
                     .color(theme.accent_color()),
@@ -1485,17 +1411,7 @@ impl FastTailApp {
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
-            if let Some([x, y]) = self.config.help_pos {
-                win = win.default_pos(egui::pos2(x, y));
-            } else {
-                win = win.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center());
-            }
-
-            if let Some([w, h]) = self.config.help_size {
-                win = win.default_size(egui::vec2(w, h));
-            } else {
-                win = win.default_width(580.0).default_height(500.0);
-            }
+            let win = restore_dialog_geometry(win, &ctx, self.config.help_pos, self.config.help_size, |win| win.default_width(580.0).default_height(500.0));
 
             let resp = win.show(&ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1631,16 +1547,9 @@ impl FastTailApp {
                 });
             });
 
-            if let Some(inner) = resp {
-                let rect = inner.response.rect;
-                if rect.min.x > -1000.0 && rect.min.y > -1000.0 {
-                    self.config.help_pos = Some([rect.min.x, rect.min.y]);
-                    self.config.help_size = Some([rect.width(), rect.height()]);
-                }
-            }
+            capture_dialog_geometry(&resp, &mut self.config.help_pos, &mut self.config.help_size);
 
-            if self.help_dialog_open != is_open {
-                self.help_dialog_open = is_open;
+            if self.config.help_open != is_open {
                 self.config.help_open = is_open;
                 let _ = self.config.save();
             }
@@ -1651,7 +1560,7 @@ impl FastTailApp {
         self.screensaver.render(&ctx, viewport);
 
         // 12. Borderless Window Resize Anchors & Visual Frames (Edges & Corners)
-        let is_maximized = self.is_maximized || ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let is_maximized = self.config.window_maximized || ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         if self.config.borderless && !is_maximized {
             let screen = ctx.content_rect();
             let border: f32 = 8.0;

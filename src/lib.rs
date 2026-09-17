@@ -4,6 +4,7 @@ pub mod config;
 pub mod crash_handler;
 pub mod html_converter;
 pub mod i18n;
+pub mod paths;
 pub mod screensaver;
 pub mod tail_engine;
 pub mod theme;

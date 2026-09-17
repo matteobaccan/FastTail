@@ -1,9 +1,26 @@
+use crate::config::push_search_history;
 use crate::i18n::{t, Language};
+use crate::paths::{paths_equal, paths_equal_fast};
 use crate::tail_engine::{HighlightRule, TailEngine};
 use crate::theme::CyberTheme;
 use egui::{Color32, RichText, ScrollArea, Stroke, Ui, WidgetText};
 use egui_dock::TabViewer;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// How long to wait after the last keystroke before rescanning the file for matches.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Finds the engine backing `path`: exact match first, then a cheap case-insensitive
+/// comparison, then a canonicalized one, so tabs restored from an older layout with a
+/// differently-cased path still resolve to their engine.
+fn find_engine_index(engines: &[TailEngine], path: &Path) -> Option<usize> {
+    engines
+        .iter()
+        .position(|e| e.path == path)
+        .or_else(|| engines.iter().position(|e| paths_equal_fast(&e.path, path)))
+        .or_else(|| engines.iter().position(|e| paths_equal(&e.path, path)))
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +69,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("log");
-                if let Some((idx, engine)) = self.ctx.engines.iter().enumerate().find(|(_, e)| &e.path == path) {
+                if let Some((idx, engine)) = find_engine_index(self.ctx.engines, path).map(|i| (i, &self.ctx.engines[i])) {
                     let watch_icon = if engine.is_watching { "▶" } else { "■" };
                     let data_dot = if engine.has_new_data { "●" } else { "○" };
                     let title_text = format!("[#{}] {} {} {}", idx + 1, watch_icon, file_name, data_dot);
@@ -104,7 +121,8 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
         match tab {
             FastTailTab::LogStream(path) => {
                 let mut new_size_unit = None;
-                if let Some(engine) = self.ctx.engines.iter_mut().find(|e| &e.path == path) {
+                let engine_idx = find_engine_index(self.ctx.engines, path);
+                if let Some(engine) = engine_idx.map(|i| &mut self.ctx.engines[i]) {
                     // Mark new data as viewed/cleared
                     engine.has_new_data = false;
                     // Each engine owns its own search query so the find box is per-tab
@@ -159,8 +177,8 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
     fn on_close(&mut self, tab: &mut Self::Tab) -> egui_dock::tab_viewer::OnCloseResponse {
         match tab {
             FastTailTab::LogStream(path) => {
-                self.ctx.open_files.retain(|p| p != path);
-                self.ctx.engines.retain(|e| &e.path != path);
+                self.ctx.open_files.retain(|p| !paths_equal_fast(p, path));
+                self.ctx.engines.retain(|e| !paths_equal_fast(&e.path, path));
                 *self.ctx.tab_closed = true;
             }
             _ => {
@@ -169,16 +187,6 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
         }
         egui_dock::tab_viewer::OnCloseResponse::Close
     }
-}
-
-fn record_search_history(history: &mut Vec<String>, query: &str) {
-    let trimmed = query.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    history.retain(|q| !q.eq_ignore_ascii_case(trimmed));
-    history.insert(0, trimmed.to_string());
-    history.truncate(10);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -198,8 +206,16 @@ fn render_log_stream(
     let row_height = (ui.ctx().fonts_mut(|f| f.row_height(&font_id)) * 1.25).max(18.0).ceil();
     let viewport_height = ui.available_height().max(200.0);
 
-    // Synchronize search matches with current search query
-    engine.update_search(search_query);
+    // Synchronize search matches with the current query, debounced while the user is typing
+    match engine.search_edited_at {
+        Some(edited) if edited.elapsed() < SEARCH_DEBOUNCE => {
+            ui.ctx().request_repaint_after(SEARCH_DEBOUNCE - edited.elapsed());
+        }
+        _ => {
+            engine.search_edited_at = None;
+            engine.update_search(search_query);
+        }
+    }
 
     // Helper to scroll to a target line index (centers the line in the viewport)
     let scroll_to_target = |engine: &mut TailEngine, line_idx: usize| {
@@ -221,13 +237,13 @@ fn render_log_stream(
     if next_f3 {
         if let Some(target) = engine.search_next(sound_enabled) {
             scroll_to_target(engine, target);
-            record_search_history(search_history, search_query);
+            push_search_history(search_history, search_query);
             ui.ctx().request_repaint();
         }
     } else if shift_f3 {
         if let Some(target) = engine.search_prev(sound_enabled) {
             scroll_to_target(engine, target);
-            record_search_history(search_history, search_query);
+            push_search_history(search_history, search_query);
             ui.ctx().request_repaint();
         }
     }
@@ -294,7 +310,7 @@ fn render_log_stream(
         } else {
             RichText::new("🔤 TXT").color(theme.text_dim()).monospace()
         };
-        if ui.button(txt_style).on_hover_text("Modalità Testo").clicked() {
+        if ui.button(txt_style).on_hover_text(t(lang, "tip_mode_txt")).clicked() {
             engine.view_mode = crate::tail_engine::ViewMode::Text;
             ui.ctx().request_repaint();
         }
@@ -304,7 +320,7 @@ fn render_log_stream(
         } else {
             RichText::new("🔢 HEX").color(theme.text_dim()).monospace()
         };
-        if ui.button(hex_style).on_hover_text("Modalità Esadecimale (HEX)").clicked() {
+        if ui.button(hex_style).on_hover_text(t(lang, "tip_mode_hex")).clicked() {
             engine.view_mode = crate::tail_engine::ViewMode::Hex;
             ui.ctx().request_repaint();
         }
@@ -314,7 +330,7 @@ fn render_log_stream(
         } else {
             RichText::new("📝 MD").color(theme.text_dim()).monospace()
         };
-        if ui.button(md_style).on_hover_text("Modalità Markdown (MD)").clicked() {
+        if ui.button(md_style).on_hover_text(t(lang, "tip_mode_md")).clicked() {
             engine.view_mode = crate::tail_engine::ViewMode::Markdown;
             ui.ctx().request_repaint();
         }
@@ -411,6 +427,9 @@ fn render_log_stream(
             .desired_width(box_w)
             .id(search_id);
         let search_resp = ui.add(search_edit).on_hover_text(t(lang, "tip_search_box"));
+        if search_resp.changed() {
+            engine.search_edited_at = Some(Instant::now());
+        }
 
         // Global Ctrl+F shortcut: immediately requests focus on the search input and selects all text
         let ctrl_f = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F);
@@ -436,7 +455,7 @@ fn render_log_stream(
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
                 if let Some(target) = engine.search_next(sound_enabled) {
                     scroll_to_target(engine, target);
-                    record_search_history(search_history, search_query);
+                    push_search_history(search_history, search_query);
                 } else {
                     engine.follow_tail = false;
                     engine.requested_scroll_y = Some(engine.current_scroll_y + row_height);
@@ -446,7 +465,7 @@ fn render_log_stream(
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
                 if let Some(target) = engine.search_prev(sound_enabled) {
                     scroll_to_target(engine, target);
-                    record_search_history(search_history, search_query);
+                    push_search_history(search_history, search_query);
                 } else {
                     engine.follow_tail = false;
                     engine.requested_scroll_y = Some((engine.current_scroll_y - row_height).max(0.0));
@@ -476,6 +495,9 @@ fn render_log_stream(
             let enter_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             let shift_enter_pressed = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter));
             if enter_pressed || shift_enter_pressed {
+                // Enter must act on the query as typed, even inside the debounce window
+                engine.search_edited_at = None;
+                engine.update_search(search_query);
                 let target_line = if shift_enter_pressed {
                     engine.search_prev(sound_enabled)
                 } else {
@@ -483,7 +505,7 @@ fn render_log_stream(
                 };
                 if let Some(target) = target_line {
                     scroll_to_target(engine, target);
-                    record_search_history(search_history, search_query);
+                    push_search_history(search_history, search_query);
                     ui.ctx().request_repaint();
                 }
             }
@@ -509,7 +531,7 @@ fn render_log_stream(
                 if ui.button(RichText::new("▲").monospace()).on_hover_text(t(lang, "search_prev")).clicked() {
                     if let Some(target) = engine.search_prev(sound_enabled) {
                         scroll_to_target(engine, target);
-                        record_search_history(search_history, search_query);
+                        push_search_history(search_history, search_query);
                         ui.ctx().request_repaint();
                     }
                 }
@@ -517,7 +539,7 @@ fn render_log_stream(
                 if ui.button(RichText::new("▼").monospace()).on_hover_text(t(lang, "search_next")).clicked() {
                     if let Some(target) = engine.search_next(sound_enabled) {
                         scroll_to_target(engine, target);
-                        record_search_history(search_history, search_query);
+                        push_search_history(search_history, search_query);
                         ui.ctx().request_repaint();
                     }
                 }
@@ -707,8 +729,7 @@ fn render_log_stream(
         return;
     }
 
-    let search_lower = search_query.to_lowercase();
-    let has_search = !search_lower.is_empty();
+    let has_search = !engine.last_searched_query.is_empty();
     let active_search_line = engine.current_search_line();
 
     let mut toggle_json = None;
@@ -739,7 +760,7 @@ fn render_log_stream(
                 let is_json = TailEngine::is_json_line(&raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
                 let highlight = engine.match_highlight(&raw_line);
-                let matches_search = has_search && raw_line.to_lowercase().contains(&search_lower);
+                let matches_search = has_search && engine.search_matches.binary_search(&actual_line_idx).is_ok();
                 let is_active_search = active_search_line == Some(actual_line_idx);
 
                 let row_resp = ui.horizontal(|ui| {
@@ -1417,12 +1438,8 @@ fn render_markdown_stream(
         return;
     }
 
-    let raw_text = String::from_utf8_lossy(&engine.buffer);
-    let text = if crate::html_converter::contains_html(&raw_text) {
-        crate::html_converter::html_to_markdown(&raw_text)
-    } else {
-        raw_text.to_string()
-    };
+    engine.ensure_markdown_text();
+    let text: &str = engine.markdown_text_cache.as_ref().map(|(_, s)| s.as_str()).unwrap_or("");
 
     let mut scroll_area = ScrollArea::both()
         .auto_shrink([false, false])
@@ -1444,7 +1461,7 @@ fn render_markdown_stream(
         ui.spacing_mut().item_spacing.y = 4.0;
         egui_commonmark::CommonMarkViewer::new()
             .render_html_fn(Some(&html_renderer))
-            .show(ui, &mut engine.markdown_cache, &text);
+            .show(ui, &mut engine.markdown_cache, text);
     });
 
     engine.current_scroll_y = scroll_output.state.offset.y;
