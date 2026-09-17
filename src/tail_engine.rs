@@ -184,8 +184,13 @@ pub struct TailEngine {
     pub filtered_lines: Vec<usize>,
     pub search_query: String,
     pub search_matches: Vec<usize>,
+    /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
+    pub search_byte_matches: Vec<(usize, usize)>,
+    search_byte_max_len: usize,
     pub current_match_idx: Option<usize>,
     pub last_searched_query: String,
+    /// Byte offset the HEX view should scroll to after F3 / Shift+F3.
+    pub scroll_to_byte: Option<usize>,
     /// When the user last typed in the search box (used to debounce the rescan).
     pub search_edited_at: Option<Instant>,
     /// Bumped every time the buffer / line index is rebuilt; keys derived caches.
@@ -296,8 +301,11 @@ impl TailEngine {
             filtered_lines: Vec::new(),
             search_query: String::new(),
             search_matches: Vec::new(),
+            search_byte_matches: Vec::new(),
+            search_byte_max_len: 0,
             current_match_idx: None,
             last_searched_query: String::new(),
+            scroll_to_byte: None,
             search_edited_at: None,
             buffer_generation: 0,
             markdown_text_cache: None,
@@ -1053,25 +1061,131 @@ impl TailEngine {
             return;
         }
         let current_line = self.current_search_line();
+        let current_byte = self.current_search_byte().map(|(off, _)| off);
         let query = std::mem::take(&mut self.last_searched_query);
+
         let keep = self.search_matches.partition_point(|&idx| idx < start);
         self.search_matches.truncate(keep);
         let remaining = MAX_SEARCH_MATCHES.saturating_sub(self.search_matches.len());
         let fresh = self.find_matches_from(&query, start, remaining);
         self.search_matches.extend(fresh);
+
+        // Byte matches: everything ending before the first changed byte is still valid
+        let start_offset = self.line_offsets.get(start).map(|&o| o as usize).unwrap_or(0);
+        let keep_bytes = self.search_byte_matches.partition_point(|&(off, len)| off + len <= start_offset);
+        self.search_byte_matches.truncate(keep_bytes);
+        let rescan_from = start_offset.saturating_sub(self.search_byte_max_len.saturating_sub(1));
+        let remaining = MAX_SEARCH_MATCHES.saturating_sub(self.search_byte_matches.len());
+        let (fresh, max_len) = self.find_byte_matches_from(&query, rescan_from, remaining);
+        self.search_byte_matches.extend(fresh.into_iter().filter(|&(off, len)| off + len > start_offset));
+        self.search_byte_max_len = max_len;
         self.last_searched_query = query;
 
-        self.current_match_idx = if self.search_matches.is_empty() {
-            None
-        } else {
-            match current_line {
-                Some(line) => Some(match self.search_matches.binary_search(&line) {
-                    Ok(i) => i,
-                    Err(i) => i.min(self.search_matches.len() - 1),
-                }),
-                None => Some(0),
+        let restore = |matches_len: usize, wanted: Option<usize>, position: Option<usize>| -> Option<usize> {
+            if matches_len == 0 {
+                None
+            } else {
+                match (wanted, position) {
+                    (Some(_), Some(i)) => Some(i.min(matches_len - 1)),
+                    _ => Some(0),
+                }
             }
         };
+        self.current_match_idx = if self.view_mode == ViewMode::Hex {
+            let pos = current_byte.map(|off| match self.search_byte_matches.binary_search_by_key(&off, |&(o, _)| o) {
+                Ok(i) | Err(i) => i,
+            });
+            restore(self.search_byte_matches.len(), current_byte, pos)
+        } else {
+            let pos = current_line.map(|line| match self.search_matches.binary_search(&line) {
+                Ok(i) | Err(i) => i,
+            });
+            restore(self.search_matches.len(), current_line, pos)
+        };
+    }
+
+    /// Byte-level search used by the HEX view: the query is matched as ASCII text
+    /// (case-insensitive) and, when it looks like a hex byte pattern (`0A 0D`, `0a0d`),
+    /// as raw bytes as well. Returns `(matches, longest pattern length)`.
+    fn find_byte_matches_from(&self, query: &str, start: usize, limit: usize) -> (Vec<(usize, usize)>, usize) {
+        let mut matches = Vec::new();
+        let trimmed = query.trim();
+        if trimmed.is_empty() || limit == 0 || start >= self.buffer.len() {
+            return (matches, 0);
+        }
+
+        let mut patterns: Vec<(Vec<u8>, bool)> = Vec::new(); // (bytes, case_insensitive)
+        let text = trimmed.to_lowercase().into_bytes();
+        if !text.is_empty() {
+            patterns.push((text, true));
+        }
+        let no_spaces: String = trimmed.chars().filter(|c| !c.is_whitespace() && *c != ':').collect();
+        if no_spaces.len() >= 2 && no_spaces.len().is_multiple_of(2) && no_spaces.chars().all(|c| c.is_ascii_hexdigit()) {
+            let bytes: Vec<u8> = (0..no_spaces.len())
+                .step_by(2)
+                .filter_map(|i| u8::from_str_radix(&no_spaces[i..i + 2], 16).ok())
+                .collect();
+            if !bytes.is_empty() {
+                patterns.push((bytes, false));
+            }
+        }
+        let max_len = patterns.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
+
+        let haystack = &self.buffer[start..];
+        for (pattern, ci) in &patterns {
+            if pattern.len() > haystack.len() {
+                continue;
+            }
+            for (i, window) in haystack.windows(pattern.len()).enumerate() {
+                let hit = if *ci { window.eq_ignore_ascii_case(pattern) } else { window == pattern.as_slice() };
+                if hit {
+                    matches.push((start + i, pattern.len()));
+                    if matches.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+        matches.sort_unstable();
+        matches.dedup();
+        matches.truncate(limit);
+        (matches, max_len)
+    }
+
+    /// Number of hits in the list the current view navigates (bytes in HEX, lines otherwise).
+    pub fn active_match_count(&self) -> usize {
+        if self.view_mode == ViewMode::Hex {
+            self.search_byte_matches.len()
+        } else {
+            self.search_matches.len()
+        }
+    }
+
+    /// Switches the view and keeps the search cursor inside the list that view navigates.
+    pub fn set_view_mode(&mut self, mode: ViewMode) {
+        self.view_mode = mode;
+        let len = self.active_match_count();
+        self.current_match_idx = match self.current_match_idx {
+            _ if len == 0 => None,
+            Some(i) if i < len => Some(i),
+            _ => Some(0),
+        };
+    }
+
+    pub fn current_search_byte(&self) -> Option<(usize, usize)> {
+        self.current_match_idx.and_then(|idx| self.search_byte_matches.get(idx).copied())
+    }
+
+    /// True when any byte match overlaps the HEX row `[row_start, row_end)`.
+    pub fn hex_row_matches(&self, row_start: usize, row_end: usize) -> bool {
+        let first = self
+            .search_byte_matches
+            .partition_point(|&(off, len)| off + len <= row_start);
+        self.search_byte_matches[first..]
+            .iter()
+            .take_while(|&&(off, _)| off < row_end)
+            .next()
+            .is_some()
     }
 
     /// Text shown in Markdown mode: the buffer as UTF-8, converted from HTML when it looks
@@ -1099,6 +1213,8 @@ impl TailEngine {
         let trimmed = query.trim();
         if trimmed.is_empty() {
             self.search_matches.clear();
+            self.search_byte_matches.clear();
+            self.search_byte_max_len = 0;
             self.current_match_idx = None;
             self.last_searched_query.clear();
             return;
@@ -1108,59 +1224,55 @@ impl TailEngine {
         }
         self.last_searched_query = trimmed.to_string();
         self.search_matches = self.find_matches(trimmed);
-        if !self.search_matches.is_empty() {
-            self.current_match_idx = Some(0);
-        } else {
-            self.current_match_idx = None;
-        }
+        let (byte_matches, max_len) = self.find_byte_matches_from(trimmed, 0, MAX_SEARCH_MATCHES);
+        self.search_byte_matches = byte_matches;
+        self.search_byte_max_len = max_len;
+        self.current_match_idx = if self.active_match_count() > 0 { Some(0) } else { None };
     }
 
+    /// Moves to the next hit and returns its target: a line index, or a byte offset in HEX view.
     pub fn search_next(&mut self, sound_enabled: bool) -> Option<usize> {
-        if self.search_matches.is_empty() {
+        let len = self.active_match_count();
+        if len == 0 {
             return None;
         }
-        let len = self.search_matches.len();
         let (next_idx, wrapped) = match self.current_match_idx {
-            Some(curr) => {
-                if curr + 1 < len {
-                    (curr + 1, false)
-                } else {
-                    (0, true)
-                }
-            }
+            Some(curr) if curr + 1 < len => (curr + 1, false),
+            Some(_) => (0, true),
             None => (0, false),
         };
-        self.current_match_idx = Some(next_idx);
-        let target = self.search_matches[next_idx];
-        self.scroll_to_line = Some(target);
-        if wrapped && sound_enabled {
-            crate::audio::SoundAlertPreset::Beep.play();
-        }
-        Some(target)
+        Some(self.jump_to_match(next_idx, wrapped && sound_enabled))
     }
 
+    /// Moves to the previous hit and returns its target: a line index, or a byte offset in HEX view.
     pub fn search_prev(&mut self, sound_enabled: bool) -> Option<usize> {
-        if self.search_matches.is_empty() {
+        let len = self.active_match_count();
+        if len == 0 {
             return None;
         }
-        let len = self.search_matches.len();
         let (prev_idx, wrapped) = match self.current_match_idx {
-            Some(curr) => {
-                if curr > 0 {
-                    (curr - 1, false)
-                } else {
-                    (len - 1, true)
-                }
-            }
+            Some(curr) if curr > 0 => (curr - 1, false),
+            Some(_) => (len - 1, true),
             None => (len - 1, false),
         };
-        self.current_match_idx = Some(prev_idx);
-        let target = self.search_matches[prev_idx];
-        self.scroll_to_line = Some(target);
-        if wrapped && sound_enabled {
+        Some(self.jump_to_match(prev_idx, wrapped && sound_enabled))
+    }
+
+    fn jump_to_match(&mut self, idx: usize, beep: bool) -> usize {
+        self.current_match_idx = Some(idx);
+        let target = if self.view_mode == ViewMode::Hex {
+            let offset = self.search_byte_matches[idx].0;
+            self.scroll_to_byte = Some(offset);
+            offset
+        } else {
+            let line = self.search_matches[idx];
+            self.scroll_to_line = Some(line);
+            line
+        };
+        if beep {
             crate::audio::SoundAlertPreset::Beep.play();
         }
-        Some(target)
+        target
     }
 
     pub fn current_search_line(&self) -> Option<usize> {

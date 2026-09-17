@@ -1004,6 +1004,16 @@ impl FastTailApp {
         dock_style.buttons.close_tab_active_color = current_theme.warn_color();
 
         let mut test_screensaver = false;
+        // The stream in the focused dock leaf is the "current window": it alone receives
+        // F3 / Shift+F3, Ctrl+F and the keyboard navigation shortcuts.
+        let focused_stream = match self.dock_state.find_active_focused() {
+            Some((_, FastTailTab::LogStream(p))) => Some(p.clone()),
+            Some(_) => None,
+            None => match self.dock_state.main_surface_mut().find_active() {
+                Some((_, FastTailTab::LogStream(p))) => Some(p.clone()),
+                _ => None,
+            },
+        };
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -1021,6 +1031,7 @@ impl FastTailApp {
             search_history: &mut self.config.search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream,
         };
 
         let mut tab_viewer = FastTailTabViewer { ctx: dock_ctx };

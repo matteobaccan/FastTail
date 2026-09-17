@@ -513,6 +513,7 @@ fn test_i18n_exhaustive_coverage() {
         "tip_mode_txt",
         "tip_mode_hex",
         "tip_mode_md",
+        "md_search_source",
         "case_sensitive",
         "case_sensitive_tip",
     ];
@@ -1727,6 +1728,7 @@ fn test_ctrl_f_focus_and_search() {
     let mut search_history = Vec::new();
     let mut tab_closed = false;
     let mut test_screensaver = false;
+    let focused_stream = Some(path.clone());
 
     let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path.clone())]);
 
@@ -1751,6 +1753,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -1788,6 +1791,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -1813,6 +1817,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -1839,6 +1844,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -1877,6 +1883,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -1908,6 +1915,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -1952,6 +1960,7 @@ fn test_search_query_is_per_tab() {
     let mut search_history = Vec::new();
     let mut tab_closed = false;
     let mut test_screensaver = false;
+    let focused_stream = Some(path1.clone());
 
     // Both tabs visible at once (side by side) so both stream panels render each frame
     let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
@@ -1981,6 +1990,7 @@ fn test_search_query_is_per_tab() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2377,6 +2387,7 @@ fn test_tab_lookup_tolerates_path_case_differences() {
     let mut search_history = Vec::new();
     let mut tab_closed = false;
     let mut test_screensaver = false;
+    let focused_stream = Some(upper_path.clone());
     let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(upper_path.clone())]);
 
     let ctx = egui::Context::default();
@@ -2399,6 +2410,7 @@ fn test_tab_lookup_tolerates_path_case_differences() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            focused_stream: focused_stream.clone(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         use egui_dock::TabViewer;
@@ -2409,4 +2421,145 @@ fn test_tab_lookup_tolerates_path_case_differences() {
     out.textures_delta.clear();
 
     assert!(!title_text.contains(t(Language::En, "closed")), "tab must resolve its engine: {title_text}");
+}
+
+#[test]
+fn test_f3_only_advances_the_focused_tab() {
+    use egui_dock::{DockState, NodeIndex};
+    use fasttail::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
+
+    let mut tmp1 = NamedTempFile::new().unwrap();
+    writeln!(tmp1, "file 1 line 1").unwrap();
+    writeln!(tmp1, "file 1 line 2").unwrap();
+    tmp1.flush().unwrap();
+    let mut tmp2 = NamedTempFile::new().unwrap();
+    writeln!(tmp2, "file 2 line 1").unwrap();
+    writeln!(tmp2, "file 2 line 2").unwrap();
+    tmp2.flush().unwrap();
+
+    let path1 = tmp1.path().to_path_buf();
+    let path2 = tmp2.path().to_path_buf();
+    let mut engines = vec![
+        TailEngine::open(&path1).expect("open file 1"),
+        TailEngine::open(&path2).expect("open file 2"),
+    ];
+    engines[0].search_query.push_str("line");
+    engines[1].search_query.push_str("line");
+    let mut open_files = vec![path1.clone(), path2.clone()];
+    let mut theme = CyberTheme::Tron;
+    let mut lang = Language::En;
+    let mut global_rules = Vec::new();
+    let mut screensaver_enabled = false;
+    let mut screensaver_timeout_mins = 5;
+    let mut telemetry_enabled = false;
+    let mut sound_enabled = false;
+    let mut borderless = false;
+    let mut show_line_numbers = true;
+    let mut font_size = 13.0;
+    let mut size_unit = fasttail::tail_engine::SizeUnit::Bytes;
+    let mut search_history = Vec::new();
+    let mut tab_closed = false;
+    let mut test_screensaver = false;
+    // The first tab is the "current window"
+    let focused_stream = Some(path1.clone());
+
+    let mut dock: DockState<FastTailTab> = DockState::new(vec![FastTailTab::LogStream(path1.clone())]);
+    dock.main_surface_mut()
+        .split_right(NodeIndex::root(), 0.5, vec![FastTailTab::LogStream(path2.clone())]);
+
+    let ctx = egui::Context::default();
+    let f3 = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::F3,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+
+    // Frame 1 computes the matches, frame 2 presses F3
+    for raw in [egui::RawInput::default(), f3] {
+        let mut out = ctx.run_ui(raw, |ui| {
+            let dock_ctx = DockContext {
+                engines: &mut engines,
+                open_files: &mut open_files,
+                theme: &mut theme,
+                language: &mut lang,
+                global_rules: &mut global_rules,
+                screensaver_enabled: &mut screensaver_enabled,
+                screensaver_timeout_mins: &mut screensaver_timeout_mins,
+                telemetry_enabled: &mut telemetry_enabled,
+                sound_enabled: &mut sound_enabled,
+                borderless: &mut borderless,
+                show_line_numbers: &mut show_line_numbers,
+                font_size: &mut font_size,
+                size_unit: &mut size_unit,
+                search_history: &mut search_history,
+                tab_closed: &mut tab_closed,
+                test_screensaver: &mut test_screensaver,
+                focused_stream: focused_stream.clone(),
+            };
+            let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+            egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+        });
+        out.textures_delta.clear();
+    }
+
+    assert_eq!(engines[0].search_matches, vec![0, 1]);
+    assert_eq!(engines[1].search_matches, vec![0, 1]);
+    assert_eq!(engines[0].current_match_idx, Some(1), "F3 must advance the focused tab");
+    assert_eq!(engines[1].current_match_idx, Some(0), "F3 must not touch the other tab");
+}
+
+#[test]
+fn test_hex_search_matches_bytes_across_rows() {
+    use fasttail::tail_engine::ViewMode;
+
+    let mut tmp = NamedTempFile::new().unwrap();
+    // "needle" starts at byte 15 and spans the 16-byte row boundary
+    tmp.write_all(b"AAAAAAAAAAAAAAAneedle rest of data that fills more rows").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.set_view_mode(ViewMode::Hex);
+    engine.update_search("NEEDLE");
+
+    assert_eq!(engine.search_byte_matches, vec![(15, 6)]);
+    assert_eq!(engine.active_match_count(), 1);
+    assert!(engine.hex_row_matches(0, 16), "row 0 holds the first byte of the match");
+    assert!(engine.hex_row_matches(16, 32), "row 1 holds the tail of the match");
+    assert!(!engine.hex_row_matches(32, 48));
+
+    // F3 in hex mode navigates byte offsets
+    assert_eq!(engine.current_search_byte(), Some((15, 6)));
+    assert_eq!(engine.search_next(false), Some(15));
+
+    // A hex byte pattern is searched too ("6E 65" == "ne")
+    engine.update_search("6E 65");
+    assert_eq!(engine.search_byte_matches, vec![(15, 2)]);
+}
+
+#[test]
+fn test_switching_view_mode_keeps_search_cursor_valid() {
+    use fasttail::tail_engine::ViewMode;
+
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "abc").unwrap();
+    writeln!(tmp, "abc").unwrap();
+    writeln!(tmp, "abc").unwrap();
+    tmp.flush().unwrap();
+
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.update_search("abc");
+    engine.search_next(false);
+    engine.search_next(false);
+    assert_eq!(engine.current_match_idx, Some(2));
+
+    engine.set_view_mode(ViewMode::Hex);
+    // 3 byte matches as well ("abc" x3), cursor stays in range
+    assert_eq!(engine.active_match_count(), 3);
+    assert!(engine.current_match_idx.unwrap() < 3);
+    assert!(engine.search_next(false).is_some());
 }

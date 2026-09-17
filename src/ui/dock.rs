@@ -49,6 +49,8 @@ pub struct DockContext<'a> {
     pub search_history: &'a mut Vec<String>,
     pub tab_closed: &'a mut bool,
     pub test_screensaver: &'a mut bool,
+    /// Stream shown in the focused dock leaf: the only one that handles search shortcuts.
+    pub focused_stream: Option<PathBuf>,
 }
 
 pub struct FastTailTabViewer<'a> {
@@ -122,6 +124,12 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
             FastTailTab::LogStream(path) => {
                 let mut new_size_unit = None;
                 let engine_idx = find_engine_index(self.ctx.engines, path);
+                let is_focused = self
+                    .ctx
+                    .focused_stream
+                    .as_deref()
+                    .map(|f| paths_equal_fast(f, path))
+                    .unwrap_or(false);
                 if let Some(engine) = engine_idx.map(|i| &mut self.ctx.engines[i]) {
                     // Mark new data as viewed/cleared
                     engine.has_new_data = false;
@@ -138,6 +146,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         self.ctx.show_line_numbers,
                         *self.ctx.font_size,
                         &mut new_size_unit,
+                        is_focused,
                     );
                     engine.search_query = search_query;
                 } else {
@@ -189,6 +198,46 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
     }
 }
 
+/// Background of the text of the current search hit.
+const SEARCH_ACTIVE_BG: Color32 = Color32::from_rgb(0, 255, 230);
+/// Background of the text of the other search hits.
+const SEARCH_MATCH_BG: Color32 = Color32::from_rgb(255, 230, 0);
+
+/// The marker column shown while a search is active: `▶` on the current hit, `●` on the
+/// other hits, and a blank of the same width elsewhere so rows never shift.
+fn search_marker_label(ui: &mut Ui, theme: &CyberTheme, font_size: f32, matches: bool, is_active: bool) {
+    let (glyph, color) = if is_active {
+        ("▶", theme.accent_color())
+    } else if matches {
+        ("●", theme.warn_color())
+    } else {
+        ("\u{2007}", theme.text_dim()) // figure space: same advance as a digit
+    };
+    ui.label(RichText::new(format!("{glyph} ")).monospace().strong().size(font_size).color(color));
+}
+
+/// Tints the whole row of a search hit, drawing behind the widgets laid out in `row_rect`.
+fn paint_search_row_background(
+    ui: &Ui,
+    slot: egui::layers::ShapeIdx,
+    row_rect: egui::Rect,
+    theme: &CyberTheme,
+    matches: bool,
+    is_active: bool,
+) {
+    if !matches && !is_active {
+        return;
+    }
+    let base = if is_active { theme.accent_color() } else { theme.warn_color() };
+    let alpha = if is_active { 70 } else { 40 };
+    let fill = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
+    let full = egui::Rect::from_min_max(
+        egui::pos2(ui.max_rect().left(), row_rect.top()),
+        egui::pos2(ui.max_rect().right().max(row_rect.right()), row_rect.bottom()),
+    );
+    ui.painter().set(slot, egui::Shape::rect_filled(full, 0.0, fill));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_log_stream(
     ui: &mut Ui,
@@ -201,10 +250,13 @@ fn render_log_stream(
     show_line_numbers: &mut bool,
     font_size: f32,
     new_size_unit: &mut Option<crate::tail_engine::SizeUnit>,
+    is_focused: bool,
 ) {
     let font_id = egui::FontId::monospace(font_size);
-    let row_height = (ui.ctx().fonts_mut(|f| f.row_height(&font_id)) * 1.25).max(18.0).ceil();
+    let hex_row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
+    let row_height = (hex_row_height * 1.25).max(18.0).ceil();
     let viewport_height = ui.available_height().max(200.0);
+    let bytes_per_row = engine.hex_columns.max(8);
 
     // Synchronize search matches with the current query, debounced while the user is typing
     match engine.search_edited_at {
@@ -217,20 +269,24 @@ fn render_log_stream(
         }
     }
 
-    // Helper to scroll to a target line index (centers the line in the viewport)
-    let scroll_to_target = |engine: &mut TailEngine, line_idx: usize| {
-        engine.scroll_to_line = Some(line_idx);
-        if let Some(v_row) = engine.get_visible_row_of_line(line_idx) {
-            let line_y = v_row as f32 * row_height;
-            let target_scroll = (line_y - (viewport_height / 2.0).max(0.0)).max(0.0);
-            engine.requested_scroll_y = Some(target_scroll);
+    // Helper to scroll to a search target (a line index, or a byte offset in HEX view),
+    // centering it in the viewport
+    let scroll_to_target = |engine: &mut TailEngine, target: usize| {
+        let row_y = if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+            Some((target / bytes_per_row) as f32 * hex_row_height)
+        } else {
+            engine.scroll_to_line = Some(target);
+            engine.get_visible_row_of_line(target).map(|v_row| v_row as f32 * row_height)
+        };
+        if let Some(row_y) = row_y {
+            engine.requested_scroll_y = Some((row_y - viewport_height / 2.0).max(0.0));
             engine.requested_scroll_x = Some(0.0);
             engine.follow_tail = false;
         }
     };
 
-    // F3 and Shift+F3 shortcuts (evaluated globally in this tab)
-    let f3_pressed = ui.input(|i| i.key_pressed(egui::Key::F3));
+    // F3 and Shift+F3 shortcuts: only the stream in the focused dock leaf reacts
+    let f3_pressed = is_focused && ui.input(|i| i.key_pressed(egui::Key::F3));
     let shift_f3 = f3_pressed && ui.input(|i| i.modifiers.shift);
     let next_f3 = f3_pressed && !ui.input(|i| i.modifiers.shift);
 
@@ -311,7 +367,7 @@ fn render_log_stream(
             RichText::new("🔤 TXT").color(theme.text_dim()).monospace()
         };
         if ui.button(txt_style).on_hover_text(t(lang, "tip_mode_txt")).clicked() {
-            engine.view_mode = crate::tail_engine::ViewMode::Text;
+            engine.set_view_mode(crate::tail_engine::ViewMode::Text);
             ui.ctx().request_repaint();
         }
 
@@ -321,7 +377,7 @@ fn render_log_stream(
             RichText::new("🔢 HEX").color(theme.text_dim()).monospace()
         };
         if ui.button(hex_style).on_hover_text(t(lang, "tip_mode_hex")).clicked() {
-            engine.view_mode = crate::tail_engine::ViewMode::Hex;
+            engine.set_view_mode(crate::tail_engine::ViewMode::Hex);
             ui.ctx().request_repaint();
         }
 
@@ -331,7 +387,7 @@ fn render_log_stream(
             RichText::new("📝 MD").color(theme.text_dim()).monospace()
         };
         if ui.button(md_style).on_hover_text(t(lang, "tip_mode_md")).clicked() {
-            engine.view_mode = crate::tail_engine::ViewMode::Markdown;
+            engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
             ui.ctx().request_repaint();
         }
 
@@ -418,7 +474,7 @@ fn render_log_stream(
         ui.label(RichText::new("🔍").monospace());
         let search_id = egui::Id::new("log_search_input").with(&engine.path);
         let has_query = !search_query.trim().is_empty();
-        let match_count = engine.search_matches.len();
+        let match_count = engine.active_match_count();
 
         let extra_controls_w = if has_query { 220.0 } else { 70.0 };
         let box_w = (ui.available_width() - extra_controls_w).clamp(160.0, 360.0);
@@ -431,9 +487,9 @@ fn render_log_stream(
             engine.search_edited_at = Some(Instant::now());
         }
 
-        // Global Ctrl+F shortcut: immediately requests focus on the search input and selects all text
+        // Ctrl+F in the focused stream: requests focus on its search input and selects all text
         let ctrl_f = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F);
-        if ui.input_mut(|i| i.consume_shortcut(&ctrl_f)) {
+        if is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_f)) {
             ui.ctx().memory_mut(|m| m.request_focus(search_id));
             let mut state = egui::text_edit::TextEditState::load(ui.ctx(), search_id).unwrap_or_default();
             state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
@@ -577,8 +633,8 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
-        // Keyboard navigation shortcuts when user is not actively typing in an input
-        if !ui.ctx().egui_wants_keyboard_input() {
+        // Keyboard navigation shortcuts for the focused stream when no input has the keyboard
+        if is_focused && !ui.ctx().egui_wants_keyboard_input() {
             ui.input(|i| {
                 // Ctrl + Home: Jump to top
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
@@ -638,14 +694,24 @@ fn render_log_stream(
 
     // If Hex streaming mode is active, render the binary hex stream
     if engine.view_mode == crate::tail_engine::ViewMode::Hex {
-        render_hex_stream(ui, engine, theme, lang, search_query, font_size);
+        render_hex_stream(ui, engine, theme, lang, font_size);
         return;
     }
 
-    // If Markdown mode is active, render formatted markdown stream
+    // Markdown mode renders the formatted document; with an active search it falls back to
+    // the source lines so hits get the same marker column and row highlight as text mode.
+    let search_active = !engine.last_searched_query.is_empty();
     if engine.view_mode == crate::tail_engine::ViewMode::Markdown {
-        render_markdown_stream(ui, engine, theme, lang);
-        return;
+        if !search_active {
+            render_markdown_stream(ui, engine, theme, lang);
+            return;
+        }
+        ui.label(
+            RichText::new(format!("📝 {}", t(lang, "md_search_source")))
+                .monospace()
+                .size(11.0)
+                .color(theme.warn_color()),
+        );
     }
 
     // Quick Filter Row directly above log buffer
@@ -763,20 +829,16 @@ fn render_log_stream(
                 let matches_search = has_search && engine.search_matches.binary_search(&actual_line_idx).is_ok();
                 let is_active_search = active_search_line == Some(actual_line_idx);
 
+                // Background painted after layout, behind the row (see SearchRowMark)
+                let row_bg = ui.painter().add(egui::Shape::Noop);
                 let row_resp = ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.set_min_height(row_height);
                     ui.set_max_height(row_height);
 
-                    // Active search match pointer indicator
-                    if is_active_search {
-                        ui.label(
-                            RichText::new("▶")
-                                .monospace()
-                                .strong()
-                                .size(font_size)
-                                .color(theme.accent_color()),
-                        );
+                    // Search marker column: ▶ current hit, ● other hits, blank otherwise
+                    if has_search {
+                        search_marker_label(ui, theme, font_size, matches_search, is_active_search);
                     }
 
                     // Line number
@@ -813,14 +875,9 @@ fn render_log_stream(
                     // Content text
                     let mut text = RichText::new(&*raw_line).monospace().size(font_size);
                     if is_active_search {
-                        text = text
-                            .color(Color32::BLACK)
-                            .background_color(Color32::from_rgb(0, 255, 230))
-                            .strong();
+                        text = text.color(Color32::BLACK).background_color(SEARCH_ACTIVE_BG).strong();
                     } else if matches_search {
-                        text = text
-                            .color(Color32::BLACK)
-                            .background_color(Color32::from_rgb(255, 230, 0));
+                        text = text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
                     } else if let Some(hl) = highlight {
                         text = text.color(hl.fg).background_color(hl.bg);
                         if hl.bold {
@@ -834,6 +891,7 @@ fn render_log_stream(
                     }
                     ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
                 }).response;
+                paint_search_row_background(ui, row_bg, row_resp.rect, theme, matches_search, is_active_search);
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
                     row_resp.scroll_to_me(Some(egui::Align::Center));
@@ -888,9 +946,10 @@ fn render_hex_stream(
     engine: &mut TailEngine,
     theme: &CyberTheme,
     lang: Language,
-    search_query: &str,
     font_size: f32,
 ) {
+    let has_search = !engine.last_searched_query.is_empty();
+    let active_byte = engine.current_search_byte();
     let file_size = engine.file_size as usize;
     if file_size == 0 {
         ui.centered_and_justified(|ui| {
@@ -938,6 +997,10 @@ fn render_hex_stream(
         .show(ui, |ui| {
             ui.set_min_width(engine.max_detected_width);
             ui.horizontal(|ui| {
+                if has_search {
+                    // Keep the header aligned with the marker column of the rows
+                    search_marker_label(ui, theme, font_size, false, false);
+                }
                 ui.label(
                     RichText::new(offset_header)
                         .monospace()
@@ -963,25 +1026,7 @@ fn render_hex_stream(
         });
     ui.separator();
 
-    // Support text search or hex byte search
-    let search_clean = search_query.trim().to_lowercase();
-    let search_hex_bytes: Option<Vec<u8>> = if !search_clean.is_empty() {
-        let no_spaces: String = search_clean
-            .chars()
-            .filter(|c| !c.is_whitespace() && *c != ':')
-            .collect();
-        if no_spaces.len() >= 2 && no_spaces.len().is_multiple_of(2) && no_spaces.chars().all(|c| c.is_ascii_hexdigit()) {
-            (0..no_spaces.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&no_spaces[i..i + 2], 16).ok())
-                .collect()
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
+    let mut scroll_to_byte = engine.scroll_to_byte;
     let mut scroll_area = ScrollArea::both()
         .id_salt("hex_rows_scroll")
         .auto_shrink([false, false])
@@ -1005,7 +1050,20 @@ fn render_hex_stream(
                 None => continue,
             };
 
-            ui.horizontal(|ui| {
+            // Search state of this row: any byte hit overlapping it, and whether the current hit is here
+            let row_end = offset + chunk.len();
+            let matches_search = has_search && engine.hex_row_matches(offset, row_end);
+            let is_active_search = matches_search
+                && active_byte
+                    .map(|(off, len)| off < row_end && off + len > offset)
+                    .unwrap_or(false);
+
+            let row_bg = ui.painter().add(egui::Shape::Noop);
+            let row_resp = ui.horizontal(|ui| {
+                if has_search {
+                    search_marker_label(ui, theme, font_size, matches_search, is_active_search);
+                }
+
                 // Offset label (8 uppercase hex digits)
                 ui.label(
                     RichText::new(format!("{:08X}  ", offset))
@@ -1013,24 +1071,6 @@ fn render_hex_stream(
                         .size(font_size)
                         .color(theme.text_dim().gamma_multiply(0.75)),
                 );
-
-                // Search matching
-                let mut matches_search = false;
-                if !search_clean.is_empty() {
-                    let ascii_lossy = String::from_utf8_lossy(chunk).to_lowercase();
-                    if ascii_lossy.contains(&search_clean) {
-                        matches_search = true;
-                    }
-                    if let Some(ref target_bytes) = search_hex_bytes {
-                        if !target_bytes.is_empty()
-                            && chunk
-                                .windows(target_bytes.len())
-                                .any(|w| w == target_bytes.as_slice())
-                        {
-                            matches_search = true;
-                        }
-                    }
-                }
 
                 // Format hex bytes in groups of 8
                 let mut hex_str = String::with_capacity(bytes_per_row * 3 + 8);
@@ -1064,13 +1104,12 @@ fn render_hex_stream(
                 let mut hex_text = RichText::new(hex_str).monospace().size(font_size);
                 let mut ascii_text = RichText::new(ascii_str).monospace().size(font_size);
 
-                if matches_search {
-                    hex_text = hex_text
-                        .color(Color32::BLACK)
-                        .background_color(Color32::from_rgb(255, 230, 0));
-                    ascii_text = ascii_text
-                        .color(Color32::BLACK)
-                        .background_color(Color32::from_rgb(255, 230, 0));
+                if is_active_search {
+                    hex_text = hex_text.color(Color32::BLACK).background_color(SEARCH_ACTIVE_BG).strong();
+                    ascii_text = ascii_text.color(Color32::BLACK).background_color(SEARCH_ACTIVE_BG).strong();
+                } else if matches_search {
+                    hex_text = hex_text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
+                    ascii_text = ascii_text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
                 } else {
                     hex_text = hex_text.color(theme.text_primary());
                     ascii_text = ascii_text.color(theme.secondary_accent());
@@ -1078,9 +1117,16 @@ fn render_hex_stream(
 
                 ui.label(hex_text);
                 ui.label(ascii_text);
-            });
+            }).response;
+            paint_search_row_background(ui, row_bg, row_resp.rect, theme, matches_search, is_active_search);
+
+            if is_active_search && scroll_to_byte.map(|b| b >= offset && b < row_end).unwrap_or(false) {
+                row_resp.scroll_to_me(Some(egui::Align::Center));
+                scroll_to_byte = None;
+            }
         }
     });
+    engine.scroll_to_byte = scroll_to_byte;
     let measured_width = scroll_output.content_size.x;
     if measured_width > engine.max_detected_width {
         engine.max_detected_width = measured_width;
