@@ -69,11 +69,15 @@ The log stream viewport SHALL support comprehensive keyboard navigation. Stream-
 - **THEN** only the stream in the focused panel jumps to its last line and enables follow mode; the other panel keeps its scroll position.
 
 ### Requirement: Recent Files Menu (MRU)
-The top navigation bar SHALL provide a Recent Files dropdown (🕒 Recent) listing previously opened log files in Most Recently Used order, allowing instant reopening with a single click and a clear recent list option.
+The top navigation bar SHALL provide a Recent Files dropdown as an icon-only button (🕒) placed immediately to the right of the Open File button, whose tooltip SHALL read the localized "Recent Files" label. The dropdown SHALL list previously opened log files in Most Recently Used order, allowing instant reopening with a single click and a clear recent list option.
 
 #### Scenario: Reopening a file from the recent list
 - **WHEN** the user opens the Recent dropdown and clicks a previously opened log file
 - **THEN** the file opens in a new stream tab and moves to the top of the Most Recently Used list.
+
+#### Scenario: Icon button next to Open File
+- **WHEN** the title bar is rendered in any language
+- **THEN** the 🕒 button sits directly after the Open File button, before the Filter button, shows no text, and hovering it displays the "Recent Files" label of the current language.
 
 ### Requirement: Virtualized Scroll Rendering
 The docking log stream SHALL use virtualized row scrolling to render only visible lines on screen, guaranteeing 60+ FPS performance even with tens of millions of lines in the buffer. Visible rows SHALL be computed directly from the active visible line set, utilizing 100% of the viewport height without empty gaps or truncated lines. When an include/exclude filter is active, only the matching rows are laid out so the viewport is always filled.

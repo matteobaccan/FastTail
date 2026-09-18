@@ -27,6 +27,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Recent Files is an icon button (🕒) next to Open File.** The localized
+  name is its tooltip; the menu content (recent list, clear entry) is
+  unchanged. The title bar is narrower and the two ways of opening a log sit
+  together.
 - **wgpu is now the first choice of the `auto` renderer**, OpenGL the fallback.
   Measured on an NVIDIA Windows machine with the pointer moving over the
   window: a continuous repaint costs about 12% of one core on wgpu against a
