@@ -2,9 +2,7 @@
 
 ## Purpose
 Enables real-time filtering (include/exclude) and multi-rule visual and acoustic highlighting for streamed log lines with priority ordering.
-
 ## Requirements
-
 ### Requirement: Live Include and Exclude Filters
 The application SHALL provide real-time filtering directly in the stream control bar and filter management tabs, supporting case-sensitive and case-insensitive plain text and regular expressions. Empty include and exclude filter fields SHALL represent no filter constraint, allowing lines to pass unfiltered unless an active criterion excludes or includes them.
 
@@ -59,3 +57,18 @@ When the user creates a new filter or highlight rule, the text and regex fields 
 #### Scenario: Adding a new highlight rule
 - **WHEN** the user clicks the add-rule button in the Highlights dialog
 - **THEN** a new rule row appears with an empty pattern field, ready for typing, and no placeholder text is saved to the configuration.
+
+### Requirement: Capture-Only Highlighting
+A regex highlight rule with capture groups MAY set "highlight captures only"; then only the captured spans of a matching row SHALL be painted with the rule's style while the rest of the row keeps its normal style. Rules without the option SHALL keep colouring the whole row. At most 64 spans per row SHALL be painted, first rule winning per byte.
+
+#### Scenario: Colouring request ids
+- **WHEN** the rule `req=(\d+)` with captures-only and a cyan foreground is enabled
+- **THEN** only the digits after `req=` are cyan on each matching row.
+
+### Requirement: Quick Colour Labels
+Ctrl+Shift+1..9 SHALL create or toggle a quick label for the current search text of the focused stream (row selection is whole-row only, so the search text is the text source; without a current search hit the stream bar SHALL show a notice) using preset colour N, applied across all streams, listed in a strip above the stream with a remove button, and not persisted across restarts. Pressing the same digit again SHALL remove the label, another digit SHALL recolour it. Quick labels SHALL rank below user rules.
+
+#### Scenario: Labelling a session id
+- **WHEN** the user searches `sess-8f3a` and presses Ctrl+Shift+2
+- **THEN** every occurrence of `sess-8f3a` in every stream is painted with preset colour 2 until the label is removed or the application restarts.
+
