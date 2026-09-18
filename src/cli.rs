@@ -24,6 +24,7 @@ OPTIONS:
     --no-follow          Disable follow mode on those files
     --renderer <NAME>    Rendering backend: auto (default), glow, wgpu
     --config <FILE>      Use this configuration file (same as FASTTAIL_CONFIG)
+    --session <FILE>     Load this session file (*.fasttail-session.ini) at startup
     -V, --version        Print the version and exit
     -h, --help           Print this help and exit
 ";
@@ -38,6 +39,8 @@ pub struct CliArgs {
     pub follow: Option<bool>,
     pub renderer: Option<RendererChoice>,
     pub config: Option<PathBuf>,
+    /// Session file to load at startup, replacing the restored workspace.
+    pub session: Option<PathBuf>,
     pub show_version: bool,
     pub show_help: bool,
 }
@@ -103,6 +106,7 @@ impl CliArgs {
                 "--filter" => out.filter = Some(value("text")?),
                 "--exclude" => out.exclude = Some(value("text")?),
                 "--config" => out.config = Some(resolve(&value("file path")?, cwd)),
+                "--session" => out.session = Some(resolve(&value("file path")?, cwd)),
                 "--renderer" => {
                     let v = value("name")?;
                     out.renderer = Some(RendererChoice::parse(&v).ok_or_else(|| {

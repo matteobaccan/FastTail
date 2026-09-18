@@ -45,6 +45,14 @@ impl FileEncoding {
             FileEncoding::UnicodeBe,
         ]
     }
+
+    /// The encoding whose `name()` is `name` (case-insensitive), used by session files.
+    pub fn from_name(name: &str) -> Option<FileEncoding> {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|e| e.name().eq_ignore_ascii_case(name.trim()))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

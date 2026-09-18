@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Named sessions.** The 🗂 menu saves the workspace (open files and patterns,
+  dock layout, per-stream filters, search query, wrap, encoding and bookmarks)
+  to a `*.fasttail-session.ini` file and loads it back, replacing the current
+  streams; global preferences stay in `fasttail.ini`. Paths are stored absolute
+  and, when the file lies under the session's folder, also relative, so a
+  session saved next to a log bundle still opens after the bundle moves.
+  Recent sessions menu, "save as default workspace", `*` in the title bar when
+  the workspace differs from the saved session (with a confirmation before a
+  load discards it), missing files listed and skipped, `--session <file>` on
+  the command line. Filters, search query and encoding of every stream are now
+  restored at the next start too.
 - **Capture-group highlighting.** A regex highlight rule can tick "Captures
   only" to paint just its capture groups (the whole match when the pattern has
   no group) instead of the row; `req=(\d+)` colours the request id alone. Rules

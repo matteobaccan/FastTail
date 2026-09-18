@@ -628,6 +628,21 @@ fn test_i18n_exhaustive_coverage() {
         "scan_filtering",
         "scan_searching",
         "md_too_large",
+        "session_tip",
+        "session_save_as",
+        "session_save",
+        "session_load",
+        "session_recent",
+        "session_no_recent",
+        "session_clear_recent",
+        "session_save_default",
+        "session_unsaved_title",
+        "session_unsaved_body",
+        "session_load_anyway",
+        "session_cancel",
+        "session_missing_title",
+        "session_missing_body",
+        "session_ok",
     ];
 
     for lang in &[
@@ -4671,4 +4686,237 @@ fn test_engine_current_row_prefers_selection_then_search_hit_then_last_line() {
     assert_eq!(engine.current_row(), Some(1), "the clicked row wins");
     engine.clear_selection();
     assert_eq!(engine.current_row(), Some(2));
+}
+
+// ---------------------------------------------------------------------------
+// Named sessions
+// ---------------------------------------------------------------------------
+
+mod named_sessions {
+    use fasttail::cli::CliArgs;
+    use fasttail::config::FastTailConfig;
+    use fasttail::i18n::{t, Language};
+    use fasttail::session::{Session, StreamEntry, SESSION_SUFFIX};
+    use std::path::{Path, PathBuf};
+
+    fn entry(path: PathBuf) -> StreamEntry {
+        StreamEntry {
+            path,
+            include_filter: "ERROR".to_string(),
+            exclude_filter: "health".to_string(),
+            search_query: "timeout".to_string(),
+            wrap: true,
+            encoding: Some("ANSI".to_string()),
+            bookmarks: vec![3, 7, 42],
+        }
+    }
+
+    #[test]
+    fn every_session_field_round_trips_through_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(&log, "a\nb\n").unwrap();
+        let pattern = dir.path().join("app-*.log");
+        let mut session = Session {
+            streams: vec![entry(log.clone()), StreamEntry::new(pattern.clone())],
+            dock_layout: Some("(layout)".to_string()),
+        };
+        session.streams[1].wrap = false;
+        let file = dir.path().join(format!("incident{SESSION_SUFFIX}"));
+        session.save_to(&file).unwrap();
+
+        let loaded = Session::load_from(&file).unwrap();
+        assert!(loaded.missing.is_empty());
+        assert!(!loaded.relocated);
+        assert_eq!(loaded.session, session);
+        assert_eq!(Session::name_of(&file), "incident");
+    }
+
+    #[test]
+    fn a_moved_bundle_opens_through_the_relative_path() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("bundle");
+        std::fs::create_dir_all(bundle.join("logs")).unwrap();
+        let log = bundle.join("logs").join("app.log");
+        std::fs::write(&log, "x\n").unwrap();
+        let file = bundle.join(format!("dev{SESSION_SUFFIX}"));
+        Session {
+            streams: vec![entry(log.clone())],
+            dock_layout: Some("(layout)".to_string()),
+        }
+        .save_to(&file)
+        .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("rel=logs/app.log"), "{text}");
+
+        // Move the whole bundle: the absolute path no longer exists.
+        let moved = root.path().join("moved");
+        std::fs::rename(&bundle, &moved).unwrap();
+        let loaded = Session::load_from(&moved.join(format!("dev{SESSION_SUFFIX}"))).unwrap();
+        assert!(loaded.missing.is_empty());
+        assert_eq!(loaded.session.streams.len(), 1);
+        assert_eq!(
+            loaded.session.streams[0].path,
+            moved.join("logs").join("app.log")
+        );
+        assert_eq!(loaded.session.streams[0].include_filter, "ERROR");
+        assert!(loaded.relocated);
+        assert_eq!(
+            loaded.session.dock_layout, None,
+            "a layout naming the old paths is dropped"
+        );
+    }
+
+    #[test]
+    fn missing_files_are_skipped_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("present.log");
+        std::fs::write(&present, "x\n").unwrap();
+        let gone = dir.path().join("gone.log");
+        let no_dir_pattern = dir.path().join("nowhere").join("*.log");
+        let file = dir.path().join(format!("s{SESSION_SUFFIX}"));
+        Session {
+            streams: vec![
+                StreamEntry::new(present.clone()),
+                StreamEntry::new(gone.clone()),
+                StreamEntry::new(no_dir_pattern.clone()),
+            ],
+            dock_layout: None,
+        }
+        .save_to(&file)
+        .unwrap();
+        let loaded = Session::load_from(&file).unwrap();
+        assert_eq!(loaded.session.streams.len(), 1);
+        assert_eq!(loaded.session.streams[0].path, present);
+        assert_eq!(loaded.missing, vec![gone, no_dir_pattern]);
+    }
+
+    #[test]
+    fn serialized_text_detects_changes() {
+        let a = Session {
+            streams: vec![entry(PathBuf::from("C:/x/a.log"))],
+            dock_layout: None,
+        };
+        let mut b = a.clone();
+        assert_eq!(a.serialized(None), b.serialized(None));
+        b.streams[0].bookmarks.push(99);
+        assert_ne!(a.serialized(None), b.serialized(None));
+        let mut c = a.clone();
+        c.dock_layout = Some("(other)".to_string());
+        assert_ne!(a.serialized(None), c.serialized(None));
+    }
+
+    #[test]
+    fn default_session_is_embedded_in_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("a.log");
+        std::fs::write(&log, "x\n").unwrap();
+        let mut cfg = FastTailConfig::default();
+        cfg.open_files = vec![log.clone()];
+        let mut e = entry(log.clone());
+        e.wrap = false;
+        e.bookmarks.clear();
+        cfg.set_stream_state(e);
+        cfg.set_wrap(&log, true);
+        cfg.set_bookmarks(&log, &[3, 7, 42]);
+        cfg.current_session = Some(dir.path().join(format!("cur{SESSION_SUFFIX}")));
+        cfg.add_recent_session(&dir.path().join(format!("one{SESSION_SUFFIX}")));
+        cfg.add_recent_session(&dir.path().join(format!("two{SESSION_SUFFIX}")));
+
+        let ini = cfg.to_ini();
+        let loaded = FastTailConfig::from_ini(&ini);
+        assert_eq!(loaded.open_files, vec![log.clone()]);
+        let state = loaded
+            .stream_state_for(&log)
+            .expect("stream state persisted");
+        assert_eq!(state.include_filter, "ERROR");
+        assert_eq!(state.exclude_filter, "health");
+        assert_eq!(state.search_query, "timeout");
+        assert_eq!(state.encoding.as_deref(), Some("ANSI"));
+        assert!(loaded.wrap_for(&log));
+        assert_eq!(loaded.bookmarks_for(&log, 100), Some(vec![3, 7, 42]));
+        assert_eq!(loaded.current_session, cfg.current_session);
+        assert_eq!(loaded.recent_sessions.len(), 2);
+        assert_eq!(
+            Session::name_of(&loaded.recent_sessions[0]),
+            "two",
+            "most recent first"
+        );
+
+        // The default session assembled from the config carries everything.
+        let default = Session::from_config(&loaded);
+        assert_eq!(default.streams.len(), 1);
+        assert!(default.streams[0].wrap);
+        assert_eq!(default.streams[0].bookmarks, vec![3, 7, 42]);
+    }
+
+    #[test]
+    fn config_without_session_sections_still_loads() {
+        let text =
+            "[general]\ntheme=Tron\nlanguage=en\n\n[open_files]\nfile_0=missing-for-sure.log\n";
+        let ini = ini::Ini::load_from_str(text).unwrap();
+        let cfg = FastTailConfig::from_ini(&ini);
+        assert!(cfg.streams.is_empty());
+        assert!(cfg.current_session.is_none());
+        assert!(cfg.recent_sessions.is_empty());
+    }
+
+    #[test]
+    fn apply_to_config_replaces_the_default_workspace() {
+        let mut cfg = FastTailConfig::default();
+        cfg.open_files = vec![PathBuf::from("C:/old/x.log")];
+        cfg.dock_layout = Some("(old)".to_string());
+        let session = Session {
+            streams: vec![entry(PathBuf::from("C:/new/a.log"))],
+            dock_layout: Some("(new)".to_string()),
+        };
+        session.apply_to_config(&mut cfg);
+        assert_eq!(cfg.open_files, vec![PathBuf::from("C:/new/a.log")]);
+        assert_eq!(cfg.dock_layout.as_deref(), Some("(new)"));
+        assert!(cfg.wrap_for(Path::new("C:/new/a.log")));
+        assert_eq!(
+            cfg.stream_state_for(Path::new("C:/new/a.log"))
+                .map(|s| s.include_filter.clone()),
+            Some("ERROR".to_string())
+        );
+    }
+
+    #[test]
+    fn session_suffix_and_cli_option() {
+        assert_eq!(
+            Session::with_suffix(Path::new("C:/s/incident")),
+            PathBuf::from(format!("C:/s/incident{SESSION_SUFFIX}"))
+        );
+        let cwd = if cfg!(windows) {
+            PathBuf::from(r"C:\work")
+        } else {
+            PathBuf::from("/work")
+        };
+        let args = CliArgs::parse(["--session", "dev.fasttail-session.ini"], &cwd).unwrap();
+        assert_eq!(args.session, Some(cwd.join("dev.fasttail-session.ini")));
+        assert!(fasttail::cli::USAGE.contains("--session <FILE>"));
+    }
+
+    #[test]
+    fn session_i18n_keys_exist_in_every_language() {
+        for lang in [
+            Language::En,
+            Language::It,
+            Language::Fr,
+            Language::Es,
+            Language::Zh,
+        ] {
+            for key in [
+                "session_tip",
+                "session_save_as",
+                "session_load",
+                "session_unsaved_body",
+                "session_missing_title",
+            ] {
+                let text = t(lang, key);
+                assert_ne!(text, key, "{key} missing for {lang:?}");
+            }
+            assert!(t(lang, "session_unsaved_body").contains("{name}"));
+        }
+    }
 }

@@ -1,8 +1,5 @@
-# Command Line Specification
+## MODIFIED Requirements
 
-## Purpose
-Defines the startup arguments and options of the fasttail executable: files to open, workspace and filter options, renderer and configuration overrides, help and version output.
-## Requirements
 ### Requirement: Command Line Paths and Options
 The executable SHALL accept `fasttail [OPTIONS] [PATH...]`. Each PATH SHALL be opened as a stream after the workspace is restored, skipping paths already open and reporting missing files on stderr; relative paths SHALL be resolved against the current directory at startup. Options: `--fresh` (empty workspace), `--filter <text>`, `--exclude <text>` (applied to the streams opened from the command line), `--follow` / `--no-follow`, `--renderer <auto|glow|wgpu>`, `--config <path>`, `--session <file>` (load this session file at startup, replacing the restored workspace without confirmation), `--version`, `--help`, and `--` to end option parsing. Unknown options or missing values SHALL print usage to stderr and exit with code 2; `--help` and `--version` SHALL print to the parent console and exit 0.
 
@@ -21,4 +18,3 @@ The executable SHALL accept `fasttail [OPTIONS] [PATH...]`. Each PATH SHALL be o
 #### Scenario: Session from the command line
 - **WHEN** the user runs `fasttail --session incident.fasttail-session.ini`
 - **THEN** the window opens with that session's streams and layout, and the title bar shows `incident`.
-

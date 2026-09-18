@@ -12,6 +12,7 @@ pub mod paths;
 pub mod renderer;
 pub mod scan_job;
 pub mod screensaver;
+pub mod session;
 pub mod tail_engine;
 pub mod theme;
 pub mod ui;
