@@ -19,9 +19,9 @@
 
 ## 4. LTO Benchmark
 
-- [ ] 4.1 Build two release binaries locally, `lto = true` and `lto = "thin"` (both `codegen-units = 1`), from the same commit
-- [ ] 4.2 Run the same include filter, exclude filter and search workload on a log of at least 1 GB with each binary and record wall time and peak memory
-- [ ] 4.3 Apply the decision: set `lto = "thin"` in `Cargo.toml` if within 5% of fat LTO, otherwise keep `lto = true`; record the numbers in `design.md`
+- [x] 4.1 Build two release binaries locally, `lto = true` and `lto = "thin"` (both `codegen-units = 1`), from the same commit
+- [x] 4.2 Run the same include filter, exclude filter and search workload on a log of at least 1 GB with each binary and record wall time and peak memory
+- [x] 4.3 Apply the decision: set `lto = "thin"` in `Cargo.toml` if within 5% of fat LTO, otherwise keep `lto = true`; record the numbers in `design.md`
 
 ## 5. Release Recovery
 

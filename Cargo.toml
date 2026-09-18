@@ -48,7 +48,7 @@ tempfile = "3.17"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "thin"
 codegen-units = 1
 panic = "unwind"
 debug = 1

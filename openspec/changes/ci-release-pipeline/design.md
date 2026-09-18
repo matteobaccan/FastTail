@@ -52,6 +52,20 @@ The `test` job uses `save-if: github.ref == 'refs/heads/main'` (key `test-<targe
 **D5. Thin LTO, gated by a benchmark.**
 `lto = "thin"` with `codegen-units = 1` builds the crate ~3x faster and grows the Windows binary by 5%. Because filter, highlight and search over multi-million-line files are the hot paths, adoption is conditional: build both variants, run the same filter and search workload on a ≥ 1 GB log, and adopt thin LTO only if the slower variant is within 5% of fat LTO on wall time. If it regresses, keep `lto = true` and record the measurement in this design. `codegen-units = 16` is rejected on the measurements (slower and larger than 1 unit under thin LTO).
 
+**D5 result (2026-09-18).** Benchmark `examples/filter_bench.rs` on a 1.1 GB synthetic log (12,482,791 lines), Windows x86_64, both binaries built from the same commit with `codegen-units = 1`, best of 3 rounds per phase, second alternating run (first run warmed the OS file cache):
+
+| Phase | fat LTO | thin LTO |
+|---|---|---|
+| open + line index | 1382 ms | 1380 ms |
+| include filter, case-insensitive | 3093 ms | 3116 ms |
+| include + exclude filters | 9756 ms | 9604 ms |
+| include regex | 1407 ms | 1355 ms |
+| search + 1000 F3 hops | 58 ms | 75 ms |
+| highlight scan, 3 rules, all lines | 6471 ms | 6340 ms |
+| whole run wall time | 67.6 s | 67.4 s |
+
+Every phase is within ±2% except search, which is sub-100 ms and dominated by timer noise. Thin LTO is adopted: `lto = "thin"`, `codegen-units = 1`. Peak memory was not captured (the process handle had already been released when read); memory use does not depend on the LTO mode since the data structures are identical.
+
 **D6. Crash report URL.**
 Replace both occurrences of `https://github.com/baccan/fasttail/issues` with `https://github.com/matteobaccan/FastTail/issues`, sourced from a single `ISSUES_URL` constant so the report and the dialog cannot drift again. The existing crash-handler unit tests assert on the report; they are updated to assert the constant.
 
