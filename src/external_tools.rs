@@ -182,12 +182,46 @@ pub fn expand_argument(arg: &str, ctx: &ToolContext, matched: &str) -> String {
     if !arg.contains('{') {
         return arg.to_string();
     }
-    arg.replace("{line}", &ctx.line)
-        .replace("{file}", &ctx.file)
-        .replace("{dir}", &ctx.dir)
-        .replace("{lineno}", &ctx.lineno.to_string())
-        .replace("{selection}", &ctx.selection)
-        .replace("{match}", matched)
+    // Single pass over the template: a value substituted for one placeholder is never
+    // scanned again, so a log line containing the literal text `{file}` reaches the
+    // tool unchanged instead of being expanded a second time.
+    let mut out = String::with_capacity(arg.len() + 64);
+    let mut rest = arg;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open..];
+        match after.find('}') {
+            Some(close) => {
+                let name = &after[1..close];
+                let value: Option<std::borrow::Cow<str>> = match name {
+                    "line" => Some(ctx.line.as_str().into()),
+                    "file" => Some(ctx.file.as_str().into()),
+                    "dir" => Some(ctx.dir.as_str().into()),
+                    "lineno" => Some(ctx.lineno.to_string().into()),
+                    "selection" => Some(ctx.selection.as_str().into()),
+                    "match" => Some(matched.into()),
+                    _ => None,
+                };
+                match value {
+                    Some(v) => {
+                        out.push_str(&v);
+                        rest = &after[close + 1..];
+                    }
+                    None => {
+                        // Unknown placeholder or stray brace: keep the brace literally.
+                        out.push('{');
+                        rest = &after[1..];
+                    }
+                }
+            }
+            None => {
+                out.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The expanded argument list of a tool for a row, one entry per argv element.
@@ -414,6 +448,22 @@ impl ToolRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placeholders_expand_in_a_single_pass() {
+        let ctx = ToolContext {
+            line: "payload {file} and {match} stay literal".to_string(),
+            file: "app.log".to_string(),
+            dir: "C:/logs".to_string(),
+            lineno: 7,
+            selection: String::new(),
+        };
+        let out = expand_argument("{lineno}:{line}|{file}|{nope}|{", &ctx, "M");
+        assert_eq!(
+            out,
+            "7:payload {file} and {match} stay literal|app.log|{nope}|{"
+        );
+    }
 
     #[test]
     fn splits_like_a_shell() {
