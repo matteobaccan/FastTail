@@ -17,7 +17,7 @@ The CI workflow SHALL run a `test` job on every push to `main`, every pull reque
 - **THEN** the Linux `test` job fails and the pull request is reported as failing.
 
 ### Requirement: Release Builds Only on Tags and Manual Dispatch
-The release `build` matrix (Windows x86_64, Windows ARM64, Linux x86_64, Linux ARM64, macOS ARM64) SHALL run only when a `v*` tag is pushed or the workflow is dispatched manually. Each build job SHALL compile with `cargo build --release` and SHALL NOT run the test suite.
+The release `build` matrix (Windows x86_64, Linux x86_64, Linux ARM64, macOS ARM64) SHALL run only when a `v*` tag is pushed or the workflow is dispatched manually. Each build job SHALL compile with `cargo build --release` and SHALL NOT run the test suite. Windows ARM64 is not built (Windows on ARM runs the x86_64 executable under emulation) and macOS runs no test job (the platform has too few users to justify its 10x billing).
 
 #### Scenario: Push to main
 - **WHEN** a commit is pushed to `main` without a tag
@@ -25,7 +25,7 @@ The release `build` matrix (Windows x86_64, Windows ARM64, Linux x86_64, Linux A
 
 #### Scenario: Tag pushed
 - **WHEN** the tag `v0.2.0` is pushed
-- **THEN** the `test` job and the five `build` jobs start in parallel, and the `release` job starts only after all of them succeed.
+- **THEN** the `test` job and the four `build` jobs start in parallel, and the `release` job starts only after all of them succeed.
 
 ### Requirement: Compressed Release Assets
 Each build job SHALL package its binary before upload: Linux and macOS as `fasttail-<os>-<arch>.tar.gz` containing the executable, Windows as `fasttail-windows-<arch>.zip` containing `fasttail.exe` and `fasttail.pdb`. The release job SHALL publish these archives, never bare binaries.

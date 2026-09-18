@@ -148,7 +148,6 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 | Platform | Asset | Contents |
 |---|---|---|
 | Windows x86_64 | `fasttail-windows-x86_64.zip` | `fasttail.exe` + `fasttail.pdb` |
-| Windows ARM64 | `fasttail-windows-arm64.zip` | `fasttail.exe` + `fasttail.pdb` |
 | Linux x86_64 | `fasttail-linux-x86_64.tar.gz` | `fasttail` |
 | Linux ARM64 | `fasttail-linux-arm64.tar.gz` | `fasttail` |
 | macOS Apple Silicon | `fasttail-macos-arm64.tar.gz` | `fasttail` |

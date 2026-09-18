@@ -92,11 +92,8 @@ jobs:
             asset: fasttail-windows-x86_64.zip
             binary: fasttail.exe
 
-          - name: Windows ARM64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
-            asset: fasttail-windows-arm64.zip
-            binary: fasttail.exe
+          # Windows ARM64 is not built: Windows on ARM runs the x86_64 exe
+          # under emulation and the cross-compiled target had no users.
 
           # Linux
           - name: Linux x86_64
