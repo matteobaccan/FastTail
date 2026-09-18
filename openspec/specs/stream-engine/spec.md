@@ -1,11 +1,11 @@
 # Stream Engine Specification
 
 ## Purpose
-Defines the tail engine: memory-mapped access to very large files, real-time follow with pause, rotation and truncation handling, multi-encoding decoding, and the Text, Hex and Markdown view modes.
+Defines the tail engine: on-demand streaming access to very large files without holding them in memory, real-time follow with pause, rotation and truncation handling, background scans with progress, multi-encoding decoding, and the Text, Hex and Markdown view modes.
 
 ## Requirements
 
-### Requirement: Memory-mapped streaming of large files
+### Requirement: Streaming access to large files
 The tail engine SHALL access files through an open read handle and a bounded block cache (at most 64 blocks of 64 KB per stream) and SHALL NOT hold a copy of the file in memory. Resident state per stream SHALL be limited to the line index (one 64-bit offset per line), the filtered-line and match lists, selection and bookmarks. Opening a file SHALL show its content immediately; the line index is built synchronously for files up to 256 MB and in the background above, with progress shown. Memory-mapping SHALL NOT be used, because a mapped file blocks the writer's rotation on Windows.
 
 #### Scenario: Ten growing files
@@ -19,6 +19,7 @@ The tail engine SHALL access files through an open read handle and a bounded blo
 #### Scenario: Truncation returns memory
 - **WHEN** a 500 MB stream is truncated to zero by the writer
 - **THEN** the index, cache and derived lists are dropped and their memory returned to the allocator.
+
 ### Requirement: Real-time file follow with pause and resume
 The engine SHALL monitor file modifications in real-time (`tail -f`) and append newly written lines to the view automatically while follow mode is active.
 
