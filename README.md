@@ -158,7 +158,7 @@ Keep `fasttail.pdb` next to `fasttail.exe`: it lets a crash report (`fasttail_cr
 
 ## 📐 Specifications
 
-Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting, docking UI, themes, localization, log intelligence, screensaver, telemetry and BareTail migration.
+Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting, docking UI, themes, localization, log intelligence, screensaver, telemetry, BareTail migration, crash reporting and the release pipeline.
 
 ---
 
