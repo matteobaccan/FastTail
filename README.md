@@ -90,6 +90,7 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Ctrl + C` | Copy the selected rows (or the current search hit) as plain text |
 | `Ctrl + G` | Go to line N, or `+N` / `-N` from the current line (hidden lines resolve to the next visible one) |
 | `Ctrl + Shift + T` | Toggle always-on-top (also the 📌 pin in the title bar and a Settings checkbox) |
+| `Ctrl + F2` / `F2` / `Shift + F2` | Bookmark the current row (`★` in the marker column) / jump to the next / previous bookmark, wrapping around; bookmarks are saved per file |
 | `Alt + 1..9` | Switch to stream tab #1 through #9 |
 | `Ctrl +` / `Ctrl =` | Zoom in (increase font size) |
 | `Ctrl -` | Zoom out (decrease font size) |

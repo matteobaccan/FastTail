@@ -576,6 +576,10 @@ fn test_i18n_exhaustive_coverage() {
         "help_desc_goto",
         "always_on_top",
         "pin_tip",
+        "clear_bookmarks",
+        "help_desc_bookmark",
+        "flash_on_alert",
+        "flash_on_alert_tip",
     ];
 
     for lang in &[
@@ -3055,4 +3059,123 @@ fn test_always_on_top_persists_in_ini() {
         Some("true")
     );
     assert!(FastTailConfig::from_ini(&ini).always_on_top);
+}
+
+#[test]
+fn test_bookmarks_toggle_navigate_and_wrap_under_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("bm.log");
+    write_lines(&log, &["a", "b KEEP", "c", "d", "e", "f KEEP", "g"]);
+    let mut engine = TailEngine::open(&log).unwrap();
+
+    engine.toggle_bookmark(1);
+    engine.toggle_bookmark(3);
+    engine.toggle_bookmark(5);
+    assert!(engine.has_bookmarks() && engine.is_bookmarked(3));
+    engine.toggle_bookmark(3);
+    assert!(!engine.is_bookmarked(3));
+    engine.toggle_bookmark(3);
+    engine.bookmark_cursor = None;
+
+    // Row 3 is hidden by the filter: navigation skips it but keeps it.
+    engine.set_exclude_filter("d"); // hides only row 3 ("d")
+    assert!(!engine.is_line_visible(3));
+    assert_eq!(engine.bookmark_next(0), Some(1));
+    assert_eq!(engine.bookmark_next(0), Some(5));
+    assert_eq!(engine.bookmark_next(0), Some(1), "wraps around");
+    assert_eq!(engine.bookmark_prev(0), Some(5), "wraps backwards");
+    assert!(engine.is_bookmarked(3), "hidden bookmark is kept");
+
+    engine.clear_bookmarks();
+    assert!(!engine.has_bookmarks());
+    assert_eq!(engine.bookmark_next(0), None);
+}
+
+#[test]
+fn test_bookmarks_cleared_on_truncation() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("bmt.log");
+    write_lines(&log, &["one", "two", "three"]);
+    let mut engine = TailEngine::open(&log).unwrap();
+    engine.toggle_bookmark(2);
+    std::fs::File::create(&log)
+        .unwrap()
+        .write_all(b"x\n")
+        .unwrap();
+    engine.poll_updates();
+    assert!(!engine.has_bookmarks());
+}
+
+#[test]
+fn test_bookmarks_persist_in_config_with_caps() {
+    use fasttail::config::{MAX_BOOKMARKS_PER_FILE, MAX_BOOKMARK_FILES};
+    let mut cfg = FastTailConfig::default();
+    let path = std::path::PathBuf::from(if cfg!(windows) {
+        r"C:\logs\app.log"
+    } else {
+        "/logs/app.log"
+    });
+
+    cfg.set_bookmarks(&path, &[200, 10]);
+    let restored = FastTailConfig::from_ini(&cfg.to_ini());
+    assert_eq!(restored.bookmarks_for(&path, 300), Some(vec![10, 200]));
+    assert_eq!(
+        restored.bookmarks_for(&path, 50),
+        None,
+        "file shrank below the largest index"
+    );
+
+    // Empty list removes the entry.
+    cfg.set_bookmarks(&path, &[]);
+    assert!(cfg.bookmarks_for(&path, 1000).is_none());
+
+    // Per-file and file-count caps.
+    let many: Vec<usize> = (0..MAX_BOOKMARKS_PER_FILE + 500).collect();
+    cfg.set_bookmarks(&path, &many);
+    assert_eq!(
+        cfg.bookmarks_for(&path, usize::MAX).unwrap().len(),
+        MAX_BOOKMARKS_PER_FILE
+    );
+    for i in 0..MAX_BOOKMARK_FILES + 10 {
+        cfg.set_bookmarks(&path.with_file_name(format!("f{i}.log")), &[1]);
+    }
+    assert_eq!(cfg.bookmarks.len(), MAX_BOOKMARK_FILES);
+    assert!(
+        cfg.bookmarks_for(&path, usize::MAX).is_none(),
+        "oldest entry evicted"
+    );
+}
+
+#[test]
+fn test_unseen_lines_counted_only_while_hidden() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("badge.log");
+    write_lines(&log, &["start"]);
+    let mut engine = TailEngine::open(&log).unwrap();
+    engine.set_highlight_rules(vec![HighlightRule::new(
+        "ERROR",
+        [255, 0, 0],
+        [0, 0, 0],
+        false,
+    )]);
+
+    // Hidden tab: appended lines are counted, a rule match raises the severity.
+    engine.displayed = false;
+    let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    f.write_all(b"plain\nERROR boom\n").unwrap();
+    drop(f);
+    engine.poll_updates();
+    assert_eq!(engine.unseen_lines, 2);
+    assert_eq!(engine.unseen_severity, 1);
+
+    // Displayed: the viewer clears the counter and nothing accrues.
+    engine.mark_seen();
+    assert_eq!(engine.unseen_lines, 0);
+    let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    f.write_all(b"more\n").unwrap();
+    drop(f);
+    engine.poll_updates();
+    assert_eq!(engine.unseen_lines, 0);
 }

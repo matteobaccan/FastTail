@@ -73,8 +73,34 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 {
                     let watch_icon = if engine.is_watching { "▶" } else { "■" };
                     let data_dot = if engine.has_new_data { "●" } else { "○" };
-                    let title_text =
-                        format!("[#{}] {} {} {}", idx + 1, watch_icon, file_name, data_dot);
+                    // Background-tab activity badge: lines appended since the tab was last shown
+                    let badge = if !engine.displayed && engine.unseen_lines > 0 {
+                        if engine.unseen_lines > 999 {
+                            " [999+]".to_string()
+                        } else {
+                            format!(" [{}]", engine.unseen_lines)
+                        }
+                    } else {
+                        String::new()
+                    };
+                    let title_text = format!(
+                        "[#{}] {} {} {}{}",
+                        idx + 1,
+                        watch_icon,
+                        file_name,
+                        data_dot,
+                        badge
+                    );
+                    if !badge.is_empty() {
+                        let color = match engine.unseen_severity {
+                            2 => self.ctx.theme.warn_color(),
+                            1 => self.ctx.theme.accent_color(),
+                            _ => self.ctx.theme.secondary_accent(),
+                        };
+                        return WidgetText::from(
+                            RichText::new(title_text).monospace().strong().color(color),
+                        );
+                    }
                     if engine.has_new_data {
                         WidgetText::from(
                             RichText::new(title_text)
@@ -134,8 +160,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .map(|f| paths_equal_fast(f, path))
                     .unwrap_or(false);
                 if let Some(engine) = engine_idx.map(|i| &mut self.ctx.engines[i]) {
-                    // Mark new data as viewed/cleared
+                    // Mark new data as viewed/cleared; the tab is on screen this frame
                     engine.has_new_data = false;
+                    engine.mark_seen();
                     // Each engine owns its own search query so the find box is per-tab
                     let mut search_query = std::mem::take(&mut engine.search_query);
                     render_log_stream(
@@ -222,11 +249,14 @@ fn search_marker_label(
     font_size: f32,
     matches: bool,
     is_active: bool,
+    bookmarked: bool,
 ) {
     let (glyph, color) = if is_active {
         ("▶", theme.accent_color())
     } else if matches {
         ("●", theme.warn_color())
+    } else if bookmarked {
+        ("★", theme.secondary_accent())
     } else {
         ("\u{2007}", theme.text_dim()) // figure space: same advance as a digit
     };
@@ -240,6 +270,7 @@ fn search_marker_label(
 }
 
 /// Tints the whole row of a search hit, drawing behind the widgets laid out in `row_rect`.
+#[allow(clippy::too_many_arguments)]
 fn paint_search_row_background(
     ui: &Ui,
     slot: egui::layers::ShapeIdx,
@@ -248,17 +279,20 @@ fn paint_search_row_background(
     matches: bool,
     is_active: bool,
     selected: bool,
+    bookmarked: bool,
 ) {
-    if !matches && !is_active && !selected {
+    if !matches && !is_active && !selected && !bookmarked {
         return;
     }
-    // Search tints win over the selection tint so hits stay recognisable.
+    // Search tints win over the selection tint, which wins over the bookmark tint.
     let (base, alpha) = if is_active {
         (theme.accent_color(), 70)
     } else if matches {
         (theme.warn_color(), 40)
-    } else {
+    } else if selected {
         (theme.secondary_accent(), 60)
+    } else {
+        (theme.secondary_accent(), 28)
     };
     let fill = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
     let full = egui::Rect::from_min_max(
@@ -884,6 +918,16 @@ fn render_log_stream(
                 export(engine, t(lang, "export_matches"), true);
                 ui.close();
             }
+            if engine.has_bookmarks() {
+                ui.separator();
+                if ui
+                    .button(RichText::new(t(lang, "clear_bookmarks")).monospace())
+                    .clicked()
+                {
+                    engine.clear_bookmarks();
+                    ui.close();
+                }
+            }
         })
         .response
         .on_hover_text(t(lang, "export_tip"));
@@ -901,6 +945,40 @@ fn render_log_stream(
             if ui.input_mut(|i| i.consume_shortcut(&ctrl_c)) {
                 if let Some(text) = engine.copy_selection_text() {
                     ui.ctx().copy_text(text);
+                }
+            }
+            // Bookmarks: Ctrl+F2 toggles on the current row, F2 / Shift+F2 navigate.
+            let ctrl_f2 = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::F2);
+            let shift_f2 = egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::F2);
+            let plain_f2 = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F2);
+            let current_row = || -> usize {
+                let top = (engine.current_scroll_y / row_height).round() as usize;
+                engine
+                    .selection
+                    .iter()
+                    .next()
+                    .copied()
+                    .or(engine.current_search_line())
+                    .or_else(|| engine.get_actual_line_idx(top))
+                    .unwrap_or(0)
+            };
+            if ui.input_mut(|i| i.consume_shortcut(&ctrl_f2)) {
+                let row = current_row();
+                engine.toggle_bookmark(row);
+                ui.ctx().request_repaint();
+            } else if ui.input_mut(|i| i.consume_shortcut(&shift_f2)) {
+                let row = current_row();
+                if let Some(target) = engine.bookmark_prev(row) {
+                    scroll_to_target(engine, target);
+                    engine.select_row(target);
+                    ui.ctx().request_repaint();
+                }
+            } else if ui.input_mut(|i| i.consume_shortcut(&plain_f2)) {
+                let row = current_row();
+                if let Some(target) = engine.bookmark_next(row) {
+                    scroll_to_target(engine, target);
+                    engine.select_row(target);
+                    ui.ctx().request_repaint();
                 }
             }
             ui.input(|i| {
@@ -1089,6 +1167,8 @@ fn render_log_stream(
 
     let has_search = !engine.last_searched_query.is_empty();
     let active_search_line = engine.current_search_line();
+    // The marker column appears when there is anything to mark: search hits or bookmarks.
+    let show_markers = has_search || engine.has_bookmarks();
 
     let mut toggle_json = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
@@ -1126,6 +1206,7 @@ fn render_log_stream(
                         .is_ok();
                 let is_active_search = active_search_line == Some(actual_line_idx);
                 let is_selected = engine.is_selected(actual_line_idx);
+                let is_bookmarked = engine.is_bookmarked(actual_line_idx);
 
                 // Background painted after layout, behind the row (see SearchRowMark)
                 let row_bg = ui.painter().add(egui::Shape::Noop);
@@ -1136,13 +1217,14 @@ fn render_log_stream(
                         ui.set_max_height(row_height);
 
                         // Search marker column: ▶ current hit, ● other hits, blank otherwise
-                        if has_search {
+                        if show_markers {
                             search_marker_label(
                                 ui,
                                 theme,
                                 font_size,
                                 matches_search,
                                 is_active_search,
+                                is_bookmarked,
                             );
                         }
 
@@ -1208,6 +1290,7 @@ fn render_log_stream(
                     matches_search,
                     is_active_search,
                     is_selected,
+                    is_bookmarked,
                 );
 
                 // Row selection: click, Shift+click (range), Ctrl+click (toggle)
@@ -1351,7 +1434,7 @@ fn render_hex_stream(
             ui.horizontal(|ui| {
                 if has_search {
                     // Keep the header aligned with the marker column of the rows
-                    search_marker_label(ui, theme, font_size, false, false);
+                    search_marker_label(ui, theme, font_size, false, false, false);
                 }
                 ui.label(
                     RichText::new(offset_header)
@@ -1414,7 +1497,14 @@ fn render_hex_stream(
             let row_resp = ui
                 .horizontal(|ui| {
                     if has_search {
-                        search_marker_label(ui, theme, font_size, matches_search, is_active_search);
+                        search_marker_label(
+                            ui,
+                            theme,
+                            font_size,
+                            matches_search,
+                            is_active_search,
+                            false,
+                        );
                     }
 
                     // Offset label (8 uppercase hex digits)
@@ -1489,6 +1579,7 @@ fn render_hex_stream(
                 theme,
                 matches_search,
                 is_active_search,
+                false,
                 false,
             );
 

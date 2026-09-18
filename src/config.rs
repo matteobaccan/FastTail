@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 const CONFIG_FILE_NAME: &str = "fasttail.ini";
 const OLD_CONFIG_FILE_NAME: &str = "fasttail.toml";
 
+/// Caps for persisted bookmarks: files remembered, and lines per file.
+pub const MAX_BOOKMARK_FILES: usize = 50;
+pub const MAX_BOOKMARKS_PER_FILE: usize = 1000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FastTailConfig {
     pub theme: CyberTheme,
@@ -23,6 +27,10 @@ pub struct FastTailConfig {
     /// Keep the main window above other windows.
     #[serde(default)]
     pub always_on_top: bool,
+    /// Request OS attention (taskbar flash) when a sound-alert rule matches in a hidden tab
+    /// while the window is unfocused.
+    #[serde(default)]
+    pub flash_on_alert: bool,
     #[serde(default)]
     pub borderless: bool,
     #[serde(default = "default_true")]
@@ -36,6 +44,9 @@ pub struct FastTailConfig {
     pub recent_files: Vec<PathBuf>,
     #[serde(default)]
     pub search_history: Vec<String>,
+    /// Bookmarked lines per file (most recently used first), see `set_bookmarks`.
+    #[serde(default)]
+    pub bookmarks: Vec<(PathBuf, Vec<usize>)>,
     pub highlight_rules: Vec<HighlightRule>,
     #[serde(default)]
     pub baretail_import: bool,
@@ -97,6 +108,7 @@ impl Default for FastTailConfig {
             sound_enabled: false,
             renderer: crate::renderer::RendererChoice::Auto,
             always_on_top: false,
+            flash_on_alert: false,
             borderless: false,
             show_line_numbers: true,
             font_size: 13.0,
@@ -104,6 +116,7 @@ impl Default for FastTailConfig {
             open_files: Vec::new(),
             recent_files: Vec::new(),
             search_history: Vec::new(),
+            bookmarks: Vec::new(),
             highlight_rules: Vec::new(),
             baretail_import: false,
             baretail_prompt_shown: false,
@@ -198,6 +211,35 @@ impl FastTailConfig {
         None
     }
 
+    /// Records the bookmarks of `path` (most recently used first), dropping the entry when
+    /// `lines` is empty and enforcing the per-file and file-count caps.
+    pub fn set_bookmarks(&mut self, path: &Path, lines: &[usize]) {
+        self.bookmarks
+            .retain(|(p, _)| !crate::paths::paths_equal(p, path));
+        if !lines.is_empty() {
+            let mut kept: Vec<usize> = lines.to_vec();
+            kept.sort_unstable();
+            kept.truncate(MAX_BOOKMARKS_PER_FILE);
+            self.bookmarks.insert(0, (path.to_path_buf(), kept));
+            self.bookmarks.truncate(MAX_BOOKMARK_FILES);
+        }
+    }
+
+    /// Saved bookmarks of `path` that still fit in a file of `total_lines` lines. Returns
+    /// `None` when there are none or the file shrank below the largest saved index.
+    pub fn bookmarks_for(&self, path: &Path, total_lines: usize) -> Option<Vec<usize>> {
+        let (_, lines) = self
+            .bookmarks
+            .iter()
+            .find(|(p, _)| crate::paths::paths_equal(p, path))?;
+        let max = *lines.iter().max()?;
+        if max < total_lines {
+            Some(lines.clone())
+        } else {
+            None
+        }
+    }
+
     pub fn to_ini(&self) -> Ini {
         let mut conf = Ini::new();
 
@@ -219,6 +261,7 @@ impl FastTailConfig {
             .set("language", self.language.code())
             .set("renderer", self.renderer.as_str())
             .set("always_on_top", self.always_on_top.to_string())
+            .set("flash_on_alert", self.flash_on_alert.to_string())
             .set("screensaver_enabled", self.screensaver_enabled.to_string())
             .set(
                 "screensaver_timeout_mins",
@@ -247,6 +290,19 @@ impl FastTailConfig {
             let mut sec = conf.with_section(Some("recent_files"));
             for (i, p) in self.recent_files.iter().enumerate() {
                 sec.set(format!("file_{}", i), p.to_string_lossy().to_string());
+            }
+        }
+
+        if !self.bookmarks.is_empty() {
+            let mut sec = conf.with_section(Some("bookmarks"));
+            for (i, (path, lines)) in self.bookmarks.iter().enumerate() {
+                sec.set(format!("file_{}", i), path.to_string_lossy().to_string());
+                let joined = lines
+                    .iter()
+                    .map(|l| l.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                sec.set(format!("lines_{}", i), joined);
             }
         }
 
@@ -361,6 +417,12 @@ impl FastTailConfig {
             {
                 cfg.always_on_top = v;
             }
+            if let Some(v) = general
+                .get("flash_on_alert")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.flash_on_alert = v;
+            }
             if let Some(s) = general.get("screensaver_enabled") {
                 if let Ok(v) = s.parse::<bool>() {
                     cfg.screensaver_enabled = v;
@@ -445,6 +507,21 @@ impl FastTailConfig {
                 if !cfg.recent_files.contains(&p) {
                     cfg.recent_files.push(p);
                 }
+            }
+        }
+
+        if let Some(sec) = conf.section(Some("bookmarks")) {
+            cfg.bookmarks.clear();
+            let mut i = 0;
+            while let Some(path) = sec.get(format!("file_{}", i)) {
+                let lines: Vec<usize> = sec
+                    .get(format!("lines_{}", i))
+                    .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+                    .unwrap_or_default();
+                if !lines.is_empty() && cfg.bookmarks.len() < MAX_BOOKMARK_FILES {
+                    cfg.bookmarks.push((PathBuf::from(path), lines));
+                }
+                i += 1;
             }
         }
 

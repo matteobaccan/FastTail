@@ -60,6 +60,8 @@ pub struct FastTailApp {
     pub renderer: crate::renderer::ActiveRenderer,
     /// Window level currently applied to the viewport (see `config.always_on_top`).
     pub applied_on_top: bool,
+    /// An OS attention request was sent and the window has not been focused since.
+    pub attention_requested: bool,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -204,6 +206,7 @@ impl FastTailApp {
             floating_window_rects,
             renderer: crate::renderer::ActiveRenderer::unknown(),
             applied_on_top: false,
+            attention_requested: false,
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -334,6 +337,9 @@ impl FastTailApp {
         if let Ok(mut engine) = TailEngine::open(&path) {
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.size_unit = self.config.size_unit;
+            if let Some(lines) = self.config.bookmarks_for(&path, engine.total_lines()) {
+                engine.set_bookmarks(lines);
+            }
             self.engines.push(engine);
 
             crate::audio::play_sound(
@@ -1238,6 +1244,12 @@ impl FastTailApp {
                 _ => None,
             },
         };
+        // Streams drawn this frame set `displayed` again in the tab viewer; the others keep
+        // counting unseen lines for the tab badge.
+        for eng in &mut self.engines {
+            eng.displayed = false;
+        }
+
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -1280,6 +1292,35 @@ impl FastTailApp {
             }
         }
         prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
+
+        // Persist bookmarks that changed this frame, and flash the window on a background
+        // sound-alert match when the option is on and the window is not focused.
+        let mut bookmarks_changed = false;
+        let mut critical_in_background = false;
+        for eng in &mut self.engines {
+            if eng.bookmarks_dirty {
+                eng.bookmarks_dirty = false;
+                let lines: Vec<usize> = eng.bookmarks.iter().copied().collect();
+                self.config.set_bookmarks(&eng.path, &lines);
+                bookmarks_changed = true;
+            }
+            if !eng.displayed && eng.unseen_severity >= 2 {
+                critical_in_background = true;
+            }
+        }
+        if bookmarks_changed {
+            let _ = self.config.save();
+        }
+        let window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        if window_focused {
+            self.attention_requested = false;
+        } else if self.config.flash_on_alert && critical_in_background && !self.attention_requested
+        {
+            self.attention_requested = true;
+            ctx.send_viewport_cmd(ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Informational,
+            ));
+        }
 
         if test_screensaver {
             self.screensaver.is_active = true;
@@ -1478,6 +1519,13 @@ impl FastTailApp {
                     if ui
                         .checkbox(&mut self.config.always_on_top, t(lang, "always_on_top"))
                         .on_hover_text(t(lang, "pin_tip"))
+                        .changed()
+                    {
+                        let _ = self.config.save();
+                    }
+                    if ui
+                        .checkbox(&mut self.config.flash_on_alert, t(lang, "flash_on_alert"))
+                        .on_hover_text(t(lang, "flash_on_alert_tip"))
                         .changed()
                     {
                         let _ = self.config.save();
@@ -1871,6 +1919,14 @@ impl FastTailApp {
 
                                 ui.label(RichText::new("Ctrl + Shift + T").monospace().strong());
                                 ui.label(RichText::new(t(lang, "pin_tip")).monospace());
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new("Ctrl + F2  /  F2  /  Shift + F2")
+                                        .monospace()
+                                        .strong(),
+                                );
+                                ui.label(RichText::new(t(lang, "help_desc_bookmark")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("F1").monospace().strong());

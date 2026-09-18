@@ -224,6 +224,15 @@ pub struct TailEngine {
     pub goto_open: bool,
     pub goto_input: String,
     pub goto_notice: Option<String>,
+    /// Bookmarked line indices, the last bookmark jumped to, and a dirty flag for persistence.
+    pub bookmarks: BTreeSet<usize>,
+    pub bookmark_cursor: Option<usize>,
+    pub bookmarks_dirty: bool,
+    /// Background-tab activity: set by the viewer when the stream is drawn, counted by the
+    /// engine while it is not; severity 0 = plain lines, 1 = highlight match, 2 = sound alert.
+    pub displayed: bool,
+    pub unseen_lines: usize,
+    pub unseen_severity: u8,
     /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
     pub search_byte_matches: Vec<(usize, usize)>,
     search_byte_max_len: usize,
@@ -347,6 +356,12 @@ impl TailEngine {
             goto_open: false,
             goto_input: String::new(),
             goto_notice: None,
+            bookmarks: BTreeSet::new(),
+            bookmark_cursor: None,
+            bookmarks_dirty: false,
+            displayed: false,
+            unseen_lines: 0,
+            unseen_severity: 0,
             is_watching: true,
             has_new_data: false,
             view_mode,
@@ -503,6 +518,7 @@ impl TailEngine {
     pub fn rebuild_line_index(&mut self) {
         // The file was truncated, rewritten or re-decoded: row indices no longer mean the same.
         self.clear_selection();
+        self.clear_bookmarks();
         self.rebuild_line_index_from(0);
     }
 
@@ -720,6 +736,7 @@ impl TailEngine {
                 };
                 self.rebuild_line_index_from(unchanged_lines);
                 self.check_sound_alerts(prev_lines_count);
+                self.note_unseen(prev_lines_count);
                 return;
             }
 
@@ -1392,6 +1409,139 @@ impl TailEngine {
             crate::audio::SoundAlertPreset::Beep.play();
         }
         target
+    }
+
+    // ----- Bookmarks -----
+
+    pub fn toggle_bookmark(&mut self, idx: usize) {
+        if idx >= self.total_lines() {
+            return;
+        }
+        if !self.bookmarks.remove(&idx) {
+            self.bookmarks.insert(idx);
+        }
+        self.bookmark_cursor = Some(idx);
+        self.bookmarks_dirty = true;
+    }
+
+    pub fn clear_bookmarks(&mut self) {
+        if !self.bookmarks.is_empty() {
+            self.bookmarks_dirty = true;
+        }
+        self.bookmarks.clear();
+        self.bookmark_cursor = None;
+    }
+
+    /// Replaces the bookmarks (used when restoring them from the configuration).
+    pub fn set_bookmarks<I: IntoIterator<Item = usize>>(&mut self, lines: I) {
+        let total = self.total_lines();
+        self.bookmarks = lines.into_iter().filter(|&l| l < total).collect();
+        self.bookmark_cursor = None;
+        self.bookmarks_dirty = false;
+    }
+
+    pub fn has_bookmarks(&self) -> bool {
+        !self.bookmarks.is_empty()
+    }
+
+    pub fn is_bookmarked(&self, idx: usize) -> bool {
+        self.bookmarks.contains(&idx)
+    }
+
+    /// Bookmarks that pass the active filters, in file order.
+    fn visible_bookmarks(&self) -> Vec<usize> {
+        self.bookmarks
+            .iter()
+            .copied()
+            .filter(|&l| self.is_line_visible(l))
+            .collect()
+    }
+
+    /// Jumps to the next visible bookmark after the cursor (or after `from` when there is no
+    /// cursor), wrapping around. Returns the target line.
+    pub fn bookmark_next(&mut self, from: usize) -> Option<usize> {
+        let visible = self.visible_bookmarks();
+        if visible.is_empty() {
+            return None;
+        }
+        let start = self.bookmark_cursor.unwrap_or(from);
+        let target = match self.bookmark_cursor {
+            Some(_) => visible.iter().copied().find(|&l| l > start),
+            None => visible.iter().copied().find(|&l| l >= start),
+        }
+        .unwrap_or(visible[0]);
+        self.bookmark_cursor = Some(target);
+        self.scroll_to_line = Some(target);
+        Some(target)
+    }
+
+    /// Jumps to the previous visible bookmark before the cursor, wrapping around.
+    pub fn bookmark_prev(&mut self, from: usize) -> Option<usize> {
+        let visible = self.visible_bookmarks();
+        if visible.is_empty() {
+            return None;
+        }
+        let start = self.bookmark_cursor.unwrap_or(from);
+        let target = match self.bookmark_cursor {
+            Some(_) => visible.iter().rev().copied().find(|&l| l < start),
+            None => visible.iter().rev().copied().find(|&l| l <= start),
+        }
+        .unwrap_or(*visible.last().unwrap());
+        self.bookmark_cursor = Some(target);
+        self.scroll_to_line = Some(target);
+        Some(target)
+    }
+
+    // ----- Background-tab activity -----
+
+    /// Counts lines appended while the stream is not displayed and records the most severe
+    /// highlight among them (2 = rule with a sound alert, 1 = any rule, 0 = none).
+    fn note_unseen(&mut self, start_idx: usize) {
+        if self.displayed {
+            return;
+        }
+        let total = self.total_lines();
+        if start_idx >= total {
+            return;
+        }
+        self.unseen_lines = self.unseen_lines.saturating_add(total - start_idx);
+        // Bound the per-poll scan so a burst of writes cannot stall the UI thread.
+        let scan_end = total.min(start_idx + 2_000);
+        for idx in start_idx..scan_end {
+            if self.unseen_severity >= 2 {
+                break;
+            }
+            if let Some(line) = self.get_line(idx) {
+                for (re_opt, pat_lower, rule) in &self.compiled_highlights {
+                    if !rule.enabled {
+                        continue;
+                    }
+                    let is_match = if let Some(re) = re_opt {
+                        re.is_match(&line)
+                    } else if rule.case_sensitive {
+                        line.contains(&rule.pattern)
+                    } else {
+                        contains_case_insensitive(&line, pat_lower)
+                    };
+                    if is_match {
+                        let sev = if rule.sound_alert != SoundAlertPreset::None {
+                            2
+                        } else {
+                            1
+                        };
+                        self.unseen_severity = self.unseen_severity.max(sev);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Called by the viewer when the stream is drawn: clears the unseen counter.
+    pub fn mark_seen(&mut self) {
+        self.displayed = true;
+        self.unseen_lines = 0;
+        self.unseen_severity = 0;
     }
 
     // ----- Go to line -----
