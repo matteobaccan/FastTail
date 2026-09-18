@@ -25,5 +25,5 @@
 
 ## 5. Release Recovery
 
-- [ ] 5.1 Delete the draft v0.1.0 release and its tag, or publish it as-is, per maintainer decision
-- [ ] 5.2 Tag the release commit on the new `main` and verify the tag pipeline ends with a published release containing five archives in under ~6 minutes
+- [x] 5.1 Delete the draft v0.1.0 release and its tag, or publish it as-is, per maintainer decision
+- [x] 5.2 Tag the release commit on the new `main` and verify the tag pipeline ends with a published release containing five archives in under ~6 minutes
