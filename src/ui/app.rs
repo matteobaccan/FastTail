@@ -4,13 +4,14 @@ use crate::external_tools::ToolRunner;
 use crate::i18n::t;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
-use crate::tail_engine::{QuickLabel, TailEngine};
+use crate::session::{LoadedSession, Session, StreamEntry};
+use crate::tail_engine::{FileEncoding, QuickLabel, TailEngine};
 use crate::theme::CyberTheme;
 use crate::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
 use eframe::egui;
 use egui::{Color32, CornerRadius, Key, Margin, RichText, Stroke, ViewportCommand};
 use egui_dock::{DockArea, DockState};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
@@ -69,6 +70,17 @@ pub struct FastTailApp {
     pub pattern_prompt: Option<String>,
     /// Spawns external tools and enforces the rule-bound throttle and cap.
     pub tool_runner: ToolRunner,
+    /// INI text of the named session as last saved or loaded; compared with the live
+    /// workspace at most once per second to show the `*` in the title bar.
+    pub session_saved: String,
+    pub session_dirty: bool,
+    pub last_dirty_check: Instant,
+    /// Session file waiting for the user to confirm discarding unsaved changes.
+    pub pending_session_load: Option<PathBuf>,
+    /// Streams of the last loaded session that could not be opened, shown once.
+    pub session_missing: Option<Vec<PathBuf>>,
+    /// Window title last sent to the OS, to send it again only when it changes.
+    pub title_applied: String,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -153,6 +165,9 @@ impl FastTailApp {
         config.theme.apply(&cc.egui_ctx);
         let mut app = Self::from_config(config);
         app.apply_cli(&cli);
+        if let Some(file) = &cli.session {
+            app.load_session_file(file.clone(), true);
+        }
         app.renderer = crate::renderer::ActiveRenderer::from_creation_context(cc);
         crate::renderer::mark_app_created();
         eprintln!(
@@ -217,6 +232,12 @@ impl FastTailApp {
             quick_labels: Vec::new(),
             pattern_prompt: None,
             tool_runner: ToolRunner::default(),
+            session_saved: String::new(),
+            session_dirty: false,
+            last_dirty_check: Instant::now(),
+            pending_session_load: None,
+            session_missing: None,
+            title_applied: String::new(),
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -248,6 +269,10 @@ impl FastTailApp {
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
                     engine.wrap_lines = app.config.wrap_for(&path);
+                    if let Some(lines) = app.config.bookmarks_for(&path, engine.total_lines()) {
+                        engine.set_bookmarks(lines);
+                    }
+                    apply_stream_state(&mut engine, &app.config);
                     app.engines.push(engine);
                 }
             }
@@ -260,15 +285,217 @@ impl FastTailApp {
             }
         }
 
-        // Open any files passed as CLI arguments
-        for arg in std::env::args_os().skip(1) {
-            let path = PathBuf::from(arg);
-            if path.exists() {
-                app.open_log_file(path);
+        // A named session restored from the previous run: what is on screen now is what
+        // fasttail.ini kept, which may already differ from the file; the snapshot is
+        // taken from the file itself so the `*` is right from the first frame.
+        if let Some(file) = app.config.current_session.clone() {
+            match Session::load_from(&file) {
+                Ok(loaded) => {
+                    app.session_saved = loaded.session.serialized(file.parent());
+                }
+                Err(_) => app.config.current_session = None,
             }
         }
 
         app
+    }
+
+    // ----- Named sessions -----------------------------------------------------------
+
+    /// Directory the current session file lives in (relative paths are computed to it).
+    fn session_base_dir(&self) -> Option<PathBuf> {
+        self.config
+            .current_session
+            .as_ref()
+            .and_then(|f| f.parent().map(Path::to_path_buf))
+    }
+
+    /// The dock layout as RON, with the recorded floating window rectangles applied.
+    fn dock_layout_ron(&mut self) -> Option<String> {
+        prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
+        let mut dock_to_save = self.dock_state.clone();
+        for (surf_index, rect) in &self.floating_window_rects {
+            if let Some(ws) = dock_to_save.get_window_state_mut(*surf_index) {
+                if rect.is_positive()
+                    && rect.min.x.is_finite()
+                    && rect.min.y.is_finite()
+                    && rect.min.x > -10000.0
+                    && rect.min.y > -10000.0
+                {
+                    ws.set_position(rect.min);
+                    ws.set_size(rect.size());
+                }
+            }
+        }
+        ron::to_string(&dock_to_save).ok()
+    }
+
+    /// The live workspace as a session: streams in dock order with their filters,
+    /// search query, wrap, encoding and bookmarks, plus the dock layout.
+    pub fn capture_session(&mut self) -> Session {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for (_, tab) in self.dock_state.iter_all_tabs() {
+            if let FastTailTab::LogStream(p) = tab {
+                if !paths.iter().any(|e| paths_equal(e, p)) {
+                    paths.push(p.clone());
+                }
+            }
+        }
+        let streams = paths
+            .iter()
+            .filter_map(|p| {
+                self.engines
+                    .iter()
+                    .find(|e| paths_equal(&e.path, p))
+                    .map(stream_entry_of)
+            })
+            .collect();
+        Session {
+            streams,
+            dock_layout: self.dock_layout_ron(),
+        }
+    }
+
+    /// The live workspace as text for the unsaved-changes check. The dock layout is
+    /// represented by its structure (surfaces, nodes and tab order) rather than by the
+    /// RON, whose node rectangles change at every resize without the user doing anything.
+    fn session_fingerprint(&mut self) -> String {
+        let base = self.session_base_dir();
+        let mut session = self.capture_session();
+        session.dock_layout = Some(dock_signature(&self.dock_state));
+        session.serialized(base.as_deref())
+    }
+
+    /// Records the live workspace as the saved state of the current session.
+    fn refresh_session_snapshot(&mut self) {
+        self.session_saved = self.session_fingerprint();
+        self.session_dirty = false;
+        self.last_dirty_check = Instant::now();
+    }
+
+    /// Compares the live workspace with the saved session, at most once per second.
+    fn check_session_dirty(&mut self) {
+        if self.config.current_session.is_none() {
+            self.session_dirty = false;
+            return;
+        }
+        if self.last_dirty_check.elapsed().as_secs_f32() < 1.0 {
+            return;
+        }
+        self.last_dirty_check = Instant::now();
+        let now = self.session_fingerprint();
+        self.session_dirty = now != self.session_saved;
+    }
+
+    /// Text shown after the product name: ` · name` with a `*` when unsaved.
+    pub fn session_title_suffix(&self) -> String {
+        match &self.config.current_session {
+            Some(file) => format!(
+                " · {}{}",
+                Session::name_of(file),
+                if self.session_dirty { "*" } else { "" }
+            ),
+            None => String::new(),
+        }
+    }
+
+    /// Saves the live workspace to `file` and makes it the current session.
+    pub fn save_session_as(&mut self, file: PathBuf) -> std::io::Result<()> {
+        let session = self.capture_session();
+        session.save_to(&file)?;
+        self.config.current_session = Some(file.clone());
+        self.config.add_recent_session(&file);
+        let _ = self.config.save();
+        self.refresh_session_snapshot();
+        Ok(())
+    }
+
+    /// Saves the live workspace to the current session file, if any.
+    pub fn save_session(&mut self) -> std::io::Result<()> {
+        match self.config.current_session.clone() {
+            Some(file) => self.save_session_as(file),
+            None => Ok(()),
+        }
+    }
+
+    /// Makes the live workspace the default one (fasttail.ini) and leaves the named session.
+    pub fn save_session_as_default(&mut self) {
+        let session = self.capture_session();
+        session.apply_to_config(&mut self.config);
+        self.config.current_session = None;
+        let _ = self.config.save();
+        self.refresh_session_snapshot();
+    }
+
+    /// Loads `file`, replacing the workspace. Unless `force`, a named session with unsaved
+    /// changes asks for confirmation first.
+    pub fn load_session_file(&mut self, file: PathBuf, force: bool) {
+        if !force && self.config.current_session.is_some() {
+            self.last_dirty_check = Instant::now() - std::time::Duration::from_secs(2);
+            self.check_session_dirty();
+            if self.session_dirty {
+                self.pending_session_load = Some(file);
+                return;
+            }
+        }
+        match Session::load_from(&file) {
+            Ok(loaded) => self.replace_workspace(loaded, Some(file)),
+            Err(err) => {
+                eprintln!("fasttail: cannot load session {}: {err}", file.display());
+                self.session_missing = Some(vec![file]);
+            }
+        }
+    }
+
+    /// Closes every stream and opens the ones of `loaded`, restoring their state and, when
+    /// its tabs match, the saved dock layout.
+    pub fn replace_workspace(&mut self, loaded: LoadedSession, file: Option<PathBuf>) {
+        self.engines.clear();
+        self.dock_state = DockState::new(vec![]);
+        self.floating_window_rects.clear();
+        self.config.open_files.clear();
+        self.config.streams.clear();
+        for entry in &loaded.session.streams {
+            self.config.set_stream_state(entry.clone());
+            self.config.set_wrap(&entry.path, entry.wrap);
+            self.config.set_bookmarks(&entry.path, &entry.bookmarks);
+            self.open_log_file(entry.path.clone());
+        }
+        if let Some(layout) = &loaded.session.dock_layout {
+            if let Ok(ds) = ron::from_str::<DockState<FastTailTab>>(layout) {
+                let tabs: Vec<PathBuf> = ds
+                    .iter_all_tabs()
+                    .filter_map(|(_, t)| match t {
+                        FastTailTab::LogStream(p) => Some(p.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let matches = tabs.len() == self.engines.len()
+                    && tabs
+                        .iter()
+                        .all(|t| self.engines.iter().any(|e| paths_equal(&e.path, t)));
+                if matches {
+                    for (surf_index, surface) in ds.iter_surfaces_indexed() {
+                        if let egui_dock::Surface::Window(_tree, ws) = surface {
+                            let r = ws.rect();
+                            if r.is_positive() && r.min.x > -10000.0 && r.min.y > -10000.0 {
+                                self.floating_window_rects.insert(surf_index, r);
+                            }
+                        }
+                    }
+                    self.dock_state = ds;
+                }
+            }
+        }
+        self.config.current_session = file.clone();
+        if let Some(f) = &file {
+            self.config.add_recent_session(f);
+        }
+        self.save_dock_layout();
+        self.refresh_session_snapshot();
+        if !loaded.missing.is_empty() {
+            self.session_missing = Some(loaded.missing);
+        }
     }
 
     /// Keeps every engine's set of tool-bound rule patterns in sync with the tools list
@@ -317,6 +544,16 @@ impl FastTailApp {
             }
         }
         self.config.open_files = current_open;
+
+        // Per-stream state of the default session (filters, search, encoding).
+        for eng in &self.engines {
+            let mut entry = stream_entry_of(eng);
+            entry.wrap = false;
+            entry.bookmarks.clear();
+            self.config.set_stream_state(entry);
+        }
+        let open = self.config.open_files.clone();
+        self.config.retain_stream_state_of(&open);
 
         prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
         let mut dock_to_save = self.dock_state.clone();
@@ -413,6 +650,7 @@ impl FastTailApp {
                 engine.set_bookmarks(lines);
             }
             engine.wrap_lines = self.config.wrap_for(&path);
+            apply_stream_state(&mut engine, &self.config);
             self.engines.push(engine);
 
             crate::audio::play_sound(
@@ -612,6 +850,16 @@ impl FastTailApp {
             self.save_dock_layout();
             self.last_dock_save = Instant::now();
         }
+        self.check_session_dirty();
+        let window_title = format!(
+            "FastTail v{} by Matteo Baccan{}",
+            env!("CARGO_PKG_VERSION"),
+            self.session_title_suffix()
+        );
+        if window_title != self.title_applied {
+            ctx.send_viewport_cmd(ViewportCommand::Title(window_title.clone()));
+            self.title_applied = window_title;
+        }
 
         // 2. Poll file updates, then run the tools bound to the rules that matched
         for eng in &mut self.engines {
@@ -685,7 +933,8 @@ impl FastTailApp {
 
                     // Title with integrated version
                     let version_str = format!("v{} by Matteo Baccan", env!("CARGO_PKG_VERSION"));
-                    let title_text = format!("FASTTAIL {}", version_str);
+                    let title_text =
+                        format!("FASTTAIL {}{}", version_str, self.session_title_suffix());
                     let title_resp = ui.add(
                         egui::Label::new(
                             RichText::new(title_text)
@@ -1022,6 +1271,78 @@ impl FastTailApp {
                             .map(|d| Self::default_pattern_for(&d))
                             .unwrap_or_default();
                         self.pattern_prompt = Some(seed);
+                    }
+
+                    // Sessions menu (🗂): save as, save, load, recent, save as default
+                    let session_btn =
+                        egui::Button::new(RichText::new("🗂").monospace().strong().color(text_pri))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.2, accent))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(30.0, 26.0));
+                    let mut session_action: Option<SessionAction> = None;
+                    let lang = self.config.language;
+                    let has_session = self.config.current_session.is_some();
+                    let recent_sessions = self.config.recent_sessions.clone();
+                    let session_menu =
+                        egui::menu::MenuButton::from_button(session_btn).ui(ui, |ui| {
+                            if ui.button(t(lang, "session_save_as")).clicked() {
+                                session_action = Some(SessionAction::SaveAs);
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(
+                                    has_session,
+                                    egui::Button::new(t(lang, "session_save")),
+                                )
+                                .clicked()
+                            {
+                                session_action = Some(SessionAction::Save);
+                                ui.close();
+                            }
+                            if ui.button(t(lang, "session_load")).clicked() {
+                                session_action = Some(SessionAction::Load);
+                                ui.close();
+                            }
+                            ui.menu_button(t(lang, "session_recent"), |ui| {
+                                if recent_sessions.is_empty() {
+                                    ui.label(
+                                        RichText::new(t(lang, "session_no_recent"))
+                                            .italics()
+                                            .color(self.config.theme.text_dim()),
+                                    );
+                                }
+                                for file in &recent_sessions {
+                                    if ui
+                                        .button(
+                                            RichText::new(format!("🗂 {}", Session::name_of(file)))
+                                                .monospace(),
+                                        )
+                                        .on_hover_text(file.display().to_string())
+                                        .clicked()
+                                    {
+                                        session_action =
+                                            Some(SessionAction::LoadFile(file.clone()));
+                                        ui.close();
+                                    }
+                                }
+                                if !recent_sessions.is_empty() {
+                                    ui.separator();
+                                    if ui.button(t(lang, "session_clear_recent")).clicked() {
+                                        session_action = Some(SessionAction::ClearRecent);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            if ui.button(t(lang, "session_save_default")).clicked() {
+                                session_action = Some(SessionAction::SaveDefault);
+                                ui.close();
+                            }
+                        });
+                    let _ = session_menu.0.on_hover_text(t(lang, "session_tip"));
+                    if let Some(action) = session_action {
+                        self.run_session_action(action);
                     }
 
                     // Filter button with amber border
@@ -2393,6 +2714,100 @@ impl FastTailApp {
             }
         }
 
+        // 11c. Session dialogs: discard unsaved changes? / streams that could not be opened
+        if let Some(pending) = self.pending_session_load.clone() {
+            let lang = self.config.language;
+            let theme = self.config.theme;
+            let mut is_open = true;
+            let mut decision: Option<bool> = None;
+            egui::Window::new(
+                RichText::new(format!("🗂 {}", t(lang, "session_unsaved_title")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .id(egui::Id::new("fasttail_session_confirm"))
+            .open(&mut is_open)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                let current = self
+                    .config
+                    .current_session
+                    .as_deref()
+                    .map(Session::name_of)
+                    .unwrap_or_default();
+                ui.label(
+                    RichText::new(t(lang, "session_unsaved_body").replace("{name}", &current))
+                        .monospace()
+                        .size(11.5)
+                        .color(theme.text_primary()),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(t(lang, "session_load_anyway")).clicked() {
+                        decision = Some(true);
+                    }
+                    if ui.button(t(lang, "session_cancel")).clicked()
+                        || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    {
+                        decision = Some(false);
+                    }
+                });
+            });
+            match decision {
+                Some(true) => {
+                    self.pending_session_load = None;
+                    self.load_session_file(pending, true);
+                }
+                Some(false) => self.pending_session_load = None,
+                None if !is_open => self.pending_session_load = None,
+                None => {}
+            }
+        }
+        if let Some(missing) = self.session_missing.clone() {
+            let lang = self.config.language;
+            let theme = self.config.theme;
+            let mut is_open = true;
+            let mut close = false;
+            egui::Window::new(
+                RichText::new(format!("🗂 {}", t(lang, "session_missing_title")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .id(egui::Id::new("fasttail_session_missing"))
+            .open(&mut is_open)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                ui.label(
+                    RichText::new(t(lang, "session_missing_body"))
+                        .monospace()
+                        .size(11.5)
+                        .color(theme.text_primary()),
+                );
+                ui.add_space(4.0);
+                for p in &missing {
+                    ui.label(
+                        RichText::new(format!("• {}", p.display()))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme.text_dim()),
+                    );
+                }
+                ui.add_space(8.0);
+                if ui.button(t(lang, "session_ok")).clicked()
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            if close || !is_open {
+                self.session_missing = None;
+            }
+        }
+
         // 12. Render Matrix Screensaver if activated
         let viewport = ctx.content_rect();
         self.screensaver.render(&ctx, viewport);
@@ -2530,5 +2945,113 @@ impl eframe::App for FastTailApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_dock_layout();
         let _ = self.config.save();
+    }
+}
+
+/// What the sessions menu asked for; run after the menu closed so `self` is free.
+enum SessionAction {
+    SaveAs,
+    Save,
+    Load,
+    LoadFile(PathBuf),
+    ClearRecent,
+    SaveDefault,
+}
+
+impl FastTailApp {
+    fn run_session_action(&mut self, action: SessionAction) {
+        match action {
+            SessionAction::SaveAs => {
+                let mut dialog = rfd::FileDialog::new()
+                    .add_filter("FastTail session", &["ini"])
+                    .set_file_name(format!("session{}", crate::session::SESSION_SUFFIX));
+                if let Some(dir) = self.session_base_dir() {
+                    dialog = dialog.set_directory(dir);
+                }
+                if let Some(file) = dialog.save_file() {
+                    let file = Session::with_suffix(&file);
+                    if let Err(err) = self.save_session_as(file.clone()) {
+                        eprintln!("fasttail: cannot save session {}: {err}", file.display());
+                    }
+                }
+            }
+            SessionAction::Save => {
+                if let Err(err) = self.save_session() {
+                    eprintln!("fasttail: cannot save session: {err}");
+                }
+            }
+            SessionAction::Load => {
+                let mut dialog = rfd::FileDialog::new().add_filter("FastTail session", &["ini"]);
+                if let Some(dir) = self.session_base_dir() {
+                    dialog = dialog.set_directory(dir);
+                }
+                if let Some(file) = dialog.pick_file() {
+                    self.load_session_file(file, false);
+                }
+            }
+            SessionAction::LoadFile(file) => self.load_session_file(file, false),
+            SessionAction::ClearRecent => {
+                self.config.recent_sessions.clear();
+                let _ = self.config.save();
+            }
+            SessionAction::SaveDefault => self.save_session_as_default(),
+        }
+    }
+}
+
+/// Structure of the dock (surface, node and tab order) without geometry.
+fn dock_signature(dock: &DockState<FastTailTab>) -> String {
+    let mut out = String::new();
+    for (path, tab) in dock.iter_all_tabs() {
+        let name = match tab {
+            FastTailTab::LogStream(p) => p.to_string_lossy().to_string(),
+            other => format!("{other:?}"),
+        };
+        out.push_str(&format!(
+            "{}:{}:{}:{name};",
+            path.surface.0, path.node.0, path.tab.0
+        ));
+    }
+    out
+}
+
+/// The session entry describing `engine` as it is now.
+fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
+    StreamEntry {
+        path: engine.path.clone(),
+        include_filter: engine.include_filter.clone(),
+        exclude_filter: engine.exclude_filter.clone(),
+        search_query: engine.search_query.trim().to_string(),
+        wrap: engine.wrap_lines,
+        encoding: Some(engine.encoding.name().to_string()),
+        bookmarks: engine.bookmarks.iter().copied().collect(),
+    }
+}
+
+/// Applies the persisted filters, search query and encoding of the engine's path (wrap
+/// and bookmarks are applied by the caller from their own sections).
+fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
+    let Some(entry) = cfg.stream_state_for(&engine.path).cloned() else {
+        return;
+    };
+    if let Some(enc) = entry.encoding.as_deref().and_then(FileEncoding::from_name) {
+        if enc != engine.encoding {
+            // Re-decoding rebuilds the index and drops bookmarks: restore them after.
+            let bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
+            engine.set_encoding(enc);
+            if !bookmarks.is_empty() && bookmarks.iter().all(|&l| l < engine.total_lines()) {
+                engine.set_bookmarks(bookmarks);
+            }
+        }
+    }
+    if !entry.include_filter.is_empty() {
+        engine.set_include_filter(&entry.include_filter);
+    }
+    if !entry.exclude_filter.is_empty() {
+        engine.set_exclude_filter(&entry.exclude_filter);
+    }
+    if !entry.search_query.is_empty() {
+        engine.search_query = entry.search_query.clone();
+        engine.update_search(&entry.search_query);
     }
 }

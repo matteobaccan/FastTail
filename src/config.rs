@@ -1,4 +1,5 @@
 use crate::i18n::Language;
+use crate::session::{Session, StreamEntry, MAX_RECENT_SESSIONS};
 use crate::tail_engine::{HighlightRule, SizeUnit};
 use crate::theme::CyberTheme;
 use ini::Ini;
@@ -64,6 +65,16 @@ pub struct FastTailConfig {
     pub baretail_prompt_shown: bool,
     #[serde(default)]
     pub dock_layout: Option<String>,
+    /// Per-stream state of the default session (filters, search, encoding), keyed by
+    /// path; wrap and bookmarks keep their own sections. See `set_stream_state`.
+    #[serde(default, skip)]
+    pub streams: Vec<StreamEntry>,
+    /// Named session file the workspace was last saved to or loaded from.
+    #[serde(default)]
+    pub current_session: Option<PathBuf>,
+    /// Recently used session files, most recent first.
+    #[serde(default)]
+    pub recent_sessions: Vec<PathBuf>,
     #[serde(default)]
     pub window_x: Option<f32>,
     #[serde(default)]
@@ -135,6 +146,9 @@ impl Default for FastTailConfig {
             baretail_import: false,
             baretail_prompt_shown: false,
             dock_layout: None,
+            streams: Vec::new(),
+            current_session: None,
+            recent_sessions: Vec::new(),
             window_x: None,
             window_y: None,
             window_width: None,
@@ -257,6 +271,34 @@ impl FastTailConfig {
             .any(|p| crate::paths::paths_equal(p, path))
     }
 
+    /// Records the per-stream state of `entry.path` (filters, search query, encoding).
+    pub fn set_stream_state(&mut self, entry: StreamEntry) {
+        self.streams
+            .retain(|s| !crate::paths::paths_equal(&s.path, &entry.path));
+        self.streams.push(entry);
+    }
+
+    /// Persisted per-stream state of `path`, if any.
+    pub fn stream_state_for(&self, path: &Path) -> Option<&StreamEntry> {
+        self.streams
+            .iter()
+            .find(|s| crate::paths::paths_equal(&s.path, path))
+    }
+
+    /// Drops the per-stream state of files that are no longer open.
+    pub fn retain_stream_state_of(&mut self, open: &[PathBuf]) {
+        self.streams
+            .retain(|s| open.iter().any(|p| crate::paths::paths_equal(p, &s.path)));
+    }
+
+    /// Records `file` at the front of the recent sessions list (capped).
+    pub fn add_recent_session(&mut self, file: &Path) {
+        self.recent_sessions
+            .retain(|p| !crate::paths::paths_equal(p, file));
+        self.recent_sessions.insert(0, file.to_path_buf());
+        self.recent_sessions.truncate(MAX_RECENT_SESSIONS);
+    }
+
     /// Saved bookmarks of `path` that still fit in a file of `total_lines` lines. Returns
     /// `None` when there are none or the file shrank below the largest saved index.
     pub fn bookmarks_for(&self, path: &Path, total_lines: usize) -> Option<Vec<usize>> {
@@ -355,6 +397,24 @@ impl FastTailConfig {
 
         if let Some(layout) = &self.dock_layout {
             conf.with_section(Some("dock")).set("layout", layout);
+        }
+
+        // The default session's per-stream state, in the session file format so the same
+        // reader serves both. Only the entries of files still open are written.
+        let mut default_session = Session::from_config(self);
+        default_session.dock_layout = None;
+        if !default_session.streams.is_empty() {
+            default_session.write_into(&mut conf, None);
+        }
+        if let Some(file) = &self.current_session {
+            conf.with_section(Some("general"))
+                .set("session_file", file.to_string_lossy().to_string());
+        }
+        if !self.recent_sessions.is_empty() {
+            let mut sec = conf.with_section(Some("recent_sessions"));
+            for (i, p) in self.recent_sessions.iter().enumerate() {
+                sec.set(format!("file_{}", i), p.to_string_lossy().to_string());
+            }
         }
 
         let mut win_sec = conf.with_section(Some("window"));
@@ -616,6 +676,43 @@ impl FastTailConfig {
             if let Some(layout) = sec.get("layout") {
                 cfg.dock_layout = Some(layout.to_string());
             }
+        }
+
+        // Per-stream state of the default session (same sections as a session file;
+        // paths are absolute, no base directory). Wrap and bookmarks come from their own
+        // sections above; the stream entries only contribute filters, search, encoding.
+        let loaded = Session::read_from(conf, None);
+        cfg.streams = loaded
+            .session
+            .streams
+            .into_iter()
+            .map(|mut s| {
+                s.wrap = false;
+                s.bookmarks.clear();
+                s
+            })
+            .collect();
+        if let Some(file) = conf
+            .section(Some("general"))
+            .and_then(|g| g.get("session_file"))
+            .filter(|f| !f.is_empty())
+        {
+            cfg.current_session = Some(PathBuf::from(file));
+        }
+        if let Some(sec) = conf.section(Some("recent_sessions")) {
+            let mut entries: Vec<_> = sec.iter().collect();
+            entries.sort_by_key(|(k, _)| {
+                k.strip_prefix("file_")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(usize::MAX)
+            });
+            for (_, val) in entries {
+                let p = PathBuf::from(val);
+                if !cfg.recent_sessions.contains(&p) {
+                    cfg.recent_sessions.push(p);
+                }
+            }
+            cfg.recent_sessions.truncate(MAX_RECENT_SESSIONS);
         }
 
         if let Some(win) = conf.section(Some("window")) {
