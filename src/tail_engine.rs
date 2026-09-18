@@ -498,6 +498,9 @@ pub struct TailEngine {
     /// Minimum time between two directory scans of a pattern stream (2 s; tests use 0).
     pub pattern_scan_interval: Duration,
     last_pattern_scan: Instant,
+    /// Minimum time between fallback size checks via filesystem metadata (500 ms; tests use 0).
+    pub size_check_interval: Duration,
+    last_size_check: Instant,
     /// Name of the file the stream last switched to and when, for the stream bar notice.
     pub switch_notice: Option<(String, Instant)>,
     /// First bytes of the file and the bytes before the indexed end, used to tell a rewrite
@@ -624,7 +627,8 @@ pub struct TailEngine {
 
 /// Directory scan cadence of a pattern stream.
 pub const PATTERN_SCAN_INTERVAL: Duration = Duration::from_secs(2);
-/// How long the "switched to <file>" notice stays in the stream bar.
+/// Minimum cadence between fallback size checks via filesystem metadata (500 ms).
+pub const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 pub const SWITCH_NOTICE_DURATION: Duration = Duration::from_secs(5);
 
 impl TailEngine {
@@ -897,6 +901,10 @@ impl TailEngine {
             current_file: None,
             pattern_scan_interval: PATTERN_SCAN_INTERVAL,
             last_pattern_scan: Instant::now(),
+            size_check_interval: Duration::ZERO,
+            last_size_check: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
             switch_notice: None,
             source,
             head_fingerprint: Vec::new(),
@@ -1343,15 +1351,22 @@ impl TailEngine {
         }
 
         // Periodic size check (handles network drives and Windows handle caches)
-        if let Some(current) = &self.current_file {
-            if let Ok(metadata) = std::fs::metadata(current) {
-                let current_len = metadata.len();
-                if current_len != self.file_size {
-                    needs_refresh = true;
+        let do_size_check = needs_refresh
+            || self.size_check_interval.is_zero()
+            || (self.is_pattern() && self.pattern_scan_interval.is_zero())
+            || self.last_size_check.elapsed() >= self.size_check_interval;
+        if do_size_check {
+            self.last_size_check = Instant::now();
+            if let Some(current) = &self.current_file {
+                if let Ok(metadata) = std::fs::metadata(current) {
+                    let current_len = metadata.len();
+                    if current_len != self.file_size {
+                        needs_refresh = true;
+                    }
                 }
+            } else {
+                needs_refresh = false;
             }
-        } else {
-            needs_refresh = false;
         }
 
         if needs_refresh {

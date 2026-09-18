@@ -81,6 +81,10 @@ pub struct FastTailApp {
     pub session_missing: Option<Vec<PathBuf>>,
     /// Window title last sent to the OS, to send it again only when it changes.
     pub title_applied: String,
+    /// Theme visuals last applied to egui context, applied again only when it changes.
+    pub theme_applied: Option<CyberTheme>,
+    /// Timestamp of last live frame render for frame pacing.
+    pub last_frame_render: Instant,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -238,6 +242,8 @@ impl FastTailApp {
             pending_session_load: None,
             session_missing: None,
             title_applied: String::new(),
+            theme_applied: None,
+            last_frame_render: Instant::now(),
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -266,6 +272,7 @@ impl FastTailApp {
                     TailEngine::open(&path)
                 };
                 if let Ok(mut engine) = opened {
+                    engine.size_check_interval = crate::tail_engine::SIZE_CHECK_INTERVAL;
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
                     engine.wrap_lines = app.config.wrap_for(&path);
@@ -501,6 +508,26 @@ impl FastTailApp {
     /// Keeps every engine's set of tool-bound rule patterns in sync with the tools list
     /// and runs the tools whose rule matched appended lines, through the throttled runner.
     pub fn run_rule_bound_tools(&mut self) {
+        if self.config.external_tools.is_empty() {
+            for eng in &mut self.engines {
+                if !eng.tool_bound_rules.is_empty() {
+                    eng.tool_bound_rules.clear();
+                }
+                eng.pending_tool_hits.clear();
+            }
+            return;
+        }
+        let any_bound = self.config.external_tools.iter().any(|t| t.bound_rule.is_some());
+        if !any_bound {
+            for eng in &mut self.engines {
+                if !eng.tool_bound_rules.is_empty() {
+                    eng.tool_bound_rules.clear();
+                }
+                eng.pending_tool_hits.clear();
+            }
+            return;
+        }
+
         let bound: std::collections::HashSet<String> = self
             .config
             .external_tools
@@ -643,6 +670,7 @@ impl FastTailApp {
             TailEngine::open(&path)
         };
         if let Ok(mut engine) = opened {
+            engine.size_check_interval = crate::tail_engine::SIZE_CHECK_INTERVAL;
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
@@ -891,8 +919,11 @@ impl FastTailApp {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
-        // 5. Apply theme visuals
-        self.config.theme.apply(&ctx);
+        // 5. Apply theme visuals (only when theme changes or on first frame)
+        if self.theme_applied != Some(self.config.theme) {
+            self.config.theme.apply(&ctx);
+            self.theme_applied = Some(self.config.theme);
+        }
 
         // 6. Primary Title Bar (Title, window controls, telemetry, and safe draggable region)
         egui::Panel::top("title_panel")
@@ -2939,6 +2970,12 @@ impl eframe::App for FastTailApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let min_interval = std::time::Duration::from_millis(8);
+        let elapsed = self.last_frame_render.elapsed();
+        if elapsed < min_interval {
+            std::thread::sleep(min_interval - elapsed);
+        }
+        self.last_frame_render = Instant::now();
         self.render_ui(ui);
     }
 
