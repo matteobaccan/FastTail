@@ -1073,9 +1073,7 @@ impl TailEngine {
         }
         let q_lower = query.to_lowercase();
 
-        let check_match = |line: &str| -> bool {
-            contains_case_insensitive(line, &q_lower)
-        };
+        let check_match = |line: &str| -> bool { contains_case_insensitive(line, &q_lower) };
 
         if self.is_filter_active() {
             let first = self.filtered_lines.partition_point(|&idx| idx < start);
