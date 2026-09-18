@@ -1,8 +1,11 @@
 use crate::config::push_search_history;
 use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
-use crate::tail_engine::{HighlightRule, TailEngine};
+use crate::tail_engine::{HighlightRule, HighlightStyle, TailEngine};
 use crate::theme::CyberTheme;
+use crate::wrap_layout::{
+    anchor_center, anchor_to_bottom, fill_from, layout_slice, walk_anchor, WrapAnchor, WrapScroll,
+};
 use egui::{Color32, RichText, ScrollArea, Stroke, Ui, WidgetText};
 use egui_dock::TabViewer;
 use std::path::{Path, PathBuf};
@@ -256,15 +259,7 @@ fn search_marker_label(
     is_active: bool,
     bookmarked: bool,
 ) {
-    let (glyph, color) = if is_active {
-        ("▶", theme.accent_color())
-    } else if matches {
-        ("●", theme.warn_color())
-    } else if bookmarked {
-        ("★", theme.secondary_accent())
-    } else {
-        ("\u{2007}", theme.text_dim()) // figure space: same advance as a digit
-    };
+    let (glyph, color) = marker_glyph(theme, matches, is_active, bookmarked);
     ui.label(
         RichText::new(format!("{glyph} "))
             .monospace()
@@ -272,6 +267,53 @@ fn search_marker_label(
             .size(font_size)
             .color(color),
     );
+}
+
+/// Row tint for search hits, the selection and bookmarks; search tints win over the
+/// selection tint, which wins over the bookmark tint.
+fn row_tint(
+    theme: &CyberTheme,
+    matches: bool,
+    is_active: bool,
+    selected: bool,
+    bookmarked: bool,
+) -> Option<Color32> {
+    if !matches && !is_active && !selected && !bookmarked {
+        return None;
+    }
+    let (base, alpha) = if is_active {
+        (theme.accent_color(), 70)
+    } else if matches {
+        (theme.warn_color(), 40)
+    } else if selected {
+        (theme.secondary_accent(), 60)
+    } else {
+        (theme.secondary_accent(), 28)
+    };
+    Some(Color32::from_rgba_unmultiplied(
+        base.r(),
+        base.g(),
+        base.b(),
+        alpha,
+    ))
+}
+
+/// Marker glyph and colour of a row: ▶ current hit, ● other hits, ★ bookmark, blank otherwise.
+fn marker_glyph(
+    theme: &CyberTheme,
+    matches: bool,
+    is_active: bool,
+    bookmarked: bool,
+) -> (&'static str, Color32) {
+    if is_active {
+        ("▶", theme.accent_color())
+    } else if matches {
+        ("●", theme.warn_color())
+    } else if bookmarked {
+        ("★", theme.secondary_accent())
+    } else {
+        ("\u{2007}", theme.text_dim()) // figure space: same advance as a digit
+    }
 }
 
 /// Tints the whole row of a search hit, drawing behind the widgets laid out in `row_rect`.
@@ -286,20 +328,9 @@ fn paint_search_row_background(
     selected: bool,
     bookmarked: bool,
 ) {
-    if !matches && !is_active && !selected && !bookmarked {
+    let Some(fill) = row_tint(theme, matches, is_active, selected, bookmarked) else {
         return;
-    }
-    // Search tints win over the selection tint, which wins over the bookmark tint.
-    let (base, alpha) = if is_active {
-        (theme.accent_color(), 70)
-    } else if matches {
-        (theme.warn_color(), 40)
-    } else if selected {
-        (theme.secondary_accent(), 60)
-    } else {
-        (theme.secondary_accent(), 28)
     };
-    let fill = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
     let full = egui::Rect::from_min_max(
         egui::pos2(ui.max_rect().left(), row_rect.top()),
         egui::pos2(
@@ -344,21 +375,82 @@ fn render_log_stream(
         }
     }
 
-    // Helper to scroll to a search target (a line index, or a byte offset in HEX view),
-    // centering it in the viewport
-    let scroll_to_target = |engine: &mut TailEngine, target: usize| {
-        let row_y = if engine.view_mode == crate::tail_engine::ViewMode::Hex {
-            Some((target / bytes_per_row) as f32 * hex_row_height)
+    // Viewport movement helpers. Extend mode maps lines to pixels through the constant row
+    // height; wrap mode hands the wrap renderer a request that it resolves through the real
+    // row heights (see `wrap_layout`), so every jump stays anchored to a line index.
+    let wrap_view = |engine: &TailEngine| {
+        engine.wrap_lines && engine.view_mode != crate::tail_engine::ViewMode::Hex
+    };
+    let top_row = |engine: &TailEngine| -> usize {
+        if wrap_view(engine) {
+            engine.wrap_anchor.row
         } else {
-            engine.scroll_to_line = Some(target);
-            engine
-                .get_visible_row_of_line(target)
-                .map(|v_row| v_row as f32 * row_height)
-        };
-        if let Some(row_y) = row_y {
+            (engine.current_scroll_y / row_height).round() as usize
+        }
+    };
+    let scroll_lines = |engine: &mut TailEngine, n: i64| {
+        engine.follow_tail = false;
+        if wrap_view(engine) {
+            engine.wrap_request = Some(WrapScroll::Lines(n));
+        } else {
+            engine.requested_scroll_y =
+                Some((engine.current_scroll_y + n as f32 * row_height).max(0.0));
+        }
+    };
+    let scroll_pages = |engine: &mut TailEngine, n: i32| {
+        engine.follow_tail = false;
+        if wrap_view(engine) {
+            engine.wrap_request = Some(WrapScroll::Pages(n));
+        } else {
+            let visible_lines = ((viewport_height / row_height).floor() as usize).max(1);
+            let current_line = (engine.current_scroll_y / row_height).round() as usize;
+            let target_line = if n < 0 {
+                current_line.saturating_sub(visible_lines * n.unsigned_abs() as usize)
+            } else {
+                current_line + visible_lines * n as usize
+            };
+            engine.requested_scroll_y = Some(target_line as f32 * row_height);
+        }
+    };
+    let scroll_top = |engine: &mut TailEngine| {
+        engine.follow_tail = false;
+        if wrap_view(engine) {
+            engine.wrap_request = Some(WrapScroll::Top);
+        } else {
+            engine.requested_scroll_y = Some(0.0);
+        }
+    };
+    let scroll_bottom = |engine: &mut TailEngine| {
+        engine.follow_tail = true;
+        if wrap_view(engine) {
+            engine.wrap_request = Some(WrapScroll::Bottom);
+        } else {
+            let max_y = (engine.visible_line_count() as f32 * row_height).max(0.0);
+            engine.requested_scroll_y = Some(max_y);
+        }
+    };
+    // Scroll to a search target (a line index, or a byte offset in HEX view), centering it
+    // in the viewport
+    let scroll_to_target = |engine: &mut TailEngine, target: usize| {
+        if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+            let row_y = (target / bytes_per_row) as f32 * hex_row_height;
             engine.requested_scroll_y = Some((row_y - viewport_height / 2.0).max(0.0));
             engine.requested_scroll_x = Some(0.0);
             engine.follow_tail = false;
+        } else if wrap_view(engine) {
+            engine.scroll_to_line = None;
+            engine.wrap_request = Some(WrapScroll::CenterLine(target));
+            engine.follow_tail = false;
+        } else {
+            engine.scroll_to_line = Some(target);
+            if let Some(row_y) = engine
+                .get_visible_row_of_line(target)
+                .map(|v_row| v_row as f32 * row_height)
+            {
+                engine.requested_scroll_y = Some((row_y - viewport_height / 2.0).max(0.0));
+                engine.requested_scroll_x = Some(0.0);
+                engine.follow_tail = false;
+            }
         }
     };
 
@@ -442,6 +534,33 @@ fn render_log_stream(
         {
             *show_line_numbers = !*show_line_numbers;
             ui.ctx().request_repaint();
+        }
+
+        // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
+        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+            let wrap_text = if engine.wrap_lines {
+                RichText::new("↩ Wrap")
+                    .color(theme.accent_color())
+                    .monospace()
+                    .strong()
+            } else {
+                RichText::new("↩ Wrap").color(theme.text_dim()).monospace()
+            };
+            let alt_w = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::W);
+            let toggled = ui
+                .button(wrap_text)
+                .on_hover_text(t(lang, "tip_wrap"))
+                .clicked()
+                || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
+            if toggled {
+                let row = top_row(engine);
+                engine.set_wrap_lines(!engine.wrap_lines, row);
+                if !engine.wrap_lines {
+                    // Extend mode maps rows to pixels itself: keep the same top row.
+                    engine.requested_scroll_y = Some(row as f32 * row_height);
+                }
+                ui.ctx().request_repaint();
+            }
         }
 
         ui.separator();
@@ -722,8 +841,7 @@ fn render_log_stream(
                     scroll_to_target(engine, target);
                     push_search_history(search_history, search_query);
                 } else {
-                    engine.follow_tail = false;
-                    engine.requested_scroll_y = Some(engine.current_scroll_y + row_height);
+                    scroll_lines(engine, 1);
                 }
                 ui.ctx().request_repaint();
             }
@@ -732,26 +850,16 @@ fn render_log_stream(
                     scroll_to_target(engine, target);
                     push_search_history(search_history, search_query);
                 } else {
-                    engine.follow_tail = false;
-                    engine.requested_scroll_y =
-                        Some((engine.current_scroll_y - row_height).max(0.0));
+                    scroll_lines(engine, -1);
                 }
                 ui.ctx().request_repaint();
             }
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown)) {
-                let visible_lines = ((viewport_height / row_height).floor() as usize).max(1);
-                let current_line = (engine.current_scroll_y / row_height).round() as usize;
-                let target_line = current_line + visible_lines;
-                engine.follow_tail = false;
-                engine.requested_scroll_y = Some(target_line as f32 * row_height);
+                scroll_pages(engine, 1);
                 ui.ctx().request_repaint();
             }
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp)) {
-                let visible_lines = ((viewport_height / row_height).floor() as usize).max(1);
-                let current_line = (engine.current_scroll_y / row_height).round() as usize;
-                let target_line = current_line.saturating_sub(visible_lines);
-                engine.follow_tail = false;
-                engine.requested_scroll_y = Some(target_line as f32 * row_height);
+                scroll_pages(engine, -1);
                 ui.ctx().request_repaint();
             }
         }
@@ -892,8 +1000,7 @@ fn render_log_stream(
             let esc = resp.has_focus()
                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             if enter {
-                let current_line = (engine.current_scroll_y / row_height).round() as usize;
-                let current_line = engine.get_actual_line_idx(current_line).unwrap_or(0);
+                let current_line = engine.get_actual_line_idx(top_row(engine)).unwrap_or(0);
                 match engine.resolve_goto(&engine.goto_input.clone(), current_line) {
                     Some(target) => {
                         engine.goto_notice = if target.hidden {
@@ -1015,7 +1122,7 @@ fn render_log_stream(
             let shift_f2 = egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::F2);
             let plain_f2 = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F2);
             let current_row = || -> usize {
-                let top = (engine.current_scroll_y / row_height).round() as usize;
+                let top = top_row(engine);
                 engine
                     .selection
                     .iter()
@@ -1047,14 +1154,11 @@ fn render_log_stream(
             ui.input(|i| {
                 // Ctrl + Home: Jump to top
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
-                    engine.follow_tail = false;
-                    engine.requested_scroll_y = Some(0.0);
+                    scroll_top(engine);
                 }
                 // Ctrl + End: Jump to bottom & follow
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::End) {
-                    engine.follow_tail = true;
-                    let max_y = (engine.visible_line_count() as f32 * row_height).max(0.0);
-                    engine.requested_scroll_y = Some(max_y);
+                    scroll_bottom(engine);
                 }
                 // Home (horizontal start)
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
@@ -1070,13 +1174,10 @@ fn render_log_stream(
                 // Arrow navigation (Ctrl + Left/Right moves by 5x)
                 let h_step = if i.modifiers.ctrl { 200.0 } else { 40.0 };
                 if i.key_pressed(egui::Key::ArrowUp) {
-                    engine.follow_tail = false;
-                    engine.requested_scroll_y =
-                        Some((engine.current_scroll_y - row_height).max(0.0));
+                    scroll_lines(engine, -1);
                 }
                 if i.key_pressed(egui::Key::ArrowDown) {
-                    engine.follow_tail = false;
-                    engine.requested_scroll_y = Some(engine.current_scroll_y + row_height);
+                    scroll_lines(engine, 1);
                 }
                 if i.key_pressed(egui::Key::ArrowLeft) {
                     engine.requested_scroll_x = Some((engine.current_scroll_x - h_step).max(0.0));
@@ -1085,17 +1186,11 @@ fn render_log_stream(
                     engine.requested_scroll_x = Some(engine.current_scroll_x + h_step);
                 }
                 // PageUp / PageDown: screen-based paging
-                let visible_lines = ((ui.available_height() / row_height).floor() as usize).max(1);
-                let current_line = (engine.current_scroll_y / row_height).round() as usize;
                 if i.key_pressed(egui::Key::PageUp) {
-                    engine.follow_tail = false;
-                    let target_line = current_line.saturating_sub(visible_lines);
-                    engine.requested_scroll_y = Some(target_line as f32 * row_height);
+                    scroll_pages(engine, -1);
                 }
                 if i.key_pressed(egui::Key::PageDown) {
-                    engine.follow_tail = false;
-                    let target_line = current_line + visible_lines;
-                    engine.requested_scroll_y = Some(target_line as f32 * row_height);
+                    scroll_pages(engine, 1);
                 }
             });
         }
@@ -1293,9 +1388,73 @@ fn render_log_stream(
     // The marker column appears when there is anything to mark: search hits or bookmarks.
     let show_markers = has_search || engine.has_bookmarks();
 
+    let (row_click, toggle_json) = if engine.wrap_lines {
+        render_wrapped_rows(
+            ui,
+            engine,
+            theme,
+            font_size,
+            row_height,
+            *show_line_numbers,
+            show_markers,
+            level_colors,
+            has_search,
+            active_search_line,
+        )
+    } else {
+        render_extended_rows(
+            ui,
+            engine,
+            theme,
+            font_size,
+            row_height,
+            *show_line_numbers,
+            show_markers,
+            level_colors,
+            has_search,
+            active_search_line,
+        )
+    };
+
+    if let Some((idx, mods)) = row_click {
+        if mods.shift {
+            engine.extend_selection_to(idx);
+        } else if mods.ctrl || mods.command {
+            engine.toggle_row(idx);
+        } else {
+            engine.select_row(idx);
+        }
+        ui.ctx().request_repaint();
+    }
+
+    if let Some((idx, was_expanded)) = toggle_json {
+        if was_expanded {
+            engine.expanded_json_lines.remove(&idx);
+        } else {
+            engine.expanded_json_lines.insert(idx);
+        }
+    }
+}
+
+/// Text view in extend mode: every row has the same height, so the scroll offset maps to
+/// a line index arithmetically and `show_rows` lays out only the visible range.
+#[allow(clippy::too_many_arguments)]
+fn render_extended_rows(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    font_size: f32,
+    row_height: f32,
+    show_line_numbers: bool,
+    show_markers: bool,
+    level_colors: bool,
+    has_search: bool,
+    active_search_line: Option<usize>,
+) -> RowInteractions {
     let mut toggle_json = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut clear_scroll_to_line = false;
+    let visible_lines = engine.visible_line_count();
     let mut scroll_area = ScrollArea::both()
         .auto_shrink([false, false])
         .stick_to_bottom(engine.follow_tail);
@@ -1322,19 +1481,8 @@ fn render_log_stream(
                 let is_json = TailEngine::is_json_line(&raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
                 // User rules first; the level palette only colours rows no rule matched.
-                let highlight = engine.match_highlight(&raw_line).or_else(|| {
-                    if !level_colors {
-                        return None;
-                    }
-                    theme
-                        .level_style(engine.level_of(actual_line_idx))
-                        .map(|s| crate::tail_engine::HighlightStyle {
-                            fg: s.fg,
-                            bg: s.bg,
-                            bold: s.bold,
-                            italic: false,
-                        })
-                });
+                let highlight =
+                    row_highlight(engine, theme, level_colors, actual_line_idx, &raw_line);
                 let matches_search = has_search
                     && engine
                         .search_matches
@@ -1365,7 +1513,7 @@ fn render_log_stream(
                         }
 
                         // Line number
-                        if *show_line_numbers {
+                        if show_line_numbers {
                             let line_num_str = format!("{:>6} │", actual_line_idx + 1);
                             let num_color = if is_active_search {
                                 theme.accent_color()
@@ -1487,25 +1635,386 @@ fn render_log_stream(
     }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
+    (row_click, toggle_json)
+}
 
-    if let Some((idx, mods)) = row_click {
-        if mods.shift {
-            engine.extend_selection_to(idx);
-        } else if mods.ctrl || mods.command {
-            engine.toggle_row(idx);
-        } else {
-            engine.select_row(idx);
+/// What the user did on the rows this frame: a row click with its modifiers, and a JSON
+/// expander toggle `(line, was_expanded)`.
+type RowInteractions = (Option<(usize, egui::Modifiers)>, Option<(usize, bool)>);
+
+/// Level-palette fallback for a row no user rule matched (user rules keep priority).
+fn row_highlight(
+    engine: &TailEngine,
+    theme: &CyberTheme,
+    level_colors: bool,
+    line_idx: usize,
+    raw_line: &str,
+) -> Option<HighlightStyle> {
+    engine.match_highlight(raw_line).or_else(|| {
+        if !level_colors {
+            return None;
         }
-        ui.ctx().request_repaint();
+        theme
+            .level_style(engine.level_of(line_idx))
+            .map(|s| HighlightStyle {
+                fg: s.fg,
+                bg: s.bg,
+                bold: s.bold,
+                italic: false,
+            })
+    })
+}
+
+/// A row laid out for the wrapped view: its line, galleys and total height.
+struct WrappedRow {
+    line: usize,
+    galley: std::sync::Arc<egui::Galley>,
+    pretty: Option<std::sync::Arc<egui::Galley>>,
+    height: f32,
+    is_json: bool,
+    expanded: bool,
+    highlight: Option<HighlightStyle>,
+}
+
+/// Text view in wrap mode: rows soft-wrap at the viewport width and have their own
+/// heights, so the viewport is anchored to a row (`engine.wrap_anchor`, see
+/// `wrap_layout`) instead of being mapped arithmetically. Only the rows in view are laid
+/// out; the scroll bar sees an estimated total height (rows × average row height) and an
+/// offset derived from the anchor, which makes its thumb approximate on files with very
+/// uneven line lengths while scrolling by line stays exact.
+#[allow(clippy::too_many_arguments)]
+fn render_wrapped_rows(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    font_size: f32,
+    row_height: f32,
+    show_line_numbers: bool,
+    show_markers: bool,
+    level_colors: bool,
+    has_search: bool,
+    active_search_line: Option<usize>,
+) -> RowInteractions {
+    use std::collections::HashMap;
+
+    let ctx = ui.ctx().clone();
+    let font_id = egui::FontId::monospace(font_size);
+    let font_row_h = ctx.fonts_mut(|f| f.row_height(&font_id));
+    let char_w = ctx.fonts_mut(|f| f.glyph_width(&font_id, '0'));
+    let pad = (row_height - font_row_h).max(0.0);
+    let rows = engine.visible_line_count();
+    if engine.wrap_avg_row_height <= 0.0 {
+        engine.wrap_avg_row_height = row_height;
     }
 
-    if let Some((idx, was_expanded)) = toggle_json {
-        if was_expanded {
-            engine.expanded_json_lines.remove(&idx);
-        } else {
-            engine.expanded_json_lines.insert(idx);
-        }
+    let mut scroll_area = ScrollArea::vertical().auto_shrink([false, false]);
+    let handed = engine.wrap_virtual_offset;
+    if let Some(v) = handed {
+        scroll_area = scroll_area.vertical_scroll_offset(v);
     }
+    engine.requested_scroll_y = None;
+
+    let mut row_click: Option<(usize, egui::Modifiers)> = None;
+    let mut toggle_json: Option<(usize, bool)> = None;
+
+    let output = scroll_area.show_viewport(ui, |ui, viewport| {
+        let origin = ui.max_rect().min;
+        let content_w = ui.available_width().max(50.0);
+        let vh = viewport.height().max(1.0);
+        let top = origin.y + viewport.min.y;
+        let left_pad = 4.0;
+        let marker_w = if show_markers { char_w * 2.0 } else { 0.0 };
+        let num_w = if show_line_numbers { char_w * 9.0 } else { 0.0 };
+        let text_x = origin.x + left_pad + marker_w + num_w;
+        let json_w = char_w * 9.0;
+        let text_w = (origin.x + content_w - text_x - left_pad).max(40.0);
+        let pretty_font = egui::FontId::monospace(11.0);
+
+        // Rows laid out this frame, keyed by visible row. Heights come from the real
+        // wrapped galleys; the layout is capped to `WRAP_LAYOUT_CAP` bytes per row.
+        let eng: &TailEngine = engine;
+        let mut laid: HashMap<usize, WrappedRow> = HashMap::new();
+        let mut measure = |row: usize| -> f32 {
+            if let Some(r) = laid.get(&row) {
+                return r.height;
+            }
+            let Some(line) = eng.get_actual_line_idx(row) else {
+                return row_height;
+            };
+            let Some(raw) = eng.get_line(line) else {
+                return row_height;
+            };
+            let is_json = TailEngine::is_json_line(&raw);
+            let expanded = is_json && eng.expanded_json_lines.contains(&line);
+            let highlight = row_highlight(eng, theme, level_colors, line, &raw);
+            let format = egui::TextFormat {
+                font_id: font_id.clone(),
+                color: Color32::PLACEHOLDER,
+                italics: highlight.map(|h| h.italic).unwrap_or(false),
+                ..Default::default()
+            };
+            let mut job =
+                egui::text::LayoutJob::single_section(layout_slice(&raw).to_owned(), format);
+            job.wrap.max_width = if is_json { text_w - json_w } else { text_w }.max(20.0);
+            let galley = ctx.fonts_mut(|f| f.layout_job(job));
+            let mut height = galley.size().y.max(font_row_h) + pad;
+            let pretty = if expanded {
+                serde_json::from_str::<serde_json::Value>(&raw)
+                    .ok()
+                    .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                    .map(|pretty| {
+                        let format = egui::TextFormat {
+                            font_id: pretty_font.clone(),
+                            color: Color32::PLACEHOLDER,
+                            ..Default::default()
+                        };
+                        let mut job = egui::text::LayoutJob::single_section(pretty, format);
+                        job.wrap.max_width = (text_w - 12.0).max(20.0);
+                        let g = ctx.fonts_mut(|f| f.layout_job(job));
+                        height += g.size().y + 16.0;
+                        g
+                    })
+            } else {
+                None
+            };
+            laid.insert(
+                row,
+                WrappedRow {
+                    line,
+                    galley,
+                    pretty,
+                    height,
+                    is_json,
+                    expanded,
+                    highlight,
+                },
+            );
+            height
+        };
+
+        // 1. Resolve the anchor: pending request, then the user's scrolling during the
+        //    last frame (measured below against the offset handed to the scroll area),
+        //    then follow mode.
+        let avg = eng.wrap_avg_row_height;
+        let prev_offset = eng.wrap_virtual_offset;
+        let delta = eng.wrap_scroll_delta;
+        let mut anchor = eng.wrap_anchor;
+        anchor.row = anchor.row.min(rows.saturating_sub(1));
+        let mut at_bottom = eng.wrap_at_bottom;
+        if let Some(request) = eng.wrap_request {
+            at_bottom = false;
+            anchor = match request {
+                WrapScroll::Top => WrapAnchor::TOP,
+                WrapScroll::Bottom => {
+                    at_bottom = true;
+                    anchor_to_bottom(rows, vh, &mut measure)
+                }
+                WrapScroll::Lines(n) => WrapAnchor {
+                    row: (anchor.row as i64 + n).clamp(0, rows.saturating_sub(1) as i64) as usize,
+                    within: 0.0,
+                },
+                WrapScroll::Pages(n) => walk_anchor(anchor, n as f32 * vh, rows, &mut measure),
+                WrapScroll::CenterLine(line) => {
+                    // A line hidden by the filters resolves to the next visible row.
+                    let row = if eng.is_filter_active() {
+                        eng.filtered_lines.partition_point(|&l| l < line)
+                    } else {
+                        line
+                    };
+                    anchor_center(row, rows, vh, &mut measure)
+                }
+            };
+        }
+        if delta.abs() > 0.5 {
+            at_bottom = false;
+            anchor = if delta.abs() > 4.0 * vh {
+                // Scroll bar dragged far: jump through the estimate instead of walking.
+                let row = (eng.wrap_scroll_abs / avg.max(1.0)).floor();
+                WrapAnchor {
+                    row: (row.max(0.0) as usize).min(rows.saturating_sub(1)),
+                    within: 0.0,
+                }
+            } else {
+                walk_anchor(anchor, delta, rows, &mut measure)
+            };
+        }
+        if eng.follow_tail && at_bottom {
+            anchor = anchor_to_bottom(rows, vh, &mut measure);
+        }
+
+        // 2. Lay out the rows in view; when they run out before the viewport is full, pull
+        //    the last row to the bottom edge instead of leaving a gap.
+        let (mut count, mut covered) = fill_from(anchor, rows, vh, &mut measure);
+        if covered < vh && anchor.row + count >= rows && anchor != WrapAnchor::TOP {
+            anchor = anchor_to_bottom(rows, vh, &mut measure);
+            (count, covered) = fill_from(anchor, rows, vh, &mut measure);
+        }
+        let reached_end = anchor.row + count >= rows && covered <= vh + 0.5;
+
+        // 3. Estimated total height for the scroll bar, refreshed from the rows measured
+        //    this frame, and the offset that represents the anchor on that scale.
+        let mean = if count > 0 {
+            (anchor.row..anchor.row + count)
+                .map(|r| laid.get(&r).map(|l| l.height).unwrap_or(row_height))
+                .sum::<f32>()
+                / count as f32
+        } else {
+            avg
+        };
+        let new_avg = if prev_offset.is_none() {
+            mean
+        } else {
+            avg * 0.8 + mean * 0.2
+        }
+        .max(1.0);
+        let total_h = (rows as f32 * new_avg).max(vh);
+        let max_offset = (total_h - vh).max(0.0);
+        let virtual_offset = if reached_end {
+            max_offset
+        } else {
+            (anchor.row as f32 * new_avg + anchor.within).clamp(0.0, max_offset)
+        };
+        ui.allocate_rect(
+            egui::Rect::from_min_size(origin, egui::vec2(content_w, total_h)),
+            egui::Sense::hover(),
+        );
+
+        // 4. Paint the rows from the anchor: tints and gutter first, the text galley, the
+        //    expanded JSON below it, then the click targets.
+        let painter = ui.painter().clone();
+        let mut y = top - anchor.within;
+        for row in anchor.row..anchor.row + count {
+            let Some(r) = laid.get(&row) else {
+                continue;
+            };
+            let line = r.line;
+            let row_rect = egui::Rect::from_min_max(
+                egui::pos2(origin.x, y),
+                egui::pos2(origin.x + content_w, y + r.height),
+            );
+            let matches_search = has_search && eng.search_matches.binary_search(&line).is_ok();
+            let is_active = active_search_line == Some(line);
+            let is_selected = eng.is_selected(line);
+            let is_bookmarked = eng.is_bookmarked(line);
+            if let Some(fill) =
+                row_tint(theme, matches_search, is_active, is_selected, is_bookmarked)
+            {
+                painter.rect_filled(row_rect, 0.0, fill);
+            }
+            let text_top = y + pad / 2.0;
+            if show_markers {
+                let (glyph, color) = marker_glyph(theme, matches_search, is_active, is_bookmarked);
+                painter.text(
+                    egui::pos2(origin.x + left_pad, text_top),
+                    egui::Align2::LEFT_TOP,
+                    glyph,
+                    font_id.clone(),
+                    color,
+                );
+            }
+            if show_line_numbers {
+                let num_color = if is_active {
+                    theme.accent_color()
+                } else {
+                    theme.text_dim().gamma_multiply(0.6)
+                };
+                painter.text(
+                    egui::pos2(origin.x + left_pad + marker_w, text_top),
+                    egui::Align2::LEFT_TOP,
+                    format!("{:>6} │", line + 1),
+                    font_id.clone(),
+                    num_color,
+                );
+            }
+            let (color, text_bg) = if is_active {
+                (Color32::BLACK, Some(SEARCH_ACTIVE_BG))
+            } else if matches_search {
+                (Color32::BLACK, Some(SEARCH_MATCH_BG))
+            } else if let Some(hl) = r.highlight {
+                (hl.fg, Some(hl.bg).filter(|c| c.a() > 0))
+            } else {
+                (theme.text_primary(), None)
+            };
+            let text_pos = egui::pos2(text_x + if r.is_json { json_w } else { 0.0 }, text_top);
+            if let Some(bg) = text_bg {
+                painter.rect_filled(
+                    egui::Rect::from_min_size(text_pos, r.galley.size()),
+                    0.0,
+                    bg,
+                );
+            }
+            painter.galley(text_pos, r.galley.clone(), color);
+            if let Some(pretty) = &r.pretty {
+                let frame = egui::Rect::from_min_size(
+                    egui::pos2(text_x, text_top + r.galley.size().y + 4.0),
+                    egui::vec2(text_w, pretty.size().y + 12.0),
+                );
+                painter.rect(
+                    frame,
+                    0.0,
+                    theme.panel_bg().linear_multiply(1.3),
+                    Stroke::new(1.0_f32, theme.border_color().gamma_multiply(0.4)),
+                    egui::StrokeKind::Inside,
+                );
+                painter.galley(
+                    frame.min + egui::vec2(6.0, 6.0),
+                    pretty.clone(),
+                    theme.secondary_accent(),
+                );
+            }
+
+            // Row selection: click, Shift+click (range), Ctrl+click (toggle)
+            let click = ui.interact(
+                row_rect,
+                ui.id().with(("row_select", line)),
+                egui::Sense::click(),
+            );
+            if click.clicked() {
+                row_click = Some((line, ui.input(|i| i.modifiers)));
+            }
+            // JSON toggle, registered after the row so it wins the click
+            if r.is_json {
+                let btn_rect = egui::Rect::from_min_size(
+                    egui::pos2(text_x, text_top),
+                    egui::vec2(json_w - char_w, font_row_h),
+                );
+                let btn = ui.interact(
+                    btn_rect,
+                    ui.id().with(("wrap_json", line)),
+                    egui::Sense::click(),
+                );
+                let label = if r.expanded { "[-] JSON" } else { "[+] JSON" };
+                painter.text(
+                    btn_rect.min,
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    egui::FontId::monospace((font_size - 2.0).max(9.0)),
+                    theme.secondary_accent(),
+                );
+                if btn.clicked() {
+                    toggle_json = Some((line, r.expanded));
+                }
+            }
+            y += r.height;
+        }
+
+        engine.wrap_anchor = anchor;
+        engine.wrap_at_bottom = reached_end;
+        engine.wrap_avg_row_height = new_avg;
+        engine.wrap_virtual_offset = Some(virtual_offset);
+        engine.wrap_request = None;
+    });
+    // User scrolling this frame: the scroll area started from `handed` (clamped to its
+    // range like egui does) and ended on `state.offset`. Applied to the anchor next frame.
+    let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
+    let ended = output.state.offset.y;
+    engine.wrap_scroll_delta = handed
+        .map(|h| ended - h.clamp(0.0, max_offset))
+        .unwrap_or(0.0);
+    engine.wrap_scroll_abs = ended;
+    engine.current_scroll_x = 0.0;
+    engine.current_scroll_y = ended;
+    (row_click, toggle_json)
 }
 
 fn render_hex_stream(

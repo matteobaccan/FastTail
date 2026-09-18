@@ -24,6 +24,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (exclude, then include, then level). Stack-trace continuation lines follow
   their parent; a `?` toggle shows or hides lines without a detectable level.
 - **Per-level counters** in the stream bar, updated live as the file grows.
+- **Line wrap.** A per-stream `↩ Wrap` toggle (`Alt+W`) soft-wraps long lines at
+  the window width instead of scrolling horizontally. Wrapped rows keep their
+  line number, marker, colours and JSON expander; search jumps, bookmarks,
+  go-to, arrows and paging keep navigating by line. Only the rows in view are
+  laid out (each capped to 64 KB), so wrapping costs the same on a 10 GB file;
+  the scroll bar thumb is approximate in wrap mode. The toggle is saved per
+  file in `fasttail.ini`.
 
 ### Changed
 

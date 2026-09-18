@@ -2,6 +2,7 @@ use crate::audio::SoundAlertPreset;
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange};
+use crate::wrap_layout::{WrapAnchor, WrapScroll};
 use egui::Color32;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
@@ -348,6 +349,23 @@ pub struct TailEngine {
     pub bookmarks: BTreeSet<usize>,
     pub bookmark_cursor: Option<usize>,
     pub bookmarks_dirty: bool,
+    /// Soft-wrap rows at the viewport width (per stream, persisted in the workspace) and a
+    /// dirty flag for persistence.
+    pub wrap_lines: bool,
+    pub wrap_dirty: bool,
+    /// Wrap-mode viewport state, see `wrap_layout`: the anchor row and its hidden pixels,
+    /// the approximate offset last handed to the scroll bar, the running average row
+    /// height behind that offset, whether the view sits on the last row (follow sticks
+    /// only then) and a pending scroll request.
+    pub wrap_anchor: WrapAnchor,
+    pub wrap_virtual_offset: Option<f32>,
+    /// User scrolling measured after the last frame: pixels moved against the offset the
+    /// view handed to the scroll area, and the absolute offset it ended on.
+    pub wrap_scroll_delta: f32,
+    pub wrap_scroll_abs: f32,
+    pub wrap_avg_row_height: f32,
+    pub wrap_at_bottom: bool,
+    pub wrap_request: Option<WrapScroll>,
     /// Background-tab activity: set by the viewer when the stream is drawn, counted by the
     /// engine while it is not; severity 0 = plain lines, 1 = highlight match, 2 = sound alert.
     pub displayed: bool,
@@ -479,6 +497,15 @@ impl TailEngine {
             bookmarks: BTreeSet::new(),
             bookmark_cursor: None,
             bookmarks_dirty: false,
+            wrap_lines: false,
+            wrap_dirty: false,
+            wrap_anchor: WrapAnchor::TOP,
+            wrap_virtual_offset: None,
+            wrap_scroll_delta: 0.0,
+            wrap_scroll_abs: 0.0,
+            wrap_avg_row_height: 0.0,
+            wrap_at_bottom: true,
+            wrap_request: None,
             displayed: false,
             unseen_lines: 0,
             unseen_severity: 0,
@@ -1567,6 +1594,28 @@ impl TailEngine {
     }
 
     /// Switches the view and keeps the search cursor inside the list that view navigates.
+    /// Switches soft wrapping for this stream. The viewport keeps its top row: the wrap
+    /// anchor starts from the current top row and the scroll bar is re-synchronised.
+    pub fn set_wrap_lines(&mut self, wrap: bool, top_row: usize) {
+        if self.wrap_lines == wrap {
+            return;
+        }
+        self.wrap_lines = wrap;
+        self.wrap_dirty = true;
+        self.wrap_anchor = WrapAnchor {
+            row: top_row,
+            within: 0.0,
+        };
+        self.wrap_virtual_offset = None;
+        self.wrap_scroll_delta = 0.0;
+        self.wrap_at_bottom = self.follow_tail;
+        self.wrap_request = if self.follow_tail {
+            Some(WrapScroll::Bottom)
+        } else {
+            None
+        };
+    }
+
     pub fn set_view_mode(&mut self, mode: ViewMode) {
         if mode == ViewMode::Markdown && self.markdown_too_large() {
             // Rendered Markdown needs the whole text in memory: stay in the current view.
