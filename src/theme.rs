@@ -1,5 +1,15 @@
+use crate::log_level::LogLevel;
 use egui::{Color32, Stroke, Style, Visuals};
 use serde::{Deserialize, Serialize};
+
+/// Style of a row coloured by its detected log level (see `CyberTheme::level_style`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelStyle {
+    pub fg: Color32,
+    /// `Color32::TRANSPARENT` when the row keeps the normal background.
+    pub bg: Color32,
+    pub bold: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CyberTheme {
@@ -133,6 +143,74 @@ impl CyberTheme {
 
     pub fn info_color(&self) -> Color32 {
         self.accent_color()
+    }
+
+    /// Level palette: how a row whose level was detected is drawn when no user highlight
+    /// rule matches it. INFO and unknown levels keep the plain text style (`None`).
+    pub fn level_style(&self, level: LogLevel) -> Option<LevelStyle> {
+        let is_light = *self == CyberTheme::Light;
+        let plain = Color32::TRANSPARENT;
+        match level {
+            LogLevel::Fatal => Some(LevelStyle {
+                fg: if is_light {
+                    Color32::WHITE
+                } else {
+                    Color32::from_rgb(255, 235, 238)
+                },
+                bg: if is_light {
+                    Color32::from_rgb(200, 30, 45)
+                } else {
+                    Color32::from_rgb(120, 16, 28)
+                },
+                bold: true,
+            }),
+            LogLevel::Error => Some(LevelStyle {
+                fg: self.level_color(level),
+                bg: plain,
+                bold: false,
+            }),
+            LogLevel::Warn => Some(LevelStyle {
+                fg: self.warn_color(),
+                bg: plain,
+                bold: false,
+            }),
+            LogLevel::Debug => Some(LevelStyle {
+                fg: self.text_dim(),
+                bg: plain,
+                bold: false,
+            }),
+            LogLevel::Trace => Some(LevelStyle {
+                fg: self.level_color(level),
+                bg: plain,
+                bold: false,
+            }),
+            LogLevel::Info | LogLevel::Unknown => None,
+        }
+    }
+
+    /// Colour of a level tag (selector entries, per-level counters).
+    pub fn level_color(&self, level: LogLevel) -> Color32 {
+        let is_light = *self == CyberTheme::Light;
+        match level {
+            LogLevel::Fatal | LogLevel::Error => {
+                if is_light {
+                    Color32::from_rgb(200, 30, 45)
+                } else {
+                    self.error_color()
+                }
+            }
+            LogLevel::Warn => self.warn_color(),
+            LogLevel::Info => self.accent_color(),
+            LogLevel::Debug => self.text_dim(),
+            LogLevel::Trace => {
+                if is_light {
+                    Color32::from_rgb(148, 160, 176)
+                } else {
+                    self.text_dim().gamma_multiply(0.7)
+                }
+            }
+            LogLevel::Unknown => self.text_dim(),
+        }
     }
 
     pub fn apply(&self, ctx: &egui::Context) {

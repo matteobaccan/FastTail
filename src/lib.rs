@@ -6,6 +6,7 @@ pub mod crash_handler;
 pub mod file_source;
 pub mod html_converter;
 pub mod i18n;
+pub mod log_level;
 pub mod paths;
 pub mod renderer;
 pub mod scan_job;

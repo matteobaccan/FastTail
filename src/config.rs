@@ -31,6 +31,9 @@ pub struct FastTailConfig {
     /// while the window is unfocused.
     #[serde(default)]
     pub flash_on_alert: bool,
+    /// Colour rows by their detected log level when no highlight rule matches them.
+    #[serde(default = "default_true")]
+    pub level_colors: bool,
     #[serde(default)]
     pub borderless: bool,
     #[serde(default = "default_true")]
@@ -109,6 +112,7 @@ impl Default for FastTailConfig {
             renderer: crate::renderer::RendererChoice::Auto,
             always_on_top: false,
             flash_on_alert: false,
+            level_colors: true,
             borderless: false,
             show_line_numbers: true,
             font_size: 13.0,
@@ -262,6 +266,7 @@ impl FastTailConfig {
             .set("renderer", self.renderer.as_str())
             .set("always_on_top", self.always_on_top.to_string())
             .set("flash_on_alert", self.flash_on_alert.to_string())
+            .set("level_colors", self.level_colors.to_string())
             .set("screensaver_enabled", self.screensaver_enabled.to_string())
             .set(
                 "screensaver_timeout_mins",
@@ -422,6 +427,12 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.flash_on_alert = v;
+            }
+            if let Some(v) = general
+                .get("level_colors")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.level_colors = v;
             }
             if let Some(s) = general.get("screensaver_enabled") {
                 if let Ok(v) = s.parse::<bool>() {
