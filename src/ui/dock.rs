@@ -489,12 +489,18 @@ fn render_log_stream(
         } else {
             RichText::new("📝 MD").color(theme.text_dim()).monospace()
         };
-        if ui
-            .button(md_style)
-            .on_hover_text(t(lang, "tip_mode_md"))
-            .clicked()
-        {
-            engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
+        let md_too_large = engine.markdown_too_large();
+        let md_tip = if md_too_large {
+            t(lang, "md_too_large")
+        } else {
+            t(lang, "tip_mode_md")
+        };
+        if ui.button(md_style).on_hover_text(md_tip).clicked() {
+            if md_too_large {
+                engine.view_notice = Some(t(lang, "md_too_large").to_string());
+            } else {
+                engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
+            }
             ui.ctx().request_repaint();
         }
 
@@ -582,6 +588,34 @@ fn render_log_stream(
                 .monospace()
                 .color(theme.text_dim()),
         );
+
+        // Background scan in progress: kind, percentage and hits so far
+        if let Some((kind, progress, hits)) = engine.scan_progress() {
+            let key = match kind {
+                crate::scan_job::ScanKind::Index => "scan_indexing",
+                crate::scan_job::ScanKind::Filter => "scan_filtering",
+                crate::scan_job::ScanKind::Search => "scan_searching",
+            };
+            ui.label(
+                RichText::new(format!(
+                    "⏳ {} {:.0}% ({})",
+                    t(lang, key),
+                    (progress * 100.0).clamp(0.0, 100.0),
+                    hits
+                ))
+                .monospace()
+                .color(theme.warn_color()),
+            );
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if let Some(notice) = &engine.view_notice {
+            ui.label(
+                RichText::new(format!("ⓘ {notice}"))
+                    .monospace()
+                    .color(theme.warn_color()),
+            );
+        }
 
         // Clickable File Size toggle (Bytes -> MB -> GB -> Hex -> Bytes)
         let size_str = engine.format_size();

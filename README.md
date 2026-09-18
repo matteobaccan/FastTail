@@ -27,7 +27,7 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 
 ## 🚀 Feature Highlights
 
-- **Zero-Lag Streaming Engine**: opens multi-gigabyte files in milliseconds, follows appends in real time, and handles log rotation, truncation and in-place rewrites without locking the file for the writer.
+- **Zero-Lag Streaming Engine**: never holds the file in memory. Rows are read on demand through a 4 MB block cache per stream; the only per-file state is the line index (8 bytes per line). Appends are indexed incrementally, log rotation, truncation and in-place rewrites are detected without locking the file for the writer, and files above 16 MB run filters and search on a worker thread with progress shown in the stream bar (above 256 MB the initial index too). Ten 50 MB logs growing continuously cost about 60 MB of RAM and a few milliseconds per frame.
 - **Three View Modes per Stream**:
   - **TXT**: virtualized text view with highlight rules, inline JSON pretty-printing and stack-trace grouping.
   - **HEX**: live hexadecimal + ASCII dump with byte columns in multiples of 8 (16, 24, 32...).

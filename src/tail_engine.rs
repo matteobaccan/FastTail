@@ -332,6 +332,8 @@ pub struct TailEngine {
     pub goto_open: bool,
     pub goto_input: String,
     pub goto_notice: Option<String>,
+    /// Short notice shown in the stream bar (e.g. Markdown refused above the size cap).
+    pub view_notice: Option<String>,
     /// Bookmarked line indices, the last bookmark jumped to, and a dirty flag for persistence.
     pub bookmarks: BTreeSet<usize>,
     pub bookmark_cursor: Option<usize>,
@@ -463,6 +465,7 @@ impl TailEngine {
             goto_open: false,
             goto_input: String::new(),
             goto_notice: None,
+            view_notice: None,
             bookmarks: BTreeSet::new(),
             bookmark_cursor: None,
             bookmarks_dirty: false,
@@ -1454,6 +1457,11 @@ impl TailEngine {
 
     /// Switches the view and keeps the search cursor inside the list that view navigates.
     pub fn set_view_mode(&mut self, mode: ViewMode) {
+        if mode == ViewMode::Markdown && self.markdown_too_large() {
+            // Rendered Markdown needs the whole text in memory: stay in the current view.
+            return;
+        }
+        self.view_notice = None;
         self.view_mode = mode;
         if mode == ViewMode::Hex
             && !self.last_searched_query.is_empty()

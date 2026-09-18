@@ -19,11 +19,11 @@
 
 ## 4. UI
 
-- [ ] 4.1 Progress text (`indexing 34%`, `filtering 58%`, `searching 12%`, count so far) in the stream bar while a job runs
-- [ ] 4.2 Markdown cap notice; long-line truncation marker; i18n keys in five languages and the coverage test
+- [x] 4.1 Progress text (`indexing 34%`, `filtering 58%`, `searching 12%`, count so far) in the stream bar while a job runs
+- [x] 4.2 Markdown cap notice; long-line truncation marker; i18n keys in five languages and the coverage test
 
 ## 5. Measurement and Docs
 
 - [x] 5.1 `filter_bench`: `open` on 1 GB, `scroll` (random `get_line`), the 10 × 50 MB scenario with per-frame polling, and a peak resident memory report
 - [x] 5.2 Record before/after numbers in `design.md` (memory for 10 × 50 MB, per-frame poll cost, open time for 1 GB)
-- [ ] 5.3 README: replace the memory-mapped wording with the real model and its limits; `stream-engine` spec synced at archive
+- [x] 5.3 README: replace the memory-mapped wording with the real model and its limits; `stream-engine` spec synced at archive

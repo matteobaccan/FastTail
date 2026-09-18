@@ -579,6 +579,10 @@ fn test_i18n_exhaustive_coverage() {
         "help_desc_bookmark",
         "flash_on_alert",
         "flash_on_alert_tip",
+        "scan_indexing",
+        "scan_filtering",
+        "scan_searching",
+        "md_too_large",
     ];
 
     for lang in &[
