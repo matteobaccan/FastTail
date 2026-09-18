@@ -931,6 +931,7 @@ dependencies = [
  "egui",
  "egui_commonmark",
  "egui_dock",
+ "memchr",
  "memmap2",
  "notify",
  "regex",

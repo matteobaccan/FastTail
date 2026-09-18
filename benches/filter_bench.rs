@@ -155,6 +155,32 @@ fn main() {
         println!("{name:<16}{ms:9.1} ms  ({n} lines)");
     };
 
+    // Live tail: what the UI does on every frame while the file grows. Only on the
+    // generated file, never on a user's log. 20 polls of 200 appended 500-byte lines.
+    let generated = _tmp.is_some();
+    let append_rounds = |engine: &mut TailEngine, path: &std::path::Path| -> usize {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        let line = format!(
+            "2026-09-18 12:00:00.000 [INFO] payment-3 req=000000001 {}\n",
+            "x".repeat(440)
+        );
+        for _ in 0..20 {
+            for _ in 0..200 {
+                f.write_all(line.as_bytes()).unwrap();
+            }
+            f.flush().unwrap();
+            engine.poll_updates();
+        }
+        engine.total_lines()
+    };
+    if generated {
+        report(
+            "append x20",
+            best(rounds, || append_rounds(&mut engine, &path)),
+        );
+    }
+
     // Case-insensitive plain-text include filter.
     report(
         "include ci",
@@ -204,6 +230,17 @@ fn main() {
             engine.search_matches.len()
         }),
     );
+    if generated {
+        // Growing file with an active search and an include filter: the derived state
+        // (visible rows, matches) must be refreshed incrementally too.
+        engine.set_include_filter("payment");
+        report(
+            "append+search",
+            best(rounds, || append_rounds(&mut engine, &path)),
+        );
+        engine.set_include_filter("");
+        engine.update_search("");
+    }
 
     // Highlight rule evaluation over every line (what rendering + sound alerts do).
     engine.set_highlight_rules(vec![

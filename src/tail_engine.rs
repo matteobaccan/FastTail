@@ -526,101 +526,93 @@ impl TailEngine {
     /// search matches). Lines before `unchanged_lines` are known to be identical to the
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
-        self.line_offsets.clear();
-        let mmap = &self.buffer;
-        if mmap.is_empty() {
+        let buf_len = self.buffer.len();
+        if buf_len == 0 {
+            self.line_offsets.clear();
+            self.max_line_bytes = 0;
+            self.max_detected_width = self.max_detected_width.max(120.0);
+            self.buffer_generation = self.buffer_generation.wrapping_add(1);
+            self.scroll_to_line = None;
+            self.refresh_derived_state_from(0);
             return;
         }
 
-        let mut max_bytes = 0usize;
+        let bom_len = match self.encoding {
+            FileEncoding::Utf8 if self.buffer.starts_with(&[0xEF, 0xBB, 0xBF]) => 3,
+            FileEncoding::UnicodeLe if self.buffer.starts_with(&[0xFF, 0xFE]) => 2,
+            FileEncoding::UnicodeBe if self.buffer.starts_with(&[0xFE, 0xFF]) => 2,
+            _ => 0,
+        };
+
+        // Incremental scan: keep the offsets of the lines known to be unchanged and rescan
+        // only from the start of the first changed line (the previously last, maybe partial,
+        // line). A pure append on a 100 MB file then costs the size of the new data, not
+        // the size of the file.
+        let (scan_from, mut max_bytes) =
+            if unchanged_lines > 0 && unchanged_lines < self.line_offsets.len() {
+                let from = self.line_offsets[unchanged_lines] as usize;
+                self.line_offsets.truncate(unchanged_lines);
+                (from.min(buf_len), self.max_line_bytes)
+            } else {
+                self.line_offsets.clear();
+                (bom_len.min(buf_len), 0usize)
+            };
+
+        let mmap = &self.buffer;
+        let char_bytes = match self.encoding {
+            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => 2,
+            _ => 1,
+        };
+        if scan_from < buf_len {
+            self.line_offsets.push(scan_from as u64);
+        }
+        let mut prev_offset = scan_from;
         match self.encoding {
             FileEncoding::Utf8 | FileEncoding::Ascii | FileEncoding::Ansi => {
-                let start_offset = if self.encoding == FileEncoding::Utf8
-                    && mmap.starts_with(&[0xEF, 0xBB, 0xBF])
-                {
-                    3
-                } else {
-                    0
-                };
-                if start_offset < mmap.len() {
-                    self.line_offsets.push(start_offset as u64);
-                }
-                let mut prev_offset = start_offset;
-                for (i, &byte) in mmap.iter().enumerate().skip(start_offset) {
-                    if byte == b'\n' {
-                        let len = i.saturating_sub(prev_offset);
-                        if len > max_bytes {
-                            max_bytes = len;
-                        }
-                        if i + 1 < mmap.len() {
-                            self.line_offsets.push((i + 1) as u64);
-                            prev_offset = i + 1;
-                        }
+                for rel in memchr::memchr_iter(b'\n', &mmap[scan_from..]) {
+                    let i = scan_from + rel;
+                    let len = i.saturating_sub(prev_offset);
+                    if len > max_bytes {
+                        max_bytes = len;
+                    }
+                    if i + 1 < buf_len {
+                        self.line_offsets.push((i + 1) as u64);
+                        prev_offset = i + 1;
                     }
                 }
-                let last_len = mmap.len().saturating_sub(prev_offset);
-                if last_len > max_bytes {
-                    max_bytes = last_len;
-                }
             }
-            FileEncoding::UnicodeLe => {
-                let start_offset = if mmap.starts_with(&[0xFF, 0xFE]) {
-                    2
+            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
+                let (lo, hi) = if self.encoding == FileEncoding::UnicodeLe {
+                    (0x0A, 0x00)
                 } else {
-                    0
+                    (0x00, 0x0A)
                 };
-                if start_offset < mmap.len() {
-                    self.line_offsets.push(start_offset as u64);
-                }
-                let mut prev_offset = start_offset;
-                let mut i = start_offset;
-                while i + 1 < mmap.len() {
-                    if mmap[i] == 0x0A && mmap[i + 1] == 0x00 {
-                        let len = (i.saturating_sub(prev_offset)) / 2;
+                let mut i = scan_from;
+                while i + 1 < buf_len {
+                    if mmap[i] == lo && mmap[i + 1] == hi {
+                        let len = i.saturating_sub(prev_offset) / 2;
                         if len > max_bytes {
                             max_bytes = len;
                         }
-                        if i + 2 < mmap.len() {
+                        if i + 2 < buf_len {
                             self.line_offsets.push((i + 2) as u64);
                             prev_offset = i + 2;
                         }
                     }
                     i += 2;
                 }
-                let last_len = (mmap.len().saturating_sub(prev_offset)) / 2;
-                if last_len > max_bytes {
-                    max_bytes = last_len;
-                }
             }
-            FileEncoding::UnicodeBe => {
-                let start_offset = if mmap.starts_with(&[0xFE, 0xFF]) {
-                    2
-                } else {
-                    0
-                };
-                if start_offset < mmap.len() {
-                    self.line_offsets.push(start_offset as u64);
-                }
-                let mut prev_offset = start_offset;
-                let mut i = start_offset;
-                while i + 1 < mmap.len() {
-                    if mmap[i] == 0x00 && mmap[i + 1] == 0x0A {
-                        let len = (i.saturating_sub(prev_offset)) / 2;
-                        if len > max_bytes {
-                            max_bytes = len;
-                        }
-                        if i + 2 < mmap.len() {
-                            self.line_offsets.push((i + 2) as u64);
-                            prev_offset = i + 2;
-                        }
-                    }
-                    i += 2;
-                }
-                let last_len = (mmap.len().saturating_sub(prev_offset)) / 2;
-                if last_len > max_bytes {
-                    max_bytes = last_len;
-                }
-            }
+        }
+        // Length of the final (possibly unterminated) line, without its newline.
+        let ends_with_newline = match self.encoding {
+            FileEncoding::UnicodeLe => buf_len >= 2 && mmap[buf_len - 2..] == [0x0A, 0x00],
+            FileEncoding::UnicodeBe => buf_len >= 2 && mmap[buf_len - 2..] == [0x00, 0x0A],
+            _ => buf_len >= 1 && mmap[buf_len - 1] == b'\n',
+        };
+        let trailing = if ends_with_newline { char_bytes } else { 0 };
+        let last_len = buf_len.saturating_sub(prev_offset).saturating_sub(trailing) / char_bytes;
+        if last_len > max_bytes {
+            max_bytes = last_len;
         }
         self.max_line_bytes = max_bytes;
         let estimated_width = (max_bytes as f32) * 8.5 + 120.0;
@@ -706,12 +698,24 @@ impl TailEngine {
                 if let Ok(mut file) = open_file_shared(&self.path) {
                     let mut prefix = [0u8; 64];
                     let check_len = self.buffer.len().min(64);
-                    let is_rewrite =
+                    let mut is_rewrite =
                         if check_len > 0 && file.read_exact(&mut prefix[..check_len]).is_ok() {
                             prefix[..check_len] != self.buffer[..check_len]
                         } else {
                             false
                         };
+                    // A file reset and regrown past its old size can keep the same header
+                    // (same log format): also compare the bytes where the old data ended.
+                    if !is_rewrite && self.buffer.len() > 64 {
+                        let tail_start = self.buffer.len() - 64;
+                        let mut tail = [0u8; 64];
+                        if file.seek(SeekFrom::Start(tail_start as u64)).is_ok()
+                            && file.read_exact(&mut tail).is_ok()
+                            && tail != self.buffer[tail_start..]
+                        {
+                            is_rewrite = true;
+                        }
+                    }
 
                     if is_rewrite {
                         self.buffer.clear();

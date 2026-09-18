@@ -23,6 +23,14 @@ The engine SHALL monitor file modifications in real-time (`tail -f`) and append 
 - **WHEN** the user toggles follow off or scrolls up into the buffer
 - **THEN** the viewport remains fixed on the current lines while background streaming continues without moving the scroll position.
 
+#### Scenario: Continuous appends on a large file
+- **WHEN** a 100 MB log receives new lines on every frame
+- **THEN** each poll costs time proportional to the appended bytes, not to the file size: the line index keeps the offsets of unchanged lines and rescans only from the previously last (possibly partial) line, so the interface stays responsive.
+
+#### Scenario: File reset and regrown with the same header
+- **WHEN** the writer truncates the file and refills it past its previous size with lines that start with the same 64 bytes as before
+- **THEN** the engine detects the rewrite by comparing the bytes where the old data ended, reloads the file from the start, and never shows old and new content spliced together.
+
 ### Requirement: Log rotation and truncation handling
 The engine SHALL detect when a monitored file is truncated or rotated (e.g., via logrotate) and reopen or reset the byte stream automatically without crashing or losing data.
 

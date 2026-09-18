@@ -3179,3 +3179,98 @@ fn test_unseen_lines_counted_only_while_hidden() {
     engine.poll_updates();
     assert_eq!(engine.unseen_lines, 0);
 }
+
+#[test]
+fn test_incremental_index_completes_partial_line_across_polls() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("partial.log");
+    std::fs::File::create(&log)
+        .unwrap()
+        .write_all(b"one\ntwo\nabc")
+        .unwrap();
+    let mut engine = TailEngine::open(&log).unwrap();
+    assert_eq!(engine.total_lines(), 3);
+    assert_eq!(engine.get_line(2).unwrap(), "abc");
+
+    // The writer completes the partial line and adds two more.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    f.write_all(b"def\nghi\njkl\n").unwrap();
+    drop(f);
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 5);
+    assert_eq!(engine.get_line(2).unwrap(), "abcdef");
+    assert_eq!(engine.get_line(3).unwrap(), "ghi");
+    assert_eq!(engine.get_line(4).unwrap(), "jkl");
+    assert_eq!(engine.max_line_bytes, 6);
+
+    // A second append keeps the earlier offsets intact.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    f.write_all(b"a much longer line\n").unwrap();
+    drop(f);
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 6);
+    assert_eq!(engine.get_line(0).unwrap(), "one");
+    assert_eq!(engine.get_line(5).unwrap(), "a much longer line");
+    assert_eq!(engine.max_line_bytes, 18);
+}
+
+#[test]
+fn test_incremental_index_utf16_append() {
+    use fasttail::tail_engine::FileEncoding;
+    use std::io::Write;
+    fn utf16le(s: &str) -> Vec<u8> {
+        s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("u16.log");
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(utf16le("uno\ndue\n"));
+    std::fs::File::create(&log)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    let mut engine = TailEngine::open(&log).unwrap();
+    assert_eq!(engine.encoding, FileEncoding::UnicodeLe);
+    assert_eq!(engine.total_lines(), 2);
+
+    let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    f.write_all(&utf16le("tre\nquattro\n")).unwrap();
+    drop(f);
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 4);
+    assert_eq!(engine.get_line(0).unwrap(), "uno");
+    assert_eq!(engine.get_line(2).unwrap(), "tre");
+    assert_eq!(engine.get_line(3).unwrap(), "quattro");
+}
+
+#[test]
+fn test_reset_and_regrow_with_same_header_reloads_from_start() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("reset.log");
+    // 100 lines with an identical 64+ byte header prefix, as a formatted logger would write.
+    let header = "2026-09-19 10:00:00.000 [INFO] service-1 req=000000001 message ";
+    let mut f = std::fs::File::create(&log).unwrap();
+    for i in 0..100 {
+        writeln!(f, "{header}old-{i}").unwrap();
+    }
+    drop(f);
+    let mut engine = TailEngine::open(&log).unwrap();
+    assert_eq!(engine.total_lines(), 100);
+
+    // Between two polls the file is reset and refilled past its old size with the same header.
+    let mut f = std::fs::File::create(&log).unwrap();
+    for i in 0..150 {
+        writeln!(f, "{header}new-{i}").unwrap();
+    }
+    drop(f);
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 150);
+    assert_eq!(engine.get_line(0).unwrap(), format!("{header}new-0"));
+    assert_eq!(engine.get_line(149).unwrap(), format!("{header}new-149"));
+    assert!(
+        (0..150).all(|i| !engine.get_line(i).unwrap().contains("old-")),
+        "no old content spliced with the new file"
+    );
+}
