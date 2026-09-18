@@ -2,9 +2,7 @@
 
 ## Purpose
 Provides a responsive, high-contrast Cyberpunk docking UI with virtualized rendering, draggable modal windows, theme customizability, and intuitive keyboard navigation.
-
 ## Requirements
-
 ### Requirement: Cyberpunk UI Styling and Branding
 The application SHALL present a clean, high-contrast Cyberpunk UI featuring customizable themes (Tron, Matrix, Blade, Light), without double slashes (//) in UI labels. Interactive buttons SHALL maintain zero expansion (`expansion = 0.0`) and fixed dimensions on hover, preventing layout shifts and footprint jitter. The main application window title SHALL be `FastTail v<version> by Matteo Baccan`.
 
@@ -144,3 +142,15 @@ When enabled in Settings, a highlight rule with a sound preset matching in a str
 #### Scenario: Alert while the window is in the background
 - **WHEN** the option is on, the window is not focused, and a Critical rule matches
 - **THEN** the OS attention request is sent once, and not again until the window has been focused.
+
+### Requirement: Line Wrap Mode
+Each text stream SHALL offer a wrap toggle (stream bar button and Alt+W) that soft-wraps rows at the viewport width. Wrapped rows SHALL keep their line number, marker and highlight, navigation by line index (search, bookmarks, go-to, paging) SHALL keep working, and the toggle state SHALL be persisted per stream in the workspace.
+
+#### Scenario: Wrapping a long JSON line
+- **WHEN** wrap is enabled on a stream containing a 3,000-character line
+- **THEN** the line is displayed on several rows within the viewport width, with no horizontal scrollbar, and the line number is shown once.
+
+#### Scenario: Search jump in wrap mode
+- **WHEN** wrap is enabled and the user presses F3
+- **THEN** the viewport scrolls so that the matching line is fully visible.
+
