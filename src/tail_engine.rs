@@ -2,6 +2,7 @@ use crate::audio::SoundAlertPreset;
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange};
+use crate::wildcard::{resolve_newest, split_pattern};
 use crate::wrap_layout::{WrapAnchor, WrapScroll};
 use egui::Color32;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -12,7 +13,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FileEncoding {
@@ -458,6 +459,16 @@ pub struct TailEngine {
     /// On-demand access to the file: a shared handle plus a small block cache. No copy of
     /// the file lives in memory.
     pub source: FileSource,
+    /// File-name pattern (`*` / `?`) of a pattern stream. `path` is then `dir/pattern`,
+    /// the stable identity of the stream, and `current_file` the resolved file being
+    /// tailed (`None` while nothing matches yet).
+    pub pattern: Option<String>,
+    pub current_file: Option<PathBuf>,
+    /// Minimum time between two directory scans of a pattern stream (2 s; tests use 0).
+    pub pattern_scan_interval: Duration,
+    last_pattern_scan: Instant,
+    /// Name of the file the stream last switched to and when, for the stream bar notice.
+    pub switch_notice: Option<(String, Instant)>,
     /// First bytes of the file and the bytes before the indexed end, used to tell a rewrite
     /// from an append (see `fingerprints_match`).
     head_fingerprint: Vec<u8>,
@@ -574,6 +585,11 @@ pub struct TailEngine {
     pub throughput_bps: f64,
 }
 
+/// Directory scan cadence of a pattern stream.
+pub const PATTERN_SCAN_INTERVAL: Duration = Duration::from_secs(2);
+/// How long the "switched to <file>" notice stays in the stream bar.
+pub const SWITCH_NOTICE_DURATION: Duration = Duration::from_secs(5);
+
 impl TailEngine {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
         Self::open_with_thresholds(path, JOB_THRESHOLD_BYTES, INDEX_JOB_THRESHOLD_BYTES)
@@ -602,46 +618,8 @@ impl TailEngine {
 
         let source = FileSource::open(&path_buf)?;
         let sample = source.read_to_vec(0, 512);
-
-        let (detected_encoding, is_binary) = if !sample.is_empty() {
-            if sample.starts_with(&[0xEF, 0xBB, 0xBF]) {
-                (FileEncoding::Utf8, false)
-            } else if sample.starts_with(&[0xFF, 0xFE]) {
-                (FileEncoding::UnicodeLe, false)
-            } else if sample.starts_with(&[0xFE, 0xFF]) {
-                (FileEncoding::UnicodeBe, false)
-            } else if sample.len() >= 4
-                && sample.iter().step_by(2).all(|&b| b != 0)
-                && sample.iter().skip(1).step_by(2).all(|&b| b == 0)
-            {
-                (FileEncoding::UnicodeLe, false)
-            } else if sample.len() >= 4
-                && sample.iter().step_by(2).all(|&b| b == 0)
-                && sample.iter().skip(1).step_by(2).all(|&b| b != 0)
-            {
-                (FileEncoding::UnicodeBe, false)
-            } else if sample.contains(&0) {
-                (FileEncoding::Utf8, true)
-            } else {
-                (FileEncoding::Utf8, false)
-            }
-        } else {
-            (FileEncoding::Utf8, false)
-        };
-
-        let is_markdown = path_buf
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
-            .unwrap_or(false);
-
-        let view_mode = if is_binary {
-            ViewMode::Hex
-        } else if is_markdown {
-            ViewMode::Markdown
-        } else {
-            ViewMode::Text
-        };
+        let (detected_encoding, is_binary) = Self::detect_encoding(&sample);
+        let view_mode = Self::initial_view_mode(&path_buf, is_binary);
 
         let (tx, rx) = channel();
         let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).ok();
@@ -649,8 +627,240 @@ impl TailEngine {
             let _ = w.watch(&path_buf, RecursiveMode::NonRecursive);
         }
 
+        let current_file = Some(path_buf.clone());
+        let mut engine = Self::assemble(
+            path_buf,
+            source,
+            file_size,
+            last_modified,
+            detected_encoding,
+            view_mode,
+            watcher,
+            rx,
+            job_threshold_bytes,
+            index_job_threshold_bytes,
+        );
+        engine.current_file = current_file;
+        Ok(engine)
+    }
+
+    /// Opens a pattern stream: `dir/glob` where `glob` holds `*` / `?` wildcards. The
+    /// stream tails the newest matching file and switches when a newer one appears; while
+    /// nothing matches it is empty and picks up the first file that does.
+    pub fn open_pattern<P: AsRef<Path>>(pattern_path: P) -> Result<Self, std::io::Error> {
+        Self::open_pattern_with_thresholds(
+            pattern_path,
+            JOB_THRESHOLD_BYTES,
+            INDEX_JOB_THRESHOLD_BYTES,
+        )
+    }
+
+    /// Like `open_pattern`, with explicit background-job thresholds (see `open_with_thresholds`).
+    pub fn open_pattern_with_thresholds<P: AsRef<Path>>(
+        pattern_path: P,
+        job_threshold_bytes: u64,
+        index_job_threshold_bytes: u64,
+    ) -> Result<Self, std::io::Error> {
+        let pattern_path = pattern_path.as_ref().to_path_buf();
+        let Some((dir, glob)) = split_pattern(&pattern_path) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Not a file-name pattern",
+            ));
+        };
+        if !dir.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Pattern directory does not exist",
+            ));
+        }
+
+        let (tx, rx) = channel();
+        let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).ok();
+        if let Some(ref mut w) = watcher {
+            let _ = w.watch(&dir, RecursiveMode::NonRecursive);
+        }
+
+        let mut engine = Self::assemble(
+            pattern_path,
+            FileSource::empty(),
+            0,
+            None,
+            FileEncoding::Utf8,
+            ViewMode::Text,
+            watcher,
+            rx,
+            job_threshold_bytes,
+            index_job_threshold_bytes,
+        );
+        engine.pattern = Some(glob.clone());
+        if let Some(newest) = resolve_newest(&dir, &glob) {
+            engine.switch_to(newest)?;
+            engine.switch_notice = None;
+        }
+        Ok(engine)
+    }
+
+    /// True for a stream opened from a file-name pattern.
+    pub fn is_pattern(&self) -> bool {
+        self.pattern.is_some()
+    }
+
+    /// Name of the file currently tailed (the resolved file of a pattern stream), if any.
+    pub fn current_file_name(&self) -> Option<String> {
+        self.current_file
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+    }
+
+    /// The switch notice while it is younger than 5 seconds.
+    pub fn active_switch_notice(&self) -> Option<&str> {
+        match &self.switch_notice {
+            Some((name, at)) if at.elapsed() < SWITCH_NOTICE_DURATION => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Rescans the pattern directory and switches to the newest match when it differs
+    /// from the file being tailed. Returns true when a switch happened.
+    pub fn rescan_pattern(&mut self) -> bool {
+        self.last_pattern_scan = Instant::now();
+        let Some(glob) = self.pattern.clone() else {
+            return false;
+        };
+        let dir = match self.path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        let Some(newest) = resolve_newest(&dir, &glob) else {
+            // Nothing matches (any more): keep the current file, if there is one.
+            return false;
+        };
+        if self.current_file.as_ref() == Some(&newest) {
+            return false;
+        }
+        self.switch_to(newest).is_ok()
+    }
+
+    /// Binds the stream to another file. Filters, highlight rules, search query, wrap and
+    /// encoding are kept; the buffer, line index, per-line caches, bookmarks, selection and
+    /// unseen counters start over. No sound is played.
+    pub fn switch_to(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
+        let metadata = std::fs::metadata(&path)?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+        let source = FileSource::open(&path)?;
+        if self.current_file.is_none() {
+            // First file of an empty pattern stream: nothing was detected yet.
+            let sample = source.read_to_vec(0, 512);
+            let (encoding, is_binary) = Self::detect_encoding(&sample);
+            self.encoding = encoding;
+            if is_binary {
+                self.view_mode = ViewMode::Hex;
+            }
+        }
+        self.file_size = metadata.len();
+        self.last_modified = metadata.modified().ok();
+        self.source = source;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.current_file = Some(path);
+
+        self.max_line_bytes = 0;
+        self.max_detected_width = 0.0;
+        self.expanded_json_lines.clear();
+        self.markdown_text_cache = None;
+        self.unseen_lines = 0;
+        self.unseen_severity = 0;
+        self.has_new_data = true;
+        self.scroll_to_line = None;
+        self.requested_scroll_x = None;
+        self.requested_scroll_y = None;
+        self.current_scroll_y = 0.0;
+        self.wrap_dirty = true;
+        self.wrap_anchor = WrapAnchor::TOP;
+        self.wrap_virtual_offset = None;
+        self.wrap_request = None;
+        self.wrap_at_bottom = true;
+        self.bytes_read_since_tick = 0;
+        // Drops selection, bookmarks, jobs and per-line caches; re-applies filters and search.
+        self.rebuild_line_index();
+        self.update_fingerprints();
+        self.switch_notice = Some((name, Instant::now()));
+        Ok(())
+    }
+
+    /// Encoding detection on the first bytes of a file: BOMs, UTF-16 without BOM, and a
+    /// NUL byte marking a binary file (shown in HEX).
+    fn detect_encoding(sample: &[u8]) -> (FileEncoding, bool) {
+        if sample.is_empty() {
+            return (FileEncoding::Utf8, false);
+        }
+        if sample.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            (FileEncoding::Utf8, false)
+        } else if sample.starts_with(&[0xFF, 0xFE]) {
+            (FileEncoding::UnicodeLe, false)
+        } else if sample.starts_with(&[0xFE, 0xFF]) {
+            (FileEncoding::UnicodeBe, false)
+        } else if sample.len() >= 4
+            && sample.iter().step_by(2).all(|&b| b != 0)
+            && sample.iter().skip(1).step_by(2).all(|&b| b == 0)
+        {
+            (FileEncoding::UnicodeLe, false)
+        } else if sample.len() >= 4
+            && sample.iter().step_by(2).all(|&b| b == 0)
+            && sample.iter().skip(1).step_by(2).all(|&b| b != 0)
+        {
+            (FileEncoding::UnicodeBe, false)
+        } else if sample.contains(&0) {
+            (FileEncoding::Utf8, true)
+        } else {
+            (FileEncoding::Utf8, false)
+        }
+    }
+
+    fn initial_view_mode(path: &Path, is_binary: bool) -> ViewMode {
+        let is_markdown = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false);
+        if is_binary {
+            ViewMode::Hex
+        } else if is_markdown {
+            ViewMode::Markdown
+        } else {
+            ViewMode::Text
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        path_buf: PathBuf,
+        source: FileSource,
+        file_size: u64,
+        last_modified: Option<std::time::SystemTime>,
+        detected_encoding: FileEncoding,
+        view_mode: ViewMode,
+        watcher: Option<RecommendedWatcher>,
+        rx: Receiver<notify::Result<Event>>,
+        job_threshold_bytes: u64,
+        index_job_threshold_bytes: u64,
+    ) -> Self {
         let mut engine = Self {
             path: path_buf,
+            pattern: None,
+            current_file: None,
+            pattern_scan_interval: PATTERN_SCAN_INTERVAL,
+            last_pattern_scan: Instant::now(),
+            switch_notice: None,
             source,
             head_fingerprint: Vec::new(),
             tail_fingerprint: (0, Vec::new()),
@@ -736,7 +946,7 @@ impl TailEngine {
 
         engine.rebuild_line_index();
         engine.update_fingerprints();
-        Ok(engine)
+        engine
     }
 
     /// Raw bytes `[offset, offset + len)` for the HEX view, read through the block cache.
@@ -1069,7 +1279,7 @@ impl TailEngine {
         }
         let mut needs_refresh = false;
 
-        // Drain filesystem watcher events
+        // Drain filesystem watcher events (the file, or the directory of a pattern stream)
         while let Ok(event_res) = self.rx.try_recv() {
             if let Ok(event) = event_res {
                 if event.kind.is_modify() || event.kind.is_create() {
@@ -1078,12 +1288,25 @@ impl TailEngine {
             }
         }
 
+        // Pattern stream: look for a newer match on directory activity and every 2 s.
+        if self.pattern.is_some()
+            && (needs_refresh || self.last_pattern_scan.elapsed() >= self.pattern_scan_interval)
+            && self.rescan_pattern()
+        {
+            // The switch rebuilt everything from the new file.
+            needs_refresh = false;
+        }
+
         // Periodic size check (handles network drives and Windows handle caches)
-        if let Ok(metadata) = std::fs::metadata(&self.path) {
-            let current_len = metadata.len();
-            if current_len != self.file_size {
-                needs_refresh = true;
+        if let Some(current) = &self.current_file {
+            if let Ok(metadata) = std::fs::metadata(current) {
+                let current_len = metadata.len();
+                if current_len != self.file_size {
+                    needs_refresh = true;
+                }
             }
+        } else {
+            needs_refresh = false;
         }
 
         if needs_refresh {
@@ -1100,7 +1323,10 @@ impl TailEngine {
     }
 
     fn refresh_file(&mut self) {
-        let Ok(metadata) = std::fs::metadata(&self.path) else {
+        let Some(current) = self.current_file.clone() else {
+            return;
+        };
+        let Ok(metadata) = std::fs::metadata(&current) else {
             return;
         };
         let new_size = metadata.len();

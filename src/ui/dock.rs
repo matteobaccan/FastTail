@@ -85,6 +85,13 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 {
                     let watch_icon = if engine.is_watching { "▶" } else { "■" };
                     let data_dot = if engine.has_new_data { "●" } else { "○" };
+                    // Pattern stream: the tab names the pattern and the file it resolves to.
+                    let file_name = match engine.current_file_name() {
+                        Some(current) if engine.is_pattern() => {
+                            format!("{file_name} ▸ {current}")
+                        }
+                        _ => file_name.to_string(),
+                    };
                     // Background-tab activity badge: lines appended since the tab was last shown
                     let badge = if !engine.displayed && engine.unseen_lines > 0 {
                         if engine.unseen_lines > 999 {
@@ -773,6 +780,33 @@ fn render_log_stream(
                     .monospace()
                     .color(theme.warn_color()),
             );
+        }
+
+        // Pattern stream: the pattern, the file being tailed, and the switch notice
+        if let Some(glob) = engine.pattern.clone() {
+            ui.separator();
+            let label = match engine.current_file_name() {
+                Some(name) => RichText::new(format!("📂* {glob} ▸ {name}"))
+                    .monospace()
+                    .color(theme.secondary_accent()),
+                None => RichText::new(format!("📂* {glob} ▸ {}", t(lang, "pattern_waiting")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            };
+            let tip = match &engine.current_file {
+                Some(file) => format!("{}\n{}", engine.path.display(), file.display()),
+                None => engine.path.display().to_string(),
+            };
+            ui.label(label).on_hover_text(tip);
+            if let Some(name) = engine.active_switch_notice() {
+                ui.label(
+                    RichText::new(format!("ⓘ {} {name}", t(lang, "pattern_switched")))
+                        .monospace()
+                        .color(theme.warn_color()),
+                );
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(500));
+            }
         }
 
         // Clickable File Size toggle (Bytes -> MB -> GB -> Hex -> Bytes)

@@ -43,6 +43,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the scroll bar thumb is approximate in wrap mode. The toggle is saved per
   file in `fasttail.ini`.
 
+- **Directory wildcard tail.** A stream can be opened from a pattern such as
+  `C:\logspp-*.log` (the `📂*` prompt, a folder dropped on the window, or
+  the command line): it tails the newest matching file and switches by itself
+  when a newer one appears, checking the folder every 2 seconds. Filters,
+  highlight rules, search, wrap and encoding survive the switch; buffer,
+  bookmarks and selection start over, and the stream bar shows the pattern,
+  the current file and a 5-second "switched to" notice. The pattern is what
+  the workspace and the recent list remember; while nothing matches the
+  stream waits and picks up the first file that appears.
+
 ### Changed
 
 - **wgpu is now the first choice of the `auto` renderer**, OpenGL the fallback.
