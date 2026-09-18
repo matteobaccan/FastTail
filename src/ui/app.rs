@@ -13,6 +13,23 @@ use std::path::PathBuf;
 use std::time::Instant;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
+/// Drops the recorded rects whose surface no longer exists or is not a floating window.
+///
+/// `DockState::get_window_state` indexes the surface vector without a bounds check,
+/// so a stale `SurfaceIndex` left behind by a closed floating window must never
+/// reach it (v0.1.0 crash: "index out of bounds: the len is 3 but the index is 3").
+pub fn prune_floating_window_rects<T>(
+    dock_state: &DockState<T>,
+    rects: &mut std::collections::HashMap<egui_dock::SurfaceIndex, egui::Rect>,
+) {
+    rects.retain(|idx, _| {
+        matches!(
+            dock_state.get_surface(*idx),
+            Some(egui_dock::Surface::Window(..))
+        )
+    });
+}
+
 #[cfg(windows)]
 mod win_util {
     #[link(name = "user32")]
@@ -226,6 +243,7 @@ impl FastTailApp {
         }
         self.config.open_files = current_open;
 
+        prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
         let mut dock_to_save = self.dock_state.clone();
         for (surf_index, rect) in &self.floating_window_rects {
             if let Some(ws) = dock_to_save.get_window_state_mut(*surf_index) {
@@ -1158,8 +1176,7 @@ impl FastTailApp {
                 }
             }
         }
-        self.floating_window_rects
-            .retain(|idx, _| self.dock_state.get_window_state(*idx).is_some());
+        prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
 
         if test_screensaver {
             self.screensaver.is_active = true;

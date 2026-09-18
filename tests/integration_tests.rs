@@ -1321,7 +1321,8 @@ fn test_crash_handler_git_commit_and_report_generation() {
         "GIT_COMMIT_HASH must not be empty"
     );
     assert!(!GIT_TAG.is_empty(), "GIT_TAG must not be empty");
-    assert_eq!(APP_VERSION, "0.1.0");
+    assert_eq!(APP_VERSION, env!("CARGO_PKG_VERSION"));
+    assert_eq!(APP_VERSION, "0.2.0");
 
     let bt = std::backtrace::Backtrace::disabled();
     let report = build_crash_report(
@@ -2774,4 +2775,33 @@ fn test_tail_engine_rejects_non_regular_files() {
         Ok(_) => panic!("Expected TailEngine::open to fail for directory"),
         Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput),
     }
+}
+
+#[test]
+fn test_prune_floating_window_rects_ignores_stale_surface_index() {
+    use fasttail::ui::app::prune_floating_window_rects;
+
+    let mut dock: egui_dock::DockState<String> =
+        egui_dock::DockState::new(vec!["main".to_string()]);
+    let win = dock.add_window(vec!["floating".to_string()]);
+    let mut rects = std::collections::HashMap::new();
+    rects.insert(
+        win,
+        egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(200.0, 100.0)),
+    );
+    rects.insert(
+        egui_dock::SurfaceIndex::main(),
+        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1.0, 1.0)),
+    );
+
+    // The live floating window is kept, the main surface is not a window.
+    prune_floating_window_rects(&dock, &mut rects);
+    assert_eq!(rects.len(), 1);
+    assert!(rects.contains_key(&win));
+
+    // Closing the window leaves a stale index behind: pruning must not panic
+    // (v0.1.0 crashed here with "index out of bounds") and must drop it.
+    dock.remove_surface(win);
+    prune_floating_window_rects(&dock, &mut rects);
+    assert!(rects.is_empty());
 }

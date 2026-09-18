@@ -103,11 +103,15 @@ The log stream pane SHALL NOT render a redundant internal banner with the file n
 - **THEN** the stream controls appear immediately below the tab header without an internal title banner.
 
 ### Requirement: Persisted Workspace Geometry
-The dock layout, floating window positions and sizes, dialog positions and sizes, and the main window position, size and maximized state SHALL be persisted in the configuration file and restored on the next start. A saved window position that no longer falls on an attached monitor SHALL be ignored so the window is never restored off-screen.
+The dock layout, floating window positions and sizes, dialog positions and sizes, and the main window position, size and maximized state SHALL be persisted in the configuration file and restored on the next start. A saved window position that no longer falls on an attached monitor SHALL be ignored so the window is never restored off-screen. Geometry recorded for a floating dock window SHALL be discarded as soon as that window no longer exists, and looking it up SHALL never index a surface that is gone.
 
 #### Scenario: Restart after disconnecting a monitor
 - **WHEN** the window was last closed on a secondary monitor that is no longer attached
 - **THEN** the next start ignores the saved position and opens the window on an attached monitor with its saved size and dock layout.
+
+#### Scenario: Closing a floating dock window
+- **WHEN** the user closes or re-docks a floating window whose position was recorded during the session
+- **THEN** the application keeps running, the stale record is dropped, and the next layout save contains only windows that still exist.
 
 ### Requirement: Window Idle Detection
 Mouse movement, mouse clicks, wheel scrolling and keyboard input SHALL all count as user activity for the screensaver idle timer.
