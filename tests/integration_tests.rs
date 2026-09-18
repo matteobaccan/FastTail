@@ -569,6 +569,13 @@ fn test_i18n_exhaustive_coverage() {
         "export_tip",
         "help_desc_select",
         "help_desc_copy",
+        "goto_label",
+        "goto_hint",
+        "goto_hidden",
+        "goto_invalid",
+        "help_desc_goto",
+        "always_on_top",
+        "pin_tip",
     ];
 
     for lang in &[
@@ -2994,4 +3001,58 @@ fn test_export_visible_and_search_matches() {
     let n = engine.export_search_matches(&mut out).unwrap();
     assert_eq!(n, 1, "only lines visible under the filters are searchable");
     assert_eq!(String::from_utf8(out).unwrap(), "ERROR a\n");
+}
+
+#[test]
+fn test_goto_line_exact_clamped_hidden_and_relative() {
+    use fasttail::tail_engine::GotoTarget;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("goto.log");
+    write_lines(&log, &["ERROR 1", "INFO 2", "INFO 3", "ERROR 4", "INFO 5"]);
+    let mut engine = TailEngine::open(&log).unwrap();
+
+    // Exact, 1-based in, 0-based out.
+    assert_eq!(
+        engine.resolve_goto("3", 0),
+        Some(GotoTarget {
+            requested: 2,
+            line: 2,
+            hidden: false
+        })
+    );
+    // Beyond the end clamps to the last line.
+    assert_eq!(engine.resolve_goto("500", 0).unwrap().line, 4);
+    // Relative to the current line.
+    assert_eq!(engine.resolve_goto("+2", 1).unwrap().line, 3);
+    assert_eq!(engine.resolve_goto("-9", 1).unwrap().line, 0);
+    // Not a number, or line 0.
+    assert_eq!(engine.resolve_goto("abc", 0), None);
+    assert_eq!(engine.resolve_goto("0", 0), None);
+
+    // Under a filter a hidden line resolves to the next visible one and says so.
+    engine.set_include_filter("ERROR"); // visible: 0, 3
+    assert_eq!(
+        engine.resolve_goto("2", 0),
+        Some(GotoTarget {
+            requested: 1,
+            line: 3,
+            hidden: true
+        })
+    );
+    // Past the last visible line: the last visible line.
+    assert_eq!(engine.resolve_goto("5", 0).unwrap().line, 3);
+}
+
+#[test]
+fn test_always_on_top_persists_in_ini() {
+    let mut cfg = FastTailConfig::default();
+    assert!(!cfg.always_on_top);
+    cfg.always_on_top = true;
+    let ini = cfg.to_ini();
+    assert_eq!(
+        ini.section(Some("general"))
+            .and_then(|s| s.get("always_on_top")),
+        Some("true")
+    );
+    assert!(FastTailConfig::from_ini(&ini).always_on_top);
 }

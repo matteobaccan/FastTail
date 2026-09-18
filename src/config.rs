@@ -20,6 +20,9 @@ pub struct FastTailConfig {
     /// Rendering backend: auto (OpenGL, then wgpu on failure), glow or wgpu. Applies at start.
     #[serde(default)]
     pub renderer: crate::renderer::RendererChoice,
+    /// Keep the main window above other windows.
+    #[serde(default)]
+    pub always_on_top: bool,
     #[serde(default)]
     pub borderless: bool,
     #[serde(default = "default_true")]
@@ -93,6 +96,7 @@ impl Default for FastTailConfig {
             telemetry_enabled: true,
             sound_enabled: false,
             renderer: crate::renderer::RendererChoice::Auto,
+            always_on_top: false,
             borderless: false,
             show_line_numbers: true,
             font_size: 13.0,
@@ -214,6 +218,7 @@ impl FastTailConfig {
             .set("theme", theme_str)
             .set("language", self.language.code())
             .set("renderer", self.renderer.as_str())
+            .set("always_on_top", self.always_on_top.to_string())
             .set("screensaver_enabled", self.screensaver_enabled.to_string())
             .set(
                 "screensaver_timeout_mins",
@@ -349,6 +354,12 @@ impl FastTailConfig {
                 .and_then(crate::renderer::RendererChoice::parse)
             {
                 cfg.renderer = r;
+            }
+            if let Some(v) = general
+                .get("always_on_top")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.always_on_top = v;
             }
             if let Some(s) = general.get("screensaver_enabled") {
                 if let Ok(v) = s.parse::<bool>() {

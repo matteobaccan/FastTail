@@ -162,6 +162,17 @@ impl HighlightRule {
 /// Upper bound on remembered search hits, keeps F3 navigation responsive on huge files.
 const MAX_SEARCH_MATCHES: usize = 20_000;
 
+/// Result of a go-to-line request (see `TailEngine::resolve_goto`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GotoTarget {
+    /// The requested line after clamping (0-based).
+    pub requested: usize,
+    /// The line the view will actually show (0-based).
+    pub line: usize,
+    /// True when `requested` is hidden by the filters and `line` was substituted.
+    pub hidden: bool,
+}
+
 /// Efficient case-insensitive substring search.
 /// For ASCII haystack and pre-lowercased needle, avoids heap allocation by checking ASCII byte windows.
 #[inline]
@@ -209,6 +220,10 @@ pub struct TailEngine {
     pub selection: BTreeSet<usize>,
     pub selection_all: bool,
     pub selection_anchor: Option<usize>,
+    /// Go-to-line box state (per stream): open flag, typed text, last notice.
+    pub goto_open: bool,
+    pub goto_input: String,
+    pub goto_notice: Option<String>,
     /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
     pub search_byte_matches: Vec<(usize, usize)>,
     search_byte_max_len: usize,
@@ -329,6 +344,9 @@ impl TailEngine {
             selection: BTreeSet::new(),
             selection_all: false,
             selection_anchor: None,
+            goto_open: false,
+            goto_input: String::new(),
+            goto_notice: None,
             is_watching: true,
             has_new_data: false,
             view_mode,
@@ -1374,6 +1392,49 @@ impl TailEngine {
             crate::audio::SoundAlertPreset::Beep.play();
         }
         target
+    }
+
+    // ----- Go to line -----
+
+    /// Resolves a go-to request. `input` is a 1-based line number, or `+N` / `-N` relative to
+    /// `current_line` (0-based). Returns the resolved 0-based target and whether the requested
+    /// line was hidden by the filters (in which case the first visible line at or after it,
+    /// or the last visible line, is returned). `None` when the input is not a number.
+    pub fn resolve_goto(&self, input: &str, current_line: usize) -> Option<GotoTarget> {
+        let total = self.total_lines();
+        if total == 0 {
+            return None;
+        }
+        let s = input.trim();
+        let requested: usize = if let Some(rel) = s.strip_prefix('+') {
+            current_line.saturating_add(rel.trim().parse::<usize>().ok()?)
+        } else if let Some(rel) = s.strip_prefix('-') {
+            current_line.saturating_sub(rel.trim().parse::<usize>().ok()?)
+        } else {
+            s.parse::<usize>().ok()?.checked_sub(1)?
+        };
+        let clamped = requested.min(total - 1);
+        if !self.is_filter_active() {
+            return Some(GotoTarget {
+                requested: clamped,
+                line: clamped,
+                hidden: false,
+            });
+        }
+        if self.filtered_lines.is_empty() {
+            return None;
+        }
+        let pos = self.filtered_lines.partition_point(|&l| l < clamped);
+        let line = if pos < self.filtered_lines.len() {
+            self.filtered_lines[pos]
+        } else {
+            *self.filtered_lines.last().unwrap()
+        };
+        Some(GotoTarget {
+            requested: clamped,
+            line,
+            hidden: line != clamped,
+        })
     }
 
     // ----- Row selection, clipboard text and export -----

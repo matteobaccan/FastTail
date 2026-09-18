@@ -58,6 +58,8 @@ pub struct FastTailApp {
     pub floating_window_rects: std::collections::HashMap<egui_dock::SurfaceIndex, egui::Rect>,
     /// Backend the window runs on, read once from the creation context.
     pub renderer: crate::renderer::ActiveRenderer,
+    /// Window level currently applied to the viewport (see `config.always_on_top`).
+    pub applied_on_top: bool,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -201,6 +203,7 @@ impl FastTailApp {
             first_frame: true,
             floating_window_rects,
             renderer: crate::renderer::ActiveRenderer::unknown(),
+            applied_on_top: false,
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -378,6 +381,16 @@ impl FastTailApp {
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, self.config.theme.bg_color());
 
+        // Always-on-top: apply whenever the setting and the viewport disagree (covers startup)
+        if self.config.always_on_top != self.applied_on_top {
+            self.applied_on_top = self.config.always_on_top;
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if self.applied_on_top {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            }));
+        }
+
         // 0. Handle initial maximize on Windows / viewport
         if self.first_frame {
             self.first_frame = false;
@@ -478,6 +491,12 @@ impl FastTailApp {
             // Keyboard shortcut: F1 (Toggle Help)
             if i.key_pressed(Key::F1) {
                 self.config.help_open = !self.config.help_open;
+                let _ = self.config.save();
+            }
+
+            // Keyboard shortcut: Ctrl + Shift + T (toggle always-on-top)
+            if i.modifiers.command && i.modifiers.shift && i.key_pressed(Key::T) {
+                self.config.always_on_top = !self.config.always_on_top;
                 let _ = self.config.save();
             }
 
@@ -664,6 +683,26 @@ impl FastTailApp {
 
                             ui.separator();
                         }
+
+                        // Always-on-top pin (Ctrl+Shift+T)
+                        let pin_text = if self.config.always_on_top {
+                            RichText::new(" 📌 ")
+                                .monospace()
+                                .color(self.config.theme.accent_color())
+                        } else {
+                            RichText::new(" 📌 ")
+                                .monospace()
+                                .color(self.config.theme.text_dim())
+                        };
+                        if ui
+                            .button(pin_text)
+                            .on_hover_text(t(self.config.language, "pin_tip"))
+                            .clicked()
+                        {
+                            self.config.always_on_top = !self.config.always_on_top;
+                            let _ = self.config.save();
+                        }
+                        ui.separator();
 
                         if self.config.telemetry_enabled {
                             // RAM Meter & Progress Bar
@@ -1435,6 +1474,14 @@ impl FastTailApp {
                         .small()
                         .color(theme.text_primary()),
                     );
+                    ui.add_space(6.0);
+                    if ui
+                        .checkbox(&mut self.config.always_on_top, t(lang, "always_on_top"))
+                        .on_hover_text(t(lang, "pin_tip"))
+                        .changed()
+                    {
+                        let _ = self.config.save();
+                    }
                 });
             });
 
@@ -1816,6 +1863,14 @@ impl FastTailApp {
                                     RichText::new("Ctrl + A  /  Ctrl + C").monospace().strong(),
                                 );
                                 ui.label(RichText::new(t(lang, "help_desc_copy")).monospace());
+                                ui.end_row();
+
+                                ui.label(RichText::new("Ctrl + G").monospace().strong());
+                                ui.label(RichText::new(t(lang, "help_desc_goto")).monospace());
+                                ui.end_row();
+
+                                ui.label(RichText::new("Ctrl + Shift + T").monospace().strong());
+                                ui.label(RichText::new(t(lang, "pin_tip")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("F1").monospace().strong());

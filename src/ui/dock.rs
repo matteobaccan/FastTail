@@ -767,6 +767,76 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
+        // Go to line (Ctrl+G): inline box, Enter jumps, Esc closes
+        let ctrl_g = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::G);
+        let goto_id = egui::Id::new("goto_line_input").with(&engine.path);
+        if is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_g)) {
+            engine.goto_open = true;
+            engine.goto_input.clear();
+            engine.goto_notice = None;
+            ui.ctx().memory_mut(|m| m.request_focus(goto_id));
+        }
+        if engine.goto_open {
+            ui.separator();
+            ui.label(
+                RichText::new(format!("⇢ {}:", t(lang, "goto_label")))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.accent_color()),
+            );
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut engine.goto_input)
+                    .hint_text(t(lang, "goto_hint"))
+                    .desired_width(90.0)
+                    .id(goto_id),
+            );
+            let enter = resp.has_focus()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            let esc = resp.has_focus()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if enter {
+                let current_line = (engine.current_scroll_y / row_height).round() as usize;
+                let current_line = engine.get_actual_line_idx(current_line).unwrap_or(0);
+                match engine.resolve_goto(&engine.goto_input.clone(), current_line) {
+                    Some(target) => {
+                        engine.goto_notice = if target.hidden {
+                            Some(format!(
+                                "{} {} {}",
+                                target.requested + 1,
+                                t(lang, "goto_hidden"),
+                                target.line + 1
+                            ))
+                        } else {
+                            None
+                        };
+                        scroll_to_target(engine, target.line);
+                        engine.select_row(target.line);
+                        if !target.hidden {
+                            engine.goto_open = false;
+                            ui.ctx().memory_mut(|m| m.stop_text_input());
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                    None => {
+                        engine.goto_notice = Some(t(lang, "goto_invalid").to_string());
+                    }
+                }
+            }
+            if esc {
+                engine.goto_open = false;
+                engine.goto_notice = None;
+                ui.ctx().memory_mut(|m| m.stop_text_input());
+            }
+            if let Some(notice) = &engine.goto_notice {
+                ui.label(
+                    RichText::new(notice)
+                        .monospace()
+                        .size(11.0)
+                        .color(theme.warn_color()),
+                );
+            }
+        }
+
         // Export menu: visible lines, or the search matches, to a text file
         ui.menu_button("💾", |ui| {
             ui.set_max_width(260.0);

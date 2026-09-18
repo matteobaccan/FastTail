@@ -88,6 +88,8 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Click` / `Shift + Click` / `Ctrl + Click` | Select a row / extend the selection over the visible rows / toggle a row |
 | `Ctrl + A` | Select every visible row of the focused stream |
 | `Ctrl + C` | Copy the selected rows (or the current search hit) as plain text |
+| `Ctrl + G` | Go to line N, or `+N` / `-N` from the current line (hidden lines resolve to the next visible one) |
+| `Ctrl + Shift + T` | Toggle always-on-top (also the 📌 pin in the title bar and a Settings checkbox) |
 | `Alt + 1..9` | Switch to stream tab #1 through #9 |
 | `Ctrl +` / `Ctrl =` | Zoom in (increase font size) |
 | `Ctrl -` | Zoom out (decrease font size) |
