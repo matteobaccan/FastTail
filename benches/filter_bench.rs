@@ -14,7 +14,7 @@
 //! Every phase is timed `rounds` times and the best time is reported.
 
 use fasttail::log_level::LogLevel;
-use fasttail::tail_engine::{HighlightRule, TailEngine};
+use fasttail::tail_engine::{HighlightRule, QuickLabel, TailEngine};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -396,6 +396,29 @@ fn main() {
             hits
         }),
     );
+    // Span evaluation over every line: a captures-only rule plus a quick label, what the
+    // renderer does per row once such a rule or label exists.
+    engine.set_highlight_rules(vec![
+        HighlightRule::new("ERROR", [255, 80, 80], [40, 0, 0], false),
+        HighlightRule::captures(r"req=(\d+)", [0, 200, 255], [0, 20, 40]),
+    ]);
+    engine.set_quick_labels(&[QuickLabel {
+        text: "payment".to_string(),
+        color: 2,
+    }]);
+    report(
+        "span highlight",
+        best(rounds, || {
+            let mut spans = 0;
+            for idx in 0..total {
+                if let Some(line) = engine.get_line(idx) {
+                    spans += engine.match_highlight_spans(&line).spans.len();
+                }
+            }
+            spans
+        }),
+    );
+    engine.set_quick_labels(&[]);
     // Random access through the block cache: what scrolling around the file costs.
     report(
         "scroll 20k rows",

@@ -1,7 +1,9 @@
 use crate::config::push_search_history;
 use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
-use crate::tail_engine::{HighlightRule, HighlightStyle, TailEngine};
+use crate::tail_engine::{
+    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SpanStyle, TailEngine,
+};
 use crate::theme::CyberTheme;
 use crate::wrap_layout::{
     anchor_center, anchor_to_bottom, fill_from, layout_slice, walk_anchor, WrapAnchor, WrapScroll,
@@ -55,6 +57,10 @@ pub struct DockContext<'a> {
     pub search_history: &'a mut Vec<String>,
     pub tab_closed: &'a mut bool,
     pub test_screensaver: &'a mut bool,
+    /// Quick colour labels (Ctrl+Shift+1..9), shared by every stream; `labels_changed` asks
+    /// the app to push them to the engines again.
+    pub quick_labels: &'a mut Vec<QuickLabel>,
+    pub labels_changed: &'a mut bool,
     /// Stream shown in the focused dock leaf: the only one that handles search shortcuts.
     pub focused_stream: Option<PathBuf>,
 }
@@ -184,6 +190,8 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         *self.ctx.level_colors,
                         &mut new_size_unit,
                         is_focused,
+                        self.ctx.quick_labels,
+                        self.ctx.labels_changed,
                     );
                     engine.search_query = search_query;
                 } else {
@@ -356,6 +364,8 @@ fn render_log_stream(
     level_colors: bool,
     new_size_unit: &mut Option<crate::tail_engine::SizeUnit>,
     is_focused: bool,
+    quick_labels: &mut Vec<QuickLabel>,
+    labels_changed: &mut bool,
 ) {
     let font_id = egui::FontId::monospace(font_size);
     let hex_row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
@@ -1371,6 +1381,42 @@ fn render_log_stream(
 
     ui.separator();
 
+    // Quick colour labels strip: one chip per label with a remove button.
+    if !quick_labels.is_empty() {
+        let mut remove = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(format!("🏷 {}:", t(lang, "quick_labels")))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.text_dim()),
+            );
+            for (i, label) in quick_labels.iter().enumerate() {
+                let (fg, bg) = theme.label_style(label.color);
+                ui.label(
+                    RichText::new(format!(" {} {} ", label.color, label.text))
+                        .monospace()
+                        .size(11.0)
+                        .color(fg)
+                        .background_color(bg),
+                );
+                if ui
+                    .small_button("✕")
+                    .on_hover_text(t(lang, "tip_remove_label"))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            }
+        });
+        if let Some(i) = remove {
+            quick_labels.remove(i);
+            *labels_changed = true;
+            ui.ctx().request_repaint();
+        }
+        ui.separator();
+    }
+
     let visible_lines = engine.visible_line_count();
     if visible_lines == 0 {
         ui.centered_and_justified(|ui| {
@@ -1455,6 +1501,8 @@ fn render_extended_rows(
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut clear_scroll_to_line = false;
     let visible_lines = engine.visible_line_count();
+    let font_id = egui::FontId::monospace(font_size);
+    let span_rules = engine.has_span_rules();
     let mut scroll_area = ScrollArea::both()
         .auto_shrink([false, false])
         .stick_to_bottom(engine.follow_tail);
@@ -1480,15 +1528,26 @@ fn render_extended_rows(
             if let Some(raw_line) = engine.get_line(actual_line_idx) {
                 let is_json = TailEngine::is_json_line(&raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
-                // User rules first; the level palette only colours rows no rule matched.
-                let highlight =
-                    row_highlight(engine, theme, level_colors, actual_line_idx, &raw_line);
                 let matches_search = has_search
                     && engine
                         .search_matches
                         .binary_search(&actual_line_idx)
                         .is_ok();
                 let is_active_search = active_search_line == Some(actual_line_idx);
+                // User rules first; the level palette only colours rows no rule matched.
+                // Span rules (captures-only, quick labels) only run when one exists, and
+                // never on search hits, which keep their own colours.
+                let spans = if span_rules && !matches_search && !is_active_search {
+                    Some(engine.match_highlight_spans(&raw_line))
+                } else {
+                    None
+                };
+                let highlight = match &spans {
+                    Some(s) => s
+                        .rest
+                        .or_else(|| level_fallback(engine, theme, level_colors, actual_line_idx)),
+                    None => row_highlight(engine, theme, level_colors, actual_line_idx, &raw_line),
+                };
                 let is_selected = engine.is_selected(actual_line_idx);
                 let is_bookmarked = engine.is_bookmarked(actual_line_idx);
 
@@ -1543,7 +1602,21 @@ fn render_extended_rows(
                             }
                         }
 
-                        // Content text
+                        // Content text: per-span formats when a captures-only rule or a
+                        // quick label painted something, the plain label otherwise.
+                        if let Some(spans) = spans.as_ref().filter(|s| !s.spans.is_empty()) {
+                            let base = egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color: highlight.map(|h| h.fg).unwrap_or(theme.text_primary()),
+                                background: highlight.map(|h| h.bg).unwrap_or(Color32::TRANSPARENT),
+                                italics: highlight.map(|h| h.italic).unwrap_or(false),
+                                ..Default::default()
+                            };
+                            let job =
+                                span_layout_job(&raw_line, &font_id, base, &spans.spans, theme);
+                            ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend));
+                            return;
+                        }
                         let mut text = RichText::new(&*raw_line).monospace().size(font_size);
                         if is_active_search {
                             text = text
@@ -1650,19 +1723,81 @@ fn row_highlight(
     line_idx: usize,
     raw_line: &str,
 ) -> Option<HighlightStyle> {
-    engine.match_highlight(raw_line).or_else(|| {
-        if !level_colors {
-            return None;
+    engine
+        .match_highlight(raw_line)
+        .or_else(|| level_fallback(engine, theme, level_colors, line_idx))
+}
+
+/// The level palette entry of a row, when level colouring is on.
+fn level_fallback(
+    engine: &TailEngine,
+    theme: &CyberTheme,
+    level_colors: bool,
+    line_idx: usize,
+) -> Option<HighlightStyle> {
+    if !level_colors {
+        return None;
+    }
+    theme
+        .level_style(engine.level_of(line_idx))
+        .map(|s| HighlightStyle {
+            fg: s.fg,
+            bg: s.bg,
+            bold: s.bold,
+            italic: false,
+        })
+}
+
+/// Lays out `text` as sections: `base` for the bytes no span claimed, and per span the
+/// rule's colours or the theme's preset for a quick label. Spans are sorted and
+/// non-overlapping (see `TailEngine::match_highlight_spans`); ranges past the end of the
+/// (possibly capped) text are dropped.
+fn span_layout_job(
+    text: &str,
+    font_id: &egui::FontId,
+    base: egui::TextFormat,
+    spans: &[HighlightSpan],
+    theme: &CyberTheme,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let mut pos = 0;
+    for sp in spans {
+        let start = sp.start.min(text.len());
+        let end = sp.end.min(text.len());
+        if start < pos
+            || start >= end
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+        {
+            continue;
         }
-        theme
-            .level_style(engine.level_of(line_idx))
-            .map(|s| HighlightStyle {
-                fg: s.fg,
-                bg: s.bg,
-                bold: s.bold,
-                italic: false,
-            })
-    })
+        if start > pos {
+            job.append(&text[pos..start], 0.0, base.clone());
+        }
+        let (fg, bg, italics) = match sp.style {
+            SpanStyle::Rule(s) => (s.fg, s.bg, s.italic),
+            SpanStyle::Label(n) => {
+                let (fg, bg) = theme.label_style(n);
+                (fg, bg, false)
+            }
+        };
+        job.append(
+            &text[start..end],
+            0.0,
+            egui::TextFormat {
+                font_id: font_id.clone(),
+                color: fg,
+                background: bg,
+                italics,
+                ..Default::default()
+            },
+        );
+        pos = end;
+    }
+    if pos < text.len() {
+        job.append(&text[pos..], 0.0, base);
+    }
+    job
 }
 
 /// A row laid out for the wrapped view: its line, galleys and total height.
@@ -1706,6 +1841,7 @@ fn render_wrapped_rows(
     if engine.wrap_avg_row_height <= 0.0 {
         engine.wrap_avg_row_height = row_height;
     }
+    let span_rules = engine.has_span_rules();
 
     let mut scroll_area = ScrollArea::vertical().auto_shrink([false, false]);
     let handed = engine.wrap_virtual_offset;
@@ -1746,15 +1882,33 @@ fn render_wrapped_rows(
             };
             let is_json = TailEngine::is_json_line(&raw);
             let expanded = is_json && eng.expanded_json_lines.contains(&line);
-            let highlight = row_highlight(eng, theme, level_colors, line, &raw);
+            // Search hits keep their own colours; other rows take the span path only when
+            // a captures-only rule or a quick label exists.
+            let is_hit = active_search_line == Some(line)
+                || (has_search && eng.search_matches.binary_search(&line).is_ok());
+            let spans = if span_rules && !is_hit {
+                Some(eng.match_highlight_spans(&raw))
+            } else {
+                None
+            };
+            let highlight = match &spans {
+                Some(s) => s
+                    .rest
+                    .or_else(|| level_fallback(eng, theme, level_colors, line)),
+                None => row_highlight(eng, theme, level_colors, line, &raw),
+            };
             let format = egui::TextFormat {
                 font_id: font_id.clone(),
                 color: Color32::PLACEHOLDER,
                 italics: highlight.map(|h| h.italic).unwrap_or(false),
                 ..Default::default()
             };
-            let mut job =
-                egui::text::LayoutJob::single_section(layout_slice(&raw).to_owned(), format);
+            let mut job = match spans.filter(|s| !s.spans.is_empty()) {
+                Some(s) => span_layout_job(layout_slice(&raw), &font_id, format, &s.spans, theme),
+                None => {
+                    egui::text::LayoutJob::single_section(layout_slice(&raw).to_owned(), format)
+                }
+            };
             job.wrap.max_width = if is_json { text_w - json_w } else { text_w }.max(20.0);
             let galley = ctx.fonts_mut(|f| f.layout_job(job));
             let mut height = galley.size().y.max(font_row_h) + pad;
@@ -2467,6 +2621,14 @@ pub fn render_highlights_content(
                         .checkbox(&mut rule.is_regex, "Regex")
                         .on_hover_text(t(lang, "tip_regex_checkbox"))
                         .changed()
+                    {
+                        rules_changed = true;
+                    }
+                    if rule.is_regex
+                        && ui
+                            .checkbox(&mut rule.captures_only, t(lang, "captures_only"))
+                            .on_hover_text(t(lang, "tip_captures_only"))
+                            .changed()
                     {
                         rules_changed = true;
                     }

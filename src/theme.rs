@@ -213,6 +213,47 @@ impl CyberTheme {
         }
     }
 
+    /// Foreground and background of quick label preset `n` (1..=9): red, orange, yellow,
+    /// green, cyan, blue, violet, magenta, grey. Saturated on the dark themes, pastel on
+    /// Light so the text stays readable.
+    pub fn label_style(&self, n: u8) -> (Color32, Color32) {
+        let i = (n.clamp(1, 9) - 1) as usize;
+        if *self == CyberTheme::Light {
+            const BG: [[u8; 3]; 9] = [
+                [255, 205, 205],
+                [255, 222, 180],
+                [255, 245, 160],
+                [200, 240, 200],
+                [190, 240, 245],
+                [200, 215, 255],
+                [225, 205, 255],
+                [255, 205, 235],
+                [220, 225, 230],
+            ];
+            let [r, g, b] = BG[i];
+            (Color32::from_rgb(24, 28, 36), Color32::from_rgb(r, g, b))
+        } else {
+            const BG: [[u8; 3]; 9] = [
+                [220, 50, 50],
+                [230, 120, 30],
+                [230, 200, 30],
+                [40, 190, 80],
+                [0, 200, 220],
+                [60, 120, 240],
+                [150, 90, 240],
+                [230, 60, 180],
+                [150, 160, 170],
+            ];
+            let [r, g, b] = BG[i];
+            let fg = if i == 5 || i == 6 {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(10, 10, 10)
+            };
+            (fg, Color32::from_rgb(r, g, b))
+        }
+    }
+
     pub fn apply(&self, ctx: &egui::Context) {
         let is_light = *self == CyberTheme::Light;
         let mut visuals = if is_light {
