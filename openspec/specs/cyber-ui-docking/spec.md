@@ -2,9 +2,7 @@
 
 ## Purpose
 Provides a responsive, high-contrast Cyberpunk docking UI with virtualized rendering, draggable modal windows, theme customizability, and intuitive keyboard navigation.
-
 ## Requirements
-
 ### Requirement: Cyberpunk UI Styling and Branding
 The application SHALL present a clean, high-contrast Cyberpunk UI featuring customizable themes (Tron, Matrix, Blade, Light), without double slashes (//) in UI labels. Interactive buttons SHALL maintain zero expansion (`expansion = 0.0`) and fixed dimensions on hover, preventing layout shifts and footprint jitter. The main application window title SHALL be `FastTail v<version> by Matteo Baccan`.
 
@@ -27,11 +25,19 @@ The main application window titlebar SHALL display the current crate version alo
 - **THEN** the top navigation bar displays `FastTail v<version> by Matteo Baccan`.
 
 ### Requirement: Clickable External Hyperlinks in About Dialog
-The About dialog SHALL provide clickable hyperlinks to the GitHub repository and to `https://www.baccan.it`, and SHALL show the git tag and build timestamp of the running binary.
+The About dialog SHALL provide clickable hyperlinks to the GitHub repository and to `https://www.baccan.it`, each showing its full URL as a hover tooltip, and SHALL show the git tag and build timestamp of the running binary. The build SHALL include the platform support that opens URLs in the operating system's default browser (the `links` feature of eframe), and a test SHALL fail if that support is dropped from the dependency declaration.
 
 #### Scenario: User clicks website or repository link
 - **WHEN** the user opens the About dialog and clicks the GitHub repository or `www.baccan.it` link
 - **THEN** the default web browser opens the respective URL.
+
+#### Scenario: Hovering a link
+- **WHEN** the pointer rests on the `www.baccan.it` or the repository link
+- **THEN** a tooltip shows the full `https://` URL that a click will open.
+
+#### Scenario: Browser support removed from the build
+- **WHEN** the `eframe` dependency in `Cargo.toml` no longer lists the `links` feature
+- **THEN** the test suite fails with a message naming the missing feature.
 
 ### Requirement: Localized Tooltips
 All interactive buttons, sliders, and controls SHALL provide informative tooltips fully localized in the currently selected user language (English, Italian, French, Spanish, Chinese).
@@ -144,3 +150,4 @@ When enabled in Settings, a highlight rule with a sound preset matching in a str
 #### Scenario: Alert while the window is in the background
 - **WHEN** the option is on, the window is not focused, and a Critical rule matches
 - **THEN** the OS attention request is sent once, and not again until the window has been focused.
+
