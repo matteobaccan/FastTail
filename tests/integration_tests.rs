@@ -434,6 +434,23 @@ fn test_tail_engine_out_of_bounds() {
 }
 
 #[test]
+fn test_eframe_links_feature_enabled() {
+    // The About dialog opens its URLs through egui's OpenUrl output, which egui-winit
+    // forwards to the system browser only when eframe is built with the `links`
+    // feature. The crate cannot see that feature at compile time, so guard the
+    // dependency declaration itself.
+    let manifest = include_str!("../Cargo.toml");
+    let eframe_line = manifest
+        .lines()
+        .find(|l| l.trim_start().starts_with("eframe"))
+        .expect("Cargo.toml declares the eframe dependency");
+    assert!(
+        eframe_line.contains("\"links\""),
+        "the eframe dependency must enable the `links` feature, otherwise the About dialog links cannot open the browser: {eframe_line}"
+    );
+}
+
+#[test]
 fn test_i18n_exhaustive_coverage() {
     let all_keys = [
         "app_subtitle",

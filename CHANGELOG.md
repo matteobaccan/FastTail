@@ -55,6 +55,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Recent Files is an icon button (🕒) next to Open File.** The localized
+  name is its tooltip; the menu content (recent list, clear entry) is
+  unchanged. The title bar is narrower and the two ways of opening a log sit
+  together.
 - **wgpu is now the first choice of the `auto` renderer**, OpenGL the fallback.
   Measured on an NVIDIA Windows machine with the pointer moving over the
   window: a continuous repaint costs about 12% of one core on wgpu against a
@@ -70,6 +74,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The screensaver timeout field accepts 0 (= never); it used to clamp 0 to 1
   minute, so the timeout could not disable the screensaver.
+- The About dialog links (`www.baccan.it`, the GitHub repository) open the
+  default browser again: the `links` feature of eframe had been dropped with
+  the explicit feature list, so clicks only produced a log warning. The links
+  now also show the full URL as a tooltip, and a test guards the feature.
 
 ## [0.3.0] - 2026-09-18
 
