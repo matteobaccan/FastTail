@@ -348,7 +348,15 @@ mod tests {
     fn open_rejects_non_regular_files() {
         let dir = tempfile::tempdir().unwrap();
         let res = FileSource::open(dir.path());
-        assert!(res.is_err());
-        assert_eq!(res.err().unwrap().kind(), std::io::ErrorKind::InvalidInput);
+        let err = res
+            .err()
+            .expect("a directory must not open as a file source");
+        // On Windows, opening a directory without FILE_FLAG_BACKUP_SEMANTICS already fails
+        // inside File::open (access denied), so the metadata check is never reached and the
+        // error kind comes from the OS; on Unix the handle opens and the check rejects it.
+        #[cfg(not(windows))]
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        #[cfg(windows)]
+        let _ = err;
     }
 }
