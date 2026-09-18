@@ -286,10 +286,11 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
 
         while curr <= max_pos {
             // SIMD-accelerated search for candidate starting positions using first char
-            let match_rel = match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..=max_pos]) {
-                Some(rel) => rel,
-                None => return false,
-            };
+            let match_rel =
+                match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..=max_pos]) {
+                    Some(rel) => rel,
+                    None => return false,
+                };
 
             curr += match_rel;
             if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
