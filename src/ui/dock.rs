@@ -247,16 +247,19 @@ fn paint_search_row_background(
     theme: &CyberTheme,
     matches: bool,
     is_active: bool,
+    selected: bool,
 ) {
-    if !matches && !is_active {
+    if !matches && !is_active && !selected {
         return;
     }
-    let base = if is_active {
-        theme.accent_color()
+    // Search tints win over the selection tint so hits stay recognisable.
+    let (base, alpha) = if is_active {
+        (theme.accent_color(), 70)
+    } else if matches {
+        (theme.warn_color(), 40)
     } else {
-        theme.warn_color()
+        (theme.secondary_accent(), 60)
     };
-    let alpha = if is_active { 70 } else { 40 };
     let fill = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
     let full = egui::Rect::from_min_max(
         egui::pos2(ui.max_rect().left(), row_rect.top()),
@@ -764,8 +767,72 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
+        // Export menu: visible lines, or the search matches, to a text file
+        ui.menu_button("💾", |ui| {
+            ui.set_max_width(260.0);
+            let export = |engine: &TailEngine, title: &str, matches_only: bool| {
+                let suggested = format!(
+                    "{}-{}.txt",
+                    engine
+                        .path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("fasttail"),
+                    if matches_only { "matches" } else { "export" }
+                );
+                if let Some(target) = rfd::FileDialog::new()
+                    .set_title(title)
+                    .set_file_name(suggested)
+                    .add_filter("Text (*.txt, *.log)", &["txt", "log"])
+                    .save_file()
+                {
+                    let result = std::fs::File::create(&target).and_then(|f| {
+                        let mut w = std::io::BufWriter::new(f);
+                        if matches_only {
+                            engine.export_search_matches(&mut w)
+                        } else {
+                            engine.export_visible(&mut w)
+                        }
+                    });
+                    if let Err(err) = result {
+                        eprintln!("fasttail: export to {} failed: {err}", target.display());
+                    }
+                }
+            };
+            if ui
+                .button(RichText::new(t(lang, "export_visible")).monospace())
+                .clicked()
+            {
+                export(engine, t(lang, "export_visible"), false);
+                ui.close();
+            }
+            if has_query
+                && ui
+                    .button(RichText::new(t(lang, "export_matches")).monospace())
+                    .clicked()
+            {
+                export(engine, t(lang, "export_matches"), true);
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text(t(lang, "export_tip"));
+
         // Keyboard navigation shortcuts for the focused stream when no input has the keyboard
         if is_focused && !ui.ctx().egui_wants_keyboard_input() {
+            // Ctrl+A selects every visible row, Ctrl+C copies the selection (or the
+            // current search hit) as plain text.
+            let ctrl_a = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::A);
+            let ctrl_c = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::C);
+            if ui.input_mut(|i| i.consume_shortcut(&ctrl_a)) {
+                engine.select_all_visible();
+                ui.ctx().request_repaint();
+            }
+            if ui.input_mut(|i| i.consume_shortcut(&ctrl_c)) {
+                if let Some(text) = engine.copy_selection_text() {
+                    ui.ctx().copy_text(text);
+                }
+            }
             ui.input(|i| {
                 // Ctrl + Home: Jump to top
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
@@ -954,6 +1021,7 @@ fn render_log_stream(
     let active_search_line = engine.current_search_line();
 
     let mut toggle_json = None;
+    let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut clear_scroll_to_line = false;
     let mut scroll_area = ScrollArea::both()
         .auto_shrink([false, false])
@@ -987,6 +1055,7 @@ fn render_log_stream(
                         .binary_search(&actual_line_idx)
                         .is_ok();
                 let is_active_search = active_search_line == Some(actual_line_idx);
+                let is_selected = engine.is_selected(actual_line_idx);
 
                 // Background painted after layout, behind the row (see SearchRowMark)
                 let row_bg = ui.painter().add(egui::Shape::Noop);
@@ -1068,7 +1137,25 @@ fn render_log_stream(
                     theme,
                     matches_search,
                     is_active_search,
+                    is_selected,
                 );
+
+                // Row selection: click, Shift+click (range), Ctrl+click (toggle)
+                let click_rect = egui::Rect::from_min_max(
+                    egui::pos2(ui.max_rect().left(), row_resp.rect.top()),
+                    egui::pos2(
+                        ui.max_rect().right().max(row_resp.rect.right()),
+                        row_resp.rect.bottom(),
+                    ),
+                );
+                let click = ui.interact(
+                    click_rect,
+                    ui.id().with(("row_select", actual_line_idx)),
+                    egui::Sense::click(),
+                );
+                if click.clicked() {
+                    row_click = Some((actual_line_idx, ui.input(|i| i.modifiers)));
+                }
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
                     row_resp.scroll_to_me(Some(egui::Align::Center));
@@ -1111,6 +1198,17 @@ fn render_log_stream(
     }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
+
+    if let Some((idx, mods)) = row_click {
+        if mods.shift {
+            engine.extend_selection_to(idx);
+        } else if mods.ctrl || mods.command {
+            engine.toggle_row(idx);
+        } else {
+            engine.select_row(idx);
+        }
+        ui.ctx().request_repaint();
+    }
 
     if let Some((idx, was_expanded)) = toggle_json {
         if was_expanded {
@@ -1321,6 +1419,7 @@ fn render_hex_stream(
                 theme,
                 matches_search,
                 is_active_search,
+                false,
             );
 
             if is_active_search

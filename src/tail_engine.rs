@@ -4,9 +4,9 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Instant;
@@ -205,6 +205,10 @@ pub struct TailEngine {
     pub filtered_lines: Vec<usize>,
     pub search_query: String,
     pub search_matches: Vec<usize>,
+    /// Selected rows (line indices) for copy/export; `selection_all` marks "every visible row".
+    pub selection: BTreeSet<usize>,
+    pub selection_all: bool,
+    pub selection_anchor: Option<usize>,
     /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
     pub search_byte_matches: Vec<(usize, usize)>,
     search_byte_max_len: usize,
@@ -322,6 +326,9 @@ impl TailEngine {
             file_size,
             last_modified,
             follow_tail: true,
+            selection: BTreeSet::new(),
+            selection_all: false,
+            selection_anchor: None,
             is_watching: true,
             has_new_data: false,
             view_mode,
@@ -476,6 +483,8 @@ impl TailEngine {
     }
 
     pub fn rebuild_line_index(&mut self) {
+        // The file was truncated, rewritten or re-decoded: row indices no longer mean the same.
+        self.clear_selection();
         self.rebuild_line_index_from(0);
     }
 
@@ -1365,6 +1374,140 @@ impl TailEngine {
             crate::audio::SoundAlertPreset::Beep.play();
         }
         target
+    }
+
+    // ----- Row selection, clipboard text and export -----
+
+    /// Selects only `idx` and makes it the anchor for Shift+click ranges.
+    pub fn select_row(&mut self, idx: usize) {
+        self.selection.clear();
+        self.selection_all = false;
+        self.selection.insert(idx);
+        self.selection_anchor = Some(idx);
+    }
+
+    /// Adds or removes `idx` (Ctrl+click) and makes it the anchor.
+    pub fn toggle_row(&mut self, idx: usize) {
+        if self.selection_all {
+            // Materialise "all visible" before removing one row from it.
+            self.selection = (0..self.visible_line_count())
+                .filter_map(|r| self.get_actual_line_idx(r))
+                .collect();
+            self.selection_all = false;
+        }
+        if !self.selection.remove(&idx) {
+            self.selection.insert(idx);
+        }
+        self.selection_anchor = Some(idx);
+    }
+
+    /// Selects the visible rows between the anchor and `idx` (Shift+click); hidden rows
+    /// in between stay unselected. Without a usable anchor this selects `idx` alone.
+    pub fn extend_selection_to(&mut self, idx: usize) {
+        let anchor_row = self
+            .selection_anchor
+            .and_then(|a| self.get_visible_row_of_line(a));
+        let target_row = self.get_visible_row_of_line(idx);
+        match (anchor_row, target_row) {
+            (Some(a), Some(b)) => {
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                self.selection_all = false;
+                for row in lo..=hi {
+                    if let Some(line) = self.get_actual_line_idx(row) {
+                        self.selection.insert(line);
+                    }
+                }
+            }
+            _ => self.select_row(idx),
+        }
+    }
+
+    /// Selects every row visible under the active filters (Ctrl+A), lazily.
+    pub fn select_all_visible(&mut self) {
+        self.selection.clear();
+        self.selection_all = true;
+        self.selection_anchor = None;
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
+        self.selection_all = false;
+        self.selection_anchor = None;
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection_all || !self.selection.is_empty()
+    }
+
+    pub fn is_selected(&self, idx: usize) -> bool {
+        if self.selection_all {
+            self.is_line_visible(idx)
+        } else {
+            self.selection.contains(&idx)
+        }
+    }
+
+    /// Selected line indices in file order.
+    pub fn selected_lines(&self) -> Vec<usize> {
+        if self.selection_all {
+            (0..self.visible_line_count())
+                .filter_map(|r| self.get_actual_line_idx(r))
+                .collect()
+        } else {
+            self.selection.iter().copied().collect()
+        }
+    }
+
+    /// Plain text for the clipboard: the selected rows, or the current search hit when
+    /// nothing is selected. One line per row, no line numbers or markers.
+    pub fn copy_selection_text(&self) -> Option<String> {
+        let lines = if self.has_selection() {
+            self.selected_lines()
+        } else {
+            self.current_search_line().into_iter().collect()
+        };
+        if lines.is_empty() {
+            return None;
+        }
+        let mut out = String::new();
+        for (n, idx) in lines.iter().enumerate() {
+            if n > 0 {
+                out.push('\n');
+            }
+            if let Some(line) = self.get_line(*idx) {
+                out.push_str(&line);
+            }
+        }
+        Some(out)
+    }
+
+    /// Writes the given rows as text lines to `sink`, streaming; returns the row count.
+    pub fn export_lines<I, W>(&self, indices: I, sink: &mut W) -> std::io::Result<usize>
+    where
+        I: IntoIterator<Item = usize>,
+        W: Write,
+    {
+        let mut count = 0;
+        for idx in indices {
+            if let Some(line) = self.get_line(idx) {
+                sink.write_all(line.as_bytes())?;
+                sink.write_all(b"\n")?;
+                count += 1;
+            }
+        }
+        sink.flush()?;
+        Ok(count)
+    }
+
+    /// Exports the rows that pass the active filters (all rows without filters).
+    pub fn export_visible<W: Write>(&self, sink: &mut W) -> std::io::Result<usize> {
+        let rows = (0..self.visible_line_count()).filter_map(|r| self.get_actual_line_idx(r));
+        self.export_lines(rows, sink)
+    }
+
+    /// Exports the lines matching the current search query.
+    pub fn export_search_matches<W: Write>(&self, sink: &mut W) -> std::io::Result<usize> {
+        self.export_lines(self.search_matches.iter().copied(), sink)
     }
 
     pub fn current_search_line(&self) -> Option<usize> {

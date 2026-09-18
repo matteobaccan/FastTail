@@ -564,6 +564,11 @@ fn test_i18n_exhaustive_coverage() {
         "renderer_wgpu",
         "renderer_note",
         "renderer_tip",
+        "export_visible",
+        "export_matches",
+        "export_tip",
+        "help_desc_select",
+        "help_desc_copy",
     ];
 
     for lang in &[
@@ -1329,7 +1334,7 @@ fn test_crash_handler_git_commit_and_report_generation() {
     );
     assert!(!GIT_TAG.is_empty(), "GIT_TAG must not be empty");
     assert_eq!(APP_VERSION, env!("CARGO_PKG_VERSION"));
-    assert_eq!(APP_VERSION, "0.2.0");
+    assert_eq!(APP_VERSION, "0.3.0");
 
     let bt = std::backtrace::Backtrace::disabled();
     let report = build_crash_report(
@@ -2880,4 +2885,113 @@ fn test_cli_paths_open_streams_with_filters_and_follow() {
     // Opening the same path again from the command line does not duplicate the stream.
     app.apply_cli(&cli);
     assert_eq!(app.engines.len(), 1);
+}
+
+fn write_lines(path: &std::path::Path, lines: &[&str]) {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path).unwrap();
+    for l in lines {
+        writeln!(f, "{l}").unwrap();
+    }
+}
+
+#[test]
+fn test_row_selection_range_toggle_and_select_all_under_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("sel.log");
+    write_lines(
+        &log,
+        &[
+            "a ERROR 0",
+            "b INFO 1",
+            "c ERROR 2",
+            "d INFO 3",
+            "e ERROR 4",
+        ],
+    );
+    let mut engine = TailEngine::open(&log).unwrap();
+    engine.set_include_filter("ERROR"); // visible: 0, 2, 4
+
+    engine.select_row(0);
+    engine.extend_selection_to(4);
+    assert_eq!(
+        engine.selected_lines(),
+        vec![0, 2, 4],
+        "hidden rows stay unselected"
+    );
+
+    engine.toggle_row(2);
+    assert_eq!(engine.selected_lines(), vec![0, 4]);
+    engine.toggle_row(2);
+    assert_eq!(engine.selected_lines(), vec![0, 2, 4]);
+
+    engine.select_all_visible();
+    assert!(engine.is_selected(4) && !engine.is_selected(1));
+    assert_eq!(engine.selected_lines(), vec![0, 2, 4]);
+    engine.toggle_row(4);
+    assert_eq!(engine.selected_lines(), vec![0, 2]);
+
+    engine.clear_selection();
+    assert!(!engine.has_selection());
+}
+
+#[test]
+fn test_copy_selection_text_is_plain_lines_in_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("copy.log");
+    write_lines(&log, &["first", "second", "third"]);
+    let mut engine = TailEngine::open(&log).unwrap();
+
+    assert_eq!(engine.copy_selection_text(), None);
+
+    engine.toggle_row(2);
+    engine.toggle_row(0);
+    assert_eq!(
+        engine.copy_selection_text().as_deref(),
+        Some("first\nthird")
+    );
+
+    // No selection: the current search hit is copied.
+    engine.clear_selection();
+    engine.update_search("second");
+    assert_eq!(engine.copy_selection_text().as_deref(), Some("second"));
+}
+
+#[test]
+fn test_selection_cleared_on_truncation() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("trunc.log");
+    write_lines(&log, &["one", "two", "three"]);
+    let mut engine = TailEngine::open(&log).unwrap();
+    engine.select_row(2);
+    assert!(engine.has_selection());
+
+    std::fs::File::create(&log)
+        .unwrap()
+        .write_all(b"x\n")
+        .unwrap();
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 1);
+    assert!(!engine.has_selection());
+}
+
+#[test]
+fn test_export_visible_and_search_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("exp.log");
+    write_lines(&log, &["ERROR a", "INFO b", "ERROR healthcheck", "WARN c"]);
+    let mut engine = TailEngine::open(&log).unwrap();
+
+    engine.set_exclude_filter("healthcheck");
+    let mut out = Vec::new();
+    let n = engine.export_visible(&mut out).unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(String::from_utf8(out).unwrap(), "ERROR a\nINFO b\nWARN c\n");
+
+    engine.update_search("ERROR");
+    let mut out = Vec::new();
+    let n = engine.export_search_matches(&mut out).unwrap();
+    assert_eq!(n, 1, "only lines visible under the filters are searchable");
+    assert_eq!(String::from_utf8(out).unwrap(), "ERROR a\n");
 }

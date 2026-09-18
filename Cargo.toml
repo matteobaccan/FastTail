@@ -1,6 +1,6 @@
 [package]
 name = "fasttail"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Matteo Baccan"]
 description = "Ultra-fast multi-stream log monitor and tail viewer with Cyberpunk UI aesthetic"

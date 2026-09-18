@@ -1804,6 +1804,20 @@ impl FastTailApp {
                                 ui.label(RichText::new(t(lang, "help_desc_find_next")).monospace());
                                 ui.end_row();
 
+                                ui.label(
+                                    RichText::new("Click / Shift + Click / Ctrl + Click")
+                                        .monospace()
+                                        .strong(),
+                                );
+                                ui.label(RichText::new(t(lang, "help_desc_select")).monospace());
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new("Ctrl + A  /  Ctrl + C").monospace().strong(),
+                                );
+                                ui.label(RichText::new(t(lang, "help_desc_copy")).monospace());
+                                ui.end_row();
+
                                 ui.label(RichText::new("F1").monospace().strong());
                                 ui.label(RichText::new(t(lang, "help_desc_f1")).monospace());
                                 ui.end_row();
