@@ -312,8 +312,7 @@ fn test_tail_engine_truncation_and_rotation() {
     let mut engine = TailEngine::open(tmp.path()).unwrap();
     assert_eq!(engine.total_lines(), 3);
 
-    // Release mmap before truncating (Windows NTFS requirement for file shrinking)
-    engine.release_mmap();
+    // The engine keeps a shared read handle: the writer may truncate the file under it.
     std::fs::write(tmp.path(), "Rotated Fresh Line 1\n").unwrap();
 
     engine.poll_updates();
@@ -3273,4 +3272,94 @@ fn test_reset_and_regrow_with_same_header_reloads_from_start() {
         (0..150).all(|i| !engine.get_line(i).unwrap().contains("old-")),
         "no old content spliced with the new file"
     );
+}
+
+#[test]
+fn test_every_line_reads_back_across_block_boundaries() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("blocks.log");
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&log).unwrap());
+    // ~700 KB: spans three 256 KB cache blocks, with lines of uneven length.
+    for i in 0..7000 {
+        writeln!(f, "line {i:05} {}", "x".repeat(60 + (i % 37))).unwrap();
+    }
+    drop(f);
+    let content = std::fs::read_to_string(&log).unwrap();
+    let engine = TailEngine::open(&log).unwrap();
+    assert_eq!(engine.total_lines(), 7000);
+    for (i, expected) in content.lines().enumerate() {
+        assert_eq!(engine.get_line(i).as_deref(), Some(expected), "line {i}");
+    }
+    // The cache stayed bounded while walking the whole file.
+    assert!(
+        engine.source.cached_bytes()
+            <= fasttail::file_source::MAX_BLOCKS * fasttail::file_source::BLOCK_SIZE
+    );
+}
+
+#[test]
+fn test_long_line_is_truncated_with_marker() {
+    use fasttail::tail_engine::{MAX_LINE_BYTES, TRUNCATED_LINE_MARKER};
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("long.log");
+    let mut f = std::fs::File::create(&log).unwrap();
+    f.write_all(b"short\n").unwrap();
+    f.write_all(&vec![b'y'; MAX_LINE_BYTES + 500_000]).unwrap();
+    f.write_all(b"\nafter\n").unwrap();
+    drop(f);
+    let engine = TailEngine::open(&log).unwrap();
+    assert_eq!(engine.total_lines(), 3);
+    let long = engine.get_line(1).unwrap();
+    assert!(long.ends_with(TRUNCATED_LINE_MARKER));
+    assert_eq!(long.len(), MAX_LINE_BYTES + TRUNCATED_LINE_MARKER.len());
+    assert_eq!(engine.get_line(2).as_deref(), Some("after"));
+}
+
+#[test]
+fn test_truncation_drops_cache_and_index_memory() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("shrink.log");
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&log).unwrap());
+    for i in 0..50_000 {
+        writeln!(f, "row {i} {}", "z".repeat(40)).unwrap();
+    }
+    drop(f);
+    let mut engine = TailEngine::open(&log).unwrap();
+    assert_eq!(engine.total_lines(), 50_000);
+    let _ = engine.get_line(49_999);
+    assert!(engine.source.cached_bytes() > 0);
+    assert!(engine.line_offsets.capacity() >= 50_000);
+
+    std::fs::File::create(&log)
+        .unwrap()
+        .write_all(b"fresh\n")
+        .unwrap();
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 1);
+    assert_eq!(engine.get_line(0).as_deref(), Some("fresh"));
+    assert!(
+        engine.line_offsets.capacity() < 1_000,
+        "index memory returned"
+    );
+}
+
+#[test]
+fn test_markdown_mode_refuses_files_over_the_cap() {
+    use fasttail::tail_engine::MARKDOWN_MAX_BYTES;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("big.md");
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&log).unwrap());
+    let chunk = vec![b'a'; 1024 * 1024];
+    for _ in 0..(MARKDOWN_MAX_BYTES / (1024 * 1024) + 1) {
+        f.write_all(&chunk).unwrap();
+        f.write_all(b"\n").unwrap();
+    }
+    drop(f);
+    let mut engine = TailEngine::open(&log).unwrap();
+    assert!(engine.markdown_too_large());
+    assert_eq!(engine.markdown_text(), "");
 }

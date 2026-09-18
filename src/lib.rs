@@ -3,6 +3,7 @@ pub mod baretail_bridge;
 pub mod cli;
 pub mod config;
 pub mod crash_handler;
+pub mod file_source;
 pub mod html_converter;
 pub mod i18n;
 pub mod paths;

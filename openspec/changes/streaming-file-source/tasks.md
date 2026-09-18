@@ -1,15 +1,15 @@
 ## 1. File Source
 
-- [ ] 1.1 Add `FileSource` in `src/file_source.rs`: open handle with full sharing, `len()`, `read_at(offset, len) -> Cow<[u8]>` through an LRU of 16 × 256 KB blocks, `invalidate_from(offset)`, `clear()`, `reopen()`
-- [ ] 1.2 Unit tests: reads inside a block, across block boundaries, past EOF, after invalidation and after the file grew
+- [x] 1.1 Add `FileSource` in `src/file_source.rs`: open handle with full sharing, `len()`, `read_at(offset, len) -> Cow<[u8]>` through an LRU of 16 × 256 KB blocks, `invalidate_from(offset)`, `clear()`, `reopen()`
+- [x] 1.2 Unit tests: reads inside a block, across block boundaries, past EOF, after invalidation and after the file grew
 
 ## 2. Engine on the Source
 
-- [ ] 2.1 Replace `buffer: Vec<u8>` with `source: FileSource`; rewrite `get_line` (decode from `read_at`, 1 MB cap with marker), `get_bytes`, `find_byte_matches_from` (chunked with overlap), `ensure_markdown_text` (32 MB cap)
-- [ ] 2.2 Rewrite the index scan to stream 256 KB chunks with memchr (initial and incremental); keep `max_line_bytes` and `max_detected_width` semantics
-- [ ] 2.3 Rewrite `refresh_file`: growth reads only new bytes through the source; fingerprints of the head and of the indexed end replace the buffer prefix/tail comparison; shrink drops index, cache and derived state and shrinks vectors
-- [ ] 2.4 Remove `release_mmap`, the `memmap2` dependency and every remaining `buffer` reference (`render_markdown_stream` uses `total_lines()`)
-- [ ] 2.5 Run the existing suite unchanged: all 91 integration tests and the unit tests pass
+- [x] 2.1 Replace `buffer: Vec<u8>` with `source: FileSource`; rewrite `get_line` (decode from `read_at`, 1 MB cap with marker), `get_bytes`, `find_byte_matches_from` (chunked with overlap), `ensure_markdown_text` (32 MB cap)
+- [x] 2.2 Rewrite the index scan to stream 256 KB chunks with memchr (initial and incremental); keep `max_line_bytes` and `max_detected_width` semantics
+- [x] 2.3 Rewrite `refresh_file`: growth reads only new bytes through the source; fingerprints of the head and of the indexed end replace the buffer prefix/tail comparison; shrink drops index, cache and derived state and shrinks vectors
+- [x] 2.4 Remove `release_mmap`, the `memmap2` dependency and every remaining `buffer` reference (`render_markdown_stream` uses `total_lines()`)
+- [x] 2.5 Run the existing suite unchanged: all 91 integration tests and the unit tests pass
 
 ## 3. Scan Jobs
 

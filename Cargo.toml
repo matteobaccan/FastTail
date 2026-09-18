@@ -17,7 +17,6 @@ egui_commonmark = "0.25"
 memchr = "2"
 
 # File I/O & Streaming
-memmap2 = "0.9"
 notify = "8.0"
 
 # Data, Serialization & Parsing

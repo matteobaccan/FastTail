@@ -1532,7 +1532,7 @@ fn render_hex_stream(
                     // Format ASCII representation
                     let mut ascii_str = String::with_capacity(bytes_per_row + 4);
                     ascii_str.push('|');
-                    for &b in chunk {
+                    for &b in &chunk {
                         if (0x20..=0x7E).contains(&b) {
                             ascii_str.push(b as char);
                         } else {
@@ -2065,7 +2065,7 @@ fn render_markdown_stream(
     theme: &CyberTheme,
     lang: Language,
 ) {
-    if engine.buffer.is_empty() {
+    if engine.total_lines() == 0 {
         ui.centered_and_justified(|ui| {
             ui.label(
                 RichText::new(t(lang, "no_file_open"))

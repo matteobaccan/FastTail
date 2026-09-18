@@ -1,26 +1,15 @@
 use crate::audio::SoundAlertPreset;
+use crate::file_source::FileSource;
 use egui::Color32;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Instant;
-
-fn open_file_shared(path: &Path) -> Result<File, std::io::Error> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.share_mode(7); // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
-    }
-    options.open(path)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FileEncoding {
@@ -161,6 +150,101 @@ impl HighlightRule {
 
 /// Upper bound on remembered search hits, keeps F3 navigation responsive on huge files.
 const MAX_SEARCH_MATCHES: usize = 20_000;
+/// Bytes read per step by sequential scans (indexing, byte search).
+const SCAN_CHUNK: usize = 1024 * 1024;
+/// A single line longer than this is shown truncated, with a marker.
+pub const MAX_LINE_BYTES: usize = 1024 * 1024;
+/// Rendered Markdown needs the whole text: larger files stay in text mode.
+pub const MARKDOWN_MAX_BYTES: u64 = 32 * 1024 * 1024;
+/// Bytes remembered at the head and at the indexed end to recognise rewrites.
+const FINGERPRINT_LEN: usize = 64;
+/// Marker appended to a line cut at `MAX_LINE_BYTES`.
+pub const TRUNCATED_LINE_MARKER: &str = " …[line truncated]";
+
+/// Decodes one raw line (bytes between two offsets, newline included) in `encoding`,
+/// dropping the trailing newline / CR LF unless the line was cut by the length cap.
+fn decode_line(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> String {
+    let mut s = match encoding {
+        FileEncoding::Utf8 => {
+            let end = if truncated {
+                bytes.len()
+            } else {
+                trim_newline_1(bytes)
+            };
+            String::from_utf8_lossy(&bytes[..end]).into_owned()
+        }
+        FileEncoding::Ascii => {
+            let end = if truncated {
+                bytes.len()
+            } else {
+                trim_newline_1(bytes)
+            };
+            bytes[..end]
+                .iter()
+                .map(|&b| if b <= 127 { b as char } else { '?' })
+                .collect()
+        }
+        FileEncoding::Ansi => {
+            let end = if truncated {
+                bytes.len()
+            } else {
+                trim_newline_1(bytes)
+            };
+            bytes[..end].iter().map(|&b| b as char).collect()
+        }
+        FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
+            let le = encoding == FileEncoding::UnicodeLe;
+            let end = if truncated {
+                bytes.len() & !1
+            } else {
+                trim_newline_2(bytes, le)
+            };
+            let units = bytes[..end].as_chunks::<2>().0.iter().map(|c| {
+                if le {
+                    u16::from_le_bytes([c[0], c[1]])
+                } else {
+                    u16::from_be_bytes([c[0], c[1]])
+                }
+            });
+            char::decode_utf16(units)
+                .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .collect()
+        }
+    };
+    if truncated {
+        s.push_str(TRUNCATED_LINE_MARKER);
+    }
+    s
+}
+
+/// End of the line content for single-byte encodings: strips `\n` and a preceding `\r`.
+fn trim_newline_1(bytes: &[u8]) -> usize {
+    let mut end = bytes.len();
+    if end > 0 && bytes[end - 1] == b'\n' {
+        end -= 1;
+        if end > 0 && bytes[end - 1] == b'\r' {
+            end -= 1;
+        }
+    }
+    end
+}
+
+/// End of the line content for UTF-16: strips the newline and a preceding CR (2 bytes each).
+fn trim_newline_2(bytes: &[u8], le: bool) -> usize {
+    let (nl, cr): ([u8; 2], [u8; 2]) = if le {
+        ([0x0A, 0x00], [0x0D, 0x00])
+    } else {
+        ([0x00, 0x0A], [0x00, 0x0D])
+    };
+    let mut end = bytes.len() & !1;
+    if end >= 2 && bytes[end - 2..end] == nl {
+        end -= 2;
+        if end >= 2 && bytes[end - 2..end] == cr {
+            end -= 2;
+        }
+    }
+    end
+}
 
 /// Result of a go-to-line request (see `TailEngine::resolve_goto`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,7 +280,13 @@ fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
 
 pub struct TailEngine {
     pub path: PathBuf,
-    pub buffer: Vec<u8>,
+    /// On-demand access to the file: a shared handle plus a small block cache. No copy of
+    /// the file lives in memory.
+    pub source: FileSource,
+    /// First bytes of the file and the bytes before the indexed end, used to tell a rewrite
+    /// from an append (see `fingerprints_match`).
+    head_fingerprint: Vec<u8>,
+    tail_fingerprint: (u64, Vec<u8>),
     pub line_offsets: Vec<u64>,
     pub file_size: u64,
     pub last_modified: Option<std::time::SystemTime>,
@@ -283,41 +373,30 @@ impl TailEngine {
         let file_size = metadata.len();
         let last_modified = metadata.modified().ok();
 
-        let mut buffer = Vec::new();
-        if file_size > 0 {
-            let mut file = open_file_shared(&path_buf)?;
-            if let Ok(size_usize) = usize::try_from(file_size) {
-                buffer.reserve_exact(size_usize);
-            }
-            file.read_to_end(&mut buffer)?;
-            // `file` dropped here, closing file handle immediately!
-        }
+        let source = FileSource::open(&path_buf)?;
+        let sample = source.read_to_vec(0, 512);
 
-        let (detected_encoding, is_binary) = if !buffer.is_empty() {
-            if buffer.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        let (detected_encoding, is_binary) = if !sample.is_empty() {
+            if sample.starts_with(&[0xEF, 0xBB, 0xBF]) {
                 (FileEncoding::Utf8, false)
-            } else if buffer.starts_with(&[0xFF, 0xFE]) {
+            } else if sample.starts_with(&[0xFF, 0xFE]) {
                 (FileEncoding::UnicodeLe, false)
-            } else if buffer.starts_with(&[0xFE, 0xFF]) {
+            } else if sample.starts_with(&[0xFE, 0xFF]) {
                 (FileEncoding::UnicodeBe, false)
+            } else if sample.len() >= 4
+                && sample.iter().step_by(2).all(|&b| b != 0)
+                && sample.iter().skip(1).step_by(2).all(|&b| b == 0)
+            {
+                (FileEncoding::UnicodeLe, false)
+            } else if sample.len() >= 4
+                && sample.iter().step_by(2).all(|&b| b == 0)
+                && sample.iter().skip(1).step_by(2).all(|&b| b != 0)
+            {
+                (FileEncoding::UnicodeBe, false)
+            } else if sample.contains(&0) {
+                (FileEncoding::Utf8, true)
             } else {
-                let sample_len = buffer.len().min(512);
-                let sample = &buffer[..sample_len];
-                if sample.len() >= 4
-                    && sample.iter().step_by(2).all(|&b| b != 0)
-                    && sample.iter().skip(1).step_by(2).all(|&b| b == 0)
-                {
-                    (FileEncoding::UnicodeLe, false)
-                } else if sample.len() >= 4
-                    && sample.iter().step_by(2).all(|&b| b == 0)
-                    && sample.iter().skip(1).step_by(2).all(|&b| b != 0)
-                {
-                    (FileEncoding::UnicodeBe, false)
-                } else if sample.contains(&0) {
-                    (FileEncoding::Utf8, true)
-                } else {
-                    (FileEncoding::Utf8, false)
-                }
+                (FileEncoding::Utf8, false)
             }
         } else {
             (FileEncoding::Utf8, false)
@@ -345,7 +424,9 @@ impl TailEngine {
 
         let mut engine = Self {
             path: path_buf,
-            buffer,
+            source,
+            head_fingerprint: Vec::new(),
+            tail_fingerprint: (0, Vec::new()),
             line_offsets: Vec::new(),
             file_size,
             last_modified,
@@ -407,15 +488,16 @@ impl TailEngine {
         };
 
         engine.rebuild_line_index();
+        engine.update_fingerprints();
         Ok(engine)
     }
 
-    pub fn get_bytes(&self, offset: usize, len: usize) -> Option<&[u8]> {
-        if offset >= self.buffer.len() {
+    /// Raw bytes `[offset, offset + len)` for the HEX view, read through the block cache.
+    pub fn get_bytes(&self, offset: usize, len: usize) -> Option<Vec<u8>> {
+        if offset as u64 >= self.source.len() {
             return None;
         }
-        let end = (offset + len).min(self.buffer.len());
-        Some(&self.buffer[offset..end])
+        Some(self.source.read_to_vec(offset as u64, len))
     }
 
     pub fn total_hex_rows(&self, bytes_per_row: usize) -> usize {
@@ -444,13 +526,6 @@ impl TailEngine {
             ),
             SizeUnit::Hex => format!("0x{:X}", self.file_size),
         }
-    }
-
-    pub fn release_mmap(&mut self) {
-        self.buffer.clear();
-        self.buffer.shrink_to_fit();
-        self.buffer_generation = self.buffer_generation.wrapping_add(1);
-        self.markdown_text_cache = None;
     }
 
     pub fn set_highlight_rules(&mut self, rules: Vec<HighlightRule>) {
@@ -526,9 +601,9 @@ impl TailEngine {
     /// search matches). Lines before `unchanged_lines` are known to be identical to the
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
-        let buf_len = self.buffer.len();
-        if buf_len == 0 {
-            self.line_offsets.clear();
+        let total_len = self.source.len();
+        if total_len == 0 {
+            self.line_offsets = Vec::new();
             self.max_line_bytes = 0;
             self.max_detected_width = self.max_detected_width.max(120.0);
             self.buffer_generation = self.buffer_generation.wrapping_add(1);
@@ -537,80 +612,95 @@ impl TailEngine {
             return;
         }
 
-        let bom_len = match self.encoding {
-            FileEncoding::Utf8 if self.buffer.starts_with(&[0xEF, 0xBB, 0xBF]) => 3,
-            FileEncoding::UnicodeLe if self.buffer.starts_with(&[0xFF, 0xFE]) => 2,
-            FileEncoding::UnicodeBe if self.buffer.starts_with(&[0xFE, 0xFF]) => 2,
-            _ => 0,
+        let bom_len = self.bom_len();
+        let char_bytes: u64 = match self.encoding {
+            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => 2,
+            _ => 1,
         };
 
         // Incremental scan: keep the offsets of the lines known to be unchanged and rescan
         // only from the start of the first changed line (the previously last, maybe partial,
-        // line). A pure append on a 100 MB file then costs the size of the new data, not
-        // the size of the file.
+        // line). The bytes are streamed in chunks straight from the file and never kept.
         let (scan_from, mut max_bytes) =
             if unchanged_lines > 0 && unchanged_lines < self.line_offsets.len() {
-                let from = self.line_offsets[unchanged_lines] as usize;
+                let from = self.line_offsets[unchanged_lines];
                 self.line_offsets.truncate(unchanged_lines);
-                (from.min(buf_len), self.max_line_bytes)
+                (from.min(total_len), self.max_line_bytes)
             } else {
-                self.line_offsets.clear();
-                (bom_len.min(buf_len), 0usize)
+                self.line_offsets = Vec::new();
+                (bom_len.min(total_len), 0usize)
             };
 
-        let mmap = &self.buffer;
-        let char_bytes = match self.encoding {
-            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => 2,
-            _ => 1,
-        };
-        if scan_from < buf_len {
-            self.line_offsets.push(scan_from as u64);
+        if scan_from < total_len {
+            self.line_offsets.push(scan_from);
         }
         let mut prev_offset = scan_from;
-        match self.encoding {
-            FileEncoding::Utf8 | FileEncoding::Ascii | FileEncoding::Ansi => {
-                for rel in memchr::memchr_iter(b'\n', &mmap[scan_from..]) {
-                    let i = scan_from + rel;
-                    let len = i.saturating_sub(prev_offset);
-                    if len > max_bytes {
-                        max_bytes = len;
-                    }
-                    if i + 1 < buf_len {
-                        self.line_offsets.push((i + 1) as u64);
-                        prev_offset = i + 1;
-                    }
-                }
-            }
-            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
-                let (lo, hi) = if self.encoding == FileEncoding::UnicodeLe {
-                    (0x0A, 0x00)
-                } else {
-                    (0x00, 0x0A)
-                };
-                let mut i = scan_from;
-                while i + 1 < buf_len {
-                    if mmap[i] == lo && mmap[i + 1] == hi {
-                        let len = i.saturating_sub(prev_offset) / 2;
+        let mut chunk = vec![0u8; SCAN_CHUNK];
+        let mut pos = scan_from;
+        while pos < total_len {
+            let want = ((total_len - pos) as usize).min(chunk.len());
+            let n = match self.source.read_direct(pos, &mut chunk[..want]) {
+                Ok(n) if n > 0 => n,
+                _ => break,
+            };
+            match self.encoding {
+                FileEncoding::Utf8 | FileEncoding::Ascii | FileEncoding::Ansi => {
+                    for rel in memchr::memchr_iter(b'\n', &chunk[..n]) {
+                        let i = pos + rel as u64;
+                        let len = (i - prev_offset) as usize;
                         if len > max_bytes {
                             max_bytes = len;
                         }
-                        if i + 2 < buf_len {
-                            self.line_offsets.push((i + 2) as u64);
-                            prev_offset = i + 2;
+                        if i + 1 < total_len {
+                            self.line_offsets.push(i + 1);
+                            prev_offset = i + 1;
                         }
                     }
-                    i += 2;
+                    pos += n as u64;
+                }
+                FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
+                    let (lo, hi) = if self.encoding == FileEncoding::UnicodeLe {
+                        (0x0A, 0x00)
+                    } else {
+                        (0x00, 0x0A)
+                    };
+                    let n_even = n & !1;
+                    if n_even == 0 {
+                        break;
+                    }
+                    let mut k = 0;
+                    while k + 1 < n_even {
+                        if chunk[k] == lo && chunk[k + 1] == hi {
+                            let i = pos + k as u64;
+                            let len = ((i - prev_offset) / 2) as usize;
+                            if len > max_bytes {
+                                max_bytes = len;
+                            }
+                            if i + 2 < total_len {
+                                self.line_offsets.push(i + 2);
+                                prev_offset = i + 2;
+                            }
+                        }
+                        k += 2;
+                    }
+                    pos += n_even as u64;
                 }
             }
         }
         // Length of the final (possibly unterminated) line, without its newline.
+        let tail = self
+            .source
+            .read_to_vec(total_len.saturating_sub(char_bytes), char_bytes as usize);
         let ends_with_newline = match self.encoding {
-            FileEncoding::UnicodeLe => buf_len >= 2 && mmap[buf_len - 2..] == [0x0A, 0x00],
-            FileEncoding::UnicodeBe => buf_len >= 2 && mmap[buf_len - 2..] == [0x00, 0x0A],
-            _ => buf_len >= 1 && mmap[buf_len - 1] == b'\n',
+            FileEncoding::UnicodeLe => tail == [0x0A, 0x00],
+            FileEncoding::UnicodeBe => tail == [0x00, 0x0A],
+            _ => tail == *b"\n",
         };
         let trailing = if ends_with_newline { char_bytes } else { 0 };
-        let last_len = buf_len.saturating_sub(prev_offset).saturating_sub(trailing) / char_bytes;
+        let last_len = (total_len
+            .saturating_sub(prev_offset)
+            .saturating_sub(trailing)
+            / char_bytes) as usize;
         if last_len > max_bytes {
             max_bytes = last_len;
         }
@@ -665,96 +755,120 @@ impl TailEngine {
     }
 
     fn refresh_file(&mut self) {
-        if let Ok(metadata) = std::fs::metadata(&self.path) {
-            let new_size = metadata.len();
-            let new_modified = metadata.modified().ok();
+        let Ok(metadata) = std::fs::metadata(&self.path) else {
+            return;
+        };
+        let new_size = metadata.len();
+        let new_modified = metadata.modified().ok();
 
-            if new_size < self.file_size {
-                // File was truncated or rotated! Reset completely.
-                self.file_size = new_size;
-                self.last_modified = new_modified;
-                self.max_line_bytes = 0;
-                self.max_detected_width = 0.0;
-                self.buffer.clear();
-                if new_size > 0 {
-                    if let Ok(mut file) = open_file_shared(&self.path) {
-                        let _ = file.read_to_end(&mut self.buffer);
-                        // file is dropped and closed immediately!
-                    }
-                }
-                self.has_new_data = true;
-                self.rebuild_line_index();
+        if new_size < self.file_size {
+            // Truncated or rotated: start over and give the memory back.
+            self.reload_from_start(new_size, new_modified);
+            return;
+        }
+
+        if new_size > self.file_size {
+            let prev_lines_count = self.line_offsets.len();
+            let added_bytes = new_size - self.file_size;
+            self.bytes_read_since_tick += added_bytes;
+
+            // A file reset and regrown past its old size can keep the same header (same log
+            // format): the fingerprints of the head and of the old end tell a rewrite apart
+            // from an append.
+            if !self.fingerprints_match() {
+                self.reload_from_start(new_size, new_modified);
                 return;
             }
 
-            if new_size > self.file_size {
-                let prev_lines_count = self.line_offsets.len();
-                let added_bytes = new_size - self.file_size;
-                self.bytes_read_since_tick += added_bytes;
-                self.file_size = new_size;
-                self.last_modified = new_modified;
+            self.file_size = new_size;
+            self.last_modified = new_modified;
+            self.source.set_len(new_size);
+            self.has_new_data = true;
+            // On a pure append every previously complete line is unchanged; the last line
+            // may have been partial, so it is re-evaluated together with the new ones.
+            self.rebuild_line_index_from(prev_lines_count.saturating_sub(1));
+            self.update_tail_fingerprint();
+            self.check_sound_alerts(prev_lines_count);
+            self.note_unseen(prev_lines_count);
+            return;
+        }
 
-                let mut appended_only = false;
-                if let Ok(mut file) = open_file_shared(&self.path) {
-                    let mut prefix = [0u8; 64];
-                    let check_len = self.buffer.len().min(64);
-                    let mut is_rewrite =
-                        if check_len > 0 && file.read_exact(&mut prefix[..check_len]).is_ok() {
-                            prefix[..check_len] != self.buffer[..check_len]
-                        } else {
-                            false
-                        };
-                    // A file reset and regrown past its old size can keep the same header
-                    // (same log format): also compare the bytes where the old data ended.
-                    if !is_rewrite && self.buffer.len() > 64 {
-                        let tail_start = self.buffer.len() - 64;
-                        let mut tail = [0u8; 64];
-                        if file.seek(SeekFrom::Start(tail_start as u64)).is_ok()
-                            && file.read_exact(&mut tail).is_ok()
-                            && tail != self.buffer[tail_start..]
-                        {
-                            is_rewrite = true;
-                        }
-                    }
+        // In-place modification where size remains identical but timestamp changed
+        if new_modified != self.last_modified {
+            self.reload_from_start(new_size, new_modified);
+        }
+    }
 
-                    if is_rewrite {
-                        self.buffer.clear();
-                        let _ = file.seek(SeekFrom::Start(0));
-                        let _ = file.read_to_end(&mut self.buffer);
-                    } else if file.seek(SeekFrom::Start(self.buffer.len() as u64)).is_ok() {
-                        let _ = file.read_to_end(&mut self.buffer);
-                        appended_only = true;
-                    } else {
-                        self.buffer.clear();
-                        let _ = file.read_to_end(&mut self.buffer);
-                    }
-                    // file is dropped and closed immediately!
-                }
-                self.has_new_data = true;
-                // On a pure append every previously complete line is unchanged; the last line
-                // may have been partial, so it is re-evaluated together with the new ones.
-                let unchanged_lines = if appended_only {
-                    prev_lines_count.saturating_sub(1)
-                } else {
-                    0
-                };
-                self.rebuild_line_index_from(unchanged_lines);
-                self.check_sound_alerts(prev_lines_count);
-                self.note_unseen(prev_lines_count);
-                return;
+    /// Full reload after a truncation, rotation or in-place rewrite: reopens the handle,
+    /// drops the cache and the index, and rebuilds from byte 0.
+    fn reload_from_start(&mut self, new_size: u64, new_modified: Option<std::time::SystemTime>) {
+        self.file_size = new_size;
+        self.last_modified = new_modified;
+        self.max_line_bytes = 0;
+        self.max_detected_width = 0.0;
+        if self.source.reopen().is_err() {
+            self.source.clear();
+        }
+        self.source.set_len(new_size);
+        self.has_new_data = true;
+        self.rebuild_line_index();
+        self.update_fingerprints();
+    }
+
+    /// Bytes before `end` used to recognise the file across polls (at most 64).
+    fn fingerprint_window(&self, end: u64) -> (u64, Vec<u8>) {
+        let len = end.min(FINGERPRINT_LEN as u64) as usize;
+        let start = end - len as u64;
+        let mut buf = vec![0u8; len];
+        match self.source.read_direct(start, &mut buf) {
+            Ok(n) => {
+                buf.truncate(n);
+                (start, buf)
             }
+            Err(_) => (start, Vec::new()),
+        }
+    }
 
-            // In-place modification where size remains identical but timestamp changed
-            if new_modified != self.last_modified {
-                self.last_modified = new_modified;
-                if let Ok(mut file) = open_file_shared(&self.path) {
-                    self.buffer.clear();
-                    let _ = file.read_to_end(&mut self.buffer);
-                    // file is dropped and closed immediately!
-                }
-                self.has_new_data = true;
-                self.rebuild_line_index();
+    fn update_fingerprints(&mut self) {
+        self.head_fingerprint = self
+            .fingerprint_window(self.file_size.min(FINGERPRINT_LEN as u64))
+            .1;
+        self.update_tail_fingerprint();
+    }
+
+    fn update_tail_fingerprint(&mut self) {
+        self.tail_fingerprint = self.fingerprint_window(self.file_size);
+    }
+
+    /// True when the file still starts with the remembered head and still holds the
+    /// remembered bytes where the indexed data ended.
+    fn fingerprints_match(&self) -> bool {
+        if !self.head_fingerprint.is_empty() {
+            let mut buf = vec![0u8; self.head_fingerprint.len()];
+            match self.source.read_direct(0, &mut buf) {
+                Ok(n) if n == buf.len() && buf == self.head_fingerprint => {}
+                _ => return false,
             }
+        }
+        let (start, bytes) = &self.tail_fingerprint;
+        if !bytes.is_empty() {
+            let mut buf = vec![0u8; bytes.len()];
+            match self.source.read_direct(*start, &mut buf) {
+                Ok(n) if n == buf.len() && &buf == bytes => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Length of the byte-order mark for the current encoding, read from the file.
+    fn bom_len(&self) -> u64 {
+        let head = self.source.read_to_vec(0, 3);
+        match self.encoding {
+            FileEncoding::Utf8 if head.starts_with(&[0xEF, 0xBB, 0xBF]) => 3,
+            FileEncoding::UnicodeLe if head.starts_with(&[0xFF, 0xFE]) => 2,
+            FileEncoding::UnicodeBe if head.starts_with(&[0xFE, 0xFF]) => 2,
+            _ => 0,
         }
     }
 
@@ -797,109 +911,25 @@ impl TailEngine {
         if idx >= self.line_offsets.len() {
             return None;
         }
-        let mmap = &self.buffer;
-        if mmap.is_empty() {
-            return None;
-        }
-        let start = self.line_offsets[idx] as usize;
+        let start = self.line_offsets[idx];
         let next_start = if idx + 1 < self.line_offsets.len() {
-            self.line_offsets[idx + 1] as usize
+            self.line_offsets[idx + 1]
         } else {
-            mmap.len()
+            self.source.len()
         };
-
-        if start > next_start || next_start > mmap.len() {
+        if start > next_start {
             return None;
         }
-
-        match self.encoding {
-            FileEncoding::Utf8 => {
-                let mut end = next_start;
-                if end > start && mmap.get(end - 1) == Some(&b'\n') {
-                    end -= 1;
-                    if end > start && mmap.get(end - 1) == Some(&b'\r') {
-                        end -= 1;
-                    }
-                }
-                let slice = &mmap[start..end];
-                match std::str::from_utf8(slice) {
-                    Ok(s) => Some(Cow::Borrowed(s)),
-                    Err(_) => Some(Cow::Owned(String::from_utf8_lossy(slice).into_owned())),
-                }
-            }
-            FileEncoding::Ascii => {
-                let mut end = next_start;
-                if end > start && mmap.get(end - 1) == Some(&b'\n') {
-                    end -= 1;
-                    if end > start && mmap.get(end - 1) == Some(&b'\r') {
-                        end -= 1;
-                    }
-                }
-                let slice = &mmap[start..end];
-                let mut s = String::with_capacity(slice.len());
-                for &b in slice {
-                    if b <= 127 {
-                        s.push(b as char);
-                    } else {
-                        s.push('?');
-                    }
-                }
-                Some(Cow::Owned(s))
-            }
-            FileEncoding::Ansi => {
-                let mut end = next_start;
-                if end > start && mmap.get(end - 1) == Some(&b'\n') {
-                    end -= 1;
-                    if end > start && mmap.get(end - 1) == Some(&b'\r') {
-                        end -= 1;
-                    }
-                }
-                let slice = &mmap[start..end];
-                let mut s = String::with_capacity(slice.len());
-                for &b in slice {
-                    s.push(b as char);
-                }
-                Some(Cow::Owned(s))
-            }
-            FileEncoding::UnicodeLe => {
-                let mut end = next_start;
-                if end >= start + 2 && mmap[end - 2] == 0x0A && mmap[end - 1] == 0x00 {
-                    end -= 2;
-                    if end >= start + 2 && mmap[end - 2] == 0x0D && mmap[end - 1] == 0x00 {
-                        end -= 2;
-                    }
-                }
-                let slice = &mmap[start..end];
-                let u16_iter = slice
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]));
-                let s = char::decode_utf16(u16_iter)
-                    .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
-                    .collect::<String>();
-                Some(Cow::Owned(s))
-            }
-            FileEncoding::UnicodeBe => {
-                let mut end = next_start;
-                if end >= start + 2 && mmap[end - 2] == 0x00 && mmap[end - 1] == 0x0A {
-                    end -= 2;
-                    if end >= start + 2 && mmap[end - 2] == 0x00 && mmap[end - 1] == 0x0D {
-                        end -= 2;
-                    }
-                }
-                let slice = &mmap[start..end];
-                let u16_iter = slice
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]));
-                let s = char::decode_utf16(u16_iter)
-                    .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
-                    .collect::<String>();
-                Some(Cow::Owned(s))
-            }
-        }
+        let raw_len = (next_start - start) as usize;
+        let (len, truncated) = if raw_len > MAX_LINE_BYTES {
+            (MAX_LINE_BYTES, true)
+        } else {
+            (raw_len, false)
+        };
+        let encoding = self.encoding;
+        self.source.read_with(start, len, |bytes| {
+            Cow::Owned(decode_line(bytes, encoding, truncated))
+        })
     }
 
     pub fn matches_filter(&self, line: &str) -> bool {
@@ -1000,24 +1030,96 @@ impl TailEngine {
 
     fn recompute_filtered_lines_from(&mut self, start: usize) {
         if !self.is_filter_active() {
-            self.filtered_lines.clear();
+            self.filtered_lines = Vec::new();
             return;
         }
         let total = self.total_lines();
         let start = start.min(total);
         if start == 0 {
-            self.filtered_lines.clear();
+            self.filtered_lines = Vec::new();
         } else {
             let keep = self.filtered_lines.partition_point(|&idx| idx < start);
             self.filtered_lines.truncate(keep);
         }
         let mut fresh = Vec::new();
-        for idx in start..total {
-            if self.is_line_visible(idx) {
+        self.scan_lines(start, total, |idx, line| {
+            if self.matches_filter(line) {
                 fresh.push(idx);
             }
-        }
+            true
+        });
         self.filtered_lines.extend(fresh);
+    }
+
+    /// Streams lines `[start, end)` from the file in 1 MB chunks and calls `f(idx, text)`
+    /// for each one, borrowing the text from the chunk whenever the encoding allows it
+    /// (UTF-8 without invalid sequences). `f` returns `false` to stop. This is the path for
+    /// full scans (filters, search): no per-line allocation, no cache churn.
+    fn scan_lines(&self, start: usize, end: usize, mut f: impl FnMut(usize, &str) -> bool) {
+        let total = self.line_offsets.len();
+        let end = end.min(total);
+        if start >= end {
+            return;
+        }
+        let file_len = self.source.len();
+        let line_end = |i: usize| -> u64 {
+            if i + 1 < total {
+                self.line_offsets[i + 1]
+            } else {
+                file_len
+            }
+        };
+        let mut chunk = vec![0u8; SCAN_CHUNK];
+        let mut i = start;
+        while i < end {
+            let base = self.line_offsets[i];
+            // Last line whose end fits in the chunk; at least one line (capped) per step.
+            let limit = base.saturating_add(SCAN_CHUNK as u64);
+            let mut k = self.line_offsets[i..end].partition_point(|&o| o <= limit) + i;
+            // `k` is the first line starting past the limit; lines i..k start inside, but
+            // the last of them may end past it: keep only lines that end within the chunk.
+            while k > i + 1 && line_end(k - 1) > limit {
+                k -= 1;
+            }
+            let read_end = if k > i + 1 || line_end(i) <= limit {
+                line_end(k - 1)
+            } else {
+                // A single line longer than the chunk: read it capped, like `get_line`.
+                base + (MAX_LINE_BYTES as u64).min(line_end(i) - base)
+            };
+            let want = ((read_end - base) as usize).min(chunk.len().max(MAX_LINE_BYTES));
+            if chunk.len() < want {
+                chunk.resize(want, 0);
+            }
+            let n = match self.source.read_direct(base, &mut chunk[..want]) {
+                Ok(n) if n > 0 => n,
+                _ => return,
+            };
+            for idx in i..k {
+                let s = (self.line_offsets[idx] - base) as usize;
+                let e = ((line_end(idx) - base) as usize).min(n);
+                if s > n {
+                    // The file shrank under the scan: stop, the poll will rebuild.
+                    return;
+                }
+                let bytes = &chunk[s..e.max(s)];
+                let truncated = (line_end(idx) - self.line_offsets[idx]) as usize > MAX_LINE_BYTES;
+                let go_on = match self.encoding {
+                    FileEncoding::Utf8 if !truncated => {
+                        let content = &bytes[..trim_newline_1(bytes)];
+                        match std::str::from_utf8(content) {
+                            Ok(text) => f(idx, text),
+                            Err(_) => f(idx, &String::from_utf8_lossy(content)),
+                        }
+                    }
+                    enc => f(idx, &decode_line(bytes, enc, truncated)),
+                };
+                if !go_on {
+                    return;
+                }
+            }
+            i = k;
+        }
     }
 
     pub fn visible_line_count(&self) -> usize {
@@ -1122,30 +1224,49 @@ impl TailEngine {
         let q_lower = query.to_lowercase();
 
         let check_match = |line: &str| -> bool { contains_case_insensitive(line, &q_lower) };
+        let total = self.total_lines();
 
         if self.is_filter_active() {
             let first = self.filtered_lines.partition_point(|&idx| idx < start);
-            for &idx in &self.filtered_lines[first..] {
-                if let Some(line) = self.get_line(idx) {
-                    if check_match(&line) {
+            let visible = &self.filtered_lines[first..];
+            if visible.len() * 4 < total.saturating_sub(start) {
+                // Sparse filter: reading only the visible lines beats scanning the file.
+                for &idx in visible {
+                    if let Some(line) = self.get_line(idx) {
+                        if check_match(&line) {
+                            matches.push(idx);
+                            if matches.len() >= limit {
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Dense filter: one sequential pass, skipping the hidden lines.
+                let mut p = 0;
+                self.scan_lines(start, total, |idx, line| {
+                    while p < visible.len() && visible[p] < idx {
+                        p += 1;
+                    }
+                    if p < visible.len() && visible[p] == idx && check_match(line) {
                         matches.push(idx);
                         if matches.len() >= limit {
-                            break;
+                            return false;
                         }
                     }
-                }
+                    true
+                });
             }
         } else {
-            for i in start..self.total_lines() {
-                if let Some(line) = self.get_line(i) {
-                    if check_match(&line) {
-                        matches.push(i);
-                        if matches.len() >= limit {
-                            break;
-                        }
+            self.scan_lines(start, total, |idx, line| {
+                if check_match(line) {
+                    matches.push(idx);
+                    if matches.len() >= limit {
+                        return false;
                     }
                 }
-            }
+                true
+            });
         }
         matches
     }
@@ -1227,7 +1348,8 @@ impl TailEngine {
     ) -> (Vec<(usize, usize)>, usize) {
         let mut matches = Vec::new();
         let trimmed = query.trim();
-        if trimmed.is_empty() || limit == 0 || start >= self.buffer.len() {
+        let total = self.source.len() as usize;
+        if trimmed.is_empty() || limit == 0 || start >= total {
             return (matches, 0);
         }
 
@@ -1253,25 +1375,44 @@ impl TailEngine {
             }
         }
         let max_len = patterns.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
+        if max_len == 0 {
+            return (matches, 0);
+        }
 
-        let haystack = &self.buffer[start..];
-        for (pattern, ci) in &patterns {
-            if pattern.len() > haystack.len() {
-                continue;
-            }
-            for (i, window) in haystack.windows(pattern.len()).enumerate() {
-                let hit = if *ci {
-                    window.eq_ignore_ascii_case(pattern)
-                } else {
-                    window == pattern.as_slice()
-                };
-                if hit {
-                    matches.push((start + i, pattern.len()));
-                    if matches.len() >= limit {
-                        break;
+        // Stream the file in chunks that overlap by `max_len - 1` bytes so no hit is missed
+        // at a boundary; duplicates from the overlap are removed at the end.
+        let overlap = max_len - 1;
+        let mut chunk = vec![0u8; SCAN_CHUNK + overlap];
+        let mut pos = start;
+        'outer: while pos < total {
+            let want = (total - pos).min(chunk.len());
+            let n = match self.source.read_direct(pos as u64, &mut chunk[..want]) {
+                Ok(n) if n > 0 => n,
+                _ => break,
+            };
+            let haystack = &chunk[..n];
+            for (pattern, ci) in &patterns {
+                if pattern.len() > haystack.len() {
+                    continue;
+                }
+                for (i, window) in haystack.windows(pattern.len()).enumerate() {
+                    let hit = if *ci {
+                        window.eq_ignore_ascii_case(pattern)
+                    } else {
+                        window == pattern.as_slice()
+                    };
+                    if hit {
+                        matches.push((pos + i, pattern.len()));
+                        if matches.len() >= limit * 2 {
+                            break 'outer;
+                        }
                     }
                 }
             }
+            if n < want || pos + n >= total {
+                break;
+            }
+            pos += n - overlap;
         }
         matches.sort_unstable();
         matches.dedup();
@@ -1336,13 +1477,26 @@ impl TailEngine {
         {
             return;
         }
-        let raw = String::from_utf8_lossy(&self.buffer);
+        if self.markdown_too_large() {
+            self.markdown_text_cache = Some((generation, String::new()));
+            return;
+        }
+        let total = self.source.len() as usize;
+        let mut bytes = vec![0u8; total];
+        let n = self.source.read_direct(0, &mut bytes).unwrap_or(0);
+        bytes.truncate(n);
+        let raw = String::from_utf8_lossy(&bytes);
         let text = if crate::html_converter::contains_html(&raw) {
             crate::html_converter::html_to_markdown(&raw)
         } else {
             raw.into_owned()
         };
         self.markdown_text_cache = Some((generation, text));
+    }
+
+    /// Rendered Markdown needs the whole text in memory: refused above `MARKDOWN_MAX_BYTES`.
+    pub fn markdown_too_large(&self) -> bool {
+        self.source.len() > MARKDOWN_MAX_BYTES
     }
 
     pub fn update_search(&mut self, query: &str) {
