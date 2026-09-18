@@ -340,6 +340,7 @@ impl FastTailApp {
             if let Some(lines) = self.config.bookmarks_for(&path, engine.total_lines()) {
                 engine.set_bookmarks(lines);
             }
+            engine.wrap_lines = self.config.wrap_for(&path);
             self.engines.push(engine);
 
             crate::audio::play_sound(
@@ -1304,8 +1305,9 @@ impl FastTailApp {
         }
         prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
 
-        // Persist bookmarks that changed this frame, and flash the window on a background
-        // sound-alert match when the option is on and the window is not focused.
+        // Persist bookmarks and wrap toggles that changed this frame, and flash the window
+        // on a background sound-alert match when the option is on and the window is not
+        // focused.
         let mut bookmarks_changed = false;
         let mut critical_in_background = false;
         for eng in &mut self.engines {
@@ -1313,6 +1315,11 @@ impl FastTailApp {
                 eng.bookmarks_dirty = false;
                 let lines: Vec<usize> = eng.bookmarks.iter().copied().collect();
                 self.config.set_bookmarks(&eng.path, &lines);
+                bookmarks_changed = true;
+            }
+            if eng.wrap_dirty {
+                eng.wrap_dirty = false;
+                self.config.set_wrap(&eng.path, eng.wrap_lines);
                 bookmarks_changed = true;
             }
             if !eng.displayed && eng.unseen_severity >= 2 {
@@ -1930,6 +1937,10 @@ impl FastTailApp {
 
                                 ui.label(RichText::new("Ctrl + G").monospace().strong());
                                 ui.label(RichText::new(t(lang, "help_desc_goto")).monospace());
+                                ui.end_row();
+
+                                ui.label(RichText::new("Alt + W").monospace().strong());
+                                ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("Ctrl + Shift + T").monospace().strong());

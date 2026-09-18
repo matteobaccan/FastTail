@@ -14,3 +14,4 @@ pub mod screensaver;
 pub mod tail_engine;
 pub mod theme;
 pub mod ui;
+pub mod wrap_layout;

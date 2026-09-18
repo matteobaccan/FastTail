@@ -155,3 +155,14 @@ When enabled in Settings, a highlight rule with a sound preset matching in a str
 - **WHEN** the option is on, the window is not focused, and a Critical rule matches
 - **THEN** the OS attention request is sent once, and not again until the window has been focused.
 
+### Requirement: Line Wrap Mode
+Each text stream SHALL offer a wrap toggle (stream bar button and Alt+W) that soft-wraps rows at the viewport width. Wrapped rows SHALL keep their line number, marker and highlight, navigation by line index (search, bookmarks, go-to, paging) SHALL keep working, and the toggle state SHALL be persisted per stream in the workspace.
+
+#### Scenario: Wrapping a long JSON line
+- **WHEN** wrap is enabled on a stream containing a 3,000-character line
+- **THEN** the line is displayed on several rows within the viewport width, with no horizontal scrollbar, and the line number is shown once.
+
+#### Scenario: Search jump in wrap mode
+- **WHEN** wrap is enabled and the user presses F3
+- **THEN** the viewport scrolls so that the matching line is fully visible.
+

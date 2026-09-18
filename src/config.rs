@@ -12,6 +12,8 @@ const OLD_CONFIG_FILE_NAME: &str = "fasttail.toml";
 /// Caps for persisted bookmarks: files remembered, and lines per file.
 pub const MAX_BOOKMARK_FILES: usize = 50;
 pub const MAX_BOOKMARKS_PER_FILE: usize = 1000;
+/// Cap for the files remembered with line wrap on.
+pub const MAX_WRAPPED_FILES: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FastTailConfig {
@@ -50,6 +52,9 @@ pub struct FastTailConfig {
     /// Bookmarked lines per file (most recently used first), see `set_bookmarks`.
     #[serde(default)]
     pub bookmarks: Vec<(PathBuf, Vec<usize>)>,
+    /// Files whose stream has line wrap on (most recently toggled first), see `set_wrap`.
+    #[serde(default)]
+    pub wrapped_files: Vec<PathBuf>,
     pub highlight_rules: Vec<HighlightRule>,
     #[serde(default)]
     pub baretail_import: bool,
@@ -121,6 +126,7 @@ impl Default for FastTailConfig {
             recent_files: Vec::new(),
             search_history: Vec::new(),
             bookmarks: Vec::new(),
+            wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
             baretail_import: false,
             baretail_prompt_shown: false,
@@ -229,6 +235,24 @@ impl FastTailConfig {
         }
     }
 
+    /// Records whether the stream of `path` wraps its lines (most recently toggled first,
+    /// capped to `MAX_WRAPPED_FILES` files).
+    pub fn set_wrap(&mut self, path: &Path, wrap: bool) {
+        self.wrapped_files
+            .retain(|p| !crate::paths::paths_equal(p, path));
+        if wrap {
+            self.wrapped_files.insert(0, path.to_path_buf());
+            self.wrapped_files.truncate(MAX_WRAPPED_FILES);
+        }
+    }
+
+    /// Whether the stream of `path` was saved with line wrap on.
+    pub fn wrap_for(&self, path: &Path) -> bool {
+        self.wrapped_files
+            .iter()
+            .any(|p| crate::paths::paths_equal(p, path))
+    }
+
     /// Saved bookmarks of `path` that still fit in a file of `total_lines` lines. Returns
     /// `None` when there are none or the file shrank below the largest saved index.
     pub fn bookmarks_for(&self, path: &Path, total_lines: usize) -> Option<Vec<usize>> {
@@ -308,6 +332,13 @@ impl FastTailConfig {
                     .collect::<Vec<_>>()
                     .join(",");
                 sec.set(format!("lines_{}", i), joined);
+            }
+        }
+
+        if !self.wrapped_files.is_empty() {
+            let mut sec = conf.with_section(Some("wrapped_files"));
+            for (i, path) in self.wrapped_files.iter().enumerate() {
+                sec.set(format!("file_{}", i), path.to_string_lossy().to_string());
             }
         }
 
@@ -531,6 +562,17 @@ impl FastTailConfig {
                     .unwrap_or_default();
                 if !lines.is_empty() && cfg.bookmarks.len() < MAX_BOOKMARK_FILES {
                     cfg.bookmarks.push((PathBuf::from(path), lines));
+                }
+                i += 1;
+            }
+        }
+
+        if let Some(sec) = conf.section(Some("wrapped_files")) {
+            cfg.wrapped_files.clear();
+            let mut i = 0;
+            while let Some(path) = sec.get(format!("file_{}", i)) {
+                if cfg.wrapped_files.len() < MAX_WRAPPED_FILES {
+                    cfg.wrapped_files.push(PathBuf::from(path));
                 }
                 i += 1;
             }
