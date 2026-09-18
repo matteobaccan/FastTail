@@ -6,7 +6,7 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.4.0] - 2026-09-18
 
 ### Added
 
@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   load discards it), missing files listed and skipped, `--session <file>` on
   the command line. Filters, search query and encoding of every stream are now
   restored at the next start too.
+- **Empty state when no file is open.** The workspace shows an icon, a short
+  hint, an Open File button and quick buttons for the five most recent files
+  instead of a blank area.
 - **Capture-group highlighting.** A regex highlight rule can tick "Captures
   only" to paint just its capture groups (the whole match when the pattern has
   no group) instead of the row; `req=(\d+)` colours the request id alone. Rules
@@ -76,6 +79,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Faster case-insensitive search.** ASCII searches scan candidate positions
+  with `memchr2` before comparing, about 30% faster on highlight rule scans.
 - **Recent Files is an icon button (🕒) next to Open File.** The localized
   name is its tooltip; the menu content (recent list, clear entry) is
   unchanged. The title bar is narrower and the two ways of opening a log sit
@@ -93,6 +98,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Non-regular files (directories, pipes, devices) are rejected on the opened
+  handle in `FileSource::open` and `reopen`, closing a time-of-check race that
+  could hang a scan thread.
 - The screensaver timeout field accepts 0 (= never); it used to clamp 0 to 1
   minute, so the timeout could not disable the screensaver.
 - The About dialog links (`www.baccan.it`, the GitHub repository) open the
@@ -192,7 +200,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
-[Unreleased]: https://github.com/matteobaccan/FastTail/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/matteobaccan/FastTail/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/matteobaccan/FastTail/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/matteobaccan/FastTail/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/matteobaccan/FastTail/commits/v0.1.0
