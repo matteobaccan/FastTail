@@ -352,7 +352,8 @@ pub struct GotoTarget {
 }
 
 /// Efficient case-insensitive substring search.
-/// For ASCII haystack and pre-lowercased needle, avoids heap allocation by checking ASCII byte windows.
+/// For ASCII haystack and pre-lowercased needle, avoids heap allocation and uses
+/// SIMD-accelerated `memchr2` to skip non-matching positions rapidly.
 #[inline]
 /// Byte ranges of every non-overlapping, case-insensitive occurrence of `needle_lower`
 /// (already lower-cased) in `haystack`.
@@ -407,12 +408,31 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
     if haystack.is_ascii() && needle_lower.is_ascii() {
         let h_bytes = haystack.as_bytes();
         let n_bytes = needle_lower.as_bytes();
-        if n_bytes.len() > h_bytes.len() {
+        let n_len = n_bytes.len();
+        if n_len > h_bytes.len() {
             return false;
         }
-        h_bytes
-            .windows(n_bytes.len())
-            .any(|w| w.eq_ignore_ascii_case(n_bytes))
+
+        let first_lower = n_bytes[0];
+        let first_upper = first_lower.to_ascii_uppercase();
+        let max_pos = h_bytes.len() - n_len;
+        let mut curr = 0;
+
+        while curr <= max_pos {
+            // SIMD-accelerated search for candidate starting positions using first char
+            let match_rel =
+                match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..=max_pos]) {
+                    Some(rel) => rel,
+                    None => return false,
+                };
+
+            curr += match_rel;
+            if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
+                return true;
+            }
+            curr += 1;
+        }
+        false
     } else {
         haystack.to_lowercase().contains(needle_lower)
     }
