@@ -134,7 +134,25 @@ cargo build --release
 The standalone executable is written to `target/release/fasttail` (`target/release/fasttail.exe` on Windows).
 
 ### Prebuilt binaries
-Every push to `main` builds Windows (x86_64, ARM64), Linux (x86_64, ARM64) and macOS (Apple Silicon) binaries in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page.
+Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform:
+
+| Platform | Asset | Contents |
+|---|---|---|
+| Windows x86_64 | `fasttail-windows-x86_64.zip` | `fasttail.exe` + `fasttail.pdb` |
+| Windows ARM64 | `fasttail-windows-arm64.zip` | `fasttail.exe` + `fasttail.pdb` |
+| Linux x86_64 | `fasttail-linux-x86_64.tar.gz` | `fasttail` |
+| Linux ARM64 | `fasttail-linux-arm64.tar.gz` | `fasttail` |
+| macOS Apple Silicon | `fasttail-macos-arm64.tar.gz` | `fasttail` |
+
+```bash
+# Linux / macOS
+tar -xzf fasttail-linux-x86_64.tar.gz && ./fasttail app.log
+
+# Windows (PowerShell)
+Expand-Archive fasttail-windows-x86_64.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
+```
+
+Keep `fasttail.pdb` next to `fasttail.exe`: it lets a crash report (`fasttail_crash.log`) show function names. Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs.
 
 ---
 

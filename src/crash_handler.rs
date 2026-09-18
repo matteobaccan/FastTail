@@ -6,6 +6,8 @@ use std::path::PathBuf;
 pub const GIT_COMMIT_HASH: &str = env!("GIT_COMMIT_HASH");
 pub const GIT_TAG: &str = env!("GIT_TAG");
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Where users are asked to report a crash; shared by the log footer and the dialog.
+pub const ISSUES_URL: &str = "https://github.com/matteobaccan/FastTail/issues";
 
 fn is_leap_year(year: u64) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
@@ -85,7 +87,7 @@ pub fn build_crash_report(payload: &str, location: Option<&str>, backtrace: &Bac
          CALLSTACK / BACKTRACE:\n\
          {}\n\
          ================================================================================\n\
-         Please report this issue at: https://github.com/baccan/fasttail/issues\n\
+         Please report this issue at: {}\n\
          Attach this crash log file to help identify and resolve the problem.\n\
          ================================================================================\n",
         APP_VERSION,
@@ -96,7 +98,8 @@ pub fn build_crash_report(payload: &str, location: Option<&str>, backtrace: &Bac
         std::env::consts::ARCH,
         location.unwrap_or("unknown"),
         payload,
-        backtrace
+        backtrace,
+        ISSUES_URL
     )
 }
 
@@ -190,11 +193,12 @@ pub fn install_crash_handler() {
              Error Message:\n{}\n\n\
              Location:\n{}\n\n\
              A detailed crash log with callstack has been saved to:\n{}\n\n\
-             Please report this issue on GitHub:\nhttps://github.com/baccan/fasttail/issues",
+             Please report this issue on GitHub:\n{}",
             GIT_COMMIT_HASH,
             payload,
             location.as_deref().unwrap_or("unknown"),
-            saved_info
+            saved_info,
+            ISSUES_URL
         );
 
         rfd::MessageDialog::new()
@@ -237,6 +241,8 @@ mod tests {
         assert!(report.contains("src/main.rs:10:5"));
         assert!(report.contains("test panic message"));
         assert!(report.contains("CALLSTACK / BACKTRACE:"));
+        assert!(report.contains(ISSUES_URL));
+        assert!(!report.contains("baccan/fasttail"));
     }
 
     #[test]
