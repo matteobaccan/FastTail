@@ -1263,6 +1263,7 @@ impl FastTailApp {
             borderless: &mut self.config.borderless,
             show_line_numbers: &mut self.config.show_line_numbers,
             font_size: &mut self.config.font_size,
+            level_colors: &mut self.config.level_colors,
             size_unit: &mut self.config.size_unit,
             search_history: &mut self.config.search_history,
             tab_closed: &mut tab_closed,
@@ -1475,6 +1476,7 @@ impl FastTailApp {
                         &mut self.config.borderless,
                         &mut self.config.show_line_numbers,
                         &mut self.config.font_size,
+                        &mut self.config.level_colors,
                     );
 
                     // Rendering backend: applies at the next start.
@@ -1973,6 +1975,11 @@ impl FastTailApp {
                             RichText::new(t(lang, "help_filter_visibility"))
                                 .monospace()
                                 .color(theme.text_primary()),
+                        );
+                        ui.label(
+                            RichText::new(t(lang, "help_filter_levels"))
+                                .monospace()
+                                .color(theme.warn_color()),
                         );
                         ui.label(
                             RichText::new(t(lang, "help_filter_recent"))

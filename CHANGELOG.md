@@ -6,6 +6,25 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Log level detection.** The level of every line (`FATAL`, `ERROR`, `WARN`,
+  `INFO`, `DEBUG`, `TRACE`, plus syslog `<n>` priorities) is detected from the
+  common layouts without configuration: the first level word in the line
+  header, bracketed, bare, `level=error` or `"level":"debug"` alike. Levels
+  are cached per line (1 byte per line) and detected on a worker thread for
+  large files, with progress in the stream bar.
+- **Rows coloured by level.** `FATAL`, `ERROR`, `WARN`, `DEBUG` and `TRACE`
+  rows get the theme's level palette when no highlight rule matches them, so
+  existing colour rules keep priority. A Settings checkbox turns it off.
+- **Minimum-level filter.** A `≥ level` selector above the buffer hides the
+  lines below the chosen level, combined with the include / exclude filters
+  (exclude, then include, then level). Stack-trace continuation lines follow
+  their parent; a `?` toggle shows or hides lines without a detectable level.
+- **Per-level counters** in the stream bar, updated live as the file grows.
+
 ## [0.3.0] - 2026-09-18
 
 ### Added
@@ -98,6 +117,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[Unreleased]: https://github.com/matteobaccan/FastTail/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/matteobaccan/FastTail/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/matteobaccan/FastTail/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/matteobaccan/FastTail/commits/v0.1.0

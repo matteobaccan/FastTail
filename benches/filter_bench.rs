@@ -13,6 +13,7 @@
 //!
 //! Every phase is timed `rounds` times and the best time is reported.
 
+use fasttail::log_level::LogLevel;
 use fasttail::tail_engine::{HighlightRule, TailEngine};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -324,9 +325,20 @@ fn main() {
         }),
     );
 
-    // Regex include filter.
+    // Minimum log level (the third filter stage, after exclude and include), no text.
     engine.set_exclude_filter("");
     engine.set_include_filter("");
+    report(
+        "min level WARN",
+        best(rounds, || {
+            engine.set_min_level(LogLevel::Unknown);
+            engine.set_min_level(LogLevel::Warn);
+            engine.visible_line_count()
+        }),
+    );
+    engine.set_min_level(LogLevel::Unknown);
+
+    // Regex include filter.
     engine.filter_is_regex = true;
     report(
         "include regex",

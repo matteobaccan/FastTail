@@ -1,5 +1,6 @@
 use crate::audio::SoundAlertPreset;
 use crate::file_source::FileSource;
+use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange};
 use egui::Color32;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -306,6 +307,15 @@ pub struct TailEngine {
     pub exclude_filter: String,
     pub filter_case_sensitive: bool,
     pub filter_is_regex: bool,
+    /// Minimum-level stage of the filter (`Unknown` = off) and its unknown-level toggle.
+    pub min_level: LogLevel,
+    pub show_unknown_levels: bool,
+    /// Detected level of every line (`LogLevel as u8`), a prefix of the line index: lines
+    /// `>= levels.len()` have not been examined yet. Filled on append, on open for files up
+    /// to the job threshold, and by a background `Levels` job for larger ones.
+    levels: Vec<u8>,
+    /// Lines per level among the cached prefix, indexed by `LogLevel as u8`.
+    pub level_counts: [u64; LogLevel::COUNT],
     /// Compiled include/exclude filter, shared with filter and search jobs.
     filter: FilterSpec,
     /// Running background scan, if any (one at a time per stream).
@@ -482,6 +492,10 @@ impl TailEngine {
             exclude_filter: String::new(),
             filter_case_sensitive: false,
             filter_is_regex: false,
+            min_level: LogLevel::Unknown,
+            show_unknown_levels: false,
+            levels: Vec::new(),
+            level_counts: [0; LogLevel::COUNT],
             filter: FilterSpec::default(),
             job: None,
             job_generation: 0,
@@ -588,8 +602,91 @@ impl TailEngine {
             &self.exclude_filter,
             self.filter_case_sensitive,
             self.filter_is_regex,
-        );
+        )
+        .with_levels(self.min_level, self.show_unknown_levels);
         self.recompute_filtered_lines();
+    }
+
+    /// Sets the minimum level a line must have to be visible (`Unknown` turns it off).
+    pub fn set_min_level(&mut self, level: LogLevel) {
+        if self.min_level != level {
+            self.min_level = level;
+            self.refresh_filters();
+        }
+    }
+
+    pub fn set_show_unknown_levels(&mut self, show: bool) {
+        if self.show_unknown_levels != show {
+            self.show_unknown_levels = show;
+            self.refresh_filters();
+        }
+    }
+
+    /// Level of line `idx`: from the cache when it has been reached, detected on the fly
+    /// otherwise (the cache stays a prefix of the index).
+    pub fn level_of(&self, idx: usize) -> LogLevel {
+        match self.levels.get(idx) {
+            Some(&v) => LogLevel::from_u8(v),
+            None => self
+                .get_line(idx)
+                .map(|line| detect_level(&line))
+                .unwrap_or(LogLevel::Unknown),
+        }
+    }
+
+    pub fn level_count(&self, level: LogLevel) -> u64 {
+        self.level_counts[level as usize]
+    }
+
+    /// True once every indexed line has its level cached (the counters are complete).
+    pub fn levels_complete(&self) -> bool {
+        self.levels.len() >= self.line_offsets.len()
+    }
+
+    fn push_levels(&mut self, fresh: &[u8]) {
+        for &v in fresh {
+            self.level_counts[(v as usize).min(LogLevel::COUNT - 1)] += 1;
+        }
+        self.levels.extend_from_slice(fresh);
+    }
+
+    /// Forgets the cached levels of lines `>= keep` (the index changed from there).
+    fn truncate_levels(&mut self, keep: usize) {
+        if self.levels.len() <= keep {
+            return;
+        }
+        for &v in &self.levels[keep..] {
+            let slot = &mut self.level_counts[(v as usize).min(LogLevel::COUNT - 1)];
+            *slot = slot.saturating_sub(1);
+        }
+        self.levels.truncate(keep);
+    }
+
+    /// Detects the levels of the lines not cached yet: synchronously when the remaining
+    /// bytes are below the job threshold, otherwise on a worker thread once no other
+    /// scan is running (a `Levels` job has the lowest priority).
+    fn ensure_levels(&mut self) {
+        if self.index_pending {
+            return;
+        }
+        let from = self.levels.len();
+        let total = self.total_lines();
+        if from >= total {
+            return;
+        }
+        let remaining = self.source.len().saturating_sub(self.line_offsets[from]);
+        if remaining > self.job_threshold_bytes {
+            if self.job.is_none() {
+                self.start_job(JobSpec::Levels, from);
+            }
+            return;
+        }
+        let mut fresh = Vec::with_capacity(total - from);
+        self.scan_lines(from, total, |_, text| {
+            fresh.push(detect_level(text) as u8);
+            true
+        });
+        self.push_levels(&fresh);
     }
 
     pub fn set_include_filter(&mut self, filter: &str) {
@@ -622,6 +719,17 @@ impl TailEngine {
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
         let total_len = self.source.len();
+        // The level cache follows the index: drop what a running level scan would push out
+        // of order, and forget the lines that are about to be rescanned.
+        if self
+            .job
+            .as_ref()
+            .map(|j| j.kind == ScanKind::Levels)
+            .unwrap_or(false)
+        {
+            self.job = None;
+        }
+        self.truncate_levels(unchanged_lines);
         if unchanged_lines == 0 && total_len > self.index_job_threshold_bytes {
             // Large file: index on a worker thread; the view shows lines as they arrive.
             self.line_offsets = Vec::new();
@@ -752,6 +860,7 @@ impl TailEngine {
             self.scroll_to_line = None;
         }
         self.refresh_derived_state_from(unchanged_lines);
+        self.ensure_levels();
     }
 
     pub fn poll_updates(&mut self) {
@@ -1022,7 +1131,9 @@ impl TailEngine {
     }
 
     pub fn is_filter_active(&self) -> bool {
-        !self.include_filter.is_empty() || !self.exclude_filter.is_empty()
+        !self.include_filter.is_empty()
+            || !self.exclude_filter.is_empty()
+            || self.min_level != LogLevel::Unknown
     }
 
     pub fn recompute_filtered_lines(&mut self) {
@@ -1188,7 +1299,7 @@ impl TailEngine {
         if self.filter.excluded(&line) {
             return false;
         }
-        if self.filter.included(&line) {
+        if self.filter.included(&line) && self.filter.level_passes(&line) {
             return true;
         }
         // A stack trace continuation line is shown with its (nearest non-continuation) parent.
@@ -1666,8 +1777,12 @@ impl TailEngine {
                                 self.current_match_idx = Some(0);
                             }
                         }
-                        ScanKind::Index => {}
+                        ScanKind::Index | ScanKind::Levels => {}
                     }
+                }
+                ScanBatch::Levels(levels) => {
+                    self.push_levels(&levels);
+                    job.hits = self.levels.len();
                 }
                 ScanBatch::Offsets {
                     offsets,
@@ -1753,7 +1868,14 @@ impl TailEngine {
                     self.refresh_derived_state_from(from);
                 }
             }
+            ScanKind::Levels => {
+                if let Some(from) = self.pending_refresh_from.take() {
+                    self.refresh_derived_state_from(from);
+                }
+            }
         }
+        // Lines appended while a scan ran, or a level scan displaced by a filter/search job.
+        self.ensure_levels();
     }
 
     /// Moves to the next hit and returns its target: a line index, or a byte offset in HEX view.

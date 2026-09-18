@@ -22,6 +22,7 @@ fn find_engine_index(engines: &[TailEngine], path: &Path) -> Option<usize> {
         .or_else(|| engines.iter().position(|e| paths_equal(&e.path, path)))
 }
 
+use crate::log_level::LogLevel;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -45,6 +46,8 @@ pub struct DockContext<'a> {
     pub borderless: &'a mut bool,
     pub show_line_numbers: &'a mut bool,
     pub font_size: &'a mut f32,
+    /// Colour rows by detected log level when no highlight rule matches (Settings).
+    pub level_colors: &'a mut bool,
     pub size_unit: &'a mut crate::tail_engine::SizeUnit,
     pub search_history: &'a mut Vec<String>,
     pub tab_closed: &'a mut bool,
@@ -175,6 +178,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         *self.ctx.sound_enabled,
                         self.ctx.show_line_numbers,
                         *self.ctx.font_size,
+                        *self.ctx.level_colors,
                         &mut new_size_unit,
                         is_focused,
                     );
@@ -214,6 +218,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.borderless,
                     self.ctx.show_line_numbers,
                     self.ctx.font_size,
+                    self.ctx.level_colors,
                 );
             }
         }
@@ -317,6 +322,7 @@ fn render_log_stream(
     sound_enabled: bool,
     show_line_numbers: &mut bool,
     font_size: f32,
+    level_colors: bool,
     new_size_unit: &mut Option<crate::tail_engine::SizeUnit>,
     is_focused: bool,
 ) {
@@ -589,12 +595,35 @@ fn render_log_stream(
                 .color(theme.text_dim()),
         );
 
+        // Per-level counters (most severe first), only the levels seen in the file
+        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+            let counts: Vec<(LogLevel, u64)> = LogLevel::ALL
+                .iter()
+                .rev()
+                .map(|l| (*l, engine.level_count(*l)))
+                .filter(|(_, n)| *n > 0)
+                .collect();
+            if !counts.is_empty() {
+                ui.separator();
+                for (level, n) in counts {
+                    ui.label(
+                        RichText::new(format!("{} {}", level.short(), n))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme.level_color(level)),
+                    )
+                    .on_hover_text(t(lang, "level_counts_tip"));
+                }
+            }
+        }
+
         // Background scan in progress: kind, percentage and hits so far
         if let Some((kind, progress, hits)) = engine.scan_progress() {
             let key = match kind {
                 crate::scan_job::ScanKind::Index => "scan_indexing",
                 crate::scan_job::ScanKind::Filter => "scan_filtering",
                 crate::scan_job::ScanKind::Search => "scan_searching",
+                crate::scan_job::ScanKind::Levels => "scan_levels",
             };
             ui.label(
                 RichText::new(format!(
@@ -1183,6 +1212,66 @@ fn render_log_stream(
             engine.filter_is_regex = !engine.filter_is_regex;
             engine.refresh_filters();
         }
+
+        ui.separator();
+
+        // Minimum log level selector (third filter stage) and the unknown-level toggle
+        let level_active = engine.min_level != LogLevel::Unknown;
+        let level_text = if level_active {
+            RichText::new(format!("≥ {}", engine.min_level.name()))
+                .monospace()
+                .size(11.0)
+                .strong()
+                .color(theme.level_color(engine.min_level))
+        } else {
+            RichText::new(t(lang, "min_level_off"))
+                .monospace()
+                .size(11.0)
+                .color(theme.text_dim())
+        };
+        let mut new_level: Option<LogLevel> = None;
+        egui::ComboBox::from_id_salt(egui::Id::new("min_level").with(&engine.path))
+            .selected_text(level_text)
+            .width(110.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(!level_active, t(lang, "min_level_off"))
+                    .clicked()
+                {
+                    new_level = Some(LogLevel::Unknown);
+                }
+                for level in LogLevel::ALL {
+                    let label = RichText::new(format!("≥ {}", level.name()))
+                        .monospace()
+                        .color(theme.level_color(level));
+                    if ui
+                        .selectable_label(engine.min_level == level, label)
+                        .clicked()
+                    {
+                        new_level = Some(level);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t(lang, "min_level_tip"));
+        if let Some(level) = new_level {
+            engine.set_min_level(level);
+        }
+        if engine.min_level > LogLevel::Trace {
+            let unknown_text = if engine.show_unknown_levels {
+                RichText::new("?").strong().color(theme.accent_color())
+            } else {
+                RichText::new("?").color(theme.text_dim())
+            };
+            if ui
+                .button(unknown_text)
+                .on_hover_text(t(lang, "show_unknown_levels_tip"))
+                .clicked()
+            {
+                let show = !engine.show_unknown_levels;
+                engine.set_show_unknown_levels(show);
+            }
+        }
     });
 
     ui.separator();
@@ -1232,7 +1321,20 @@ fn render_log_stream(
             if let Some(raw_line) = engine.get_line(actual_line_idx) {
                 let is_json = TailEngine::is_json_line(&raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
-                let highlight = engine.match_highlight(&raw_line);
+                // User rules first; the level palette only colours rows no rule matched.
+                let highlight = engine.match_highlight(&raw_line).or_else(|| {
+                    if !level_colors {
+                        return None;
+                    }
+                    theme
+                        .level_style(engine.level_of(actual_line_idx))
+                        .map(|s| crate::tail_engine::HighlightStyle {
+                            fg: s.fg,
+                            bg: s.bg,
+                            bold: s.bold,
+                            italic: false,
+                        })
+                });
                 let matches_search = has_search
                     && engine
                         .search_matches
@@ -2003,6 +2105,7 @@ pub fn render_settings_content(
     borderless: &mut bool,
     show_line_numbers: &mut bool,
     font_size: &mut f32,
+    level_colors: &mut bool,
 ) {
     ui.heading(RichText::new(format!("⚙ {}", t(*lang, "settings").to_uppercase())).monospace());
     ui.add_space(10.0);
@@ -2091,6 +2194,8 @@ pub fn render_settings_content(
     ui.checkbox(sound_enabled, t(*lang, "sound_fx"));
     ui.checkbox(borderless, t(*lang, "borderless"));
     ui.checkbox(show_line_numbers, t(*lang, "show_lines"));
+    ui.checkbox(level_colors, t(*lang, "level_colors"))
+        .on_hover_text(t(*lang, "level_colors_tip"));
 }
 
 fn render_markdown_stream(
