@@ -6,6 +6,8 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
 ## [0.4.0] - 2026-09-18
 
 ### Added
@@ -200,6 +202,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[Unreleased]: https://github.com/matteobaccan/FastTail/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/matteobaccan/FastTail/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/matteobaccan/FastTail/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/matteobaccan/FastTail/compare/v0.1.0...v0.2.0
