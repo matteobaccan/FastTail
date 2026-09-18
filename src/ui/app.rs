@@ -1271,10 +1271,92 @@ impl FastTailApp {
             focused_stream,
         };
 
-        let mut tab_viewer = FastTailTabViewer { ctx: dock_ctx };
-        DockArea::new(&mut self.dock_state)
-            .style(dock_style)
-            .show_inside(ui, &mut tab_viewer);
+        if self.dock_state.iter_all_tabs().count() == 0 {
+            egui::Frame::new()
+                .fill(self.config.theme.panel_bg())
+                .show(ui, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(20.0);
+                            ui.label(RichText::new("📂").size(48.0));
+                            ui.add_space(10.0);
+                            ui.label(
+                                RichText::new(t(self.config.language, "no_file_open"))
+                                    .monospace()
+                                    .size(13.5)
+                                    .color(self.config.theme.text_primary()),
+                            );
+                            ui.add_space(16.0);
+                            let open_btn = egui::Button::new(
+                                RichText::new(format!("📁 {}", t(self.config.language, "open_file")))
+                                    .monospace()
+                                    .strong()
+                                    .size(13.0)
+                                    .color(self.config.theme.accent_color()),
+                            )
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.5, self.config.theme.accent_color()))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(160.0, 32.0));
+
+                            if ui
+                                .add(open_btn)
+                                .on_hover_text(t(self.config.language, "open_file_tip"))
+                                .clicked()
+                            {
+                                if let Some(paths) = rfd::FileDialog::new()
+                                    .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
+                                    .set_title("Open Log Files")
+                                    .pick_files()
+                                {
+                                    for path in paths {
+                                        self.open_log_file(path);
+                                    }
+                                }
+                            }
+
+                            if !self.config.recent_files.is_empty() {
+                                ui.add_space(16.0);
+                                ui.label(
+                                    RichText::new(t(self.config.language, "recent_files"))
+                                        .monospace()
+                                        .size(11.5)
+                                        .color(self.config.theme.text_dim()),
+                                );
+                                ui.add_space(6.0);
+                                let mut recent_to_open = None;
+                                ui.horizontal_wrapped(|ui| {
+                                    for path in self.config.recent_files.iter().take(5) {
+                                        let file_name = path
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("log");
+                                        let btn = egui::Button::new(
+                                            RichText::new(format!("📄 {}", file_name))
+                                                .monospace()
+                                                .size(11.0)
+                                                .color(self.config.theme.secondary_accent()),
+                                        )
+                                        .fill(self.config.theme.button_bg())
+                                        .corner_radius(CornerRadius::same(4));
+                                        if ui.add(btn).on_hover_text(path.display().to_string()).clicked() {
+                                            recent_to_open = Some(path.clone());
+                                        }
+                                    }
+                                });
+                                if let Some(path) = recent_to_open {
+                                    self.open_log_file(path);
+                                }
+                            }
+                        });
+                    });
+                });
+        } else {
+            let mut tab_viewer = FastTailTabViewer { ctx: dock_ctx };
+            DockArea::new(&mut self.dock_state)
+                .style(dock_style)
+                .show_inside(ui, &mut tab_viewer);
+        }
 
         // Record positions and sizes of floating dock windows from egui memory
         for (surf_index, surface) in self.dock_state.iter_surfaces_indexed() {
