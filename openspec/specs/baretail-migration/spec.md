@@ -1,4 +1,9 @@
-## ADDED Requirements
+# BareTail Migration Specification
+
+## Purpose
+Discovers existing BareTail settings on Windows, offers an interactive one-time import, and defines where the portable `fasttail.ini` configuration is looked up and written on every platform.
+
+## Requirements
 
 ### Requirement: Windows Registry discovery of BareTail configuration
 On Windows, the application SHALL query `HKEY_CURRENT_USER\Software\Bare Metal Software\BareTail` and `BareTailPro` on first startup to discover previously used file paths, tabs, and highlighting preferences.

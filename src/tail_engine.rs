@@ -243,6 +243,15 @@ impl TailEngine {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
         let path_buf = path.as_ref().to_path_buf();
         let metadata = std::fs::metadata(&path_buf)?;
+        // Security check: ensure target path is a regular file.
+        // Prevents opening directories, device nodes (/dev/zero, /dev/urandom),
+        // FIFOs/named pipes, or sockets that cause hanging or infinite memory allocation (DoS).
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
         let file_size = metadata.len();
         let last_modified = metadata.modified().ok();
 

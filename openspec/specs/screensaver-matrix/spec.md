@@ -1,4 +1,9 @@
-## ADDED Requirements
+# Matrix Screensaver Specification
+
+## Purpose
+Renders a Matrix-style digital rain screensaver after a configurable idle period and dismisses it instantly on any user input.
+
+## Requirements
 
 ### Requirement: Matrix digital rain screensaver
 The application SHALL render a full-viewport digital rain screensaver (cascading vertical streams of green phosphor glyphs with fading trails and bright leading heads) when the user remains idle.

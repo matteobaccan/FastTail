@@ -1,5 +1,8 @@
 # Stream Engine Specification
 
+## Purpose
+Defines the tail engine: memory-mapped access to very large files, real-time follow with pause, rotation and truncation handling, multi-encoding decoding, and the Text, Hex and Markdown view modes.
+
 ## Requirements
 
 ### Requirement: Memory-mapped streaming of large files
@@ -10,7 +13,7 @@ The tail engine SHALL open files using memory-mapped I/O (memmap2) with 64-bit o
 - **THEN** the application opens the file within 100 milliseconds and displays the tail lines using less than 50 MB of resident memory.
 
 ### Requirement: Real-time file follow with pause and resume
-The engine SHALL monitor file modifications in real-time (	ail -f) and append newly written lines to the view automatically while follow mode is active.
+The engine SHALL monitor file modifications in real-time (`tail -f`) and append newly written lines to the view automatically while follow mode is active.
 
 #### Scenario: New log lines appended to file
 - **WHEN** an external process writes new lines to a monitored log file

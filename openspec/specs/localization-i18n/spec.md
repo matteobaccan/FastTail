@@ -1,4 +1,9 @@
-## ADDED Requirements
+# Localization and i18n Specification
+
+## Purpose
+Provides a fully localized interface in English, Italian, French, Spanish and Chinese, with OS language detection, English fallback and a runtime language switcher.
+
+## Requirements
 
 ### Requirement: Multi-language interface support
 The application SHALL support 5 languages for all UI labels, menus, settings, migration prompts, and tooltips: English (`en`), Italian (`it`), French (`fr`), Spanish (`es`), and Chinese (`zh` / Simplified Chinese).

@@ -554,6 +554,9 @@ fn test_i18n_exhaustive_coverage() {
         "md_search_source",
         "case_sensitive",
         "case_sensitive_tip",
+        "delete_rule",
+        "clear_search",
+        "clear_filter",
     ];
 
     for lang in &[
@@ -2762,4 +2765,13 @@ fn test_switching_view_mode_keeps_search_cursor_valid() {
     assert_eq!(engine.active_match_count(), 3);
     assert!(engine.current_match_idx.unwrap() < 3);
     assert!(engine.search_next(false).is_some());
+}
+
+#[test]
+fn test_tail_engine_rejects_non_regular_files() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    match TailEngine::open(tmp_dir.path()) {
+        Ok(_) => panic!("Expected TailEngine::open to fail for directory"),
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput),
+    }
 }

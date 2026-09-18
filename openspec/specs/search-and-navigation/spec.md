@@ -22,6 +22,10 @@ Each open stream SHALL own its search query, match list and current match positi
 ### Requirement: Match Counter, Wrap-Around and History
 The stream bar SHALL show the current match position and total (`[current / total]`), navigation SHALL wrap around at either end emitting a beep when sound effects are enabled, and the last 10 distinct queries SHALL be kept in a history dropdown persisted in the configuration file. Rescans while typing SHALL be debounced so that each keystroke does not block the interface.
 
+#### Scenario: Wrapping past the last match
+- **WHEN** the counter shows `[7 / 7]` and the user presses `F3`
+- **THEN** the current match becomes `[1 / 7]`, a beep is played if sound effects are enabled, and the query is stored at the top of the search history.
+
 ### Requirement: Live Refresh of Matches
 Matches SHALL be recomputed when the file grows, is truncated or rewritten, and when the include/exclude filters change. Only lines that can be displayed under the active filters are searchable. The current match SHALL stay on the same line whenever that line still matches; otherwise it moves to the nearest following match.
 
@@ -31,6 +35,10 @@ Matches SHALL be recomputed when the file grows, is truncated or rewritten, and 
 
 ### Requirement: Match Marker Column and Row Highlight in Every View
 While a query is active, every view SHALL show a fixed-width marker column at the left of each row: `▶` on the row of the current match, `●` on rows of other matches, blank elsewhere. Matching rows SHALL be tinted across their full width, with a stronger tint on the current match. The column width SHALL not change when the current match moves.
+
+#### Scenario: Moving the current match
+- **WHEN** three rows match and the user presses `F3`
+- **THEN** the `▶` marker and the stronger tint move to the next matching row, the previous row keeps `●` and the normal tint, and no row shifts horizontally.
 
 ### Requirement: Byte-Level Search in HEX View
 In HEX view the query SHALL be matched against the file bytes: as ASCII text ignoring case, and additionally as a byte pattern when the query is an even-length string of hex digits (spaces and colons ignored, e.g. `0A 0D`). A hit spanning two hex rows SHALL mark both rows. `F3` / `Shift+F3` SHALL navigate between byte offsets and the counter SHALL count byte-level hits.
@@ -42,5 +50,13 @@ In HEX view the query SHALL be matched against the file bytes: as ASCII text ign
 ### Requirement: Search in Markdown View
 In Markdown view an active query SHALL switch the stream to its source lines, marked and highlighted exactly as in Text view, with a notice that the source is being shown. Clearing the query SHALL restore the rendered Markdown document.
 
+#### Scenario: Searching inside a rendered README
+- **WHEN** a stream in MD view is showing a rendered README and the user types `install` in the search box
+- **THEN** the stream shows the Markdown source lines with matches marked and a notice that the source is displayed; clearing the box returns to the rendered document.
+
 ### Requirement: Search Cursor Preserved Across Views
 Switching a stream between Text, Hex and Markdown views SHALL keep the query and keep the current match position within the range of the list navigated by the new view.
+
+#### Scenario: Switching from Text to Hex with an active search
+- **WHEN** a Text view search shows `[5 / 12]` and the user switches the stream to HEX view
+- **THEN** the query stays in the search box, byte-level hits are computed, and the current match index is clamped to the new hit count.
