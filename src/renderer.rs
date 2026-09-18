@@ -2,8 +2,9 @@
 //! the backend the running window ended up on.
 //!
 //! Resolution order: `FASTTAIL_RENDERER` environment variable, then the `renderer` key in
-//! `fasttail.ini`, then `auto`. `auto` tries OpenGL first and retries with wgpu when eframe
-//! fails to start the OpenGL backend.
+//! `fasttail.ini`, then `auto`. `auto` tries wgpu first (Direct3D 12 / Vulkan / Metal, the
+//! cheapest per frame on current drivers) and retries with OpenGL when eframe fails to start
+//! the wgpu backend.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -62,7 +63,7 @@ pub enum RendererKind {
 }
 
 /// Set by `main` before the window starts, read by the app when it is created:
-/// `true` when OpenGL failed and wgpu was started instead.
+/// `true` when the preferred backend failed and the other one was started instead.
 static FALLBACK_USED: AtomicBool = AtomicBool::new(false);
 /// 0 = unknown, 1 = glow, 2 = wgpu: which backend `main` is starting right now.
 static STARTING: AtomicU8 = AtomicU8::new(0);
@@ -105,7 +106,7 @@ pub struct ActiveRenderer {
     pub adapter: String,
     /// Driver description when the backend reports one.
     pub driver: String,
-    /// True when OpenGL failed and this backend was started instead.
+    /// True when the preferred backend failed and this one was started instead.
     pub fallback: bool,
 }
 
@@ -159,7 +160,7 @@ impl ActiveRenderer {
         r
     }
 
-    /// Short chip text for the status bar: `GL`, `WGPU`, `WGPU fallback`.
+    /// Short chip text for the status bar: `GL`, `WGPU`, `GL fallback`, `WGPU fallback`.
     pub fn chip(&self) -> String {
         let base = match self.kind {
             RendererKind::Glow => "GL",
@@ -237,6 +238,9 @@ mod tests {
         let g = ActiveRenderer::new(RendererKind::Glow, "4.6.0 NVIDIA", "GeForce", "", false);
         assert_eq!(g.chip(), "GL");
         assert_eq!(g.details(), "4.6.0 NVIDIA · GeForce");
+
+        let gf = ActiveRenderer::new(RendererKind::Glow, "3.3.0 Mesa", "llvmpipe", "", true);
+        assert_eq!(gf.chip(), "GL fallback");
         assert_eq!(ActiveRenderer::unknown().details(), "unknown");
     }
 }

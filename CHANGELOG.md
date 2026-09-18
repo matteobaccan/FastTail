@@ -25,6 +25,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   their parent; a `?` toggle shows or hides lines without a detectable level.
 - **Per-level counters** in the stream bar, updated live as the file grows.
 
+### Changed
+
+- **wgpu is now the first choice of the `auto` renderer**, OpenGL the fallback.
+  Measured on an NVIDIA Windows machine with the pointer moving over the
+  window: a continuous repaint costs about 12% of one core on wgpu against a
+  full core on OpenGL, whose driver busy-waits for the vertical blank. The
+  OpenGL path now runs without vsync (100% -> about 35% of a core) for the
+  machines that fall back to it or pin it. The status chip reads `GL fallback`
+  when the retry happened.
+- **Screensaver.** It no longer starts, and stops, when the window does not
+  have the focus, so it cannot animate unseen behind other windows; the
+  animation is capped at 30 fps.
+
+### Fixed
+
+- The screensaver timeout field accepts 0 (= never); it used to clamp 0 to 1
+  minute, so the timeout could not disable the screensaver.
+
 ## [0.3.0] - 2026-09-18
 
 ### Added

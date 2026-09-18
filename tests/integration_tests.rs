@@ -121,12 +121,12 @@ fn test_screensaver_idle_trigger() {
     assert!(!screensaver.is_active);
 
     // Inactivity check with 0 timeout (disabled)
-    screensaver.check_inactivity(0, true);
+    screensaver.check_inactivity(0, true, true);
     assert!(!screensaver.is_active);
 
     // Simulate idle by setting last_input_time in past
     screensaver.last_input_time = std::time::Instant::now() - Duration::from_secs(601);
-    screensaver.check_inactivity(10, true);
+    screensaver.check_inactivity(10, true, true);
     assert!(screensaver.is_active);
 
     // User input resets
@@ -457,6 +457,7 @@ fn test_i18n_exhaustive_coverage() {
         "language",
         "screensaver",
         "screensaver_timeout",
+        "screensaver_zero_off",
         "sound_fx",
         "baretail_title",
         "baretail_desc",

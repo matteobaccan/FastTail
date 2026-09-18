@@ -117,10 +117,19 @@ fn main() -> eframe::Result<()> {
     let make_options = |renderer: eframe::Renderer| eframe::NativeOptions {
         viewport: viewport.clone(),
         renderer,
+        // Some OpenGL drivers (NVIDIA on Windows among them) busy-wait inside SwapBuffers
+        // while waiting for the vertical blank, which costs a whole core whenever egui
+        // repaints continuously. egui only repaints on demand, so disabling vsync on the
+        // OpenGL path trades tearing on a UI that hardly animates for a much lower CPU
+        // cost; wgpu presents through the swap chain and keeps vsync.
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
 
-    // OpenGL first, wgpu on failure (or whichever backend was forced).
+    // wgpu first, OpenGL on failure (or whichever backend was forced).
     let choice = cli
         .renderer
         .unwrap_or_else(|| RendererChoice::from_env(config.renderer));
@@ -140,17 +149,17 @@ fn main() -> eframe::Result<()> {
             })
         }
         RendererChoice::Auto => {
-            renderer::mark_starting(RendererKind::Glow, false);
-            let first = eframe::run_native(&app_title, make_options(eframe::Renderer::Glow), {
+            renderer::mark_starting(RendererKind::Wgpu, false);
+            let first = eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu), {
                 let cli = cli.clone();
                 Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
             });
             match first {
                 Err(err) if !renderer::app_created() => {
-                    eprintln!("renderer: OpenGL backend failed to start: {err}");
-                    eprintln!("renderer: falling back to wgpu");
-                    renderer::mark_starting(RendererKind::Wgpu, true);
-                    eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu), {
+                    eprintln!("renderer: wgpu backend failed to start: {err}");
+                    eprintln!("renderer: falling back to OpenGL");
+                    renderer::mark_starting(RendererKind::Glow, true);
+                    eframe::run_native(&app_title, make_options(eframe::Renderer::Glow), {
                         let cli = cli.clone();
                         Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
                     })
