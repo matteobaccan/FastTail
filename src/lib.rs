@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod baretail_bridge;
+pub mod cli;
 pub mod config;
 pub mod crash_handler;
 pub mod html_converter;

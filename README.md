@@ -93,7 +93,24 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `F1` | Open the Help & Keyboard Shortcuts dialog |
 | `Esc` | Close the active dialog, or leave the search box |
 
-Files can also be opened by **drag & drop** onto the window or by passing their paths as command line arguments.
+Files can also be opened by **drag & drop** onto the window or from the command line:
+
+```text
+fasttail [OPTIONS] [PATH...]
+
+  PATH...            log files to open in addition to the restored workspace
+  --fresh            start with an empty workspace instead of the saved one
+  --filter <TEXT>    include filter for the files opened from the command line
+  --exclude <TEXT>   exclude filter for those files
+  --follow / --no-follow
+                     follow mode for those files
+  --renderer <NAME>  auto (default), glow or wgpu
+  --config <FILE>    configuration file to use (same as FASTTAIL_CONFIG)
+  -V, --version      print the version and exit
+  -h, --help         print the usage and exit
+```
+
+Example: `fasttail --fresh --filter ERROR app.log err.log`.
 
 ---
 
@@ -123,7 +140,7 @@ When the first backend fails, the error is printed to stderr together with `rend
 ## 🛠️ Building & Installation
 
 ### Prerequisites
-- [Rust](https://rustup.rs/) 1.80 or newer
+- [Rust](https://rustup.rs/) 1.87 or newer
 - On Linux: `libasound2-dev libudev-dev pkg-config libx11-dev libxcb1-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev`
 
 ### Build from Source
@@ -176,7 +193,7 @@ Keep `fasttail.pdb` next to `fasttail.exe`: it lets a crash report (`fasttail_cr
 
 ## 📐 Specifications
 
-Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting, docking UI, themes, localization, log intelligence, screensaver, telemetry, BareTail migration, crash reporting and the release pipeline.
+Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting, docking UI, themes, localization, log intelligence, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend and the command line.
 
 ---
 

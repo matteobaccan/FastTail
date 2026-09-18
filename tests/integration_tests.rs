@@ -2837,3 +2837,47 @@ fn test_renderer_choice_persists_in_ini() {
         RendererChoice::Auto
     );
 }
+
+#[test]
+fn test_cli_paths_open_streams_with_filters_and_follow() {
+    use fasttail::cli::CliArgs;
+    use fasttail::ui::FastTailApp;
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("cli.log");
+    std::fs::File::create(&log)
+        .unwrap()
+        .write_all(b"INFO ok\nERROR boom\nERROR healthcheck failed\n")
+        .unwrap();
+    let missing = dir.path().join("missing.log");
+
+    let cli = CliArgs::parse(
+        [
+            "--filter",
+            "error",
+            "--exclude",
+            "healthcheck",
+            "--no-follow",
+            &log.to_string_lossy(),
+            &missing.to_string_lossy(),
+        ],
+        dir.path(),
+    )
+    .unwrap();
+
+    let mut app = FastTailApp::from_config(FastTailConfig::default());
+    app.apply_cli(&cli);
+
+    // The existing file is open once, the missing one is skipped.
+    assert_eq!(app.engines.len(), 1);
+    let engine = &app.engines[0];
+    assert_eq!(engine.include_filter, "error");
+    assert_eq!(engine.exclude_filter, "healthcheck");
+    assert!(!engine.follow_tail);
+    assert_eq!(engine.visible_line_count(), 1);
+
+    // Opening the same path again from the command line does not duplicate the stream.
+    app.apply_cli(&cli);
+    assert_eq!(app.engines.len(), 1);
+}

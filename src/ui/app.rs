@@ -131,11 +131,17 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
 }
 
 impl FastTailApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, cli: crate::cli::CliArgs) -> Self {
         setup_cjk_fonts(&cc.egui_ctx);
-        let config = FastTailConfig::load();
+        let mut config = FastTailConfig::load();
+        if cli.fresh {
+            // Empty workspace: no restored streams, no saved dock layout.
+            config.open_files.clear();
+            config.dock_layout = None;
+        }
         config.theme.apply(&cc.egui_ctx);
         let mut app = Self::from_config(config);
+        app.apply_cli(&cli);
         app.renderer = crate::renderer::ActiveRenderer::from_creation_context(cc);
         crate::renderer::mark_app_created();
         eprintln!(
@@ -276,6 +282,33 @@ impl FastTailApp {
             }
         }
         let _ = self.config.save();
+    }
+
+    /// Opens the files named on the command line (skipping ones already open) and applies
+    /// the command line filters and follow flag to those streams only.
+    pub fn apply_cli(&mut self, cli: &crate::cli::CliArgs) {
+        for path in &cli.paths {
+            if !path.exists() {
+                eprintln!("fasttail: {} not found, skipped", path.display());
+                continue;
+            }
+            self.open_log_file(path.clone());
+            if let Some(engine) = self
+                .engines
+                .iter_mut()
+                .find(|e| e.path == *path || paths_equal(&e.path, path))
+            {
+                if let Some(f) = &cli.filter {
+                    engine.set_include_filter(f);
+                }
+                if let Some(x) = &cli.exclude {
+                    engine.set_exclude_filter(x);
+                }
+                if let Some(follow) = cli.follow {
+                    engine.follow_tail = follow;
+                }
+            }
+        }
     }
 
     pub fn open_log_file(&mut self, path: PathBuf) {

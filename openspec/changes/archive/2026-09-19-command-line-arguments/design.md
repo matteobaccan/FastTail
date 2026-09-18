@@ -15,6 +15,9 @@
 - **Relative paths are resolved against the current directory at startup**, before anything else changes it.
 - **Exit codes**: 0 for `--help`/`--version`, 2 for usage errors, otherwise the GUI runs.
 
+- **`--session` and directory patterns are deferred** to the `named-sessions` and `directory-wildcard-tail` changes; the parser is written so adding them is one match arm each. `--renderer` is included instead, mirroring `FASTTAIL_RENDERER` from `wgpu-renderer-fallback`.
+- **`--config` is applied by setting `FASTTAIL_CONFIG`** before the configuration loads, reusing the existing lookup order instead of threading a path through the loader.
+
 ## Risks / Trade-offs
 
 - [Console attach on Windows prints after the shell prompt returned] → known Windows behaviour for GUI-subsystem apps; acceptable for `--help`.
