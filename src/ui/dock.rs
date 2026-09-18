@@ -2181,7 +2181,8 @@ pub fn render_settings_content(
     if *screensaver_enabled {
         ui.horizontal(|ui| {
             ui.label(t(*lang, "screensaver_timeout"));
-            ui.add(egui::DragValue::new(screensaver_timeout_mins).range(1..=120));
+            ui.add(egui::DragValue::new(screensaver_timeout_mins).range(0..=120))
+                .on_hover_text(t(*lang, "screensaver_zero_off"));
             ui.add_space(8.0);
             if ui.button(t(*lang, "test_screensaver")).clicked() {
                 *test_screensaver = true;

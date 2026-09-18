@@ -134,14 +134,14 @@ Settings are stored in a single `fasttail.ini` file, looked up in this order:
 New installs write next to the executable and fall back to the per-user directory when that folder is read-only (for example `Program Files`). A legacy `fasttail.toml` from older versions is migrated automatically on first start.
 
 ### Rendering backend
-FastTail starts on OpenGL and, if the OpenGL context cannot be created (Remote Desktop sessions, virtual machines, basic display adapters), retries automatically with `wgpu` (Direct3D 12 on Windows, Vulkan on Linux, Metal on macOS). The status bar shows which backend is active: `GL`, `WGPU`, or `WGPU fallback` when the retry happened; hover it, or open About, for the adapter details.
+FastTail starts on `wgpu` (Direct3D 12 or Vulkan on Windows, Vulkan on Linux, Metal on macOS) and, if that backend cannot be created, retries automatically with OpenGL. wgpu is the default because it is the cheapest per frame: on an NVIDIA Windows machine a continuous repaint costs about 12% of one core on wgpu against a full core on OpenGL, whose driver busy-waits for the vertical blank; for that reason the OpenGL path runs without vsync. The status bar shows which backend is active: `WGPU`, `GL`, or `GL fallback` when the retry happened; hover it, or open About, for the adapter details.
 
 | Setting | Values | Where |
 |---|---|---|
 | `renderer` in `fasttail.ini` | `auto` (default), `glow`, `wgpu` | Settings dialog, applies at the next start |
 | `FASTTAIL_RENDERER` | same values, overrides the config | environment, useful for support: `FASTTAIL_RENDERER=wgpu fasttail` |
 
-When the first backend fails, the error is printed to stderr together with `renderer: falling back to wgpu`.
+When the first backend fails, the error is printed to stderr together with `renderer: falling back to OpenGL`.
 
 ---
 

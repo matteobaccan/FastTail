@@ -16,6 +16,14 @@ The application SHALL render a full-viewport digital rain screensaver (cascading
 - **WHEN** the screensaver is running and the user moves the mouse, clicks, or presses any key
 - **THEN** the screensaver dismisses immediately and returns the user to the exact prior workspace state without delay or visual stutter.
 
+#### Scenario: Unfocused window never animates
+- **WHEN** the FastTail window does not have the keyboard focus (it sits behind another window, on another desktop, or is minimized) and the idle timeout elapses
+- **THEN** the screensaver does not start, and a running screensaver stops as soon as the focus is lost, so the animation never consumes CPU while nobody can see it.
+
+#### Scenario: Bounded frame rate
+- **WHEN** the screensaver is running
+- **THEN** it repaints at most about 30 times per second, independently of the renderer's vsync setting.
+
 ### Requirement: Screensaver configuration and defaults
 The screensaver SHALL be enabled by default with a default timeout of 10 minutes, and SHALL provide configuration options to adjust the timeout duration or disable the feature entirely.
 
@@ -30,3 +38,7 @@ The screensaver SHALL be enabled by default with a default timeout of 10 minutes
 #### Scenario: User disables screensaver
 - **WHEN** the user toggles the screensaver off in settings
 - **THEN** the screensaver never triggers regardless of idle duration.
+
+#### Scenario: Timeout of zero
+- **WHEN** the user sets the idle timeout to 0 in Settings (the field accepts 0 to 120 and its tooltip reads "0 = never")
+- **THEN** the value is kept as 0, persisted to `fasttail.ini`, and the screensaver never triggers.

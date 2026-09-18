@@ -548,12 +548,18 @@ impl FastTailApp {
             self.last_sys_refresh = Instant::now();
         }
 
-        // 4. Check screensaver idle timeout
+        // 4. Check screensaver idle timeout (only a focused window can start it)
+        let window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         self.screensaver.check_inactivity(
             self.config.screensaver_timeout_mins,
             self.config.screensaver_enabled,
+            window_focused,
         );
-        if self.config.screensaver_enabled && !self.screensaver.is_active {
+        if self.config.screensaver_enabled
+            && self.config.screensaver_timeout_mins > 0
+            && window_focused
+            && !self.screensaver.is_active
+        {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
