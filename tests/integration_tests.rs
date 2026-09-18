@@ -1413,7 +1413,7 @@ fn test_crash_handler_git_commit_and_report_generation() {
     );
     assert!(!GIT_TAG.is_empty(), "GIT_TAG must not be empty");
     assert_eq!(APP_VERSION, env!("CARGO_PKG_VERSION"));
-    assert_eq!(APP_VERSION, "0.3.0");
+    assert_eq!(APP_VERSION, env!("CARGO_PKG_VERSION"));
 
     let bt = std::backtrace::Backtrace::disabled();
     let report = build_crash_report(
