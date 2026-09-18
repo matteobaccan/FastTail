@@ -51,7 +51,14 @@ pub struct FileSource {
 impl FileSource {
     pub fn open(path: &Path) -> std::io::Result<Self> {
         let file = open_file_shared(path)?;
-        let len = file.metadata()?.len();
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+        let len = metadata.len();
         Ok(Self {
             path: path.to_path_buf(),
             file: RefCell::new(Some(file)),
@@ -110,7 +117,14 @@ impl FileSource {
     /// Reopens the handle (after a rotation or a failed read) and drops the cache.
     pub fn reopen(&self) -> std::io::Result<()> {
         let file = open_file_shared(&self.path)?;
-        let len = file.metadata()?.len();
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+        let len = metadata.len();
         *self.file.borrow_mut() = Some(file);
         self.len.set(len);
         self.clear();
@@ -339,5 +353,21 @@ mod tests {
         assert_eq!(n, 30);
         assert_eq!(&buf[..n], &data[BLOCK_SIZE - 20..]);
         assert_eq!(src.cached_bytes(), 0);
+    }
+
+    #[test]
+    fn open_rejects_non_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let res = FileSource::open(dir.path());
+        let err = res
+            .err()
+            .expect("a directory must not open as a file source");
+        // On Windows, opening a directory without FILE_FLAG_BACKUP_SEMANTICS already fails
+        // inside File::open (access denied), so the metadata check is never reached and the
+        // error kind comes from the OS; on Unix the handle opens and the check rejects it.
+        #[cfg(not(windows))]
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        #[cfg(windows)]
+        let _ = err;
     }
 }
