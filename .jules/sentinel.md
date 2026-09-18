@@ -1,0 +1,4 @@
+## 2026-04-18 - Enforce regular file validation on file open and reopen
+**Vulnerability:** Opening non-regular files (e.g. directories, FIFOs/named pipes, device nodes, sockets) can lead to Denial of Service (DoS) via thread blocking, infinite loops, or excessive memory allocation when background scan threads attempt to stream data.
+**Learning:** Checking file metadata prior to opening a file path leaves a potential Time-of-Check to Time-of-Use (TOCTOU) race condition if the path target changes between check and open. Validating `metadata.is_file()` on the opened `File` handle directly in `FileSource::open` and `FileSource::reopen` eliminates the race condition and ensures defense in depth across all read paths.
+**Prevention:** Always inspect file metadata directly on the opened OS handle (`file.metadata()`) rather than checking paths on disk prior to `open`.
