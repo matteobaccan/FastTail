@@ -1686,7 +1686,8 @@ impl FastTailApp {
                             .size(11.5)
                             .color(theme.secondary_accent()),
                         "https://www.baccan.it",
-                    );
+                    )
+                    .on_hover_text("https://www.baccan.it");
                 });
 
                 ui.add_space(8.0);
@@ -1755,7 +1756,8 @@ impl FastTailApp {
                                 .monospace()
                                 .color(theme.secondary_accent()),
                             "https://www.baccan.it",
-                        );
+                        )
+                        .on_hover_text("https://www.baccan.it");
                         ui.end_row();
 
                         ui.label(RichText::new(t(lang, "about_repo")).monospace().strong());
@@ -1764,7 +1766,8 @@ impl FastTailApp {
                                 .monospace()
                                 .color(theme.accent_color()),
                             "https://github.com/matteobaccan/FastTail",
-                        );
+                        )
+                        .on_hover_text("https://github.com/matteobaccan/FastTail");
                         ui.end_row();
 
                         ui.label(RichText::new(t(lang, "about_license")).monospace().strong());
