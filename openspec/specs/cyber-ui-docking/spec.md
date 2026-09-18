@@ -25,11 +25,19 @@ The main application window titlebar SHALL display the current crate version alo
 - **THEN** the top navigation bar displays `FastTail v<version> by Matteo Baccan`.
 
 ### Requirement: Clickable External Hyperlinks in About Dialog
-The About dialog SHALL provide clickable hyperlinks to the GitHub repository and to `https://www.baccan.it`, and SHALL show the git tag and build timestamp of the running binary.
+The About dialog SHALL provide clickable hyperlinks to the GitHub repository and to `https://www.baccan.it`, each showing its full URL as a hover tooltip, and SHALL show the git tag and build timestamp of the running binary. The build SHALL include the platform support that opens URLs in the operating system's default browser (the `links` feature of eframe), and a test SHALL fail if that support is dropped from the dependency declaration.
 
 #### Scenario: User clicks website or repository link
 - **WHEN** the user opens the About dialog and clicks the GitHub repository or `www.baccan.it` link
 - **THEN** the default web browser opens the respective URL.
+
+#### Scenario: Hovering a link
+- **WHEN** the pointer rests on the `www.baccan.it` or the repository link
+- **THEN** a tooltip shows the full `https://` URL that a click will open.
+
+#### Scenario: Browser support removed from the build
+- **WHEN** the `eframe` dependency in `Cargo.toml` no longer lists the `links` feature
+- **THEN** the test suite fails with a message naming the missing feature.
 
 ### Requirement: Localized Tooltips
 All interactive buttons, sliders, and controls SHALL provide informative tooltips fully localized in the currently selected user language (English, Italian, French, Spanish, Chinese).
@@ -61,11 +69,15 @@ The log stream viewport SHALL support comprehensive keyboard navigation. Stream-
 - **THEN** only the stream in the focused panel jumps to its last line and enables follow mode; the other panel keeps its scroll position.
 
 ### Requirement: Recent Files Menu (MRU)
-The top navigation bar SHALL provide a Recent Files dropdown (🕒 Recent) listing previously opened log files in Most Recently Used order, allowing instant reopening with a single click and a clear recent list option.
+The top navigation bar SHALL provide a Recent Files dropdown as an icon-only button (🕒) placed immediately to the right of the Open File button, whose tooltip SHALL read the localized "Recent Files" label. The dropdown SHALL list previously opened log files in Most Recently Used order, allowing instant reopening with a single click and a clear recent list option.
 
 #### Scenario: Reopening a file from the recent list
 - **WHEN** the user opens the Recent dropdown and clicks a previously opened log file
 - **THEN** the file opens in a new stream tab and moves to the top of the Most Recently Used list.
+
+#### Scenario: Icon button next to Open File
+- **WHEN** the title bar is rendered in any language
+- **THEN** the 🕒 button sits directly after the Open File button, before the Filter button, shows no text, and hovering it displays the "Recent Files" label of the current language.
 
 ### Requirement: Virtualized Scroll Rendering
 The docking log stream SHALL use virtualized row scrolling to render only visible lines on screen, guaranteeing 60+ FPS performance even with tens of millions of lines in the buffer. Visible rows SHALL be computed directly from the active visible line set, utilizing 100% of the viewport height without empty gaps or truncated lines. When an include/exclude filter is active, only the matching rows are laid out so the viewport is always filled.

@@ -868,6 +868,60 @@ impl FastTailApp {
                         }
                     }
 
+                    // Recent Files dropdown (🕒), right after Open File
+                    let mut file_to_open = None;
+                    // Icon-only button next to Open File; the localized name is its tooltip.
+                    let recent_btn =
+                        egui::Button::new(RichText::new("🕒").monospace().color(text_pri))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.2, accent))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(30.0, 26.0));
+
+                    let recent_menu =
+                        egui::menu::MenuButton::from_button(recent_btn).ui(ui, |ui| {
+                            if self.config.recent_files.is_empty() {
+                                ui.label(
+                                    RichText::new(t(self.config.language, "no_recent_files"))
+                                        .italics()
+                                        .color(self.config.theme.text_dim()),
+                                );
+                            } else {
+                                for path in &self.config.recent_files {
+                                    let file_name =
+                                        path.file_name().and_then(|n| n.to_str()).unwrap_or("log");
+                                    let full_path = path.display().to_string();
+                                    let btn_text = format!("📄 {} ({})", file_name, full_path);
+                                    if ui.button(RichText::new(btn_text).monospace()).clicked() {
+                                        file_to_open = Some(path.clone());
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui
+                                    .button(
+                                        RichText::new(format!(
+                                            "🗑 {}",
+                                            t(self.config.language, "clear_recent")
+                                        ))
+                                        .monospace()
+                                        .color(self.config.theme.warn_color()),
+                                    )
+                                    .clicked()
+                                {
+                                    self.config.recent_files.clear();
+                                    let _ = self.config.save();
+                                    ui.close();
+                                }
+                            }
+                        });
+                    let _ = recent_menu
+                        .0
+                        .on_hover_text(t(self.config.language, "recent_files"));
+                    if let Some(path) = file_to_open {
+                        self.open_log_file(path);
+                    }
+
                     // Filter button with amber border
                     let active_color_rules = self
                         .config
@@ -984,56 +1038,6 @@ impl FastTailApp {
                     {
                         self.config.settings_open = !self.config.settings_open;
                         let _ = self.config.save();
-                    }
-
-                    // Recent Files dropdown menu with uniform height
-                    let mut file_to_open = None;
-                    let recent_title = format!("🕒 {}", t(self.config.language, "recent_files"));
-                    let recent_btn =
-                        egui::Button::new(RichText::new(recent_title).monospace().color(text_dim))
-                            .fill(self.config.theme.button_bg())
-                            .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                            .corner_radius(CornerRadius::same(6))
-                            .min_size(egui::vec2(0.0, 26.0));
-
-                    egui::menu::MenuButton::from_button(recent_btn).ui(ui, |ui| {
-                        if self.config.recent_files.is_empty() {
-                            ui.label(
-                                RichText::new(t(self.config.language, "no_recent_files"))
-                                    .italics()
-                                    .color(self.config.theme.text_dim()),
-                            );
-                        } else {
-                            for path in &self.config.recent_files {
-                                let file_name =
-                                    path.file_name().and_then(|n| n.to_str()).unwrap_or("log");
-                                let full_path = path.display().to_string();
-                                let btn_text = format!("📄 {} ({})", file_name, full_path);
-                                if ui.button(RichText::new(btn_text).monospace()).clicked() {
-                                    file_to_open = Some(path.clone());
-                                    ui.close();
-                                }
-                            }
-                            ui.separator();
-                            if ui
-                                .button(
-                                    RichText::new(format!(
-                                        "🗑 {}",
-                                        t(self.config.language, "clear_recent")
-                                    ))
-                                    .monospace()
-                                    .color(self.config.theme.warn_color()),
-                                )
-                                .clicked()
-                            {
-                                self.config.recent_files.clear();
-                                let _ = self.config.save();
-                                ui.close();
-                            }
-                        }
-                    });
-                    if let Some(path) = file_to_open {
-                        self.open_log_file(path);
                     }
 
                     // Right-aligned toolbar badges: Help & About with uniform height
@@ -1693,7 +1697,8 @@ impl FastTailApp {
                             .size(11.5)
                             .color(theme.secondary_accent()),
                         "https://www.baccan.it",
-                    );
+                    )
+                    .on_hover_text("https://www.baccan.it");
                 });
 
                 ui.add_space(8.0);
@@ -1762,7 +1767,8 @@ impl FastTailApp {
                                 .monospace()
                                 .color(theme.secondary_accent()),
                             "https://www.baccan.it",
-                        );
+                        )
+                        .on_hover_text("https://www.baccan.it");
                         ui.end_row();
 
                         ui.label(RichText::new(t(lang, "about_repo")).monospace().strong());
@@ -1771,7 +1777,8 @@ impl FastTailApp {
                                 .monospace()
                                 .color(theme.accent_color()),
                             "https://github.com/matteobaccan/FastTail",
-                        );
+                        )
+                        .on_hover_text("https://github.com/matteobaccan/FastTail");
                         ui.end_row();
 
                         ui.label(RichText::new(t(lang, "about_license")).monospace().strong());
