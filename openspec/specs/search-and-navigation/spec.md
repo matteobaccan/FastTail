@@ -60,3 +60,36 @@ Switching a stream between Text, Hex and Markdown views SHALL keep the query and
 #### Scenario: Switching from Text to Hex with an active search
 - **WHEN** a Text view search shows `[5 / 12]` and the user switches the stream to HEX view
 - **THEN** the query stays in the search box, byte-level hits are computed, and the current match index is clamped to the new hit count.
+
+### Requirement: Go To Line
+Ctrl+G SHALL open a go-to popup for the focused stream. Entering a 1-based line number and pressing Enter SHALL scroll that line to the middle of the viewport and pause follow mode. Numbers past the end SHALL clamp to the last line. Under active filters the first visible line at or after the target SHALL be used and the popup SHALL say so. The forms `+N` and `-N` SHALL jump relative to the current top line.
+
+#### Scenario: Jumping to a hidden line
+- **WHEN** an include filter hides line 500 and the user goes to line 500
+- **THEN** the viewport centres on the first visible line after 500 and the popup reports the substitution.
+
+#### Scenario: Number beyond the file
+- **WHEN** the file has 1,000 lines and the user enters 5000
+- **THEN** the viewport shows line 1,000 and follow mode is paused.
+
+### Requirement: Line Bookmarks
+Each stream SHALL keep a set of bookmarked line indices. Ctrl+F2 SHALL toggle a bookmark on the current row, F2 / Shift+F2 SHALL jump to the next / previous bookmark visible under the active filters with wrap-around, and the stream menu SHALL offer "Clear bookmarks". Bookmarked rows SHALL show `★` in the marker column unless the row is a search match, and SHALL be tinted across their width. Bookmarks SHALL be dropped when the file is truncated or rewritten.
+
+#### Scenario: Navigating bookmarks with a filter active
+- **WHEN** rows 5, 60 and 900 are bookmarked, an include filter hides row 60, and the user presses F2 from row 5
+- **THEN** the view jumps to row 900, and pressing F2 again wraps to row 5.
+
+#### Scenario: Bookmark on a search match
+- **WHEN** a bookmarked row is also the current search match
+- **THEN** the marker column shows `▶` and the row keeps the bookmark tint.
+
+### Requirement: Bookmark Persistence per File
+Bookmarks SHALL be saved in `fasttail.ini` keyed by absolute file path, at most 1,000 per file and 50 files, and restored when the same path is reopened, provided the file still has at least as many lines as the largest saved index.
+
+#### Scenario: Reopening a file
+- **WHEN** the user bookmarks rows 10 and 200 in `app.log`, closes FastTail and opens `app.log` again
+- **THEN** rows 10 and 200 are bookmarked.
+
+#### Scenario: File rewritten smaller
+- **WHEN** saved bookmarks reference row 200 and the reopened file has 50 lines
+- **THEN** the saved bookmarks for that file are discarded.

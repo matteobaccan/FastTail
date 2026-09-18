@@ -119,3 +119,28 @@ Mouse movement, mouse clicks, wheel scrolling and keyboard input SHALL all count
 #### Scenario: Wheel scrolling keeps the workspace awake
 - **WHEN** the user only scrolls a stream with the mouse wheel for longer than the configured idle timeout
 - **THEN** the screensaver does not start, because each wheel event resets the idle timer.
+
+### Requirement: Always-On-Top Window
+The title bar SHALL offer a pin toggle, mirrored by a Settings checkbox and by Ctrl+Shift+T, that keeps the main window above other windows. The state SHALL be persisted in `fasttail.ini` and applied at startup.
+
+#### Scenario: Pinning the window
+- **WHEN** the user clicks the pin and then focuses another application
+- **THEN** the FastTail window stays visible above it, and the pin is highlighted.
+
+#### Scenario: Restart with pin active
+- **WHEN** FastTail was closed with the pin active
+- **THEN** the next start opens the window already on top.
+
+### Requirement: Background Tab Activity Badge
+A stream tab that is not currently displayed SHALL show a badge with the number of lines appended since it was last displayed, capped at `999+`, coloured by the most severe highlight (or log level, when detected) among those lines. The badge SHALL clear when the tab is displayed again.
+
+#### Scenario: Lines arrive in a hidden tab
+- **WHEN** stream B is behind stream A in the same tab group and 42 lines are appended to B, one matching a rule with a Critical sound preset
+- **THEN** B's tab shows `42` in the critical colour, and clicking B clears it.
+
+### Requirement: Window Attention on Background Alerts
+When enabled in Settings, a highlight rule with a sound preset matching in a stream that is not displayed while the window is unfocused SHALL request user attention from the OS (taskbar/dock flash).
+
+#### Scenario: Alert while the window is in the background
+- **WHEN** the option is on, the window is not focused, and a Critical rule matches
+- **THEN** the OS attention request is sent once, and not again until the window has been focused.
