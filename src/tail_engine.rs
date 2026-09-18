@@ -140,6 +140,9 @@ impl QuickLabel {
     }
 }
 
+/// Cap on queued external-tool hits per stream (see `TailEngine::collect_tool_hits`).
+pub const MAX_PENDING_TOOL_HITS: usize = 256;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HighlightRule {
     pub pattern: String,
@@ -598,6 +601,12 @@ pub struct TailEngine {
     pub max_line_bytes: usize,
     pub max_detected_width: f32,
     pub last_sound_alert_time: Instant,
+    /// Patterns of the highlight rules that have an external tool bound to them; set by
+    /// the app from the tools list. Matches on appended lines are queued in
+    /// `pending_tool_hits` as `(rule pattern, line index)` for the app to run, capped at
+    /// `MAX_PENDING_TOOL_HITS` per poll (the runner throttles anyway).
+    pub tool_bound_rules: HashSet<String>,
+    pub pending_tool_hits: Vec<(String, usize)>,
     _watcher: Option<RecommendedWatcher>,
     rx: Receiver<notify::Result<Event>>,
     pub last_read_time: Instant,
@@ -957,6 +966,8 @@ impl TailEngine {
             max_line_bytes: 0,
             max_detected_width: 0.0,
             last_sound_alert_time: Instant::now(),
+            tool_bound_rules: HashSet::new(),
+            pending_tool_hits: Vec::new(),
             _watcher: watcher,
             rx,
             last_read_time: Instant::now(),
@@ -1384,6 +1395,7 @@ impl TailEngine {
             self.rebuild_line_index_from(prev_lines_count.saturating_sub(1));
             self.update_tail_fingerprint();
             self.check_sound_alerts(prev_lines_count);
+            self.collect_tool_hits(prev_lines_count);
             self.note_unseen(prev_lines_count);
             return;
         }
@@ -1496,6 +1508,56 @@ impl TailEngine {
                 }
             }
         }
+    }
+
+    /// Queues `(rule pattern, line index)` for every appended line from `start_idx` that
+    /// matches a rule with an external tool bound to it (see `tool_bound_rules`). The app
+    /// drains the queue each frame and runs the tools through the throttled runner.
+    pub fn collect_tool_hits(&mut self, start_idx: usize) {
+        if self.tool_bound_rules.is_empty() {
+            return;
+        }
+        let total = self.line_offsets.len();
+        let mut hits = Vec::new();
+        for idx in start_idx..total {
+            if self.pending_tool_hits.len() + hits.len() >= MAX_PENDING_TOOL_HITS {
+                break;
+            }
+            let Some(line) = self.get_line(idx) else {
+                continue;
+            };
+            for (re_opt, pat_lower, rule) in &self.compiled_highlights {
+                if !rule.enabled || !self.tool_bound_rules.contains(&rule.pattern) {
+                    continue;
+                }
+                let is_match = if let Some(re) = re_opt {
+                    re.is_match(&line)
+                } else if rule.case_sensitive {
+                    line.contains(&rule.pattern)
+                } else {
+                    contains_case_insensitive(&line, pat_lower)
+                };
+                if is_match {
+                    hits.push((rule.pattern.clone(), idx));
+                }
+            }
+        }
+        self.pending_tool_hits.extend(hits);
+    }
+
+    /// Row an external tool or a stream-menu action applies to: the last clicked row of
+    /// the selection, else the current search hit, else the last line.
+    pub fn current_row(&self) -> Option<usize> {
+        if let Some(anchor) = self.selection_anchor.filter(|a| self.selection.contains(a)) {
+            return Some(anchor);
+        }
+        if let Some(last) = self.selection.iter().next_back() {
+            return Some(*last);
+        }
+        if let Some(hit) = self.current_search_line() {
+            return Some(hit);
+        }
+        self.line_offsets.len().checked_sub(1)
     }
 
     pub fn total_lines(&self) -> usize {

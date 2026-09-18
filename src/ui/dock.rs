@@ -1,4 +1,5 @@
 use crate::config::push_search_history;
+use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
 use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
 use crate::tail_engine::{
@@ -61,8 +62,50 @@ pub struct DockContext<'a> {
     /// the app to push them to the engines again.
     pub quick_labels: &'a mut Vec<QuickLabel>,
     pub labels_changed: &'a mut bool,
+    /// External tools (Settings editor, row context menu, stream menu) and the runner
+    /// that spawns them and counts dropped rule-bound runs.
+    pub external_tools: &'a mut Vec<ExternalTool>,
+    pub tool_runner: &'a mut ToolRunner,
     /// Stream shown in the focused dock leaf: the only one that handles search shortcuts.
     pub focused_stream: Option<PathBuf>,
+}
+
+/// Row data handed to an external tool: the row text, the file being tailed (the resolved
+/// file of a pattern stream), the 1-based line number and the selection text when the
+/// row is part of a selection.
+pub fn tool_context_for_row(engine: &TailEngine, row: usize) -> Option<ToolContext> {
+    let line = engine.get_line(row)?.into_owned();
+    let file = engine
+        .current_file
+        .clone()
+        .unwrap_or_else(|| engine.path.clone());
+    let selection = if engine.has_selection() && engine.is_selected(row) {
+        engine.copy_selection_text()
+    } else {
+        None
+    };
+    Some(ToolContext::for_row(
+        &file,
+        row + 1,
+        &line,
+        selection.as_deref(),
+    ))
+}
+
+/// Runs a tool on a row from a user gesture; a spawn failure becomes a stream notice.
+pub fn run_tool_on_row(
+    engine: &mut TailEngine,
+    tool: &ExternalTool,
+    runner: &mut ToolRunner,
+    row: usize,
+    lang: Language,
+) {
+    let Some(ctx) = tool_context_for_row(engine, row) else {
+        return;
+    };
+    if let Err(err) = runner.run_manual(tool, &ctx) {
+        engine.view_notice = Some(format!("{}: {err}", t(lang, "ext_tool_run_failed")));
+    }
 }
 
 pub struct FastTailTabViewer<'a> {
@@ -199,6 +242,8 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         is_focused,
                         self.ctx.quick_labels,
                         self.ctx.labels_changed,
+                        self.ctx.external_tools,
+                        self.ctx.tool_runner,
                     );
                     engine.search_query = search_query;
                 } else {
@@ -237,6 +282,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.show_line_numbers,
                     self.ctx.font_size,
                     self.ctx.level_colors,
+                    self.ctx.external_tools,
+                    self.ctx.global_rules,
+                    self.ctx.tool_runner,
                 );
             }
         }
@@ -373,6 +421,8 @@ fn render_log_stream(
     is_focused: bool,
     quick_labels: &mut Vec<QuickLabel>,
     labels_changed: &mut bool,
+    external_tools: &[ExternalTool],
+    tool_runner: &mut ToolRunner,
 ) {
     let font_id = egui::FontId::monospace(font_size);
     let hex_row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
@@ -1142,6 +1192,31 @@ fn render_log_stream(
                     ui.close();
                 }
             }
+            // External tools on the current row (last clicked, search hit, or last line)
+            if !external_tools.is_empty() {
+                ui.separator();
+                ui.label(
+                    RichText::new(t(lang, "ext_tools_menu"))
+                        .monospace()
+                        .small()
+                        .color(theme.text_dim()),
+                );
+                let mut run: Option<usize> = None;
+                for (ti, tool) in external_tools.iter().enumerate() {
+                    if ui
+                        .button(RichText::new(format!("▶ {}", tool.name)).monospace())
+                        .clicked()
+                    {
+                        run = Some(ti);
+                        ui.close();
+                    }
+                }
+                if let Some(ti) = run {
+                    if let Some(row) = engine.current_row() {
+                        run_tool_on_row(engine, &external_tools[ti], tool_runner, row, lang);
+                    }
+                }
+            }
         })
         .response
         .on_hover_text(t(lang, "export_tip"));
@@ -1468,7 +1543,7 @@ fn render_log_stream(
     // The marker column appears when there is anything to mark: search hits or bookmarks.
     let show_markers = has_search || engine.has_bookmarks();
 
-    let (row_click, toggle_json) = if engine.wrap_lines {
+    let (row_click, toggle_json, tool_run) = if engine.wrap_lines {
         render_wrapped_rows(
             ui,
             engine,
@@ -1480,6 +1555,7 @@ fn render_log_stream(
             level_colors,
             has_search,
             active_search_line,
+            external_tools,
         )
     } else {
         render_extended_rows(
@@ -1493,8 +1569,15 @@ fn render_log_stream(
             level_colors,
             has_search,
             active_search_line,
+            external_tools,
         )
     };
+
+    if let Some((tool_idx, row)) = tool_run {
+        if let Some(tool) = external_tools.get(tool_idx) {
+            run_tool_on_row(engine, tool, tool_runner, row, lang);
+        }
+    }
 
     if let Some((idx, mods)) = row_click {
         if mods.shift {
@@ -1530,9 +1613,11 @@ fn render_extended_rows(
     level_colors: bool,
     has_search: bool,
     active_search_line: Option<usize>,
+    external_tools: &[ExternalTool],
 ) -> RowInteractions {
     let mut toggle_json = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
+    let mut tool_run: Option<(usize, usize)> = None;
     let mut clear_scroll_to_line = false;
     let visible_lines = engine.visible_line_count();
     let font_id = egui::FontId::monospace(font_size);
@@ -1700,6 +1785,7 @@ fn render_extended_rows(
                 if click.clicked() {
                     row_click = Some((actual_line_idx, ui.input(|i| i.modifiers)));
                 }
+                row_context_menu(&click, actual_line_idx, external_tools, &mut tool_run);
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
                     row_resp.scroll_to_me(Some(egui::Align::Center));
@@ -1742,12 +1828,41 @@ fn render_extended_rows(
     }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
-    (row_click, toggle_json)
+    (row_click, toggle_json, tool_run)
 }
 
-/// What the user did on the rows this frame: a row click with its modifiers, and a JSON
-/// expander toggle `(line, was_expanded)`.
-type RowInteractions = (Option<(usize, egui::Modifiers)>, Option<(usize, bool)>);
+/// What the user did on the rows this frame: a row click with its modifiers, a JSON
+/// expander toggle `(line, was_expanded)`, and an external tool picked from the row
+/// context menu `(tool index, line)`.
+type RowInteractions = (
+    Option<(usize, egui::Modifiers)>,
+    Option<(usize, bool)>,
+    Option<(usize, usize)>,
+);
+
+/// Row context menu listing the external tools; records the pick in `tool_run`.
+fn row_context_menu(
+    click: &egui::Response,
+    line: usize,
+    tools: &[ExternalTool],
+    tool_run: &mut Option<(usize, usize)>,
+) {
+    if tools.is_empty() {
+        return;
+    }
+    click.context_menu(|ui| {
+        ui.set_min_width(160.0);
+        for (ti, tool) in tools.iter().enumerate() {
+            if ui
+                .button(RichText::new(format!("▶ {}", tool.name)).monospace())
+                .clicked()
+            {
+                *tool_run = Some((ti, line));
+                ui.close();
+            }
+        }
+    });
+}
 
 /// Level-palette fallback for a row no user rule matched (user rules keep priority).
 fn row_highlight(
@@ -1863,6 +1978,7 @@ fn render_wrapped_rows(
     level_colors: bool,
     has_search: bool,
     active_search_line: Option<usize>,
+    external_tools: &[ExternalTool],
 ) -> RowInteractions {
     use std::collections::HashMap;
 
@@ -1886,6 +2002,7 @@ fn render_wrapped_rows(
 
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut toggle_json: Option<(usize, bool)> = None;
+    let mut tool_run: Option<(usize, usize)> = None;
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -2160,6 +2277,7 @@ fn render_wrapped_rows(
             if click.clicked() {
                 row_click = Some((line, ui.input(|i| i.modifiers)));
             }
+            row_context_menu(&click, line, external_tools, &mut tool_run);
             // JSON toggle, registered after the row so it wins the click
             if r.is_json {
                 let btn_rect = egui::Rect::from_min_size(
@@ -2202,7 +2320,7 @@ fn render_wrapped_rows(
     engine.wrap_scroll_abs = ended;
     engine.current_scroll_x = 0.0;
     engine.current_scroll_y = ended;
-    (row_click, toggle_json)
+    (row_click, toggle_json, tool_run)
 }
 
 fn render_hex_stream(
@@ -2811,6 +2929,9 @@ pub fn render_settings_content(
     show_line_numbers: &mut bool,
     font_size: &mut f32,
     level_colors: &mut bool,
+    external_tools: &mut Vec<ExternalTool>,
+    rules: &[HighlightRule],
+    tool_runner: &mut ToolRunner,
 ) {
     ui.heading(RichText::new(format!("⚙ {}", t(*lang, "settings").to_uppercase())).monospace());
     ui.add_space(10.0);
@@ -2902,6 +3023,200 @@ pub fn render_settings_content(
     ui.checkbox(show_line_numbers, t(*lang, "show_lines"));
     ui.checkbox(level_colors, t(*lang, "level_colors"))
         .on_hover_text(t(*lang, "level_colors_tip"));
+
+    ui.add_space(6.0);
+    ui.separator();
+    ui.add_space(6.0);
+    render_external_tools_editor(ui, *lang, external_tools, rules, tool_runner);
+}
+
+/// Settings section listing the external tools: one editable card per tool with name,
+/// program, arguments, shortcut, bound rule, `{match}` regex, shell flag and the count of
+/// dropped rule-bound runs.
+fn render_external_tools_editor(
+    ui: &mut Ui,
+    lang: Language,
+    external_tools: &mut Vec<ExternalTool>,
+    rules: &[HighlightRule],
+    tool_runner: &mut ToolRunner,
+) {
+    let (dim, warn) = (ui.visuals().weak_text_color(), ui.visuals().warn_fg_color);
+    ui.label(
+        RichText::new(format!("🛠 {}", t(lang, "ext_tools")))
+            .monospace()
+            .strong(),
+    );
+    ui.label(
+        RichText::new(format!(
+            "{}: {}",
+            t(lang, "ext_tools_placeholders"),
+            crate::external_tools::PLACEHOLDERS.join(" ")
+        ))
+        .monospace()
+        .small()
+        .color(dim),
+    );
+    ui.add_space(4.0);
+
+    let mut remove: Option<usize> = None;
+    let mut rule_patterns: Vec<&str> = rules.iter().map(|r| r.pattern.as_str()).collect();
+    rule_patterns.dedup();
+    for (i, tool) in external_tools.iter_mut().enumerate() {
+        ui.group(|ui| {
+            egui::Grid::new(("ext_tool", i))
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new(t(lang, "ext_tool_name")).monospace());
+                    ui.add(egui::TextEdit::singleline(&mut tool.name).desired_width(260.0));
+                    ui.end_row();
+
+                    ui.label(RichText::new(t(lang, "ext_tool_program")).monospace());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut tool.program)
+                            .desired_width(260.0)
+                            .hint_text("code"),
+                    );
+                    ui.end_row();
+
+                    ui.label(RichText::new(t(lang, "ext_tool_args")).monospace());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut tool.args)
+                            .desired_width(260.0)
+                            .hint_text("-g \"{file}:{lineno}\""),
+                    );
+                    ui.end_row();
+
+                    ui.label(RichText::new(t(lang, "ext_tool_shortcut")).monospace());
+                    ui.horizontal(|ui| {
+                        let mut text = tool.shortcut.clone().unwrap_or_default();
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut text)
+                                    .desired_width(140.0)
+                                    .hint_text("Ctrl+Shift+F9"),
+                            )
+                            .changed()
+                        {
+                            let trimmed = text.trim().to_string();
+                            tool.shortcut = (!trimmed.is_empty()).then_some(trimmed);
+                        }
+                        if tool.shortcut.is_some() && tool.parsed_shortcut().is_none() {
+                            ui.label(
+                                RichText::new(t(lang, "ext_tool_bad_shortcut"))
+                                    .small()
+                                    .color(warn),
+                            );
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new(t(lang, "ext_tool_rule")).monospace());
+                    ui.horizontal(|ui| {
+                        let none = t(lang, "ext_tool_no_rule");
+                        let selected = tool.bound_rule.clone().unwrap_or_else(|| none.to_string());
+                        egui::ComboBox::from_id_salt(("ext_tool_rule", i))
+                            .width(180.0)
+                            .selected_text(RichText::new(&selected).monospace())
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(tool.bound_rule.is_none(), none)
+                                    .clicked()
+                                {
+                                    tool.bound_rule = None;
+                                }
+                                for pat in &rule_patterns {
+                                    let is_sel = tool.bound_rule.as_deref() == Some(*pat);
+                                    if ui
+                                        .selectable_label(is_sel, RichText::new(*pat).monospace())
+                                        .clicked()
+                                    {
+                                        tool.bound_rule = Some((*pat).to_string());
+                                    }
+                                }
+                            });
+                        if let Some(bound) = tool.bound_rule.as_deref() {
+                            if !rule_patterns.contains(&bound) {
+                                ui.label(
+                                    RichText::new(t(lang, "ext_tool_rule_missing"))
+                                        .small()
+                                        .color(warn),
+                                );
+                            }
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new(t(lang, "ext_tool_match")).monospace());
+                    {
+                        let mut text = tool.match_pattern.clone().unwrap_or_default();
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut text)
+                                    .desired_width(260.0)
+                                    .hint_text("req=([0-9]+)"),
+                            )
+                            .changed()
+                        {
+                            tool.match_pattern = (!text.is_empty()).then_some(text);
+                        }
+                    }
+                    ui.end_row();
+                });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut tool.use_shell, t(lang, "ext_tool_shell"));
+                if tool.use_shell {
+                    ui.label(
+                        RichText::new(format!("⚠ {}", t(lang, "ext_tool_shell_warn")))
+                            .small()
+                            .color(warn),
+                    );
+                }
+            });
+            ui.horizontal(|ui| {
+                if tool.bound_rule.is_some() {
+                    ui.label(
+                        RichText::new(format!(
+                            "{}: {}",
+                            t(lang, "ext_tool_dropped"),
+                            tool_runner.dropped_for(&tool.name)
+                        ))
+                        .monospace()
+                        .small()
+                        .color(dim),
+                    );
+                }
+                if ui
+                    .button(RichText::new(format!("🗑 {}", t(lang, "ext_tool_remove"))).small())
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            });
+        });
+        ui.add_space(4.0);
+    }
+    if let Some(i) = remove {
+        external_tools.remove(i);
+    }
+    if ui
+        .button(RichText::new(format!("➕ {}", t(lang, "ext_tool_add"))).monospace())
+        .clicked()
+    {
+        let n = external_tools.len() + 1;
+        external_tools.push(ExternalTool::new(
+            &format!("{} {n}", t(lang, "ext_tool_default_name")),
+            "",
+            "{line}",
+        ));
+    }
+    if let Some(err) = tool_runner.last_error.as_deref() {
+        ui.label(
+            RichText::new(format!("{}: {err}", t(lang, "ext_tool_run_failed")))
+                .small()
+                .color(warn),
+        );
+    }
 }
 
 fn render_markdown_stream(

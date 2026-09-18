@@ -1,5 +1,6 @@
 use crate::baretail_bridge::{detect_baretail_config, BareTailConfig};
 use crate::config::FastTailConfig;
+use crate::external_tools::ToolRunner;
 use crate::i18n::t;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
@@ -66,6 +67,8 @@ pub struct FastTailApp {
     pub quick_labels: Vec<QuickLabel>,
     /// Text of the "open pattern" prompt while it is shown (`None` when closed).
     pub pattern_prompt: Option<String>,
+    /// Spawns external tools and enforces the rule-bound throttle and cap.
+    pub tool_runner: ToolRunner,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -213,6 +216,7 @@ impl FastTailApp {
             attention_requested: false,
             quick_labels: Vec::new(),
             pattern_prompt: None,
+            tool_runner: ToolRunner::default(),
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -265,6 +269,39 @@ impl FastTailApp {
         }
 
         app
+    }
+
+    /// Keeps every engine's set of tool-bound rule patterns in sync with the tools list
+    /// and runs the tools whose rule matched appended lines, through the throttled runner.
+    pub fn run_rule_bound_tools(&mut self) {
+        let bound: std::collections::HashSet<String> = self
+            .config
+            .external_tools
+            .iter()
+            .filter_map(|t| t.bound_rule.clone())
+            .collect();
+        for eng in &mut self.engines {
+            if eng.tool_bound_rules != bound {
+                eng.tool_bound_rules = bound.clone();
+            }
+            if eng.pending_tool_hits.is_empty() {
+                continue;
+            }
+            let hits = std::mem::take(&mut eng.pending_tool_hits);
+            for (pattern, row) in hits {
+                let Some(ctx) = crate::ui::dock::tool_context_for_row(eng, row) else {
+                    continue;
+                };
+                for tool in self
+                    .config
+                    .external_tools
+                    .iter()
+                    .filter(|t| t.bound_rule.as_deref() == Some(pattern.as_str()))
+                {
+                    self.tool_runner.run_bound(tool, &ctx);
+                }
+            }
+        }
     }
 
     pub fn save_dock_layout(&mut self) {
@@ -576,10 +613,11 @@ impl FastTailApp {
             self.last_dock_save = Instant::now();
         }
 
-        // 2. Poll file updates
+        // 2. Poll file updates, then run the tools bound to the rules that matched
         for eng in &mut self.engines {
             eng.poll_updates();
         }
+        self.run_rule_bound_tools();
 
         // 3. Periodic telemetry refresh
         if self.last_sys_refresh.elapsed().as_secs_f32() >= 1.0 {
@@ -1326,6 +1364,37 @@ impl FastTailApp {
             eng.displayed = false;
         }
 
+        // Keyboard shortcuts of the external tools run them on the current row of the
+        // focused stream (a modifier is always required, see `Shortcut::parse`).
+        let tool_shortcut = ctx.input_mut(|i| {
+            self.config
+                .external_tools
+                .iter()
+                .enumerate()
+                .find_map(|(n, tool)| {
+                    let sc = tool.parsed_shortcut()?;
+                    i.consume_key(sc.modifiers(), sc.key).then_some(n)
+                })
+        });
+        if let Some(n) = tool_shortcut {
+            let lang = self.config.language;
+            let focused = focused_stream
+                .as_ref()
+                .and_then(|p| self.engines.iter().position(|e| paths_equal(&e.path, p)));
+            if let (Some(idx), Some(tool)) = (focused, self.config.external_tools.get(n)) {
+                let engine = &mut self.engines[idx];
+                if let Some(row) = engine.current_row() {
+                    crate::ui::dock::run_tool_on_row(
+                        engine,
+                        tool,
+                        &mut self.tool_runner,
+                        row,
+                        lang,
+                    );
+                }
+            }
+        }
+
         // Keyboard shortcut: Ctrl + Shift + 1..9 creates or toggles quick colour label N
         // for the current search text of the focused stream.
         const LABEL_KEYS: [Key; 9] = [
@@ -1387,6 +1456,8 @@ impl FastTailApp {
             test_screensaver: &mut test_screensaver,
             quick_labels: &mut self.quick_labels,
             labels_changed: &mut labels_changed,
+            external_tools: &mut self.config.external_tools,
+            tool_runner: &mut self.tool_runner,
             focused_stream,
         };
 
@@ -1701,6 +1772,9 @@ impl FastTailApp {
                         &mut self.config.show_line_numbers,
                         &mut self.config.font_size,
                         &mut self.config.level_colors,
+                        &mut self.config.external_tools,
+                        &self.config.highlight_rules,
+                        &mut self.tool_runner,
                     );
 
                     // Rendering backend: applies at the next start.
@@ -2152,6 +2226,14 @@ impl FastTailApp {
 
                                 ui.label(RichText::new("Ctrl + Shift + 1..9").monospace().strong());
                                 ui.label(RichText::new(t(lang, "help_desc_labels")).monospace());
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new(t(lang, "help_key_tools"))
+                                        .monospace()
+                                        .strong(),
+                                );
+                                ui.label(RichText::new(t(lang, "help_desc_tools")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("Ctrl + Shift + T").monospace().strong());
