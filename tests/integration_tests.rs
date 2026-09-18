@@ -2766,3 +2766,12 @@ fn test_switching_view_mode_keeps_search_cursor_valid() {
     assert!(engine.current_match_idx.unwrap() < 3);
     assert!(engine.search_next(false).is_some());
 }
+
+#[test]
+fn test_tail_engine_rejects_non_regular_files() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    match TailEngine::open(tmp_dir.path()) {
+        Ok(_) => panic!("Expected TailEngine::open to fail for directory"),
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput),
+    }
+}
