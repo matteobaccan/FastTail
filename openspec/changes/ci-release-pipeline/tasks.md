@@ -14,7 +14,7 @@
 
 - [x] 3.1 Replace the "Stage Artifact" step: Linux/macOS produce `fasttail-<os>-<arch>.tar.gz` with the executable, Windows produces `fasttail-windows-<arch>.zip` with `fasttail.exe` and `fasttail.pdb`
 - [x] 3.2 Point `upload-artifact` and the release `files:` glob at the archives and verify that `find`-based flattening still yields one archive per target
-- [ ] 3.3 Run the workflow via `workflow_dispatch` on `main`, download the five archives and check that each extracts to a runnable binary (and that the Windows zip contains the PDB)
+- [x] 3.3 Run the workflow via `workflow_dispatch` on `main`, download the five archives and check that each extracts to a runnable binary (and that the Windows zip contains the PDB)
 - [x] 3.4 Update the "Prebuilt binaries" section of `README.md` with the archive names and extraction commands
 
 ## 4. LTO Benchmark
