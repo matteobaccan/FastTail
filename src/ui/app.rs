@@ -3,7 +3,7 @@ use crate::config::FastTailConfig;
 use crate::i18n::t;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
-use crate::tail_engine::TailEngine;
+use crate::tail_engine::{QuickLabel, TailEngine};
 use crate::theme::CyberTheme;
 use crate::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
 use eframe::egui;
@@ -62,6 +62,8 @@ pub struct FastTailApp {
     pub applied_on_top: bool,
     /// An OS attention request was sent and the window has not been focused since.
     pub attention_requested: bool,
+    /// Quick colour labels (Ctrl+Shift+1..9), in memory only, pushed to every engine.
+    pub quick_labels: Vec<QuickLabel>,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -207,6 +209,7 @@ impl FastTailApp {
             renderer: crate::renderer::ActiveRenderer::unknown(),
             applied_on_top: false,
             attention_requested: false,
+            quick_labels: Vec::new(),
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -336,6 +339,7 @@ impl FastTailApp {
 
         if let Ok(mut engine) = TailEngine::open(&path) {
             engine.set_highlight_rules(self.config.highlight_rules.clone());
+            engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
             if let Some(lines) = self.config.bookmarks_for(&path, engine.total_lines()) {
                 engine.set_bookmarks(lines);
@@ -1080,6 +1084,7 @@ impl FastTailApp {
         let prev_theme = self.config.theme;
         let prev_lang = self.config.language;
         let mut tab_closed = false;
+        let mut labels_changed = false;
         // Keyboard shortcut: Alt + 1..9 to switch focus to tab #1..9
         let mut switch_to_tab = None;
         ctx.input(|i| {
@@ -1261,6 +1266,47 @@ impl FastTailApp {
             eng.displayed = false;
         }
 
+        // Keyboard shortcut: Ctrl + Shift + 1..9 creates or toggles quick colour label N
+        // for the current search text of the focused stream.
+        const LABEL_KEYS: [Key; 9] = [
+            Key::Num1,
+            Key::Num2,
+            Key::Num3,
+            Key::Num4,
+            Key::Num5,
+            Key::Num6,
+            Key::Num7,
+            Key::Num8,
+            Key::Num9,
+        ];
+        let label_key = ctx.input_mut(|i| {
+            LABEL_KEYS.iter().enumerate().find_map(|(n, key)| {
+                i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, *key)
+                    .then_some(n as u8 + 1)
+            })
+        });
+        if let Some(color) = label_key {
+            let lang = self.config.language;
+            let focused = focused_stream
+                .as_ref()
+                .and_then(|p| self.engines.iter().position(|e| paths_equal(&e.path, p)));
+            if let Some(idx) = focused {
+                let engine = &mut self.engines[idx];
+                let text = engine
+                    .current_search_line()
+                    .map(|_| engine.last_searched_query.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                match text {
+                    Some(text) => {
+                        if QuickLabel::toggle(&mut self.quick_labels, &text, color) {
+                            labels_changed = true;
+                        }
+                    }
+                    None => engine.view_notice = Some(t(lang, "label_no_text").to_string()),
+                }
+            }
+        }
+
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -1279,6 +1325,8 @@ impl FastTailApp {
             search_history: &mut self.config.search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            quick_labels: &mut self.quick_labels,
+            labels_changed: &mut labels_changed,
             focused_stream,
         };
 
@@ -1346,6 +1394,13 @@ impl FastTailApp {
 
         if tab_closed {
             self.save_dock_layout();
+        }
+
+        if labels_changed {
+            for eng in &mut self.engines {
+                eng.set_quick_labels(&self.quick_labels);
+            }
+            ctx.request_repaint();
         }
 
         if self.config.borderless != prev_borderless {
@@ -1941,6 +1996,10 @@ impl FastTailApp {
 
                                 ui.label(RichText::new("Alt + W").monospace().strong());
                                 ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
+                                ui.end_row();
+
+                                ui.label(RichText::new("Ctrl + Shift + 1..9").monospace().strong());
+                                ui.label(RichText::new(t(lang, "help_desc_labels")).monospace());
                                 ui.end_row();
 
                                 ui.label(RichText::new("Ctrl + Shift + T").monospace().strong());

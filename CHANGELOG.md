@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Capture-group highlighting.** A regex highlight rule can tick "Captures
+  only" to paint just its capture groups (the whole match when the pattern has
+  no group) instead of the row; `req=(\d+)` colours the request id alone. Rules
+  keep their top-down priority per byte, whole-row rules still colour the rest
+  of the row, and at most 64 spans are painted per row. Works in extend and
+  wrap mode.
+- **Quick colour labels.** `Ctrl+Shift+1..9` turns the current search text of
+  the focused stream into a label painted with preset colour 1..9 in every
+  stream; the same key again removes it, another digit recolours it. Labels are
+  listed in a strip above the rows with a remove button, rank below the
+  highlight rules and live in memory only.
 - **Log level detection.** The level of every line (`FATAL`, `ERROR`, `WARN`,
   `INFO`, `DEBUG`, `TRACE`, plus syslog `<n>` priorities) is detected from the
   common layouts without configuration: the first level word in the line

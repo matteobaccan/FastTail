@@ -76,6 +76,69 @@ pub struct HighlightStyle {
     pub italic: bool,
 }
 
+/// Upper bound on painted spans per row: bounds the layout work on pathological lines.
+pub const MAX_ROW_SPANS: usize = 64;
+
+/// Style of a painted span: a captures-only rule's style, or preset colour `1..=9` of a
+/// quick label (resolved by the theme in the renderer).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpanStyle {
+    Rule(HighlightStyle),
+    Label(u8),
+}
+
+/// A byte range `[start, end)` of a row painted with its own style.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HighlightSpan {
+    pub start: usize,
+    pub end: usize,
+    pub style: SpanStyle,
+}
+
+/// Result of the span evaluation of a row: the painted spans (sorted, non-overlapping,
+/// at most `MAX_ROW_SPANS`) and the style of the remaining bytes when a whole-row rule
+/// matched (`None` leaves them in the default style, or the level palette).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpanHighlight {
+    pub spans: Vec<HighlightSpan>,
+    pub rest: Option<HighlightStyle>,
+}
+
+/// An ad-hoc colour label (Ctrl+Shift+1..9): case-insensitive plain text painted with
+/// preset colour `color` (1..=9) in every stream. Lives in memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuickLabel {
+    pub text: String,
+    pub color: u8,
+}
+
+impl QuickLabel {
+    /// Creates, recolours or removes the label for `text`: a label with the same text and
+    /// colour is removed, one with another colour takes `color`, otherwise it is added.
+    /// Returns `false` when `text` is blank and nothing changed.
+    pub fn toggle(labels: &mut Vec<QuickLabel>, text: &str, color: u8) -> bool {
+        let text = text.trim();
+        if text.is_empty() || !(1..=9).contains(&color) {
+            return false;
+        }
+        if let Some(pos) = labels.iter().position(|l| {
+            l.text.eq_ignore_ascii_case(text) || l.text.to_lowercase() == text.to_lowercase()
+        }) {
+            if labels[pos].color == color {
+                labels.remove(pos);
+            } else {
+                labels[pos].color = color;
+            }
+        } else {
+            labels.push(QuickLabel {
+                text: text.to_string(),
+                color,
+            });
+        }
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HighlightRule {
     pub pattern: String,
@@ -92,6 +155,10 @@ pub struct HighlightRule {
     pub sound_alert: SoundAlertPreset,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Regex rules only: paint the captured groups (the whole match without groups)
+    /// instead of the whole row.
+    #[serde(default)]
+    pub captures_only: bool,
 }
 
 impl HighlightRule {
@@ -106,6 +173,23 @@ impl HighlightRule {
             italic: false,
             sound_alert: SoundAlertPreset::None,
             enabled: true,
+            captures_only: false,
+        }
+    }
+
+    /// A regex rule painting only its captured groups.
+    pub fn captures(pattern: &str, fg: [u8; 3], bg: [u8; 3]) -> Self {
+        let mut rule = Self::new(pattern, fg, bg, true);
+        rule.captures_only = true;
+        rule
+    }
+
+    fn style(&self) -> HighlightStyle {
+        HighlightStyle {
+            fg: Color32::from_rgb(self.fg_color[0], self.fg_color[1], self.fg_color[2]),
+            bg: Color32::from_rgb(self.bg_color[0], self.bg_color[1], self.bg_color[2]),
+            bold: self.bold,
+            italic: self.italic,
         }
     }
 
@@ -127,6 +211,7 @@ impl HighlightRule {
             italic,
             sound_alert: SoundAlertPreset::None,
             enabled: true,
+            captures_only: false,
         }
     }
 
@@ -147,6 +232,7 @@ impl HighlightRule {
             italic: false,
             sound_alert,
             enabled: true,
+            captures_only: false,
         }
     }
 }
@@ -267,6 +353,52 @@ pub struct GotoTarget {
 /// Efficient case-insensitive substring search.
 /// For ASCII haystack and pre-lowercased needle, avoids heap allocation by checking ASCII byte windows.
 #[inline]
+/// Byte ranges of every non-overlapping, case-insensitive occurrence of `needle_lower`
+/// (already lower-cased) in `haystack`.
+pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    if needle_lower.is_empty() {
+        return out;
+    }
+    if haystack.is_ascii() && needle_lower.is_ascii() {
+        let h = haystack.as_bytes();
+        let n = needle_lower.as_bytes();
+        let mut i = 0;
+        while i + n.len() <= h.len() {
+            if h[i..i + n.len()].eq_ignore_ascii_case(n) {
+                out.push((i, i + n.len()));
+                i += n.len();
+            } else {
+                i += 1;
+            }
+        }
+        return out;
+    }
+    // Lower-casing can change byte lengths: keep a map from each byte of the lowered
+    // text back to the start and end offsets of the original character.
+    let mut lowered = String::with_capacity(haystack.len());
+    let mut starts = Vec::with_capacity(haystack.len());
+    let mut ends = Vec::with_capacity(haystack.len());
+    for (idx, ch) in haystack.char_indices() {
+        let before = lowered.len();
+        for lc in ch.to_lowercase() {
+            lowered.push(lc);
+        }
+        for _ in before..lowered.len() {
+            starts.push(idx);
+            ends.push(idx + ch.len_utf8());
+        }
+    }
+    let mut from = 0;
+    while let Some(pos) = lowered[from..].find(needle_lower) {
+        let s = from + pos;
+        let e = s + needle_lower.len();
+        out.push((starts[s], ends[e - 1]));
+        from = e;
+    }
+    out
+}
+
 pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
     if needle_lower.is_empty() {
         return true;
@@ -283,6 +415,42 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
     } else {
         haystack.to_lowercase().contains(needle_lower)
     }
+}
+
+/// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
+/// cap of `MAX_ROW_SPANS` is reached.
+fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
+    let mut pieces = vec![(start, end)];
+    for sp in spans.iter() {
+        let mut next = Vec::with_capacity(pieces.len() + 1);
+        for (s, e) in pieces {
+            if e <= sp.start || s >= sp.end {
+                next.push((s, e));
+                continue;
+            }
+            if s < sp.start {
+                next.push((s, sp.start));
+            }
+            if e > sp.end {
+                next.push((sp.end, e));
+            }
+        }
+        pieces = next;
+        if pieces.is_empty() {
+            break;
+        }
+    }
+    for (s, e) in pieces {
+        if spans.len() >= MAX_ROW_SPANS {
+            return true;
+        }
+        spans.push(HighlightSpan {
+            start: s,
+            end: e,
+            style,
+        });
+    }
+    spans.len() >= MAX_ROW_SPANS
 }
 
 pub struct TailEngine {
@@ -386,6 +554,9 @@ pub struct TailEngine {
     pub markdown_text_cache: Option<(u64, String)>,
     pub highlight_rules: Vec<HighlightRule>,
     compiled_highlights: Vec<(Option<Regex>, String, HighlightRule)>,
+    /// Quick labels (see `QuickLabel`) with their lower-cased text, evaluated after the
+    /// user rules by `match_highlight_spans`.
+    quick_labels: Vec<(QuickLabel, String)>,
     pub expanded_json_lines: HashSet<usize>,
     pub requested_scroll_x: Option<f32>,
     pub requested_scroll_y: Option<f32>,
@@ -545,6 +716,7 @@ impl TailEngine {
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
+            quick_labels: Vec::new(),
             expanded_json_lines: HashSet::new(),
             requested_scroll_x: None,
             requested_scroll_y: None,
@@ -1113,9 +1285,11 @@ impl TailEngine {
         self.filter.matches(line)
     }
 
+    /// Whole-row style of the first enabled rule matching `line`; captures-only rules
+    /// never colour a whole row (see `match_highlight_spans`).
     pub fn match_highlight(&self, line: &str) -> Option<HighlightStyle> {
         for (re_opt, pat_lower, rule) in &self.compiled_highlights {
-            if !rule.enabled {
+            if !rule.enabled || rule.captures_only {
                 continue;
             }
             let is_match = if let Some(re) = re_opt {
@@ -1127,17 +1301,98 @@ impl TailEngine {
             };
 
             if is_match {
-                let fg = Color32::from_rgb(rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]);
-                let bg = Color32::from_rgb(rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]);
-                return Some(HighlightStyle {
-                    fg,
-                    bg,
-                    bold: rule.bold,
-                    italic: rule.italic,
-                });
+                return Some(rule.style());
             }
         }
         None
+    }
+
+    pub fn set_quick_labels(&mut self, labels: &[QuickLabel]) {
+        self.quick_labels = labels
+            .iter()
+            .map(|l| (l.clone(), l.text.to_lowercase()))
+            .collect();
+    }
+
+    pub fn quick_labels(&self) -> Vec<QuickLabel> {
+        self.quick_labels.iter().map(|(l, _)| l.clone()).collect()
+    }
+
+    /// True when rows need the span path: an enabled captures-only regex rule or a quick
+    /// label exists. Otherwise the renderer keeps the whole-row `match_highlight`.
+    pub fn has_span_rules(&self) -> bool {
+        !self.quick_labels.is_empty()
+            || self
+                .compiled_highlights
+                .iter()
+                .any(|(re, _, rule)| rule.enabled && rule.captures_only && re.is_some())
+    }
+
+    /// Span evaluation of a row, top-down like `match_highlight`, first rule winning per
+    /// byte: a captures-only rule claims its captured groups (the whole match when the
+    /// pattern has no group); a whole-row rule claims every byte still free and ends the
+    /// walk (`rest`); quick labels come after the rules and claim what is left. Spans are
+    /// returned sorted, non-overlapping and capped at `MAX_ROW_SPANS`.
+    pub fn match_highlight_spans(&self, line: &str) -> SpanHighlight {
+        let mut out = SpanHighlight::default();
+        let mut full = false;
+        for (re_opt, pat_lower, rule) in &self.compiled_highlights {
+            if !rule.enabled {
+                continue;
+            }
+            if rule.captures_only {
+                let Some(re) = re_opt else {
+                    continue;
+                };
+                let style = SpanStyle::Rule(rule.style());
+                for caps in re.captures_iter(line) {
+                    let groups = if caps.len() > 1 { 1..caps.len() } else { 0..1 };
+                    for g in groups {
+                        if let Some(m) = caps.get(g) {
+                            if m.start() < m.end() {
+                                full = claim_span(&mut out.spans, m.start(), m.end(), style);
+                            }
+                        }
+                        if full {
+                            break;
+                        }
+                    }
+                    if full {
+                        break;
+                    }
+                }
+            } else {
+                let is_match = if let Some(re) = re_opt {
+                    re.is_match(line)
+                } else if rule.case_sensitive {
+                    line.contains(&rule.pattern)
+                } else {
+                    contains_case_insensitive(line, pat_lower)
+                };
+                if is_match {
+                    out.rest = Some(rule.style());
+                    full = true;
+                }
+            }
+            if full {
+                break;
+            }
+        }
+        if !full {
+            for (label, lower) in &self.quick_labels {
+                for (s, e) in find_case_insensitive(line, lower) {
+                    if claim_span(&mut out.spans, s, e, SpanStyle::Label(label.color)) {
+                        full = true;
+                        break;
+                    }
+                }
+                if full {
+                    break;
+                }
+            }
+        }
+        out.spans.sort_by_key(|s| s.start);
+        out
     }
 
     pub fn is_json_line(line: &str) -> bool {

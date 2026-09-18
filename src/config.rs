@@ -421,6 +421,7 @@ impl FastTailConfig {
             sec.set("italic", rule.italic.to_string());
             sec.set("sound_alert", rule.sound_alert.name());
             sec.set("enabled", rule.enabled.to_string());
+            sec.set("captures_only", rule.captures_only.to_string());
         }
 
         conf
@@ -690,6 +691,10 @@ impl FastTailConfig {
                     .get("enabled")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(true);
+                let captures_only = sec
+                    .get("captures_only")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false);
 
                 rules.push(HighlightRule {
                     pattern,
@@ -701,6 +706,7 @@ impl FastTailConfig {
                     italic,
                     sound_alert,
                     enabled,
+                    captures_only,
                 });
             }
             idx += 1;
