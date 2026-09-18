@@ -1166,7 +1166,7 @@ impl TailEngine {
     /// search matches). Lines before `unchanged_lines` are known to be identical to the
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
-        let total_len = self.source.len();
+        let mut total_len = self.source.len();
         // The level cache follows the index: drop what a running level scan would push out
         // of order, and forget the lines that are about to be rescanned.
         if self
@@ -1278,6 +1278,12 @@ impl TailEngine {
                     pos += n_even as u64;
                 }
             }
+        }
+        if pos < total_len {
+            total_len = pos;
+            self.file_size = pos;
+            self.source.set_len(pos);
+            self.line_offsets.retain(|&off| off < total_len);
         }
         // Length of the final (possibly unterminated) line, without its newline.
         let tail = self

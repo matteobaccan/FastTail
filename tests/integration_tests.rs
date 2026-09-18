@@ -434,6 +434,23 @@ fn test_tail_engine_out_of_bounds() {
 }
 
 #[test]
+fn test_tail_engine_line_past_file_end_returns_none() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "First line").unwrap();
+    writeln!(tmp, "Second line").unwrap();
+    tmp.flush().unwrap();
+
+    let engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.total_lines(), 2);
+
+    // If underlying file shrinks on disk and cache is cleared:
+    std::fs::write(tmp.path(), "Tiny").unwrap();
+    engine.source.clear();
+    // Getting lines before poll_updates must not panic even if offset is now out of range:
+    assert!(engine.get_line(1).is_none());
+}
+
+#[test]
 fn test_eframe_links_feature_enabled() {
     // The About dialog opens its URLs through egui's OpenUrl output, which egui-winit
     // forwards to the system browser only when eframe is built with the `links`

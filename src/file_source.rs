@@ -159,6 +159,9 @@ impl FileSource {
             let mut cache = self.cache.borrow_mut();
             let block = self.block(&mut cache, first_block)?;
             let start = (offset - first_block * BLOCK_SIZE as u64) as usize;
+            if start >= block.len() {
+                return None;
+            }
             let stop = (start + len).min(block.len());
             return Some(f(&block[start..stop]));
         }
@@ -175,6 +178,9 @@ impl FileSource {
                     out.extend_from_slice(&block[from..to]);
                 }
             }
+        }
+        if out.is_empty() && len > 0 {
+            return None;
         }
         Some(f(&out))
     }
@@ -297,6 +303,24 @@ mod tests {
         assert!(src.read_with(5000, 10, |b| b.len()).is_none());
         assert_eq!(src.read_with(990, 100, |b| b.len()), Some(10));
         assert_eq!(src.read_with(10, 0, |b| b.len()), Some(0));
+    }
+
+    #[test]
+    fn read_past_actual_file_length_does_not_panic() {
+        let data = pattern(1000);
+        let (_dir, path) = temp_file(&data);
+        let src = FileSource::open(&path).unwrap();
+        // Simulate a situation where src.len() is larger than the underlying file data
+        // (e.g., race condition where file metadata reported a larger size or writer truncated).
+        src.set_len(5000);
+
+        // Reading at or past the actual block length on disk must return None, not panic.
+        assert!(src.read_with(2000, 50, |b| b.len()).is_none());
+        assert_eq!(src.read_to_vec(2000, 50), Vec::<u8>::new());
+
+        // Overlapping the end of actual data clamps safely to available bytes.
+        assert_eq!(src.read_with(990, 50, |b| b.len()), Some(10));
+        assert_eq!(src.read_to_vec(990, 50), &data[990..1000]);
     }
 
     #[test]
