@@ -1288,11 +1288,14 @@ impl FastTailApp {
                             );
                             ui.add_space(16.0);
                             let open_btn = egui::Button::new(
-                                RichText::new(format!("📁 {}", t(self.config.language, "open_file")))
-                                    .monospace()
-                                    .strong()
-                                    .size(13.0)
-                                    .color(self.config.theme.accent_color()),
+                                RichText::new(format!(
+                                    "📁 {}",
+                                    t(self.config.language, "open_file")
+                                ))
+                                .monospace()
+                                .strong()
+                                .size(13.0)
+                                .color(self.config.theme.accent_color()),
                             )
                             .fill(self.config.theme.button_bg())
                             .stroke(Stroke::new(1.5, self.config.theme.accent_color()))
@@ -1305,7 +1308,10 @@ impl FastTailApp {
                                 .clicked()
                             {
                                 if let Some(paths) = rfd::FileDialog::new()
-                                    .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
+                                    .add_filter(
+                                        "Log Files (*.log, *.txt, *.*)",
+                                        &["log", "txt", "*"],
+                                    )
                                     .set_title("Open Log Files")
                                     .pick_files()
                                 {
@@ -1339,7 +1345,11 @@ impl FastTailApp {
                                         )
                                         .fill(self.config.theme.button_bg())
                                         .corner_radius(CornerRadius::same(4));
-                                        if ui.add(btn).on_hover_text(path.display().to_string()).clicked() {
+                                        if ui
+                                            .add(btn)
+                                            .on_hover_text(path.display().to_string())
+                                            .clicked()
+                                        {
                                             recent_to_open = Some(path.clone());
                                         }
                                     }
