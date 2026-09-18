@@ -3843,6 +3843,25 @@ fn test_appends_during_a_level_scan_are_detected_afterwards() {
 }
 
 #[test]
+fn test_empty_state_rendering_when_no_tabs_open() {
+    use fasttail::config::FastTailConfig;
+    use fasttail::ui::FastTailApp;
+
+    let mut config = FastTailConfig::default();
+    config.open_files.clear();
+    config.dock_layout = None;
+
+    let mut app = FastTailApp::from_config(config);
+    assert_eq!(app.dock_state.iter_all_tabs().count(), 0);
+
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        app.render_ui(ui);
+    });
+    output.textures_delta.clear();
+}
+
+#[test]
 fn test_level_i18n_keys() {
     for lang in [
         Language::En,
