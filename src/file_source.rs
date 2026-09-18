@@ -60,6 +60,17 @@ impl FileSource {
         })
     }
 
+    /// A source with no file behind it: length 0, every read empty. Used by a pattern
+    /// stream while no file matches its pattern.
+    pub fn empty() -> Self {
+        Self {
+            path: PathBuf::new(),
+            file: RefCell::new(None),
+            len: Cell::new(0),
+            cache: RefCell::new(BlockCache::default()),
+        }
+    }
+
     /// Length the source currently believes the file has (kept in sync by the engine).
     pub fn len(&self) -> u64 {
         self.len.get()

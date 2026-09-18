@@ -531,7 +531,10 @@ impl FastTailConfig {
             cfg.open_files.clear();
             for (_, val) in entries {
                 let p = PathBuf::from(val);
-                if p.exists() && !cfg.open_files.contains(&p) {
+                // A pattern entry (`logs/app-*.log`) never exists as a file: it is kept
+                // and resolved again to the newest match at the next start.
+                let keep = p.exists() || crate::wildcard::is_pattern_path(&p);
+                if keep && !cfg.open_files.contains(&p) {
                     cfg.open_files.push(p);
                 }
             }

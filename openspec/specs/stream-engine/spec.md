@@ -2,9 +2,7 @@
 
 ## Purpose
 Defines the tail engine: on-demand streaming access to very large files without holding them in memory, real-time follow with pause, rotation and truncation handling, background scans with progress, multi-encoding decoding, and the Text, Hex and Markdown view modes.
-
 ## Requirements
-
 ### Requirement: Streaming access to large files
 The tail engine SHALL access files through an open read handle and a bounded block cache (at most 64 blocks of 64 KB per stream) and SHALL NOT hold a copy of the file in memory. Resident state per stream SHALL be limited to the line index (one 64-bit offset per line), the filtered-line and match lists, selection and bookmarks. Opening a file SHALL show its content immediately; the line index is built synchronously for files up to 256 MB and in the background above, with progress shown. Memory-mapping SHALL NOT be used, because a mapped file blocks the writer's rotation on Windows.
 
@@ -95,3 +93,15 @@ A single line longer than 1 MB SHALL be displayed truncated to 1 MB with a visib
 #### Scenario: One-megabyte JSON line
 - **WHEN** a log contains a 3 MB single-line JSON payload
 - **THEN** the row shows the first 1 MB followed by a truncation marker and the rest of the file stays navigable.
+
+### Requirement: Pattern Streams Follow the Newest Matching File
+A stream MAY be opened from a directory path plus a file-name pattern with `*` and `?` wildcards. The engine SHALL resolve the newest matching file by modification time (name as tie-break), rescan the directory every 2 seconds, and switch to a newer match automatically, keeping filters, highlight rules, search query, wrap and encoding while resetting the buffer, bookmarks and selection. The pattern SHALL be what is persisted in the workspace and in the recent files list.
+
+#### Scenario: Daily rotation
+- **WHEN** the stream was opened as `logs/app-*.log` while `app-2026-09-18.log` was newest and the writer creates `app-2026-09-19.log`
+- **THEN** within 2 seconds the stream tails `app-2026-09-19.log`, the include filter still applies, and the status bar reports the switch.
+
+#### Scenario: No match yet
+- **WHEN** the pattern matches no file at open time
+- **THEN** the stream opens empty with a "waiting for a matching file" notice and starts tailing the first file that appears.
+

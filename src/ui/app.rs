@@ -64,6 +64,8 @@ pub struct FastTailApp {
     pub attention_requested: bool,
     /// Quick colour labels (Ctrl+Shift+1..9), in memory only, pushed to every engine.
     pub quick_labels: Vec<QuickLabel>,
+    /// Text of the "open pattern" prompt while it is shown (`None` when closed).
+    pub pattern_prompt: Option<String>,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -210,6 +212,7 @@ impl FastTailApp {
             applied_on_top: false,
             attention_requested: false,
             quick_labels: Vec::new(),
+            pattern_prompt: None,
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -227,18 +230,27 @@ impl FastTailApp {
                 }
             }
             for path in tabs_to_open {
-                if path.exists() {
-                    if let Ok(mut engine) = TailEngine::open(&path) {
-                        engine.set_highlight_rules(app.config.highlight_rules.clone());
-                        engine.size_unit = app.config.size_unit;
-                        app.engines.push(engine);
-                    }
+                let is_pattern = crate::wildcard::is_pattern_path(&path);
+                if !is_pattern && !path.exists() {
+                    continue;
+                }
+                let opened = if is_pattern {
+                    // A pattern tab resolves to the newest match again at every start.
+                    TailEngine::open_pattern(&path)
+                } else {
+                    TailEngine::open(&path)
+                };
+                if let Ok(mut engine) = opened {
+                    engine.set_highlight_rules(app.config.highlight_rules.clone());
+                    engine.size_unit = app.config.size_unit;
+                    engine.wrap_lines = app.config.wrap_for(&path);
+                    app.engines.push(engine);
                 }
             }
         } else {
             // Clean dock layout: open previously saved files into dock
             for path in app.config.open_files.clone() {
-                if path.exists() {
+                if path.exists() || crate::wildcard::is_pattern_path(&path) {
                     app.open_log_file(path);
                 }
             }
@@ -297,7 +309,10 @@ impl FastTailApp {
     /// the command line filters and follow flag to those streams only.
     pub fn apply_cli(&mut self, cli: &crate::cli::CliArgs) {
         for path in &cli.paths {
-            if !path.exists() {
+            let pattern_dir_exists = crate::wildcard::split_pattern(path)
+                .map(|(dir, _)| dir.is_dir())
+                .unwrap_or(false);
+            if !path.exists() && !pattern_dir_exists {
                 eprintln!("fasttail: {} not found, skipped", path.display());
                 continue;
             }
@@ -320,8 +335,19 @@ impl FastTailApp {
         }
     }
 
+    /// Opens the "open pattern" prompt, prefilled with `text`.
+    pub fn prompt_pattern(&mut self, text: String) {
+        self.pattern_prompt = Some(text);
+    }
+
+    /// Default pattern offered for a directory: every `.log` file in it.
+    pub fn default_pattern_for(dir: &std::path::Path) -> String {
+        dir.join("*.log").to_string_lossy().to_string()
+    }
+
     pub fn open_log_file(&mut self, path: PathBuf) {
-        if !path.exists() {
+        let is_pattern = crate::wildcard::is_pattern_path(&path);
+        if !is_pattern && !path.exists() {
             return;
         }
 
@@ -337,7 +363,12 @@ impl FastTailApp {
             }
         }
 
-        if let Ok(mut engine) = TailEngine::open(&path) {
+        let opened = if is_pattern {
+            TailEngine::open_pattern(&path)
+        } else {
+            TailEngine::open(&path)
+        };
+        if let Ok(mut engine) = opened {
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
@@ -524,7 +555,13 @@ impl FastTailApp {
             // Drag & drop file support (single or multiple)
             if !i.raw.dropped_files.is_empty() {
                 for file in &i.raw.dropped_files {
-                    self.open_log_file(file.path().to_path_buf());
+                    let path = file.path().to_path_buf();
+                    if path.is_dir() {
+                        // A folder: ask which files to follow (newest match is tailed).
+                        self.pattern_prompt = Some(Self::default_pattern_for(&path));
+                    } else {
+                        self.open_log_file(path);
+                    }
                 }
             }
         });
@@ -924,6 +961,29 @@ impl FastTailApp {
                         .on_hover_text(t(self.config.language, "recent_files"));
                     if let Some(path) = file_to_open {
                         self.open_log_file(path);
+                    }
+
+                    // Open pattern button: tail the newest file matching `dir/app-*.log`
+                    let pattern_btn = egui::Button::new(
+                        RichText::new("📂*").monospace().strong().color(text_pri),
+                    )
+                    .fill(self.config.theme.button_bg())
+                    .stroke(Stroke::new(1.2, accent))
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(egui::vec2(30.0, 26.0));
+                    if ui
+                        .add(pattern_btn)
+                        .on_hover_text(t(self.config.language, "open_pattern_tip"))
+                        .clicked()
+                    {
+                        let seed = self
+                            .config
+                            .recent_files
+                            .first()
+                            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                            .map(|d| Self::default_pattern_for(&d))
+                            .unwrap_or_default();
+                        self.pattern_prompt = Some(seed);
                     }
 
                     // Filter button with amber border
@@ -2078,6 +2138,84 @@ impl FastTailApp {
             if self.config.help_open != is_open {
                 self.config.help_open = is_open;
                 let _ = self.config.save();
+            }
+        }
+
+        // 11b. "Open pattern" prompt (folder drop, 📂* button)
+        if self.pattern_prompt.is_some() {
+            let lang = self.config.language;
+            let theme = self.config.theme;
+            let mut is_open = true;
+            let mut submit = false;
+            let mut cancel = false;
+            let mut error: Option<String> = None;
+            let text_id = egui::Id::new("fasttail_pattern_prompt_text");
+            egui::Window::new(
+                RichText::new(format!("📂* {}", t(lang, "open_pattern")))
+                    .monospace()
+                    .color(theme.accent_color()),
+            )
+            .id(egui::Id::new("fasttail_pattern_prompt"))
+            .open(&mut is_open)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                ui.label(
+                    RichText::new(t(lang, "open_pattern_desc"))
+                        .monospace()
+                        .size(11.5)
+                        .color(theme.text_dim()),
+                );
+                ui.add_space(6.0);
+                let text = self.pattern_prompt.get_or_insert_with(String::new);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .hint_text(t(lang, "open_pattern_hint"))
+                        .desired_width(420.0)
+                        .id(text_id),
+                );
+                // Take the keyboard focus when the prompt opens, without stealing it later.
+                if !resp.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
+                    resp.request_focus();
+                }
+                let enter = resp.has_focus()
+                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                let valid = crate::wildcard::split_pattern(std::path::Path::new(text.trim()))
+                    .map(|(dir, _)| dir.is_dir())
+                    .unwrap_or(false);
+                if !text.trim().is_empty() && !valid {
+                    error = Some(t(lang, "open_pattern_invalid").to_string());
+                }
+                if let Some(err) = &error {
+                    ui.label(
+                        RichText::new(format!("ⓘ {err}"))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme.warn_color()),
+                    );
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(valid, egui::Button::new(t(lang, "open_pattern_go")))
+                        .clicked()
+                        || (enter && valid)
+                    {
+                        submit = true;
+                    }
+                    if ui.button(t(lang, "open_pattern_cancel")).clicked() || esc {
+                        cancel = true;
+                    }
+                });
+            });
+            if submit {
+                if let Some(text) = self.pattern_prompt.take() {
+                    self.open_log_file(PathBuf::from(text.trim()));
+                }
+            } else if cancel || !is_open {
+                self.pattern_prompt = None;
             }
         }
 
