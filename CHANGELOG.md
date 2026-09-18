@@ -43,6 +43,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the scroll bar thumb is approximate in wrap mode. The toggle is saved per
   file in `fasttail.ini`.
 
+- **External tools.** Settings gain a list of user-defined commands with an
+  argument list using the placeholders `{line}`, `{file}`, `{dir}`, `{lineno}`,
+  `{selection}` and `{match}` (first capture of the tool's regex). Tools run
+  on a row from the right-click menu, the stream menu or a shortcut such as
+  `Ctrl+Shift+F9`, and can be bound to a highlight rule to run when it matches
+  an appended line (once per second per tool, at most 10 children, dropped
+  runs counted in Settings). Arguments are passed as separate argv entries
+  without a shell; the "run via shell" flag (`cmd /c`, `sh -c`) is off by
+  default because it lets the row text reach a shell parser. Persisted as
+  `[tool.N]` sections of `fasttail.ini`.
 - **Directory wildcard tail.** A stream can be opened from a pattern such as
   `C:\logspp-*.log` (the `📂*` prompt, a folder dropped on the window, or
   the command line): it tails the newest matching file and switches by itself

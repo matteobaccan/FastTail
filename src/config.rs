@@ -56,6 +56,9 @@ pub struct FastTailConfig {
     #[serde(default)]
     pub wrapped_files: Vec<PathBuf>,
     pub highlight_rules: Vec<HighlightRule>,
+    /// User-configured external tools (`[tool.N]` sections), see `external_tools`.
+    #[serde(default)]
+    pub external_tools: Vec<crate::external_tools::ExternalTool>,
     #[serde(default)]
     pub baretail_import: bool,
     pub baretail_prompt_shown: bool,
@@ -128,6 +131,7 @@ impl Default for FastTailConfig {
             bookmarks: Vec::new(),
             wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
+            external_tools: Vec::new(),
             baretail_import: false,
             baretail_prompt_shown: false,
             dock_layout: None,
@@ -424,6 +428,17 @@ impl FastTailConfig {
             sec.set("captures_only", rule.captures_only.to_string());
         }
 
+        for (i, tool) in self.external_tools.iter().enumerate() {
+            let mut sec = conf.with_section(Some(format!("tool.{}", i)));
+            sec.set("name", &tool.name);
+            sec.set("program", &tool.program);
+            sec.set("args", &tool.args);
+            sec.set("shortcut", tool.shortcut.clone().unwrap_or_default());
+            sec.set("rule", tool.bound_rule.clone().unwrap_or_default());
+            sec.set("shell", tool.use_shell.to_string());
+            sec.set("match", tool.match_pattern.clone().unwrap_or_default());
+        }
+
         conf
     }
 
@@ -717,6 +732,30 @@ impl FastTailConfig {
         if !rules.is_empty() {
             cfg.highlight_rules = rules;
         }
+
+        let mut tools = Vec::new();
+        let mut idx = 0;
+        while let Some(sec) = conf.section(Some(format!("tool.{}", idx))) {
+            let name = sec.get("name").unwrap_or("").to_string();
+            let program = sec.get("program").unwrap_or("").to_string();
+            if !name.is_empty() && !program.is_empty() {
+                let non_empty = |k: &str| sec.get(k).filter(|v| !v.is_empty()).map(str::to_string);
+                tools.push(crate::external_tools::ExternalTool {
+                    name,
+                    program,
+                    args: sec.get("args").unwrap_or("").to_string(),
+                    shortcut: non_empty("shortcut"),
+                    bound_rule: non_empty("rule"),
+                    use_shell: sec
+                        .get("shell")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(false),
+                    match_pattern: non_empty("match"),
+                });
+            }
+            idx += 1;
+        }
+        cfg.external_tools = tools;
 
         cfg
     }
