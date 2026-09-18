@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use fasttail::config::FastTailConfig;
+use fasttail::renderer::{self, RendererChoice, RendererKind};
 use fasttail::ui::FastTailApp;
 
 /// True when the point just inside the top-left corner of a window placed at (`x`, `y`)
@@ -66,14 +67,50 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_maximized(true);
     }
 
-    let native_options = eframe::NativeOptions {
-        viewport,
+    let make_options = |renderer: eframe::Renderer| eframe::NativeOptions {
+        viewport: viewport.clone(),
+        renderer,
         ..Default::default()
     };
 
-    eframe::run_native(
-        &app_title,
-        native_options,
-        Box::new(|cc| Ok(Box::new(FastTailApp::new(cc)))),
-    )
+    // OpenGL first, wgpu on failure (or whichever backend was forced).
+    match RendererChoice::from_env(config.renderer) {
+        RendererChoice::Wgpu => {
+            renderer::mark_starting(RendererKind::Wgpu, false);
+            eframe::run_native(
+                &app_title,
+                make_options(eframe::Renderer::Wgpu),
+                Box::new(|cc| Ok(Box::new(FastTailApp::new(cc)))),
+            )
+        }
+        RendererChoice::Glow => {
+            renderer::mark_starting(RendererKind::Glow, false);
+            eframe::run_native(
+                &app_title,
+                make_options(eframe::Renderer::Glow),
+                Box::new(|cc| Ok(Box::new(FastTailApp::new(cc)))),
+            )
+        }
+        RendererChoice::Auto => {
+            renderer::mark_starting(RendererKind::Glow, false);
+            let first = eframe::run_native(
+                &app_title,
+                make_options(eframe::Renderer::Glow),
+                Box::new(|cc| Ok(Box::new(FastTailApp::new(cc)))),
+            );
+            match first {
+                Err(err) if !renderer::app_created() => {
+                    eprintln!("renderer: OpenGL backend failed to start: {err}");
+                    eprintln!("renderer: falling back to wgpu");
+                    renderer::mark_starting(RendererKind::Wgpu, true);
+                    eframe::run_native(
+                        &app_title,
+                        make_options(eframe::Renderer::Wgpu),
+                        Box::new(|cc| Ok(Box::new(FastTailApp::new(cc)))),
+                    )
+                }
+                other => other,
+            }
+        }
+    }
 }

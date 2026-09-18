@@ -17,6 +17,9 @@ pub struct FastTailConfig {
     pub screensaver_timeout_mins: u32,
     pub telemetry_enabled: bool,
     pub sound_enabled: bool,
+    /// Rendering backend: auto (OpenGL, then wgpu on failure), glow or wgpu. Applies at start.
+    #[serde(default)]
+    pub renderer: crate::renderer::RendererChoice,
     #[serde(default)]
     pub borderless: bool,
     #[serde(default = "default_true")]
@@ -89,6 +92,7 @@ impl Default for FastTailConfig {
             screensaver_timeout_mins: 10,
             telemetry_enabled: true,
             sound_enabled: false,
+            renderer: crate::renderer::RendererChoice::Auto,
             borderless: false,
             show_line_numbers: true,
             font_size: 13.0,
@@ -209,6 +213,7 @@ impl FastTailConfig {
         conf.with_section(Some("general"))
             .set("theme", theme_str)
             .set("language", self.language.code())
+            .set("renderer", self.renderer.as_str())
             .set("screensaver_enabled", self.screensaver_enabled.to_string())
             .set(
                 "screensaver_timeout_mins",
@@ -338,6 +343,12 @@ impl FastTailConfig {
             }
             if let Some(l) = general.get("language") {
                 cfg.language = Language::from_code(l);
+            }
+            if let Some(r) = general
+                .get("renderer")
+                .and_then(crate::renderer::RendererChoice::parse)
+            {
+                cfg.renderer = r;
             }
             if let Some(s) = general.get("screensaver_enabled") {
                 if let Ok(v) = s.parse::<bool>() {

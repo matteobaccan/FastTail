@@ -557,6 +557,13 @@ fn test_i18n_exhaustive_coverage() {
         "delete_rule",
         "clear_search",
         "clear_filter",
+        "about_renderer",
+        "renderer",
+        "renderer_auto",
+        "renderer_glow",
+        "renderer_wgpu",
+        "renderer_note",
+        "renderer_tip",
     ];
 
     for lang in &[
@@ -2804,4 +2811,29 @@ fn test_prune_floating_window_rects_ignores_stale_surface_index() {
     dock.remove_surface(win);
     prune_floating_window_rects(&dock, &mut rects);
     assert!(rects.is_empty());
+}
+
+#[test]
+fn test_renderer_choice_persists_in_ini() {
+    use fasttail::renderer::RendererChoice;
+
+    let mut cfg = FastTailConfig::default();
+    assert_eq!(cfg.renderer, RendererChoice::Auto);
+
+    cfg.renderer = RendererChoice::Wgpu;
+    let ini = cfg.to_ini();
+    assert_eq!(
+        ini.section(Some("general")).and_then(|s| s.get("renderer")),
+        Some("wgpu")
+    );
+    let restored = FastTailConfig::from_ini(&ini);
+    assert_eq!(restored.renderer, RendererChoice::Wgpu);
+
+    // Unknown values fall back to the default instead of failing the whole config.
+    let mut bad = cfg.to_ini();
+    bad.with_section(Some("general")).set("renderer", "vulkan");
+    assert_eq!(
+        FastTailConfig::from_ini(&bad).renderer,
+        RendererChoice::Auto
+    );
 }

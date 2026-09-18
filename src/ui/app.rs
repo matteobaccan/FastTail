@@ -56,6 +56,8 @@ pub struct FastTailApp {
     pub last_dock_save: Instant,
     pub first_frame: bool,
     pub floating_window_rects: std::collections::HashMap<egui_dock::SurfaceIndex, egui::Rect>,
+    /// Backend the window runs on, read once from the creation context.
+    pub renderer: crate::renderer::ActiveRenderer,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -133,7 +135,15 @@ impl FastTailApp {
         setup_cjk_fonts(&cc.egui_ctx);
         let config = FastTailConfig::load();
         config.theme.apply(&cc.egui_ctx);
-        Self::from_config(config)
+        let mut app = Self::from_config(config);
+        app.renderer = crate::renderer::ActiveRenderer::from_creation_context(cc);
+        crate::renderer::mark_app_created();
+        eprintln!(
+            "renderer: running on {} ({})",
+            app.renderer.chip(),
+            app.renderer.details()
+        );
+        app
     }
 
     pub fn from_config(config: FastTailConfig) -> Self {
@@ -184,6 +194,7 @@ impl FastTailApp {
             last_dock_save: Instant::now(),
             first_frame: true,
             floating_window_rects,
+            renderer: crate::renderer::ActiveRenderer::unknown(),
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -1077,6 +1088,26 @@ impl FastTailApp {
                             .size(11.0)
                             .color(current_theme.text_primary()),
                     );
+
+                    // Renderer chip at the far right: GL / WGPU (+ fallback), details on hover.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let chip_color = if self.renderer.fallback {
+                            current_theme.warn_color()
+                        } else {
+                            current_theme.secondary_accent()
+                        };
+                        ui.label(
+                            RichText::new(self.renderer.chip())
+                                .monospace()
+                                .size(10.0)
+                                .color(chip_color),
+                        )
+                        .on_hover_text(format!(
+                            "{}\n{}",
+                            t(self.config.language, "renderer_tip"),
+                            self.renderer.details()
+                        ));
+                    });
                 });
             });
 
@@ -1332,6 +1363,45 @@ impl FastTailApp {
                         &mut self.config.show_line_numbers,
                         &mut self.config.font_size,
                     );
+
+                    // Rendering backend: applies at the next start.
+                    ui.add_space(6.0);
+                    let lang = self.config.language;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{}:", t(lang, "renderer"))).monospace());
+                        egui::ComboBox::from_id_salt("renderer_choice")
+                            .selected_text(match self.config.renderer {
+                                crate::renderer::RendererChoice::Auto => t(lang, "renderer_auto"),
+                                crate::renderer::RendererChoice::Glow => t(lang, "renderer_glow"),
+                                crate::renderer::RendererChoice::Wgpu => t(lang, "renderer_wgpu"),
+                            })
+                            .show_ui(ui, |ui| {
+                                for choice in crate::renderer::RendererChoice::ALL {
+                                    let label = match choice {
+                                        crate::renderer::RendererChoice::Auto => {
+                                            t(lang, "renderer_auto")
+                                        }
+                                        crate::renderer::RendererChoice::Glow => {
+                                            t(lang, "renderer_glow")
+                                        }
+                                        crate::renderer::RendererChoice::Wgpu => {
+                                            t(lang, "renderer_wgpu")
+                                        }
+                                    };
+                                    ui.selectable_value(&mut self.config.renderer, choice, label);
+                                }
+                            });
+                    });
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · {} {}",
+                            t(lang, "renderer_note"),
+                            self.renderer.chip(),
+                            self.renderer.details()
+                        ))
+                        .small()
+                        .color(theme.text_primary()),
+                    );
                 });
             });
 
@@ -1516,6 +1586,22 @@ impl FastTailApp {
                             RichText::new(env!("BUILD_TIMESTAMP"))
                                 .monospace()
                                 .color(theme.text_primary()),
+                        );
+                        ui.end_row();
+
+                        ui.label(
+                            RichText::new(t(lang, "about_renderer"))
+                                .monospace()
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {}",
+                                self.renderer.chip(),
+                                self.renderer.details()
+                            ))
+                            .monospace()
+                            .color(theme.text_primary()),
                         );
                         ui.end_row();
 
