@@ -1,5 +1,6 @@
 use crate::audio::SoundAlertPreset;
 use crate::file_source::FileSource;
+use crate::scan_job::{FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange};
 use egui::Color32;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
@@ -156,6 +157,10 @@ const SCAN_CHUNK: usize = 1024 * 1024;
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 /// Rendered Markdown needs the whole text: larger files stay in text mode.
 pub const MARKDOWN_MAX_BYTES: u64 = 32 * 1024 * 1024;
+/// Files larger than this run filters and search on a worker thread.
+pub const JOB_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024;
+/// Files larger than this build their line index on a worker thread.
+pub const INDEX_JOB_THRESHOLD_BYTES: u64 = 256 * 1024 * 1024;
 /// Bytes remembered at the head and at the indexed end to recognise rewrites.
 const FINGERPRINT_LEN: usize = 64;
 /// Marker appended to a line cut at `MAX_LINE_BYTES`.
@@ -163,7 +168,7 @@ pub const TRUNCATED_LINE_MARKER: &str = " …[line truncated]";
 
 /// Decodes one raw line (bytes between two offsets, newline included) in `encoding`,
 /// dropping the trailing newline / CR LF unless the line was cut by the length cap.
-fn decode_line(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> String {
+pub(crate) fn decode_line(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> String {
     let mut s = match encoding {
         FileEncoding::Utf8 => {
             let end = if truncated {
@@ -218,7 +223,7 @@ fn decode_line(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> String 
 }
 
 /// End of the line content for single-byte encodings: strips `\n` and a preceding `\r`.
-fn trim_newline_1(bytes: &[u8]) -> usize {
+pub(crate) fn trim_newline_1(bytes: &[u8]) -> usize {
     let mut end = bytes.len();
     if end > 0 && bytes[end - 1] == b'\n' {
         end -= 1;
@@ -260,7 +265,7 @@ pub struct GotoTarget {
 /// Efficient case-insensitive substring search.
 /// For ASCII haystack and pre-lowercased needle, avoids heap allocation by checking ASCII byte windows.
 #[inline]
-fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
+pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
     if needle_lower.is_empty() {
         return true;
     }
@@ -301,8 +306,21 @@ pub struct TailEngine {
     pub exclude_filter: String,
     pub filter_case_sensitive: bool,
     pub filter_is_regex: bool,
-    include_regex: Option<Regex>,
-    exclude_regex: Option<Regex>,
+    /// Compiled include/exclude filter, shared with filter and search jobs.
+    filter: FilterSpec,
+    /// Running background scan, if any (one at a time per stream).
+    job: Option<ScanJob>,
+    job_generation: u64,
+    /// Line index from which the derived state must be refreshed once the job ends.
+    pending_refresh_from: Option<usize>,
+    /// Full filter / search recomputation requested while another job was running.
+    pending_filter: bool,
+    pending_search: bool,
+    /// True while the line index is being built in the background.
+    pub index_pending: bool,
+    /// Files larger than these run filters/search, or the initial index, on a worker thread.
+    pub job_threshold_bytes: u64,
+    pub index_job_threshold_bytes: u64,
     pub filtered_lines: Vec<usize>,
     pub search_query: String,
     pub search_matches: Vec<usize>,
@@ -336,8 +354,6 @@ pub struct TailEngine {
     pub buffer_generation: u64,
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
     pub markdown_text_cache: Option<(u64, String)>,
-    include_filter_lower: String,
-    exclude_filter_lower: String,
     pub highlight_rules: Vec<HighlightRule>,
     compiled_highlights: Vec<(Option<Regex>, String, HighlightRule)>,
     pub expanded_json_lines: HashSet<usize>,
@@ -359,6 +375,16 @@ pub struct TailEngine {
 
 impl TailEngine {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
+        Self::open_with_thresholds(path, JOB_THRESHOLD_BYTES, INDEX_JOB_THRESHOLD_BYTES)
+    }
+
+    /// Like `open`, with explicit sizes above which filters/search and the initial index
+    /// run on a worker thread (tests use 0 to exercise the background paths on small files).
+    pub fn open_with_thresholds<P: AsRef<Path>>(
+        path: P,
+        job_threshold_bytes: u64,
+        index_job_threshold_bytes: u64,
+    ) -> Result<Self, std::io::Error> {
         let path_buf = path.as_ref().to_path_buf();
         let metadata = std::fs::metadata(&path_buf)?;
         // Security check: ensure target path is a regular file.
@@ -453,8 +479,15 @@ impl TailEngine {
             exclude_filter: String::new(),
             filter_case_sensitive: false,
             filter_is_regex: false,
-            include_regex: None,
-            exclude_regex: None,
+            filter: FilterSpec::default(),
+            job: None,
+            job_generation: 0,
+            pending_refresh_from: None,
+            pending_filter: false,
+            pending_search: false,
+            index_pending: false,
+            job_threshold_bytes,
+            index_job_threshold_bytes,
             filtered_lines: Vec::new(),
             search_query: String::new(),
             search_matches: Vec::new(),
@@ -466,8 +499,6 @@ impl TailEngine {
             search_edited_at: None,
             buffer_generation: 0,
             markdown_text_cache: None,
-            include_filter_lower: String::new(),
-            exclude_filter_lower: String::new(),
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
             expanded_json_lines: HashSet::new(),
@@ -549,29 +580,12 @@ impl TailEngine {
     }
 
     pub fn refresh_filters(&mut self) {
-        self.include_filter_lower = self.include_filter.to_lowercase();
-        self.exclude_filter_lower = self.exclude_filter.to_lowercase();
-        if self.filter_is_regex {
-            self.include_regex = if self.include_filter.is_empty() {
-                None
-            } else {
-                regex::RegexBuilder::new(&self.include_filter)
-                    .case_insensitive(!self.filter_case_sensitive)
-                    .build()
-                    .ok()
-            };
-            self.exclude_regex = if self.exclude_filter.is_empty() {
-                None
-            } else {
-                regex::RegexBuilder::new(&self.exclude_filter)
-                    .case_insensitive(!self.filter_case_sensitive)
-                    .build()
-                    .ok()
-            };
-        } else {
-            self.include_regex = None;
-            self.exclude_regex = None;
-        }
+        self.filter = FilterSpec::build(
+            &self.include_filter,
+            &self.exclude_filter,
+            self.filter_case_sensitive,
+            self.filter_is_regex,
+        );
         self.recompute_filtered_lines();
     }
 
@@ -592,6 +606,9 @@ impl TailEngine {
 
     pub fn rebuild_line_index(&mut self) {
         // The file was truncated, rewritten or re-decoded: row indices no longer mean the same.
+        self.job = None;
+        self.index_pending = false;
+        self.pending_refresh_from = None;
         self.clear_selection();
         self.clear_bookmarks();
         self.rebuild_line_index_from(0);
@@ -602,6 +619,22 @@ impl TailEngine {
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
         let total_len = self.source.len();
+        if unchanged_lines == 0 && total_len > self.index_job_threshold_bytes {
+            // Large file: index on a worker thread; the view shows lines as they arrive.
+            self.line_offsets = Vec::new();
+            self.filtered_lines = Vec::new();
+            self.search_matches = Vec::new();
+            self.search_byte_matches = Vec::new();
+            self.current_match_idx = None;
+            self.max_line_bytes = 0;
+            self.buffer_generation = self.buffer_generation.wrapping_add(1);
+            self.scroll_to_line = None;
+            self.index_pending = true;
+            self.pending_filter = self.filter.is_active();
+            self.pending_search = !self.last_searched_query.is_empty();
+            self.start_job(JobSpec::Index, 0);
+            return;
+        }
         if total_len == 0 {
             self.line_offsets = Vec::new();
             self.max_line_bytes = 0;
@@ -719,6 +752,7 @@ impl TailEngine {
     }
 
     pub fn poll_updates(&mut self) {
+        self.drain_job();
         if !self.is_watching {
             return;
         }
@@ -784,6 +818,10 @@ impl TailEngine {
             self.last_modified = new_modified;
             self.source.set_len(new_size);
             self.has_new_data = true;
+            if self.index_pending {
+                // The index job covers the old range; the rest is indexed when it ends.
+                return;
+            }
             // On a pure append every previously complete line is unchanged; the last line
             // may have been partial, so it is re-evaluated together with the new ones.
             self.rebuild_line_index_from(prev_lines_count.saturating_sub(1));
@@ -933,40 +971,7 @@ impl TailEngine {
     }
 
     pub fn matches_filter(&self, line: &str) -> bool {
-        // Exclude check first
-        if !self.exclude_filter.is_empty() {
-            let matches_exclude = if self.filter_is_regex {
-                if let Some(ref re) = self.exclude_regex {
-                    re.is_match(line)
-                } else {
-                    false
-                }
-            } else if self.filter_case_sensitive {
-                line.contains(&self.exclude_filter)
-            } else {
-                contains_case_insensitive(line, &self.exclude_filter_lower)
-            };
-            if matches_exclude {
-                return false;
-            }
-        }
-
-        // Include check
-        if !self.include_filter.is_empty() {
-            if self.filter_is_regex {
-                if let Some(ref re) = self.include_regex {
-                    re.is_match(line)
-                } else {
-                    false
-                }
-            } else if self.filter_case_sensitive {
-                line.contains(&self.include_filter)
-            } else {
-                contains_case_insensitive(line, &self.include_filter_lower)
-            }
-        } else {
-            true
-        }
+        self.filter.matches(line)
     }
 
     pub fn match_highlight(&self, line: &str) -> Option<HighlightStyle> {
@@ -1033,8 +1038,27 @@ impl TailEngine {
             self.filtered_lines = Vec::new();
             return;
         }
+        if self.index_pending {
+            self.pending_filter = true;
+            return;
+        }
+        if self.job.is_some() && start > 0 {
+            // A scan is running: refresh the appended tail once it ends.
+            self.pending_refresh_from =
+                Some(self.pending_refresh_from.map_or(start, |p| p.min(start)));
+            return;
+        }
         let total = self.total_lines();
         let start = start.min(total);
+        if start == 0 && self.source.len() > self.job_threshold_bytes {
+            // Full recomputation of a large file: worker thread, results stream in.
+            self.filtered_lines = Vec::new();
+            if !self.last_searched_query.is_empty() {
+                self.pending_search = true;
+            }
+            self.start_job(JobSpec::Filter(self.filter.clone()), 0);
+            return;
+        }
         if start == 0 {
             self.filtered_lines = Vec::new();
         } else {
@@ -1042,8 +1066,12 @@ impl TailEngine {
             self.filtered_lines.truncate(keep);
         }
         let mut fresh = Vec::new();
+        // Continuation lines of a stack trace follow their parent's visibility.
+        let mut parent_visible = self.parent_visible_before(start);
         self.scan_lines(start, total, |idx, line| {
-            if self.matches_filter(line) {
+            let (visible, next) = self.filter.visible_in_sequence(line, parent_visible);
+            parent_visible = next;
+            if visible {
                 fresh.push(idx);
             }
             true
@@ -1151,56 +1179,31 @@ impl TailEngine {
     }
 
     pub fn is_line_visible(&self, idx: usize) -> bool {
-        if let Some(line) = self.get_line(idx) {
-            // Must not match exclude filter if set
-            if !self.exclude_filter.is_empty() {
-                let matches_exclude = if self.filter_is_regex {
-                    if let Some(ref re) = self.exclude_regex {
-                        re.is_match(&line)
-                    } else {
-                        false
-                    }
-                } else if self.filter_case_sensitive {
-                    line.contains(&self.exclude_filter)
-                } else {
-                    contains_case_insensitive(&line, &self.exclude_filter_lower)
-                };
-                if matches_exclude {
-                    return false;
-                }
-            }
+        let Some(line) = self.get_line(idx) else {
+            return false;
+        };
+        if self.filter.excluded(&line) {
+            return false;
+        }
+        if self.filter.included(&line) {
+            return true;
+        }
+        // A stack trace continuation line is shown with its (nearest non-continuation) parent.
+        if Self::is_stacktrace_continuation(&line) {
+            return self.parent_visible_before(idx);
+        }
+        false
+    }
 
-            // Must match the include filter when one is set (highlight rules never bypass it)
-            let matches_include = if !self.include_filter.is_empty() {
-                if self.filter_is_regex {
-                    if let Some(ref re) = self.include_regex {
-                        re.is_match(&line)
-                    } else {
-                        false
-                    }
-                } else if self.filter_case_sensitive {
-                    line.contains(&self.include_filter)
-                } else {
-                    contains_case_insensitive(&line, &self.include_filter_lower)
-                }
-            } else {
-                true
-            };
-
-            if matches_include {
-                return true;
-            }
-
-            // Also check multiline stack trace continuation
-            if Self::is_stacktrace_continuation(&line) {
-                let mut curr = idx;
-                while curr > 0 {
-                    curr -= 1;
-                    if let Some(parent) = self.get_line(curr) {
-                        if !Self::is_stacktrace_continuation(&parent) {
-                            return self.is_line_visible(curr);
-                        }
-                    }
+    /// Visibility of the nearest non-continuation line before `idx`, the state a sequential
+    /// scan starting at `idx` needs for continuation lines.
+    fn parent_visible_before(&self, idx: usize) -> bool {
+        let mut curr = idx;
+        while curr > 0 {
+            curr -= 1;
+            if let Some(line) = self.get_line(curr) {
+                if !Self::is_stacktrace_continuation(&line) {
+                    return self.filter.matches(&line);
                 }
             }
         }
@@ -1275,6 +1278,26 @@ impl TailEngine {
     /// changed, keeping the current match on the same line whenever it still matches.
     fn refresh_search_from(&mut self, start: usize) {
         if self.last_searched_query.is_empty() {
+            return;
+        }
+        if self.index_pending
+            || self
+                .job
+                .as_ref()
+                .map(|j| j.kind == ScanKind::Filter)
+                .unwrap_or(false)
+        {
+            // Search follows the filter: rerun it when the index / filter job ends.
+            self.pending_search = true;
+            return;
+        }
+        if self.job.is_some() && start > 0 {
+            self.pending_refresh_from =
+                Some(self.pending_refresh_from.map_or(start, |p| p.min(start)));
+            return;
+        }
+        if start == 0 && self.source.len() > self.job_threshold_bytes {
+            self.start_search_job();
             return;
         }
         let current_line = self.current_search_line();
@@ -1432,6 +1455,18 @@ impl TailEngine {
     /// Switches the view and keeps the search cursor inside the list that view navigates.
     pub fn set_view_mode(&mut self, mode: ViewMode) {
         self.view_mode = mode;
+        if mode == ViewMode::Hex
+            && !self.last_searched_query.is_empty()
+            && self.search_byte_matches.is_empty()
+        {
+            let (byte_matches, max_len) = self.find_byte_matches_from(
+                &self.last_searched_query.clone(),
+                0,
+                MAX_SEARCH_MATCHES,
+            );
+            self.search_byte_matches = byte_matches;
+            self.search_byte_max_len = max_len;
+        }
         let len = self.active_match_count();
         self.current_match_idx = match self.current_match_idx {
             _ if len == 0 => None,
@@ -1513,6 +1548,23 @@ impl TailEngine {
             return;
         }
         self.last_searched_query = trimmed.to_string();
+        if self.index_pending
+            || self
+                .job
+                .as_ref()
+                .map(|j| j.kind == ScanKind::Filter)
+                .unwrap_or(false)
+        {
+            self.search_matches = Vec::new();
+            self.search_byte_matches = Vec::new();
+            self.current_match_idx = None;
+            self.pending_search = true;
+            return;
+        }
+        if self.source.len() > self.job_threshold_bytes {
+            self.start_search_job();
+            return;
+        }
         self.search_matches = self.find_matches(trimmed);
         let (byte_matches, max_len) = self.find_byte_matches_from(trimmed, 0, MAX_SEARCH_MATCHES);
         self.search_byte_matches = byte_matches;
@@ -1522,6 +1574,178 @@ impl TailEngine {
         } else {
             None
         };
+    }
+
+    /// Starts a background search over the visible lines for the active query. Byte-level
+    /// hits (HEX view) are computed synchronously only while the HEX view is showing.
+    fn start_search_job(&mut self) {
+        let query = self.last_searched_query.clone();
+        self.search_matches = Vec::new();
+        self.current_match_idx = None;
+        let filter = if self.filter.is_active() {
+            Some(self.filter.clone())
+        } else {
+            None
+        };
+        self.start_job(
+            JobSpec::Search {
+                query_lower: query.to_lowercase(),
+                filter,
+                limit: MAX_SEARCH_MATCHES,
+            },
+            0,
+        );
+        if self.view_mode == ViewMode::Hex {
+            let (byte_matches, max_len) =
+                self.find_byte_matches_from(&query, 0, MAX_SEARCH_MATCHES);
+            self.search_byte_matches = byte_matches;
+            self.search_byte_max_len = max_len;
+            self.current_match_idx = if self.search_byte_matches.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+        } else {
+            self.search_byte_matches = Vec::new();
+            self.search_byte_max_len = 0;
+        }
+    }
+
+    /// Spawns a job over `[start_line, end of file)` and makes it the running one.
+    fn start_job(&mut self, spec: JobSpec, start_line: usize) {
+        self.job_generation = self.job_generation.wrapping_add(1);
+        let start_offset = if start_line == 0 {
+            self.bom_len()
+        } else {
+            self.line_offsets
+                .get(start_line)
+                .copied()
+                .unwrap_or(self.source.len())
+        };
+        let range = ScanRange {
+            start_offset,
+            end_offset: self.source.len(),
+            start_line,
+            encoding: self.encoding,
+            parent_visible: self.parent_visible_before(start_line),
+        };
+        self.job = Some(ScanJob::spawn(self.job_generation, &self.path, range, spec));
+    }
+
+    /// Running background scan, if any: kind, progress in `0..=1`, hits so far.
+    pub fn scan_progress(&self) -> Option<(ScanKind, f32, usize)> {
+        self.job.as_ref().map(|j| (j.kind, j.progress, j.hits))
+    }
+
+    /// Applies the batches the running job sent since the last poll and finishes it.
+    fn drain_job(&mut self) {
+        let Some(mut job) = self.job.take() else {
+            return;
+        };
+        let mut finished: Option<Result<usize, ()>> = None;
+        while let Some(batch) = job.try_recv() {
+            match batch {
+                ScanBatch::Lines(lines) => {
+                    job.hits += lines.len();
+                    match job.kind {
+                        ScanKind::Filter => self.filtered_lines.extend(lines),
+                        ScanKind::Search => {
+                            self.search_matches.extend(lines);
+                            if self.current_match_idx.is_none()
+                                && self.view_mode != ViewMode::Hex
+                                && !self.search_matches.is_empty()
+                            {
+                                self.current_match_idx = Some(0);
+                            }
+                        }
+                        ScanKind::Index => {}
+                    }
+                }
+                ScanBatch::Offsets {
+                    offsets,
+                    max_line_bytes,
+                } => {
+                    self.line_offsets.extend(offsets);
+                    job.hits = self.line_offsets.len();
+                    if max_line_bytes > self.max_line_bytes {
+                        self.max_line_bytes = max_line_bytes;
+                        let estimated_width = (max_line_bytes as f32) * 8.5 + 120.0;
+                        self.max_detected_width = self.max_detected_width.max(estimated_width);
+                    }
+                }
+                ScanBatch::Progress(p) => job.progress = p,
+                ScanBatch::Done { lines } => {
+                    finished = Some(Ok(lines));
+                    break;
+                }
+                ScanBatch::Failed => {
+                    finished = Some(Err(()));
+                    break;
+                }
+            }
+        }
+        match finished {
+            None => self.job = Some(job),
+            Some(Err(())) => {
+                drop(job);
+                if let Ok(metadata) = std::fs::metadata(&self.path) {
+                    let modified = metadata.modified().ok();
+                    self.reload_from_start(metadata.len(), modified);
+                }
+            }
+            Some(Ok(_)) => {
+                let kind = job.kind;
+                let end_offset = job.range.end_offset;
+                drop(job);
+                self.finish_job(kind, end_offset);
+            }
+        }
+    }
+
+    fn finish_job(&mut self, kind: ScanKind, end_offset: u64) {
+        match kind {
+            ScanKind::Index => {
+                self.index_pending = false;
+                self.buffer_generation = self.buffer_generation.wrapping_add(1);
+                if self.source.len() > end_offset {
+                    // The file grew while indexing: index the rest incrementally.
+                    let last = self.line_offsets.len().saturating_sub(1);
+                    if last > 0 {
+                        self.rebuild_line_index_from(last);
+                    } else {
+                        self.rebuild_line_index_from(0);
+                        return;
+                    }
+                }
+                self.update_tail_fingerprint();
+                if self.pending_filter {
+                    self.pending_filter = false;
+                    self.recompute_filtered_lines_from(0);
+                } else if self.pending_search {
+                    self.pending_search = false;
+                    self.refresh_search_from(0);
+                }
+            }
+            ScanKind::Filter => {
+                if let Some(from) = self.pending_refresh_from.take() {
+                    self.recompute_filtered_lines_from(from);
+                }
+                if self.pending_search {
+                    self.pending_search = false;
+                    self.refresh_search_from(0);
+                } else if !self.last_searched_query.is_empty() {
+                    self.refresh_search_from(0);
+                }
+            }
+            ScanKind::Search => {
+                if self.current_match_idx.is_none() && self.active_match_count() > 0 {
+                    self.current_match_idx = Some(0);
+                }
+                if let Some(from) = self.pending_refresh_from.take() {
+                    self.refresh_derived_state_from(from);
+                }
+            }
+        }
     }
 
     /// Moves to the next hit and returns its target: a line index, or a byte offset in HEX view.

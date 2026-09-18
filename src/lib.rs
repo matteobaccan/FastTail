@@ -8,6 +8,7 @@ pub mod html_converter;
 pub mod i18n;
 pub mod paths;
 pub mod renderer;
+pub mod scan_job;
 pub mod screensaver;
 pub mod tail_engine;
 pub mod theme;

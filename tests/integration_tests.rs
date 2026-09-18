@@ -3363,3 +3363,155 @@ fn test_markdown_mode_refuses_files_over_the_cap() {
     assert!(engine.markdown_too_large());
     assert_eq!(engine.markdown_text(), "");
 }
+
+/// Polls the engine until no background scan is running (or 30 s passed).
+fn wait_for_jobs(engine: &mut TailEngine) {
+    let start = std::time::Instant::now();
+    loop {
+        engine.poll_updates();
+        if engine.scan_progress().is_none() && !engine.index_pending {
+            return;
+        }
+        assert!(
+            start.elapsed().as_secs() < 30,
+            "background scan did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn write_scenario_log(path: &std::path::Path, lines: usize) {
+    use std::io::Write;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
+    for i in 0..lines {
+        let level = match i % 10 {
+            0 => "ERROR",
+            1 | 2 => "WARN",
+            _ => "INFO",
+        };
+        writeln!(
+            f,
+            "2026-09-19 10:00:{:02} [{level}] svc-{} req={i} payload {}",
+            i % 60,
+            i % 7,
+            "p".repeat(i % 50)
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn test_background_filter_equals_synchronous_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("bg.log");
+    write_scenario_log(&log, 40_000);
+
+    let mut sync = TailEngine::open(&log).unwrap();
+    sync.set_include_filter("ERROR");
+    sync.set_exclude_filter("svc-3");
+    assert!(sync.scan_progress().is_none());
+    let expected = sync.filtered_lines.clone();
+    assert!(!expected.is_empty());
+
+    let mut bg = TailEngine::open_with_thresholds(&log, 0, u64::MAX).unwrap();
+    bg.set_include_filter("ERROR");
+    bg.set_exclude_filter("svc-3");
+    assert!(bg.scan_progress().is_some(), "large-file path spawns a job");
+    wait_for_jobs(&mut bg);
+    assert_eq!(bg.filtered_lines, expected);
+    assert_eq!(bg.visible_line_count(), expected.len());
+}
+
+#[test]
+fn test_newer_filter_cancels_the_running_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("cancel.log");
+    write_scenario_log(&log, 60_000);
+
+    let mut sync = TailEngine::open(&log).unwrap();
+    sync.set_include_filter("WARN");
+    let expected = sync.filtered_lines.clone();
+
+    let mut bg = TailEngine::open_with_thresholds(&log, 0, u64::MAX).unwrap();
+    bg.set_include_filter("ERROR");
+    bg.set_include_filter("WARN"); // replaces the ERROR job before it finishes
+    wait_for_jobs(&mut bg);
+    assert_eq!(bg.filtered_lines, expected);
+    assert!(
+        bg.filtered_lines.windows(2).all(|w| w[0] < w[1]),
+        "results in order"
+    );
+}
+
+#[test]
+fn test_appends_during_a_filter_job_are_applied_afterwards() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("append_job.log");
+    write_scenario_log(&log, 60_000);
+
+    let mut bg = TailEngine::open_with_thresholds(&log, 0, u64::MAX).unwrap();
+    bg.set_include_filter("ERROR");
+    assert!(bg.scan_progress().is_some());
+    // Lines arrive while the job scans: two match, one does not.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    f.write_all(b"late ERROR one\nlate INFO two\nlate ERROR three\n")
+        .unwrap();
+    drop(f);
+    bg.poll_updates(); // notices the growth while the job is still running
+    wait_for_jobs(&mut bg);
+
+    let mut sync = TailEngine::open(&log).unwrap();
+    sync.set_include_filter("ERROR");
+    assert_eq!(bg.total_lines(), 60_003);
+    assert_eq!(bg.filtered_lines, sync.filtered_lines);
+    assert!(bg.filtered_lines.contains(&60_000) && bg.filtered_lines.contains(&60_002));
+    assert!(!bg.filtered_lines.contains(&60_001));
+}
+
+#[test]
+fn test_background_search_matches_synchronous_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("search_job.log");
+    write_scenario_log(&log, 40_000);
+
+    let mut sync = TailEngine::open(&log).unwrap();
+    sync.set_include_filter("WARN");
+    sync.update_search("svc-5");
+    let expected = sync.search_matches.clone();
+    assert!(!expected.is_empty());
+
+    let mut bg = TailEngine::open_with_thresholds(&log, 0, u64::MAX).unwrap();
+    bg.set_include_filter("WARN");
+    wait_for_jobs(&mut bg);
+    bg.update_search("svc-5");
+    assert!(bg.scan_progress().is_some());
+    wait_for_jobs(&mut bg);
+    assert_eq!(bg.search_matches, expected);
+    assert_eq!(bg.current_match_idx, Some(0));
+    assert_eq!(bg.search_next(false), Some(expected[1]));
+}
+
+#[test]
+fn test_index_job_builds_the_same_index_as_the_synchronous_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("index_job.log");
+    write_scenario_log(&log, 50_000);
+
+    let sync = TailEngine::open(&log).unwrap();
+    let mut bg = TailEngine::open_with_thresholds(&log, 0, 0).unwrap();
+    assert!(bg.index_pending);
+    wait_for_jobs(&mut bg);
+    assert!(!bg.index_pending);
+    assert_eq!(bg.total_lines(), sync.total_lines());
+    assert_eq!(bg.line_offsets, sync.line_offsets);
+    assert_eq!(bg.max_line_bytes, sync.max_line_bytes);
+    assert_eq!(bg.get_line(49_999), sync.get_line(49_999));
+
+    // Filters queued behind the index job run once it is done.
+    bg.set_include_filter("ERROR");
+    wait_for_jobs(&mut bg);
+    let mut sync2 = TailEngine::open(&log).unwrap();
+    sync2.set_include_filter("ERROR");
+    assert_eq!(bg.filtered_lines, sync2.filtered_lines);
+}

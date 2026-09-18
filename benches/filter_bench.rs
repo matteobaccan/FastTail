@@ -100,6 +100,128 @@ fn generate_log(path: &Path, target_bytes: u64) -> std::io::Result<usize> {
     Ok(lines)
 }
 
+/// Peak resident memory of this process in MB (Windows: PeakWorkingSetSize; Linux: VmHWM).
+fn peak_memory_mb() -> f64 {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        struct ProcessMemoryCounters {
+            cb: u32,
+            PageFaultCount: u32,
+            PeakWorkingSetSize: usize,
+            WorkingSetSize: usize,
+            QuotaPeakPagedPoolUsage: usize,
+            QuotaPagedPoolUsage: usize,
+            QuotaPeakNonPagedPoolUsage: usize,
+            QuotaNonPagedPoolUsage: usize,
+            PagefileUsage: usize,
+            PeakPagefileUsage: usize,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn K32GetProcessMemoryInfo(
+                process: *mut std::ffi::c_void,
+                counters: *mut ProcessMemoryCounters,
+                cb: u32,
+            ) -> i32;
+        }
+        let mut c = ProcessMemoryCounters {
+            cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+            PageFaultCount: 0,
+            PeakWorkingSetSize: 0,
+            WorkingSetSize: 0,
+            QuotaPeakPagedPoolUsage: 0,
+            QuotaPagedPoolUsage: 0,
+            QuotaPeakNonPagedPoolUsage: 0,
+            QuotaNonPagedPoolUsage: 0,
+            PagefileUsage: 0,
+            PeakPagefileUsage: 0,
+        };
+        // SAFETY: documented Win32 call with a correctly sized, initialised struct.
+        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
+        if ok != 0 {
+            return c.PeakWorkingSetSize as f64 / (1024.0 * 1024.0);
+        }
+        0.0
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|t| {
+                t.lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|kb| kb.parse::<f64>().ok())
+            })
+            .map(|kb| kb / 1024.0)
+            .unwrap_or(0.0)
+    }
+}
+
+/// Current resident memory of this process in MB.
+fn current_memory_mb() -> f64 {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        struct ProcessMemoryCounters {
+            cb: u32,
+            PageFaultCount: u32,
+            PeakWorkingSetSize: usize,
+            WorkingSetSize: usize,
+            QuotaPeakPagedPoolUsage: usize,
+            QuotaPagedPoolUsage: usize,
+            QuotaPeakNonPagedPoolUsage: usize,
+            QuotaNonPagedPoolUsage: usize,
+            PagefileUsage: usize,
+            PeakPagefileUsage: usize,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn K32GetProcessMemoryInfo(
+                process: *mut std::ffi::c_void,
+                counters: *mut ProcessMemoryCounters,
+                cb: u32,
+            ) -> i32;
+        }
+        let mut c = ProcessMemoryCounters {
+            cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+            PageFaultCount: 0,
+            PeakWorkingSetSize: 0,
+            WorkingSetSize: 0,
+            QuotaPeakPagedPoolUsage: 0,
+            QuotaPagedPoolUsage: 0,
+            QuotaPeakNonPagedPoolUsage: 0,
+            QuotaNonPagedPoolUsage: 0,
+            PagefileUsage: 0,
+            PeakPagefileUsage: 0,
+        };
+        // SAFETY: as above.
+        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
+        if ok != 0 {
+            return c.WorkingSetSize as f64 / (1024.0 * 1024.0);
+        }
+        0.0
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|t| {
+                t.lines()
+                    .find(|l| l.starts_with("VmRSS:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|kb| kb.parse::<f64>().ok())
+            })
+            .map(|kb| kb / 1024.0)
+            .unwrap_or(0.0)
+    }
+}
+
 fn best<F: FnMut() -> usize>(rounds: usize, mut f: F) -> (f64, usize) {
     let mut best_ms = f64::MAX;
     let mut result = 0;
@@ -262,4 +384,86 @@ fn main() {
             hits
         }),
     );
+    // Random access through the block cache: what scrolling around the file costs.
+    report(
+        "scroll 20k rows",
+        best(rounds, || {
+            let mut rng = XorShift(0xDEAD_BEEF_CAFE_F00D);
+            let mut hits = 0;
+            for _ in 0..20_000 {
+                let idx = rng.below(total);
+                if engine.get_line(idx).is_some() {
+                    hits += 1;
+                }
+            }
+            hits
+        }),
+    );
+
+    println!(
+        "memory          current {:.1} MB, peak {:.1} MB (one stream of {} bytes)",
+        current_memory_mb(),
+        peak_memory_mb(),
+        size
+    );
+    drop(engine);
+
+    // The maintainer's workload: ten 50 MB logs, all growing on every frame.
+    if generated {
+        let dir = _tmp.as_ref().unwrap().path().to_path_buf();
+        let mut paths = Vec::new();
+        for i in 0..10 {
+            let p = dir.join(format!("multi_{i}.log"));
+            generate_log(&p, 50_000_000).expect("write scenario log");
+            paths.push(p);
+        }
+        let before = current_memory_mb();
+        let t0 = Instant::now();
+        let mut engines: Vec<TailEngine> = paths
+            .iter()
+            .map(|p| TailEngine::open(p).expect("open scenario log"))
+            .collect();
+        let open_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let lines: usize = engines.iter().map(|e| e.total_lines()).sum();
+        println!("10x50MB open   {open_ms:9.1} ms  ({lines} lines)");
+        // 60 "frames": every frame appends 50 lines to each file and polls every engine.
+        let line = format!(
+            "2026-09-18 12:00:00.000 [INFO] payment-3 req=000000001 {}\n",
+            "x".repeat(440)
+        );
+        let mut writers: Vec<std::fs::File> = paths
+            .iter()
+            .map(|p| std::fs::OpenOptions::new().append(true).open(p).unwrap())
+            .collect();
+        let mut poll_total = 0.0f64;
+        for _ in 0..60 {
+            for w in writers.iter_mut() {
+                for _ in 0..50 {
+                    w.write_all(line.as_bytes()).unwrap();
+                }
+            }
+            let t = Instant::now();
+            for e in engines.iter_mut() {
+                e.poll_updates();
+            }
+            poll_total += t.elapsed().as_secs_f64() * 1000.0;
+        }
+        println!(
+            "10x50MB poll   {:9.2} ms per frame (10 streams, 500 new lines per frame)",
+            poll_total / 60.0
+        );
+        // Touch the tail of every stream, as ten visible tabs would.
+        for e in &engines {
+            let n = e.total_lines();
+            for i in n.saturating_sub(60)..n {
+                let _ = e.get_line(i);
+            }
+        }
+        println!(
+            "10x50MB memory  {:.1} MB for the ten streams (process {:.1} MB, peak {:.1} MB)",
+            current_memory_mb() - before,
+            current_memory_mb(),
+            peak_memory_mb()
+        );
+    }
 }

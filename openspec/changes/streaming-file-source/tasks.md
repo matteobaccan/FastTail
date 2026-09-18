@@ -13,9 +13,9 @@
 
 ## 3. Scan Jobs
 
-- [ ] 3.1 Add `ScanJob` (kind: Index | Filter | Search; generation; own handle; parameter snapshot) running on a worker thread, sending ordered `ScanBatch` messages with progress; `AtomicU64` generation for cancellation
-- [ ] 3.2 Route indexing (> 256 MB), filtering and search (> 16 MB) through jobs; drain batches in `poll_updates`; queue appends during a job and replay them incrementally at the end
-- [ ] 3.3 Tests: background filter equals synchronous filter, cancellation on a newer query, appends during a job, index job on a generated 300 MB file
+- [x] 3.1 Add `ScanJob` (kind: Index | Filter | Search; generation; own handle; parameter snapshot) running on a worker thread, sending ordered `ScanBatch` messages with progress; `AtomicU64` generation for cancellation
+- [x] 3.2 Route indexing (> 256 MB), filtering and search (> 16 MB) through jobs; drain batches in `poll_updates`; queue appends during a job and replay them incrementally at the end
+- [x] 3.3 Tests: background filter equals synchronous filter, cancellation on a newer query, appends during a job, index job on a generated 300 MB file
 
 ## 4. UI
 
@@ -24,6 +24,6 @@
 
 ## 5. Measurement and Docs
 
-- [ ] 5.1 `filter_bench`: `open` on 1 GB, `scroll` (random `get_line`), the 10 × 50 MB scenario with per-frame polling, and a peak resident memory report
-- [ ] 5.2 Record before/after numbers in `design.md` (memory for 10 × 50 MB, per-frame poll cost, open time for 1 GB)
+- [x] 5.1 `filter_bench`: `open` on 1 GB, `scroll` (random `get_line`), the 10 × 50 MB scenario with per-frame polling, and a peak resident memory report
+- [x] 5.2 Record before/after numbers in `design.md` (memory for 10 × 50 MB, per-frame poll cost, open time for 1 GB)
 - [ ] 5.3 README: replace the memory-mapped wording with the real model and its limits; `stream-engine` spec synced at archive

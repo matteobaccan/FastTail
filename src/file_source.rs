@@ -12,10 +12,11 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-/// Size of one cached block.
-pub const BLOCK_SIZE: usize = 256 * 1024;
+/// Size of one cached block. A screen of rows fits in one block; a miss costs one read of
+/// this size, so smaller blocks make random jumps (F3, go-to, bookmarks) cheaper.
+pub const BLOCK_SIZE: usize = 64 * 1024;
 /// Blocks kept per source (4 MB).
-pub const MAX_BLOCKS: usize = 16;
+pub const MAX_BLOCKS: usize = 64;
 
 pub fn open_file_shared(path: &Path) -> std::io::Result<File> {
     let mut options = std::fs::OpenOptions::new();

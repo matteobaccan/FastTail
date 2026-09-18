@@ -22,7 +22,7 @@ Measured costs on this machine (thin LTO): sequential scan with memchr ~1.2 GB/s
 ## Decisions
 
 **D1. `FileSource`: one read handle, a block cache, no buffer.**
-A stream keeps a `File` opened with full sharing (already the case for polls) and an LRU cache of at most 16 blocks of 256 KB (4 MB). `read_at(offset, len)` returns bytes from cached blocks, reading missing blocks with `seek + read_exact` (or `read_at` on Unix). Visible rows come from one or two blocks, so scrolling and follow mode hit the cache; a filter scan streams the file sequentially through the same cache with a read-ahead of one block. The handle is reopened when the file is replaced (rotation) or when a read fails.
+A stream keeps a `File` opened with full sharing (already the case for polls) and an LRU cache of at most 64 blocks of 64 KB (4 MB; 16 × 256 KB was measured first and made random jumps four times more expensive for no gain in scrolling). `read_at(offset, len)` returns bytes from cached blocks, reading missing blocks with `seek + read_exact` (or `read_at` on Unix). Visible rows come from one or two blocks, so scrolling and follow mode hit the cache; a filter scan streams the file sequentially through the same cache with a read-ahead of one block. The handle is reopened when the file is replaced (rotation) or when a read fails.
 
 **D2. Line text is decoded on access.** `get_line(idx)` reads `[offset(idx), offset(idx+1))` through the cache and decodes it as today (UTF-8 lossless, ANSI/ASCII mapping, UTF-16 LE/BE). Lines longer than one block are assembled from consecutive blocks; a cap of 1 MB per line protects the UI from pathological input (the rest of the line is not shown, and a marker says so).
 
@@ -42,6 +42,32 @@ Indexing at open runs synchronously up to 256 MB (about 200 ms) and in the backg
 **D9. Export and copy stream through the source**, unchanged in API: `export_lines` reads each line on demand; a 12 million-line export costs one sequential pass.
 
 **D10. Tests and benchmark.** All existing tests must pass unchanged (they only use the public API). New tests: lines spanning block boundaries, a 1 MB line, truncation freeing the cache, reset-with-same-header detection through fingerprints, background filter job delivering the same result as the synchronous path, cancellation on a newer query, Markdown cap. `filter_bench` gains an `open 1 GB` phase, a `scroll` phase (random `get_line` over the file) and prints peak resident memory (Windows `GetProcessMemoryInfo`, Linux `/proc/self/status`), with the 10 × 50 MB scenario as a dedicated phase.
+
+## Measurements (2026-09-19, this machine, thin LTO, `cargo bench`)
+
+100 MB generated log, 1.13 million lines, one stream:
+
+| Phase | In-memory buffer (after the incremental-index fix) | File source, 64 KB blocks |
+|---|---|---|
+| open + index | 80 ms | 57 ms |
+| 20 append polls (200 lines each) | 213 ms | 26 ms |
+| include filter, case-insensitive | 272 ms | 284 ms |
+| include + exclude | 865 ms | 893 ms |
+| include regex | 122 ms | 132 ms |
+| search | 82 ms | 132 ms |
+| 20 append polls with search + filter | 174 ms | 29 ms |
+| 20,000 random `get_line` (cache misses) | n/a (in RAM) | 470 ms, 23 µs each (1489 ms with 256 KB blocks) |
+| process memory, current / peak | ~130 MB / ~230 MB | 20 MB / 24 MB |
+
+Maintainer scenario, ten 50 MB logs (5.6 million lines of ~88 bytes) growing on every frame:
+
+| Measure | Before | After |
+|---|---|---|
+| memory for the ten streams | ~500 MB (up to 1 GB after growth) | 60 MB (45 MB of index + cache) |
+| open all ten | not measured | 232 ms |
+| poll of all ten per frame, 500 new lines per frame | tens of ms | 3.5 ms |
+
+With 500-byte lines the index is five times smaller, so the same scenario lands near 50 MB total. Sequential scans (filters, search) stay within noise of the in-memory version because they stream 1 MB chunks and borrow UTF-8 text from the chunk; search is ~50 ms slower on 100 MB because the byte-level HEX search now also streams the file.
 
 ## Risks / Trade-offs
 
