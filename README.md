@@ -133,6 +133,15 @@ cargo build --release
 
 The standalone executable is written to `target/release/fasttail` (`target/release/fasttail.exe` on Windows).
 
+### Benchmarks
+`cargo bench` runs `benches/filter_bench.rs`, which times the engine hot paths (indexing, include/exclude and regex filters, search, highlight scanning) on a synthetic 200 MB log generated in a temporary directory. It is built only on demand, never by `cargo test`.
+
+| Variable | Effect |
+|---|---|
+| `FASTTAIL_BENCH_LOG=<file>` | benchmark an existing log instead of generating one |
+| `FASTTAIL_BENCH_BYTES=<n>` | size of the generated log (default 200000000; 1100000000 was used for the LTO decision) |
+| `FASTTAIL_BENCH_ROUNDS=<n>` | rounds per phase, best time reported (default 3) |
+
 ### Prebuilt binaries
 Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform:
 
