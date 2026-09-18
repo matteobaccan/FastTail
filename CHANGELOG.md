@@ -1,0 +1,103 @@
+# Changelog
+
+All notable changes to FastTail are listed here. The section matching a
+release tag is used as the body of the GitHub Release; GitHub appends the
+list of merged pull requests and the compare link below it.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [0.3.0] - 2026-09-18
+
+### Added
+
+- **Row selection, copy and export.** Click, Shift+click and Ctrl+click select
+  rows (ranges follow the visible order under the active filters), Ctrl+A
+  selects every visible row, Ctrl+C copies the selection or the current search
+  hit as plain text. A save menu in the stream bar exports the visible lines
+  or the search matches to a file.
+- **Go to line (Ctrl+G).** An inline box in the focused stream accepts an
+  absolute line number or `+N` / `-N` relative to the current line. Numbers
+  past the end clamp, a line hidden by the filters resolves to the next
+  visible one. The target row is centred and selected, follow mode pauses.
+- **Always on top.** Title-bar pin, Settings checkbox and Ctrl+Shift+T keep the
+  window above the others; the choice is persisted in `fasttail.ini`.
+- **Line bookmarks.** Ctrl+F2 toggles a bookmark on the current line, F2 and
+  Shift+F2 jump to the next and previous one with wrap-around, respecting the
+  filters. Bookmarks show a star in the marker column, are persisted per file
+  and restored on reopen; the stream menu clears them.
+- **Background-tab activity badge.** Tabs that are not displayed show the
+  number of lines appended since they were last shown (capped at 999+),
+  coloured by the most severe highlight rule among them. An optional setting
+  requests OS attention when a sound-alert rule matches in a hidden tab while
+  the window is unfocused.
+- **Scan progress in the stream bar.** While a background job runs, the bar
+  shows `indexing / filtering / searching NN%` with the hit count so far.
+
+### Changed
+
+- **Files are no longer held in memory.** The engine reads on demand through
+  a small block cache (16 x 256 KB); indexing, filters and search stream the
+  file in 1 MB chunks. Resident memory per stream is the line index (8 bytes
+  per line) plus at most 4 MB of cache, whatever the file size. Truncation
+  drops cache and index and returns their memory.
+- **Background scans on large files.** Above 16 MB, include/exclude filtering
+  and search run on a worker thread; above 256 MB the line index is built
+  there too. The UI keeps repainting, a newer filter or search cancels the
+  job it replaces, and appended lines are picked up when the job ends.
+- **Incremental line index on append.** Growing files no longer trigger a
+  full rescan on every poll: only the tail from the last (possibly partial)
+  line is indexed, using `memchr` for the byte encodings. On a 100 MB file
+  20 append polls went from 1570 ms to 27 ms, opening from 131 ms to 55 ms.
+- **Stronger rewrite detection.** A file reset and regrown past its old size
+  with the same header is detected by also comparing the 64 bytes where the
+  old data ended, so old and new content are never spliced.
+- Lines longer than 1 MB are shown truncated with a marker. Rendered Markdown
+  is refused above 32 MB with a notice; the text view stays available.
+- README documents the memory model. All new UI strings are localized in the
+  five supported languages.
+
+### Removed
+
+- The `memmap2` dependency: the block cache replaced the memory map.
+
+## [0.2.0] - 2026-09-18
+
+### Added
+
+- **Command line arguments.** `fasttail [OPTIONS] [PATH...]` with `--fresh`,
+  `--filter`, `--exclude`, `--follow` / `--no-follow`, `--renderer`,
+  `--config`, `--version`, `--help` and `--`. Files are opened after the
+  restored workspace, missing ones are reported, usage errors exit with 2.
+  On Windows `--help` and `--version` attach to the parent console.
+- **wgpu renderer fallback.** Machines without a usable OpenGL driver (Remote
+  Desktop, VMs, basic adapters) could not start FastTail at all. Startup now
+  tries OpenGL first and, with `renderer=auto`, retries with wgpu. The
+  `FASTTAIL_RENDERER` variable, the `renderer` config key and Settings force
+  `auto`, `glow` or `wgpu`. The status bar shows the active backend with the
+  adapter in its tooltip and in About.
+
+### Fixed
+
+- Crash `index out of bounds` after closing a floating dock window: its
+  surface index stayed in the saved window rectangles and was dereferenced
+  without a bounds check. Stale entries are now pruned before rendering and
+  before saving the layout.
+
+### Changed
+
+- The filter benchmark moved from `examples/` to `benches/` and generates its
+  own deterministic log (`FASTTAIL_BENCH_BYTES`, default 200 MB) unless
+  `FASTTAIL_BENCH_LOG` points to an existing file.
+- The Windows ARM64 release target was dropped: Windows on ARM runs the
+  x86_64 executable under emulation.
+
+## [0.1.0] - 2026-09-18
+
+First public release: multi-stream tail with docking tabs, include/exclude
+filters, highlight rules with sound alerts, search, HEX and Markdown views,
+encoding detection, localized UI and a CI pipeline that publishes Windows,
+Linux and macOS builds on every `v*` tag.
+
+[0.3.0]: https://github.com/matteobaccan/FastTail/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/matteobaccan/FastTail/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/matteobaccan/FastTail/commits/v0.1.0

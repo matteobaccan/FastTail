@@ -39,7 +39,7 @@ Each build job SHALL package its binary before upload: Linux and macOS as `fastt
 - **THEN** `fasttail.exe` and `fasttail.pdb` sit in the same directory, so a crash backtrace resolves function names.
 
 ### Requirement: Release Published Non-Draft with All Assets
-The `release` job SHALL depend on both `test` and `build`, SHALL upload every archive produced by the matrix, and SHALL leave the GitHub release published (not draft) with generated release notes.
+The `release` job SHALL depend on both `test` and `build`, SHALL upload every archive produced by the matrix, and SHALL leave the GitHub release published (not draft). The release body SHALL be the `CHANGELOG.md` section whose heading matches the tag version (`v0.3.0` -> `## [0.3.0]`), followed by the GitHub-generated notes (merged pull requests, new contributors, compare link); a tag without a matching section SHALL still publish with the generated notes only.
 
 #### Scenario: Successful tag pipeline
 - **WHEN** all `test` and `build` jobs of a `v*` tag succeed
