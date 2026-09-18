@@ -1,4 +1,9 @@
-## ADDED Requirements
+# Cyber Themes Specification
+
+## Purpose
+Defines the curated Tron, Matrix, Blade and Light color themes, live theme switching at runtime, and persistence of the selected theme.
+
+## Requirements
 
 ### Requirement: Preset sci-fi visual themes
 The application SHALL provide four curated, switchable color themes: three sci-fi themes inspired by cinematic aesthetics, **Tron**, **Matrix** and **Blade**, plus a clean **Light** theme for bright environments.

@@ -1,4 +1,9 @@
-## ADDED Requirements
+# Log Intelligence Specification
+
+## Purpose
+Adds structure awareness to raw log lines: inline JSON detection with expandable pretty-printing and grouping of multiline stack traces with their parent entry.
+
+## Requirements
 
 ### Requirement: Inline JSON auto-detection and expansion
 The application SHALL detect single-line JSON log payloads and render an inline interactive expansion button (`[▼ JSON]`), allowing the user to expand the payload into formatted, pretty-printed tree view with syntax coloring.

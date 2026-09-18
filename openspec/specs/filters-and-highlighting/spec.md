@@ -55,3 +55,7 @@ Highlight rules SHALL be evaluated strictly in order from top to bottom. Once a 
 
 ### Requirement: Clean Initialization of New Rules
 When the user creates a new filter or highlight rule, the text and regex fields SHALL initialize empty without prefilled sample text.
+
+#### Scenario: Adding a new highlight rule
+- **WHEN** the user clicks the add-rule button in the Highlights dialog
+- **THEN** a new rule row appears with an empty pattern field, ready for typing, and no placeholder text is saved to the configuration.
