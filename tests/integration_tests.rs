@@ -1186,29 +1186,30 @@ fn test_config_ini_persistence() {
 fn test_config_save_only_when_different() {
     let dir = tempfile::tempdir().unwrap();
     let cfg_path = dir.path().join("test_save.ini");
-    std::env::set_var("FASTTAIL_CONFIG", &cfg_path);
 
     let mut config = FastTailConfig::default();
     config.font_size = 14.0;
-    config.save().unwrap();
-    assert!(cfg_path.exists());
 
-    let mtime1 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+    assert!(
+        config.save_to(&cfg_path).unwrap(),
+        "first save must write the file"
+    );
+    let first = std::fs::read(&cfg_path).unwrap();
 
-    // Saving identical config must not touch or rewrite the file on disk
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    config.save().unwrap();
-    let mtime2 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
-    assert_eq!(mtime1, mtime2, "save() should not rewrite identical file");
+    // Saving an identical config must leave the file untouched
+    assert!(
+        !config.save_to(&cfg_path).unwrap(),
+        "identical config must not be rewritten"
+    );
+    assert_eq!(std::fs::read(&cfg_path).unwrap(), first);
 
-    // Saving modified config should rewrite the file
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Saving a modified config must rewrite it
     config.font_size = 18.0;
-    config.save().unwrap();
-    let mtime3 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
-    assert_ne!(mtime1, mtime3, "save() should rewrite when config changed");
-
-    std::env::remove_var("FASTTAIL_CONFIG");
+    assert!(
+        config.save_to(&cfg_path).unwrap(),
+        "changed config must be rewritten"
+    );
+    assert_ne!(std::fs::read(&cfg_path).unwrap(), first);
 }
 
 #[test]
