@@ -1183,6 +1183,35 @@ fn test_config_ini_persistence() {
 }
 
 #[test]
+fn test_config_save_only_when_different() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("test_save.ini");
+    std::env::set_var("FASTTAIL_CONFIG", &cfg_path);
+
+    let mut config = FastTailConfig::default();
+    config.font_size = 14.0;
+    config.save().unwrap();
+    assert!(cfg_path.exists());
+
+    let mtime1 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+
+    // Saving identical config must not touch or rewrite the file on disk
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    config.save().unwrap();
+    let mtime2 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+    assert_eq!(mtime1, mtime2, "save() should not rewrite identical file");
+
+    // Saving modified config should rewrite the file
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    config.font_size = 18.0;
+    config.save().unwrap();
+    let mtime3 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+    assert_ne!(mtime1, mtime3, "save() should rewrite when config changed");
+
+    std::env::remove_var("FASTTAIL_CONFIG");
+}
+
+#[test]
 fn test_highlight_rule_sound_alert_ini_persistence() {
     use fasttail::audio::SoundAlertPreset;
 
