@@ -233,16 +233,62 @@ pub fn expanded_args(tool: &ExternalTool, ctx: &ToolContext) -> Vec<String> {
         .collect()
 }
 
+/// Safely quotes an argument for POSIX shell (`sh -c`) execution to prevent command injection.
+pub fn quote_sh_arg(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Safely quotes an argument for Windows CMD (`cmd /c`) execution to prevent command injection.
+pub fn quote_cmd_arg(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    out.push('"');
+    let mut backslashes = 0;
+    for c in s.chars() {
+        if c == '\\' {
+            backslashes += 1;
+        } else if c == '"' {
+            for _ in 0..backslashes * 2 {
+                out.push('\\');
+            }
+            backslashes = 0;
+            out.push_str(r#"\""#);
+        } else {
+            for _ in 0..backslashes {
+                out.push('\\');
+            }
+            backslashes = 0;
+            if c == '%' {
+                out.push_str("%%");
+            } else {
+                out.push(c);
+            }
+        }
+    }
+    for _ in 0..backslashes * 2 {
+        out.push('\\');
+    }
+    out.push('"');
+    out
+}
+
 /// Builds the command for a tool on a row. Without the shell flag the program is spawned
 /// directly with one argv entry per expanded argument; with it, `cmd /c` (Windows) or
-/// `sh -c` runs the program and the arguments joined by spaces.
+/// `sh -c` runs the program with safely quoted arguments to prevent command injection.
 pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
     let args = expanded_args(tool, ctx);
     let mut cmd = if tool.use_shell {
+        #[cfg(windows)]
+        let quote_arg = quote_cmd_arg;
+        #[cfg(not(windows))]
+        let quote_arg = quote_sh_arg;
+
         let mut line = tool.program.clone();
         for a in &args {
             line.push(' ');
-            line.push_str(a);
+            line.push_str(&quote_arg(a));
         }
         #[cfg(windows)]
         let mut cmd = {
@@ -489,5 +535,39 @@ mod tests {
         assert!(Shortcut::parse("F9").is_none(), "a modifier is required");
         assert!(Shortcut::parse("Ctrl+Nope").is_none());
         assert!(Shortcut::parse("Ctrl+A+B").is_none());
+    }
+
+    #[test]
+    fn test_shell_quoting_prevents_injection() {
+        assert_eq!(quote_sh_arg(""), "''");
+        assert_eq!(quote_sh_arg("hello; rm -rf /"), "'hello; rm -rf /'");
+        assert_eq!(quote_sh_arg("foo'bar"), r"'foo'\''bar'");
+
+        assert_eq!(quote_cmd_arg("hello & calc.exe"), r#""hello & calc.exe""#);
+        assert_eq!(quote_cmd_arg("100%"), r#""100%%""#);
+        assert_eq!(quote_cmd_arg(r#"a\"b"#), r#""a\\\"b""#);
+    }
+
+    #[test]
+    fn test_build_command_shell_mode_quotes_arguments() {
+        let mut tool = ExternalTool::new("echo", "echo", "{line}");
+        tool.use_shell = true;
+        let ctx = ToolContext {
+            line: "hello; rm -rf /".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_command(&tool, &ctx);
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        assert_eq!(args.len(), 2);
+        #[cfg(not(windows))]
+        {
+            assert_eq!(args[0], "-c");
+            assert_eq!(args[1], "echo 'hello; rm -rf /'");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(args[0], "/c");
+            assert_eq!(args[1], "echo \"hello; rm -rf /\"");
+        }
     }
 }
