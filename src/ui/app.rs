@@ -919,6 +919,11 @@ impl FastTailApp {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
+        // Keep streams updated even when idle or running in the background
+        if self.engines.iter().any(|e| e.is_watching) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+
         // 5. Apply theme visuals (only when theme changes or on first frame)
         if self.theme_applied != Some(self.config.theme) {
             self.config.theme.apply(&ctx);

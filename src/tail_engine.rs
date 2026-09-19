@@ -1350,7 +1350,7 @@ impl TailEngine {
             needs_refresh = false;
         }
 
-        // Periodic size check (handles network drives and Windows handle caches)
+        // Periodic size check (handles network drives, atomic saves, and Windows handle caches)
         let do_size_check = needs_refresh
             || self.size_check_interval.is_zero()
             || (self.is_pattern() && self.pattern_scan_interval.is_zero())
@@ -1360,7 +1360,10 @@ impl TailEngine {
             if let Some(current) = &self.current_file {
                 if let Ok(metadata) = std::fs::metadata(current) {
                     let current_len = metadata.len();
-                    if current_len != self.file_size {
+                    if current_len != self.file_size
+                        || metadata.modified().ok() != self.last_modified
+                        || !self.source.is_same_file_as_path()
+                    {
                         needs_refresh = true;
                     }
                 }
@@ -1399,6 +1402,14 @@ impl TailEngine {
         }
 
         if new_size > self.file_size {
+            // If the underlying handle points to a replaced file (e.g. atomic save by an editor)
+            // or does not yet reflect the new size, reopen to obtain the live file handle.
+            if !self.source.is_same_file_as_path()
+                || self.source.handle_len().unwrap_or(0) < new_size
+            {
+                let _ = self.source.reopen();
+            }
+
             let prev_lines_count = self.line_offsets.len();
             let added_bytes = new_size - self.file_size;
             self.bytes_read_since_tick += added_bytes;
@@ -1429,8 +1440,8 @@ impl TailEngine {
             return;
         }
 
-        // In-place modification where size remains identical but timestamp changed
-        if new_modified != self.last_modified {
+        // In-place modification where size remains identical but timestamp changed or file was replaced
+        if new_modified != self.last_modified || !self.source.is_same_file_as_path() {
             self.reload_from_start(new_size, new_modified);
         }
     }

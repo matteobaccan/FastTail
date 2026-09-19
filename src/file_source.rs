@@ -87,6 +87,88 @@ impl FileSource {
         self.len.get() == 0
     }
 
+    /// Length of the currently open file handle on disk, if any.
+    pub fn handle_len(&self) -> Option<u64> {
+        self.file
+            .borrow()
+            .as_ref()
+            .and_then(|f| f.metadata().ok().map(|m| m.len()))
+    }
+
+#[cfg(windows)]
+fn win32_file_identity(file: &std::fs::File) -> Option<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    #[repr(C)]
+    struct ByHandleFileInformation {
+        dw_file_attributes: u32,
+        ft_creation_time: [u32; 2],
+        ft_last_access_time: [u32; 2],
+        ft_last_write_time: [u32; 2],
+        dw_volume_serial_number: u32,
+        n_file_size_high: u32,
+        n_file_size_low: u32,
+        n_number_of_links: u32,
+        n_file_index_high: u32,
+        n_file_index_low: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            handle: *mut std::ffi::c_void,
+            info: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+    let mut info = std::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
+    let res = unsafe {
+        GetFileInformationByHandle(
+            file.as_raw_handle(),
+            info.as_mut_ptr(),
+        )
+    };
+    if res != 0 {
+        let info = unsafe { info.assume_init() };
+        let file_index = ((info.n_file_index_high as u64) << 32) | (info.n_file_index_low as u64);
+        Some((info.dw_volume_serial_number, file_index))
+    } else {
+        None
+    }
+}
+
+    /// Returns true if the open handle still points to the same filesystem entity as `self.path`.
+    pub fn is_same_file_as_path(&self) -> bool {
+        if self.path.as_os_str().is_empty() {
+            return true;
+        }
+        let borrow = self.file.borrow();
+        let Some(file) = borrow.as_ref() else {
+            return false;
+        };
+        #[cfg(windows)]
+        {
+            let Some(id1) = Self::win32_file_identity(file) else {
+                return true;
+            };
+            let Ok(path_file) = open_file_shared(&self.path) else {
+                return false;
+            };
+            let Some(id2) = Self::win32_file_identity(&path_file) else {
+                return true;
+            };
+            id1 == id2
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let Ok(handle_meta) = file.metadata() else {
+                return false;
+            };
+            let Ok(path_meta) = std::fs::metadata(&self.path) else {
+                return false;
+            };
+            handle_meta.dev() == path_meta.dev() && handle_meta.ino() == path_meta.ino()
+        }
+    }
+
     /// Records a new file length. Growth invalidates the (partial) block that held the old
     /// end; shrinking drops the whole cache.
     pub fn set_len(&self, new_len: u64) {

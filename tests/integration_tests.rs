@@ -46,6 +46,27 @@ fn test_tail_engine_open_and_stream() {
 }
 
 #[test]
+fn test_tail_engine_atomic_save_replacement_detected() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("atomic_test.log");
+    std::fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+
+    let mut engine = TailEngine::open(&file_path).unwrap();
+    assert_eq!(engine.total_lines(), 3);
+
+    // Simulate atomic save: write new file with new lines and replace original file
+    let tmp_path = dir.path().join("atomic_test.tmp");
+    std::fs::write(&tmp_path, "line 1\nline 2\nline 3\nline 4\nline 5\n").unwrap();
+    let _ = std::fs::remove_file(&file_path);
+    std::fs::rename(&tmp_path, &file_path).unwrap();
+
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 5);
+    assert_eq!(engine.get_line(3).as_deref(), Some("line 4"));
+    assert_eq!(engine.get_line(4).as_deref(), Some("line 5"));
+}
+
+#[test]
 fn test_tail_engine_filters() {
     let mut tmp = NamedTempFile::new().unwrap();
     writeln!(tmp, "INFO: Worker 1 OK").unwrap();
