@@ -877,35 +877,41 @@ impl FastTailConfig {
         Self::default()
     }
 
+    /// Writes `buf` to `path` only when the file does not already hold those exact
+    /// bytes. Returns whether the file was actually written. A read error counts as
+    /// "different", so an unreadable target is rewritten rather than skipped.
+    fn write_if_changed(path: &Path, buf: &[u8]) -> Result<bool, std::io::Error> {
+        if fs::read(path)
+            .map(|existing| existing == buf)
+            .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+        fs::write(path, buf)?;
+        Ok(true)
+    }
+
+    /// Serializes the config to `path`. Returns `true` when the file changed on disk.
+    pub fn save_to(&self, path: &Path) -> Result<bool, std::io::Error> {
+        let mut buf = Vec::new();
+        self.to_ini()
+            .write_to(&mut buf)
+            .map_err(std::io::Error::other)?;
+        Self::write_if_changed(path, &buf)
+    }
+
     pub fn save(&self) -> Result<(), std::io::Error> {
         let path = Self::config_path();
-        let conf = self.to_ini();
-        let mut buf = Vec::new();
-        conf.write_to(&mut buf).map_err(std::io::Error::other)?;
-
-        let matches_existing = |target: &Path| -> bool {
-            fs::read(target)
-                .map(|existing| existing == buf)
-                .unwrap_or(false)
-        };
-
-        if matches_existing(&path) {
-            return Ok(());
-        }
-
-        match fs::write(&path, &buf) {
-            Ok(()) => Ok(()),
+        match self.save_to(&path) {
+            Ok(_) => Ok(()),
             Err(primary_err) => {
                 // Install directory may be read-only (e.g. Program Files): fall back to the user directory
                 if let Some(user) = Self::user_config_path() {
                     if user != path {
-                        if matches_existing(&user) {
-                            return Ok(());
-                        }
                         if let Some(parent) = user.parent() {
                             let _ = fs::create_dir_all(parent);
                         }
-                        if fs::write(&user, &buf).is_ok() {
+                        if self.save_to(&user).is_ok() {
                             return Ok(());
                         }
                     }
