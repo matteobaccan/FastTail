@@ -6,7 +6,36 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-19
+
+### Added
+
+- **Background stream monitoring.** Active log streams continue to poll and
+  update in real time even when FastTail is idle or running in the background.
+
+### Changed
+
+- **Smart configuration persistence.** The configuration file (`fasttail.ini`)
+  is now only written to disk if its serialized content has actually changed,
+  eliminating redundant periodic disk writes.
+
+### Fixed
+
+- **FileSource slice-bounds crash fix.** Prevented slice out-of-bounds panic in
+  `FileSource::read_with` when an underlying file shrinks while cached in memory.
+- **Atomic save / file replacement detection.** Detects when files are replaced
+  or saved atomically by external editors (such as Notepad or VS Code) using
+  filesystem identity and handle tracking, reopening the handle and indexing
+  newly appended lines.
+
+### Performance
+
+- **UI frame pacing.** Added 8ms frame pacing (~125 FPS cap) to prevent
+  excessive repaints and high CPU usage during high-frequency mouse movements.
+- **Throttled fallback size checks.** Throttled filesystem metadata checks in
+  the tail engine to 500ms intervals during live UI frames.
+- **Theme visual styling cache.** Cached theme visuals to prevent costly
+  re-evaluation of egui context styles on every rendered frame.
 
 ## [0.4.0] - 2026-09-18
 
@@ -202,7 +231,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
-[Unreleased]: https://github.com/matteobaccan/FastTail/compare/v0.4.0...HEAD
+[0.5.0]: https://github.com/matteobaccan/FastTail/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/matteobaccan/FastTail/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/matteobaccan/FastTail/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/matteobaccan/FastTail/compare/v0.1.0...v0.2.0
