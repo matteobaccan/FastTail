@@ -1416,7 +1416,7 @@ impl FastTailApp {
 
                     if ui
                         .add(filter_btn)
-                        .on_hover_text("Open highlight color rules")
+                        .on_hover_text(t(self.config.language, "color_filters_desc"))
                         .clicked()
                     {
                         self.config.filters_open = !self.config.filters_open;
@@ -1443,7 +1443,7 @@ impl FastTailApp {
 
                     if ui
                         .add(play_btn)
-                        .on_hover_text("Resume monitoring and following tail on all streams")
+                        .on_hover_text(t(self.config.language, "play_tip"))
                         .clicked()
                     {
                         for eng in &mut self.engines {
@@ -1473,7 +1473,7 @@ impl FastTailApp {
 
                     if ui
                         .add(pause_btn)
-                        .on_hover_text("Pause monitoring and tail following on all streams")
+                        .on_hover_text(t(self.config.language, "pause_tip"))
                         .clicked()
                     {
                         for eng in &mut self.engines {
@@ -1515,7 +1515,7 @@ impl FastTailApp {
 
                         if ui
                             .add(help_btn)
-                            .on_hover_text("Shortcuts and Help (F1)")
+                            .on_hover_text(t(self.config.language, "help_tip"))
                             .clicked()
                         {
                             self.config.help_open = !self.config.help_open;
@@ -1530,7 +1530,11 @@ impl FastTailApp {
                                 .corner_radius(CornerRadius::same(6))
                                 .min_size(egui::vec2(0.0, 26.0));
 
-                        if ui.add(about_btn).on_hover_text("About FastTail").clicked() {
+                        if ui
+                            .add(about_btn)
+                            .on_hover_text(t(self.config.language, "about_tip"))
+                            .clicked()
+                        {
                             self.config.about_open = !self.config.about_open;
                             let _ = self.config.save();
                         }

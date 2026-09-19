@@ -582,6 +582,8 @@ fn test_i18n_exhaustive_coverage() {
         "settings_tip",
         "about_tip",
         "help_tip",
+        "play_tip",
+        "pause_tip",
         "tip_search_box",
         "tip_add_rule",
         "tip_size_unit",
