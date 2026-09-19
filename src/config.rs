@@ -880,16 +880,32 @@ impl FastTailConfig {
     pub fn save(&self) -> Result<(), std::io::Error> {
         let path = Self::config_path();
         let conf = self.to_ini();
-        match conf.write_to_file(&path) {
+        let mut buf = Vec::new();
+        conf.write_to(&mut buf).map_err(std::io::Error::other)?;
+
+        let matches_existing = |target: &Path| -> bool {
+            fs::read(target)
+                .map(|existing| existing == buf)
+                .unwrap_or(false)
+        };
+
+        if matches_existing(&path) {
+            return Ok(());
+        }
+
+        match fs::write(&path, &buf) {
             Ok(()) => Ok(()),
             Err(primary_err) => {
                 // Install directory may be read-only (e.g. Program Files): fall back to the user directory
                 if let Some(user) = Self::user_config_path() {
                     if user != path {
+                        if matches_existing(&user) {
+                            return Ok(());
+                        }
                         if let Some(parent) = user.parent() {
                             let _ = fs::create_dir_all(parent);
                         }
-                        if conf.write_to_file(&user).is_ok() {
+                        if fs::write(&user, &buf).is_ok() {
                             return Ok(());
                         }
                     }

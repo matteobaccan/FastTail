@@ -46,6 +46,27 @@ fn test_tail_engine_open_and_stream() {
 }
 
 #[test]
+fn test_tail_engine_atomic_save_replacement_detected() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("atomic_test.log");
+    std::fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+
+    let mut engine = TailEngine::open(&file_path).unwrap();
+    assert_eq!(engine.total_lines(), 3);
+
+    // Simulate atomic save: write new file with new lines and replace original file
+    let tmp_path = dir.path().join("atomic_test.tmp");
+    std::fs::write(&tmp_path, "line 1\nline 2\nline 3\nline 4\nline 5\n").unwrap();
+    let _ = std::fs::remove_file(&file_path);
+    std::fs::rename(&tmp_path, &file_path).unwrap();
+
+    engine.poll_updates();
+    assert_eq!(engine.total_lines(), 5);
+    assert_eq!(engine.get_line(3).as_deref(), Some("line 4"));
+    assert_eq!(engine.get_line(4).as_deref(), Some("line 5"));
+}
+
+#[test]
 fn test_tail_engine_filters() {
     let mut tmp = NamedTempFile::new().unwrap();
     writeln!(tmp, "INFO: Worker 1 OK").unwrap();
@@ -431,6 +452,23 @@ fn test_tail_engine_out_of_bounds() {
     assert_eq!(engine.get_line(1).as_deref(), None);
     assert_eq!(engine.get_line(9999).as_deref(), None);
     assert_eq!(engine.get_line(usize::MAX).as_deref(), None);
+}
+
+#[test]
+fn test_tail_engine_line_past_file_end_returns_none() {
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "First line").unwrap();
+    writeln!(tmp, "Second line").unwrap();
+    tmp.flush().unwrap();
+
+    let engine = TailEngine::open(tmp.path()).unwrap();
+    assert_eq!(engine.total_lines(), 2);
+
+    // If underlying file shrinks on disk and cache is cleared:
+    std::fs::write(tmp.path(), "Tiny").unwrap();
+    engine.source.clear();
+    // Getting lines before poll_updates must not panic even if offset is now out of range:
+    assert!(engine.get_line(1).is_none());
 }
 
 #[test]
@@ -1142,6 +1180,35 @@ fn test_config_ini_persistence() {
         loaded.highlight_rules[0].sound_alert,
         fasttail::audio::SoundAlertPreset::None
     );
+}
+
+#[test]
+fn test_config_save_only_when_different() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("test_save.ini");
+    std::env::set_var("FASTTAIL_CONFIG", &cfg_path);
+
+    let mut config = FastTailConfig::default();
+    config.font_size = 14.0;
+    config.save().unwrap();
+    assert!(cfg_path.exists());
+
+    let mtime1 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+
+    // Saving identical config must not touch or rewrite the file on disk
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    config.save().unwrap();
+    let mtime2 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+    assert_eq!(mtime1, mtime2, "save() should not rewrite identical file");
+
+    // Saving modified config should rewrite the file
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    config.font_size = 18.0;
+    config.save().unwrap();
+    let mtime3 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+    assert_ne!(mtime1, mtime3, "save() should rewrite when config changed");
+
+    std::env::remove_var("FASTTAIL_CONFIG");
 }
 
 #[test]

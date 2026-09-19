@@ -498,6 +498,9 @@ pub struct TailEngine {
     /// Minimum time between two directory scans of a pattern stream (2 s; tests use 0).
     pub pattern_scan_interval: Duration,
     last_pattern_scan: Instant,
+    /// Minimum time between fallback size checks via filesystem metadata (500 ms; tests use 0).
+    pub size_check_interval: Duration,
+    last_size_check: Instant,
     /// Name of the file the stream last switched to and when, for the stream bar notice.
     pub switch_notice: Option<(String, Instant)>,
     /// First bytes of the file and the bytes before the indexed end, used to tell a rewrite
@@ -624,7 +627,8 @@ pub struct TailEngine {
 
 /// Directory scan cadence of a pattern stream.
 pub const PATTERN_SCAN_INTERVAL: Duration = Duration::from_secs(2);
-/// How long the "switched to <file>" notice stays in the stream bar.
+/// Minimum cadence between fallback size checks via filesystem metadata (500 ms).
+pub const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 pub const SWITCH_NOTICE_DURATION: Duration = Duration::from_secs(5);
 
 impl TailEngine {
@@ -897,6 +901,10 @@ impl TailEngine {
             current_file: None,
             pattern_scan_interval: PATTERN_SCAN_INTERVAL,
             last_pattern_scan: Instant::now(),
+            size_check_interval: Duration::ZERO,
+            last_size_check: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(Instant::now),
             switch_notice: None,
             source,
             head_fingerprint: Vec::new(),
@@ -1166,7 +1174,7 @@ impl TailEngine {
     /// search matches). Lines before `unchanged_lines` are known to be identical to the
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
-        let total_len = self.source.len();
+        let mut total_len = self.source.len();
         // The level cache follows the index: drop what a running level scan would push out
         // of order, and forget the lines that are about to be rescanned.
         if self
@@ -1279,6 +1287,12 @@ impl TailEngine {
                 }
             }
         }
+        if pos < total_len {
+            total_len = pos;
+            self.file_size = pos;
+            self.source.set_len(pos);
+            self.line_offsets.retain(|&off| off < total_len);
+        }
         // Length of the final (possibly unterminated) line, without its newline.
         let tail = self
             .source
@@ -1336,16 +1350,26 @@ impl TailEngine {
             needs_refresh = false;
         }
 
-        // Periodic size check (handles network drives and Windows handle caches)
-        if let Some(current) = &self.current_file {
-            if let Ok(metadata) = std::fs::metadata(current) {
-                let current_len = metadata.len();
-                if current_len != self.file_size {
-                    needs_refresh = true;
+        // Periodic size check (handles network drives, atomic saves, and Windows handle caches)
+        let do_size_check = needs_refresh
+            || self.size_check_interval.is_zero()
+            || (self.is_pattern() && self.pattern_scan_interval.is_zero())
+            || self.last_size_check.elapsed() >= self.size_check_interval;
+        if do_size_check {
+            self.last_size_check = Instant::now();
+            if let Some(current) = &self.current_file {
+                if let Ok(metadata) = std::fs::metadata(current) {
+                    let current_len = metadata.len();
+                    if current_len != self.file_size
+                        || metadata.modified().ok() != self.last_modified
+                        || !self.source.is_same_file_as_path()
+                    {
+                        needs_refresh = true;
+                    }
                 }
+            } else {
+                needs_refresh = false;
             }
-        } else {
-            needs_refresh = false;
         }
 
         if needs_refresh {
@@ -1378,6 +1402,14 @@ impl TailEngine {
         }
 
         if new_size > self.file_size {
+            // If the underlying handle points to a replaced file (e.g. atomic save by an editor)
+            // or does not yet reflect the new size, reopen to obtain the live file handle.
+            if !self.source.is_same_file_as_path()
+                || self.source.handle_len().unwrap_or(0) < new_size
+            {
+                let _ = self.source.reopen();
+            }
+
             let prev_lines_count = self.line_offsets.len();
             let added_bytes = new_size - self.file_size;
             self.bytes_read_since_tick += added_bytes;
@@ -1408,8 +1440,8 @@ impl TailEngine {
             return;
         }
 
-        // In-place modification where size remains identical but timestamp changed
-        if new_modified != self.last_modified {
+        // In-place modification where size remains identical but timestamp changed or file was replaced
+        if new_modified != self.last_modified || !self.source.is_same_file_as_path() {
             self.reload_from_start(new_size, new_modified);
         }
     }
