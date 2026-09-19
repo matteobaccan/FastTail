@@ -376,13 +376,31 @@ pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(
     if haystack.is_ascii() && needle_lower.is_ascii() {
         let h = haystack.as_bytes();
         let n = needle_lower.as_bytes();
-        let mut i = 0;
-        while i + n.len() <= h.len() {
-            if h[i..i + n.len()].eq_ignore_ascii_case(n) {
-                out.push((i, i + n.len()));
-                i += n.len();
+        let n_len = n.len();
+        if n_len == 0 || n_len > h.len() {
+            return out;
+        }
+
+        // SIMD optimization: use memchr2 on the first byte's lower and upper variants
+        // to skip non-candidate byte positions rapidly without checking every index linearly.
+        let first_lower = n[0].to_ascii_lowercase();
+        let first_upper = n[0].to_ascii_uppercase();
+        let max_pos = h.len() - n_len;
+        let mut curr = 0;
+
+        while curr <= max_pos {
+            let match_rel =
+                match memchr::memchr2(first_lower, first_upper, &h[curr..=max_pos]) {
+                    Some(rel) => rel,
+                    None => break,
+                };
+
+            curr += match_rel;
+            if h[curr..curr + n_len].eq_ignore_ascii_case(n) {
+                out.push((curr, curr + n_len));
+                curr += n_len;
             } else {
-                i += 1;
+                curr += 1;
             }
         }
         return out;
@@ -2159,19 +2177,49 @@ impl TailEngine {
             };
             let haystack = &chunk[..n];
             for (pattern, ci) in &patterns {
-                if pattern.len() > haystack.len() {
+                let p_len = pattern.len();
+                if p_len == 0 || p_len > haystack.len() {
                     continue;
                 }
-                for (i, window) in haystack.windows(pattern.len()).enumerate() {
-                    let hit = if *ci {
-                        window.eq_ignore_ascii_case(pattern)
-                    } else {
-                        window == pattern.as_slice()
-                    };
-                    if hit {
-                        matches.push((pos + i, pattern.len()));
-                        if matches.len() >= limit * 2 {
-                            break 'outer;
+                let max_pos = haystack.len() - p_len;
+                let mut curr = 0;
+
+                // SIMD optimization: use memchr / memchr2 to skip directly to candidate positions.
+                if *ci {
+                    let first_lower = pattern[0].to_ascii_lowercase();
+                    let first_upper = pattern[0].to_ascii_uppercase();
+                    while curr <= max_pos {
+                        let rel = match memchr::memchr2(first_lower, first_upper, &haystack[curr..=max_pos]) {
+                            Some(r) => r,
+                            None => break,
+                        };
+                        curr += rel;
+                        if haystack[curr..curr + p_len].eq_ignore_ascii_case(pattern) {
+                            matches.push((pos + curr, p_len));
+                            if matches.len() >= limit * 2 {
+                                break 'outer;
+                            }
+                            curr += p_len;
+                        } else {
+                            curr += 1;
+                        }
+                    }
+                } else {
+                    let first_byte = pattern[0];
+                    while curr <= max_pos {
+                        let rel = match memchr::memchr(first_byte, &haystack[curr..=max_pos]) {
+                            Some(r) => r,
+                            None => break,
+                        };
+                        curr += rel;
+                        if haystack[curr..curr + p_len] == *pattern {
+                            matches.push((pos + curr, p_len));
+                            if matches.len() >= limit * 2 {
+                                break 'outer;
+                            }
+                            curr += p_len;
+                        } else {
+                            curr += 1;
                         }
                     }
                 }
@@ -2888,5 +2936,33 @@ impl TailEngine {
     pub fn current_search_line(&self) -> Option<usize> {
         self.current_match_idx
             .and_then(|idx| self.search_matches.get(idx).copied())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_case_insensitive_ascii() {
+        let haystack = "2026-09-18 [ERROR] payment-3 Error in Payment system";
+        let needle = "error";
+        let matches = find_case_insensitive(haystack, needle);
+        assert_eq!(matches, vec![(12, 17), (29, 34)]);
+
+        let needle_payment = "payment";
+        let matches_p = find_case_insensitive(haystack, needle_payment);
+        assert_eq!(matches_p, vec![(19, 26), (38, 45)]);
+    }
+
+    #[test]
+    fn test_find_case_insensitive_edge_cases() {
+        assert_eq!(find_case_insensitive("", "test"), vec![]);
+        assert_eq!(find_case_insensitive("test", ""), vec![]);
+        assert_eq!(find_case_insensitive("abc", "abcdef"), vec![]);
+        assert_eq!(
+            find_case_insensitive("aaaaa", "aa"),
+            vec![(0, 2), (2, 4)]
+        );
     }
 }
