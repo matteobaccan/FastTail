@@ -517,7 +517,11 @@ impl FastTailApp {
             }
             return;
         }
-        let any_bound = self.config.external_tools.iter().any(|t| t.bound_rule.is_some());
+        let any_bound = self
+            .config
+            .external_tools
+            .iter()
+            .any(|t| t.bound_rule.is_some());
         if !any_bound {
             for eng in &mut self.engines {
                 if !eng.tool_bound_rules.is_empty() {

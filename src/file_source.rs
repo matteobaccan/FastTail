@@ -95,44 +95,40 @@ impl FileSource {
             .and_then(|f| f.metadata().ok().map(|m| m.len()))
     }
 
-#[cfg(windows)]
-fn win32_file_identity(file: &std::fs::File) -> Option<(u32, u64)> {
-    use std::os::windows::io::AsRawHandle;
-    #[repr(C)]
-    struct ByHandleFileInformation {
-        dw_file_attributes: u32,
-        ft_creation_time: [u32; 2],
-        ft_last_access_time: [u32; 2],
-        ft_last_write_time: [u32; 2],
-        dw_volume_serial_number: u32,
-        n_file_size_high: u32,
-        n_file_size_low: u32,
-        n_number_of_links: u32,
-        n_file_index_high: u32,
-        n_file_index_low: u32,
+    #[cfg(windows)]
+    fn win32_file_identity(file: &std::fs::File) -> Option<(u32, u64)> {
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)]
+        struct ByHandleFileInformation {
+            dw_file_attributes: u32,
+            ft_creation_time: [u32; 2],
+            ft_last_access_time: [u32; 2],
+            ft_last_write_time: [u32; 2],
+            dw_volume_serial_number: u32,
+            n_file_size_high: u32,
+            n_file_size_low: u32,
+            n_number_of_links: u32,
+            n_file_index_high: u32,
+            n_file_index_low: u32,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetFileInformationByHandle(
+                handle: *mut std::ffi::c_void,
+                info: *mut ByHandleFileInformation,
+            ) -> i32;
+        }
+        let mut info = std::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
+        let res = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+        if res != 0 {
+            let info = unsafe { info.assume_init() };
+            let file_index =
+                ((info.n_file_index_high as u64) << 32) | (info.n_file_index_low as u64);
+            Some((info.dw_volume_serial_number, file_index))
+        } else {
+            None
+        }
     }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetFileInformationByHandle(
-            handle: *mut std::ffi::c_void,
-            info: *mut ByHandleFileInformation,
-        ) -> i32;
-    }
-    let mut info = std::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
-    let res = unsafe {
-        GetFileInformationByHandle(
-            file.as_raw_handle(),
-            info.as_mut_ptr(),
-        )
-    };
-    if res != 0 {
-        let info = unsafe { info.assume_init() };
-        let file_index = ((info.n_file_index_high as u64) << 32) | (info.n_file_index_low as u64);
-        Some((info.dw_volume_serial_number, file_index))
-    } else {
-        None
-    }
-}
 
     /// Returns true if the open handle still points to the same filesystem entity as `self.path`.
     pub fn is_same_file_as_path(&self) -> bool {

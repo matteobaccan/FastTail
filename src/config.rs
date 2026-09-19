@@ -884,7 +884,9 @@ impl FastTailConfig {
         conf.write_to(&mut buf).map_err(std::io::Error::other)?;
 
         let matches_existing = |target: &Path| -> bool {
-            fs::read(target).map(|existing| existing == buf).unwrap_or(false)
+            fs::read(target)
+                .map(|existing| existing == buf)
+                .unwrap_or(false)
         };
 
         if matches_existing(&path) {
