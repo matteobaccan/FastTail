@@ -6,6 +6,55 @@ use fasttail::config::FastTailConfig;
 use fasttail::renderer::{self, RendererChoice, RendererKind};
 use fasttail::ui::FastTailApp;
 
+#[cfg(windows)]
+mod legacy_compat {
+    #[repr(C)]
+    pub struct FileTime {
+        pub dw_low_date_time: u32,
+        pub dw_high_date_time: u32,
+    }
+
+    type PreciseFn = unsafe extern "system" fn(*mut FileTime);
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetSystemTimeAsFileTime(lp_system_time_as_file_time: *mut FileTime);
+        fn GetModuleHandleA(lp_module_name: *const u8) -> *mut std::ffi::c_void;
+        fn GetProcAddress(
+            h_module: *mut std::ffi::c_void,
+            lp_proc_name: *const u8,
+        ) -> *mut std::ffi::c_void;
+    }
+
+    static RESOLVED: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
+        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    static CHECKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    #[no_mangle]
+    pub unsafe extern "system" fn hook_GetSystemTimePreciseAsFileTime(ft: *mut FileTime) {
+        if !CHECKED.load(std::sync::atomic::Ordering::Acquire) {
+            let kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr());
+            if !kernel32.is_null() {
+                let proc = GetProcAddress(kernel32, b"GetSystemTimePreciseAsFileTime\0".as_ptr());
+                RESOLVED.store(proc, std::sync::atomic::Ordering::Release);
+            }
+            CHECKED.store(true, std::sync::atomic::Ordering::Release);
+        }
+
+        let ptr = RESOLVED.load(std::sync::atomic::Ordering::Relaxed);
+        if !ptr.is_null() {
+            let f: PreciseFn = std::mem::transmute(ptr);
+            f(ft);
+        } else {
+            GetSystemTimeAsFileTime(ft);
+        }
+    }
+
+    #[no_mangle]
+    pub static mut __imp_GetSystemTimePreciseAsFileTime: PreciseFn =
+        hook_GetSystemTimePreciseAsFileTime;
+}
+
 /// GUI-subsystem executables have no console; attach the parent's so `--help` and
 /// `--version` are visible when launched from a terminal.
 #[cfg(windows)]
@@ -128,8 +177,8 @@ fn main() -> eframe::Result<()> {
         },
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             surface: eframe::egui_wgpu::SurfaceConfig {
-                present_mode: eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync,
-                desired_maximum_frame_latency: Some(1),
+                present_mode: eframe::egui_wgpu::wgpu::PresentMode::AutoVsync,
+                desired_maximum_frame_latency: Some(2),
             },
             ..Default::default()
         },

@@ -203,8 +203,16 @@ impl ActiveRenderer {
             || adapter_lower.contains("lavapipe")
             || adapter_lower.contains("warp")
             || adapter_lower.contains("gdi generic")
+            || adapter_lower.contains("vmware")
+            || adapter_lower.contains("hyper-v")
+            || adapter_lower.contains("virtual")
+            || adapter_lower.contains("qemu")
+            || adapter_lower.contains("vbox")
+            || adapter_lower.contains("remote")
+            || adapter_lower.contains("rdp")
             || driver_lower.contains("llvmpipe")
             || driver_lower.contains("software")
+            || driver_lower.contains("warp")
     }
 }
 

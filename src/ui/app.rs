@@ -3045,20 +3045,17 @@ impl eframe::App for FastTailApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Pace live rendering to avoid high CPU usage during mouse movement:
-        // On software rasterizers (VMs without GPU, WARP, llvmpipe) where the CPU rasterizes
-        // every pixel, cap to max_fps_software (configurable, default 30 FPS / 33 ms).
-        // On hardware GPUs, cap to max_fps (configurable, default 60 FPS / 16 ms).
-        let target_fps = if self.renderer.is_software() {
-            self.config.max_fps_software
-        } else {
-            self.config.max_fps
-        }
-        .max(1);
-        let min_interval = std::time::Duration::from_micros(1_000_000 / target_fps as u64);
-        let elapsed = self.last_frame_render.elapsed();
-        if elapsed < min_interval {
-            std::thread::sleep(min_interval - elapsed);
+        // Pace live rendering on software rasterizers (VMs without GPU, WARP, llvmpipe)
+        // where the CPU rasterizes every pixel, capping to max_fps_software (default 30 FPS)
+        // to avoid burning 100% CPU during mouse movements.
+        // On hardware GPUs, hardware presentation (VSync) handles pacing without thread sleeping.
+        if self.renderer.is_software() {
+            let target_fps = self.config.max_fps_software.max(1);
+            let min_interval = std::time::Duration::from_micros(1_000_000 / target_fps as u64);
+            let elapsed = self.last_frame_render.elapsed();
+            if elapsed < min_interval {
+                std::thread::sleep(min_interval - elapsed);
+            }
         }
         self.last_frame_render = Instant::now();
         self.render_ui(ui);
