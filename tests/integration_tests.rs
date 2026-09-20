@@ -3228,6 +3228,31 @@ fn test_export_visible_and_search_matches() {
 }
 
 #[test]
+fn test_export_rejects_non_regular_files() {
+    use fasttail::ui::dock::create_export_file;
+
+    let dir = tempfile::tempdir().unwrap();
+    let target_dir = dir.path().join("sub_directory");
+    std::fs::create_dir(&target_dir).unwrap();
+
+    let result = create_export_file(&target_dir);
+    assert!(result.is_err(), "create_export_file for directory must fail");
+
+    #[cfg(unix)]
+    {
+        let fifo_path = dir.path().join("test_fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status();
+        if status.map(|s| s.success()).unwrap_or(false) {
+            let res = create_export_file(&fifo_path);
+            let err = res.expect_err("create_export_file for FIFO must fail");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+}
+
+#[test]
 fn test_goto_line_exact_clamped_hidden_and_relative() {
     use fasttail::tail_engine::GotoTarget;
     let dir = tempfile::tempdir().unwrap();
