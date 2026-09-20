@@ -92,6 +92,34 @@ pub fn tool_context_for_row(engine: &TailEngine, row: usize) -> Option<ToolConte
     ))
 }
 
+/// Creates or truncates a regular export file safely.
+/// Opens without truncating, validates that the handle points to a regular file,
+/// and truncates to 0 bytes only after confirming it is not a directory or non-regular file.
+pub fn create_export_file(target: &Path) -> std::io::Result<std::fs::File> {
+    if target.exists() {
+        let meta = std::fs::metadata(target)?;
+        if !meta.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(target)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Target path is not a regular file",
+        ));
+    }
+    file.set_len(0)?;
+    Ok(file)
+}
+
 /// Runs a tool on a row from a user gesture; a spawn failure becomes a stream notice.
 pub fn run_tool_on_row(
     engine: &mut TailEngine,
@@ -1154,7 +1182,7 @@ fn render_log_stream(
                     .add_filter("Text (*.txt, *.log)", &["txt", "log"])
                     .save_file()
                 {
-                    let result = std::fs::File::create(&target).and_then(|f| {
+                    let result = create_export_file(&target).and_then(|f| {
                         let mut w = std::io::BufWriter::new(f);
                         if matches_only {
                             engine.export_search_matches(&mut w)
