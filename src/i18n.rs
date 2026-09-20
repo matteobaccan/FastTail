@@ -258,7 +258,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::It, "help_key_tools") => "Clic destro / scorciatoia strumento",
         (Language::It, "help_desc_tools") => "Esegue uno strumento esterno sulla riga (Impostazioni: programma, segnaposto {line} {file} {lineno}..., regola)",
         (Language::It, "help_filter_levels") => "• Livelli di log: le righe sono colorate in base al livello rilevato (ERROR, WARN, ...) se nessuna regola colore le intercetta; il selettore ≥ livello sopra il buffer nasconde le righe sotto il livello scelto e '?' mostra o nasconde le righe senza livello.",
-        (Language::It, "md_too_large") => "File troppo grande per la vista Markdown (limite 32 MB)",
+        (Language::It, "md_too_large") => "File troppo grande per la vista Markdown (limite {limit} MB)",
         (Language::It, "renderer_note") => "Si applica al prossimo avvio",
         (Language::It, "renderer_tip") => "Backend grafico in uso e scheda video",
         (Language::It, "export_visible") => "Esporta righe visibili...",
@@ -310,6 +310,10 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::It, "max_fps_tip") => "Limite frame rate durante movimenti del mouse ed eventi per risparmiare CPU (default: 60)",
         (Language::It, "max_fps_software") => "FPS massimi (Software / VM)",
         (Language::It, "max_fps_software_tip") => "Limite frame rate su macchine virtuali o rasterizzatore software WARP/llvmpipe (default: 30)",
+        (Language::It, "mouse_throttle") => "Throttling cursore mouse",
+        (Language::It, "mouse_throttle_tip") => "Cadenza (ms) per accorpare gli eventi di puro spostamento del mouse ed evitare picchi di CPU (default: 100 ms)",
+        (Language::It, "markdown_max_size") => "Dimensione massima Markdown",
+        (Language::It, "markdown_max_size_tip") => "Dimensione massima in MB per il rendering Markdown (sopra tale limite rimane in modalità testo, default: 1 MB)",
 
         // French
         (Language::Fr, "app_subtitle") => "SURVEILLANCE DES JOURNAUX HAUTE PERFORMANCE",
@@ -485,7 +489,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Fr, "help_key_tools") => "Clic droit / raccourci d'outil",
         (Language::Fr, "help_desc_tools") => "Lance un outil externe sur la ligne (Paramètres : programme, espaces réservés {line} {file} {lineno}..., règle)",
         (Language::Fr, "help_filter_levels") => "• Niveaux de log : les lignes sont colorées selon leur niveau détecté (ERROR, WARN, ...) si aucune règle de couleur ne s'applique ; le sélecteur ≥ niveau au-dessus du tampon masque les lignes sous le niveau choisi et '?' affiche ou masque les lignes sans niveau.",
-        (Language::Fr, "md_too_large") => "Fichier trop volumineux pour la vue Markdown (limite 32 Mo)",
+        (Language::Fr, "md_too_large") => "Fichier trop volumineux pour la vue Markdown (limite {limit} Mo)",
         (Language::Fr, "renderer_note") => "Appliqué au prochain démarrage",
         (Language::Fr, "renderer_tip") => "Backend graphique utilisé et carte vidéo",
         (Language::Fr, "export_visible") => "Exporter les lignes visibles...",
@@ -537,6 +541,10 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Fr, "max_fps_tip") => "Limite le taux de rafraîchissement lors des mouvements souris pour économiser le CPU (défaut : 60)",
         (Language::Fr, "max_fps_software") => "IPS max (Logiciel / VM)",
         (Language::Fr, "max_fps_software_tip") => "Limite le taux de rafraîchissement sur machines virtuelles ou WARP/llvmpipe (défaut : 30)",
+        (Language::Fr, "mouse_throttle") => "Throttling du curseur de la souris",
+        (Language::Fr, "mouse_throttle_tip") => "Cadence (ms) pour regrouper les mouvements de la souris et économiser le CPU (défaut : 100 ms)",
+        (Language::Fr, "markdown_max_size") => "Taille max Markdown",
+        (Language::Fr, "markdown_max_size_tip") => "Taille maximale en Mo pour le rendu Markdown (reste en texte brut au-delà, défaut : 1 Mo)",
 
         // Spanish
         (Language::Es, "app_subtitle") => "MONITORIZACIÓN DE REGISTROS DE ALTO RENDIMIENTO",
@@ -712,7 +720,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Es, "help_key_tools") => "Clic derecho / atajo de herramienta",
         (Language::Es, "help_desc_tools") => "Ejecuta una herramienta externa en la fila (Ajustes: programa, marcadores {line} {file} {lineno}..., regla)",
         (Language::Es, "help_filter_levels") => "• Niveles de log: las filas se colorean según el nivel detectado (ERROR, WARN, ...) si ninguna regla de color coincide; el selector ≥ nivel sobre el búfer oculta las líneas por debajo del nivel elegido y '?' muestra u oculta las líneas sin nivel.",
-        (Language::Es, "md_too_large") => "Archivo demasiado grande para la vista Markdown (límite 32 MB)",
+        (Language::Es, "md_too_large") => "Archivo demasiado grande para la vista Markdown (límite {limit} MB)",
         (Language::Es, "renderer_note") => "Se aplica en el próximo inicio",
         (Language::Es, "renderer_tip") => "Backend gráfico en uso y tarjeta de vídeo",
         (Language::Es, "export_visible") => "Exportar líneas visibles...",
@@ -764,6 +772,10 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Es, "max_fps_tip") => "Límite de fotogramas por segundo durante movimientos del ratón para ahorrar CPU (predeterminado: 60)",
         (Language::Es, "max_fps_software") => "FPS máximos (Software / VM)",
         (Language::Es, "max_fps_software_tip") => "Límite de fotogramas por segundo en máquinas virtuales o WARP/llvmpipe (predeterminado: 30)",
+        (Language::Es, "mouse_throttle") => "Throttling del cursor del ratón",
+        (Language::Es, "mouse_throttle_tip") => "Cadencia (ms) para agrupar los movimientos del ratón y ahorrar CPU (predeterminado: 100 ms)",
+        (Language::Es, "markdown_max_size") => "Tamaño máximo Markdown",
+        (Language::Es, "markdown_max_size_tip") => "Tamaño máximo en MB para renderizar Markdown (por encima permanece en texto, predeterminado: 1 MB)",
 
         // Chinese (Simplified)
         (Language::Zh, "app_subtitle") => "高性能日志实时监控终端",
@@ -941,7 +953,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Zh, "help_key_tools") => "右键 / 工具快捷键",
         (Language::Zh, "help_desc_tools") => "对该行运行外部工具（设置：程序、{line} {file} {lineno}... 占位符、规则绑定）",
         (Language::Zh, "help_filter_levels") => "• 日志级别：在没有颜色规则匹配时，行会按识别出的级别（ERROR、WARN…）着色；缓冲区上方的 ≥ 级别选择器隐藏低于所选级别的行，'?' 切换是否显示无级别的行。",
-        (Language::Zh, "md_too_large") => "文件过大，无法使用 Markdown 视图（上限 32 MB）",
+        (Language::Zh, "md_too_large") => "文件过大，无法使用 Markdown 视图（上限 {limit} MB）",
         (Language::Zh, "renderer_note") => "下次启动时生效",
         (Language::Zh, "renderer_tip") => "当前使用的图形后端和显卡",
         (Language::Zh, "export_visible") => "导出可见行...",
@@ -993,6 +1005,10 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Zh, "max_fps_tip") => "限制鼠标移动及事件时的最大帧率以降低 CPU 占用（默认：60）",
         (Language::Zh, "max_fps_software") => "最大帧率 (软件渲染 / VM)",
         (Language::Zh, "max_fps_software_tip") => "虚拟机或 WARP/llvmpipe 软件光栅化环境下的帧率上限（默认：30）",
+        (Language::Zh, "mouse_throttle") => "鼠标移动节流 (Throttle)",
+        (Language::Zh, "mouse_throttle_tip") => "合并纯鼠标移动事件的时间间隔 (ms)，降低 CPU 占用（默认：100 ms）",
+        (Language::Zh, "markdown_max_size") => "Markdown 最大文件限制",
+        (Language::Zh, "markdown_max_size_tip") => "Markdown 渲染的最大文件大小 (MB)，超过限制保持纯文本模式（默认：1 MB）",
 
         // Default: English fallback
         (_, "app_subtitle") => "HIGH-PERFORMANCE REAL-TIME LOG MONITOR",
@@ -1154,7 +1170,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (_, "help_key_tools") => "Right click / tool shortcut",
         (_, "help_desc_tools") => "Run an external tool on the row (Settings: program, {line} {file} {lineno}... placeholders, rule binding)",
         (_, "help_filter_levels") => "• Log levels: rows are coloured by their detected level (ERROR, WARN, ...) unless a color rule matches; the ≥ level selector above the buffer hides lines below the chosen level and '?' toggles lines without a level.",
-        (_, "md_too_large") => "File too large for the Markdown view (32 MB limit)",
+        (_, "md_too_large") => "File too large for the Markdown view ({limit} MB limit)",
         (_, "renderer_note") => "Applies at the next start",
         (_, "renderer_tip") => "Rendering backend in use and graphics adapter",
         (_, "export_visible") => "Export visible lines...",
@@ -1222,6 +1238,10 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (_, "max_fps_tip") => "Limits maximum frame rate during mouse moves and events to save CPU (default: 60)",
         (_, "max_fps_software") => "Max UI FPS (Software / VM)",
         (_, "max_fps_software_tip") => "Limits frame rate on virtual machines or software rasterizers (default: 30)",
+        (_, "mouse_throttle") => "Mouse pointer throttling",
+        (_, "mouse_throttle_tip") => "Interval in milliseconds to coalesce pure pointer move events and save CPU (default: 100 ms)",
+        (_, "markdown_max_size") => "Max Markdown file size",
+        (_, "markdown_max_size_tip") => "Maximum file size in MB for Markdown rendering (exceeding files stay in text mode, default: 1 MB)",
 
         // Unknown key fallback
         _ => "Unknown",

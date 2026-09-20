@@ -58,6 +58,9 @@ pub struct FastTailConfig {
     /// Cadence in milliseconds for throttling pure pointer move events (0..=1000 ms, default 100).
     #[serde(default = "default_mouse_throttle_ms")]
     pub mouse_throttle_ms: u64,
+    /// Maximum file size in megabytes for Markdown rendering (1..=100 MB, default 1).
+    #[serde(default = "default_markdown_max_mb")]
+    pub markdown_max_mb: u32,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -154,6 +157,10 @@ fn default_mouse_throttle_ms() -> u64 {
     100
 }
 
+fn default_markdown_max_mb() -> u32 {
+    1
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -175,6 +182,7 @@ impl Default for FastTailConfig {
             max_fps: default_max_fps(),
             max_fps_software: default_max_fps_software(),
             mouse_throttle_ms: default_mouse_throttle_ms(),
+            markdown_max_mb: default_markdown_max_mb(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -395,6 +403,7 @@ impl FastTailConfig {
             .set("max_fps", self.max_fps.to_string())
             .set("max_fps_software", self.max_fps_software.to_string())
             .set("mouse_throttle_ms", self.mouse_throttle_ms.to_string())
+            .set("markdown_max_mb", self.markdown_max_mb.to_string())
             .set("size_unit", unit_str)
             .set("baretail_import", self.baretail_import.to_string())
             .set(
@@ -647,6 +656,11 @@ impl FastTailConfig {
             if let Some(s) = general.get("mouse_throttle_ms") {
                 if let Ok(v) = s.parse::<u64>() {
                     cfg.mouse_throttle_ms = v.clamp(0, 1000);
+                }
+            }
+            if let Some(s) = general.get("markdown_max_mb") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.markdown_max_mb = v.clamp(1, 100);
                 }
             }
             if let Some(s) = general.get("size_unit") {
@@ -977,6 +991,11 @@ impl FastTailConfig {
         if let Ok(v) = std::env::var("FASTTAIL_MOUSE_THROTTLE_MS") {
             if let Ok(ms) = v.parse::<u64>() {
                 cfg.mouse_throttle_ms = ms.clamp(0, 1000);
+            }
+        }
+        if let Ok(v) = std::env::var("FASTTAIL_MARKDOWN_MAX_MB") {
+            if let Ok(mb) = v.parse::<u32>() {
+                cfg.markdown_max_mb = mb.clamp(1, 100);
             }
         }
 

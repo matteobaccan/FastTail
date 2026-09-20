@@ -277,6 +277,8 @@ impl FastTailApp {
                 if let Ok(mut engine) = opened {
                     engine.size_check_interval =
                         std::time::Duration::from_millis(app.config.size_check_interval_ms as u64);
+                    engine
+                        .set_markdown_max_bytes((app.config.markdown_max_mb as u64) * 1024 * 1024);
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
                     engine.wrap_lines = app.config.wrap_for(&path);
@@ -680,6 +682,7 @@ impl FastTailApp {
         if let Ok(mut engine) = opened {
             engine.size_check_interval =
                 std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
+            engine.set_markdown_max_bytes((self.config.markdown_max_mb as u64) * 1024 * 1024);
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
@@ -2279,6 +2282,45 @@ impl FastTailApp {
                             .on_hover_text(t(lang, "max_fps_software_tip"))
                             .changed()
                         {
+                            let _ = self.config.save();
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("{}:", t(lang, "mouse_throttle"))).monospace(),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.mouse_throttle_ms)
+                                    .range(0..=1000)
+                                    .suffix(" ms"),
+                            )
+                            .on_hover_text(t(lang, "mouse_throttle_tip"))
+                            .changed()
+                        {
+                            let _ = self.config.save();
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("{}:", t(lang, "markdown_max_size"))).monospace(),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.markdown_max_mb)
+                                    .range(1..=100)
+                                    .suffix(" MB"),
+                            )
+                            .on_hover_text(t(lang, "markdown_max_size_tip"))
+                            .changed()
+                        {
+                            for engine in &mut self.engines {
+                                engine.set_markdown_max_bytes(
+                                    (self.config.markdown_max_mb as u64) * 1024 * 1024,
+                                );
+                            }
                             let _ = self.config.save();
                         }
                     });

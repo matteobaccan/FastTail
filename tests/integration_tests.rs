@@ -692,6 +692,10 @@ fn test_i18n_exhaustive_coverage() {
         "max_fps_tip",
         "max_fps_software",
         "max_fps_software_tip",
+        "mouse_throttle",
+        "mouse_throttle_tip",
+        "markdown_max_size",
+        "markdown_max_size_tip",
     ];
 
     for lang in &[
@@ -1238,15 +1242,19 @@ fn test_perf_config_bounds_and_defaults() {
     assert_eq!(cfg.size_check_interval_ms, 500);
     assert_eq!(cfg.max_fps, 60);
     assert_eq!(cfg.max_fps_software, 30);
+    assert_eq!(cfg.mouse_throttle_ms, 100);
+    assert_eq!(cfg.markdown_max_mb, 1);
 
     // Test clamped parsing from ini
-    let text = "[general]\npoll_interval_ms=10\nsize_check_interval_ms=99999\nmax_fps=1\nmax_fps_software=500\n";
+    let text = "[general]\npoll_interval_ms=10\nsize_check_interval_ms=99999\nmax_fps=1\nmax_fps_software=500\nmouse_throttle_ms=5000\nmarkdown_max_mb=999\n";
     let ini = ini::Ini::load_from_str(text).unwrap();
     let loaded = FastTailConfig::from_ini(&ini);
     assert_eq!(loaded.poll_interval_ms, 50); // clamped to 50
     assert_eq!(loaded.size_check_interval_ms, 10000); // clamped to 10000
     assert_eq!(loaded.max_fps, 5); // clamped to 5
     assert_eq!(loaded.max_fps_software, 120); // clamped to 120
+    assert_eq!(loaded.mouse_throttle_ms, 1000); // clamped to 1000
+    assert_eq!(loaded.markdown_max_mb, 100); // clamped to 100
 }
 
 #[test]
@@ -3599,7 +3607,7 @@ fn test_truncation_drops_cache_and_index_memory() {
 
 #[test]
 fn test_markdown_mode_refuses_files_over_the_cap() {
-    use fasttail::tail_engine::MARKDOWN_MAX_BYTES;
+    use fasttail::tail_engine::{ViewMode, MARKDOWN_MAX_BYTES};
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("big.md");
@@ -3611,8 +3619,18 @@ fn test_markdown_mode_refuses_files_over_the_cap() {
     }
     drop(f);
     let mut engine = TailEngine::open(&log).unwrap();
+    assert_eq!(engine.view_mode, ViewMode::Text);
     assert!(engine.markdown_too_large());
     assert_eq!(engine.markdown_text(), "");
+    engine.set_view_mode(ViewMode::Markdown);
+    assert_eq!(engine.view_mode, ViewMode::Text);
+
+    // If limit is raised, switching to Markdown becomes possible
+    engine.set_markdown_max_bytes(10 * 1024 * 1024);
+    assert!(!engine.markdown_too_large());
+    engine.set_view_mode(ViewMode::Markdown);
+    assert_eq!(engine.view_mode, ViewMode::Markdown);
+    assert!(!engine.markdown_text().is_empty());
 }
 
 /// Polls the engine until no background scan is running (or 30 s passed).

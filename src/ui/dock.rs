@@ -612,27 +612,28 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
-        ui.separator();
-
-        // Line numbers toggle
-        let lines_text = if *show_line_numbers {
-            RichText::new("# 123")
-                .color(theme.accent_color())
-                .monospace()
-        } else {
-            RichText::new("# ---").color(theme.text_dim()).monospace()
-        };
-        if ui
-            .button(lines_text)
-            .on_hover_text(t(lang, "show_lines"))
-            .clicked()
-        {
-            *show_line_numbers = !*show_line_numbers;
-            ui.ctx().request_repaint();
-        }
-
-        // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
+        // Line numbers & Line wrap toggle, meaningful in the text views only (hidden in Hex mode)
         if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+            ui.separator();
+
+            // Line numbers toggle
+            let lines_text = if *show_line_numbers {
+                RichText::new("# 123")
+                    .color(theme.accent_color())
+                    .monospace()
+            } else {
+                RichText::new("# ---").color(theme.text_dim()).monospace()
+            };
+            if ui
+                .button(lines_text)
+                .on_hover_text(t(lang, "show_lines"))
+                .clicked()
+            {
+                *show_line_numbers = !*show_line_numbers;
+                ui.ctx().request_repaint();
+            }
+
+            // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
             let wrap_text = if engine.wrap_lines {
                 RichText::new("↩ Wrap")
                     .color(theme.accent_color())
@@ -710,14 +711,16 @@ fn render_log_stream(
             RichText::new("📝 MD").color(theme.text_dim()).monospace()
         };
         let md_too_large = engine.markdown_too_large();
+        let md_limit_mb = (engine.markdown_max_bytes / (1024 * 1024)).max(1);
+        let md_msg = t(lang, "md_too_large").replace("{limit}", &md_limit_mb.to_string());
         let md_tip = if md_too_large {
-            t(lang, "md_too_large")
+            md_msg.as_str()
         } else {
             t(lang, "tip_mode_md")
         };
         if ui.button(md_style).on_hover_text(md_tip).clicked() {
             if md_too_large {
-                engine.view_notice = Some(t(lang, "md_too_large").to_string());
+                engine.view_notice = Some(md_msg);
             } else {
                 engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
             }

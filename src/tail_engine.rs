@@ -256,7 +256,7 @@ const SCAN_CHUNK: usize = 1024 * 1024;
 /// A single line longer than this is shown truncated, with a marker.
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 /// Rendered Markdown needs the whole text: larger files stay in text mode.
-pub const MARKDOWN_MAX_BYTES: u64 = 32 * 1024 * 1024;
+pub const MARKDOWN_MAX_BYTES: u64 = 1024 * 1024;
 /// Files larger than this run filters and search on a worker thread.
 pub const JOB_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024;
 /// Files larger than this build their line index on a worker thread.
@@ -625,6 +625,7 @@ pub struct TailEngine {
     pub requested_scroll_y: Option<f32>,
     pub scroll_to_line: Option<usize>,
     pub markdown_cache: egui_commonmark::CommonMarkCache,
+    pub markdown_max_bytes: u64,
     pub current_scroll_x: f32,
     pub current_scroll_y: f32,
     pub max_line_bytes: usize,
@@ -678,7 +679,8 @@ impl TailEngine {
         let source = FileSource::open(&path_buf)?;
         let sample = source.read_to_vec(0, 512);
         let (detected_encoding, is_binary) = Self::detect_encoding(&sample);
-        let view_mode = Self::initial_view_mode(&path_buf, is_binary);
+        let view_mode =
+            Self::initial_view_mode(&path_buf, is_binary, file_size, MARKDOWN_MAX_BYTES);
 
         let (tx, rx) = channel();
         let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).ok();
@@ -823,6 +825,9 @@ impl TailEngine {
                 self.view_mode = ViewMode::Hex;
             }
         }
+        if self.view_mode == ViewMode::Markdown && metadata.len() > self.markdown_max_bytes {
+            self.view_mode = ViewMode::Text;
+        }
         self.file_size = metadata.len();
         self.last_modified = metadata.modified().ok();
         self.source = source;
@@ -885,7 +890,12 @@ impl TailEngine {
         }
     }
 
-    fn initial_view_mode(path: &Path, is_binary: bool) -> ViewMode {
+    fn initial_view_mode(
+        path: &Path,
+        is_binary: bool,
+        file_size: u64,
+        max_markdown_bytes: u64,
+    ) -> ViewMode {
         let is_markdown = path
             .extension()
             .and_then(|s| s.to_str())
@@ -893,7 +903,7 @@ impl TailEngine {
             .unwrap_or(false);
         if is_binary {
             ViewMode::Hex
-        } else if is_markdown {
+        } else if is_markdown && file_size <= max_markdown_bytes {
             ViewMode::Markdown
         } else {
             ViewMode::Text
@@ -995,6 +1005,7 @@ impl TailEngine {
             requested_scroll_y: None,
             scroll_to_line: None,
             markdown_cache: egui_commonmark::CommonMarkCache::default(),
+            markdown_max_bytes: MARKDOWN_MAX_BYTES,
             current_scroll_x: 0.0,
             current_scroll_y: 0.0,
             max_line_bytes: 0,
@@ -1444,6 +1455,9 @@ impl TailEngine {
             self.last_modified = new_modified;
             self.source.set_len(new_size);
             self.has_new_data = true;
+            if self.view_mode == ViewMode::Markdown && self.markdown_too_large() {
+                self.view_mode = ViewMode::Text;
+            }
             if self.index_pending {
                 // The index job covers the old range; the rest is indexed when it ends.
                 return;
@@ -1478,6 +1492,9 @@ impl TailEngine {
         self.has_new_data = true;
         self.rebuild_line_index();
         self.update_fingerprints();
+        if self.view_mode == ViewMode::Markdown && self.markdown_too_large() {
+            self.view_mode = ViewMode::Text;
+        }
     }
 
     /// Bytes before `end` used to recognise the file across polls (at most 64).
@@ -2318,9 +2335,19 @@ impl TailEngine {
         self.markdown_text_cache = Some((generation, text));
     }
 
-    /// Rendered Markdown needs the whole text in memory: refused above `MARKDOWN_MAX_BYTES`.
+    /// Rendered Markdown needs the whole text in memory: refused above `markdown_max_bytes`.
     pub fn markdown_too_large(&self) -> bool {
-        self.source.len() > MARKDOWN_MAX_BYTES
+        self.source.len() > self.markdown_max_bytes
+    }
+
+    /// Updates the maximum allowed byte size for Markdown rendering.
+    /// If the current view is Markdown and exceeds this threshold, flips back to Text mode.
+    pub fn set_markdown_max_bytes(&mut self, max_bytes: u64) {
+        self.markdown_max_bytes = max_bytes;
+        self.markdown_text_cache = None;
+        if self.view_mode == ViewMode::Markdown && self.markdown_too_large() {
+            self.view_mode = ViewMode::Text;
+        }
     }
 
     pub fn update_search(&mut self, query: &str) {
