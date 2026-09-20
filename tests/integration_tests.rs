@@ -596,7 +596,6 @@ fn test_i18n_exhaustive_coverage() {
         "tip_regex_checkbox",
         "about",
         "about_version",
-        "about_git_tag",
         "about_build_date",
         "about_author",
         "about_repo",

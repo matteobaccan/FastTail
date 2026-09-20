@@ -2415,20 +2415,6 @@ impl FastTailApp {
                             .size(18.0)
                             .color(theme.accent_color()),
                     );
-                    ui.label(
-                        RichText::new("by Matteo Baccan")
-                            .monospace()
-                            .size(13.0)
-                            .color(theme.text_primary()),
-                    );
-                    ui.hyperlink_to(
-                        RichText::new("www.baccan.it")
-                            .monospace()
-                            .size(11.5)
-                            .color(theme.secondary_accent()),
-                        "https://www.baccan.it",
-                    )
-                    .on_hover_text("https://www.baccan.it");
                 });
 
                 ui.add_space(8.0);
@@ -2444,14 +2430,6 @@ impl FastTailApp {
                             RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                                 .monospace()
                                 .color(theme.accent_color()),
-                        );
-                        ui.end_row();
-
-                        ui.label(RichText::new(t(lang, "about_git_tag")).monospace().strong());
-                        ui.label(
-                            RichText::new(env!("GIT_TAG"))
-                                .monospace()
-                                .color(theme.secondary_accent()),
                         );
                         ui.end_row();
 
