@@ -55,6 +55,9 @@ pub struct FastTailConfig {
     /// Maximum UI frame rate when running on a software rasterizer / VM (10..=60, default 30).
     #[serde(default = "default_max_fps_software")]
     pub max_fps_software: u32,
+    /// Cadence in milliseconds for throttling pure pointer move events (0..=1000 ms, default 100).
+    #[serde(default = "default_mouse_throttle_ms")]
+    pub mouse_throttle_ms: u64,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -147,6 +150,10 @@ fn default_max_fps_software() -> u32 {
     30
 }
 
+fn default_mouse_throttle_ms() -> u64 {
+    100
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -167,6 +174,7 @@ impl Default for FastTailConfig {
             size_check_interval_ms: default_size_check_interval_ms(),
             max_fps: default_max_fps(),
             max_fps_software: default_max_fps_software(),
+            mouse_throttle_ms: default_mouse_throttle_ms(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -386,6 +394,7 @@ impl FastTailConfig {
             )
             .set("max_fps", self.max_fps.to_string())
             .set("max_fps_software", self.max_fps_software.to_string())
+            .set("mouse_throttle_ms", self.mouse_throttle_ms.to_string())
             .set("size_unit", unit_str)
             .set("baretail_import", self.baretail_import.to_string())
             .set(
@@ -633,6 +642,11 @@ impl FastTailConfig {
             if let Some(s) = general.get("max_fps_software") {
                 if let Ok(v) = s.parse::<u32>() {
                     cfg.max_fps_software = v.clamp(5, 120);
+                }
+            }
+            if let Some(s) = general.get("mouse_throttle_ms") {
+                if let Ok(v) = s.parse::<u64>() {
+                    cfg.mouse_throttle_ms = v.clamp(0, 1000);
                 }
             }
             if let Some(s) = general.get("size_unit") {
@@ -958,6 +972,11 @@ impl FastTailConfig {
         if let Ok(v) = std::env::var("FASTTAIL_MAX_FPS_SOFTWARE") {
             if let Ok(fps) = v.parse::<u32>() {
                 cfg.max_fps_software = fps.clamp(5, 120);
+            }
+        }
+        if let Ok(v) = std::env::var("FASTTAIL_MOUSE_THROTTLE_MS") {
+            if let Ok(ms) = v.parse::<u64>() {
+                cfg.mouse_throttle_ms = ms.clamp(0, 1000);
             }
         }
 

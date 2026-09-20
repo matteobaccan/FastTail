@@ -85,6 +85,8 @@ pub struct FastTailApp {
     pub theme_applied: Option<CyberTheme>,
     /// Timestamp of last live frame render for frame pacing.
     pub last_frame_render: Instant,
+    /// Timestamp of last render for pure pointer movement throttling.
+    pub last_mouse_render: Instant,
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -244,6 +246,7 @@ impl FastTailApp {
             title_applied: String::new(),
             theme_applied: None,
             last_frame_render: Instant::now(),
+            last_mouse_render: Instant::now(),
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -3045,11 +3048,24 @@ impl eframe::App for FastTailApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Pace live rendering on software rasterizers (VMs without GPU, WARP, llvmpipe)
-        // where the CPU rasterizes every pixel, capping to max_fps_software (default 30 FPS)
-        // to avoid burning 100% CPU during mouse movements.
-        // On hardware GPUs, hardware presentation (VSync) handles pacing without thread sleeping.
-        if self.renderer.is_software() {
+        // Detect whether this frame is driven purely by pointer movement (no clicks, no keys, no drag)
+        let is_pure_mouse_move = ui.input(|i| {
+            !i.pointer.any_down()
+                && !i.raw.events.is_empty()
+                && i.raw
+                    .events
+                    .iter()
+                    .all(|e| matches!(e, egui::Event::PointerMoved(_)))
+        });
+
+        if is_pure_mouse_move && self.config.mouse_throttle_ms > 0 {
+            let throttle = std::time::Duration::from_millis(self.config.mouse_throttle_ms);
+            let elapsed = self.last_mouse_render.elapsed();
+            if elapsed < throttle {
+                std::thread::sleep(throttle - elapsed);
+            }
+            self.last_mouse_render = Instant::now();
+        } else if self.renderer.is_software() {
             let target_fps = self.config.max_fps_software.max(1);
             let min_interval = std::time::Duration::from_micros(1_000_000 / target_fps as u64);
             let elapsed = self.last_frame_render.elapsed();

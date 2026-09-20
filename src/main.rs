@@ -15,14 +15,6 @@ mod legacy_compat {
     }
 
     type PreciseFn = unsafe extern "system" fn(*mut FileTime);
-    type ProcessPrngFn = unsafe extern "system" fn(*mut u8, usize) -> i32;
-    type WaitOnAddressFn = unsafe extern "system" fn(
-        *const std::ffi::c_void,
-        *const std::ffi::c_void,
-        usize,
-        u32,
-    ) -> i32;
-    type WakeByAddressFn = unsafe extern "system" fn(*const std::ffi::c_void);
 
     #[link(name = "kernel32")]
     extern "system" {
@@ -33,7 +25,6 @@ mod legacy_compat {
             h_module: *mut std::ffi::c_void,
             lp_proc_name: *const u8,
         ) -> *mut std::ffi::c_void;
-        fn Sleep(ms: u32);
     }
 
     // Dynamic GetDpiForSystem (Win10 1607+) or fallback to 96 (Win7/2008 R2)
@@ -51,14 +42,6 @@ mod legacy_compat {
         }
         96
     }
-
-    #[no_mangle]
-    pub unsafe extern "system" fn hook_GetDpiForSystem() -> u32 {
-        get_system_dpi()
-    }
-
-    #[no_mangle]
-    pub static mut __imp_GetDpiForSystem: unsafe extern "system" fn() -> u32 = hook_GetDpiForSystem;
 
     // 1. Hook GetSystemTimePreciseAsFileTime -> fallback to GetSystemTimeAsFileTime on Win7/2008R2
     static RESOLVED_TIME: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
@@ -89,156 +72,36 @@ mod legacy_compat {
     pub static mut __imp_GetSystemTimePreciseAsFileTime: PreciseFn =
         hook_GetSystemTimePreciseAsFileTime;
 
-    // 2. Hook ProcessPrng -> fallback to SystemFunction036 (RtlGenRandom) in advapi32.dll on Win7/2008R2
-    static RESOLVED_PRNG: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
+    // 2. Hook CoTaskMemFree -> redirect from combase.dll (Win8+) to ole32.dll (Win7/2008R2)
+    static RESOLVED_COTASK: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
         std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-    static CHECKED_PRNG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static CHECKED_COTASK: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 
     #[no_mangle]
-    pub unsafe extern "system" fn hook_ProcessPrng(buffer: *mut u8, size: usize) -> i32 {
-        if !CHECKED_PRNG.load(std::sync::atomic::Ordering::Acquire) {
-            let bcrypt = GetModuleHandleA(b"bcryptprimitives.dll\0".as_ptr());
-            if !bcrypt.is_null() {
-                let proc = GetProcAddress(bcrypt, b"ProcessPrng\0".as_ptr());
-                RESOLVED_PRNG.store(proc, std::sync::atomic::Ordering::Release);
+    pub unsafe extern "system" fn hook_CoTaskMemFree(pv: *mut std::ffi::c_void) {
+        if !CHECKED_COTASK.load(std::sync::atomic::Ordering::Acquire) {
+            let mut ole32 = GetModuleHandleA(b"ole32.dll\0".as_ptr());
+            if ole32.is_null() {
+                ole32 = LoadLibraryA(b"ole32.dll\0".as_ptr());
             }
-            CHECKED_PRNG.store(true, std::sync::atomic::Ordering::Release);
-        }
-
-        let ptr = RESOLVED_PRNG.load(std::sync::atomic::Ordering::Relaxed);
-        if !ptr.is_null() {
-            let f: ProcessPrngFn = std::mem::transmute(ptr);
-            f(buffer, size)
-        } else {
-            let advapi = GetModuleHandleA(b"advapi32.dll\0".as_ptr());
-            if !advapi.is_null() {
-                let proc = GetProcAddress(advapi, b"SystemFunction036\0".as_ptr());
-                if !proc.is_null() {
-                    let rtl_gen_random: unsafe extern "system" fn(*mut u8, u32) -> u8 =
-                        std::mem::transmute(proc);
-                    if rtl_gen_random(buffer, size as u32) != 0 {
-                        return 1;
-                    }
-                }
+            if !ole32.is_null() {
+                let proc = GetProcAddress(ole32, b"CoTaskMemFree\0".as_ptr());
+                RESOLVED_COTASK.store(proc, std::sync::atomic::Ordering::Release);
             }
-            0
-        }
-    }
-
-    #[no_mangle]
-    pub static mut __imp_ProcessPrng: ProcessPrngFn = hook_ProcessPrng;
-
-    // 3. Hook WaitOnAddress, WakeByAddressSingle, WakeByAddressAll -> fallback to polling Sleep on Win7/2008R2
-    static RESOLVED_WAIT: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
-        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-    static CHECKED_WAIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-    #[no_mangle]
-    pub unsafe extern "system" fn hook_WaitOnAddress(
-        address: *const std::ffi::c_void,
-        compare_address: *const std::ffi::c_void,
-        address_size: usize,
-        dw_milliseconds: u32,
-    ) -> i32 {
-        if !CHECKED_WAIT.load(std::sync::atomic::Ordering::Acquire) {
-            let synch = GetModuleHandleA(b"api-ms-win-core-synch-l1-2-0.dll\0".as_ptr());
-            let kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr());
-            let proc = if !synch.is_null() {
-                GetProcAddress(synch, b"WaitOnAddress\0".as_ptr())
-            } else if !kernel32.is_null() {
-                GetProcAddress(kernel32, b"WaitOnAddress\0".as_ptr())
-            } else {
-                std::ptr::null_mut()
-            };
-            RESOLVED_WAIT.store(proc, std::sync::atomic::Ordering::Release);
-            CHECKED_WAIT.store(true, std::sync::atomic::Ordering::Release);
+            CHECKED_COTASK.store(true, std::sync::atomic::Ordering::Release);
         }
 
-        let ptr = RESOLVED_WAIT.load(std::sync::atomic::Ordering::Relaxed);
+        let ptr = RESOLVED_COTASK.load(std::sync::atomic::Ordering::Relaxed);
         if !ptr.is_null() {
-            let f: WaitOnAddressFn = std::mem::transmute(ptr);
-            f(address, compare_address, address_size, dw_milliseconds)
-        } else {
-            let start = std::time::Instant::now();
-            let timeout = if dw_milliseconds == u32::MAX {
-                std::time::Duration::from_secs(u64::MAX)
-            } else {
-                std::time::Duration::from_millis(dw_milliseconds as u64)
-            };
-            loop {
-                let equal = match address_size {
-                    1 => *(address as *const u8) == *(compare_address as *const u8),
-                    2 => *(address as *const u16) == *(compare_address as *const u16),
-                    4 => *(address as *const u32) == *(compare_address as *const u32),
-                    8 => *(address as *const u64) == *(compare_address as *const u64),
-                    _ => {
-                        let a = std::slice::from_raw_parts(address as *const u8, address_size);
-                        let b =
-                            std::slice::from_raw_parts(compare_address as *const u8, address_size);
-                        a == b
-                    }
-                };
-                if !equal || start.elapsed() >= timeout {
-                    break;
-                }
-                Sleep(1);
-            }
-            1
+            let f: unsafe extern "system" fn(*mut std::ffi::c_void) = std::mem::transmute(ptr);
+            f(pv);
         }
     }
 
     #[no_mangle]
-    pub unsafe extern "system" fn hook_WakeByAddressSingle(address: *const std::ffi::c_void) {
-        static RESOLVED_WAKE1: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
-            std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-        static CHECKED_WAKE1: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !CHECKED_WAKE1.load(std::sync::atomic::Ordering::Acquire) {
-            let kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr());
-            let proc = if !kernel32.is_null() {
-                GetProcAddress(kernel32, b"WakeByAddressSingle\0".as_ptr())
-            } else {
-                std::ptr::null_mut()
-            };
-            RESOLVED_WAKE1.store(proc, std::sync::atomic::Ordering::Release);
-            CHECKED_WAKE1.store(true, std::sync::atomic::Ordering::Release);
-        }
-        let ptr = RESOLVED_WAKE1.load(std::sync::atomic::Ordering::Relaxed);
-        if !ptr.is_null() {
-            let f: WakeByAddressFn = std::mem::transmute(ptr);
-            f(address);
-        }
-    }
-
-    #[no_mangle]
-    pub unsafe extern "system" fn hook_WakeByAddressAll(address: *const std::ffi::c_void) {
-        static RESOLVED_WAKEALL: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
-            std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-        static CHECKED_WAKEALL: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !CHECKED_WAKEALL.load(std::sync::atomic::Ordering::Acquire) {
-            let kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr());
-            let proc = if !kernel32.is_null() {
-                GetProcAddress(kernel32, b"WakeByAddressAll\0".as_ptr())
-            } else {
-                std::ptr::null_mut()
-            };
-            RESOLVED_WAKEALL.store(proc, std::sync::atomic::Ordering::Release);
-            CHECKED_WAKEALL.store(true, std::sync::atomic::Ordering::Release);
-        }
-        let ptr = RESOLVED_WAKEALL.load(std::sync::atomic::Ordering::Relaxed);
-        if !ptr.is_null() {
-            let f: WakeByAddressFn = std::mem::transmute(ptr);
-            f(address);
-        }
-    }
-
-    #[no_mangle]
-    pub static mut __imp_WaitOnAddress: WaitOnAddressFn = hook_WaitOnAddress;
-    #[no_mangle]
-    pub static mut __imp_WakeByAddressSingle: WakeByAddressFn = hook_WakeByAddressSingle;
-    #[no_mangle]
-    pub static mut __imp_WakeByAddressAll: WakeByAddressFn = hook_WakeByAddressAll;
+    pub static mut __imp_CoTaskMemFree: unsafe extern "system" fn(*mut std::ffi::c_void) =
+        hook_CoTaskMemFree;
 }
 
 /// GUI-subsystem executables have no console; attach the parent's so `--help` and
