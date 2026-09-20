@@ -557,7 +557,10 @@ mod tests {
             ..Default::default()
         };
         let cmd = build_command(&tool, &ctx);
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
         assert_eq!(args.len(), 2);
         #[cfg(not(windows))]
         {
