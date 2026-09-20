@@ -43,6 +43,18 @@ pub struct FastTailConfig {
     pub show_line_numbers: bool,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    /// Background stream polling cadence in milliseconds (50..=5000 ms, default 250).
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u32,
+    /// Fallback filesystem metadata size check cadence in milliseconds (50..=10000 ms, default 500).
+    #[serde(default = "default_size_check_interval_ms")]
+    pub size_check_interval_ms: u32,
+    /// Maximum UI frame rate when running on a hardware GPU (15..=240, default 60).
+    #[serde(default = "default_max_fps")]
+    pub max_fps: u32,
+    /// Maximum UI frame rate when running on a software rasterizer / VM (10..=60, default 30).
+    #[serde(default = "default_max_fps_software")]
+    pub max_fps_software: u32,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -119,6 +131,22 @@ fn default_font_size() -> f32 {
     13.0
 }
 
+fn default_poll_interval_ms() -> u32 {
+    250
+}
+
+fn default_size_check_interval_ms() -> u32 {
+    500
+}
+
+fn default_max_fps() -> u32 {
+    60
+}
+
+fn default_max_fps_software() -> u32 {
+    30
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -135,6 +163,10 @@ impl Default for FastTailConfig {
             borderless: false,
             show_line_numbers: true,
             font_size: 13.0,
+            poll_interval_ms: default_poll_interval_ms(),
+            size_check_interval_ms: default_size_check_interval_ms(),
+            max_fps: default_max_fps(),
+            max_fps_software: default_max_fps_software(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -347,6 +379,13 @@ impl FastTailConfig {
             .set("borderless", self.borderless.to_string())
             .set("show_line_numbers", self.show_line_numbers.to_string())
             .set("font_size", self.font_size.to_string())
+            .set("poll_interval_ms", self.poll_interval_ms.to_string())
+            .set(
+                "size_check_interval_ms",
+                self.size_check_interval_ms.to_string(),
+            )
+            .set("max_fps", self.max_fps.to_string())
+            .set("max_fps_software", self.max_fps_software.to_string())
             .set("size_unit", unit_str)
             .set("baretail_import", self.baretail_import.to_string())
             .set(
@@ -574,6 +613,26 @@ impl FastTailConfig {
             if let Some(s) = general.get("font_size") {
                 if let Ok(v) = s.parse::<f32>() {
                     cfg.font_size = v;
+                }
+            }
+            if let Some(s) = general.get("poll_interval_ms") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.poll_interval_ms = v.clamp(50, 5000);
+                }
+            }
+            if let Some(s) = general.get("size_check_interval_ms") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.size_check_interval_ms = v.clamp(50, 10000);
+                }
+            }
+            if let Some(s) = general.get("max_fps") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.max_fps = v.clamp(5, 240);
+                }
+            }
+            if let Some(s) = general.get("max_fps_software") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.max_fps_software = v.clamp(5, 120);
                 }
             }
             if let Some(s) = general.get("size_unit") {
@@ -859,22 +918,50 @@ impl FastTailConfig {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        if path.exists() {
+        let mut cfg = if path.exists() {
             if let Ok(conf) = Ini::load_from_file(&path) {
-                return Self::from_ini(&conf);
+                Self::from_ini(&conf)
+            } else {
+                Self::default()
             }
-        }
-
-        if let Some(old_toml) = Self::old_toml_path() {
+        } else if let Some(old_toml) = Self::old_toml_path() {
             if let Ok(content) = fs::read_to_string(&old_toml) {
                 if let Ok(config) = toml::from_str::<FastTailConfig>(&content) {
                     let _ = config.save();
-                    return config;
+                    config
+                } else {
+                    Self::default()
                 }
+            } else {
+                Self::default()
+            }
+        } else {
+            Self::default()
+        };
+
+        // Environment variables override for live testing and support
+        if let Ok(v) = std::env::var("FASTTAIL_POLL_INTERVAL_MS") {
+            if let Ok(ms) = v.parse::<u32>() {
+                cfg.poll_interval_ms = ms.clamp(50, 5000);
+            }
+        }
+        if let Ok(v) = std::env::var("FASTTAIL_SIZE_CHECK_INTERVAL_MS") {
+            if let Ok(ms) = v.parse::<u32>() {
+                cfg.size_check_interval_ms = ms.clamp(50, 10000);
+            }
+        }
+        if let Ok(v) = std::env::var("FASTTAIL_MAX_FPS") {
+            if let Ok(fps) = v.parse::<u32>() {
+                cfg.max_fps = fps.clamp(5, 240);
+            }
+        }
+        if let Ok(v) = std::env::var("FASTTAIL_MAX_FPS_SOFTWARE") {
+            if let Ok(fps) = v.parse::<u32>() {
+                cfg.max_fps_software = fps.clamp(5, 120);
             }
         }
 
-        Self::default()
+        cfg
     }
 
     /// Writes `buf` to `path` only when the file does not already hold those exact

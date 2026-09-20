@@ -192,6 +192,20 @@ impl ActiveRenderer {
             parts.join(" · ")
         }
     }
+
+    /// Returns true when running on a software rasterizer (WARP / llvmpipe / Mesa software / etc.).
+    pub fn is_software(&self) -> bool {
+        let adapter_lower = self.adapter.to_ascii_lowercase();
+        let driver_lower = self.driver.to_ascii_lowercase();
+        adapter_lower.contains("basic render")
+            || adapter_lower.contains("software")
+            || adapter_lower.contains("llvmpipe")
+            || adapter_lower.contains("lavapipe")
+            || adapter_lower.contains("warp")
+            || adapter_lower.contains("gdi generic")
+            || driver_lower.contains("llvmpipe")
+            || driver_lower.contains("software")
+    }
 }
 
 #[cfg(test)]
@@ -234,13 +248,16 @@ mod tests {
         );
         assert_eq!(r.chip(), "WGPU fallback");
         assert_eq!(r.details(), "Dx12 · Microsoft Basic Render Driver");
+        assert!(r.is_software());
 
         let g = ActiveRenderer::new(RendererKind::Glow, "4.6.0 NVIDIA", "GeForce", "", false);
         assert_eq!(g.chip(), "GL");
         assert_eq!(g.details(), "4.6.0 NVIDIA · GeForce");
+        assert!(!g.is_software());
 
         let gf = ActiveRenderer::new(RendererKind::Glow, "3.3.0 Mesa", "llvmpipe", "", true);
         assert_eq!(gf.chip(), "GL fallback");
+        assert!(gf.is_software());
         assert_eq!(ActiveRenderer::unknown().details(), "unknown");
     }
 }

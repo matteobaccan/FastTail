@@ -117,13 +117,20 @@ fn main() -> eframe::Result<()> {
     let make_options = |renderer: eframe::Renderer| eframe::NativeOptions {
         viewport: viewport.clone(),
         renderer,
-        // Some OpenGL drivers (NVIDIA on Windows among them) busy-wait inside SwapBuffers
+        // Drivers (including NVIDIA on Windows among them) busy-wait inside presentation
         // while waiting for the vertical blank, which costs a whole core whenever egui
-        // repaints continuously. egui only repaints on demand, so disabling vsync on the
-        // OpenGL path trades tearing on a UI that hardly animates for a much lower CPU
-        // cost; wgpu presents through the swap chain and keeps vsync.
+        // repaints continuously (e.g. during mouse moves). egui only repaints on demand,
+        // so disabling vsync on both the OpenGL and wgpu paths trades tearing on a UI that
+        // hardly animates for a drastically lower CPU cost.
         glow_options: eframe::egui_glow::GlowConfiguration {
             vsync: false,
+            ..Default::default()
+        },
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            surface: eframe::egui_wgpu::SurfaceConfig {
+                present_mode: eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync,
+                desired_maximum_frame_latency: Some(1),
+            },
             ..Default::default()
         },
         ..Default::default()
