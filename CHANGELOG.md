@@ -6,6 +6,49 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-09-21
+
+### Added
+
+- **Configurable Markdown file size limit.** Added `markdown_max_mb` (default 1 MB,
+  range 1..=100 MB) in preferences under Performance & Refresh with INI persistence
+  and `FASTTAIL_MARKDOWN_MAX_MB` environment variable override. Files exceeding
+  the threshold remain in lightweight text streaming mode to prevent high memory
+  consumption and UI freezes, with a dynamic localized tooltip.
+- **Configurable mouse pointer move throttling.** Added `mouse_throttle_ms`
+  (default 100 ms, range 0..=1000 ms) in preferences with INI persistence and
+  `FASTTAIL_MOUSE_THROTTLE_MS` environment variable override.
+
+### Performance
+
+- **Mouse pointer move event coalescing.** Frames driven purely by mouse pointer
+  movement coalesce and pace at 100 ms intervals, eliminating CPU spikes (previously
+  reaching 100% CPU on software rasterizers like WARP/llvmpipe or virtual machines / RDP)
+  without adding any latency to clicks, key presses, or mouse wheel scrolling.
+- **Fast Markdown threshold rejection.** Files larger than the Markdown size cap
+  bypass full commonmark parsing and buffer duplication entirely upon opening.
+
+### Compatibility
+
+- **Windows 7 and Windows Server 2008 R2 support.** Completely eliminated startup
+  loader crashes (`0xc0000005`, `combase.dll is missing`, `GetSystemTimePreciseAsFileTime`,
+  `GetDpiForSystem`) by introducing dynamic IAT compatibility thunks:
+  - Routed `WaitOnAddress`, `WakeByAddressSingle`, and `WakeByAddressAll` to
+    `KernelBase.dll` on Windows 8+ or native `ntdll.dll` keyed events
+    (`NtWaitForKeyedEvent` / `NtReleaseKeyedEvent`) on Windows 7 / 2008 R2, purging
+    `api-ms-win-core-synch-l1-2-0.dll` from the PE import table.
+  - Redirected `ProcessPrng` to `advapi32.dll!SystemFunction036` (`RtlGenRandom`),
+    purging `bcryptprimitives.dll` from imports.
+  - Redirected `CoTaskMemFree` to `ole32.dll`, removing `combase.dll` from imports.
+  - Hooked `GetSystemTimePreciseAsFileTime` (falling back to `GetSystemTimeAsFileTime`)
+    and dynamically resolved `GetDpiForSystem` (falling back to 96 DPI).
+
+### Changed
+
+- **Clean HEX view toolbar.** The `# 123` line numbers toggle button and `↩ Wrap`
+  button are now hidden when viewing files in HEX mode, keeping the toolbar clean
+  and uncluttered for byte inspection.
+
 ## [0.6.0] - 2026-09-20
 
 ### Added
@@ -271,6 +314,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.7.0]: https://github.com/matteobaccan/FastTail/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/matteobaccan/FastTail/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/matteobaccan/FastTail/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/matteobaccan/FastTail/compare/v0.3.0...v0.4.0
