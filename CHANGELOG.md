@@ -6,6 +6,46 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-09-20
+
+### Added
+
+- **Toolbar action tooltip localization.** Hover tooltips on toolbar buttons
+  (`Color Filters`, `Play`, `Pause`, `Help`, `About`) are now localized across
+  all five supported languages (English, Italian, French, Spanish, and Chinese).
+- **Configurable refresh cadence.** Added preferences options for tail stream
+  polling interval (`poll_interval_ms`, default 250ms) and size check interval
+  (`size_check_interval_ms`, default 500ms) with INI persistence and live UI
+  sliders.
+- **Configurable rendering frame pacing.** Added preferences sliders to configure
+  target maximum FPS (`max_fps`, default 60 FPS) and software rasterizer FPS cap
+  (`max_fps_software`, default 30 FPS).
+
+### Performance
+
+- **SIMD-accelerated case-insensitive search.** Accelerated `find_case_insensitive`
+  in `tail_engine` using `memchr::memchr2` on the first character's lowercase
+  and uppercase variants, speeding up ASCII highlight rule and label evaluation
+  by ~18%.
+- **Adaptive frame pacing for software rendering.** Paces frame rendering based
+  on renderer detection (`renderer.is_software()`), capping software rasterizers
+  (WARP, llvmpipe, VMs) to 30 FPS by default to dramatically reduce CPU usage
+  during mouse movements.
+- **No-VSync default for wgpu.** Switched wgpu presentation to `AutoNoVsync` with
+  latency 1 to avoid swapchain backpressure and improve throughput.
+
+### Security
+
+- **Shell command injection prevention in external tools.** Quoted expanded
+  placeholder values (`{line}`, `{selection}`, `{file}`) with target-shell
+  specific escaping (`quote_sh_arg` for POSIX, `quote_cmd_arg` for Windows CMD)
+  when executing external tools in shell mode (`use_shell = true`), preventing
+  arbitrary command execution from log content.
+- **Safe export file creation.** Validates regular file metadata on the opened
+  file handle before truncating export targets (`set_len(0)`), preventing UI
+  thread deadlocks and blocking DoS when targeting non-regular files (such as
+  FIFOs/named pipes or device nodes).
+
 ## [0.5.0] - 2026-09-19
 
 ### Added
@@ -231,6 +271,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.6.0]: https://github.com/matteobaccan/FastTail/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/matteobaccan/FastTail/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/matteobaccan/FastTail/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/matteobaccan/FastTail/compare/v0.2.0...v0.3.0
