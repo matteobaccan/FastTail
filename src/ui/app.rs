@@ -272,7 +272,8 @@ impl FastTailApp {
                     TailEngine::open(&path)
                 };
                 if let Ok(mut engine) = opened {
-                    engine.size_check_interval = crate::tail_engine::SIZE_CHECK_INTERVAL;
+                    engine.size_check_interval =
+                        std::time::Duration::from_millis(app.config.size_check_interval_ms as u64);
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
                     engine.wrap_lines = app.config.wrap_for(&path);
@@ -674,7 +675,8 @@ impl FastTailApp {
             TailEngine::open(&path)
         };
         if let Ok(mut engine) = opened {
-            engine.size_check_interval = crate::tail_engine::SIZE_CHECK_INTERVAL;
+            engine.size_check_interval =
+                std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
@@ -894,7 +896,10 @@ impl FastTailApp {
         }
 
         // 2. Poll file updates, then run the tools bound to the rules that matched
+        let size_interval =
+            std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
         for eng in &mut self.engines {
+            eng.size_check_interval = size_interval;
             eng.poll_updates();
         }
         self.run_rule_bound_tools();
@@ -925,7 +930,9 @@ impl FastTailApp {
 
         // Keep streams updated even when idle or running in the background
         if self.engines.iter().any(|e| e.is_watching) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            ctx.request_repaint_after(std::time::Duration::from_millis(
+                self.config.poll_interval_ms as u64,
+            ));
         }
 
         // 5. Apply theme visuals (only when theme changes or on first frame)
@@ -2191,6 +2198,83 @@ impl FastTailApp {
                     {
                         let _ = self.config.save();
                     }
+
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!("⚡ {}", t(lang, "perf_section")))
+                            .monospace()
+                            .strong(),
+                    );
+                    ui.add_space(4.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("{}:", t(lang, "poll_interval"))).monospace(),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.poll_interval_ms)
+                                    .range(50..=5000)
+                                    .suffix(" ms"),
+                            )
+                            .on_hover_text(t(lang, "poll_interval_tip"))
+                            .changed()
+                        {
+                            let _ = self.config.save();
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("{}:", t(lang, "size_check_interval")))
+                                .monospace(),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.size_check_interval_ms)
+                                    .range(50..=10000)
+                                    .suffix(" ms"),
+                            )
+                            .on_hover_text(t(lang, "size_check_interval_tip"))
+                            .changed()
+                        {
+                            let _ = self.config.save();
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{}:", t(lang, "max_fps"))).monospace());
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.max_fps)
+                                    .range(15..=240)
+                                    .suffix(" FPS"),
+                            )
+                            .on_hover_text(t(lang, "max_fps_tip"))
+                            .changed()
+                        {
+                            let _ = self.config.save();
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("{}:", t(lang, "max_fps_software"))).monospace(),
+                        );
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.config.max_fps_software)
+                                    .range(10..=120)
+                                    .suffix(" FPS"),
+                            )
+                            .on_hover_text(t(lang, "max_fps_software_tip"))
+                            .changed()
+                        {
+                            let _ = self.config.save();
+                        }
+                    });
                 });
             });
 
@@ -2979,7 +3063,17 @@ impl eframe::App for FastTailApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let min_interval = std::time::Duration::from_millis(8);
+        // Pace live rendering to avoid high CPU usage during mouse movement:
+        // On software rasterizers (VMs without GPU, WARP, llvmpipe) where the CPU rasterizes
+        // every pixel, cap to max_fps_software (configurable, default 30 FPS / 33 ms).
+        // On hardware GPUs, cap to max_fps (configurable, default 60 FPS / 16 ms).
+        let target_fps = if self.renderer.is_software() {
+            self.config.max_fps_software
+        } else {
+            self.config.max_fps
+        }
+        .max(1);
+        let min_interval = std::time::Duration::from_micros(1_000_000 / target_fps as u64);
         let elapsed = self.last_frame_render.elapsed();
         if elapsed < min_interval {
             std::thread::sleep(min_interval - elapsed);

@@ -681,6 +681,15 @@ fn test_i18n_exhaustive_coverage() {
         "session_missing_title",
         "session_missing_body",
         "session_ok",
+        "perf_section",
+        "poll_interval",
+        "poll_interval_tip",
+        "size_check_interval",
+        "size_check_interval_tip",
+        "max_fps",
+        "max_fps_tip",
+        "max_fps_software",
+        "max_fps_software_tip",
     ];
 
     for lang in &[
@@ -1140,6 +1149,10 @@ fn test_config_ini_persistence() {
     config.font_size = 16.5;
     config.size_unit = SizeUnit::Hex;
     config.baretail_import = false;
+    config.poll_interval_ms = 350;
+    config.size_check_interval_ms = 750;
+    config.max_fps = 90;
+    config.max_fps_software = 20;
     config.open_files = vec![PathBuf::from("open1.log"), PathBuf::from("open2.log")];
     config.recent_files = vec![PathBuf::from("recent1.log"), PathBuf::from("recent2.log")];
     config.dock_layout = Some("LayoutTestRon".to_string());
@@ -1170,6 +1183,10 @@ fn test_config_ini_persistence() {
     assert_eq!(loaded.font_size, 16.5);
     assert_eq!(loaded.size_unit, SizeUnit::Hex);
     assert_eq!(loaded.baretail_import, false);
+    assert_eq!(loaded.poll_interval_ms, 350);
+    assert_eq!(loaded.size_check_interval_ms, 750);
+    assert_eq!(loaded.max_fps, 90);
+    assert_eq!(loaded.max_fps_software, 20);
     assert_eq!(loaded.dock_layout.as_deref(), Some("LayoutTestRon"));
     assert_eq!(loaded.recent_files.len(), 2);
     assert_eq!(loaded.recent_files[0], PathBuf::from("recent1.log"));
@@ -1210,6 +1227,24 @@ fn test_config_save_only_when_different() {
         "changed config must be rewritten"
     );
     assert_ne!(std::fs::read(&cfg_path).unwrap(), first);
+}
+
+#[test]
+fn test_perf_config_bounds_and_defaults() {
+    let cfg = FastTailConfig::default();
+    assert_eq!(cfg.poll_interval_ms, 250);
+    assert_eq!(cfg.size_check_interval_ms, 500);
+    assert_eq!(cfg.max_fps, 60);
+    assert_eq!(cfg.max_fps_software, 30);
+
+    // Test clamped parsing from ini
+    let text = "[general]\npoll_interval_ms=10\nsize_check_interval_ms=99999\nmax_fps=1\nmax_fps_software=500\n";
+    let ini = ini::Ini::load_from_str(text).unwrap();
+    let loaded = FastTailConfig::from_ini(&ini);
+    assert_eq!(loaded.poll_interval_ms, 50); // clamped to 50
+    assert_eq!(loaded.size_check_interval_ms, 10000); // clamped to 10000
+    assert_eq!(loaded.max_fps, 5); // clamped to 5
+    assert_eq!(loaded.max_fps_software, 120); // clamped to 120
 }
 
 #[test]

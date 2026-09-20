@@ -6,7 +6,7 @@ Defines how FastTail chooses between the wgpu and OpenGL rendering backends, the
 ## Requirements
 
 ### Requirement: Renderer Selection with Automatic Fallback
-The application SHALL support both the `wgpu` and the OpenGL (`glow`) rendering backends. The backend SHALL be resolved from the `FASTTAIL_RENDERER` environment variable, then the `renderer` key in `fasttail.ini`, then the default `auto`; accepted values are `auto`, `glow` and `wgpu`. With `auto` the application SHALL start with wgpu and, if eframe returns an error before the window runs, SHALL retry with OpenGL and log the wgpu error to stderr. With `glow` or `wgpu` no fallback SHALL happen. The OpenGL backend SHALL run without vsync, because some OpenGL drivers busy-wait for the vertical blank and turn every continuous repaint into a full core of CPU.
+The application SHALL support both the `wgpu` and the OpenGL (`glow`) rendering backends. The backend SHALL be resolved from the `FASTTAIL_RENDERER` environment variable, then the `renderer` key in `fasttail.ini`, then the default `auto`; accepted values are `auto`, `glow` and `wgpu`. With `auto` the application SHALL start with wgpu and, if eframe returns an error before the window runs, SHALL retry with OpenGL and log the wgpu error to stderr. With `glow` or `wgpu` no fallback SHALL happen. Both backends SHALL run without vsync, because some graphics drivers (including NVIDIA on Windows) busy-wait for the vertical blank and turn every continuous repaint into a full core of CPU.
 
 #### Scenario: Machine without a usable wgpu backend
 - **WHEN** FastTail starts with `renderer = auto` on a machine where neither Direct3D 12 nor Vulkan can create a device
