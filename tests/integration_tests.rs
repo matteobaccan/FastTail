@@ -3236,7 +3236,10 @@ fn test_export_rejects_non_regular_files() {
     std::fs::create_dir(&target_dir).unwrap();
 
     let result = create_export_file(&target_dir);
-    assert!(result.is_err(), "create_export_file for directory must fail");
+    assert!(
+        result.is_err(),
+        "create_export_file for directory must fail"
+    );
 
     #[cfg(unix)]
     {
