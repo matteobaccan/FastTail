@@ -376,13 +376,31 @@ pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(
     if haystack.is_ascii() && needle_lower.is_ascii() {
         let h = haystack.as_bytes();
         let n = needle_lower.as_bytes();
+        let n_len = n.len();
+        if n_len == 0 || n_len > h.len() {
+            return out;
+        }
+
+        // SIMD-accelerated ASCII case-insensitive search:
+        // Scans rapidly using memchr2 on the first byte's lowercase and uppercase variants,
+        // skipping non-candidate byte positions at SIMD vector speeds.
+        let first_lower = n[0].to_ascii_lowercase();
+        let first_upper = first_lower.to_ascii_uppercase();
+        let max_pos = h.len() - n_len;
         let mut i = 0;
-        while i + n.len() <= h.len() {
-            if h[i..i + n.len()].eq_ignore_ascii_case(n) {
-                out.push((i, i + n.len()));
-                i += n.len();
-            } else {
-                i += 1;
+
+        while i <= max_pos {
+            match memchr::memchr2(first_lower, first_upper, &h[i..=max_pos]) {
+                Some(rel) => {
+                    i += rel;
+                    if h[i..i + n_len].eq_ignore_ascii_case(n) {
+                        out.push((i, i + n_len));
+                        i += n_len;
+                    } else {
+                        i += 1;
+                    }
+                }
+                None => break,
             }
         }
         return out;
