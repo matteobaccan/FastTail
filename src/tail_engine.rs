@@ -389,11 +389,10 @@ pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(
         let mut curr = 0;
 
         while curr <= max_pos {
-            let match_rel =
-                match memchr::memchr2(first_lower, first_upper, &h[curr..=max_pos]) {
-                    Some(rel) => rel,
-                    None => break,
-                };
+            let match_rel = match memchr::memchr2(first_lower, first_upper, &h[curr..=max_pos]) {
+                Some(rel) => rel,
+                None => break,
+            };
 
             curr += match_rel;
             if h[curr..curr + n_len].eq_ignore_ascii_case(n) {
@@ -2189,7 +2188,11 @@ impl TailEngine {
                     let first_lower = pattern[0].to_ascii_lowercase();
                     let first_upper = pattern[0].to_ascii_uppercase();
                     while curr <= max_pos {
-                        let rel = match memchr::memchr2(first_lower, first_upper, &haystack[curr..=max_pos]) {
+                        let rel = match memchr::memchr2(
+                            first_lower,
+                            first_upper,
+                            &haystack[curr..=max_pos],
+                        ) {
                             Some(r) => r,
                             None => break,
                         };
@@ -2960,9 +2963,6 @@ mod tests {
         assert_eq!(find_case_insensitive("", "test"), vec![]);
         assert_eq!(find_case_insensitive("test", ""), vec![]);
         assert_eq!(find_case_insensitive("abc", "abcdef"), vec![]);
-        assert_eq!(
-            find_case_insensitive("aaaaa", "aa"),
-            vec![(0, 2), (2, 4)]
-        );
+        assert_eq!(find_case_insensitive("aaaaa", "aa"), vec![(0, 2), (2, 4)]);
     }
 }
