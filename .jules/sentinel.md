@@ -12,3 +12,8 @@
 **Vulnerability:** Running user-configured external tools in shell mode (`sh -c` / `cmd /c`) without quoting expanded placeholder values (`{line}`, `{selection}`, `{file}`) allows arbitrary command injection if log file content contains shell control characters (e.g., `;`, `&`, `|`, `$()`, quotes).
 **Learning:** Even when shell execution is explicitly requested for an external command line, individual argument placeholders derived from untrusted inputs must be escaped or quoted specifically for the target shell (`sh -c` or `cmd /c`) before concatenation.
 **Prevention:** Always pass untrusted placeholder values through POSIX (`quote_sh_arg`) or Windows CMD (`quote_cmd_arg`) argument quoter helpers when joining command lines for shell execution.
+
+## 2026-04-18 - Validate crash log output path before truncating
+**Vulnerability:** `write_crash_log` used `OpenOptions` with `.truncate(true)` when attempting to write `fasttail_crash.log` in CWD, executable directory, or temp directory. If a non-regular file or symlink (such as a FIFO/named pipe or arbitrary target file) existed at that path, opening with truncation could hang the process during panic handling or overwrite untargeted files.
+**Learning:** Crash logging handlers running during panics must ensure that writing logs to predictable paths (CWD/temp) checks `path.exists()` and open handle `metadata.is_file()` before calling `set_len(0)` to truncate.
+**Prevention:** Always validate target file handle metadata with `is_file()` prior to truncating crash log files.
