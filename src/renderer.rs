@@ -16,21 +16,27 @@ pub enum RendererChoice {
     Auto,
     Glow,
     Wgpu,
+    /// Force the wgpu software rasterizer (WARP / llvmpipe / Mesa software): useful to
+    /// exercise the software-rendering visuals and pacing even on machines with a GPU.
+    Software,
 }
 
 impl RendererChoice {
-    pub const ALL: [RendererChoice; 3] = [
+    pub const ALL: [RendererChoice; 4] = [
         RendererChoice::Auto,
         RendererChoice::Glow,
         RendererChoice::Wgpu,
+        RendererChoice::Software,
     ];
 
-    /// Parses `auto`, `glow`/`gl`/`opengl` or `wgpu` (case-insensitive); anything else is `None`.
+    /// Parses `auto`, `glow`/`gl`/`opengl`, `wgpu` or `software`/`cpu` (case-insensitive);
+    /// anything else is `None`.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(Self::Auto),
             "glow" | "gl" | "opengl" => Some(Self::Glow),
             "wgpu" => Some(Self::Wgpu),
+            "software" | "cpu" => Some(Self::Software),
             _ => None,
         }
     }
@@ -40,6 +46,7 @@ impl RendererChoice {
             Self::Auto => "auto",
             Self::Glow => "glow",
             Self::Wgpu => "wgpu",
+            Self::Software => "software",
         }
     }
 
@@ -226,6 +233,11 @@ mod tests {
         assert_eq!(RendererChoice::parse(" gl "), Some(RendererChoice::Glow));
         assert_eq!(RendererChoice::parse("OpenGL"), Some(RendererChoice::Glow));
         assert_eq!(RendererChoice::parse("wgpu"), Some(RendererChoice::Wgpu));
+        assert_eq!(
+            RendererChoice::parse("software"),
+            Some(RendererChoice::Software)
+        );
+        assert_eq!(RendererChoice::parse("CPU"), Some(RendererChoice::Software));
         assert_eq!(RendererChoice::parse("vulkan"), None);
     }
 

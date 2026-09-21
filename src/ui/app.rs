@@ -57,6 +57,9 @@ pub struct FastTailApp {
     pub baretail_config: Option<BareTailConfig>,
     pub last_dock_save: Instant,
     pub first_frame: bool,
+    /// egui context used to wake the event loop from the filesystem watcher threads, so an
+    /// idle software-rendered window picks up new lines without a periodic repaint.
+    pub egui_ctx: egui::Context,
     pub floating_window_rects: std::collections::HashMap<egui_dock::SurfaceIndex, egui::Rect>,
     /// Backend the window runs on, read once from the creation context.
     pub renderer: crate::renderer::ActiveRenderer,
@@ -216,7 +219,7 @@ impl FastTailApp {
             config.dock_layout = None;
         }
         config.theme.apply(&cc.egui_ctx);
-        let mut app = Self::from_config(config);
+        let mut app = Self::from_config_with_ctx(config, cc.egui_ctx.clone());
         app.apply_cli(&cli);
         if let Some(file) = &cli.session {
             app.load_session_file(file.clone(), true);
@@ -236,6 +239,12 @@ impl FastTailApp {
     }
 
     pub fn from_config(config: FastTailConfig) -> Self {
+        Self::from_config_with_ctx(config, egui::Context::default())
+    }
+
+    /// Builds the app around a given egui context (used by the filesystem watchers to wake
+    /// the event loop). Tests go through `from_config` with a fresh default context.
+    pub fn from_config_with_ctx(config: FastTailConfig, egui_ctx: egui::Context) -> Self {
         let mut system = System::new_with_specifics(
             RefreshKind::nothing()
                 .with_cpu(CpuRefreshKind::everything())
@@ -282,6 +291,7 @@ impl FastTailApp {
             baretail_config,
             last_dock_save: Instant::now(),
             first_frame: true,
+            egui_ctx,
             floating_window_rects,
             renderer: crate::renderer::ActiveRenderer::unknown(),
             applied_on_top: false,
@@ -319,11 +329,12 @@ impl FastTailApp {
                 if !is_pattern && !path.exists() {
                     continue;
                 }
+                let wake = Self::make_wake(&app.egui_ctx);
                 let opened = if is_pattern {
                     // A pattern tab resolves to the newest match again at every start.
-                    TailEngine::open_pattern(&path)
+                    TailEngine::open_pattern_with_wake(&path, wake)
                 } else {
-                    TailEngine::open(&path)
+                    TailEngine::open_with_wake(&path, wake)
                 };
                 if let Ok(mut engine) = opened {
                     engine.size_check_interval =
@@ -707,6 +718,13 @@ impl FastTailApp {
         dir.join("*.log").to_string_lossy().to_string()
     }
 
+    /// Waker handed to every stream: repaint as soon as its filesystem watcher fires, so
+    /// an idle software-rendered window drops the periodic present loop (see `render_ui`).
+    fn make_wake(ctx: &egui::Context) -> crate::tail_engine::WakeFn {
+        let ctx = ctx.clone();
+        std::sync::Arc::new(move || ctx.request_repaint()) as crate::tail_engine::WakeFn
+    }
+
     pub fn open_log_file(&mut self, path: PathBuf) {
         let is_pattern = crate::wildcard::is_pattern_path(&path);
         if !is_pattern && !path.exists() {
@@ -725,10 +743,11 @@ impl FastTailApp {
             }
         }
 
+        let wake = Self::make_wake(&self.egui_ctx);
         let opened = if is_pattern {
-            TailEngine::open_pattern(&path)
+            TailEngine::open_pattern_with_wake(&path, wake)
         } else {
-            TailEngine::open(&path)
+            TailEngine::open_with_wake(&path, wake)
         };
         if let Ok(mut engine) = opened {
             engine.size_check_interval =
@@ -985,11 +1004,19 @@ impl FastTailApp {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
-        // Keep streams updated even when idle or running in the background
+        // Keep streams updated even when idle or running in the background.
+        // On software rasterizers (WARP) every present is expensive in CPU, so we do not
+        // pump at the poll cadence: each stream's filesystem watcher wakes the event loop
+        // (`make_wake`) when real data arrives, and this slow safety poll only catches
+        // what notify misses (atomic saves, network shares). A background log therefore
+        // idles without burning cores while staying up to date within ~2s.
         if self.engines.iter().any(|e| e.is_watching) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(
-                self.config.poll_interval_ms as u64,
-            ));
+            let cadence = if self.renderer.is_software() {
+                std::time::Duration::from_secs(2)
+            } else {
+                std::time::Duration::from_millis(self.config.poll_interval_ms as u64)
+            };
+            ctx.request_repaint_after(cadence);
         }
 
         // 5. Apply theme visuals (only when theme changes, when the renderer's software flag
@@ -1608,6 +1635,32 @@ impl FastTailApp {
                 });
             });
 
+        // 6b. Software-renderer warning banner: on WARP/llvmpipe the whole scene is
+        // rasterized on the CPU, so tell the user a GPU is needed for smooth performance.
+        if self.renderer.is_software() {
+            let warn = self.config.theme.warn_color();
+            egui::Panel::top("software_banner")
+                .frame(
+                    egui::Frame::new()
+                        .fill(warn.gamma_multiply(0.18))
+                        .stroke(Stroke::new(1.0, warn.gamma_multiply(0.8)))
+                        .inner_margin(Margin {
+                            left: 12,
+                            right: 12,
+                            top: 5,
+                            bottom: 5,
+                        }),
+                )
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!("⚠ {}", t(self.config.language, "software_banner")))
+                            .monospace()
+                            .strong()
+                            .color(warn),
+                    );
+                });
+        }
+
         // 7. Render Central Modular Docking Area
         let prev_borderless = self.config.borderless;
         let prev_theme = self.config.theme;
@@ -2218,6 +2271,9 @@ impl FastTailApp {
                                 crate::renderer::RendererChoice::Auto => t(lang, "renderer_auto"),
                                 crate::renderer::RendererChoice::Glow => t(lang, "renderer_glow"),
                                 crate::renderer::RendererChoice::Wgpu => t(lang, "renderer_wgpu"),
+                                crate::renderer::RendererChoice::Software => {
+                                    t(lang, "renderer_software")
+                                }
                             })
                             .show_ui(ui, |ui| {
                                 for choice in crate::renderer::RendererChoice::ALL {
@@ -2230,6 +2286,9 @@ impl FastTailApp {
                                         }
                                         crate::renderer::RendererChoice::Wgpu => {
                                             t(lang, "renderer_wgpu")
+                                        }
+                                        crate::renderer::RendererChoice::Software => {
+                                            t(lang, "renderer_software")
                                         }
                                     };
                                     ui.selectable_value(&mut self.config.renderer, choice, label);

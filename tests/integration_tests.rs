@@ -640,8 +640,10 @@ fn test_i18n_exhaustive_coverage() {
         "renderer_auto",
         "renderer_glow",
         "renderer_wgpu",
+        "renderer_software",
         "renderer_note",
         "renderer_tip",
+        "software_banner",
         "export_visible",
         "export_matches",
         "export_tip",
@@ -3074,6 +3076,18 @@ fn test_renderer_choice_persists_in_ini() {
     );
     let restored = FastTailConfig::from_ini(&ini);
     assert_eq!(restored.renderer, RendererChoice::Wgpu);
+
+    // Software rendering force survives the ini round trip too.
+    cfg.renderer = RendererChoice::Software;
+    let ini = cfg.to_ini();
+    assert_eq!(
+        ini.section(Some("general")).and_then(|s| s.get("renderer")),
+        Some("software")
+    );
+    assert_eq!(
+        FastTailConfig::from_ini(&ini).renderer,
+        RendererChoice::Software
+    );
 
     // Unknown values fall back to the default instead of failing the whole config.
     let mut bad = cfg.to_ini();

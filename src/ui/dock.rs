@@ -3,7 +3,7 @@ use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
 use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
 use crate::tail_engine::{
-    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SpanStyle, TailEngine,
+    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SpanStyle, TailEngine, MAX_LINE_BYTES,
 };
 use crate::theme::CyberTheme;
 use crate::wrap_layout::{
@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 
 /// How long to wait after the last keystroke before rescanning the file for matches.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Virtual width of the horizontal scroll canvas, far beyond the widest line the renderer
+/// can produce (lines are capped at MAX_LINE_BYTES). Keeps the right edge of the scroll
+/// content beyond any real line so horizontal scrolling is effectively unlimited.
+const HORIZONTAL_SCROLL_EXTENT: f32 = MAX_LINE_BYTES as f32 * 16.0;
 
 /// Finds the engine backing `path`: exact match first, then a cheap case-insensitive
 /// comparison, then a canonicalized one, so tabs restored from an older layout with a
@@ -1650,9 +1655,11 @@ fn render_extended_rows(
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
     let mut clear_scroll_to_line = false;
+    let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
     let font_id = egui::FontId::monospace(font_size);
     let span_rules = engine.has_span_rules();
+    let scroll_content_width = engine.max_detected_width.max(HORIZONTAL_SCROLL_EXTENT);
     let mut scroll_area = ScrollArea::both()
         .auto_shrink([false, false])
         .stick_to_bottom(engine.follow_tail);
@@ -1666,7 +1673,7 @@ fn render_extended_rows(
 
     ui.spacing_mut().item_spacing.y = 0.0;
     let scroll_output = scroll_area.show_rows(ui, row_height, visible_lines, |ui, row_range| {
-        ui.set_min_width(engine.max_detected_width);
+        ui.set_min_width(scroll_content_width);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         ui.spacing_mut().item_spacing.y = 0.0;
         for row_idx in row_range {
@@ -1789,6 +1796,7 @@ fn render_extended_rows(
                         ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
                     })
                     .response;
+                max_row_natural_width = max_row_natural_width.max(row_resp.rect.width());
                 paint_search_row_background(
                     ui,
                     row_bg,
@@ -1853,9 +1861,8 @@ fn render_extended_rows(
     if clear_scroll_to_line {
         engine.scroll_to_line = None;
     }
-    let measured_width = scroll_output.content_size.x;
-    if measured_width > engine.max_detected_width {
-        engine.max_detected_width = measured_width;
+    if max_row_natural_width > engine.max_detected_width {
+        engine.max_detected_width = max_row_natural_width;
     }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
@@ -2405,6 +2412,7 @@ fn render_hex_stream(
     }
 
     let header_height = row_height + 4.0;
+    let scroll_content_width = engine.max_detected_width.max(HORIZONTAL_SCROLL_EXTENT);
     ScrollArea::horizontal()
         .id_salt("hex_header_scroll")
         .auto_shrink([false, true])
@@ -2412,7 +2420,7 @@ fn render_hex_stream(
         .horizontal_scroll_offset(engine.current_scroll_x)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
-            ui.set_min_width(engine.max_detected_width);
+            ui.set_min_width(scroll_content_width);
             ui.horizontal(|ui| {
                 if has_search {
                     // Keep the header aligned with the marker column of the rows
@@ -2444,6 +2452,7 @@ fn render_hex_stream(
     ui.separator();
 
     let mut scroll_to_byte = engine.scroll_to_byte;
+    let mut max_row_natural_width = 0.0_f32;
     let mut scroll_area = ScrollArea::both()
         .id_salt("hex_rows_scroll")
         .auto_shrink([false, false])
@@ -2457,7 +2466,7 @@ fn render_hex_stream(
     }
 
     let scroll_output = scroll_area.show_rows(ui, row_height, total_rows, |ui, row_range| {
-        ui.set_min_width(engine.max_detected_width);
+        ui.set_min_width(scroll_content_width);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         ui.spacing_mut().item_spacing.y = 0.0;
         for row_idx in row_range {
@@ -2554,6 +2563,7 @@ fn render_hex_stream(
                     ui.label(ascii_text);
                 })
                 .response;
+            max_row_natural_width = max_row_natural_width.max(row_resp.rect.width());
             paint_search_row_background(
                 ui,
                 row_bg,
@@ -2576,9 +2586,8 @@ fn render_hex_stream(
         }
     });
     engine.scroll_to_byte = scroll_to_byte;
-    let measured_width = scroll_output.content_size.x;
-    if measured_width > engine.max_detected_width {
-        engine.max_detected_width = measured_width;
+    if max_row_natural_width > engine.max_detected_width {
+        engine.max_detected_width = max_row_natural_width;
     }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;

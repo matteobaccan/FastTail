@@ -123,7 +123,7 @@ fasttail [OPTIONS] [PATH...]
   --exclude <TEXT>   exclude filter for those files
   --follow / --no-follow
                      follow mode for those files
-  --renderer <NAME>  auto (default), glow or wgpu
+  --renderer <NAME>  auto (default), glow, wgpu or software
   --config <FILE>    configuration file to use (same as FASTTAIL_CONFIG)
   -V, --version      print the version and exit
   -h, --help         print the usage and exit
@@ -166,9 +166,11 @@ Extras: a **shortcut** such as `Ctrl+Shift+F9` (a modifier is required) runs the
 ### Rendering backend
 FastTail starts on `wgpu` (Direct3D 12 or Vulkan on Windows, Vulkan on Linux, Metal on macOS) and, if that backend cannot be created, retries automatically with OpenGL. Both backends run without vsync because many drivers (NVIDIA on Windows among them) busy-wait for the vertical blank and burn CPU cores whenever egui repaints; running without vsync and with paced rendering keeps continuous repaints lightweight. The status bar shows which backend is active: `WGPU`, `GL`, or `GL fallback` when the retry happened; hover it, or open About, for the adapter details.
 
+A `software` renderer is also available as a last-resort fallback for machines with no usable GPU (or for troubleshooting driver problems). It forces the wgpu CPU rasterizer (WARP on Windows, llvmpipe on Linux). **This mode is not optimized and is CPU-hungry: WARP is designed to spread rasterization across every logical core, so the process keeps several cores busy even when the log is idle and the window is unfocused.** The cost only drops when the window is minimized. On a machine with a working GPU use `auto` (the default), `wgpu` or `glow` instead; software mode only makes sense when no hardware backend can start. A banner reminds you while the software renderer is active.
+
 | Setting | Values | Where |
 |---|---|---|
-| `renderer` in `fasttail.ini` | `auto` (default), `glow`, `wgpu` | Settings dialog, applies at the next start |
+| `renderer` in `fasttail.ini` | `auto` (default), `glow`, `wgpu`, `software` | Settings dialog, applies at the next start |
 | `FASTTAIL_RENDERER` | same values, overrides the config | environment, useful for support: `FASTTAIL_RENDERER=wgpu fasttail` |
 
 When the first backend fails, the error is printed to stderr together with `renderer: falling back to OpenGL`.
