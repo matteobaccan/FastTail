@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   movement coalesce and pace at 100 ms intervals, eliminating CPU spikes (previously
   reaching 100% CPU on software rasterizers like WARP/llvmpipe or virtual machines / RDP)
   without adding any latency to clicks, key presses, or mouse wheel scrolling.
+- **Software-rasterizer mouse pacing.** On software rasterizers (WARP / llvmpipe /
+  virtual machines / RDP) pure pointer-move frames are additionally paced to at most
+  5 FPS — or the configured `mouse_throttle_ms`, whichever is lower — because every
+  frame is rasterized on the CPU; hardware rendering keeps the user's own cadence.
+- **Reduced per-frame cost on software rasterizers.** When the active renderer reports
+  a software rasterizer, feathering (anti-aliasing), window/popup shadows, hover
+  expansion and rounded corners are disabled to cut the CPU cost of every frame;
+  hardware rendering keeps the full styling.
 - **Fast Markdown threshold rejection.** Files larger than the Markdown size cap
   bypass full commonmark parsing and buffer duplication entirely upon opening.
 

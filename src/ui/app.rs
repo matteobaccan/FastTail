@@ -81,12 +81,59 @@ pub struct FastTailApp {
     pub session_missing: Option<Vec<PathBuf>>,
     /// Window title last sent to the OS, to send it again only when it changes.
     pub title_applied: String,
-    /// Theme visuals last applied to egui context, applied again only when it changes.
-    pub theme_applied: Option<CyberTheme>,
     /// Timestamp of last live frame render for frame pacing.
     pub last_frame_render: Instant,
     /// Timestamp of last render for pure pointer movement throttling.
     pub last_mouse_render: Instant,
+    /// Visuals last applied for the active renderer; reapplied when the software-UI flag
+    /// changes so hardware and software rasterizers keep separate styling.
+    pub applied_visuals: Option<(bool, CyberTheme)>,
+}
+
+/// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
+/// every frame on the CPU, so above a few fps each pointer move costs a visible slice of CPU.
+const SOFTWARE_MOUSE_FPS: u32 = 5;
+
+/// Interval in microseconds the pure-pointer-move throttle should sleep for: on a software
+/// rasterizer the user setting is tightened to `SOFTWARE_MOUSE_FPS`, but a user value below
+/// it (including 0 = no throttling) still wins.
+pub fn mouse_throttle_interval_us(is_software_renderer: bool, mouse_throttle_ms: u64) -> u64 {
+    if is_software_renderer {
+        (1_000_000 / SOFTWARE_MOUSE_FPS.max(1) as u64).min(mouse_throttle_ms.saturating_mul(1000))
+    } else {
+        mouse_throttle_ms.saturating_mul(1000)
+    }
+}
+
+/// Applies the visuals for the active renderer: on a software rasterizer (WARP / llvmpipe /
+/// VM / RDP) the costly per-frame effects are stripped to cut CPU per frame.
+pub fn apply_renderer_visuals(ctx: &egui::Context, is_software_renderer: bool, theme: CyberTheme) {
+    theme.apply(ctx);
+    // Feathering (anti-aliasing) is the single most expensive epaint stage on a CPU
+    // rasterizer; hard edges on the pixel grid are far cheaper. Set explicitly (not only
+    // when software) so switching renderer classes restores the stock behaviour.
+    ctx.tessellation_options_mut(|o| o.feathering = !is_software_renderer);
+    if !is_software_renderer {
+        return;
+    }
+    // Shadows and hover expansion grow the tessellated area of every window and hovered
+    // widget, and rounded corners add feathered tessellation: all negligible on a GPU,
+    // measurable on WARP.
+    for theme_id in [egui::Theme::Dark, egui::Theme::Light] {
+        ctx.style_mut_of(theme_id, |style| {
+            let v = &mut style.visuals;
+            v.window_shadow = egui::Shadow::NONE;
+            v.popup_shadow = egui::Shadow::NONE;
+            v.widgets.hovered.expansion = 0.0;
+            v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(0);
+            v.widgets.inactive.corner_radius = egui::CornerRadius::same(0);
+            v.widgets.hovered.corner_radius = egui::CornerRadius::same(0);
+            v.widgets.active.corner_radius = egui::CornerRadius::same(0);
+            v.widgets.open.corner_radius = egui::CornerRadius::same(0);
+            v.window_corner_radius = egui::CornerRadius::same(0);
+            v.menu_corner_radius = egui::CornerRadius::same(0);
+        });
+    }
 }
 
 /// Applies a dialog's persisted position and size to `win`; without a saved position the
@@ -176,6 +223,10 @@ impl FastTailApp {
         }
         app.renderer = crate::renderer::ActiveRenderer::from_creation_context(cc);
         crate::renderer::mark_app_created();
+        // On a software rasterizer the costly per-frame effects are stripped here, before
+        // the first frame; `render_ui` keeps it applied when the theme changes.
+        app.applied_visuals = Some((app.renderer.is_software(), app.config.theme));
+        apply_renderer_visuals(&cc.egui_ctx, app.renderer.is_software(), app.config.theme);
         eprintln!(
             "renderer: running on {} ({})",
             app.renderer.chip(),
@@ -244,9 +295,9 @@ impl FastTailApp {
             pending_session_load: None,
             session_missing: None,
             title_applied: String::new(),
-            theme_applied: None,
             last_frame_render: Instant::now(),
             last_mouse_render: Instant::now(),
+            applied_visuals: None,
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -941,10 +992,12 @@ impl FastTailApp {
             ));
         }
 
-        // 5. Apply theme visuals (only when theme changes or on first frame)
-        if self.theme_applied != Some(self.config.theme) {
-            self.config.theme.apply(&ctx);
-            self.theme_applied = Some(self.config.theme);
+        // 5. Apply theme visuals (only when theme changes, when the renderer's software flag
+        // changes, or on first frame)
+        let software_ui = self.renderer.is_software();
+        if self.applied_visuals != Some((software_ui, self.config.theme)) {
+            apply_renderer_visuals(&ctx, software_ui, self.config.theme);
+            self.applied_visuals = Some((software_ui, self.config.theme));
         }
 
         // 6. Primary Title Bar (Title, window controls, telemetry, and safe draggable region)
@@ -3101,7 +3154,10 @@ impl eframe::App for FastTailApp {
         });
 
         if is_pure_mouse_move && self.config.mouse_throttle_ms > 0 {
-            let throttle = std::time::Duration::from_millis(self.config.mouse_throttle_ms);
+            let throttle = std::time::Duration::from_micros(mouse_throttle_interval_us(
+                self.renderer.is_software(),
+                self.config.mouse_throttle_ms,
+            ));
             let elapsed = self.last_mouse_render.elapsed();
             if elapsed < throttle {
                 std::thread::sleep(throttle - elapsed);

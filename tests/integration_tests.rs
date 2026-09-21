@@ -5070,3 +5070,66 @@ mod named_sessions {
         }
     }
 }
+
+#[test]
+fn test_mouse_throttle_interval_software_vs_hardware() {
+    use fasttail::ui::app::mouse_throttle_interval_us;
+
+    // Hardware renderer: the user setting in microseconds, verbatim (0 = no throttle).
+    assert_eq!(mouse_throttle_interval_us(false, 100), 100_000);
+    assert_eq!(mouse_throttle_interval_us(false, 0), 0);
+    assert_eq!(mouse_throttle_interval_us(false, 1000), 1_000_000);
+
+    // Software rasterizer: capped at 5 fps (200 ms) but never above the user setting,
+    // so 0 keeps meaning "no throttling".
+    assert_eq!(mouse_throttle_interval_us(true, 1000), 200_000);
+    assert_eq!(mouse_throttle_interval_us(true, 250), 200_000);
+    assert_eq!(mouse_throttle_interval_us(true, 100), 100_000);
+    assert_eq!(mouse_throttle_interval_us(true, 0), 0);
+}
+
+#[test]
+fn test_software_renderer_strips_costly_visuals() {
+    use fasttail::ui::app::apply_renderer_visuals;
+
+    let ctx = egui::Context::default();
+
+    // Hardware renderer: stock theme visuals.
+    apply_renderer_visuals(&ctx, false, CyberTheme::Tron);
+    assert!(
+        ctx.tessellation_options(|o| o.feathering),
+        "hardware rendering keeps feathering"
+    );
+    let stock_window_shadow = egui::Visuals::dark().window_shadow;
+    assert_eq!(
+        ctx.style_of(egui::Theme::Dark).visuals.window_shadow,
+        stock_window_shadow
+    );
+
+    // Software rasterizer: feathering off, shadows and rounded corners stripped.
+    apply_renderer_visuals(&ctx, true, CyberTheme::Tron);
+    assert!(
+        !ctx.tessellation_options(|o| o.feathering),
+        "software rendering must disable feathering"
+    );
+    ctx.style_mut_of(egui::Theme::Dark, |s| {
+        assert_eq!(s.visuals.window_shadow, egui::Shadow::NONE);
+        assert_eq!(s.visuals.popup_shadow, egui::Shadow::NONE);
+        assert_eq!(
+            s.visuals.widgets.hovered.corner_radius,
+            egui::CornerRadius::same(0)
+        );
+        assert_eq!(s.visuals.window_corner_radius, egui::CornerRadius::same(0));
+    });
+
+    // Switching back to a hardware renderer must restore the stock theme visuals.
+    apply_renderer_visuals(&ctx, false, CyberTheme::Tron);
+    assert!(
+        ctx.tessellation_options(|o| o.feathering),
+        "hardware rendering restores feathering"
+    );
+    assert_eq!(
+        ctx.style_of(egui::Theme::Dark).visuals.window_shadow,
+        stock_window_shadow
+    );
+}

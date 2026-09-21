@@ -311,7 +311,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::It, "max_fps_software") => "FPS massimi (Software / VM)",
         (Language::It, "max_fps_software_tip") => "Limite frame rate su macchine virtuali o rasterizzatore software WARP/llvmpipe (default: 30)",
         (Language::It, "mouse_throttle") => "Throttling cursore mouse",
-        (Language::It, "mouse_throttle_tip") => "Cadenza (ms) per accorpare gli eventi di puro spostamento del mouse ed evitare picchi di CPU (default: 100 ms)",
+        (Language::It, "mouse_throttle_tip") => "Cadenza (ms) per accorpare gli eventi di puro spostamento del mouse ed evitare picchi di CPU (default: 100 ms; su rendering software è limitata comunque a 5 FPS)",
         (Language::It, "markdown_max_size") => "Dimensione massima Markdown",
         (Language::It, "markdown_max_size_tip") => "Dimensione massima in MB per il rendering Markdown (sopra tale limite rimane in modalità testo, default: 1 MB)",
 
@@ -542,7 +542,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Fr, "max_fps_software") => "IPS max (Logiciel / VM)",
         (Language::Fr, "max_fps_software_tip") => "Limite le taux de rafraîchissement sur machines virtuelles ou WARP/llvmpipe (défaut : 30)",
         (Language::Fr, "mouse_throttle") => "Throttling du curseur de la souris",
-        (Language::Fr, "mouse_throttle_tip") => "Cadence (ms) pour regrouper les mouvements de la souris et économiser le CPU (défaut : 100 ms)",
+        (Language::Fr, "mouse_throttle_tip") => "Cadence (ms) pour regrouper les mouvements de la souris et économiser le CPU (défaut : 100 ms ; limitée à 5 IPS sur rendu logiciel)",
         (Language::Fr, "markdown_max_size") => "Taille max Markdown",
         (Language::Fr, "markdown_max_size_tip") => "Taille maximale en Mo pour le rendu Markdown (reste en texte brut au-delà, défaut : 1 Mo)",
 
@@ -773,7 +773,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Es, "max_fps_software") => "FPS máximos (Software / VM)",
         (Language::Es, "max_fps_software_tip") => "Límite de fotogramas por segundo en máquinas virtuales o WARP/llvmpipe (predeterminado: 30)",
         (Language::Es, "mouse_throttle") => "Throttling del cursor del ratón",
-        (Language::Es, "mouse_throttle_tip") => "Cadencia (ms) para agrupar los movimientos del ratón y ahorrar CPU (predeterminado: 100 ms)",
+        (Language::Es, "mouse_throttle_tip") => "Cadencia (ms) para agrupar los movimientos del ratón y ahorrar CPU (predeterminado: 100 ms; limitado a 5 FPS en renderizado por software)",
         (Language::Es, "markdown_max_size") => "Tamaño máximo Markdown",
         (Language::Es, "markdown_max_size_tip") => "Tamaño máximo en MB para renderizar Markdown (por encima permanece en texto, predeterminado: 1 MB)",
 
@@ -1006,7 +1006,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Zh, "max_fps_software") => "最大帧率 (软件渲染 / VM)",
         (Language::Zh, "max_fps_software_tip") => "虚拟机或 WARP/llvmpipe 软件光栅化环境下的帧率上限（默认：30）",
         (Language::Zh, "mouse_throttle") => "鼠标移动节流 (Throttle)",
-        (Language::Zh, "mouse_throttle_tip") => "合并纯鼠标移动事件的时间间隔 (ms)，降低 CPU 占用（默认：100 ms）",
+        (Language::Zh, "mouse_throttle_tip") => "合并纯鼠标移动事件的时间间隔 (ms)，降低 CPU 占用（默认：100 ms；软件渲染环境下限制为最高 5 FPS）",
         (Language::Zh, "markdown_max_size") => "Markdown 最大文件限制",
         (Language::Zh, "markdown_max_size_tip") => "Markdown 渲染的最大文件大小 (MB)，超过限制保持纯文本模式（默认：1 MB）",
 
@@ -1239,7 +1239,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (_, "max_fps_software") => "Max UI FPS (Software / VM)",
         (_, "max_fps_software_tip") => "Limits frame rate on virtual machines or software rasterizers (default: 30)",
         (_, "mouse_throttle") => "Mouse pointer throttling",
-        (_, "mouse_throttle_tip") => "Interval in milliseconds to coalesce pure pointer move events and save CPU (default: 100 ms)",
+        (_, "mouse_throttle_tip") => "Interval in milliseconds to coalesce pure pointer move events and save CPU (default: 100 ms; capped at 5 FPS on software rendering)",
         (_, "markdown_max_size") => "Max Markdown file size",
         (_, "markdown_max_size_tip") => "Maximum file size in MB for Markdown rendering (exceeding files stay in text mode, default: 1 MB)",
 
