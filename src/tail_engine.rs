@@ -13,6 +13,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -650,9 +651,25 @@ pub const PATTERN_SCAN_INTERVAL: Duration = Duration::from_secs(2);
 pub const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 pub const SWITCH_NOTICE_DURATION: Duration = Duration::from_secs(5);
 
+/// Callback fired from the filesystem watcher thread as soon as an event arrives, used
+/// by the app to wake the event loop so an idle software-rendered window still picks up
+/// new lines without a periodic repaint.
+pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
+
 impl TailEngine {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
         Self::open_with_thresholds(path, JOB_THRESHOLD_BYTES, INDEX_JOB_THRESHOLD_BYTES)
+    }
+
+    /// Like `open`, with a callback invoked from the filesystem watcher thread as soon as
+    /// an event arrives (used by the app to wake an idle event loop without repainting).
+    pub fn open_with_wake<P: AsRef<Path>>(path: P, wake: WakeFn) -> Result<Self, std::io::Error> {
+        Self::open_impl(
+            path,
+            JOB_THRESHOLD_BYTES,
+            INDEX_JOB_THRESHOLD_BYTES,
+            Some(wake),
+        )
     }
 
     /// Like `open`, with explicit sizes above which filters/search and the initial index
@@ -661,6 +678,15 @@ impl TailEngine {
         path: P,
         job_threshold_bytes: u64,
         index_job_threshold_bytes: u64,
+    ) -> Result<Self, std::io::Error> {
+        Self::open_impl(path, job_threshold_bytes, index_job_threshold_bytes, None)
+    }
+
+    fn open_impl<P: AsRef<Path>>(
+        path: P,
+        job_threshold_bytes: u64,
+        index_job_threshold_bytes: u64,
+        wake: Option<WakeFn>,
     ) -> Result<Self, std::io::Error> {
         let path_buf = path.as_ref().to_path_buf();
         let metadata = std::fs::metadata(&path_buf)?;
@@ -683,7 +709,7 @@ impl TailEngine {
             Self::initial_view_mode(&path_buf, is_binary, file_size, MARKDOWN_MAX_BYTES);
 
         let (tx, rx) = channel();
-        let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).ok();
+        let mut watcher = Self::watcher_with_wake(wake, tx);
         if let Some(ref mut w) = watcher {
             let _ = w.watch(&path_buf, RecursiveMode::NonRecursive);
         }
@@ -716,11 +742,38 @@ impl TailEngine {
         )
     }
 
+    /// Like `open_pattern`, with a filesystem-watcher wake callback (see `open_with_wake`).
+    pub fn open_pattern_with_wake<P: AsRef<Path>>(
+        pattern_path: P,
+        wake: WakeFn,
+    ) -> Result<Self, std::io::Error> {
+        Self::open_pattern_impl(
+            pattern_path,
+            JOB_THRESHOLD_BYTES,
+            INDEX_JOB_THRESHOLD_BYTES,
+            Some(wake),
+        )
+    }
+
     /// Like `open_pattern`, with explicit background-job thresholds (see `open_with_thresholds`).
     pub fn open_pattern_with_thresholds<P: AsRef<Path>>(
         pattern_path: P,
         job_threshold_bytes: u64,
         index_job_threshold_bytes: u64,
+    ) -> Result<Self, std::io::Error> {
+        Self::open_pattern_impl(
+            pattern_path,
+            job_threshold_bytes,
+            index_job_threshold_bytes,
+            None,
+        )
+    }
+
+    fn open_pattern_impl<P: AsRef<Path>>(
+        pattern_path: P,
+        job_threshold_bytes: u64,
+        index_job_threshold_bytes: u64,
+        wake: Option<WakeFn>,
     ) -> Result<Self, std::io::Error> {
         let pattern_path = pattern_path.as_ref().to_path_buf();
         let Some((dir, glob)) = split_pattern(&pattern_path) else {
@@ -737,7 +790,7 @@ impl TailEngine {
         }
 
         let (tx, rx) = channel();
-        let mut watcher = RecommendedWatcher::new(tx, notify::Config::default()).ok();
+        let mut watcher = Self::watcher_with_wake(wake, tx);
         if let Some(ref mut w) = watcher {
             let _ = w.watch(&dir, RecursiveMode::NonRecursive);
         }
@@ -760,6 +813,25 @@ impl TailEngine {
             engine.switch_notice = None;
         }
         Ok(engine)
+    }
+
+    /// Builds a filesystem watcher that forwards events to the channel and, when `wake`
+    /// is set, calls it from the watcher thread as soon as an event arrives.
+    fn watcher_with_wake(
+        wake: Option<WakeFn>,
+        tx: std::sync::mpsc::Sender<notify::Result<Event>>,
+    ) -> Option<RecommendedWatcher> {
+        match wake {
+            Some(wake) => RecommendedWatcher::new(
+                move |res: notify::Result<Event>| {
+                    let _ = tx.send(res);
+                    wake();
+                },
+                notify::Config::default(),
+            )
+            .ok(),
+            None => RecommendedWatcher::new(tx, notify::Config::default()).ok(),
+        }
     }
 
     /// True for a stream opened from a file-name pattern.

@@ -1,10 +1,11 @@
 #![windows_subsystem = "windows"]
 
-use eframe::egui;
+use eframe::{egui, egui_wgpu::wgpu};
 use fasttail::cli::{CliArgs, USAGE};
 use fasttail::config::FastTailConfig;
 use fasttail::renderer::{self, RendererChoice, RendererKind};
 use fasttail::ui::FastTailApp;
+use std::sync::Arc;
 
 #[cfg(windows)]
 mod legacy_compat {
@@ -425,60 +426,115 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_maximized(true);
     }
 
-    let make_options = |renderer: eframe::Renderer| eframe::NativeOptions {
-        viewport: viewport.clone(),
-        renderer,
-        // Drivers (including NVIDIA on Windows among them) busy-wait inside presentation
-        // while waiting for the vertical blank, which costs a whole core whenever egui
-        // repaints continuously (e.g. during mouse moves). egui only repaints on demand,
-        // so disabling vsync on both the OpenGL and wgpu paths trades tearing on a UI that
-        // hardly animates for a drastically lower CPU cost.
-        glow_options: eframe::egui_glow::GlowConfiguration {
-            vsync: false,
-            ..Default::default()
-        },
-        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+    let make_options = |renderer: eframe::Renderer, software: bool| {
+        let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration {
             surface: eframe::egui_wgpu::SurfaceConfig {
-                present_mode: eframe::egui_wgpu::wgpu::PresentMode::AutoVsync,
+                // On a software rasterizer (WARP) there is no real vsync to wait on, so we
+                // present immediately and let egui's own frame pacing (max_fps_software)
+                // throttle the work, which keeps latency low. Measured neutral on CPU: the
+                // idle cost is dominated by DWM composing the software surface, not by the
+                // present mode.
+                present_mode: if software {
+                    eframe::egui_wgpu::wgpu::PresentMode::Immediate
+                } else {
+                    eframe::egui_wgpu::wgpu::PresentMode::AutoVsync
+                },
                 desired_maximum_frame_latency: Some(2),
             },
             ..Default::default()
-        },
-        ..Default::default()
+        };
+        if software {
+            // Replace the default adapter picker so the wgpu path is forced onto the CPU
+            // rasterizer (WARP on Windows), regardless of the GPUs present.
+            if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup {
+                setup.native_adapter_selector = Some(Arc::new(software_adapter_selector));
+            }
+        }
+        eframe::NativeOptions {
+            viewport: viewport.clone(),
+            renderer,
+            // Drivers (including NVIDIA on Windows among them) busy-wait inside presentation
+            // while waiting for the vertical blank, which costs a whole core whenever egui
+            // repaints continuously (e.g. during mouse moves). egui only repaints on demand,
+            // so disabling vsync on both the OpenGL and wgpu paths trades tearing on a UI that
+            // hardly animates for a drastically lower CPU cost.
+            glow_options: eframe::egui_glow::GlowConfiguration {
+                vsync: false,
+                ..Default::default()
+            },
+            wgpu_options,
+            ..Default::default()
+        }
     };
 
     // wgpu first, OpenGL on failure (or whichever backend was forced).
     match choice {
         RendererChoice::Wgpu => {
             renderer::mark_starting(RendererKind::Wgpu, false);
-            eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu), {
+            eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu, false), {
                 let cli = cli.clone();
                 Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
             })
         }
         RendererChoice::Glow => {
             renderer::mark_starting(RendererKind::Glow, false);
-            eframe::run_native(&app_title, make_options(eframe::Renderer::Glow), {
+            eframe::run_native(&app_title, make_options(eframe::Renderer::Glow, false), {
                 let cli = cli.clone();
                 Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
             })
         }
+        RendererChoice::Software => {
+            renderer::mark_starting(RendererKind::Wgpu, false);
+            let first =
+                eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu, true), {
+                    let cli = cli.clone();
+                    Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
+                });
+            match first {
+                Err(err) if !renderer::app_created() => {
+                    eprintln!("renderer: wgpu software backend failed to start: {err}");
+                    eprintln!("renderer: falling back to OpenGL");
+                    renderer::mark_starting(RendererKind::Glow, true);
+                    let second = eframe::run_native(
+                        &app_title,
+                        make_options(eframe::Renderer::Glow, false),
+                        {
+                            let cli = cli.clone();
+                            Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
+                        },
+                    );
+                    match second {
+                        Err(err2) if !renderer::app_created() => {
+                            eprintln!("renderer: glow backend also failed to start: {err2}");
+                            eprintln!("renderer: no usable renderer available");
+                            Err(err2)
+                        }
+                        other => other,
+                    }
+                }
+                other => other,
+            }
+        }
         RendererChoice::Auto => {
             renderer::mark_starting(RendererKind::Wgpu, false);
-            let first = eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu), {
-                let cli = cli.clone();
-                Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-            });
+            let first =
+                eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu, false), {
+                    let cli = cli.clone();
+                    Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
+                });
             match first {
                 Err(err) if !renderer::app_created() => {
                     eprintln!("renderer: wgpu backend failed to start: {err}");
                     eprintln!("renderer: falling back to OpenGL");
                     renderer::mark_starting(RendererKind::Glow, true);
-                    let second =
-                        eframe::run_native(&app_title, make_options(eframe::Renderer::Glow), {
+                    let second = eframe::run_native(
+                        &app_title,
+                        make_options(eframe::Renderer::Glow, false),
+                        {
                             let cli = cli.clone();
                             Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-                        });
+                        },
+                    );
                     match second {
                         Err(err2) if !renderer::app_created() => {
                             eprintln!("renderer: glow backend also failed to start: {err2}");
@@ -492,4 +548,31 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+}
+
+/// Adapter picker that forces wgpu onto a CPU rasterizer, used when the user asks for
+/// software rendering. Keeps the list of available adapters in the error message so a
+/// failure is diagnosable.
+fn software_adapter_selector(
+    adapters: &[wgpu::Adapter],
+    _surface: Option<&wgpu::Surface<'_>>,
+) -> Result<wgpu::Adapter, String> {
+    adapters
+        .iter()
+        .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::Cpu)
+        .cloned()
+        .ok_or_else(|| {
+            let names: Vec<String> = adapters
+                .iter()
+                .map(|adapter| adapter.get_info().name.clone())
+                .collect();
+            format!(
+                "no software (CPU) adapter available (found: {})",
+                if names.is_empty() {
+                    "none".to_string()
+                } else {
+                    names.join(", ")
+                }
+            )
+        })
 }

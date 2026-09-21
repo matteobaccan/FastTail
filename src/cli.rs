@@ -23,7 +23,7 @@ OPTIONS:
     --exclude <TEXT>     Exclude filter applied to the files opened from the command line
     --follow             Enable follow mode on the files opened from the command line
     --no-follow          Disable follow mode on those files
-    --renderer <NAME>    Rendering backend: auto (default), glow, wgpu
+    --renderer <NAME>    Rendering backend: auto (default), glow, wgpu, software
     --config <FILE>      Use this configuration file (same as FASTTAIL_CONFIG)
     --session <FILE>     Load this session file (*.fasttail-session.ini) at startup
     -V, --version        Print the version and exit
@@ -114,7 +114,7 @@ impl CliArgs {
                     let v = value("name")?;
                     out.renderer = Some(RendererChoice::parse(&v).ok_or_else(|| {
                         CliError::Usage(format!(
-                            "unknown renderer '{v}' (expected auto, glow or wgpu)"
+                            "unknown renderer '{v}' (expected auto, glow, wgpu or software)"
                         ))
                     })?);
                 }
@@ -185,6 +185,12 @@ mod tests {
         assert_eq!(a.renderer, Some(RendererChoice::Wgpu));
         assert_eq!(a.config, Some(cwd().join("cfg.ini")));
         assert_eq!(a.paths, vec![cwd().join("x.log")]);
+    }
+
+    #[test]
+    fn software_renderer_accepted() {
+        let a = CliArgs::parse(["--renderer", "cpu"], &cwd()).unwrap();
+        assert_eq!(a.renderer, Some(RendererChoice::Software));
     }
 
     #[test]
