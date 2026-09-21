@@ -30,8 +30,6 @@ rfd = "0.17"
 
 # Telemetry
 sysinfo = "0.39"
-ratatui = "0.30.2"
-crossterm = "0.29.0"
 
 # Windows Specific
 [target.'cfg(windows)'.dependencies]

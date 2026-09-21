@@ -331,25 +331,6 @@ fn attach_parent_console() {
 #[cfg(not(windows))]
 fn attach_parent_console() {}
 
-/// Allocate or attach a console for the TUI interface when running as a Windows GUI subsystem.
-#[cfg(windows)]
-fn init_tui_console() {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn AttachConsole(process_id: u32) -> i32;
-        fn AllocConsole() -> i32;
-    }
-    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
-    unsafe {
-        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
-            AllocConsole();
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn init_tui_console() {}
-
 /// Parses the command line; prints help/version or a usage error and exits when asked to.
 fn parse_command_line() -> CliArgs {
     let cli = match CliArgs::from_env() {
@@ -415,22 +396,9 @@ fn main() -> eframe::Result<()> {
     let cli = parse_command_line();
     let config = FastTailConfig::load();
 
-    let use_tui = if cli.gui {
-        false
-    } else if cli.tui {
-        true
-    } else {
-        config.ui_mode == fasttail::config::UiMode::Tui
-    };
-
-    if use_tui {
-        init_tui_console();
-        if let Err(err) = fasttail::tui::run_tui(cli, config) {
-            eprintln!("FastTail TUI error: {err}");
-            std::process::exit(1);
-        }
-        return Ok(());
-    }
+    let choice = cli
+        .renderer
+        .unwrap_or_else(|| RendererChoice::from_env(config.renderer));
 
     let app_title = format!("FastTail v{} by Matteo Baccan", env!("CARGO_PKG_VERSION"));
     let mut viewport = egui::ViewportBuilder::default()
@@ -480,9 +448,6 @@ fn main() -> eframe::Result<()> {
     };
 
     // wgpu first, OpenGL on failure (or whichever backend was forced).
-    let choice = cli
-        .renderer
-        .unwrap_or_else(|| RendererChoice::from_env(config.renderer));
     match choice {
         RendererChoice::Wgpu => {
             renderer::mark_starting(RendererKind::Wgpu, false);
@@ -517,13 +482,8 @@ fn main() -> eframe::Result<()> {
                     match second {
                         Err(err2) if !renderer::app_created() => {
                             eprintln!("renderer: glow backend also failed to start: {err2}");
-                            eprintln!("renderer: falling back to terminal user interface (TUI)");
-                            init_tui_console();
-                            if let Err(tui_err) = fasttail::tui::run_tui(cli, config) {
-                                eprintln!("FastTail TUI error: {tui_err}");
-                                std::process::exit(1);
-                            }
-                            Ok(())
+                            eprintln!("renderer: no usable renderer available");
+                            Err(err2)
                         }
                         other => other,
                     }

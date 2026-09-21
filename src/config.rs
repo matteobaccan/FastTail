@@ -16,32 +16,6 @@ pub const MAX_BOOKMARKS_PER_FILE: usize = 1000;
 /// Cap for the files remembered with line wrap on.
 pub const MAX_WRAPPED_FILES: usize = 50;
 
-/// User interface frontend mode: GUI (default egui window) or TUI (ratatui console).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum UiMode {
-    #[default]
-    Gui,
-    Tui,
-}
-
-impl UiMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UiMode::Gui => "gui",
-            UiMode::Tui => "tui",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_lowercase().as_str() {
-            "gui" => Some(UiMode::Gui),
-            "tui" => Some(UiMode::Tui),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FastTailConfig {
     pub theme: CyberTheme,
@@ -53,9 +27,6 @@ pub struct FastTailConfig {
     /// Rendering backend: auto (OpenGL, then wgpu on failure), glow or wgpu. Applies at start.
     #[serde(default)]
     pub renderer: crate::renderer::RendererChoice,
-    /// Frontend user interface mode: GUI (egui window) or TUI (terminal console).
-    #[serde(default)]
-    pub ui_mode: UiMode,
     /// Keep the main window above other windows.
     #[serde(default)]
     pub always_on_top: bool,
@@ -200,7 +171,6 @@ impl Default for FastTailConfig {
             telemetry_enabled: true,
             sound_enabled: false,
             renderer: crate::renderer::RendererChoice::Auto,
-            ui_mode: UiMode::Gui,
             always_on_top: false,
             flash_on_alert: false,
             level_colors: true,
@@ -412,7 +382,6 @@ impl FastTailConfig {
             .set("theme", theme_str)
             .set("language", self.language.code())
             .set("renderer", self.renderer.as_str())
-            .set("ui_mode", self.ui_mode.as_str())
             .set("always_on_top", self.always_on_top.to_string())
             .set("flash_on_alert", self.flash_on_alert.to_string())
             .set("level_colors", self.level_colors.to_string())
@@ -610,9 +579,6 @@ impl FastTailConfig {
                 .and_then(crate::renderer::RendererChoice::parse)
             {
                 cfg.renderer = r;
-            }
-            if let Some(m) = general.get("ui_mode").and_then(UiMode::parse) {
-                cfg.ui_mode = m;
             }
             if let Some(v) = general
                 .get("always_on_top")
@@ -1032,16 +998,6 @@ impl FastTailConfig {
                 cfg.markdown_max_mb = mb.clamp(1, 100);
             }
         }
-        if let Ok(v) = std::env::var("FASTTAIL_UI_MODE") {
-            if let Some(m) = UiMode::parse(&v) {
-                cfg.ui_mode = m;
-            }
-        }
-        if let Ok(v) = std::env::var("FASTTAIL_TUI") {
-            if v == "1" || v.eq_ignore_ascii_case("true") {
-                cfg.ui_mode = UiMode::Tui;
-            }
-        }
 
         cfg
     }
@@ -1153,21 +1109,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ui_mode_parse() {
-        assert_eq!(UiMode::parse("gui"), Some(UiMode::Gui));
-        assert_eq!(UiMode::parse("GUI"), Some(UiMode::Gui));
-        assert_eq!(UiMode::parse("tui"), Some(UiMode::Tui));
-        assert_eq!(UiMode::parse("TUI"), Some(UiMode::Tui));
-        assert_eq!(UiMode::parse("unknown"), None);
-    }
-
-    #[test]
-    fn test_ui_mode_ini_roundtrip() {
-        let mut cfg = FastTailConfig::default();
-        assert_eq!(cfg.ui_mode, UiMode::Gui);
-        cfg.ui_mode = UiMode::Tui;
+    fn test_theme_ini_roundtrip() {
+        let cfg = FastTailConfig::default();
         let ini = cfg.to_ini();
         let loaded = FastTailConfig::from_ini(&ini);
-        assert_eq!(loaded.ui_mode, UiMode::Tui);
+        assert_eq!(loaded.theme, cfg.theme);
     }
 }
