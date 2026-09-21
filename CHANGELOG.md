@@ -6,6 +6,36 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-09-21
+
+### Added
+
+- **Software (CPU) renderer fallback.** Added `software` (alias `cpu`) as a
+  `renderer` value in the CLI, `FASTTAIL_RENDERER`, the `renderer` ini key and the
+  Settings dialog. It forces the wgpu CPU rasterizer (WARP on Windows, llvmpipe on
+  Linux) for machines without a usable GPU, retrying with OpenGL if no CPU adapter
+  can be created. Because WARP spreads rasterization across every logical core and
+  keeps them busy even when the log is idle, a persistent banner warns that a GPU is
+  required for optimal performance; use `auto`, `wgpu` or `glow` whenever a GPU is
+  available.
+- **Unbounded horizontal scrolling.** The horizontal scroll canvas is now sized from
+  the widest measured row (or a fixed extent far beyond the longest line the renderer
+  can produce) instead of the rendered content size, so long lines can be scrolled
+  past their end without the view snapping back.
+
+### Performance
+
+- **Event-driven idle on software rasterizers.** With the software renderer each
+  stream's filesystem watcher wakes the event loop directly instead of pumping at the
+  poll cadence, keeping only a 2 s safety poll, so a static file no longer repaints
+  continuously. The residual idle cost is WARP's own multi-core spin, which is inherent
+  to WARP and only stops when the window is minimized.
+
+### Changed
+
+- **Single GUI application.** Removed the experimental terminal (TUI) frontend and its
+  configuration; FastTail now ships only the desktop UI.
+
 ## [0.7.0] - 2026-09-21
 
 ### Added
@@ -18,14 +48,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Configurable mouse pointer move throttling.** Added `mouse_throttle_ms`
   (default 100 ms, range 0..=1000 ms) in preferences with INI persistence and
   `FASTTAIL_MOUSE_THROTTLE_MS` environment variable override.
-- **Software (CPU) renderer fallback.** Added `software` (alias `cpu`) as a
-  `renderer` value in the CLI, `FASTTAIL_RENDERER`, the `renderer` ini key and the
-  Settings dialog. It forces the wgpu CPU rasterizer (WARP on Windows, llvmpipe on
-  Linux) for machines without a usable GPU, retrying with OpenGL if no CPU adapter
-  can be created. Because WARP spreads rasterization across every logical core and
-  keeps them busy even when the log is idle, a persistent banner warns that a GPU is
-  required for optimal performance; use `auto`, `wgpu` or `glow` whenever a GPU is
-  available.
 
 ### Performance
 
@@ -43,11 +65,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   hardware rendering keeps the full styling.
 - **Fast Markdown threshold rejection.** Files larger than the Markdown size cap
   bypass full commonmark parsing and buffer duplication entirely upon opening.
-- **Event-driven idle on software rasterizers.** With the software renderer each
-  stream's filesystem watcher wakes the event loop directly instead of pumping at the
-  poll cadence, keeping only a 2 s safety poll, so a static file no longer repaints
-  continuously. The residual idle cost is WARP's own multi-core spin, which is inherent
-  to WARP and only stops when the window is minimized.
 
 ### Compatibility
 
@@ -335,6 +352,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.7.1]: https://github.com/matteobaccan/FastTail/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/matteobaccan/FastTail/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/matteobaccan/FastTail/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/matteobaccan/FastTail/compare/v0.4.0...v0.5.0
