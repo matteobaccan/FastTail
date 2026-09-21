@@ -82,27 +82,60 @@ impl LogLevel {
 
 /// Level of a token (a whole word already isolated), or `None` if it is not a level word.
 fn token_level(word: &[u8]) -> Option<LogLevel> {
-    // Every token is 4 to 8 ASCII letters: reject the rest before comparing.
-    if !(4..=8).contains(&word.len()) {
+    // Every level token starts with an ASCII letter and has length 4..=8.
+    if word.is_empty() || !word[0].is_ascii_alphabetic() {
         return None;
     }
-    const TABLE: [(&[u8], LogLevel); 11] = [
-        (b"FATAL", LogLevel::Fatal),
-        (b"CRITICAL", LogLevel::Fatal),
-        (b"ERROR", LogLevel::Error),
-        (b"SEVERE", LogLevel::Error),
-        (b"WARN", LogLevel::Warn),
-        (b"WARNING", LogLevel::Warn),
-        (b"INFO", LogLevel::Info),
-        (b"NOTICE", LogLevel::Info),
-        (b"DEBUG", LogLevel::Debug),
-        (b"TRACE", LogLevel::Trace),
-        (b"VERBOSE", LogLevel::Trace),
-    ];
-    TABLE
-        .iter()
-        .find(|(token, _)| word.eq_ignore_ascii_case(token))
-        .map(|(_, level)| *level)
+    match word.len() {
+        4 => {
+            if word.eq_ignore_ascii_case(b"INFO") {
+                Some(LogLevel::Info)
+            } else if word.eq_ignore_ascii_case(b"WARN") {
+                Some(LogLevel::Warn)
+            } else {
+                None
+            }
+        }
+        5 => {
+            if word.eq_ignore_ascii_case(b"ERROR") {
+                Some(LogLevel::Error)
+            } else if word.eq_ignore_ascii_case(b"DEBUG") {
+                Some(LogLevel::Debug)
+            } else if word.eq_ignore_ascii_case(b"TRACE") {
+                Some(LogLevel::Trace)
+            } else if word.eq_ignore_ascii_case(b"FATAL") {
+                Some(LogLevel::Fatal)
+            } else {
+                None
+            }
+        }
+        6 => {
+            if word.eq_ignore_ascii_case(b"NOTICE") {
+                Some(LogLevel::Info)
+            } else if word.eq_ignore_ascii_case(b"SEVERE") {
+                Some(LogLevel::Error)
+            } else {
+                None
+            }
+        }
+        7 => {
+            if word.eq_ignore_ascii_case(b"WARNING") {
+                Some(LogLevel::Warn)
+            } else if word.eq_ignore_ascii_case(b"VERBOSE") {
+                Some(LogLevel::Trace)
+            } else {
+                None
+            }
+        }
+        8 => {
+            if word.eq_ignore_ascii_case(b"CRITICAL") {
+                Some(LogLevel::Fatal)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Word characters: a level token must not be glued to letters, digits, `_` or non-ASCII
