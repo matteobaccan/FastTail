@@ -720,6 +720,32 @@ fn test_i18n_exhaustive_coverage() {
 }
 
 #[test]
+fn test_move_up_move_down_translations() {
+    for lang in [
+        Language::En,
+        Language::It,
+        Language::Fr,
+        Language::Es,
+        Language::Zh,
+    ] {
+        let up = t(lang, "move_up");
+        let down = t(lang, "move_down");
+        assert!(!up.is_empty() && up != "Unknown", "move_up missing for {lang:?}");
+        assert!(!down.is_empty() && down != "Unknown", "move_down missing for {lang:?}");
+    }
+    assert_eq!(t(Language::En, "move_up"), "Move Up");
+    assert_eq!(t(Language::En, "move_down"), "Move Down");
+    assert_eq!(t(Language::It, "move_up"), "Sposta su");
+    assert_eq!(t(Language::It, "move_down"), "Sposta giù");
+    assert_eq!(t(Language::Fr, "move_up"), "Déplacer vers le haut");
+    assert_eq!(t(Language::Fr, "move_down"), "Déplacer vers le bas");
+    assert_eq!(t(Language::Es, "move_up"), "Mover arriba");
+    assert_eq!(t(Language::Es, "move_down"), "Mover abajo");
+    assert_eq!(t(Language::Zh, "move_up"), "上移");
+    assert_eq!(t(Language::Zh, "move_down"), "下移");
+}
+
+#[test]
 fn test_filter_naming_and_translation_consistency() {
     // Italian must strictly use "Filtri" and not "Highlights"
     assert_eq!(t(Language::It, "filters"), "Filtri");
