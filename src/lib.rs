@@ -15,7 +15,6 @@ pub mod screensaver;
 pub mod session;
 pub mod tail_engine;
 pub mod theme;
-pub mod tui;
 pub mod ui;
 pub mod wildcard;
 pub mod wrap_layout;
