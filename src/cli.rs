@@ -17,6 +17,8 @@ ARGS:
     PATH...              Log files to open in addition to the restored workspace
 
 OPTIONS:
+    --tui                Run in terminal user interface (TUI) mode
+    --gui                Run in graphical user interface (GUI) mode (default)
     --fresh              Start with an empty workspace instead of the saved one
     --filter <TEXT>      Include filter applied to the files opened from the command line
     --exclude <TEXT>     Exclude filter applied to the files opened from the command line
@@ -41,6 +43,8 @@ pub struct CliArgs {
     pub config: Option<PathBuf>,
     /// Session file to load at startup, replacing the restored workspace.
     pub session: Option<PathBuf>,
+    pub tui: bool,
+    pub gui: bool,
     pub show_version: bool,
     pub show_help: bool,
 }
@@ -98,6 +102,8 @@ impl CliArgs {
             };
             match name {
                 "--" => only_paths = true,
+                "--tui" => out.tui = true,
+                "--gui" => out.gui = true,
                 "--fresh" => out.fresh = true,
                 "--follow" => out.follow = Some(true),
                 "--no-follow" => out.follow = Some(false),
@@ -195,6 +201,14 @@ mod tests {
     fn help_and_version_flags() {
         assert!(CliArgs::parse(["-h"], &cwd()).unwrap().show_help);
         assert!(CliArgs::parse(["--version"], &cwd()).unwrap().show_version);
+    }
+
+    #[test]
+    fn tui_and_gui_flags() {
+        let a = CliArgs::parse(["--tui"], &cwd()).unwrap();
+        assert!(a.tui && !a.gui);
+        let b = CliArgs::parse(["--gui"], &cwd()).unwrap();
+        assert!(b.gui && !b.tui);
     }
 
     #[test]
