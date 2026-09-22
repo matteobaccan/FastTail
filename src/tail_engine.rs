@@ -518,30 +518,59 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
     }
 }
 
+/// Precompiled highlight rule for fast evaluation per row.
+#[derive(Debug, Clone)]
+pub struct CompiledHighlight {
+    pub regex: Option<Regex>,
+    pub pattern_lower: String,
+    pub style: HighlightStyle,
+    pub enabled: bool,
+    pub captures_only: bool,
+    pub case_sensitive: bool,
+    pub pattern: String,
+    pub sound_alert: SoundAlertPreset,
+}
+
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
-    let mut pieces = vec![(start, end)];
+    let mut pieces = [(0usize, 0usize); MAX_ROW_SPANS];
+    let mut pieces_len = 1;
+    pieces[0] = (start, end);
+
     for sp in spans.iter() {
-        let mut next = Vec::with_capacity(pieces.len() + 1);
-        for (s, e) in pieces {
+        let mut next = [(0usize, 0usize); MAX_ROW_SPANS];
+        let mut next_len = 0;
+
+        for &(s, e) in &pieces[..pieces_len] {
             if e <= sp.start || s >= sp.end {
-                next.push((s, e));
+                if next_len < MAX_ROW_SPANS {
+                    next[next_len] = (s, e);
+                    next_len += 1;
+                }
                 continue;
             }
             if s < sp.start {
-                next.push((s, sp.start));
+                if next_len < MAX_ROW_SPANS {
+                    next[next_len] = (s, sp.start);
+                    next_len += 1;
+                }
             }
             if e > sp.end {
-                next.push((sp.end, e));
+                if next_len < MAX_ROW_SPANS {
+                    next[next_len] = (sp.end, e);
+                    next_len += 1;
+                }
             }
         }
         pieces = next;
-        if pieces.is_empty() {
+        pieces_len = next_len;
+        if pieces_len == 0 {
             break;
         }
     }
-    for (s, e) in pieces {
+
+    for &(s, e) in &pieces[..pieces_len] {
         if spans.len() >= MAX_ROW_SPANS {
             return true;
         }
@@ -667,7 +696,7 @@ pub struct TailEngine {
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
     pub markdown_text_cache: Option<(u64, String)>,
     pub highlight_rules: Vec<HighlightRule>,
-    compiled_highlights: Vec<(Option<Regex>, String, HighlightRule)>,
+    compiled_highlights: Vec<CompiledHighlight>,
     /// Quick labels (see `QuickLabel`) with their lower-cased text, evaluated after the
     /// user rules by `match_highlight_spans`.
     quick_labels: Vec<(QuickLabel, String)>,
@@ -1187,7 +1216,7 @@ impl TailEngine {
         self.compiled_highlights = rules
             .iter()
             .map(|r| {
-                let re = if r.is_regex {
+                let regex = if r.is_regex {
                     regex::RegexBuilder::new(&r.pattern)
                         .case_insensitive(!r.case_sensitive)
                         .build()
@@ -1195,8 +1224,18 @@ impl TailEngine {
                 } else {
                     None
                 };
-                let lower = r.pattern.to_lowercase();
-                (re, lower, r.clone())
+                let pattern_lower = r.pattern.to_lowercase();
+                let style = r.style();
+                CompiledHighlight {
+                    regex,
+                    pattern_lower,
+                    style,
+                    enabled: r.enabled,
+                    captures_only: r.captures_only,
+                    case_sensitive: r.case_sensitive,
+                    pattern: r.pattern.clone(),
+                    sound_alert: r.sound_alert,
+                }
             })
             .collect();
         self.highlight_rules = rules;
@@ -1687,17 +1726,17 @@ impl TailEngine {
 
         for idx in start_idx..total {
             if let Some(line) = self.get_line(idx) {
-                for (re_opt, pat_lower, rule) in &self.compiled_highlights {
-                    if rule.enabled && rule.sound_alert != SoundAlertPreset::None {
-                        let is_match = if let Some(re) = re_opt {
+                for ch in &self.compiled_highlights {
+                    if ch.enabled && ch.sound_alert != SoundAlertPreset::None {
+                        let is_match = if let Some(re) = &ch.regex {
                             re.is_match(&line)
-                        } else if rule.case_sensitive {
-                            line.contains(&rule.pattern)
+                        } else if ch.case_sensitive {
+                            line.contains(&ch.pattern)
                         } else {
-                            contains_case_insensitive(&line, pat_lower)
+                            contains_case_insensitive(&line, &ch.pattern_lower)
                         };
                         if is_match {
-                            rule.sound_alert.play();
+                            ch.sound_alert.play();
                             self.last_sound_alert_time = Instant::now();
                             return;
                         }
@@ -1723,19 +1762,19 @@ impl TailEngine {
             let Some(line) = self.get_line(idx) else {
                 continue;
             };
-            for (re_opt, pat_lower, rule) in &self.compiled_highlights {
-                if !rule.enabled || !self.tool_bound_rules.contains(&rule.pattern) {
+            for ch in &self.compiled_highlights {
+                if !ch.enabled || !self.tool_bound_rules.contains(&ch.pattern) {
                     continue;
                 }
-                let is_match = if let Some(re) = re_opt {
+                let is_match = if let Some(re) = &ch.regex {
                     re.is_match(&line)
-                } else if rule.case_sensitive {
-                    line.contains(&rule.pattern)
+                } else if ch.case_sensitive {
+                    line.contains(&ch.pattern)
                 } else {
-                    contains_case_insensitive(&line, pat_lower)
+                    contains_case_insensitive(&line, &ch.pattern_lower)
                 };
                 if is_match {
-                    hits.push((rule.pattern.clone(), idx));
+                    hits.push((ch.pattern.clone(), idx));
                 }
             }
         }
@@ -1793,20 +1832,20 @@ impl TailEngine {
     /// Whole-row style of the first enabled rule matching `line`; captures-only rules
     /// never colour a whole row (see `match_highlight_spans`).
     pub fn match_highlight(&self, line: &str) -> Option<HighlightStyle> {
-        for (re_opt, pat_lower, rule) in &self.compiled_highlights {
-            if !rule.enabled || rule.captures_only {
+        for ch in &self.compiled_highlights {
+            if !ch.enabled || ch.captures_only {
                 continue;
             }
-            let is_match = if let Some(re) = re_opt {
+            let is_match = if let Some(re) = &ch.regex {
                 re.is_match(line)
-            } else if rule.case_sensitive {
-                line.contains(&rule.pattern)
+            } else if ch.case_sensitive {
+                line.contains(&ch.pattern)
             } else {
-                contains_case_insensitive(line, pat_lower)
+                contains_case_insensitive(line, &ch.pattern_lower)
             };
 
             if is_match {
-                return Some(rule.style());
+                return Some(ch.style);
             }
         }
         None
@@ -1830,7 +1869,7 @@ impl TailEngine {
             || self
                 .compiled_highlights
                 .iter()
-                .any(|(re, _, rule)| rule.enabled && rule.captures_only && re.is_some())
+                .any(|ch| ch.enabled && ch.captures_only && ch.regex.is_some())
     }
 
     /// Span evaluation of a row, top-down like `match_highlight`, first rule winning per
@@ -1841,15 +1880,15 @@ impl TailEngine {
     pub fn match_highlight_spans(&self, line: &str) -> SpanHighlight {
         let mut out = SpanHighlight::default();
         let mut full = false;
-        for (re_opt, pat_lower, rule) in &self.compiled_highlights {
-            if !rule.enabled {
+        for ch in &self.compiled_highlights {
+            if !ch.enabled {
                 continue;
             }
-            if rule.captures_only {
-                let Some(re) = re_opt else {
+            if ch.captures_only {
+                let Some(re) = &ch.regex else {
                     continue;
                 };
-                let style = SpanStyle::Rule(rule.style());
+                let style = SpanStyle::Rule(ch.style);
                 for caps in re.captures_iter(line) {
                     let groups = if caps.len() > 1 { 1..caps.len() } else { 0..1 };
                     for g in groups {
@@ -1867,15 +1906,15 @@ impl TailEngine {
                     }
                 }
             } else {
-                let is_match = if let Some(re) = re_opt {
+                let is_match = if let Some(re) = &ch.regex {
                     re.is_match(line)
-                } else if rule.case_sensitive {
-                    line.contains(&rule.pattern)
+                } else if ch.case_sensitive {
+                    line.contains(&ch.pattern)
                 } else {
-                    contains_case_insensitive(line, pat_lower)
+                    contains_case_insensitive(line, &ch.pattern_lower)
                 };
                 if is_match {
-                    out.rest = Some(rule.style());
+                    out.rest = Some(ch.style);
                     full = true;
                 }
             }
@@ -2845,19 +2884,19 @@ impl TailEngine {
                 break;
             }
             if let Some(line) = self.get_line(idx) {
-                for (re_opt, pat_lower, rule) in &self.compiled_highlights {
-                    if !rule.enabled {
+                for ch in &self.compiled_highlights {
+                    if !ch.enabled {
                         continue;
                     }
-                    let is_match = if let Some(re) = re_opt {
+                    let is_match = if let Some(re) = &ch.regex {
                         re.is_match(&line)
-                    } else if rule.case_sensitive {
-                        line.contains(&rule.pattern)
+                    } else if ch.case_sensitive {
+                        line.contains(&ch.pattern)
                     } else {
-                        contains_case_insensitive(&line, pat_lower)
+                        contains_case_insensitive(&line, &ch.pattern_lower)
                     };
                     if is_match {
-                        let sev = if rule.sound_alert != SoundAlertPreset::None {
+                        let sev = if ch.sound_alert != SoundAlertPreset::None {
                             2
                         } else {
                             1
