@@ -947,16 +947,24 @@ impl FastTailConfig {
     pub fn load() -> Self {
         let path = Self::config_path();
         let mut cfg = if path.exists() {
-            if let Ok(conf) = Ini::load_from_file(&path) {
-                Self::from_ini(&conf)
+            if fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false) {
+                if let Ok(conf) = Ini::load_from_file(&path) {
+                    Self::from_ini(&conf)
+                } else {
+                    Self::default()
+                }
             } else {
                 Self::default()
             }
         } else if let Some(old_toml) = Self::old_toml_path() {
-            if let Ok(content) = fs::read_to_string(&old_toml) {
-                if let Ok(config) = toml::from_str::<FastTailConfig>(&content) {
-                    let _ = config.save();
-                    config
+            if fs::metadata(&old_toml).map(|m| m.is_file()).unwrap_or(false) {
+                if let Ok(content) = fs::read_to_string(&old_toml) {
+                    if let Ok(config) = toml::from_str::<FastTailConfig>(&content) {
+                        let _ = config.save();
+                        config
+                    } else {
+                        Self::default()
+                    }
                 } else {
                     Self::default()
                 }
@@ -1006,6 +1014,15 @@ impl FastTailConfig {
     /// bytes. Returns whether the file was actually written. A read error counts as
     /// "different", so an unreadable target is rewritten rather than skipped.
     fn write_if_changed(path: &Path, buf: &[u8]) -> Result<bool, std::io::Error> {
+        if path.exists() {
+            let meta = fs::metadata(path)?;
+            if !meta.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Target config path is not a regular file",
+                ));
+            }
+        }
         if fs::read(path)
             .map(|existing| existing == buf)
             .unwrap_or(false)

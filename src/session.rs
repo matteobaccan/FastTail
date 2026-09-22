@@ -197,12 +197,31 @@ impl Session {
     }
 
     pub fn save_to(&self, file: &Path) -> std::io::Result<()> {
+        if file.exists() && !std::fs::metadata(file)?.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target session path is not a regular file",
+            ));
+        }
         let mut conf = Ini::new();
         self.write_into(&mut conf, file.parent());
-        conf.write_to_file(file)
+        let mut buf = Vec::new();
+        conf.write_to(&mut buf)
+            .map_err(std::io::Error::other)?;
+        if file.exists() && std::fs::read(file).map(|e| e == buf).unwrap_or(false) {
+            return Ok(());
+        }
+        std::fs::write(file, buf)
     }
 
     pub fn load_from(file: &Path) -> std::io::Result<LoadedSession> {
+        let meta = std::fs::metadata(file)?;
+        if !meta.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Session path is not a regular file",
+            ));
+        }
         let conf = Ini::load_from_file(file).map_err(std::io::Error::other)?;
         Ok(Self::read_from(&conf, file.parent()))
     }
@@ -332,5 +351,16 @@ mod tests {
         };
         assert_eq!(relative_under(&outside, &base), None);
         assert_eq!(relative_under(&base, &base), None);
+    }
+
+    #[test]
+    fn test_session_rejects_non_regular_files() {
+        let dir = std::env::temp_dir();
+        let session = Session::default();
+        let err_save = session.save_to(&dir).unwrap_err();
+        assert_eq!(err_save.kind(), std::io::ErrorKind::InvalidInput);
+
+        let err_load = Session::load_from(&dir).unwrap_err();
+        assert_eq!(err_load.kind(), std::io::ErrorKind::InvalidInput);
     }
 }
