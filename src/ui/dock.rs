@@ -1584,6 +1584,7 @@ fn render_log_stream(
             ui,
             engine,
             theme,
+            lang,
             font_size,
             row_height,
             *show_line_numbers,
@@ -1598,6 +1599,7 @@ fn render_log_stream(
             ui,
             engine,
             theme,
+            lang,
             font_size,
             row_height,
             *show_line_numbers,
@@ -1642,6 +1644,7 @@ fn render_extended_rows(
     ui: &mut Ui,
     engine: &mut TailEngine,
     theme: &CyberTheme,
+    lang: Language,
     font_size: f32,
     row_height: f32,
     show_line_numbers: bool,
@@ -1748,12 +1751,22 @@ fn render_extended_rows(
                         // JSON toggle button
                         if is_json {
                             let btn_label = if is_expanded { "[-] JSON" } else { "[+] JSON" };
-                            let btn = ui.button(
-                                RichText::new(btn_label)
-                                    .monospace()
-                                    .size((font_size - 2.0).max(9.0))
-                                    .color(theme.secondary_accent()),
+                            let tip = t(
+                                lang,
+                                if is_expanded {
+                                    "json_collapse"
+                                } else {
+                                    "json_expand"
+                                },
                             );
+                            let btn = ui
+                                .button(
+                                    RichText::new(btn_label)
+                                        .monospace()
+                                        .size((font_size - 2.0).max(9.0))
+                                        .color(theme.secondary_accent()),
+                                )
+                                .on_hover_text(tip);
                             if btn.clicked() {
                                 toggle_json = Some((actual_line_idx, is_expanded));
                             }
@@ -2009,6 +2022,7 @@ fn render_wrapped_rows(
     ui: &mut Ui,
     engine: &mut TailEngine,
     theme: &CyberTheme,
+    lang: Language,
     font_size: f32,
     row_height: f32,
     show_line_numbers: bool,
@@ -2322,11 +2336,21 @@ fn render_wrapped_rows(
                     egui::pos2(text_x, text_top),
                     egui::vec2(json_w - char_w, font_row_h),
                 );
-                let btn = ui.interact(
-                    btn_rect,
-                    ui.id().with(("wrap_json", line)),
-                    egui::Sense::click(),
+                let tip = t(
+                    lang,
+                    if r.expanded {
+                        "json_collapse"
+                    } else {
+                        "json_expand"
+                    },
                 );
+                let btn = ui
+                    .interact(
+                        btn_rect,
+                        ui.id().with(("wrap_json", line)),
+                        egui::Sense::click(),
+                    )
+                    .on_hover_text(tip);
                 let label = if r.expanded { "[-] JSON" } else { "[+] JSON" };
                 painter.text(
                     btn_rect.min,
