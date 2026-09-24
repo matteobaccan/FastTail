@@ -8,17 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- **Published on crates.io.** `cargo install fasttail` installs the released version.
-  The release pipeline publishes the crate on every version tag, after checking that the
-  tag matches `Cargo.toml` and that the version is not already on crates.io, and the
-  packaged crate carries only the code, the licence and the user documentation.
-- **Installable with Scoop, and winget on the way.** `bucket/fasttail.json` makes this
-  repository a Scoop bucket (`scoop bucket add fasttail …` then `scoop install fasttail`),
-  kept current by a nightly excavator run; the release pipeline opens the winget-pkgs
-  pull request for each version, once the package exists there and `WINGET_TOKEN` is set
-  (see `packaging/winget/README.md`).
+- **The Windows archive no longer carries the debug symbols.** `fasttail-windows-x86_64.zip`
+  holds the executable alone — about 8 MB instead of 24 — and `fasttail.pdb` ships as
+  `fasttail-windows-x86_64-symbols.zip` for whoever needs to read a crash dump.
 
 ### Documentation
 
@@ -26,12 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   malware" dialog: the build is unsigned, and `xattr -d com.apple.quarantine ./fasttail`
   (or Privacy & Security → Open anyway) runs it. Signing and notarizing needs a paid
   Apple Developer account.
-
-### Changed
-
-- **The Windows archive no longer carries the debug symbols.** `fasttail-windows-x86_64.zip`
-  holds the executable alone — about 8 MB instead of 24 — and `fasttail.pdb` ships as
-  `fasttail-windows-x86_64-symbols.zip` for whoever needs to read a crash dump.
+- **Distribution channels.** `docs/distribution-channels.md` records what publishing to
+  crates.io, Scoop, winget or Chocolatey would take — the prepared work, the one-off
+  manual steps and the secrets — so the decision can be taken later from the facts. None
+  of them is wired up: releases stay GitHub archives.
 
 ## [0.8.0] - 2026-09-24
 

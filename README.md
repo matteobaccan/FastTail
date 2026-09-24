@@ -219,19 +219,6 @@ The standalone executable is written to `target/release/fasttail` (`target/relea
 | `FASTTAIL_BENCH_BYTES=<n>` | size of the generated log (default 200000000; 1100000000 was used for the LTO decision) |
 | `FASTTAIL_BENCH_ROUNDS=<n>` | rounds per phase, best time reported (default 3) |
 
-### Windows package managers
-```powershell
-scoop bucket add fasttail https://github.com/matteobaccan/FastTail
-scoop install fasttail
-```
-The Scoop manifest lives in this repository (`bucket/fasttail.json`) and follows each release by itself. A winget package (`winget install MatteoBaccan.FastTail`) is submitted to Microsoft's community repository from the release pipeline; see [packaging/winget](packaging/winget/README.md) for how that is set up.
-
-### From crates.io
-```bash
-cargo install fasttail
-```
-Builds from source with your own toolchain and puts `fasttail` on the PATH (`~/.cargo/bin`). On Linux install the development packages listed under [Prerequisites](#prerequisites) first. Every tagged release is published to [crates.io](https://crates.io/crates/fasttail) by the release pipeline, so `cargo install fasttail` always gets the latest version.
-
 ### Prebuilt binaries
 Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform:
 
@@ -266,7 +253,7 @@ xattr -d com.apple.quarantine ./fasttail   # or: xattr -cr ./fasttail
 
 Or, without the terminal: try to open it once, let it be blocked, then go to **System Settings → Privacy & Security** and press **Open anyway** next to the message about `fasttail`.
 
-Signing and notarizing the build would remove the prompt for everyone, and needs a paid Apple Developer account; the release pipeline is ready to do it as soon as one exists. Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs.
+Signing and notarizing the build would remove the prompt for everyone, and needs a paid Apple Developer account — see [distribution channels](docs/distribution-channels.md). Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs. FastTail is not published to crates.io, Scoop or winget: [docs/distribution-channels.md](docs/distribution-channels.md) records what each of those would take, for when it is worth deciding.
 
 ---
 
