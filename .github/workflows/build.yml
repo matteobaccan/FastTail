@@ -24,7 +24,7 @@ jobs:
   # platform-specific branches (config path, audio, BareTail bridge).
   # ---------------------------------------------------------------------------
   test:
-    name: Test (${{ matrix.name }})
+    name: 🧪 Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -32,35 +32,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux x86_64
+          - name: 🐧 Linux x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
 
-          - name: Windows x86_64
+          - name: 🪟 Windows x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
 
     steps:
-      - name: Checkout repository
+      - name: 🧰 Checkout repository
         uses: actions/checkout@v7
 
-      - name: Install Rust Toolchain
+      - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
           components: rustfmt
 
-      - name: Check Formatting
+      - name: 🎨 Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --check
 
-      - name: Rust Cache
+      - name: 📜 Restore cargo cache
         uses: Swatinem/rust-cache@v2
         with:
           key: test-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install Linux Dependencies
+      - name: ⬇️ Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -76,7 +76,7 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev
 
-      - name: Run Test Suite
+      - name: 🧪 Run test suite
         run: cargo test --target ${{ matrix.target }}
 
   # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ jobs:
   # file:line frames; the size problem is solved by compressing the assets.
   # ---------------------------------------------------------------------------
   build:
-    name: Build (${{ matrix.name }})
+    name: 🛠️ Build (${{ matrix.name }})
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     permissions:
@@ -96,7 +96,7 @@ jobs:
       matrix:
         include:
           # Windows
-          - name: Windows x86_64
+          - name: 🪟 Windows x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             asset: fasttail-windows-x86_64.zip
@@ -106,13 +106,13 @@ jobs:
           # under emulation and the cross-compiled target had no users.
 
           # Linux
-          - name: Linux x86_64
+          - name: 🐧 Linux x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset: fasttail-linux-x86_64.tar.gz
             binary: fasttail
 
-          - name: Linux ARM64
+          - name: 🐧 Linux ARM64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: fasttail-linux-arm64.tar.gz
@@ -126,32 +126,32 @@ jobs:
           #   asset: fasttail-macos-x86_64.tar.gz
           #   binary: fasttail
 
-          - name: macOS ARM64 (Apple Silicon)
+          - name: 🍎 macOS ARM64 (Apple Silicon)
             os: macos-latest
             target: aarch64-apple-darwin
             asset: fasttail-macos-arm64.tar.gz
             binary: fasttail
 
     steps:
-      - name: Checkout repository
+      - name: 🧰 Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Install Rust Toolchain
+      - name: 🦀 Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       # Release builds never run on `main` pushes, so the release-profile cache
       # is written by manual runs on `main` and read by tag runs.
-      - name: Rust Cache
+      - name: 📜 Restore cargo cache
         uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
           save-if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
 
-      - name: Install Linux Dependencies
+      - name: ⬇️ Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -167,13 +167,13 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev
 
-      - name: Build Release Binary
+      - name: 🛠️ Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
       # Linux/macOS: tar.gz with the executable.
       # Windows: zip with the executable and its PDB, so crash backtraces
       # resolve function names when both sit in the same directory.
-      - name: Package Release Asset
+      - name: 📦 Package release asset
         shell: bash
         run: |
           set -euo pipefail
@@ -191,7 +191,7 @@ jobs:
           esac
           ls -la dist
 
-      - name: Upload Build Artifact
+      - name: ⬆️ Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
@@ -202,20 +202,20 @@ jobs:
   # Publish: tags only, after tests and every build succeeded.
   # ---------------------------------------------------------------------------
   release:
-    name: Create GitHub Release
+    name: 🚀 Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [test, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout
+      - name: 🧰 Checkout
         uses: actions/checkout@v7
 
       # The release body is the CHANGELOG.md section whose heading matches the
       # tag (v0.3.0 -> "## [0.3.0]"). generate_release_notes then appends the
       # merged pull requests, new contributors and the compare link.
-      - name: Extract release notes from CHANGELOG.md
+      - name: 📝 Extract release notes from CHANGELOG.md
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -228,19 +228,19 @@ jobs:
           fi
           echo "--- release-notes.md ---"; cat release-notes.md
 
-      - name: Download all artifacts
+      - name: ⬇️ Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: release-artifacts
 
-      - name: Flatten release artifacts
+      - name: 📁 Flatten release artifacts
         shell: bash
         run: |
           mkdir -p final-release
           find release-artifacts -type f -exec cp {} final-release/ \;
           ls -la final-release
 
-      - name: Publish GitHub Release
+      - name: 🚀 Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: final-release/*
