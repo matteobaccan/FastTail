@@ -702,6 +702,15 @@ fn test_i18n_exhaustive_coverage() {
         "export_tip",
         "help_desc_select",
         "help_desc_copy",
+        "time_range",
+        "time_from_hint",
+        "time_to_hint",
+        "time_range_clear",
+        "time_range_invalid",
+        "time_range_unavailable",
+        "time_range_unavailable_tip",
+        "time_span",
+        "goto_time",
         "goto_label",
         "goto_hint",
         "goto_hidden",
@@ -5477,6 +5486,30 @@ mod timestamp_range {
                 millis("2026-09-18T14:03:00.000Z")
             ))
         );
+    }
+
+    #[test]
+    fn the_go_to_box_takes_a_time_as_well_as_a_line() {
+        let tmp = sample_log();
+        let mut engine = TailEngine::open(tmp.path()).unwrap();
+        engine.ensure_timestamps();
+
+        // A time, in the shapes a person types.
+        let by_clock = engine.resolve_goto("14:03", 0).expect("HH:MM");
+        assert_eq!(by_clock.line, 4);
+        let by_second = engine.resolve_goto("14:02:05", 0).expect("HH:MM:SS");
+        assert_eq!(by_second.line, 1);
+        let by_stamp = engine
+            .resolve_goto("2026-09-18T14:06:00.000Z", 0)
+            .expect("a timestamp copied out of the log");
+        assert_eq!(by_stamp.line, 5);
+
+        // Line numbers still work, and still mean lines.
+        assert_eq!(engine.resolve_goto("3", 0).unwrap().line, 2);
+        assert_eq!(engine.resolve_goto("+2", 1).unwrap().line, 3);
+        // A time nothing reaches, and plain rubbish.
+        assert!(engine.resolve_goto("23:59", 0).is_none());
+        assert!(engine.resolve_goto("later", 0).is_none());
     }
 
     #[test]

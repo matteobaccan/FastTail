@@ -617,6 +617,13 @@ pub struct TailEngine {
     /// include/exclude filters and the level filter.
     pub time_from: Option<i64>,
     pub time_to: Option<i64>,
+    /// What the user typed into the two time fields, kept verbatim: the text is what the
+    /// field shows, and re-reading it is how "14:02" follows the day of the log.
+    pub time_from_text: String,
+    pub time_to_text: String,
+    /// One of the two time fields does not parse: the row says so instead of silently
+    /// leaving that side open.
+    pub time_range_error: bool,
     pub include_filter: String,
     pub exclude_filter: String,
     pub filter_case_sensitive: bool,
@@ -1141,6 +1148,9 @@ impl TailEngine {
             filter_is_regex: false,
             time_from: None,
             time_to: None,
+            time_from_text: String::new(),
+            time_to_text: String::new(),
+            time_range_error: false,
             min_level: LogLevel::Unknown,
             show_unknown_levels: false,
             levels: Vec::new(),
@@ -2302,6 +2312,53 @@ impl TailEngine {
         self.refresh_filters();
     }
 
+    /// The instant bare times like `14:02` are anchored to: the first timestamp in the
+    /// stream, so a log from last week reads the way it is written. Falls back to now for
+    /// a stream that has no timestamps at all.
+    pub fn time_reference(&self) -> i64 {
+        self.timestamps
+            .iter()
+            .find(|&&ts| ts != NO_TIMESTAMP)
+            .copied()
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0)
+            })
+    }
+
+    /// Applies the two fields as the user typed them. Returns which side failed to parse,
+    /// so the field can say so; an empty side is an open end, not an error.
+    pub fn apply_time_range_text(&mut self, from_text: &str, to_text: &str) -> (bool, bool) {
+        self.time_from_text = from_text.to_owned();
+        self.time_to_text = to_text.to_owned();
+        self.ensure_timestamps();
+        let reference = self.time_reference();
+        let parse = |text: &str| -> (Option<i64>, bool) {
+            if text.trim().is_empty() {
+                return (None, true);
+            }
+            match crate::timestamp::parse_user_time(text, reference) {
+                Some(millis) => (Some(millis), true),
+                None => (None, false),
+            }
+        };
+        let (from, from_ok) = parse(from_text);
+        let (to, to_ok) = parse(to_text);
+        // The "to" side covers the whole minute or second it names.
+        let to = to.map(|millis| crate::timestamp::end_of_typed_time(to_text, millis));
+        self.set_time_range(from, to);
+        (from_ok, to_ok)
+    }
+
+    /// Clears the window and the two fields.
+    pub fn clear_time_range(&mut self) {
+        self.time_from_text.clear();
+        self.time_to_text.clear();
+        self.set_time_range(None, None);
+    }
+
     /// Times every indexed line, in bounded passes.
     pub fn ensure_timestamps(&mut self) {
         while !self.fill_timestamps() {}
@@ -3151,6 +3208,13 @@ impl TailEngine {
             return None;
         }
         let s = input.trim();
+        // A time rather than a line number: "14:02", "14:02:05" or a whole timestamp.
+        // Checked first, because `14:02` is not a line number in any reading.
+        if s.contains(':') {
+            let millis = crate::timestamp::parse_user_time(s, self.time_reference())?;
+            let line = self.goto_time(millis)?;
+            return Some(self.goto_target_for(line, total));
+        }
         let requested: usize = if let Some(rel) = s.strip_prefix('+') {
             current_line.saturating_add(rel.trim().parse::<usize>().ok()?)
         } else if let Some(rel) = s.strip_prefix('-') {
@@ -3159,27 +3223,39 @@ impl TailEngine {
             s.parse::<usize>().ok()?.checked_sub(1)?
         };
         let clamped = requested.min(total - 1);
+        Some(self.goto_target_for(clamped, total))
+    }
+
+    /// Where a jump to `line` actually lands: the line itself when it is visible, the next
+    /// visible one when a filter hides it.
+    fn goto_target_for(&self, line: usize, total: usize) -> GotoTarget {
+        let clamped = line.min(total.saturating_sub(1));
         if !self.is_filter_active() {
-            return Some(GotoTarget {
+            return GotoTarget {
                 requested: clamped,
                 line: clamped,
                 hidden: false,
-            });
+            };
         }
-        if self.filtered_lines.is_empty() {
-            return None;
-        }
+        let Some(&last) = self.filtered_lines.last() else {
+            // Every line is filtered out: there is nowhere to jump, so stay put.
+            return GotoTarget {
+                requested: clamped,
+                line: clamped,
+                hidden: true,
+            };
+        };
         let pos = self.filtered_lines.partition_point(|&l| l < clamped);
         let line = if pos < self.filtered_lines.len() {
             self.filtered_lines[pos]
         } else {
-            *self.filtered_lines.last().unwrap()
+            last
         };
-        Some(GotoTarget {
+        GotoTarget {
             requested: clamped,
             line,
             hidden: line != clamped,
-        })
+        }
     }
 
     // ----- Row selection, clipboard text and export -----

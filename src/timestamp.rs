@@ -347,6 +347,84 @@ fn year_from_days(days: i64) -> u32 {
     (y + i64::from(m <= 2)) as u32
 }
 
+/// `YYYY-MM-DD HH:MM:SS` for a timestamp in milliseconds, for the status bar and the
+/// tooltips. Same reading as the parser: the value is shown as it was parsed, without a
+/// zone conversion that would move the number the log itself printed.
+pub fn format_millis(millis: i64) -> String {
+    let days = millis.div_euclid(86_400_000);
+    let rest = millis.rem_euclid(86_400_000);
+    let (year, month, day) = civil_from_days(days);
+    let (h, m, sec) = (rest / 3_600_000, (rest / 60_000) % 60, (rest / 1000) % 60);
+    format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{sec:02}")
+}
+
+/// Time of day only (`HH:MM:SS`), for places where the date is already clear.
+pub fn format_clock(millis: i64) -> String {
+    let rest = millis.rem_euclid(86_400_000);
+    format!(
+        "{:02}:{:02}:{:02}",
+        rest / 3_600_000,
+        (rest / 60_000) % 60,
+        (rest / 1000) % 60
+    )
+}
+
+/// Civil date of a day count since the epoch (Howard Hinnant's `civil_from_days`).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    (y + i64::from(m <= 2), m as u32, d as u32)
+}
+
+/// Reads what the user typed into the time-range or go-to-time fields.
+///
+/// Accepts `HH:MM`, `HH:MM:SS` (that time on the day of `reference`), `YYYY-MM-DD HH:MM[:SS]`
+/// and anything the line parser reads, so a timestamp copied straight out of the log works.
+/// `reference` is the day the bare times belong to — the first timestamp of the stream,
+/// which is what the user means by "14:02" while looking at yesterday's log.
+pub fn parse_user_time(input: &str, reference: i64) -> Option<i64> {
+    let text = input.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // A full timestamp, in any of the formats a log line can carry.
+    if let Some((millis, _)) = detect_timestamp(text, FormatHint::Unknown) {
+        return Some(millis);
+    }
+    // `HH:MM` or `HH:MM:SS` on the reference day.
+    let b = text.as_bytes();
+    let (hour, minute, second) = match b.len() {
+        5 => (number(b, 0, 2)?, number(b, 3, 2)?, 0),
+        8 => (number(b, 0, 2)?, number(b, 3, 2)?, number(b, 6, 2)?),
+        _ => return None,
+    };
+    if b[2] != b':' || (b.len() == 8 && b[5] != b':') {
+        return None;
+    }
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let day_start = reference.div_euclid(86_400_000) * 86_400_000;
+    Some(day_start + (hour as i64 * 3600 + minute as i64 * 60 + second as i64) * 1000)
+}
+
+/// The end of the minute or second the user named, so "from 14:02 to 14:05" includes
+/// everything stamped 14:05:59.999 — the window a person means when they type two times.
+pub fn end_of_typed_time(input: &str, millis: i64) -> i64 {
+    match input.trim().len() {
+        5 => millis + 59_999, // HH:MM  -> to the end of that minute
+        8 => millis + 999,    // HH:MM:SS -> to the end of that second
+        _ => millis,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +506,65 @@ mod tests {
             None,
             "1900 is not a leap year"
         );
+    }
+
+    #[test]
+    fn user_input_in_the_shapes_a_person_types() {
+        let day = detect("2026-09-18T00:00:00Z").unwrap();
+        let noon = detect("2026-09-18T12:00:00Z").unwrap();
+
+        // Bare times land on the day of the reference timestamp, wherever in it it falls.
+        assert_eq!(
+            parse_user_time("14:02", noon),
+            Some(day + 14 * 3_600_000 + 2 * 60_000)
+        );
+        assert_eq!(
+            parse_user_time("14:02:05", noon),
+            Some(day + 14 * 3_600_000 + 2 * 60_000 + 5_000)
+        );
+        // A timestamp copied out of the log works as it is, reference or not.
+        assert_eq!(
+            parse_user_time("2026-09-18T14:02:05.123Z", 0),
+            Some(1_789_740_125_123)
+        );
+        assert_eq!(
+            parse_user_time("2026-09-18 14:02:05", 0),
+            Some(1_789_740_125_000)
+        );
+        // Rubbish stays rubbish.
+        assert_eq!(parse_user_time("", noon), None);
+        assert_eq!(parse_user_time("25:00", noon), None);
+        assert_eq!(parse_user_time("14:60", noon), None);
+        assert_eq!(parse_user_time("later", noon), None);
+        assert_eq!(parse_user_time("14.02", noon), None);
+    }
+
+    #[test]
+    fn formatting_is_the_inverse_of_parsing() {
+        for iso in [
+            "2026-09-18T14:02:05Z",
+            "1970-01-01T00:00:00Z",
+            "2024-02-29T23:59:59Z",
+            "2000-01-01T00:00:00Z",
+        ] {
+            let millis = detect(iso).expect(iso);
+            let shown = format_millis(millis);
+            assert_eq!(
+                detect(&format!("{shown}Z").replace(' ', "T")),
+                Some(millis),
+                "{iso} formatted as {shown} must read back the same"
+            );
+        }
+        assert_eq!(format_millis(1_789_740_125_123), "2026-09-18 14:02:05");
+        assert_eq!(format_clock(1_789_740_125_123), "14:02:05");
+    }
+
+    #[test]
+    fn a_typed_time_covers_the_unit_it_names() {
+        // "to 14:05" means through 14:05:59.999, not 14:05:00.000.
+        assert_eq!(end_of_typed_time("14:05", 1_000), 60_999);
+        assert_eq!(end_of_typed_time("14:05:30", 1_000), 1_999);
+        assert_eq!(end_of_typed_time("2026-09-18T14:05:30Z", 1_000), 1_000);
     }
 
     #[test]
