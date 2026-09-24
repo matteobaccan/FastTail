@@ -30,6 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   provides (simplified and traditional Chinese, Japanese, Korean) instead of only the
   first one found, so Japanese and Korean no longer render as empty boxes.
 
+### Documentation
+
+- **External tools cookbook.** New `docs/external-tools-cookbook.md` with ten worked
+  recipes (open the row in an editor, jump to a stack frame, SSH to the host named in
+  the line, open a URL or ticket, pretty-print the row's JSON, grep the file on disk,
+  fire a webhook from a rule-bound tool) plus the habits that keep them safe. Linked
+  from the README and from the External tools section of the settings.
+
 ## [0.7.1] - 2026-09-21
 
 ### Added

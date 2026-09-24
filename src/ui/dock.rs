@@ -3176,16 +3176,24 @@ fn render_external_tools_editor(
             .monospace()
             .strong(),
     );
-    ui.label(
-        RichText::new(format!(
-            "{}: {}",
-            t(lang, "ext_tools_placeholders"),
-            crate::external_tools::PLACEHOLDERS.join(" ")
-        ))
-        .monospace()
-        .small()
-        .color(dim),
-    );
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!(
+                "{}: {}",
+                t(lang, "ext_tools_placeholders"),
+                crate::external_tools::PLACEHOLDERS.join(" ")
+            ))
+            .monospace()
+            .small()
+            .color(dim),
+        );
+        // The fields alone do not say what a tool is *for*: point at the recipes.
+        ui.hyperlink_to(
+            RichText::new(t(lang, "ext_tools_cookbook")).small(),
+            "https://github.com/matteobaccan/FastTail/blob/main/docs/external-tools-cookbook.md",
+        )
+        .on_hover_text(t(lang, "ext_tools_cookbook_tip"));
+    });
     ui.add_space(4.0);
 
     let mut remove: Option<usize> = None;

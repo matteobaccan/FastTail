@@ -560,6 +560,8 @@ fn test_i18n_exhaustive_coverage() {
         "lock_wrong",
         "ext_tools",
         "ext_tools_placeholders",
+        "ext_tools_cookbook",
+        "ext_tools_cookbook_tip",
         "ext_tool_name",
         "ext_tool_program",
         "ext_tool_args",
