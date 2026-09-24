@@ -220,6 +220,48 @@ impl LockAttempts {
     }
 }
 
+/// Font size of the lock prompt heading, and of the lines under it (the body text
+/// keeps egui's monospace body size, which the measurement has to match).
+const LOCK_TITLE_SIZE: f32 = 16.0;
+const LOCK_BODY_SIZE: f32 = 14.0;
+/// Width the lock prompt never goes below, and the share of the window it never exceeds.
+const LOCK_MIN_WIDTH: f32 = 300.0;
+const LOCK_MAX_WIDTH_RATIO: f32 = 0.9;
+
+/// Width the lock prompt needs for the language it is drawn in: the widest line it can
+/// show, measured with the font it is drawn with, clamped between a comfortable minimum
+/// and most of the window. Without this the longest translations (the cooldown message
+/// above all) wrapped inside a dialog sized for English.
+fn lock_prompt_width(ctx: &egui::Context, lang: crate::i18n::Language) -> f32 {
+    let cooldown = t(lang, "lock_cooldown").replace("{secs}", "60");
+    let lines: [(String, f32); 5] = [
+        (format!("🔒 {}", t(lang, "locked_title")), LOCK_TITLE_SIZE),
+        (t(lang, "locked_prompt").to_owned(), LOCK_BODY_SIZE),
+        (format!("⏳ {cooldown}"), LOCK_BODY_SIZE),
+        (format!("⚠ {}", t(lang, "lock_wrong")), LOCK_BODY_SIZE),
+        (t(lang, "lock_unlock").to_owned(), LOCK_BODY_SIZE),
+    ];
+    let widest = ctx.fonts_mut(|fonts| {
+        lines
+            .iter()
+            .map(|(text, size)| {
+                fonts
+                    .layout_no_wrap(
+                        text.clone(),
+                        egui::FontId::monospace(*size),
+                        egui::Color32::WHITE,
+                    )
+                    .size()
+                    .x
+            })
+            .fold(0.0_f32, f32::max)
+    });
+    // Room for the window frame and a little air on both sides.
+    let needed = widest + 48.0;
+    let cap = (ctx.content_rect().width() * LOCK_MAX_WIDTH_RATIO).max(LOCK_MIN_WIDTH);
+    needed.clamp(LOCK_MIN_WIDTH, cap)
+}
+
 /// Background of the locked window: an opaque wash of the theme background with a slow
 /// drifting grid and a sweeping glow band, painted in the `Middle` layer so it covers the
 /// workspace (drawn in `Background`) while staying under the prompt (`Foreground`).
@@ -863,6 +905,12 @@ impl FastTailApp {
             ctx.request_repaint_after(Duration::from_millis(250).min(left));
         }
 
+        // The prompt is translated into sixteen languages, and "Too many attempts: try
+        // again in 60 s" is far wider in some of them than in English: measure the text
+        // that will actually be drawn and size the dialog from it, instead of a fixed
+        // width the longest translation wraps out of.
+        let width = lock_prompt_width(ctx, lang);
+
         egui::Modal::new(egui::Id::new("fasttail_lock_modal"))
             // The backdrop is painted by `paint_lock_backdrop` in a lower layer, so the
             // modal's own one must not dim it a second time.
@@ -873,21 +921,27 @@ impl FastTailApp {
                     .stroke(Stroke::new(2.0, theme.border_color())),
             )
             .show(ctx, |ui| {
-                ui.set_min_width(300.0);
+                ui.set_min_width(width);
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(format!("🔒 {}", t(lang, "locked_title")))
-                            .monospace()
-                            .strong()
-                            .size(16.0)
-                            .color(theme.accent_color()),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("🔒 {}", t(lang, "locked_title")))
+                                .monospace()
+                                .strong()
+                                .size(LOCK_TITLE_SIZE)
+                                .color(theme.accent_color()),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Extend),
                     );
                     ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(t(lang, "locked_prompt"))
-                            .monospace()
-                            .color(theme.text_dim()),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(t(lang, "locked_prompt"))
+                                .monospace()
+                                .color(theme.text_dim()),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Extend),
                     );
                     ui.add_space(10.0);
 
@@ -895,17 +949,20 @@ impl FastTailApp {
                         // While the prompt is paused there is nothing to type into: show
                         // the countdown instead of a field that would refuse every entry.
                         self.lock_entry.clear();
-                        ui.label(
-                            RichText::new(format!(
-                                "⏳ {}",
-                                t(lang, "lock_cooldown").replace(
-                                    "{secs}",
-                                    &left.as_secs().saturating_add(1).to_string()
-                                )
-                            ))
-                            .monospace()
-                            .strong()
-                            .color(theme.warn_color()),
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "⏳ {}",
+                                    t(lang, "lock_cooldown").replace(
+                                        "{secs}",
+                                        &left.as_secs().saturating_add(1).to_string()
+                                    )
+                                ))
+                                .monospace()
+                                .strong()
+                                .color(theme.warn_color()),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Extend),
                         );
                         ui.add_space(4.0);
                         return;
@@ -957,10 +1014,13 @@ impl FastTailApp {
 
                     if self.lock_failed {
                         ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(format!("⚠ {}", t(lang, "lock_wrong")))
-                                .monospace()
-                                .color(theme.warn_color()),
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("⚠ {}", t(lang, "lock_wrong")))
+                                    .monospace()
+                                    .color(theme.warn_color()),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Extend),
                         );
                     }
                     ui.add_space(4.0);
@@ -1171,6 +1231,15 @@ impl FastTailApp {
             }
         }
 
+        // 0. While the window is locked, strip every event the workspace could act on
+        // before anything reads the input. This has to happen first: `key_pressed` counts
+        // matching events, so filtering them afterwards would leave the handlers above
+        // having already acted — which is how a bare Escape kept closing the Settings
+        // dialog sitting behind the lock.
+        if self.locked {
+            ctx.input_mut(|i| i.events.retain(allowed_while_locked));
+        }
+
         // 1. Detect user activity to reset screensaver & handle window closing and viewport bounds
         let mut escape_pressed = false;
         let mut wheel_zoom = 1.0_f32;
@@ -1342,9 +1411,6 @@ impl FastTailApp {
             && (lock_shortcut || (self.config.lock_enabled && screensaver_ended))
         {
             self.lock();
-        }
-        if self.locked {
-            ctx.input_mut(|i| i.events.retain(allowed_while_locked));
         }
 
         // 4. Check screensaver idle timeout (only a focused window can start it)
@@ -3508,9 +3574,12 @@ impl FastTailApp {
         }
 
         // 12. Borderless Window Resize Anchors & Visual Frames (Edges & Corners)
+        // The resize handles read the pointer straight from the input rather than through
+        // a widget, so the modal does not block them: skip them while locked, like every
+        // other interaction with the window behind the prompt.
         let is_maximized =
             self.config.window_maximized || ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-        if self.config.borderless && !is_maximized {
+        if self.config.borderless && !is_maximized && !self.locked {
             let screen = ctx.content_rect();
             let border: f32 = 8.0;
 
@@ -3804,6 +3873,47 @@ mod tests {
         assert!(!allowed_while_locked(&key(Key::O, Modifiers::CTRL)));
         assert!(!allowed_while_locked(&key(Key::W, Modifiers::ALT)));
         assert!(!allowed_while_locked(&Event::Copy));
+    }
+
+    fn measure_lock_width(lang: crate::i18n::Language, screen: egui::Vec2) -> f32 {
+        let ctx = egui::Context::default();
+        let mut width = 0.0;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
+            ..Default::default()
+        };
+        ctx.begin_pass(input);
+        width = super::lock_prompt_width(&ctx, lang);
+        // The font atlas built while measuring comes back as a texture delta that egui
+        // insists is consumed; there is no painter here to consume it.
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        width
+    }
+
+    #[test]
+    fn the_lock_prompt_is_sized_for_the_language_it_shows() {
+        use crate::i18n::Language;
+        let screen = egui::vec2(1200.0, 800.0);
+        let english = measure_lock_width(Language::En, screen);
+        let russian = measure_lock_width(Language::Ru, screen);
+
+        // Every language gets at least the comfortable minimum...
+        assert!(english >= super::LOCK_MIN_WIDTH);
+        // ...and a language whose longest line is wider gets a wider dialog, which is the
+        // whole point: "Too many attempts: try again in 60 s" does not wrap any more.
+        assert!(
+            russian > english,
+            "russian {russian} should need more room than english {english}"
+        );
+        // Never wider than the window.
+        assert!(russian <= screen.x * super::LOCK_MAX_WIDTH_RATIO);
+    }
+
+    #[test]
+    fn the_lock_prompt_never_outgrows_a_small_window() {
+        let width = measure_lock_width(crate::i18n::Language::Ru, egui::vec2(320.0, 240.0));
+        assert!(width <= super::LOCK_MIN_WIDTH.max(320.0 * super::LOCK_MAX_WIDTH_RATIO));
     }
 
     #[test]

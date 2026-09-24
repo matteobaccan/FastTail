@@ -48,7 +48,11 @@ While locked, the application SHALL cover the window with an **opaque, animated*
 
 #### Scenario: Keys do not reach the workspace
 - **WHEN** the user presses `Escape`, `F1` or any shortcut while locked
-- **THEN** nothing behind the prompt reacts and the window stays locked.
+- **THEN** nothing behind the prompt reacts — the dialog that was open when the lock came up stays open — and the window stays locked.
+
+#### Scenario: The pointer cannot drive the window either
+- **WHEN** the user clicks the workspace, a dialog, the title bar buttons or drags a window edge while locked
+- **THEN** nothing happens: the prompt is modal and the borderless resize handles are disabled while locked.
 
 #### Scenario: Wrong PIN
 - **WHEN** the entered PIN does not match
@@ -60,6 +64,10 @@ While locked, the application SHALL cover the window with an **opaque, animated*
 
 ### Requirement: Guessing is slowed down
 After three wrong PINs in a row the prompt SHALL refuse further attempts for one minute, showing the remaining time instead of the entry field, and SHALL do so again every three further failures. A correct PIN SHALL clear the count. The counter SHALL live in memory only: it is a deterrent, and a restart clearing it changes nothing that editing `fasttail.ini` would not.
+
+#### Scenario: The prompt fits the language it is drawn in
+- **WHEN** the interface language makes the countdown message longer than the English one
+- **THEN** the prompt is wider instead of wrapping it, up to the width of the window.
 
 #### Scenario: Third wrong PIN pauses the prompt
 - **WHEN** the third wrong PIN in a row is submitted

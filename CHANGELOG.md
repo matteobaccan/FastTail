@@ -44,7 +44,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   row next to it.
 - **The PIN lock could be talked around.** A bare `Escape` still reached the workspace
   and closed the dialog behind the lock; only modifier shortcuts were being dropped.
-  The lock now keeps just what the PIN field needs. Its backdrop is opaque and animated
+  The lock now keeps just what the PIN field needs, and the filter runs before anything
+  reads the input — running it afterwards left the handlers having already acted, which
+  is why `Escape` still closed the Settings dialog behind the lock. The borderless
+  resize handles, which read the pointer directly instead of through a widget, are
+  disabled while locked too. Its backdrop is opaque and animated
   (drifting grid, sweeping glow) instead of translucent, so the log is no longer
   readable behind the prompt and a locked window does not look like a frozen one.
 - **`Ctrl + wheel` froze the window.** The first fix applied the zoom from inside
@@ -56,7 +60,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **The PIN prompt fights guessing.** `Enter` confirms the PIN (in the prompt and when
   setting it in the settings), a wrong PIN beeps, and three wrong PINs in a row replace
   the entry field with a one-minute countdown — repeated every three further failures,
-  and cleared by a correct PIN.
+  and cleared by a correct PIN. The prompt is sized from the text it actually shows, so
+  the longer translations of the countdown message no longer wrap inside a dialog cut
+  for English.
 
 ### Documentation
 
