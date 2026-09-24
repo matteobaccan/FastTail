@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Follow the system language.** The language picker's first entry, "System language
+  (…)", keeps the interface on the operating system language, so it changes by itself
+  when Windows does; picking a language turns it off. It is how a fresh install starts,
+  while a configuration written before this setting keeps the language it had.
+- **The window reopens minimized.** Closing FastTail while it is minimized now reopens
+  it minimized, the way closing it maximized already reopened it maximized; the saved
+  position and size are no longer overwritten by the placeholder geometry Windows
+  reports for a minimized window.
+
 - **Visible, persisted interface zoom.** `Ctrl +`, `Ctrl -`, `Ctrl 0`, `Ctrl + wheel`
   and the new Settings → Zoom row all move the same value, which scales the whole
   interface and is saved as `zoom_factor` in `fasttail.ini`. The title bar shows it as a
@@ -32,6 +41,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   first one found, so Japanese and Korean no longer render as empty boxes.
 
 ### Fixed
+
+- **Dialog sizes were not kept.** The Color filters, About and Help windows reopened at
+  the size of their content instead of the size they were left at: their scroll areas
+  auto-shrank, the window hugged them, and what was saved to `fasttail.ini` was that
+  content height rather than the window. The scroll areas now claim the whole window,
+  About is resizable like the others (it was fixed-size, so a stored size could never be
+  applied), and the geometry that round-trips is the one the window really has.
 
 - **`Ctrl + wheel` zoom did nothing.** egui turns a wheel event carrying `Ctrl` into a
   zoom delta and empties the scroll delta, so the handler that read the scroll delta

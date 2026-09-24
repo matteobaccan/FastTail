@@ -52,6 +52,11 @@ pub fn is_valid_pin(pin: &str) -> bool {
 pub struct FastTailConfig {
     pub theme: CyberTheme,
     pub language: Language,
+    /// Follow the operating system language instead of the stored one. On a fresh
+    /// install this is how FastTail starts; picking a language in the settings turns it
+    /// off, and picking "system language" turns it back on.
+    #[serde(default = "default_language_auto")]
+    pub language_auto: bool,
     pub screensaver_enabled: bool,
     pub screensaver_timeout_mins: u32,
     /// Lock the window behind a PIN when the screensaver ends or the user asks for it.
@@ -146,6 +151,10 @@ pub struct FastTailConfig {
     pub window_height: Option<f32>,
     #[serde(default)]
     pub window_maximized: bool,
+    /// Whether the window was minimized when the application was closed; it reopens that
+    /// way, like it reopens maximized.
+    #[serde(default)]
+    pub window_minimized: bool,
     #[serde(default)]
     pub settings_open: bool,
     #[serde(default)]
@@ -207,6 +216,10 @@ fn default_zoom_factor() -> f32 {
     1.0
 }
 
+fn default_language_auto() -> bool {
+    true
+}
+
 fn default_poll_interval_ms() -> u32 {
     250
 }
@@ -236,6 +249,7 @@ impl Default for FastTailConfig {
         Self {
             theme: CyberTheme::Tron,
             language: Language::detect(),
+            language_auto: default_language_auto(),
             screensaver_enabled: true,
             screensaver_timeout_mins: 10,
             lock_enabled: false,
@@ -275,6 +289,7 @@ impl Default for FastTailConfig {
             window_width: None,
             window_height: None,
             window_maximized: false,
+            window_minimized: false,
             settings_open: false,
             filters_open: false,
             about_open: false,
@@ -454,6 +469,7 @@ impl FastTailConfig {
         conf.with_section(Some("general"))
             .set("theme", theme_str)
             .set("language", self.language.code())
+            .set("language_auto", self.language_auto.to_string())
             .set("renderer", self.renderer.as_str())
             .set("always_on_top", self.always_on_top.to_string())
             .set("flash_on_alert", self.flash_on_alert.to_string())
@@ -564,6 +580,7 @@ impl FastTailConfig {
             win_sec.set("height", h.to_string());
         }
         win_sec.set("maximized", self.window_maximized.to_string());
+        win_sec.set("minimized", self.window_minimized.to_string());
 
         let mut dlg_sec = conf.with_section(Some("dialogs"));
         dlg_sec.set("settings_open", self.settings_open.to_string());
@@ -649,6 +666,19 @@ impl FastTailConfig {
             }
             if let Some(l) = general.get("language") {
                 cfg.language = Language::from_code(l);
+                // A file written before this setting existed carries a language the user
+                // chose (or that was detected once); keep honouring it rather than
+                // silently switching the interface on the next OS language change.
+                cfg.language_auto = false;
+            }
+            if let Some(v) = general
+                .get("language_auto")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.language_auto = v;
+            }
+            if cfg.language_auto {
+                cfg.language = Language::detect();
             }
             if let Some(r) = general
                 .get("renderer")
@@ -906,6 +936,9 @@ impl FastTailConfig {
             }
             if let Some(v) = win.get("maximized").and_then(|s| s.parse::<bool>().ok()) {
                 cfg.window_maximized = v;
+            }
+            if let Some(v) = win.get("minimized").and_then(|s| s.parse::<bool>().ok()) {
+                cfg.window_minimized = v;
             }
         }
 
@@ -1196,6 +1229,36 @@ fn parse_f32_pair(s: &str) -> Option<[f32; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_language_follows_the_system_until_one_is_picked() {
+        // A file written before the setting existed keeps its language.
+        let mut old_style = Ini::new();
+        old_style
+            .with_section(Some("general"))
+            .set("language", "fr");
+        let loaded = FastTailConfig::from_ini(&old_style);
+        assert!(!loaded.language_auto);
+        assert_eq!(loaded.language, Language::Fr);
+
+        // With the setting on, the stored language is ignored in favour of the system one.
+        let mut auto = loaded.clone();
+        auto.language_auto = true;
+        auto.language = Language::Fr;
+        let reloaded = FastTailConfig::from_ini(&auto.to_ini());
+        assert!(reloaded.language_auto);
+        assert_eq!(reloaded.language, Language::detect());
+    }
+
+    #[test]
+    fn test_window_minimized_round_trips() {
+        let cfg = FastTailConfig {
+            window_minimized: true,
+            ..Default::default()
+        };
+        assert!(FastTailConfig::from_ini(&cfg.to_ini()).window_minimized);
+        assert!(!FastTailConfig::from_ini(&FastTailConfig::default().to_ini()).window_minimized);
+    }
 
     #[test]
     fn test_zoom_percent_and_steps() {
