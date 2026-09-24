@@ -117,7 +117,13 @@ fn create_crash_log_file(target: &std::path::Path) -> std::io::Result<std::fs::F
             ));
         }
     }
-    let file = OpenOptions::new().write(true).create(true).open(target)?;
+    // Truncation happens below through `set_len`, once the handle is known to be a
+    // regular file, so the open itself must not truncate.
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(target)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(std::io::Error::new(
@@ -280,9 +286,8 @@ mod tests {
         let dir_target = temp_dir.path().join("dir_target");
         std::fs::create_dir(&dir_target).unwrap();
 
-        let err = create_crash_log_file(&dir_target)
-            .err()
-            .expect("should fail when target is a directory");
+        let err =
+            create_crash_log_file(&dir_target).expect_err("should fail when target is a directory");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

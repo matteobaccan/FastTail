@@ -170,6 +170,43 @@ fn restore_dialog_geometry<'a>(
     }
 }
 
+/// egui paints the dialog chrome with a plain arrow cursor, so the title bar reads as
+/// inert even though it drags the dialog and carries the collapse/close buttons. Set the
+/// cursor by hand: a move cursor over the drag strip, a pointing hand over the buttons at
+/// its two ends (egui lays the title bar out as `[collapse] title [close]`, and the drag
+/// widget — `area_id.with("__title_click")` — spans exactly the part between them).
+fn apply_dialog_chrome_cursor<R>(
+    ctx: &egui::Context,
+    resp: &Option<egui::InnerResponse<Option<R>>>,
+) {
+    let Some(inner) = resp else {
+        return;
+    };
+    let Some(title) = ctx.read_response(inner.response.layer_id.id.with("__title_click")) else {
+        return;
+    };
+    if title.dragged() {
+        ctx.set_cursor_icon(egui::CursorIcon::Move);
+        return;
+    }
+    let Some(pos) = ctx.pointer_latest_pos() else {
+        return;
+    };
+    // Ignore dialogs buried under another one.
+    if ctx.layer_id_at(pos) != Some(inner.response.layer_id) {
+        return;
+    }
+    let strip = egui::Rect::from_x_y_ranges(inner.response.rect.x_range(), title.rect.y_range());
+    if !strip.contains(pos) {
+        return;
+    }
+    ctx.set_cursor_icon(if title.rect.x_range().contains(pos.x) {
+        egui::CursorIcon::Move
+    } else {
+        egui::CursorIcon::PointingHand
+    });
+}
+
 /// Stores the rendered dialog rect back into the config so it reopens where it was.
 fn capture_dialog_geometry<R>(
     resp: &Option<egui::InnerResponse<Option<R>>>,
@@ -2137,7 +2174,7 @@ impl FastTailApp {
                 let recent_count = bt_cfg.recent_files.len();
                 let rules_count = bt_cfg.highlight_rules.len();
 
-                egui::Window::new(
+                let bt_resp = egui::Window::new(
                     RichText::new(format!("⚡ {}", t(lang, "baretail_title")))
                         .monospace()
                         .color(theme.warn_color()),
@@ -2217,6 +2254,7 @@ impl FastTailApp {
                         }
                     });
                 });
+                apply_dialog_chrome_cursor(&ctx, &bt_resp);
             }
         }
 
@@ -2479,6 +2517,7 @@ impl FastTailApp {
                 &mut self.config.settings_pos,
                 &mut self.config.settings_size,
             );
+            apply_dialog_chrome_cursor(&ctx, &resp);
 
             if test_screensaver {
                 self.screensaver.is_active = true;
@@ -2562,6 +2601,7 @@ impl FastTailApp {
                 &mut self.config.filters_pos,
                 &mut self.config.filters_size,
             );
+            apply_dialog_chrome_cursor(&ctx, &resp);
 
             if self.config.filters_open != is_open {
                 self.config.filters_open = is_open;
@@ -2702,6 +2742,7 @@ impl FastTailApp {
                 &mut self.config.about_pos,
                 &mut self.config.about_size,
             );
+            apply_dialog_chrome_cursor(&ctx, &resp);
 
             if self.config.about_open != is_open {
                 self.config.about_open = is_open;
@@ -2927,6 +2968,7 @@ impl FastTailApp {
             });
 
             capture_dialog_geometry(&resp, &mut self.config.help_pos, &mut self.config.help_size);
+            apply_dialog_chrome_cursor(&ctx, &resp);
 
             if self.config.help_open != is_open {
                 self.config.help_open = is_open;
