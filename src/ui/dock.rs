@@ -439,6 +439,30 @@ fn paint_search_row_background(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Toolbar toggle (Follow, Monitor, line numbers, Wrap, TXT/HEX/MD): an active one gets
+/// a tinted fill and an accent border on top of the coloured label. On the light theme
+/// the label colour alone was too close to the inactive grey to read as "on".
+fn toggle_button(
+    ui: &mut Ui,
+    theme: &CyberTheme,
+    label: &str,
+    active: bool,
+    accent: Color32,
+) -> egui::Response {
+    let text = if active {
+        RichText::new(label).color(accent).monospace().strong()
+    } else {
+        RichText::new(label).color(theme.text_dim()).monospace()
+    };
+    let mut button = egui::Button::new(text);
+    if active {
+        button = button
+            .fill(accent.gamma_multiply(0.20))
+            .stroke(Stroke::new(1.0, accent.gamma_multiply(0.85)));
+    }
+    ui.add(button)
+}
+
 fn render_log_stream(
     ui: &mut Ui,
     engine: &mut TailEngine,
@@ -575,21 +599,20 @@ fn render_log_stream(
 
     // Stream status bar
     ui.horizontal(|ui| {
-        let follow_text = if engine.follow_tail {
-            RichText::new("▶ Follow")
-                .color(theme.accent_color())
-                .monospace()
-                .strong()
+        let follow_label = if engine.follow_tail {
+            "▶ Follow"
         } else {
-            RichText::new("■ Follow")
-                .color(theme.warn_color())
-                .monospace()
+            "■ Follow"
         };
-
-        if ui
-            .button(follow_text)
-            .on_hover_text(t(lang, "tip_follow_tail"))
-            .clicked()
+        if toggle_button(
+            ui,
+            theme,
+            follow_label,
+            engine.follow_tail,
+            theme.accent_color(),
+        )
+        .on_hover_text(t(lang, "tip_follow_tail"))
+        .clicked()
         {
             engine.follow_tail = !engine.follow_tail;
             ui.ctx().request_repaint();
@@ -598,70 +621,23 @@ fn render_log_stream(
         ui.separator();
 
         // Monitor disk reading toggle (no attivo/sospeso text, using ▶ and ■ with color)
-        let monitor_text = if engine.is_watching {
-            RichText::new("▶ Monitor")
-                .color(theme.accent_color())
-                .monospace()
-                .strong()
+        let monitor_label = if engine.is_watching {
+            "▶ Monitor"
         } else {
-            RichText::new("■ Monitor")
-                .color(theme.warn_color())
-                .monospace()
+            "■ Monitor"
         };
-        if ui
-            .button(monitor_text)
-            .on_hover_text(t(lang, "tip_monitor"))
-            .clicked()
+        if toggle_button(
+            ui,
+            theme,
+            monitor_label,
+            engine.is_watching,
+            theme.accent_color(),
+        )
+        .on_hover_text(t(lang, "tip_monitor"))
+        .clicked()
         {
             engine.is_watching = !engine.is_watching;
             ui.ctx().request_repaint();
-        }
-
-        // Line numbers & Line wrap toggle, meaningful in the text views only (hidden in Hex mode)
-        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
-            ui.separator();
-
-            // Line numbers toggle
-            let lines_text = if *show_line_numbers {
-                RichText::new("# 123")
-                    .color(theme.accent_color())
-                    .monospace()
-            } else {
-                RichText::new("# ---").color(theme.text_dim()).monospace()
-            };
-            if ui
-                .button(lines_text)
-                .on_hover_text(t(lang, "show_lines"))
-                .clicked()
-            {
-                *show_line_numbers = !*show_line_numbers;
-                ui.ctx().request_repaint();
-            }
-
-            // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
-            let wrap_text = if engine.wrap_lines {
-                RichText::new("↩ Wrap")
-                    .color(theme.accent_color())
-                    .monospace()
-                    .strong()
-            } else {
-                RichText::new("↩ Wrap").color(theme.text_dim()).monospace()
-            };
-            let alt_w = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::W);
-            let toggled = ui
-                .button(wrap_text)
-                .on_hover_text(t(lang, "tip_wrap"))
-                .clicked()
-                || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
-            if toggled {
-                let row = top_row(engine);
-                engine.set_wrap_lines(!engine.wrap_lines, row);
-                if !engine.wrap_lines {
-                    // Extend mode maps rows to pixels itself: keep the same top row.
-                    engine.requested_scroll_y = Some(row as f32 * row_height);
-                }
-                ui.ctx().request_repaint();
-            }
         }
 
         ui.separator();
@@ -673,16 +649,7 @@ fn render_log_stream(
         let is_hex = current_mode == crate::tail_engine::ViewMode::Hex;
         let is_md = current_mode == crate::tail_engine::ViewMode::Markdown;
 
-        let txt_style = if is_txt {
-            RichText::new("🔤 TXT")
-                .color(theme.accent_color())
-                .monospace()
-                .strong()
-        } else {
-            RichText::new("🔤 TXT").color(theme.text_dim()).monospace()
-        };
-        if ui
-            .button(txt_style)
+        if toggle_button(ui, theme, "🔤 TXT", is_txt, theme.accent_color())
             .on_hover_text(t(lang, "tip_mode_txt"))
             .clicked()
         {
@@ -690,16 +657,7 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
-        let hex_style = if is_hex {
-            RichText::new("🔢 HEX")
-                .color(theme.secondary_accent())
-                .monospace()
-                .strong()
-        } else {
-            RichText::new("🔢 HEX").color(theme.text_dim()).monospace()
-        };
-        if ui
-            .button(hex_style)
+        if toggle_button(ui, theme, "🔢 HEX", is_hex, theme.secondary_accent())
             .on_hover_text(t(lang, "tip_mode_hex"))
             .clicked()
         {
@@ -707,14 +665,6 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
-        let md_style = if is_md {
-            RichText::new("📝 MD")
-                .color(theme.warn_color())
-                .monospace()
-                .strong()
-        } else {
-            RichText::new("📝 MD").color(theme.text_dim()).monospace()
-        };
         let md_too_large = engine.markdown_too_large();
         let md_limit_mb = (engine.markdown_max_bytes / (1024 * 1024)).max(1);
         let md_msg = t(lang, "md_too_large").replace("{limit}", &md_limit_mb.to_string());
@@ -723,13 +673,54 @@ fn render_log_stream(
         } else {
             t(lang, "tip_mode_md")
         };
-        if ui.button(md_style).on_hover_text(md_tip).clicked() {
+        if toggle_button(ui, theme, "📝 MD", is_md, theme.warn_color())
+            .on_hover_text(md_tip)
+            .clicked()
+        {
             if md_too_large {
                 engine.view_notice = Some(md_msg);
             } else {
                 engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
             }
             ui.ctx().request_repaint();
+        }
+
+        // Line numbers & Line wrap toggle, meaningful in the text views only (hidden in Hex mode)
+        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+            ui.separator();
+
+            // Line numbers toggle
+            let lines_label = if *show_line_numbers { "# 123" } else { "# ---" };
+            if toggle_button(
+                ui,
+                theme,
+                lines_label,
+                *show_line_numbers,
+                theme.accent_color(),
+            )
+            .on_hover_text(t(lang, "show_lines"))
+            .clicked()
+            {
+                *show_line_numbers = !*show_line_numbers;
+                ui.ctx().request_repaint();
+            }
+
+            // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
+            let alt_w = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::W);
+            let toggled =
+                toggle_button(ui, theme, "↩ Wrap", engine.wrap_lines, theme.accent_color())
+                    .on_hover_text(t(lang, "tip_wrap"))
+                    .clicked()
+                    || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
+            if toggled {
+                let row = top_row(engine);
+                engine.set_wrap_lines(!engine.wrap_lines, row);
+                if !engine.wrap_lines {
+                    // Extend mode maps rows to pixels itself: keep the same top row.
+                    engine.requested_scroll_y = Some(row as f32 * row_height);
+                }
+                ui.ctx().request_repaint();
+            }
         }
 
         // Encoding selector (relevant in Text & Markdown modes)
@@ -3011,16 +3002,18 @@ pub fn render_settings_content(
 
     ui.add_space(6.0);
 
-    // Language selector
+    // Language selector: a combo box, so the row stays one line however many
+    // languages ship with the build.
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "language"))).monospace());
-        ui.selectable_value(lang, Language::En, "English").clicked();
-        ui.selectable_value(lang, Language::It, "Italiano")
-            .clicked();
-        ui.selectable_value(lang, Language::Fr, "Français")
-            .clicked();
-        ui.selectable_value(lang, Language::Es, "Español").clicked();
-        if ui.selectable_value(lang, Language::Zh, "中文").clicked() {}
+        egui::ComboBox::from_id_salt("language_select")
+            .selected_text(RichText::new(lang.name()).monospace())
+            .width(160.0)
+            .show_ui(ui, |ui| {
+                for choice in Language::ALL {
+                    ui.selectable_value(lang, *choice, choice.name());
+                }
+            });
     });
 
     ui.add_space(6.0);

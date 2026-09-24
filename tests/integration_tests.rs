@@ -730,8 +730,14 @@ fn test_move_up_move_down_translations() {
     ] {
         let up = t(lang, "move_up");
         let down = t(lang, "move_down");
-        assert!(!up.is_empty() && up != "Unknown", "move_up missing for {lang:?}");
-        assert!(!down.is_empty() && down != "Unknown", "move_down missing for {lang:?}");
+        assert!(
+            !up.is_empty() && up != "Unknown",
+            "move_up missing for {lang:?}"
+        );
+        assert!(
+            !down.is_empty() && down != "Unknown",
+            "move_down missing for {lang:?}"
+        );
     }
     assert_eq!(t(Language::En, "move_up"), "Move Up");
     assert_eq!(t(Language::En, "move_down"), "Move Down");

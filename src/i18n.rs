@@ -10,6 +10,15 @@ pub enum Language {
 }
 
 impl Language {
+    /// Every selectable UI language, in the order shown in the settings picker.
+    pub const ALL: &'static [Language] = &[
+        Language::En,
+        Language::It,
+        Language::Fr,
+        Language::Es,
+        Language::Zh,
+    ];
+
     pub fn name(&self) -> &'static str {
         match self {
             Language::En => "English",
@@ -208,6 +217,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::It, "renderer_glow") => "OpenGL",
         (Language::It, "renderer_wgpu") => "wgpu",
         (Language::It, "renderer_software") => "Software (CPU, wgpu)",
+        (Language::It, "renderer_not_recommended") => "sconsigliato",
+        (Language::It, "renderer_software_warn") => "Sconsigliato: il renderer software disegna sulla CPU (WARP/llvmpipe), quindi è molto più lento di GPU e consuma CPU anche quando la finestra è ferma. Usalo solo se non è disponibile una GPU.",
         (Language::It, "goto_label") => "Vai alla riga",
         (Language::It, "goto_hint") => "riga, +N, -N",
         (Language::It, "goto_hidden") => "nascosta, mostro la",
@@ -443,6 +454,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Fr, "renderer_glow") => "OpenGL",
         (Language::Fr, "renderer_wgpu") => "wgpu",
         (Language::Fr, "renderer_software") => "Logiciel (CPU, wgpu)",
+        (Language::Fr, "renderer_not_recommended") => "déconseillé",
+        (Language::Fr, "renderer_software_warn") => "Déconseillé : le rendu logiciel s'effectue sur le CPU (WARP/llvmpipe), il est donc bien plus lent qu'un GPU et consomme du CPU même lorsque la fenêtre est inactive. À n'utiliser qu'en l'absence de GPU.",
         (Language::Fr, "goto_label") => "Aller à la ligne",
         (Language::Fr, "goto_hint") => "ligne, +N, -N",
         (Language::Fr, "goto_hidden") => "masquée, affichage de la",
@@ -678,6 +691,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Es, "renderer_glow") => "OpenGL",
         (Language::Es, "renderer_wgpu") => "wgpu",
         (Language::Es, "renderer_software") => "Software (CPU, wgpu)",
+        (Language::Es, "renderer_not_recommended") => "no recomendado",
+        (Language::Es, "renderer_software_warn") => "No recomendado: el renderizado por software se hace en la CPU (WARP/llvmpipe), por lo que es mucho más lento que una GPU y consume CPU incluso con la ventana quieta. Úsalo solo si no hay GPU disponible.",
         (Language::Es, "goto_label") => "Ir a la línea",
         (Language::Es, "goto_hint") => "línea, +N, -N",
         (Language::Es, "goto_hidden") => "oculta, mostrando la",
@@ -913,6 +928,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (Language::Zh, "renderer_glow") => "OpenGL",
         (Language::Zh, "renderer_wgpu") => "wgpu",
         (Language::Zh, "renderer_software") => "软件（CPU，wgpu）",
+        (Language::Zh, "renderer_not_recommended") => "不推荐",
+        (Language::Zh, "renderer_software_warn") => "不推荐：软件渲染在 CPU 上绘制（WARP/llvmpipe），比 GPU 慢得多，并且窗口静止时仍会占用 CPU。仅在没有可用 GPU 时使用。",
         (Language::Zh, "goto_label") => "跳转到行",
         (Language::Zh, "goto_hint") => "行号，+N，-N",
         (Language::Zh, "goto_hidden") => "已隐藏，显示第",
@@ -1132,6 +1149,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         (_, "renderer_glow") => "OpenGL",
         (_, "renderer_wgpu") => "wgpu",
         (_, "renderer_software") => "Software (CPU, wgpu)",
+        (_, "renderer_not_recommended") => "not recommended",
+        (_, "renderer_software_warn") => "Not recommended: the software renderer draws on the CPU (WARP/llvmpipe), so it is much slower than a GPU and keeps burning CPU even when the window is idle. Use it only when no GPU is available.",
         (_, "goto_label") => "Go to line",
         (_, "goto_hint") => "line, +N, -N",
         (_, "goto_hidden") => "hidden, showing line",
