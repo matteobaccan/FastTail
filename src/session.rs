@@ -197,9 +197,31 @@ impl Session {
     }
 
     pub fn save_to(&self, file: &Path) -> std::io::Result<()> {
+        if file.exists() {
+            let meta = std::fs::metadata(file)?;
+            if !meta.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Target path is not a regular file",
+                ));
+            }
+        }
+        let mut out = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(file)?;
+        let metadata = out.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+        out.set_len(0)?;
         let mut conf = Ini::new();
         self.write_into(&mut conf, file.parent());
-        conf.write_to_file(file)
+        conf.write_to(&mut out)
     }
 
     pub fn load_from(file: &Path) -> std::io::Result<LoadedSession> {
@@ -311,6 +333,19 @@ mod tests {
             Session::with_suffix(Path::new("/tmp/dev.fasttail-session.ini")),
             PathBuf::from("/tmp/dev.fasttail-session.ini")
         );
+    }
+
+    #[test]
+    fn test_save_to_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_target = temp_dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        let session = Session::default();
+        let err = session
+            .save_to(&dir_target)
+            .expect_err("should fail when target is a directory");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]

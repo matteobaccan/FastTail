@@ -1128,13 +1128,36 @@ impl FastTailConfig {
     /// bytes. Returns whether the file was actually written. A read error counts as
     /// "different", so an unreadable target is rewritten rather than skipped.
     fn write_if_changed(path: &Path, buf: &[u8]) -> Result<bool, std::io::Error> {
+        if path.exists() {
+            let meta = fs::metadata(path)?;
+            if !meta.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Target path is not a regular file",
+                ));
+            }
+        }
         if fs::read(path)
             .map(|existing| existing == buf)
             .unwrap_or(false)
         {
             return Ok(false);
         }
-        fs::write(path, buf)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+        file.set_len(0)?;
+        use std::io::Write;
+        file.write_all(buf)?;
         Ok(true)
     }
 
@@ -1321,6 +1344,19 @@ mod tests {
         assert!(pin_matches(&stored, "JOSHUA "));
         assert!(pin_matches("", "joshua"));
         assert!(!pin_matches("", "1234"));
+    }
+
+    #[test]
+    fn test_save_to_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_target = temp_dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        let cfg = FastTailConfig::default();
+        let err = cfg
+            .save_to(&dir_target)
+            .expect_err("should fail when target is a directory");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
