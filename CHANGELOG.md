@@ -6,6 +6,15 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Published on crates.io.** `cargo install fasttail` installs the released version.
+  The release pipeline publishes the crate on every version tag, after checking that the
+  tag matches `Cargo.toml` and that the version is not already on crates.io, and the
+  packaged crate carries only the code, the licence and the user documentation.
+
 ## [0.8.0] - 2026-09-24
 
 ### Added

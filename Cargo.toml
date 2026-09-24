@@ -7,6 +7,28 @@ description = "Ultra-fast multi-stream log monitor and tail viewer with Cyberpun
 license = "MIT"
 repository = "https://github.com/matteobaccan/FastTail"
 homepage = "https://github.com/matteobaccan/FastTail"
+readme = "README.md"
+documentation = "https://github.com/matteobaccan/FastTail#readme"
+keywords = ["log", "tail", "logging", "monitoring", "gui"]
+categories = ["command-line-utilities", "gui", "development-tools::debugging"]
+# Rust 1.87 is what the README asks for and what CI installs.
+rust-version = "1.87"
+# The published crate carries the code, the licence and the docs a user reads from
+# `cargo install`; everything else in the repository (the spec workspace, the agent
+# skills, the screenshots, the release scaffolding) is repository furniture.
+exclude = [
+    ".claude/**",
+    ".jules/**",
+    ".Jules/**",
+    ".github/**",
+    "openspec/**",
+    "dist/**",
+    # The README renders on crates.io with its images resolved against the repository,
+    # so the artwork does not need to travel in the crate (the jpg alone is 670 KB).
+    "assets/**",
+    "fasttail.ini",
+    "renovate.json",
+]
 
 [dependencies]
 # UI Framework & Docking
