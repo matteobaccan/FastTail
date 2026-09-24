@@ -5,9 +5,7 @@
 ## 2026-04-18 - Direct SIMD ASCII search without `haystack.is_ascii()` and single-byte `memchr`
 **Learning:** Calling `haystack.is_ascii()` in string-matching hot loops iterates over the entire haystack upfront on every rule check. Because UTF-8 guarantees ASCII bytes (0..127) never overlap with multi-byte sequence bytes (128..255), an ASCII needle can be searched directly via SIMD `memchr`/`memchr2` on `haystack.as_bytes()`. Additionally, when the first byte's lowercase and uppercase variants match (`first_lower == first_upper`, e.g. numbers, symbols, spaces, punctuation), using single-byte `memchr::memchr` instead of `memchr2` avoids multi-byte SIMD vector overhead.
 **Action:** Omit `haystack.is_ascii()` when `needle.is_ascii()` in UTF-8 text processing hot paths, and branch `first_lower == first_upper` to single-byte `memchr`.
-## 2026-04-18 - Zero-allocation span deduction in highlighting hot paths
-**Learning:** Performing interval deduction in per-row line highlighting hot paths with heap-allocated vectors (`vec![]`, `Vec::with_capacity()`) causes millions of small heap allocations during log rendering and highlight scanning. Replacing dynamic `Vec` instances with stack-allocated fixed arrays (`[(usize, usize); MAX_ROW_SPANS]`) eliminates heap allocations entirely for span deduction.
-**Action:** In per-row layout or highlight hot paths bounded by a fixed maximum cap, use stack-allocated fixed arrays instead of `Vec` allocations.
+
 ## 2026-04-18 - Avoid large stack buffer copies and fixed cap risks in hot loops
 **Learning:** Replacing dynamic small `Vec` instances (which hold 1–2 elements in practice) in a loop with fixed stack arrays like `[(usize, usize); 64]` (1 KB each) causes 1 KB of stack copying per iteration on every span subtraction (up to 64 KB per call). Furthermore, fixed arrays risk silently dropping interval pieces if splitting pushes the count past the fixed cap.
 **Action:** Prefer standard dynamic `Vec` or prudent small-vec over copying large fixed stack buffers in tight interval-deduction loops.
