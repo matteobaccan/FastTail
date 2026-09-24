@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Follow the system language.** The language picker's first entry, "System language
+  (…)", keeps the interface on the operating system language, so it changes by itself
+  when Windows does; picking a language turns it off. It is how a fresh install starts,
+  while a configuration written before this setting keeps the language it had.
+- **The window reopens minimized.** Closing FastTail while it is minimized now reopens
+  it minimized, the way closing it maximized already reopened it maximized; the saved
+  position and size are no longer overwritten by the placeholder geometry Windows
+  reports for a minimized window.
+
 - **Visible, persisted interface zoom.** `Ctrl +`, `Ctrl -`, `Ctrl 0`, `Ctrl + wheel`
   and the new Settings → Zoom row all move the same value, which scales the whole
   interface and is saved as `zoom_factor` in `fasttail.ini`. The title bar shows it as a

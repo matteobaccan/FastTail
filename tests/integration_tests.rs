@@ -541,6 +541,8 @@ fn test_i18n_exhaustive_coverage() {
         "settings",
         "theme",
         "language",
+        "language_system",
+        "language_system_tip",
         "screensaver",
         "screensaver_timeout",
         "screensaver_zero_off",
@@ -1243,7 +1245,10 @@ fn test_config_ini_persistence() {
 
     let mut config = FastTailConfig::default();
     config.theme = CyberTheme::Blade;
+    // A language chosen by hand: with language_auto on, the stored one is deliberately
+    // ignored in favour of the system language (see the language row in Settings).
     config.language = Language::Fr;
+    config.language_auto = false;
     config.screensaver_enabled = false;
     config.screensaver_timeout_mins = 15;
     config.telemetry_enabled = false;
@@ -1278,6 +1283,7 @@ fn test_config_ini_persistence() {
 
     assert_eq!(loaded.theme, CyberTheme::Blade);
     assert_eq!(loaded.language, Language::Fr);
+    assert!(!loaded.language_auto);
     assert_eq!(loaded.screensaver_enabled, false);
     assert_eq!(loaded.screensaver_timeout_mins, 15);
     assert_eq!(loaded.telemetry_enabled, false);
@@ -2189,6 +2195,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -2233,6 +2240,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -2267,6 +2275,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -2302,6 +2311,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -2347,6 +2357,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -2385,6 +2396,7 @@ fn test_ctrl_f_focus_and_search() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -2476,6 +2488,7 @@ fn test_search_query_is_per_tab() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -2954,6 +2967,7 @@ fn test_tab_lookup_tolerates_path_case_differences() {
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut false,
             lock_enabled: &mut false,
             lock_pin: &mut String::new(),
             lock_now: &mut false,
@@ -3059,6 +3073,7 @@ fn test_f3_only_advances_the_focused_tab() {
                 search_history: &mut search_history,
                 tab_closed: &mut tab_closed,
                 test_screensaver: &mut test_screensaver,
+                language_auto: &mut false,
                 lock_enabled: &mut false,
                 lock_pin: &mut String::new(),
                 lock_now: &mut false,

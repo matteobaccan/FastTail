@@ -64,6 +64,8 @@ pub struct DockContext<'a> {
     pub tab_closed: &'a mut bool,
     pub test_screensaver: &'a mut bool,
     /// PIN lock (Settings): master switch, scrambled PIN and a "lock right now" request.
+    /// Follow the OS language instead of the stored one (Settings language row).
+    pub language_auto: &'a mut bool,
     pub lock_enabled: &'a mut bool,
     pub lock_pin: &'a mut String,
     pub lock_now: &'a mut bool,
@@ -322,6 +324,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.external_tools,
                     self.ctx.global_rules,
                     self.ctx.tool_runner,
+                    self.ctx.language_auto,
                     self.ctx.lock_enabled,
                     self.ctx.lock_pin,
                     self.ctx.lock_now,
@@ -3052,6 +3055,7 @@ pub fn render_settings_content(
     external_tools: &mut Vec<ExternalTool>,
     rules: &[HighlightRule],
     tool_runner: &mut ToolRunner,
+    language_auto: &mut bool,
     lock_enabled: &mut bool,
     lock_pin: &mut String,
     lock_now: &mut bool,
@@ -3076,16 +3080,37 @@ pub fn render_settings_content(
 
     ui.add_space(6.0);
 
-    // Language selector: a combo box, so the row stays one line however many
-    // languages ship with the build.
+    // Language selector: a combo box, so the row stays one line however many languages
+    // ship with the build. The first entry follows the operating system, which is what a
+    // fresh install does until a language is picked here.
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "language"))).monospace());
+        let detected = Language::detect();
+        let system_label = format!("{} ({})", t(*lang, "language_system"), detected.name());
+        let selected = if *language_auto {
+            system_label.clone()
+        } else {
+            lang.name().to_owned()
+        };
         egui::ComboBox::from_id_salt("language_select")
-            .selected_text(RichText::new(lang.name()).monospace())
-            .width(160.0)
+            .selected_text(RichText::new(selected).monospace())
+            .width(220.0)
             .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(*language_auto, &system_label)
+                    .on_hover_text(t(*lang, "language_system_tip"))
+                    .clicked()
+                {
+                    *language_auto = true;
+                    *lang = detected;
+                }
+                ui.separator();
                 for choice in Language::ALL {
-                    ui.selectable_value(lang, *choice, choice.name());
+                    let picked = !*language_auto && *lang == *choice;
+                    if ui.selectable_label(picked, choice.name()).clicked() {
+                        *language_auto = false;
+                        *lang = *choice;
+                    }
                 }
             });
     });

@@ -1216,9 +1216,22 @@ impl FastTailApp {
             }));
         }
 
-        // 0. Handle initial maximize on Windows / viewport
+        // 0. Handle initial maximize / minimize on Windows / viewport
         if self.first_frame {
             self.first_frame = false;
+            if self.config.window_minimized {
+                // Reopen the way it was closed. The command is sent after the first frame
+                // has been laid out, so the restored geometry is the saved one and not
+                // whatever the window manager gives a window that starts iconified.
+                ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+                #[cfg(windows)]
+                unsafe {
+                    let hwnd = win_util::GetActiveWindow();
+                    if !hwnd.is_null() {
+                        win_util::ShowWindow(hwnd, win_util::SW_MINIMIZE);
+                    }
+                }
+            }
             if self.config.window_maximized {
                 ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
                 #[cfg(windows)]
@@ -1251,8 +1264,13 @@ impl FastTailApp {
             if let Some(maximized) = i.viewport().maximized {
                 self.config.window_maximized = maximized;
             }
+            if let Some(minimized) = i.viewport().minimized {
+                self.config.window_minimized = minimized;
+            }
 
-            if !self.config.window_maximized {
+            // A minimized window reports a placeholder geometry on Windows; keep the
+            // last real one instead of saving that.
+            if !self.config.window_maximized && !self.config.window_minimized {
                 if let Some(rect) = i.viewport().outer_rect {
                     if rect.min.x > -10000.0 && rect.min.y > -10000.0 {
                         self.config.window_x = Some(rect.min.x);
@@ -2386,6 +2404,7 @@ impl FastTailApp {
             search_history: &mut self.config.search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            language_auto: &mut self.config.language_auto,
             lock_enabled: &mut self.config.lock_enabled,
             lock_pin: &mut self.config.lock_pin,
             lock_now: &mut lock_now,
@@ -2716,6 +2735,7 @@ impl FastTailApp {
                         &mut self.config.external_tools,
                         &self.config.highlight_rules,
                         &mut self.tool_runner,
+                        &mut self.config.language_auto,
                         &mut self.config.lock_enabled,
                         &mut self.config.lock_pin,
                         &mut popup_lock_now,

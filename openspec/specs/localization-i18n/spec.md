@@ -43,7 +43,11 @@ The application SHALL load a fallback font for each CJK script the host provides
 - **THEN** kana and hangul are rendered by their own faces instead of falling back to replacement boxes, whatever the interface language is.
 
 ### Requirement: Runtime language switcher
-The application SHALL provide an explicit language selector in the settings, allowing users to switch languages instantly and persisting their choice in `fasttail.ini`. The selector SHALL be a drop-down list, so the settings row keeps its height as languages are added.
+The application SHALL provide an explicit language selector in the settings, allowing users to switch languages instantly and persisting their choice in `fasttail.ini`. The selector SHALL be a drop-down list, so the settings row keeps its height as languages are added, and its first entry SHALL be "system language", which keeps the interface following the operating system (`language_auto`) and names the language currently detected. A fresh installation SHALL start in that mode; a configuration written before the setting existed SHALL keep the language it stored.
+
+#### Scenario: Following the system language
+- **WHEN** the user selects the "system language" entry and later the operating system language changes
+- **THEN** the interface follows it at the next start, without the user touching the setting again.
 
 #### Scenario: Switching language at runtime
 - **WHEN** the user selects "Español" in the language drop-down
