@@ -82,6 +82,10 @@ pub struct FastTailConfig {
     pub show_line_numbers: bool,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    /// Interface zoom (egui zoom factor): `Ctrl +`, `Ctrl -`, `Ctrl 0`, `Ctrl + wheel`
+    /// and the Settings zoom row all move this one value, so they cannot disagree.
+    #[serde(default = "default_zoom_factor")]
+    pub zoom_factor: f32,
     /// Background stream polling cadence in milliseconds (50..=5000 ms, default 250).
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u32,
@@ -178,13 +182,29 @@ pub const DEFAULT_FONT_SIZE: f32 = 13.0;
 pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 32.0;
 
-/// The log font size as a zoom percentage of the default size.
-pub fn zoom_percent(font_size: f32) -> i32 {
-    (font_size / DEFAULT_FONT_SIZE * 100.0).round() as i32
+/// Bounds of the interface zoom (egui's zoom factor: it scales the whole UI, log text
+/// included, because it multiplies the points-per-pixel of the frame).
+pub const MIN_ZOOM: f32 = 0.5;
+pub const MAX_ZOOM: f32 = 3.0;
+/// One step of the zoom buttons and of `Ctrl +` / `Ctrl -`.
+pub const ZOOM_STEP: f32 = 0.1;
+
+/// The interface zoom as a percentage, the way the title bar and the settings show it.
+pub fn zoom_percent(zoom_factor: f32) -> i32 {
+    (zoom_factor * 100.0).round() as i32
+}
+
+/// `zoom` moved by `steps` notches and clamped to the supported range.
+pub fn stepped_zoom(zoom: f32, steps: i32) -> f32 {
+    (zoom + steps as f32 * ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
 fn default_font_size() -> f32 {
     DEFAULT_FONT_SIZE
+}
+
+fn default_zoom_factor() -> f32 {
+    1.0
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -229,6 +249,7 @@ impl Default for FastTailConfig {
             borderless: false,
             show_line_numbers: true,
             font_size: DEFAULT_FONT_SIZE,
+            zoom_factor: default_zoom_factor(),
             poll_interval_ms: default_poll_interval_ms(),
             size_check_interval_ms: default_size_check_interval_ms(),
             max_fps: default_max_fps(),
@@ -449,6 +470,7 @@ impl FastTailConfig {
             .set("borderless", self.borderless.to_string())
             .set("show_line_numbers", self.show_line_numbers.to_string())
             .set("font_size", self.font_size.to_string())
+            .set("zoom_factor", format!("{:.2}", self.zoom_factor))
             .set("poll_interval_ms", self.poll_interval_ms.to_string())
             .set(
                 "size_check_interval_ms",
@@ -693,6 +715,11 @@ impl FastTailConfig {
             if let Some(s) = general.get("font_size") {
                 if let Ok(v) = s.parse::<f32>() {
                     cfg.font_size = v;
+                }
+            }
+            if let Some(s) = general.get("zoom_factor") {
+                if let Ok(v) = s.parse::<f32>() {
+                    cfg.zoom_factor = v.clamp(MIN_ZOOM, MAX_ZOOM);
                 }
             }
             if let Some(s) = general.get("poll_interval_ms") {
@@ -1171,11 +1198,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_zoom_percent_tracks_the_font_size() {
-        assert_eq!(zoom_percent(DEFAULT_FONT_SIZE), 100);
-        assert_eq!(zoom_percent(MIN_FONT_SIZE), 62);
-        assert_eq!(zoom_percent(MAX_FONT_SIZE), 246);
-        assert_eq!(zoom_percent(FastTailConfig::default().font_size), 100);
+    fn test_zoom_percent_and_steps() {
+        assert_eq!(zoom_percent(1.0), 100);
+        assert_eq!(zoom_percent(1.25), 125);
+        assert_eq!(zoom_percent(FastTailConfig::default().zoom_factor), 100);
+        // Steps move by ZOOM_STEP and stop at the supported bounds.
+        assert!((stepped_zoom(1.0, 1) - 1.1).abs() < 1e-6);
+        assert!((stepped_zoom(1.0, -1) - 0.9).abs() < 1e-6);
+        assert_eq!(stepped_zoom(MIN_ZOOM, -5), MIN_ZOOM);
+        assert_eq!(stepped_zoom(MAX_ZOOM, 5), MAX_ZOOM);
+    }
+
+    #[test]
+    fn test_zoom_factor_round_trips_through_the_ini() {
+        let cfg = FastTailConfig {
+            zoom_factor: 1.4,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!((loaded.zoom_factor - 1.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_out_of_range_zoom_in_the_ini_is_clamped() {
+        let cfg = FastTailConfig::default();
+        let mut ini = cfg.to_ini();
+        ini.with_section(Some("general")).set("zoom_factor", "42");
+        assert_eq!(FastTailConfig::from_ini(&ini).zoom_factor, MAX_ZOOM);
     }
 
     #[test]
@@ -1188,9 +1237,11 @@ mod tests {
 
     #[test]
     fn test_pin_is_not_stored_in_clear_and_round_trips() {
-        let mut cfg = FastTailConfig::default();
-        cfg.lock_enabled = true;
-        cfg.lock_pin = scramble_pin("4711");
+        let cfg = FastTailConfig {
+            lock_enabled: true,
+            lock_pin: scramble_pin("4711"),
+            ..Default::default()
+        };
         let ini = cfg.to_ini();
         let loaded = FastTailConfig::from_ini(&ini);
         assert!(loaded.lock_enabled);

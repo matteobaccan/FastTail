@@ -10,11 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Visible zoom level.** The title bar shows the current log zoom as a percentage of
-  the default font size, next to the always-on-top pin; clicking it resets to 100%.
-  The settings row shows the same percentage beside the point size, so `Ctrl+`,
-  `Ctrl-`, `Ctrl+0` and `Ctrl+wheel` no longer change the text with nothing on screen
-  to say what happened.
+- **Visible, persisted interface zoom.** `Ctrl +`, `Ctrl -`, `Ctrl 0`, `Ctrl + wheel`
+  and the new Settings → Zoom row all move the same value, which scales the whole
+  interface and is saved as `zoom_factor` in `fasttail.ini`. The title bar shows it as a
+  percentage next to the always-on-top pin (click to reset to 100%), so a stray
+  `Ctrl + wheel` no longer resizes the app with nothing on screen to explain it. The log
+  font size in points stays a separate setting.
 - **PIN lock.** A 4 to 12 digit PIN can be set in Settings → PIN lock. With the lock
   armed, leaving the screensaver asks for the PIN, and `Ctrl+L` (or the "Lock now"
   button) locks the window on demand. The PIN is scrambled before it reaches
@@ -30,6 +31,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   provides (simplified and traditional Chinese, Japanese, Korean) instead of only the
   first one found, so Japanese and Korean no longer render as empty boxes.
 
+### Fixed
+
+- **`Ctrl + wheel` zoom did nothing.** egui turns a wheel event carrying `Ctrl` into a
+  zoom delta and empties the scroll delta, so the handler that read the scroll delta
+  never ran.
+- **The zoom shortcuts and the settings disagreed.** `Ctrl +`, `Ctrl -` and `Ctrl 0`
+  scaled the whole interface (egui applies them itself) *and* changed the log font by a
+  point, while the settings buttons only changed the font. All of them now move one
+  value, the interface zoom, which is persisted as `zoom_factor` and restored at
+  startup; the log font size in points stays a separate setting. Settings gained a Zoom
+  row next to it.
+- **The PIN lock could be talked around.** A bare `Escape` still reached the workspace
+  and closed the dialog behind the lock; only modifier shortcuts were being dropped.
+  The lock now keeps just what the PIN field needs, and the filter runs before anything
+  reads the input — running it afterwards left the handlers having already acted, which
+  is why `Escape` still closed the Settings dialog behind the lock. The borderless
+  resize handles, which read the pointer directly instead of through a widget, are
+  disabled while locked too. Its backdrop is opaque and animated
+  (drifting grid, sweeping glow) instead of translucent, so the log is no longer
+  readable behind the prompt and a locked window does not look like a frozen one.
+- **`Ctrl + wheel` froze the window.** The first fix applied the zoom from inside
+  `ctx.input(…)`, and `set_zoom_factor` takes the same context lock: the frame
+  deadlocked. The wheel delta is now read inside the closure and applied after it.
+
+### Changed
+
+- **The PIN prompt fights guessing.** `Enter` confirms the PIN (in the prompt and when
+  setting it in the settings), a wrong PIN beeps, and three wrong PINs in a row replace
+  the entry field with a one-minute countdown — repeated every three further failures,
+  and cleared by a correct PIN. The prompt is sized from the text it actually shows, so
+  the longer translations of the countdown message no longer wrap inside a dialog cut
+  for English.
+
 ### Documentation
 
 - **External tools cookbook.** New `docs/external-tools-cookbook.md` with ten worked
@@ -37,6 +71,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the line, open a URL or ticket, pretty-print the row's JSON, grep the file on disk,
   fire a webhook from a rule-bound tool) plus the habits that keep them safe. Linked
   from the README and from the External tools section of the settings.
+- **Specs realigned with the code.** `localization-i18n` describes the sixteen
+  languages, BCP-47 detection and per-script CJK fonts instead of five languages; a new
+  `window-lock` capability covers the PIN lock; `cyber-ui-docking` gains the visible zoom
+  level and the stream toolbar affordances (active-toggle styling, fixed position of the
+  TXT/HEX/MD switcher) and its dialog-chrome cursors; `screensaver-matrix` notes that
+  dismissal can hand over to the PIN prompt; `rendering-backend` records that the
+  settings label the software renderer as not recommended; `external-tools` points at
+  the cookbook. `Ctrl+L` added to the README shortcut table.
 
 ## [0.7.1] - 2026-09-21
 

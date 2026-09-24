@@ -101,16 +101,17 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Ctrl + C` | Copy the selected rows (or the current search hit) as plain text |
 | `Ctrl + G` | Go to line N, or `+N` / `-N` from the current line (hidden lines resolve to the next visible one) |
 | `Ctrl + Shift + T` | Toggle always-on-top (also the 📌 pin in the title bar and a Settings checkbox) |
+| `Ctrl + L` | Lock the window behind the PIN (needs a PIN set in Settings → PIN lock) |
 | `Ctrl + F2` / `F2` / `Shift + F2` | Bookmark the current row (`★` in the marker column) / jump to the next / previous bookmark, wrapping around; bookmarks are saved per file |
 | `Alt + W` | Toggle line wrap for the focused stream (also the `↩ Wrap` button in the stream bar); saved per file |
 | `Ctrl + Shift + 1..9` | Create, recolour or remove the quick colour label (preset 1..9) for the current search text of the focused stream; labels apply to every stream and are listed above the rows |
 | `Alt + 1..9` | Switch to stream tab #1 through #9 |
-| `Ctrl +` / `Ctrl =` | Zoom in (increase font size) |
-| `Ctrl -` | Zoom out (decrease font size) |
-| `Ctrl 0` | Reset font size to default (13 pt) |
-| `Ctrl + MouseWheel` | Dynamically scale font size |
+| `Ctrl +` / `Ctrl =` | Zoom the interface in (+10%) |
+| `Ctrl -` | Zoom the interface out (-10%) |
+| `Ctrl 0` | Reset the zoom to 100% |
+| `Ctrl + MouseWheel` | Smooth zoom with the wheel |
 
-The current zoom is shown as a percentage of the default 13 pt in the title bar, next to the always-on-top pin, and beside the point size in Settings → font size; clicking either resets it to 100%.
+Zoom scales the whole interface, log text included, and is shown as a percentage in the title bar next to the always-on-top pin (dim at 100%, accent colour when zoomed; click it to go back to 100%). Settings → Zoom has the same control, and the value is saved in `fasttail.ini` (`zoom_factor`), so the window reopens at the scale you left it. The separate **Font size** setting sets the log text in points, independently of the zoom.
 | `F1` | Open the Help & Keyboard Shortcuts dialog |
 | `Esc` | Close the active dialog, or leave the search box |
 
@@ -168,7 +169,7 @@ Settings → External tools. Each tool has a name, a program, an argument list a
 Extras: a **shortcut** such as `Ctrl+Shift+F9` (a modifier is required) runs the tool on the current row of the focused stream; **run on rule** binds the tool to a highlight rule, so it runs when the rule matches an appended line, at most once per second per tool and with at most 10 children running at the same time, the excess being counted as dropped runs in the settings row. **Run via shell** hands the program and the expanded arguments to `cmd /c` (Windows) or `sh -c` as one command line: the shell then parses the row text, so keep it off unless the log is trusted. Tools are stored as `[tool.N]` sections of `fasttail.ini`.
 
 ### PIN lock
-Settings → PIN lock. Set a PIN of 4 to 12 digits and the window can be locked behind it: with **Lock when the screensaver ends** on, coming back from the Matrix screensaver asks for the PIN, and `Ctrl+L` (or the **Lock now** button) locks on demand. While locked, a modal covers the window and keyboard shortcuts are ignored; streams keep tailing behind it, so nothing is missed.
+Settings → PIN lock. Set a PIN of 4 to 12 digits and the window can be locked behind it: with **Lock when the screensaver ends** on, coming back from the Matrix screensaver asks for the PIN, and `Ctrl+L` (or the **Lock now** button) locks on demand. While locked, an opaque animated backdrop covers the window and every keyboard shortcut is ignored — `Esc` included — while the streams keep tailing behind it, so nothing is missed. `Enter` confirms the PIN, and three wrong PINs in a row replace the entry field with a one-minute countdown.
 
 The PIN is scrambled before it is written to `fasttail.ini` (`lock_pin`), so it is not readable at a glance. That is the extent of it: **the lock is a deterrent against someone walking past the screen, not a security boundary.** The log files stay readable on disk, the config file can be edited, and a maintenance unlock phrase opens the prompt whatever the PIN is. Do not use it to protect sensitive logs — use the operating system's screen lock and file permissions for that.
 
