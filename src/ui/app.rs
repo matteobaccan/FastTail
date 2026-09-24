@@ -225,33 +225,42 @@ fn capture_dialog_geometry<R>(
 fn setup_cjk_fonts(ctx: &egui::Context) {
     #[cfg(windows)]
     {
+        // One font per script, appended as fallbacks in this order: no single CJK face
+        // covers the other scripts (YaHei carries no Hangul, Malgun no kana), so loading
+        // only the first match left the other languages showing tofu boxes.
         let font_candidates = [
+            // Simplified Chinese
             "C:\\Windows\\Fonts\\msyh.ttc",
-            "C:\\Windows\\Fonts\\msyhbd.ttc",
             "C:\\Windows\\Fonts\\simsun.ttc",
+            // Traditional Chinese
+            "C:\\Windows\\Fonts\\msjh.ttc",
+            "C:\\Windows\\Fonts\\mingliu.ttc",
+            // Japanese
+            "C:\\Windows\\Fonts\\YuGothR.ttc",
+            "C:\\Windows\\Fonts\\meiryo.ttc",
+            "C:\\Windows\\Fonts\\msgothic.ttc",
+            // Korean
             "C:\\Windows\\Fonts\\malgun.ttf",
+            "C:\\Windows\\Fonts\\gulim.ttc",
         ];
+        let mut fonts = egui::FontDefinitions::default();
+        let mut loaded = 0usize;
         for path in &font_candidates {
-            if let Ok(bytes) = std::fs::read(path) {
-                let mut fonts = egui::FontDefinitions::default();
-                fonts.font_data.insert(
-                    "cjk_fallback".to_owned(),
-                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Proportional)
-                    .or_default()
-                    .push("cjk_fallback".to_owned());
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Monospace)
-                    .or_default()
-                    .push("cjk_fallback".to_owned());
-
-                ctx.set_fonts(fonts);
-                break;
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let name = format!("cjk_fallback_{loaded}");
+            loaded += 1;
+            fonts.font_data.insert(
+                name.clone(),
+                std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                fonts.families.entry(family).or_default().push(name.clone());
             }
+        }
+        if loaded > 0 {
+            ctx.set_fonts(fonts);
         }
     }
 }

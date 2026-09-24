@@ -6,6 +6,20 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Eleven more interface languages.** German, Portuguese (Brazil), Russian, Ukrainian,
+  Japanese, Korean, Turkish, Polish, Dutch, Chinese (traditional) and Friulian join
+  English, Italian, French, Spanish and Chinese (simplified), each with the full set of
+  235 interface strings. The language is detected from the system locale (`LC_ALL`,
+  `LC_MESSAGES`, `LANG` or the Windows UI language, with `zh-TW`/`zh-HK` telling
+  traditional Chinese apart from simplified) and can be changed in Settings.
+- **Per-script CJK font fallback.** Fonts are now loaded for each script that Windows
+  provides (simplified and traditional Chinese, Japanese, Korean) instead of only the
+  first one found, so Japanese and Korean no longer render as empty boxes.
+
 ## [0.7.1] - 2026-09-21
 
 ### Added

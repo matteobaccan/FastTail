@@ -428,7 +428,38 @@ fn test_language_from_code_parsing() {
     assert_eq!(Language::from_code("es-ES"), Language::Es);
     assert_eq!(Language::from_code("zh-CN"), Language::Zh);
     assert_eq!(Language::from_code("en-US"), Language::En);
-    assert_eq!(Language::from_code("de-DE"), Language::En); // fallback
+    assert_eq!(Language::from_code("de-DE"), Language::De);
+    assert_eq!(Language::from_code("pt-BR"), Language::PtBr);
+    assert_eq!(Language::from_code("pt-PT"), Language::PtBr);
+    assert_eq!(Language::from_code("ru"), Language::Ru);
+    assert_eq!(Language::from_code("uk-UA"), Language::Uk);
+    assert_eq!(Language::from_code("ja-JP"), Language::Ja);
+    assert_eq!(Language::from_code("ko_KR"), Language::Ko);
+    assert_eq!(Language::from_code("tr-TR"), Language::Tr);
+    assert_eq!(Language::from_code("pl"), Language::Pl);
+    assert_eq!(Language::from_code("nl-BE"), Language::Nl);
+    assert_eq!(Language::from_code("fur-IT"), Language::Fur);
+    // Traditional Chinese wins over the generic zh prefix.
+    assert_eq!(Language::from_code("zh-TW"), Language::ZhTw);
+    assert_eq!(Language::from_code("zh-Hant"), Language::ZhTw);
+    assert_eq!(Language::from_code("zh-HK"), Language::ZhTw);
+    assert_eq!(Language::from_code("zh"), Language::Zh);
+    // Unknown tags, and tags that only start with a known prefix, fall back to English.
+    assert_eq!(Language::from_code("sv-SE"), Language::En);
+    assert_eq!(Language::from_code("iterable"), Language::En);
+}
+
+#[test]
+fn test_every_language_translates_every_key() {
+    // A language block that misses a key silently falls back to English; catching that
+    // here keeps a half-translated language out of a release.
+    for lang in Language::ALL {
+        for key in ["settings", "language", "renderer", "help", "close_tab"] {
+            assert!(!t(*lang, key).is_empty(), "{lang:?} has no text for {key}");
+        }
+        assert!(!lang.name().is_empty());
+        assert_eq!(Language::from_code(lang.code()), *lang, "code round-trip");
+    }
 }
 
 #[test]
@@ -700,13 +731,7 @@ fn test_i18n_exhaustive_coverage() {
         "markdown_max_size_tip",
     ];
 
-    for lang in &[
-        Language::En,
-        Language::It,
-        Language::Fr,
-        Language::Es,
-        Language::Zh,
-    ] {
+    for lang in Language::ALL {
         for key in &all_keys {
             let translation = t(*lang, key);
             assert!(
@@ -716,6 +741,25 @@ fn test_i18n_exhaustive_coverage() {
                 lang
             );
         }
+    }
+
+    // An untranslated key silently falls back to English, which the check above cannot
+    // see. A real language block differs from English almost everywhere: a handful of
+    // keys legitimately match (CPU, RAM, wgpu, OpenGL, OK...), a fallen-back block does
+    // not. 20% leaves room for those while still catching a block that never landed.
+    for lang in Language::ALL {
+        if *lang == Language::En {
+            continue;
+        }
+        let same = all_keys
+            .iter()
+            .filter(|key| t(*lang, key) == t(Language::En, key))
+            .count();
+        assert!(
+            same * 5 < all_keys.len(),
+            "{lang:?} repeats the English text for {same} of {} keys: is its block missing?",
+            all_keys.len()
+        );
     }
 }
 
