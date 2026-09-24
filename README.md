@@ -219,6 +219,13 @@ The standalone executable is written to `target/release/fasttail` (`target/relea
 | `FASTTAIL_BENCH_BYTES=<n>` | size of the generated log (default 200000000; 1100000000 was used for the LTO decision) |
 | `FASTTAIL_BENCH_ROUNDS=<n>` | rounds per phase, best time reported (default 3) |
 
+### Windows package managers
+```powershell
+scoop bucket add fasttail https://github.com/matteobaccan/FastTail
+scoop install fasttail
+```
+The Scoop manifest lives in this repository (`bucket/fasttail.json`) and follows each release by itself. A winget package (`winget install MatteoBaccan.FastTail`) is submitted to Microsoft's community repository from the release pipeline; see [packaging/winget](packaging/winget/README.md) for how that is set up.
+
 ### From crates.io
 ```bash
 cargo install fasttail
@@ -230,7 +237,8 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 
 | Platform | Asset | Contents |
 |---|---|---|
-| Windows x86_64 | `fasttail-windows-x86_64.zip` | `fasttail.exe` + `fasttail.pdb` |
+| Windows x86_64 | `fasttail-windows-x86_64.zip` | `fasttail.exe` |
+| Windows x86_64 debug symbols | `fasttail-windows-x86_64-symbols.zip` | `fasttail.pdb` (only needed to read a crash dump) |
 | Linux x86_64 | `fasttail-linux-x86_64.tar.gz` | `fasttail` |
 | Linux ARM64 | `fasttail-linux-arm64.tar.gz` | `fasttail` |
 | macOS Apple Silicon | `fasttail-macos-arm64.tar.gz` | `fasttail` |
@@ -243,7 +251,22 @@ tar -xzf fasttail-linux-x86_64.tar.gz && ./fasttail app.log
 Expand-Archive fasttail-windows-x86_64.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
 ```
 
-Keep `fasttail.pdb` next to `fasttail.exe`: it lets a crash report (`fasttail_crash.log`) show function names. Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs.
+To read a crash report (`fasttail_crash.log`) with function names instead of addresses, unpack `fasttail-windows-x86_64-symbols.zip` and keep `fasttail.pdb` next to `fasttail.exe`.
+
+#### macOS: "Apple cannot verify fasttail is free of malware"
+The macOS build is **not signed with an Apple Developer ID**, so the first launch is blocked by Gatekeeper with exactly that message, and the dialog only offers to move the file to the bin. The binary is fine — it is simply unsigned, and macOS quarantines everything downloaded from a browser.
+
+Clear the quarantine flag and run it:
+
+```bash
+tar -xzf fasttail-macos-arm64.tar.gz
+xattr -d com.apple.quarantine ./fasttail   # or: xattr -cr ./fasttail
+./fasttail app.log
+```
+
+Or, without the terminal: try to open it once, let it be blocked, then go to **System Settings → Privacy & Security** and press **Open anyway** next to the message about `fasttail`.
+
+Signing and notarizing the build would remove the prompt for everyone, and needs a paid Apple Developer account; the release pipeline is ready to do it as soon as one exists. Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs.
 
 ---
 

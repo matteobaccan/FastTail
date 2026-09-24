@@ -1,0 +1,30 @@
+{
+    "version": "0.8.0",
+    "description": "Ultra-fast multi-stream log monitor and tail viewer with a Cyberpunk UI",
+    "homepage": "https://github.com/matteobaccan/FastTail",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/matteobaccan/FastTail/releases/download/v0.8.0/fasttail-windows-x86_64.zip",
+            "hash": "dc34ea2c5eb39eea26af86ba2703e0060d83b39825885fbd6cf52ad95fabcdee"
+        }
+    },
+    "bin": "fasttail.exe",
+    "shortcuts": [
+        [
+            "fasttail.exe",
+            "FastTail"
+        ]
+    ],
+    "persist": "fasttail.ini",
+    "checkver": {
+        "github": "https://github.com/matteobaccan/FastTail"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/matteobaccan/FastTail/releases/download/v$version/fasttail-windows-x86_64.zip"
+            }
+        }
+    }
+}
