@@ -595,6 +595,8 @@ fn test_i18n_exhaustive_coverage() {
         "search_placeholder",
         "add_rule",
         "no_file_open",
+        "file_empty",
+        "no_matching_lines",
         "clear",
         "borderless",
         "show_lines",
@@ -5284,4 +5286,13 @@ fn test_software_renderer_strips_costly_visuals() {
         ctx.style_of(egui::Theme::Dark).visuals.window_shadow,
         stock_window_shadow
     );
+}
+
+#[test]
+fn test_empty_stream_i18n_messages() {
+    let lang = Language::En;
+    assert_ne!(t(lang, "file_empty"), "Unknown");
+    assert_ne!(t(lang, "no_matching_lines"), "Unknown");
+    assert!(t(lang, "file_empty").contains("empty"));
+    assert!(t(lang, "no_matching_lines").contains("filters"));
 }

@@ -1565,9 +1565,14 @@ fn render_log_stream(
 
     let visible_lines = engine.visible_line_count();
     if visible_lines == 0 {
+        let empty_msg = if engine.total_lines() == 0 {
+            t(lang, "file_empty")
+        } else {
+            t(lang, "no_matching_lines")
+        };
         ui.centered_and_justified(|ui| {
             ui.label(
-                RichText::new(t(lang, "no_file_open"))
+                RichText::new(empty_msg)
                     .monospace()
                     .color(theme.text_dim()),
             );
@@ -2393,7 +2398,7 @@ fn render_hex_stream(
     if file_size == 0 {
         ui.centered_and_justified(|ui| {
             ui.label(
-                RichText::new(t(lang, "no_file_open"))
+                RichText::new(t(lang, "file_empty"))
                     .monospace()
                     .color(theme.text_dim()),
             );
@@ -3427,7 +3432,7 @@ fn render_markdown_stream(
     if engine.total_lines() == 0 {
         ui.centered_and_justified(|ui| {
             ui.label(
-                RichText::new(t(lang, "no_file_open"))
+                RichText::new(t(lang, "file_empty"))
                     .monospace()
                     .color(theme.text_dim()),
             );
