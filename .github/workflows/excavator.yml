@@ -1,0 +1,29 @@
+name: Excavator
+
+# Keeps the Scoop manifest in `bucket/` pointing at the newest release: the action runs
+# the manifest's own `checkver` and `autoupdate` blocks, downloads the asset, computes
+# its hash and commits the result. Scheduled rather than release-triggered so it also
+# heals a manifest that was edited by hand or a release published from elsewhere.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  excavate:
+    name: 🔎 Update the Scoop manifest
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 🧰 Checkout repository
+        uses: actions/checkout@v7
+
+      - name: 🔎 Run checkver and autoupdate
+        uses: ScoopInstaller/GithubActions@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKIP_UPDATED: "1"

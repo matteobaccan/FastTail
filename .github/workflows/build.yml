@@ -185,8 +185,12 @@ jobs:
               tar -C stage -czf "dist/${{ matrix.asset }}" "${{ matrix.binary }}"
               ;;
             *.zip)
+              # The executable alone: this is what people download and what the Windows
+              # package managers point at. The 53 MB of debug symbols, which made the
+              # download 24 MB for everyone, travel in their own asset.
+              7z a -tzip "dist/${{ matrix.asset }}" ./stage/fasttail.exe
               cp "$out/fasttail.pdb" stage/
-              7z a -tzip "dist/${{ matrix.asset }}" ./stage/fasttail.exe ./stage/fasttail.pdb
+              7z a -tzip "dist/fasttail-windows-x86_64-symbols.zip" ./stage/fasttail.pdb
               ;;
           esac
           ls -la dist
@@ -195,7 +199,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          # `dist/*` rather than the single asset: the Windows build also produces the
+          # symbols archive, and the release job flattens whatever arrives.
+          path: dist/*
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -246,6 +252,32 @@ jobs:
             exit 0
           fi
           cargo publish
+  # winget: opens the pull request against microsoft/winget-pkgs for this release.
+  # The package must already exist there - the first version is submitted by hand, see
+  # packaging/winget/README.md - and WINGET_TOKEN must hold a classic PAT with the
+  # `public_repo` and `workflow` scopes.
+  # ---------------------------------------------------------------------------
+  publish-winget:
+    name: 🪟 Submit to winget
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - name: 🪟 Open the winget-pkgs pull request
+        if: env.WINGET_TOKEN != ''
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: MatteoBaccan.FastTail
+          installers-regex: 'fasttail-windows-x86_64\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}
+
+      - name: 🪟 Say why nothing was submitted
+        if: env.WINGET_TOKEN == ''
+        run: echo "::warning::WINGET_TOKEN is not set, skipping the winget submission"
 
   # ---------------------------------------------------------------------------
   # Publish: tags only, after tests and every build succeeded.
