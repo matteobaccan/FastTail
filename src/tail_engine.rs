@@ -534,43 +534,27 @@ pub struct CompiledHighlight {
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
-    let mut pieces = [(0usize, 0usize); MAX_ROW_SPANS];
-    let mut pieces_len = 1;
-    pieces[0] = (start, end);
-
+    let mut pieces = vec![(start, end)];
     for sp in spans.iter() {
-        let mut next = [(0usize, 0usize); MAX_ROW_SPANS];
-        let mut next_len = 0;
-
-        for &(s, e) in &pieces[..pieces_len] {
+        let mut next = Vec::with_capacity(pieces.len() + 1);
+        for (s, e) in pieces {
             if e <= sp.start || s >= sp.end {
-                if next_len < MAX_ROW_SPANS {
-                    next[next_len] = (s, e);
-                    next_len += 1;
-                }
+                next.push((s, e));
                 continue;
             }
             if s < sp.start {
-                if next_len < MAX_ROW_SPANS {
-                    next[next_len] = (s, sp.start);
-                    next_len += 1;
-                }
+                next.push((s, sp.start));
             }
             if e > sp.end {
-                if next_len < MAX_ROW_SPANS {
-                    next[next_len] = (sp.end, e);
-                    next_len += 1;
-                }
+                next.push((sp.end, e));
             }
         }
         pieces = next;
-        pieces_len = next_len;
-        if pieces_len == 0 {
+        if pieces.is_empty() {
             break;
         }
     }
-
-    for &(s, e) in &pieces[..pieces_len] {
+    for (s, e) in pieces {
         if spans.len() >= MAX_ROW_SPANS {
             return true;
         }
