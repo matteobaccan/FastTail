@@ -1043,28 +1043,32 @@ impl FastTailApp {
 
             // Keyboard shortcut: Ctrl + / Ctrl = (Zoom in font)
             if i.modifiers.ctrl && (i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals)) {
-                self.config.font_size = (self.config.font_size + 1.0).min(32.0);
+                self.config.font_size =
+                    (self.config.font_size + 1.0).min(crate::config::MAX_FONT_SIZE);
                 let _ = self.config.save();
             }
 
             // Keyboard shortcut: Ctrl - (Zoom out font)
             if i.modifiers.ctrl && i.key_pressed(Key::Minus) {
-                self.config.font_size = (self.config.font_size - 1.0).max(8.0);
+                self.config.font_size =
+                    (self.config.font_size - 1.0).max(crate::config::MIN_FONT_SIZE);
                 let _ = self.config.save();
             }
 
             // Keyboard shortcut: Ctrl 0 (Reset font size)
             if i.modifiers.ctrl && i.key_pressed(Key::Num0) {
-                self.config.font_size = 13.0;
+                self.config.font_size = crate::config::DEFAULT_FONT_SIZE;
                 let _ = self.config.save();
             }
 
             // Keyboard shortcut: Ctrl + Mouse Wheel (Zoom in/out font)
             if i.modifiers.ctrl && i.smooth_scroll_delta.y != 0.0 {
                 if i.smooth_scroll_delta.y > 0.0 {
-                    self.config.font_size = (self.config.font_size + 1.0).min(32.0);
+                    self.config.font_size =
+                        (self.config.font_size + 1.0).min(crate::config::MAX_FONT_SIZE);
                 } else {
-                    self.config.font_size = (self.config.font_size - 1.0).max(8.0);
+                    self.config.font_size =
+                        (self.config.font_size - 1.0).max(crate::config::MIN_FONT_SIZE);
                 }
                 let _ = self.config.save();
             }
@@ -1355,6 +1359,30 @@ impl FastTailApp {
                             .clicked()
                         {
                             self.config.always_on_top = !self.config.always_on_top;
+                            let _ = self.config.save();
+                        }
+
+                        // Zoom level (Ctrl+, Ctrl-, Ctrl+0 and Ctrl+wheel all move the log
+                        // font size): without this the zoom was invisible, so a stray
+                        // Ctrl+wheel left the user with no clue why the text had changed.
+                        // Clicking it goes back to 100%.
+                        let zoom = crate::config::zoom_percent(self.config.font_size);
+                        let zoom_color = if zoom == 100 {
+                            self.config.theme.text_dim()
+                        } else {
+                            self.config.theme.accent_color()
+                        };
+                        if ui
+                            .button(
+                                RichText::new(format!("🔍 {zoom}%"))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(zoom_color),
+                            )
+                            .on_hover_text(t(self.config.language, "zoom_tip"))
+                            .clicked()
+                        {
+                            self.config.font_size = crate::config::DEFAULT_FONT_SIZE;
                             let _ = self.config.save();
                         }
                         ui.separator();

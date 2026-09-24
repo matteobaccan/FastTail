@@ -172,8 +172,19 @@ fn default_true() -> bool {
     true
 }
 
+/// Font size the zoom is measured against: `font_size == DEFAULT_FONT_SIZE` is 100%.
+pub const DEFAULT_FONT_SIZE: f32 = 13.0;
+/// Range the zoom shortcuts and the settings clamp the font size to.
+pub const MIN_FONT_SIZE: f32 = 8.0;
+pub const MAX_FONT_SIZE: f32 = 32.0;
+
+/// The log font size as a zoom percentage of the default size.
+pub fn zoom_percent(font_size: f32) -> i32 {
+    (font_size / DEFAULT_FONT_SIZE * 100.0).round() as i32
+}
+
 fn default_font_size() -> f32 {
-    13.0
+    DEFAULT_FONT_SIZE
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -217,7 +228,7 @@ impl Default for FastTailConfig {
             level_colors: true,
             borderless: false,
             show_line_numbers: true,
-            font_size: 13.0,
+            font_size: DEFAULT_FONT_SIZE,
             poll_interval_ms: default_poll_interval_ms(),
             size_check_interval_ms: default_size_check_interval_ms(),
             max_fps: default_max_fps(),
@@ -1158,6 +1169,14 @@ fn parse_f32_pair(s: &str) -> Option<[f32; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_zoom_percent_tracks_the_font_size() {
+        assert_eq!(zoom_percent(DEFAULT_FONT_SIZE), 100);
+        assert_eq!(zoom_percent(MIN_FONT_SIZE), 62);
+        assert_eq!(zoom_percent(MAX_FONT_SIZE), 246);
+        assert_eq!(zoom_percent(FastTailConfig::default().font_size), 100);
+    }
 
     #[test]
     fn test_theme_ini_roundtrip() {

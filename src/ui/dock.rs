@@ -3089,7 +3089,7 @@ pub fn render_settings_content(
 
     ui.add_space(6.0);
 
-    // Font size selector
+    // Font size selector, labelled with the zoom percentage the title bar shows.
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "font_size"))).monospace());
         if ui
@@ -3097,26 +3097,31 @@ pub fn render_settings_content(
             .on_hover_text(t(*lang, "font_dec_tip"))
             .clicked()
         {
-            *font_size = (*font_size - 1.0).max(8.0);
+            *font_size = (*font_size - 1.0).max(crate::config::MIN_FONT_SIZE);
         }
         ui.label(
-            RichText::new(format!("{:.0} pt", *font_size))
-                .monospace()
-                .strong(),
-        );
+            RichText::new(format!(
+                "{:.0} pt · 🔍 {}%",
+                *font_size,
+                crate::config::zoom_percent(*font_size)
+            ))
+            .monospace()
+            .strong(),
+        )
+        .on_hover_text(t(*lang, "zoom_tip"));
         if ui
             .button(" + ")
             .on_hover_text(t(*lang, "font_inc_tip"))
             .clicked()
         {
-            *font_size = (*font_size + 1.0).min(32.0);
+            *font_size = (*font_size + 1.0).min(crate::config::MAX_FONT_SIZE);
         }
         if ui
             .button("100%")
             .on_hover_text(t(*lang, "font_reset_tip"))
             .clicked()
         {
-            *font_size = 13.0;
+            *font_size = crate::config::DEFAULT_FONT_SIZE;
         }
     });
 
