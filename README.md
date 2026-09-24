@@ -219,6 +219,12 @@ The standalone executable is written to `target/release/fasttail` (`target/relea
 | `FASTTAIL_BENCH_BYTES=<n>` | size of the generated log (default 200000000; 1100000000 was used for the LTO decision) |
 | `FASTTAIL_BENCH_ROUNDS=<n>` | rounds per phase, best time reported (default 3) |
 
+### From crates.io
+```bash
+cargo install fasttail
+```
+Builds from source with your own toolchain and puts `fasttail` on the PATH (`~/.cargo/bin`). On Linux install the development packages listed under [Prerequisites](#prerequisites) first. Every tagged release is published to [crates.io](https://crates.io/crates/fasttail) by the release pipeline, so `cargo install fasttail` always gets the latest version.
+
 ### Prebuilt binaries
 Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform:
 
