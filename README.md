@@ -109,6 +109,8 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Ctrl -` | Zoom out (decrease font size) |
 | `Ctrl 0` | Reset font size to default (13 pt) |
 | `Ctrl + MouseWheel` | Dynamically scale font size |
+
+The current zoom is shown as a percentage of the default 13 pt in the title bar, next to the always-on-top pin, and beside the point size in Settings → font size; clicking either resets it to 100%.
 | `F1` | Open the Help & Keyboard Shortcuts dialog |
 | `Esc` | Close the active dialog, or leave the search box |
 

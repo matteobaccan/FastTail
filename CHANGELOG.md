@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Visible zoom level.** The title bar shows the current log zoom as a percentage of
+  the default font size, next to the always-on-top pin; clicking it resets to 100%.
+  The settings row shows the same percentage beside the point size, so `Ctrl+`,
+  `Ctrl-`, `Ctrl+0` and `Ctrl+wheel` no longer change the text with nothing on screen
+  to say what happened.
 - **PIN lock.** A 4 to 12 digit PIN can be set in Settings → PIN lock. With the lock
   armed, leaving the screensaver asks for the PIN, and `Ctrl+L` (or the "Lock now"
   button) locks the window on demand. The PIN is scrambled before it reaches
@@ -227,7 +232,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   laid out (each capped to 64 KB), so wrapping costs the same on a 10 GB file;
   the scroll bar thumb is approximate in wrap mode. The toggle is saved per
   file in `fasttail.ini`.
-
 - **External tools.** Settings gain a list of user-defined commands with an
   argument list using the placeholders `{line}`, `{file}`, `{dir}`, `{lineno}`,
   `{selection}` and `{match}` (first capture of the tool's regex). Tools run
