@@ -36,11 +36,19 @@ With a PIN set, the application SHALL lock on demand — a button in the setting
 - **THEN** nothing happens and the workspace stays usable.
 
 ### Requirement: Behaviour while locked
-While locked, the application SHALL cover the window with a modal PIN prompt, SHALL drop keyboard events carrying a modifier so the workspace behind cannot be driven from the keyboard, and SHALL keep tailing every stream so no appended line is missed. Unlocking SHALL restore the exact prior workspace state.
+While locked, the application SHALL cover the window with an **opaque** backdrop and the modal PIN prompt, so none of the log contents stays readable behind it; SHALL drop every keyboard event the workspace could act on, keeping only what the PIN field needs (text, the editing keys, `Enter`) — a bare `Escape` included, since the workspace behind must not react to it; and SHALL keep tailing every stream so no appended line is missed. Unlocking SHALL restore the exact prior workspace state.
 
 #### Scenario: Log keeps growing behind the lock
 - **WHEN** the window is locked and the tailed files receive new lines
 - **THEN** the streams keep reading them, and unlocking shows the log up to date.
+
+#### Scenario: The workspace is hidden, not dimmed
+- **WHEN** the window is locked over an open log
+- **THEN** the log text is not visible behind the prompt.
+
+#### Scenario: Keys do not reach the workspace
+- **WHEN** the user presses `Escape`, `F1` or any shortcut while locked
+- **THEN** nothing behind the prompt reacts and the window stays locked.
 
 #### Scenario: Wrong PIN
 - **WHEN** the entered PIN does not match

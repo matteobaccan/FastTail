@@ -178,6 +178,64 @@ fn restore_dialog_geometry<'a>(
     }
 }
 
+/// Faint accent grid painted over the opaque lock backdrop, so a locked window reads as
+/// deliberately covered rather than as a frozen or crashed one.
+fn paint_lock_backdrop(ui: &egui::Ui, theme: CyberTheme) {
+    let rect = ui.ctx().content_rect();
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("lock_grid"),
+    ));
+    let line = theme.accent_color().gamma_multiply(0.06);
+    let step = 28.0;
+    let mut x = rect.left();
+    while x < rect.right() {
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            Stroke::new(1.0, line),
+        );
+        x += step;
+    }
+    let mut y = rect.top();
+    while y < rect.bottom() {
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            Stroke::new(1.0, line),
+        );
+        y += step;
+    }
+}
+
+/// Events the PIN prompt is allowed to see while the window is locked. Everything the
+/// workspace behind could act on is dropped — including bare `Escape`, which otherwise
+/// closed the dialog that happened to be open behind the lock, and the function keys.
+/// Text, the editing keys of the PIN field and pointer events are kept, so the prompt
+/// stays usable.
+fn allowed_while_locked(event: &egui::Event) -> bool {
+    use egui::{Event, Key};
+    match event {
+        Event::Key { key, modifiers, .. } => {
+            if modifiers.ctrl || modifiers.command || modifiers.alt {
+                return false;
+            }
+            matches!(
+                key,
+                Key::Enter
+                    | Key::Backspace
+                    | Key::Delete
+                    | Key::ArrowLeft
+                    | Key::ArrowRight
+                    | Key::Home
+                    | Key::End
+                    | Key::Tab
+            )
+        }
+        Event::Text(_) | Event::Paste(_) => true,
+        Event::Copy | Event::Cut => false,
+        _ => true,
+    }
+}
+
 /// egui paints the dialog chrome with a plain arrow cursor, so the title bar reads as
 /// inert even though it drags the dialog and carries the collapse/close buttons. Set the
 /// cursor by hand: a move cursor over the drag strip, a pointing hand over the buttons at
@@ -283,6 +341,13 @@ impl FastTailApp {
             config.dock_layout = None;
         }
         config.theme.apply(&cc.egui_ctx);
+        // egui owns the zoom factor (it scales the whole UI); restore the saved one
+        // before the first frame so the window opens at the scale it was left at.
+        cc.egui_ctx.set_zoom_factor(
+            config
+                .zoom_factor
+                .clamp(crate::config::MIN_ZOOM, crate::config::MAX_ZOOM),
+        );
         let mut app = Self::from_config_with_ctx(config, cc.egui_ctx.clone());
         app.apply_cli(&cli);
         if let Some(file) = &cli.session {
@@ -715,12 +780,17 @@ impl FastTailApp {
         let theme = self.config.theme;
         let lang = self.config.language;
         egui::Modal::new(egui::Id::new("fasttail_lock_modal"))
+            // An opaque backdrop, not the default translucent one: a lock that still
+            // shows the log it is supposed to cover protects nothing. A faint grid keeps
+            // it from looking like a crash.
+            .backdrop_color(theme.bg_color())
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(theme.panel_bg())
                     .stroke(Stroke::new(2.0, theme.border_color())),
             )
             .show(ctx, |ui| {
+                paint_lock_backdrop(ui, theme);
                 ui.set_min_width(300.0);
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
@@ -1041,36 +1111,18 @@ impl FastTailApp {
                 }
             }
 
-            // Keyboard shortcut: Ctrl + / Ctrl = (Zoom in font)
-            if i.modifiers.ctrl && (i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals)) {
-                self.config.font_size =
-                    (self.config.font_size + 1.0).min(crate::config::MAX_FONT_SIZE);
-                let _ = self.config.save();
-            }
-
-            // Keyboard shortcut: Ctrl - (Zoom out font)
-            if i.modifiers.ctrl && i.key_pressed(Key::Minus) {
-                self.config.font_size =
-                    (self.config.font_size - 1.0).max(crate::config::MIN_FONT_SIZE);
-                let _ = self.config.save();
-            }
-
-            // Keyboard shortcut: Ctrl 0 (Reset font size)
-            if i.modifiers.ctrl && i.key_pressed(Key::Num0) {
-                self.config.font_size = crate::config::DEFAULT_FONT_SIZE;
-                let _ = self.config.save();
-            }
-
-            // Keyboard shortcut: Ctrl + Mouse Wheel (Zoom in/out font)
-            if i.modifiers.ctrl && i.smooth_scroll_delta.y != 0.0 {
-                if i.smooth_scroll_delta.y > 0.0 {
-                    self.config.font_size =
-                        (self.config.font_size + 1.0).min(crate::config::MAX_FONT_SIZE);
-                } else {
-                    self.config.font_size =
-                        (self.config.font_size - 1.0).max(crate::config::MIN_FONT_SIZE);
-                }
-                let _ = self.config.save();
+            // Zoom: `Ctrl +`, `Ctrl -` and `Ctrl 0` are applied by egui itself (it calls
+            // `gui_zoom::zoom_with_keyboard` every frame), so handling them here as well
+            // would zoom twice — once the whole UI, once the log font — which is exactly
+            // why the Settings buttons looked like they did something else. `Ctrl + wheel`
+            // is the one egui does not apply: it turns the wheel into `zoom_delta` and
+            // leaves `smooth_scroll_delta` empty, so nothing happened at all. We apply it
+            // here, and the result is read back from the context below and persisted.
+            let wheel_zoom = i.zoom_delta();
+            if wheel_zoom != 1.0 {
+                let zoomed = (ctx.zoom_factor() * wheel_zoom)
+                    .clamp(crate::config::MIN_ZOOM, crate::config::MAX_ZOOM);
+                ctx.set_zoom_factor(zoomed);
             }
 
             // Keyboard shortcut: F1 (Toggle Help)
@@ -1147,6 +1199,15 @@ impl FastTailApp {
             self.last_sys_refresh = Instant::now();
         }
 
+        // 4a. Zoom: whoever moved it (egui's own Ctrl +/-/0, Ctrl + wheel above, or the
+        // Settings row) leaves the new value on the context; store it so the window
+        // reopens at the same scale.
+        let zoom = ctx.zoom_factor();
+        if (zoom - self.config.zoom_factor).abs() > 0.001 {
+            self.config.zoom_factor = zoom.clamp(crate::config::MIN_ZOOM, crate::config::MAX_ZOOM);
+            let _ = self.config.save();
+        }
+
         // 4b. PIN lock: arm it when the screensaver ends (the user walked away) and on
         // Ctrl+L on demand. While locked, modifier shortcuts are dropped so the UI behind
         // the modal cannot be driven from the keyboard; plain typing feeds the PIN box.
@@ -1164,14 +1225,7 @@ impl FastTailApp {
             self.lock();
         }
         if self.locked {
-            ctx.input_mut(|i| {
-                i.events.retain(|e| match e {
-                    egui::Event::Key { modifiers, .. } => {
-                        !(modifiers.ctrl || modifiers.command || modifiers.alt)
-                    }
-                    _ => true,
-                });
-            });
+            ctx.input_mut(|i| i.events.retain(allowed_while_locked));
         }
 
         // 4. Check screensaver idle timeout (only a focused window can start it)
@@ -1366,7 +1420,7 @@ impl FastTailApp {
                         // font size): without this the zoom was invisible, so a stray
                         // Ctrl+wheel left the user with no clue why the text had changed.
                         // Clicking it goes back to 100%.
-                        let zoom = crate::config::zoom_percent(self.config.font_size);
+                        let zoom = crate::config::zoom_percent(ctx.zoom_factor());
                         let zoom_color = if zoom == 100 {
                             self.config.theme.text_dim()
                         } else {
@@ -1382,8 +1436,7 @@ impl FastTailApp {
                             .on_hover_text(t(self.config.language, "zoom_tip"))
                             .clicked()
                         {
-                            self.config.font_size = crate::config::DEFAULT_FONT_SIZE;
-                            let _ = self.config.save();
+                            ctx.set_zoom_factor(1.0);
                         }
                         ui.separator();
 
@@ -3605,5 +3658,41 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     if !entry.search_query.is_empty() {
         engine.search_query = entry.search_query.clone();
         engine.update_search(&entry.search_query);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allowed_while_locked;
+    use egui::{Event, Key, Modifiers};
+
+    fn key(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn lock_drops_the_keys_the_workspace_would_act_on() {
+        // Bare Escape used to reach the dialog that sat behind the lock and close it.
+        assert!(!allowed_while_locked(&key(Key::Escape, Modifiers::NONE)));
+        assert!(!allowed_while_locked(&key(Key::F1, Modifiers::NONE)));
+        assert!(!allowed_while_locked(&key(Key::Space, Modifiers::NONE)));
+        assert!(!allowed_while_locked(&key(Key::O, Modifiers::CTRL)));
+        assert!(!allowed_while_locked(&key(Key::W, Modifiers::ALT)));
+        assert!(!allowed_while_locked(&Event::Copy));
+    }
+
+    #[test]
+    fn lock_keeps_what_the_pin_prompt_needs() {
+        assert!(allowed_while_locked(&Event::Text("4".to_owned())));
+        assert!(allowed_while_locked(&key(Key::Enter, Modifiers::NONE)));
+        assert!(allowed_while_locked(&key(Key::Backspace, Modifiers::NONE)));
+        assert!(allowed_while_locked(&key(Key::ArrowLeft, Modifiers::NONE)));
+        assert!(allowed_while_locked(&Event::PointerGone));
     }
 }

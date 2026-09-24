@@ -611,6 +611,7 @@ fn test_i18n_exhaustive_coverage() {
         "no_recent_files",
         "shortcuts_title",
         "font_size",
+        "zoom",
         "zoom_tip",
         "rules_order_hint",
         "bold",

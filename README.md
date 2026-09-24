@@ -106,12 +106,12 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Alt + W` | Toggle line wrap for the focused stream (also the `↩ Wrap` button in the stream bar); saved per file |
 | `Ctrl + Shift + 1..9` | Create, recolour or remove the quick colour label (preset 1..9) for the current search text of the focused stream; labels apply to every stream and are listed above the rows |
 | `Alt + 1..9` | Switch to stream tab #1 through #9 |
-| `Ctrl +` / `Ctrl =` | Zoom in (increase font size) |
-| `Ctrl -` | Zoom out (decrease font size) |
-| `Ctrl 0` | Reset font size to default (13 pt) |
-| `Ctrl + MouseWheel` | Dynamically scale font size |
+| `Ctrl +` / `Ctrl =` | Zoom the interface in (+10%) |
+| `Ctrl -` | Zoom the interface out (-10%) |
+| `Ctrl 0` | Reset the zoom to 100% |
+| `Ctrl + MouseWheel` | Smooth zoom with the wheel |
 
-The current zoom is shown as a percentage of the default 13 pt in the title bar, next to the always-on-top pin, and beside the point size in Settings → font size; clicking either resets it to 100%.
+Zoom scales the whole interface, log text included, and is shown as a percentage in the title bar next to the always-on-top pin (dim at 100%, accent colour when zoomed; click it to go back to 100%). Settings → Zoom has the same control, and the value is saved in `fasttail.ini` (`zoom_factor`), so the window reopens at the scale you left it. The separate **Font size** setting sets the log text in points, independently of the zoom.
 | `F1` | Open the Help & Keyboard Shortcuts dialog |
 | `Esc` | Close the active dialog, or leave the search box |
 

@@ -3089,7 +3089,45 @@ pub fn render_settings_content(
 
     ui.add_space(6.0);
 
-    // Font size selector, labelled with the zoom percentage the title bar shows.
+    // Interface zoom: the same value `Ctrl +`, `Ctrl -`, `Ctrl 0` and `Ctrl + wheel`
+    // move, so the buttons here and the shortcuts can never disagree.
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{}:", t(*lang, "zoom"))).monospace());
+        let zoom = ui.ctx().zoom_factor();
+        if ui
+            .button(" - ")
+            .on_hover_text(t(*lang, "zoom_tip"))
+            .clicked()
+        {
+            ui.ctx()
+                .set_zoom_factor(crate::config::stepped_zoom(zoom, -1));
+        }
+        ui.label(
+            RichText::new(format!("🔍 {}%", crate::config::zoom_percent(zoom)))
+                .monospace()
+                .strong(),
+        )
+        .on_hover_text(t(*lang, "zoom_tip"));
+        if ui
+            .button(" + ")
+            .on_hover_text(t(*lang, "zoom_tip"))
+            .clicked()
+        {
+            ui.ctx()
+                .set_zoom_factor(crate::config::stepped_zoom(zoom, 1));
+        }
+        if ui
+            .button("100%")
+            .on_hover_text(t(*lang, "zoom_tip"))
+            .clicked()
+        {
+            ui.ctx().set_zoom_factor(1.0);
+        }
+    });
+
+    ui.add_space(6.0);
+
+    // Log font size in points: independent of the zoom, which scales the whole UI.
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "font_size"))).monospace());
         if ui
@@ -3100,15 +3138,10 @@ pub fn render_settings_content(
             *font_size = (*font_size - 1.0).max(crate::config::MIN_FONT_SIZE);
         }
         ui.label(
-            RichText::new(format!(
-                "{:.0} pt · 🔍 {}%",
-                *font_size,
-                crate::config::zoom_percent(*font_size)
-            ))
-            .monospace()
-            .strong(),
-        )
-        .on_hover_text(t(*lang, "zoom_tip"));
+            RichText::new(format!("{:.0} pt", *font_size))
+                .monospace()
+                .strong(),
+        );
         if ui
             .button(" + ")
             .on_hover_text(t(*lang, "font_inc_tip"))

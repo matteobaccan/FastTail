@@ -170,12 +170,20 @@ Each text stream SHALL offer a wrap toggle (stream bar button and Alt+W) that so
 - **WHEN** wrap is enabled and the user presses F3
 - **THEN** the viewport scrolls so that the matching line is fully visible.
 
-### Requirement: Visible Zoom Level
-The log font size doubles as the application zoom (`Ctrl+`, `Ctrl-`, `Ctrl+0` and `Ctrl+wheel`), so the current level SHALL be shown as a percentage of the default size next to the always-on-top pin in the title bar, and beside the point size in the settings. Clicking the indicator SHALL reset the zoom to 100%.
+### Requirement: Interface Zoom
+`Ctrl +`, `Ctrl -`, `Ctrl 0`, `Ctrl + wheel` and the Settings zoom row SHALL all move one value — the interface zoom, which scales the whole UI including the log text — within 50% and 300% in steps of 10%. The current level SHALL be shown as a percentage next to the always-on-top pin in the title bar and in the settings; clicking the indicator SHALL reset it to 100%. The zoom SHALL be persisted (`zoom_factor` in `fasttail.ini`) and restored at startup. The log font size in points SHALL remain a separate setting that the zoom multiplies.
 
-#### Scenario: Accidental zoom is explained
-- **WHEN** the user scrolls the wheel with `Ctrl` held and the text changes size
+#### Scenario: Wheel zoom and shortcuts agree with the settings
+- **WHEN** the user zooms with `Ctrl + wheel`, with `Ctrl +` / `Ctrl -`, or with the buttons in the settings
+- **THEN** all of them change the same value, the title bar percentage follows, and the whole interface scales rather than the log text alone.
+
+#### Scenario: Accidental zoom is explained and reversible
+- **WHEN** the user scrolls the wheel with `Ctrl` held and the interface changes size
 - **THEN** the title bar shows the new percentage in the accent colour, and a click on it restores 100%.
+
+#### Scenario: Zoom survives a restart
+- **WHEN** the user leaves the application zoomed at 130% and restarts it
+- **THEN** the window reopens at 130%.
 
 ### Requirement: Stream Toolbar Affordances
 The stream toolbar SHALL show the state of its toggles (follow, monitor, line numbers, wrap, TXT/HEX/MD) with a tinted fill and a border, not with the label colour alone, so the active state is readable on the light theme as well. The TXT/HEX/MD switcher SHALL keep a fixed position in the toolbar, before the controls that appear and disappear with the view mode, so it does not move under the pointer when the mode changes.

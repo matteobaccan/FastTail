@@ -30,6 +30,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   provides (simplified and traditional Chinese, Japanese, Korean) instead of only the
   first one found, so Japanese and Korean no longer render as empty boxes.
 
+### Fixed
+
+- **`Ctrl + wheel` zoom did nothing.** egui turns a wheel event carrying `Ctrl` into a
+  zoom delta and empties the scroll delta, so the handler that read the scroll delta
+  never ran.
+- **The zoom shortcuts and the settings disagreed.** `Ctrl +`, `Ctrl -` and `Ctrl 0`
+  scaled the whole interface (egui applies them itself) *and* changed the log font by a
+  point, while the settings buttons only changed the font. All of them now move one
+  value, the interface zoom, which is persisted as `zoom_factor` and restored at
+  startup; the log font size in points stays a separate setting. Settings gained a Zoom
+  row next to it.
+- **The PIN lock could be talked around.** A bare `Escape` still reached the workspace
+  and closed the dialog behind the lock; only modifier shortcuts were being dropped.
+  The lock now keeps just what the PIN field needs. Its backdrop is opaque instead of
+  translucent, so the log is no longer readable behind the prompt.
+
 ### Documentation
 
 - **External tools cookbook.** New `docs/external-tools-cookbook.md` with ten worked
