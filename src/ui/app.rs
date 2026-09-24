@@ -2718,230 +2718,240 @@ impl FastTailApp {
             );
 
             let resp = win.show(&ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    crate::ui::dock::render_settings_content(
-                        ui,
-                        &mut self.config.theme,
-                        &mut self.config.language,
-                        &mut self.config.screensaver_enabled,
-                        &mut self.config.screensaver_timeout_mins,
-                        &mut test_screensaver,
-                        &mut self.config.telemetry_enabled,
-                        &mut self.config.sound_enabled,
-                        &mut self.config.borderless,
-                        &mut self.config.show_line_numbers,
-                        &mut self.config.font_size,
-                        &mut self.config.level_colors,
-                        &mut self.config.external_tools,
-                        &self.config.highlight_rules,
-                        &mut self.tool_runner,
-                        &mut self.config.language_auto,
-                        &mut self.config.lock_enabled,
-                        &mut self.config.lock_pin,
-                        &mut popup_lock_now,
-                    );
+                egui::ScrollArea::vertical()
+                    // Claim the whole window: with the default auto-shrink the area
+                    // collapses to its content, the window hugs it, and the size the user
+                    // dragged (and the one restored from the config) is thrown away.
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        crate::ui::dock::render_settings_content(
+                            ui,
+                            &mut self.config.theme,
+                            &mut self.config.language,
+                            &mut self.config.screensaver_enabled,
+                            &mut self.config.screensaver_timeout_mins,
+                            &mut test_screensaver,
+                            &mut self.config.telemetry_enabled,
+                            &mut self.config.sound_enabled,
+                            &mut self.config.borderless,
+                            &mut self.config.show_line_numbers,
+                            &mut self.config.font_size,
+                            &mut self.config.level_colors,
+                            &mut self.config.external_tools,
+                            &self.config.highlight_rules,
+                            &mut self.tool_runner,
+                            &mut self.config.language_auto,
+                            &mut self.config.lock_enabled,
+                            &mut self.config.lock_pin,
+                            &mut popup_lock_now,
+                        );
 
-                    // Rendering backend: applies at the next start.
-                    ui.add_space(6.0);
-                    let lang = self.config.language;
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}:", t(lang, "renderer"))).monospace());
-                        egui::ComboBox::from_id_salt("renderer_choice")
-                            .selected_text(match self.config.renderer {
-                                crate::renderer::RendererChoice::Auto => {
-                                    t(lang, "renderer_auto").to_string()
-                                }
-                                crate::renderer::RendererChoice::Glow => {
-                                    t(lang, "renderer_glow").to_string()
-                                }
-                                crate::renderer::RendererChoice::Wgpu => {
-                                    t(lang, "renderer_wgpu").to_string()
-                                }
-                                crate::renderer::RendererChoice::Software => {
-                                    software_renderer_label(lang)
-                                }
-                            })
-                            .show_ui(ui, |ui| {
-                                for choice in crate::renderer::RendererChoice::ALL {
-                                    let label = match choice {
-                                        crate::renderer::RendererChoice::Auto => {
-                                            t(lang, "renderer_auto").to_string()
-                                        }
-                                        crate::renderer::RendererChoice::Glow => {
-                                            t(lang, "renderer_glow").to_string()
-                                        }
-                                        crate::renderer::RendererChoice::Wgpu => {
-                                            t(lang, "renderer_wgpu").to_string()
-                                        }
-                                        crate::renderer::RendererChoice::Software => {
-                                            software_renderer_label(lang)
-                                        }
-                                    };
-                                    let resp = ui.selectable_value(
-                                        &mut self.config.renderer,
-                                        choice,
-                                        label,
-                                    );
-                                    if choice == crate::renderer::RendererChoice::Software {
-                                        resp.on_hover_text(t(lang, "renderer_software_warn"));
+                        // Rendering backend: applies at the next start.
+                        ui.add_space(6.0);
+                        let lang = self.config.language;
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "renderer"))).monospace(),
+                            );
+                            egui::ComboBox::from_id_salt("renderer_choice")
+                                .selected_text(match self.config.renderer {
+                                    crate::renderer::RendererChoice::Auto => {
+                                        t(lang, "renderer_auto").to_string()
                                     }
-                                }
-                            });
-                    });
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · {} {}",
-                            t(lang, "renderer_note"),
-                            self.renderer.chip(),
-                            self.renderer.details()
-                        ))
-                        .small()
-                        .color(theme.text_primary()),
-                    );
-                    // The software rasterizer is a fallback, not a real choice: warn about its
-                    // CPU cost right where it can be selected.
-                    if self.config.renderer == crate::renderer::RendererChoice::Software {
+                                    crate::renderer::RendererChoice::Glow => {
+                                        t(lang, "renderer_glow").to_string()
+                                    }
+                                    crate::renderer::RendererChoice::Wgpu => {
+                                        t(lang, "renderer_wgpu").to_string()
+                                    }
+                                    crate::renderer::RendererChoice::Software => {
+                                        software_renderer_label(lang)
+                                    }
+                                })
+                                .show_ui(ui, |ui| {
+                                    for choice in crate::renderer::RendererChoice::ALL {
+                                        let label = match choice {
+                                            crate::renderer::RendererChoice::Auto => {
+                                                t(lang, "renderer_auto").to_string()
+                                            }
+                                            crate::renderer::RendererChoice::Glow => {
+                                                t(lang, "renderer_glow").to_string()
+                                            }
+                                            crate::renderer::RendererChoice::Wgpu => {
+                                                t(lang, "renderer_wgpu").to_string()
+                                            }
+                                            crate::renderer::RendererChoice::Software => {
+                                                software_renderer_label(lang)
+                                            }
+                                        };
+                                        let resp = ui.selectable_value(
+                                            &mut self.config.renderer,
+                                            choice,
+                                            label,
+                                        );
+                                        if choice == crate::renderer::RendererChoice::Software {
+                                            resp.on_hover_text(t(lang, "renderer_software_warn"));
+                                        }
+                                    }
+                                });
+                        });
                         ui.label(
                             RichText::new(format!(
-                                "\u{26a0} {}",
-                                t(lang, "renderer_software_warn")
+                                "{} · {} {}",
+                                t(lang, "renderer_note"),
+                                self.renderer.chip(),
+                                self.renderer.details()
                             ))
                             .small()
-                            .color(theme.warn_color()),
+                            .color(theme.text_primary()),
                         );
-                    }
-                    ui.add_space(6.0);
-                    if ui
-                        .checkbox(&mut self.config.always_on_top, t(lang, "always_on_top"))
-                        .on_hover_text(t(lang, "pin_tip"))
-                        .changed()
-                    {
-                        let _ = self.config.save();
-                    }
-                    if ui
-                        .checkbox(&mut self.config.flash_on_alert, t(lang, "flash_on_alert"))
-                        .on_hover_text(t(lang, "flash_on_alert_tip"))
-                        .changed()
-                    {
-                        let _ = self.config.save();
-                    }
-
-                    ui.add_space(6.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(format!("⚡ {}", t(lang, "perf_section")))
-                            .monospace()
-                            .strong(),
-                    );
-                    ui.add_space(4.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!("{}:", t(lang, "poll_interval"))).monospace(),
-                        );
+                        // The software rasterizer is a fallback, not a real choice: warn about its
+                        // CPU cost right where it can be selected.
+                        if self.config.renderer == crate::renderer::RendererChoice::Software {
+                            ui.label(
+                                RichText::new(format!(
+                                    "\u{26a0} {}",
+                                    t(lang, "renderer_software_warn")
+                                ))
+                                .small()
+                                .color(theme.warn_color()),
+                            );
+                        }
+                        ui.add_space(6.0);
                         if ui
-                            .add(
-                                egui::DragValue::new(&mut self.config.poll_interval_ms)
-                                    .range(50..=5000)
-                                    .suffix(" ms"),
-                            )
-                            .on_hover_text(t(lang, "poll_interval_tip"))
+                            .checkbox(&mut self.config.always_on_top, t(lang, "always_on_top"))
+                            .on_hover_text(t(lang, "pin_tip"))
                             .changed()
                         {
                             let _ = self.config.save();
                         }
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!("{}:", t(lang, "size_check_interval")))
-                                .monospace(),
-                        );
                         if ui
-                            .add(
-                                egui::DragValue::new(&mut self.config.size_check_interval_ms)
-                                    .range(50..=10000)
-                                    .suffix(" ms"),
-                            )
-                            .on_hover_text(t(lang, "size_check_interval_tip"))
+                            .checkbox(&mut self.config.flash_on_alert, t(lang, "flash_on_alert"))
+                            .on_hover_text(t(lang, "flash_on_alert_tip"))
                             .changed()
                         {
                             let _ = self.config.save();
                         }
-                    });
 
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}:", t(lang, "max_fps"))).monospace());
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut self.config.max_fps)
-                                    .range(15..=240)
-                                    .suffix(" FPS"),
-                            )
-                            .on_hover_text(t(lang, "max_fps_tip"))
-                            .changed()
-                        {
-                            let _ = self.config.save();
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(6.0);
                         ui.label(
-                            RichText::new(format!("{}:", t(lang, "max_fps_software"))).monospace(),
+                            RichText::new(format!("⚡ {}", t(lang, "perf_section")))
+                                .monospace()
+                                .strong(),
                         );
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut self.config.max_fps_software)
-                                    .range(10..=120)
-                                    .suffix(" FPS"),
-                            )
-                            .on_hover_text(t(lang, "max_fps_software_tip"))
-                            .changed()
-                        {
-                            let _ = self.config.save();
-                        }
-                    });
+                        ui.add_space(4.0);
 
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!("{}:", t(lang, "mouse_throttle"))).monospace(),
-                        );
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut self.config.mouse_throttle_ms)
-                                    .range(0..=1000)
-                                    .suffix(" ms"),
-                            )
-                            .on_hover_text(t(lang, "mouse_throttle_tip"))
-                            .changed()
-                        {
-                            let _ = self.config.save();
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!("{}:", t(lang, "markdown_max_size"))).monospace(),
-                        );
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut self.config.markdown_max_mb)
-                                    .range(1..=100)
-                                    .suffix(" MB"),
-                            )
-                            .on_hover_text(t(lang, "markdown_max_size_tip"))
-                            .changed()
-                        {
-                            for engine in &mut self.engines {
-                                engine.set_markdown_max_bytes(
-                                    (self.config.markdown_max_mb as u64) * 1024 * 1024,
-                                );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "poll_interval"))).monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.poll_interval_ms)
+                                        .range(50..=5000)
+                                        .suffix(" ms"),
+                                )
+                                .on_hover_text(t(lang, "poll_interval_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
                             }
-                            let _ = self.config.save();
-                        }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "size_check_interval")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.size_check_interval_ms)
+                                        .range(50..=10000)
+                                        .suffix(" ms"),
+                                )
+                                .on_hover_text(t(lang, "size_check_interval_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("{}:", t(lang, "max_fps"))).monospace());
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.max_fps)
+                                        .range(15..=240)
+                                        .suffix(" FPS"),
+                                )
+                                .on_hover_text(t(lang, "max_fps_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "max_fps_software")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.max_fps_software)
+                                        .range(10..=120)
+                                        .suffix(" FPS"),
+                                )
+                                .on_hover_text(t(lang, "max_fps_software_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "mouse_throttle")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.mouse_throttle_ms)
+                                        .range(0..=1000)
+                                        .suffix(" ms"),
+                                )
+                                .on_hover_text(t(lang, "mouse_throttle_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "markdown_max_size")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.markdown_max_mb)
+                                        .range(1..=100)
+                                        .suffix(" MB"),
+                                )
+                                .on_hover_text(t(lang, "markdown_max_size_tip"))
+                                .changed()
+                            {
+                                for engine in &mut self.engines {
+                                    engine.set_markdown_max_bytes(
+                                        (self.config.markdown_max_mb as u64) * 1024 * 1024,
+                                    );
+                                }
+                                let _ = self.config.save();
+                            }
+                        });
                     });
-                });
             });
 
             capture_dialog_geometry(
@@ -3021,15 +3031,20 @@ impl FastTailApp {
             );
 
             let resp = win.show(&ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    crate::ui::dock::render_highlights_content(
-                        ui,
-                        &mut self.config.highlight_rules,
-                        &mut self.engines,
-                        &theme,
-                        lang,
-                    );
-                });
+                egui::ScrollArea::vertical()
+                    // Claim the whole window: with the default auto-shrink the area
+                    // collapses to its content, the window hugs it, and the size the user
+                    // dragged (and the one restored from the config) is thrown away.
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        crate::ui::dock::render_highlights_content(
+                            ui,
+                            &mut self.config.highlight_rules,
+                            &mut self.engines,
+                            &theme,
+                            lang,
+                        );
+                    });
             });
 
             capture_dialog_geometry(
@@ -3058,7 +3073,9 @@ impl FastTailApp {
             )
             .id(egui::Id::new("fasttail_about_popup"))
             .open(&mut is_open)
-            .resizable(false)
+            // Resizable like the other dialogs: it was fixed-size, so the size stored for
+            // it could never be restored and the window always reopened content-sized.
+            .resizable(true)
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(theme.panel_bg())
@@ -3070,107 +3087,117 @@ impl FastTailApp {
                 &ctx,
                 self.config.about_pos,
                 self.config.about_size,
-                |win| win.default_width(440.0),
+                |win| win.default_width(440.0).default_height(420.0),
             );
 
             let resp = win.show(&ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("⚡ FASTTAIL")
-                            .monospace()
-                            .strong()
-                            .size(18.0)
-                            .color(theme.accent_color()),
-                    );
-                });
-
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(8.0);
-
-                egui::Grid::new("about_info_grid")
-                    .num_columns(2)
-                    .spacing([16.0, 8.0])
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.label(RichText::new(t(lang, "about_version")).monospace().strong());
-                        ui.label(
-                            RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                                .monospace()
-                                .color(theme.accent_color()),
-                        );
-                        ui.end_row();
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("⚡ FASTTAIL")
+                                    .monospace()
+                                    .strong()
+                                    .size(18.0)
+                                    .color(theme.accent_color()),
+                            );
+                        });
 
-                        ui.label(
-                            RichText::new(t(lang, "about_build_date"))
-                                .monospace()
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(env!("BUILD_TIMESTAMP"))
-                                .monospace()
-                                .color(theme.text_primary()),
-                        );
-                        ui.end_row();
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
 
+                        egui::Grid::new("about_info_grid")
+                            .num_columns(2)
+                            .spacing([16.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(t(lang, "about_version")).monospace().strong(),
+                                );
+                                ui.label(
+                                    RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                        .monospace()
+                                        .color(theme.accent_color()),
+                                );
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new(t(lang, "about_build_date"))
+                                        .monospace()
+                                        .strong(),
+                                );
+                                ui.label(
+                                    RichText::new(env!("BUILD_TIMESTAMP"))
+                                        .monospace()
+                                        .color(theme.text_primary()),
+                                );
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new(t(lang, "about_renderer"))
+                                        .monospace()
+                                        .strong(),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} · {}",
+                                        self.renderer.chip(),
+                                        self.renderer.details()
+                                    ))
+                                    .monospace()
+                                    .color(theme.text_primary()),
+                                );
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new(t(lang, "about_author")).monospace().strong(),
+                                );
+                                ui.label(
+                                    RichText::new("Matteo Baccan")
+                                        .monospace()
+                                        .color(theme.text_primary()),
+                                );
+                                ui.end_row();
+
+                                ui.label(RichText::new("Website").monospace().strong());
+                                ui.hyperlink_to(
+                                    RichText::new("www.baccan.it")
+                                        .monospace()
+                                        .color(theme.secondary_accent()),
+                                    "https://www.baccan.it",
+                                )
+                                .on_hover_text("https://www.baccan.it");
+                                ui.end_row();
+
+                                ui.label(RichText::new(t(lang, "about_repo")).monospace().strong());
+                                ui.hyperlink_to(
+                                    RichText::new("github.com/matteobaccan/FastTail")
+                                        .monospace()
+                                        .color(theme.accent_color()),
+                                    "https://github.com/matteobaccan/FastTail",
+                                )
+                                .on_hover_text("https://github.com/matteobaccan/FastTail");
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new(t(lang, "about_license")).monospace().strong(),
+                                );
+                                ui.label(RichText::new("MIT").monospace().color(theme.text_dim()));
+                                ui.end_row();
+                            });
+
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(4.0);
                         ui.label(
-                            RichText::new(t(lang, "about_renderer"))
+                            RichText::new(t(lang, "about_tagline"))
                                 .monospace()
-                                .strong(),
+                                .size(10.5)
+                                .color(theme.text_dim()),
                         );
-                        ui.label(
-                            RichText::new(format!(
-                                "{} · {}",
-                                self.renderer.chip(),
-                                self.renderer.details()
-                            ))
-                            .monospace()
-                            .color(theme.text_primary()),
-                        );
-                        ui.end_row();
-
-                        ui.label(RichText::new(t(lang, "about_author")).monospace().strong());
-                        ui.label(
-                            RichText::new("Matteo Baccan")
-                                .monospace()
-                                .color(theme.text_primary()),
-                        );
-                        ui.end_row();
-
-                        ui.label(RichText::new("Website").monospace().strong());
-                        ui.hyperlink_to(
-                            RichText::new("www.baccan.it")
-                                .monospace()
-                                .color(theme.secondary_accent()),
-                            "https://www.baccan.it",
-                        )
-                        .on_hover_text("https://www.baccan.it");
-                        ui.end_row();
-
-                        ui.label(RichText::new(t(lang, "about_repo")).monospace().strong());
-                        ui.hyperlink_to(
-                            RichText::new("github.com/matteobaccan/FastTail")
-                                .monospace()
-                                .color(theme.accent_color()),
-                            "https://github.com/matteobaccan/FastTail",
-                        )
-                        .on_hover_text("https://github.com/matteobaccan/FastTail");
-                        ui.end_row();
-
-                        ui.label(RichText::new(t(lang, "about_license")).monospace().strong());
-                        ui.label(RichText::new("MIT").monospace().color(theme.text_dim()));
-                        ui.end_row();
                     });
-
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(t(lang, "about_tagline"))
-                        .monospace()
-                        .size(10.5)
-                        .color(theme.text_dim()),
-                );
             });
 
             capture_dialog_geometry(
@@ -3215,192 +3242,217 @@ impl FastTailApp {
             );
 
             let resp = win.show(&ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            RichText::new("⚡ FASTTAIL")
-                                .monospace()
-                                .strong()
-                                .size(16.0)
-                                .color(theme.accent_color()),
-                        );
-                        ui.label(
-                            RichText::new(t(lang, "shortcuts_title"))
-                                .monospace()
-                                .size(12.0)
-                                .color(theme.text_dim()),
-                        );
-                    });
+                egui::ScrollArea::vertical()
+                    // Claim the whole window: with the default auto-shrink the area
+                    // collapses to its content, the window hugs it, and the size the user
+                    // dragged (and the one restored from the config) is thrown away.
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                RichText::new("⚡ FASTTAIL")
+                                    .monospace()
+                                    .strong()
+                                    .size(16.0)
+                                    .color(theme.accent_color()),
+                            );
+                            ui.label(
+                                RichText::new(t(lang, "shortcuts_title"))
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(theme.text_dim()),
+                            );
+                        });
 
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    // Category 1: Zoom & Font Size
-                    ui.group(|ui| {
-                        ui.label(
-                            RichText::new(t(lang, "help_cat_zoom"))
-                                .monospace()
-                                .strong()
-                                .color(theme.warn_color()),
-                        );
+                        ui.add_space(8.0);
                         ui.separator();
-                        egui::Grid::new("help_zoom_grid")
-                            .num_columns(2)
-                            .spacing([18.0, 6.0])
-                            .show(ui, |ui| {
-                                ui.label(RichText::new("CTRL +  /  CTRL =").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_zoom_in")).monospace());
-                                ui.end_row();
+                        ui.add_space(8.0);
 
-                                ui.label(RichText::new("CTRL -").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_zoom_out")).monospace());
-                                ui.end_row();
+                        // Category 1: Zoom & Font Size
+                        ui.group(|ui| {
+                            ui.label(
+                                RichText::new(t(lang, "help_cat_zoom"))
+                                    .monospace()
+                                    .strong()
+                                    .color(theme.warn_color()),
+                            );
+                            ui.separator();
+                            egui::Grid::new("help_zoom_grid")
+                                .num_columns(2)
+                                .spacing([18.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new("CTRL +  /  CTRL =").monospace().strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "help_zoom_in")).monospace());
+                                    ui.end_row();
 
-                                ui.label(RichText::new("CTRL 0").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_zoom_reset")).monospace());
-                                ui.end_row();
+                                    ui.label(RichText::new("CTRL -").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_zoom_out")).monospace());
+                                    ui.end_row();
 
-                                ui.label(RichText::new("CTRL + Wheel").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_zoom_wheel")).monospace());
-                                ui.end_row();
-                            });
+                                    ui.label(RichText::new("CTRL 0").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_zoom_reset")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("CTRL + Wheel").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_zoom_wheel")).monospace());
+                                    ui.end_row();
+                                });
+                        });
+
+                        ui.add_space(8.0);
+
+                        // Category 2: Navigazione & Streaming
+                        ui.group(|ui| {
+                            ui.label(
+                                RichText::new(t(lang, "help_cat_nav"))
+                                    .monospace()
+                                    .strong()
+                                    .color(theme.warn_color()),
+                            );
+                            ui.separator();
+                            egui::Grid::new("help_nav_grid")
+                                .num_columns(2)
+                                .spacing([18.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(t(lang, "help_key_space"))
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "help_desc_space")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("CTRL F").monospace().strong());
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_search")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("F3  /  Shift + F3").monospace().strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_find_next")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("Click / Shift + Click / Ctrl + Click")
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_select")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("Ctrl + A  /  Ctrl + C").monospace().strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "help_desc_copy")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Ctrl + G").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_goto")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Alt + W").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("Ctrl + Shift + 1..9").monospace().strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_labels")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new(t(lang, "help_key_tools"))
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "help_desc_tools")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("Ctrl + Shift + T").monospace().strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "pin_tip")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("Ctrl + F2  /  F2  /  Shift + F2")
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_bookmark")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("F1").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_f1")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Esc").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_esc")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("Drag & Drop").monospace().strong());
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_drag_drop")).monospace(),
+                                    );
+                                    ui.end_row();
+                                });
+                        });
+
+                        ui.add_space(8.0);
+
+                        // Category 3: Filtri & Priorità
+                        ui.group(|ui| {
+                            ui.label(
+                                RichText::new(t(lang, "help_cat_filters"))
+                                    .monospace()
+                                    .strong()
+                                    .color(theme.warn_color()),
+                            );
+                            ui.separator();
+                            ui.label(
+                                RichText::new(t(lang, "help_filter_order"))
+                                    .monospace()
+                                    .color(theme.text_primary()),
+                            );
+                            ui.label(
+                                RichText::new(t(lang, "help_filter_reorder"))
+                                    .monospace()
+                                    .color(theme.secondary_accent()),
+                            );
+                            ui.label(
+                                RichText::new(t(lang, "help_filter_styles"))
+                                    .monospace()
+                                    .color(theme.accent_color()),
+                            );
+                            ui.label(
+                                RichText::new(t(lang, "help_filter_visibility"))
+                                    .monospace()
+                                    .color(theme.text_primary()),
+                            );
+                            ui.label(
+                                RichText::new(t(lang, "help_filter_levels"))
+                                    .monospace()
+                                    .color(theme.warn_color()),
+                            );
+                            ui.label(
+                                RichText::new(t(lang, "help_filter_recent"))
+                                    .monospace()
+                                    .color(theme.secondary_accent()),
+                            );
+                        });
                     });
-
-                    ui.add_space(8.0);
-
-                    // Category 2: Navigazione & Streaming
-                    ui.group(|ui| {
-                        ui.label(
-                            RichText::new(t(lang, "help_cat_nav"))
-                                .monospace()
-                                .strong()
-                                .color(theme.warn_color()),
-                        );
-                        ui.separator();
-                        egui::Grid::new("help_nav_grid")
-                            .num_columns(2)
-                            .spacing([18.0, 6.0])
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(t(lang, "help_key_space"))
-                                        .monospace()
-                                        .strong(),
-                                );
-                                ui.label(RichText::new(t(lang, "help_desc_space")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("CTRL F").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_search")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("F3  /  Shift + F3").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_find_next")).monospace());
-                                ui.end_row();
-
-                                ui.label(
-                                    RichText::new("Click / Shift + Click / Ctrl + Click")
-                                        .monospace()
-                                        .strong(),
-                                );
-                                ui.label(RichText::new(t(lang, "help_desc_select")).monospace());
-                                ui.end_row();
-
-                                ui.label(
-                                    RichText::new("Ctrl + A  /  Ctrl + C").monospace().strong(),
-                                );
-                                ui.label(RichText::new(t(lang, "help_desc_copy")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("Ctrl + G").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_goto")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("Alt + W").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("Ctrl + Shift + 1..9").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_labels")).monospace());
-                                ui.end_row();
-
-                                ui.label(
-                                    RichText::new(t(lang, "help_key_tools"))
-                                        .monospace()
-                                        .strong(),
-                                );
-                                ui.label(RichText::new(t(lang, "help_desc_tools")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("Ctrl + Shift + T").monospace().strong());
-                                ui.label(RichText::new(t(lang, "pin_tip")).monospace());
-                                ui.end_row();
-
-                                ui.label(
-                                    RichText::new("Ctrl + F2  /  F2  /  Shift + F2")
-                                        .monospace()
-                                        .strong(),
-                                );
-                                ui.label(RichText::new(t(lang, "help_desc_bookmark")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("F1").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_f1")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("Esc").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_esc")).monospace());
-                                ui.end_row();
-
-                                ui.label(RichText::new("Drag & Drop").monospace().strong());
-                                ui.label(RichText::new(t(lang, "help_desc_drag_drop")).monospace());
-                                ui.end_row();
-                            });
-                    });
-
-                    ui.add_space(8.0);
-
-                    // Category 3: Filtri & Priorità
-                    ui.group(|ui| {
-                        ui.label(
-                            RichText::new(t(lang, "help_cat_filters"))
-                                .monospace()
-                                .strong()
-                                .color(theme.warn_color()),
-                        );
-                        ui.separator();
-                        ui.label(
-                            RichText::new(t(lang, "help_filter_order"))
-                                .monospace()
-                                .color(theme.text_primary()),
-                        );
-                        ui.label(
-                            RichText::new(t(lang, "help_filter_reorder"))
-                                .monospace()
-                                .color(theme.secondary_accent()),
-                        );
-                        ui.label(
-                            RichText::new(t(lang, "help_filter_styles"))
-                                .monospace()
-                                .color(theme.accent_color()),
-                        );
-                        ui.label(
-                            RichText::new(t(lang, "help_filter_visibility"))
-                                .monospace()
-                                .color(theme.text_primary()),
-                        );
-                        ui.label(
-                            RichText::new(t(lang, "help_filter_levels"))
-                                .monospace()
-                                .color(theme.warn_color()),
-                        );
-                        ui.label(
-                            RichText::new(t(lang, "help_filter_recent"))
-                                .monospace()
-                                .color(theme.secondary_accent()),
-                        );
-                    });
-                });
             });
 
             capture_dialog_geometry(&resp, &mut self.config.help_pos, &mut self.config.help_size);

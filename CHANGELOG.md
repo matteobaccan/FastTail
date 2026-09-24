@@ -42,6 +42,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Dialog sizes were not kept.** The Color filters, About and Help windows reopened at
+  the size of their content instead of the size they were left at: their scroll areas
+  auto-shrank, the window hugged them, and what was saved to `fasttail.ini` was that
+  content height rather than the window. The scroll areas now claim the whole window,
+  About is resizable like the others (it was fixed-size, so a stored size could never be
+  applied), and the geometry that round-trips is the one the window really has.
+
 - **`Ctrl + wheel` zoom did nothing.** egui turns a wheel event carrying `Ctrl` into a
   zoom delta and empties the scroll delta, so the handler that read the scroll delta
   never ran.
