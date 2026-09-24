@@ -17,7 +17,7 @@ ARGS:
     PATH...              Log files to open in addition to the restored workspace
 
 OPTIONS:
-    --gui                Run in graphical user interface (GUI) mode (default)
+    --gui                Accepted and ignored: FastTail is GUI-only (kept for old shortcuts)
     --fresh              Start with an empty workspace instead of the saved one
     --filter <TEXT>      Include filter applied to the files opened from the command line
     --exclude <TEXT>     Exclude filter applied to the files opened from the command line
@@ -42,6 +42,8 @@ pub struct CliArgs {
     pub config: Option<PathBuf>,
     /// Session file to load at startup, replacing the restored workspace.
     pub session: Option<PathBuf>,
+    /// Accepted and ignored: FastTail has been GUI-only since 0.7.1, and the flag is
+    /// kept so shortcuts and scripts written for the older build keep working.
     pub gui: bool,
     pub show_version: bool,
     pub show_help: bool,
