@@ -617,53 +617,6 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
-        // Line numbers & Line wrap toggle, meaningful in the text views only (hidden in Hex mode)
-        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
-            ui.separator();
-
-            // Line numbers toggle
-            let lines_text = if *show_line_numbers {
-                RichText::new("# 123")
-                    .color(theme.accent_color())
-                    .monospace()
-            } else {
-                RichText::new("# ---").color(theme.text_dim()).monospace()
-            };
-            if ui
-                .button(lines_text)
-                .on_hover_text(t(lang, "show_lines"))
-                .clicked()
-            {
-                *show_line_numbers = !*show_line_numbers;
-                ui.ctx().request_repaint();
-            }
-
-            // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
-            let wrap_text = if engine.wrap_lines {
-                RichText::new("↩ Wrap")
-                    .color(theme.accent_color())
-                    .monospace()
-                    .strong()
-            } else {
-                RichText::new("↩ Wrap").color(theme.text_dim()).monospace()
-            };
-            let alt_w = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::W);
-            let toggled = ui
-                .button(wrap_text)
-                .on_hover_text(t(lang, "tip_wrap"))
-                .clicked()
-                || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
-            if toggled {
-                let row = top_row(engine);
-                engine.set_wrap_lines(!engine.wrap_lines, row);
-                if !engine.wrap_lines {
-                    // Extend mode maps rows to pixels itself: keep the same top row.
-                    engine.requested_scroll_y = Some(row as f32 * row_height);
-                }
-                ui.ctx().request_repaint();
-            }
-        }
-
         ui.separator();
 
         // Mode Switcher (TXT, HEX, MD)
@@ -730,6 +683,53 @@ fn render_log_stream(
                 engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
             }
             ui.ctx().request_repaint();
+        }
+
+        // Line numbers & Line wrap toggle, meaningful in the text views only (hidden in Hex mode)
+        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+            ui.separator();
+
+            // Line numbers toggle
+            let lines_text = if *show_line_numbers {
+                RichText::new("# 123")
+                    .color(theme.accent_color())
+                    .monospace()
+            } else {
+                RichText::new("# ---").color(theme.text_dim()).monospace()
+            };
+            if ui
+                .button(lines_text)
+                .on_hover_text(t(lang, "show_lines"))
+                .clicked()
+            {
+                *show_line_numbers = !*show_line_numbers;
+                ui.ctx().request_repaint();
+            }
+
+            // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
+            let wrap_text = if engine.wrap_lines {
+                RichText::new("↩ Wrap")
+                    .color(theme.accent_color())
+                    .monospace()
+                    .strong()
+            } else {
+                RichText::new("↩ Wrap").color(theme.text_dim()).monospace()
+            };
+            let alt_w = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::W);
+            let toggled = ui
+                .button(wrap_text)
+                .on_hover_text(t(lang, "tip_wrap"))
+                .clicked()
+                || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
+            if toggled {
+                let row = top_row(engine);
+                engine.set_wrap_lines(!engine.wrap_lines, row);
+                if !engine.wrap_lines {
+                    // Extend mode maps rows to pixels itself: keep the same top row.
+                    engine.requested_scroll_y = Some(row as f32 * row_height);
+                }
+                ui.ctx().request_repaint();
+            }
         }
 
         // Encoding selector (relevant in Text & Markdown modes)
@@ -3011,16 +3011,18 @@ pub fn render_settings_content(
 
     ui.add_space(6.0);
 
-    // Language selector
+    // Language selector: a combo box, so the row stays one line however many
+    // languages ship with the build.
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(*lang, "language"))).monospace());
-        ui.selectable_value(lang, Language::En, "English").clicked();
-        ui.selectable_value(lang, Language::It, "Italiano")
-            .clicked();
-        ui.selectable_value(lang, Language::Fr, "Français")
-            .clicked();
-        ui.selectable_value(lang, Language::Es, "Español").clicked();
-        if ui.selectable_value(lang, Language::Zh, "中文").clicked() {}
+        egui::ComboBox::from_id_salt("language_select")
+            .selected_text(RichText::new(lang.name()).monospace())
+            .width(160.0)
+            .show_ui(ui, |ui| {
+                for choice in Language::ALL {
+                    ui.selectable_value(lang, *choice, choice.name());
+                }
+            });
     });
 
     ui.add_space(6.0);

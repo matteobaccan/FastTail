@@ -110,6 +110,16 @@ pub fn mouse_throttle_interval_us(is_software_renderer: bool, mouse_throttle_ms:
 
 /// Applies the visuals for the active renderer: on a software rasterizer (WARP / llvmpipe /
 /// VM / RDP) the costly per-frame effects are stripped to cut CPU per frame.
+/// Label for the software renderer in the settings combo: the backend name plus a
+/// short "not recommended" tag, since it rasterizes on the CPU.
+fn software_renderer_label(lang: crate::i18n::Language) -> String {
+    format!(
+        "{} \u{2014} {}",
+        t(lang, "renderer_software"),
+        t(lang, "renderer_not_recommended")
+    )
+}
+
 pub fn apply_renderer_visuals(ctx: &egui::Context, is_software_renderer: bool, theme: CyberTheme) {
     theme.apply(ctx);
     // Feathering (anti-aliasing) is the single most expensive epaint stage on a CPU
@@ -2268,30 +2278,43 @@ impl FastTailApp {
                         ui.label(RichText::new(format!("{}:", t(lang, "renderer"))).monospace());
                         egui::ComboBox::from_id_salt("renderer_choice")
                             .selected_text(match self.config.renderer {
-                                crate::renderer::RendererChoice::Auto => t(lang, "renderer_auto"),
-                                crate::renderer::RendererChoice::Glow => t(lang, "renderer_glow"),
-                                crate::renderer::RendererChoice::Wgpu => t(lang, "renderer_wgpu"),
+                                crate::renderer::RendererChoice::Auto => {
+                                    t(lang, "renderer_auto").to_string()
+                                }
+                                crate::renderer::RendererChoice::Glow => {
+                                    t(lang, "renderer_glow").to_string()
+                                }
+                                crate::renderer::RendererChoice::Wgpu => {
+                                    t(lang, "renderer_wgpu").to_string()
+                                }
                                 crate::renderer::RendererChoice::Software => {
-                                    t(lang, "renderer_software")
+                                    software_renderer_label(lang)
                                 }
                             })
                             .show_ui(ui, |ui| {
                                 for choice in crate::renderer::RendererChoice::ALL {
                                     let label = match choice {
                                         crate::renderer::RendererChoice::Auto => {
-                                            t(lang, "renderer_auto")
+                                            t(lang, "renderer_auto").to_string()
                                         }
                                         crate::renderer::RendererChoice::Glow => {
-                                            t(lang, "renderer_glow")
+                                            t(lang, "renderer_glow").to_string()
                                         }
                                         crate::renderer::RendererChoice::Wgpu => {
-                                            t(lang, "renderer_wgpu")
+                                            t(lang, "renderer_wgpu").to_string()
                                         }
                                         crate::renderer::RendererChoice::Software => {
-                                            t(lang, "renderer_software")
+                                            software_renderer_label(lang)
                                         }
                                     };
-                                    ui.selectable_value(&mut self.config.renderer, choice, label);
+                                    let resp = ui.selectable_value(
+                                        &mut self.config.renderer,
+                                        choice,
+                                        label,
+                                    );
+                                    if choice == crate::renderer::RendererChoice::Software {
+                                        resp.on_hover_text(t(lang, "renderer_software_warn"));
+                                    }
                                 }
                             });
                     });
@@ -2305,6 +2328,18 @@ impl FastTailApp {
                         .small()
                         .color(theme.text_primary()),
                     );
+                    // The software rasterizer is a fallback, not a real choice: warn about its
+                    // CPU cost right where it can be selected.
+                    if self.config.renderer == crate::renderer::RendererChoice::Software {
+                        ui.label(
+                            RichText::new(format!(
+                                "\u{26a0} {}",
+                                t(lang, "renderer_software_warn")
+                            ))
+                            .small()
+                            .color(theme.warn_color()),
+                        );
+                    }
                     ui.add_space(6.0);
                     if ui
                         .checkbox(&mut self.config.always_on_top, t(lang, "always_on_top"))
