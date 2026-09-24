@@ -391,11 +391,16 @@ pub(crate) fn find_case_insensitive_cb(
         let max_pos = h.len() - n_len;
         let mut i = 0;
 
+        // Scanning with &h[i..] passes an unbounded slice to SIMD memchr, avoiding
+        // slice subsegmenting bounds calculations on every loop iteration.
         if first_lower == first_upper {
             while i <= max_pos {
-                match memchr::memchr(first_lower, &h[i..=max_pos]) {
+                match memchr::memchr(first_lower, &h[i..]) {
                     Some(rel) => {
                         i += rel;
+                        if i > max_pos {
+                            break;
+                        }
                         if h[i..i + n_len].eq_ignore_ascii_case(n) {
                             if !on_match(i, i + n_len) {
                                 return;
@@ -410,9 +415,12 @@ pub(crate) fn find_case_insensitive_cb(
             }
         } else {
             while i <= max_pos {
-                match memchr::memchr2(first_lower, first_upper, &h[i..=max_pos]) {
+                match memchr::memchr2(first_lower, first_upper, &h[i..]) {
                     Some(rel) => {
                         i += rel;
+                        if i > max_pos {
+                            break;
+                        }
                         if h[i..i + n_len].eq_ignore_ascii_case(n) {
                             if !on_match(i, i + n_len) {
                                 return;
@@ -484,14 +492,19 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
         let max_pos = h_bytes.len() - n_len;
         let mut curr = 0;
 
+        // Scanning with &h_bytes[curr..] passes an unbounded slice to SIMD memchr,
+        // avoiding slice subsegmenting bounds calculations on every loop iteration.
         if first_lower == first_upper {
             while curr <= max_pos {
-                let match_rel = match memchr::memchr(first_lower, &h_bytes[curr..=max_pos]) {
+                let match_rel = match memchr::memchr(first_lower, &h_bytes[curr..]) {
                     Some(rel) => rel,
                     None => return false,
                 };
 
                 curr += match_rel;
+                if curr > max_pos {
+                    return false;
+                }
                 if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
                     return true;
                 }
@@ -500,12 +513,15 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
         } else {
             while curr <= max_pos {
                 let match_rel =
-                    match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..=max_pos]) {
+                    match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..]) {
                         Some(rel) => rel,
                         None => return false,
                     };
 
                 curr += match_rel;
+                if curr > max_pos {
+                    return false;
+                }
                 if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
                     return true;
                 }
@@ -534,22 +550,33 @@ pub struct CompiledHighlight {
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
+    // Fast path: if no spans exist yet, push directly without any piece vector allocation.
+    if spans.is_empty() {
+        spans.push(HighlightSpan {
+            start,
+            end,
+            style,
+        });
+        return spans.len() >= MAX_ROW_SPANS;
+    }
+    // Double-buffer piece vectors and reuse them via drain and swap to eliminate heap
+    // allocation churn during interval subtraction.
     let mut pieces = vec![(start, end)];
+    let mut next_pieces = Vec::with_capacity(4);
     for sp in spans.iter() {
-        let mut next = Vec::with_capacity(pieces.len() + 1);
-        for (s, e) in pieces {
+        for (s, e) in pieces.drain(..) {
             if e <= sp.start || s >= sp.end {
-                next.push((s, e));
-                continue;
-            }
-            if s < sp.start {
-                next.push((s, sp.start));
-            }
-            if e > sp.end {
-                next.push((sp.end, e));
+                next_pieces.push((s, e));
+            } else {
+                if s < sp.start {
+                    next_pieces.push((s, sp.start));
+                }
+                if e > sp.end {
+                    next_pieces.push((sp.end, e));
+                }
             }
         }
-        pieces = next;
+        std::mem::swap(&mut pieces, &mut next_pieces);
         if pieces.is_empty() {
             break;
         }
