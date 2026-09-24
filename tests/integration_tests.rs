@@ -557,6 +557,8 @@ fn test_i18n_exhaustive_coverage() {
         "locked_title",
         "locked_prompt",
         "lock_unlock",
+        "lock_unlock_tip",
+        "lock_cooldown",
         "lock_wrong",
         "ext_tools",
         "ext_tools_placeholders",

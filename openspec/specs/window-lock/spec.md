@@ -36,7 +36,7 @@ With a PIN set, the application SHALL lock on demand — a button in the setting
 - **THEN** nothing happens and the workspace stays usable.
 
 ### Requirement: Behaviour while locked
-While locked, the application SHALL cover the window with an **opaque** backdrop and the modal PIN prompt, so none of the log contents stays readable behind it; SHALL drop every keyboard event the workspace could act on, keeping only what the PIN field needs (text, the editing keys, `Enter`) — a bare `Escape` included, since the workspace behind must not react to it; and SHALL keep tailing every stream so no appended line is missed. Unlocking SHALL restore the exact prior workspace state.
+While locked, the application SHALL cover the window with an **opaque, animated** backdrop (a drifting grid and a sweeping glow, so a locked window reads as deliberately covered rather than frozen) and the modal PIN prompt, so none of the log contents stays readable behind it; SHALL drop every keyboard event the workspace could act on, keeping only what the PIN field needs (text, the editing keys, `Enter`) — a bare `Escape` included, since the workspace behind must not react to it; and SHALL keep tailing every stream so no appended line is missed. Unlocking SHALL restore the exact prior workspace state.
 
 #### Scenario: Log keeps growing behind the lock
 - **WHEN** the window is locked and the tailed files receive new lines
@@ -53,6 +53,21 @@ While locked, the application SHALL cover the window with an **opaque** backdrop
 #### Scenario: Wrong PIN
 - **WHEN** the entered PIN does not match
 - **THEN** the field is cleared, a "wrong PIN" message is shown, and the window stays locked.
+
+#### Scenario: Enter confirms the PIN
+- **WHEN** the user types the PIN and presses `Enter`
+- **THEN** the PIN is submitted, exactly as clicking the unlock button.
+
+### Requirement: Guessing is slowed down
+After three wrong PINs in a row the prompt SHALL refuse further attempts for one minute, showing the remaining time instead of the entry field, and SHALL do so again every three further failures. A correct PIN SHALL clear the count. The counter SHALL live in memory only: it is a deterrent, and a restart clearing it changes nothing that editing `fasttail.ini` would not.
+
+#### Scenario: Third wrong PIN pauses the prompt
+- **WHEN** the third wrong PIN in a row is submitted
+- **THEN** the entry field is replaced by a countdown, no attempt is accepted until it expires, and the remaining seconds are visible.
+
+#### Scenario: A correct PIN forgets the failures
+- **WHEN** the user enters a wrong PIN twice and then the right one
+- **THEN** the window unlocks and the next lock starts again with three attempts available.
 
 ### Requirement: The lock is a deterrent, not a security boundary
 The application SHALL NOT present the lock as protection for the log contents. A maintenance unlock phrase SHALL always open the prompt regardless of the stored PIN, the log files stay readable on disk and `fasttail.ini` stays editable; the settings and the user documentation SHALL state this plainly.

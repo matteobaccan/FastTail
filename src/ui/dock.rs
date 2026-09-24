@@ -2993,17 +2993,20 @@ fn render_lock_settings(
     let mut draft: String = ui.data_mut(|d| d.get_temp(draft_id).unwrap_or_default());
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{}:", t(lang, "lock_pin"))).monospace());
-        ui.add(
+        let field = ui.add(
             egui::TextEdit::singleline(&mut draft)
                 .password(true)
                 .desired_width(90.0)
                 .hint_text(t(lang, "lock_pin_hint")),
         );
         let valid = crate::config::is_valid_pin(&draft);
-        if ui
-            .add_enabled(valid, egui::Button::new(t(lang, "lock_save_pin")))
-            .on_disabled_hover_text(t(lang, "lock_pin_hint"))
-            .clicked()
+        // Enter confirms the PIN, like the button next to it.
+        let entered = valid && field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if entered
+            || ui
+                .add_enabled(valid, egui::Button::new(t(lang, "lock_save_pin")))
+                .on_disabled_hover_text(t(lang, "lock_pin_hint"))
+                .clicked()
         {
             *lock_pin = crate::config::scramble_pin(draft.trim());
             draft.clear();

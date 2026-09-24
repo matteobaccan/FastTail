@@ -12,7 +12,7 @@ use eframe::egui;
 use egui::{Color32, CornerRadius, Key, Margin, RichText, Stroke, ViewportCommand};
 use egui_dock::{DockArea, DockState};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 /// Drops the recorded rects whose surface no longer exists or is not a floating window.
@@ -55,6 +55,8 @@ pub struct FastTailApp {
     pub locked: bool,
     pub lock_entry: String,
     pub lock_failed: bool,
+    /// Wrong-PIN counter and the cooldown it triggers (see `LockAttempts`).
+    pub lock_attempts: LockAttempts,
     /// Screensaver state of the previous frame, to catch the moment it ends.
     pub screensaver_was_active: bool,
     pub system: System,
@@ -178,32 +180,103 @@ fn restore_dialog_geometry<'a>(
     }
 }
 
-/// Faint accent grid painted over the opaque lock backdrop, so a locked window reads as
-/// deliberately covered rather than as a frozen or crashed one.
-fn paint_lock_backdrop(ui: &egui::Ui, theme: CyberTheme) {
-    let rect = ui.ctx().content_rect();
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("lock_grid"),
+/// Wrong PIN attempts on the lock screen. Three in a row close the prompt for a minute,
+/// so guessing a 4-digit PIN costs hours instead of seconds; a correct PIN clears the
+/// count. The state is deliberately in memory only: it is a deterrent, and a restart
+/// clearing it changes nothing an attacker could not do by editing `fasttail.ini`.
+#[derive(Debug, Default, Clone)]
+pub struct LockAttempts {
+    failures: u32,
+    retry_at: Option<Instant>,
+}
+
+/// Wrong attempts allowed before the prompt pauses.
+pub const LOCK_MAX_FAILURES: u32 = 3;
+/// How long the prompt stays closed after those attempts.
+pub const LOCK_COOLDOWN: Duration = Duration::from_secs(60);
+
+impl LockAttempts {
+    /// Registers a wrong PIN and returns whether it started a cooldown.
+    pub fn register_failure(&mut self, now: Instant) -> bool {
+        self.failures += 1;
+        if self.failures.is_multiple_of(LOCK_MAX_FAILURES) {
+            self.retry_at = Some(now + LOCK_COOLDOWN);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Time left before the next attempt is accepted, `None` when it is accepted now.
+    pub fn cooldown_left(&self, now: Instant) -> Option<Duration> {
+        let retry_at = self.retry_at?;
+        (retry_at > now).then(|| retry_at - now)
+    }
+
+    /// Clears everything after a correct PIN.
+    pub fn reset(&mut self) {
+        self.failures = 0;
+        self.retry_at = None;
+    }
+}
+
+/// Background of the locked window: an opaque wash of the theme background with a slow
+/// drifting grid and a sweeping glow band, painted in the `Middle` layer so it covers the
+/// workspace (drawn in `Background`) while staying under the prompt (`Foreground`).
+/// Animated on purpose — a still frame reads as a crash, a moving one reads as locked.
+fn paint_lock_backdrop(ctx: &egui::Context, theme: CyberTheme) {
+    let rect = ctx.content_rect();
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Middle,
+        egui::Id::new("fasttail_lock_backdrop"),
     ));
-    let line = theme.accent_color().gamma_multiply(0.06);
-    let step = 28.0;
-    let mut x = rect.left();
+    painter.rect_filled(rect, 0.0, theme.bg_color());
+
+    let time = ctx.input(|i| i.time) as f32;
+    let accent = theme.accent_color();
+    let step = 34.0;
+    // The grid drifts by one cell over four seconds, so the motion is visible without
+    // ever drawing attention away from the PIN box.
+    let drift = (time * step / 4.0) % step;
+    let line = Stroke::new(1.0, accent.gamma_multiply(0.07));
+    let mut x = rect.left() - step + drift;
     while x < rect.right() {
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            Stroke::new(1.0, line),
+            line,
         );
         x += step;
     }
-    let mut y = rect.top();
+    let mut y = rect.top() - step + drift;
     while y < rect.bottom() {
         painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-            Stroke::new(1.0, line),
+            line,
         );
         y += step;
     }
+
+    // A soft band sweeping top to bottom every six seconds.
+    let sweep_h = 120.0_f32.min(rect.height() * 0.4);
+    let travel = rect.height() + sweep_h;
+    let head = rect.top() - sweep_h + (time * travel / 6.0) % travel;
+    let bands = 14;
+    for band in 0..bands {
+        let t = band as f32 / bands as f32;
+        let top = head + t * sweep_h;
+        let alpha = (1.0 - (t * 2.0 - 1.0).abs()) * 0.05;
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.left(), top),
+                egui::vec2(rect.width(), sweep_h / bands as f32 + 1.0),
+            ),
+            0.0,
+            accent.gamma_multiply(alpha),
+        );
+    }
+
+    // Keep the animation going at the screensaver's cadence, not at full speed.
+    ctx.request_repaint_after(crate::screensaver::FRAME_INTERVAL);
 }
 
 /// Events the PIN prompt is allowed to see while the window is locked. Everything the
@@ -415,6 +488,7 @@ impl FastTailApp {
             locked: false,
             lock_entry: String::new(),
             lock_failed: false,
+            lock_attempts: LockAttempts::default(),
             screensaver_was_active: false,
             system,
             cpu_usage: 0.0,
@@ -776,21 +850,29 @@ impl FastTailApp {
 
     /// The PIN prompt shown while `locked`, as a modal that blocks the UI behind it.
     /// `crate::config::LOCK_BACKDOOR` opens it whatever the PIN is.
+    /// The PIN prompt shown while `locked`, over an animated opaque backdrop that hides
+    /// the workspace. `crate::config::LOCK_BACKDOOR` opens it whatever the PIN is, and
+    /// three wrong PINs in a row close the prompt for `LOCK_COOLDOWN`.
     fn render_lock_overlay(&mut self, ctx: &egui::Context) {
         let theme = self.config.theme;
         let lang = self.config.language;
+        paint_lock_backdrop(ctx, theme);
+        let cooldown = self.lock_attempts.cooldown_left(Instant::now());
+        if let Some(left) = cooldown {
+            // Keep the countdown ticking even when nothing else asks for a frame.
+            ctx.request_repaint_after(Duration::from_millis(250).min(left));
+        }
+
         egui::Modal::new(egui::Id::new("fasttail_lock_modal"))
-            // An opaque backdrop, not the default translucent one: a lock that still
-            // shows the log it is supposed to cover protects nothing. A faint grid keeps
-            // it from looking like a crash.
-            .backdrop_color(theme.bg_color())
+            // The backdrop is painted by `paint_lock_backdrop` in a lower layer, so the
+            // modal's own one must not dim it a second time.
+            .backdrop_color(egui::Color32::TRANSPARENT)
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
                     .fill(theme.panel_bg())
                     .stroke(Stroke::new(2.0, theme.border_color())),
             )
             .show(ctx, |ui| {
-                paint_lock_backdrop(ui, theme);
                 ui.set_min_width(300.0);
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
@@ -808,6 +890,27 @@ impl FastTailApp {
                             .color(theme.text_dim()),
                     );
                     ui.add_space(10.0);
+
+                    if let Some(left) = cooldown {
+                        // While the prompt is paused there is nothing to type into: show
+                        // the countdown instead of a field that would refuse every entry.
+                        self.lock_entry.clear();
+                        ui.label(
+                            RichText::new(format!(
+                                "⏳ {}",
+                                t(lang, "lock_cooldown").replace(
+                                    "{secs}",
+                                    &left.as_secs().saturating_add(1).to_string()
+                                )
+                            ))
+                            .monospace()
+                            .strong()
+                            .color(theme.warn_color()),
+                        );
+                        ui.add_space(4.0);
+                        return;
+                    }
+
                     let entry = ui.add(
                         egui::TextEdit::singleline(&mut self.lock_entry)
                             .password(true)
@@ -818,8 +921,10 @@ impl FastTailApp {
                     if !entry.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
                         entry.request_focus();
                     }
-                    let submitted =
-                        entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    // While locked every other consumer of the keyboard is muted, so a
+                    // plain Enter can only mean "confirm this PIN" — checking it directly
+                    // is more reliable than waiting for the field to lose focus.
+                    let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.add_space(8.0);
                     let unlock_clicked = ui
                         .button(
@@ -828,19 +933,28 @@ impl FastTailApp {
                                 .strong()
                                 .color(theme.accent_color()),
                         )
+                        .on_hover_text(t(lang, "lock_unlock_tip"))
                         .clicked();
+
                     if submitted || unlock_clicked {
                         if crate::config::pin_matches(&self.config.lock_pin, &self.lock_entry) {
                             self.locked = false;
                             self.lock_failed = false;
                             self.lock_entry.clear();
+                            self.lock_attempts.reset();
                             self.screensaver.on_user_input();
                         } else {
                             self.lock_failed = true;
                             self.lock_entry.clear();
+                            self.lock_attempts.register_failure(Instant::now());
                             entry.request_focus();
+                            crate::audio::play_sound(
+                                crate::audio::CyberSound::BeepError,
+                                self.config.sound_enabled,
+                            );
                         }
                     }
+
                     if self.lock_failed {
                         ui.add_space(6.0);
                         ui.label(
@@ -1059,6 +1173,7 @@ impl FastTailApp {
 
         // 1. Detect user activity to reset screensaver & handle window closing and viewport bounds
         let mut escape_pressed = false;
+        let mut wheel_zoom = 1.0_f32;
         ctx.input(|i| {
             if i.viewport().close_requested() {
                 self.save_dock_layout();
@@ -1116,14 +1231,9 @@ impl FastTailApp {
             // would zoom twice — once the whole UI, once the log font — which is exactly
             // why the Settings buttons looked like they did something else. `Ctrl + wheel`
             // is the one egui does not apply: it turns the wheel into `zoom_delta` and
-            // leaves `smooth_scroll_delta` empty, so nothing happened at all. We apply it
-            // here, and the result is read back from the context below and persisted.
-            let wheel_zoom = i.zoom_delta();
-            if wheel_zoom != 1.0 {
-                let zoomed = (ctx.zoom_factor() * wheel_zoom)
-                    .clamp(crate::config::MIN_ZOOM, crate::config::MAX_ZOOM);
-                ctx.set_zoom_factor(zoomed);
-            }
+            // leaves `smooth_scroll_delta` empty, so nothing happened at all. Only read it
+            // here: the context must not be touched while its input lock is held.
+            wheel_zoom = i.zoom_delta();
 
             // Keyboard shortcut: F1 (Toggle Help)
             if i.key_pressed(Key::F1) {
@@ -1197,6 +1307,15 @@ impl FastTailApp {
             self.cpu_usage = self.system.global_cpu_usage();
             self.mem_used_mb = self.system.used_memory() / (1024 * 1024);
             self.last_sys_refresh = Instant::now();
+        }
+
+        // Apply the wheel zoom collected above, outside `ctx.input`: `set_zoom_factor`
+        // takes the context lock, and calling it from inside the input closure deadlocks
+        // the frame (the window freezes on the first Ctrl + wheel).
+        if wheel_zoom != 1.0 {
+            let zoomed = (ctx.zoom_factor() * wheel_zoom)
+                .clamp(crate::config::MIN_ZOOM, crate::config::MAX_ZOOM);
+            ctx.set_zoom_factor(zoomed);
         }
 
         // 4a. Zoom: whoever moved it (egui's own Ctrl +/-/0, Ctrl + wheel above, or the
@@ -3685,6 +3804,40 @@ mod tests {
         assert!(!allowed_while_locked(&key(Key::O, Modifiers::CTRL)));
         assert!(!allowed_while_locked(&key(Key::W, Modifiers::ALT)));
         assert!(!allowed_while_locked(&Event::Copy));
+    }
+
+    #[test]
+    fn three_wrong_pins_pause_the_prompt_for_a_minute() {
+        use super::{LockAttempts, LOCK_COOLDOWN};
+        use std::time::{Duration, Instant};
+
+        let now = Instant::now();
+        let mut attempts = LockAttempts::default();
+        assert!(!attempts.register_failure(now));
+        assert!(!attempts.register_failure(now));
+        assert!(
+            attempts.cooldown_left(now).is_none(),
+            "two misses cost nothing"
+        );
+
+        assert!(
+            attempts.register_failure(now),
+            "the third one starts the pause"
+        );
+        let left = attempts.cooldown_left(now).expect("prompt is paused");
+        assert!(left <= LOCK_COOLDOWN && left > LOCK_COOLDOWN - Duration::from_secs(1));
+        assert!(attempts
+            .cooldown_left(now + LOCK_COOLDOWN - Duration::from_secs(1))
+            .is_some());
+        assert!(attempts.cooldown_left(now + LOCK_COOLDOWN).is_none());
+
+        // Three more misses pause it again, and a correct PIN forgets everything.
+        for _ in 0..3 {
+            attempts.register_failure(now + LOCK_COOLDOWN);
+        }
+        assert!(attempts.cooldown_left(now + LOCK_COOLDOWN).is_some());
+        attempts.reset();
+        assert!(attempts.cooldown_left(now + LOCK_COOLDOWN).is_none());
     }
 
     #[test]

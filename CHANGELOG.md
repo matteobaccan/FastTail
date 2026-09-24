@@ -10,11 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Visible zoom level.** The title bar shows the current log zoom as a percentage of
-  the default font size, next to the always-on-top pin; clicking it resets to 100%.
-  The settings row shows the same percentage beside the point size, so `Ctrl+`,
-  `Ctrl-`, `Ctrl+0` and `Ctrl+wheel` no longer change the text with nothing on screen
-  to say what happened.
+- **Visible, persisted interface zoom.** `Ctrl +`, `Ctrl -`, `Ctrl 0`, `Ctrl + wheel`
+  and the new Settings → Zoom row all move the same value, which scales the whole
+  interface and is saved as `zoom_factor` in `fasttail.ini`. The title bar shows it as a
+  percentage next to the always-on-top pin (click to reset to 100%), so a stray
+  `Ctrl + wheel` no longer resizes the app with nothing on screen to explain it. The log
+  font size in points stays a separate setting.
 - **PIN lock.** A 4 to 12 digit PIN can be set in Settings → PIN lock. With the lock
   armed, leaving the screensaver asks for the PIN, and `Ctrl+L` (or the "Lock now"
   button) locks the window on demand. The PIN is scrambled before it reaches
@@ -43,8 +44,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   row next to it.
 - **The PIN lock could be talked around.** A bare `Escape` still reached the workspace
   and closed the dialog behind the lock; only modifier shortcuts were being dropped.
-  The lock now keeps just what the PIN field needs. Its backdrop is opaque instead of
-  translucent, so the log is no longer readable behind the prompt.
+  The lock now keeps just what the PIN field needs. Its backdrop is opaque and animated
+  (drifting grid, sweeping glow) instead of translucent, so the log is no longer
+  readable behind the prompt and a locked window does not look like a frozen one.
+- **`Ctrl + wheel` froze the window.** The first fix applied the zoom from inside
+  `ctx.input(…)`, and `set_zoom_factor` takes the same context lock: the frame
+  deadlocked. The wheel delta is now read inside the closure and applied after it.
+
+### Changed
+
+- **The PIN prompt fights guessing.** `Enter` confirms the PIN (in the prompt and when
+  setting it in the settings), a wrong PIN beeps, and three wrong PINs in a row replace
+  the entry field with a one-minute countdown — repeated every three further failures,
+  and cleared by a correct PIN.
 
 ### Documentation
 
