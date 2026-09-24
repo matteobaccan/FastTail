@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **PIN lock.** A 4 to 12 digit PIN can be set in Settings → PIN lock. With the lock
+  armed, leaving the screensaver asks for the PIN, and `Ctrl+L` (or the "Lock now"
+  button) locks the window on demand. The PIN is scrambled before it reaches
+  `fasttail.ini`. The lock is a deterrent against a passer-by, not a security boundary:
+  the log files stay readable on disk and a maintenance unlock phrase always opens it.
 - **Eleven more interface languages.** German, Portuguese (Brazil), Russian, Ukrainian,
   Japanese, Korean, Turkish, Polish, Dutch, Chinese (traditional) and Friulian join
   English, Italian, French, Spanish and Chinese (simplified), each with the full set of

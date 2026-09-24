@@ -63,6 +63,10 @@ pub struct DockContext<'a> {
     pub search_history: &'a mut Vec<String>,
     pub tab_closed: &'a mut bool,
     pub test_screensaver: &'a mut bool,
+    /// PIN lock (Settings): master switch, scrambled PIN and a "lock right now" request.
+    pub lock_enabled: &'a mut bool,
+    pub lock_pin: &'a mut String,
+    pub lock_now: &'a mut bool,
     /// Quick colour labels (Ctrl+Shift+1..9), shared by every stream; `labels_changed` asks
     /// the app to push them to the engines again.
     pub quick_labels: &'a mut Vec<QuickLabel>,
@@ -318,6 +322,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.external_tools,
                     self.ctx.global_rules,
                     self.ctx.tool_runner,
+                    self.ctx.lock_enabled,
+                    self.ctx.lock_pin,
+                    self.ctx.lock_now,
                 );
             }
         }
@@ -2965,6 +2972,67 @@ pub fn render_highlights_content(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// PIN lock section of the settings: the master switch (lock when the screensaver ends),
+/// the PIN editor and a "lock now" button. The typed PIN never leaves this function in
+/// clear — only its scrambled form is stored (see `crate::config::scramble_pin`).
+fn render_lock_settings(
+    ui: &mut Ui,
+    lang: Language,
+    lock_enabled: &mut bool,
+    lock_pin: &mut String,
+    lock_now: &mut bool,
+) {
+    ui.label(
+        RichText::new(format!("🔒 {}", t(lang, "lock_section")))
+            .monospace()
+            .strong(),
+    );
+    ui.checkbox(lock_enabled, t(lang, "lock_enable"));
+
+    let draft_id = ui.id().with("lock_pin_draft");
+    let mut draft: String = ui.data_mut(|d| d.get_temp(draft_id).unwrap_or_default());
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{}:", t(lang, "lock_pin"))).monospace());
+        ui.add(
+            egui::TextEdit::singleline(&mut draft)
+                .password(true)
+                .desired_width(90.0)
+                .hint_text(t(lang, "lock_pin_hint")),
+        );
+        let valid = crate::config::is_valid_pin(&draft);
+        if ui
+            .add_enabled(valid, egui::Button::new(t(lang, "lock_save_pin")))
+            .on_disabled_hover_text(t(lang, "lock_pin_hint"))
+            .clicked()
+        {
+            *lock_pin = crate::config::scramble_pin(draft.trim());
+            draft.clear();
+        }
+        if ui
+            .add_enabled(
+                !lock_pin.is_empty(),
+                egui::Button::new(t(lang, "lock_clear_pin")),
+            )
+            .clicked()
+        {
+            lock_pin.clear();
+            *lock_enabled = false;
+            draft.clear();
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(draft_id, draft));
+
+    if ui
+        .add_enabled(!lock_pin.is_empty(), egui::Button::new(t(lang, "lock_now")))
+        .on_hover_text(t(lang, "lock_now_tip"))
+        .on_disabled_hover_text(t(lang, "lock_needs_pin"))
+        .clicked()
+    {
+        *lock_now = true;
+    }
+    ui.label(RichText::new(t(lang, "lock_note")).small());
+}
+
 pub fn render_settings_content(
     ui: &mut Ui,
     theme: &mut CyberTheme,
@@ -2981,6 +3049,9 @@ pub fn render_settings_content(
     external_tools: &mut Vec<ExternalTool>,
     rules: &[HighlightRule],
     tool_runner: &mut ToolRunner,
+    lock_enabled: &mut bool,
+    lock_pin: &mut String,
+    lock_now: &mut bool,
 ) {
     ui.heading(RichText::new(format!("⚙ {}", t(*lang, "settings").to_uppercase())).monospace());
     ui.add_space(10.0);
@@ -3066,6 +3137,9 @@ pub fn render_settings_content(
             }
         });
     }
+
+    ui.add_space(6.0);
+    render_lock_settings(ui, *lang, lock_enabled, lock_pin, lock_now);
 
     ui.add_space(6.0);
     ui.checkbox(telemetry_enabled, t(*lang, "telemetry"));
