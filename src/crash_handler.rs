@@ -103,6 +103,35 @@ pub fn build_crash_report(payload: &str, location: Option<&str>, backtrace: &Bac
     )
 }
 
+/// Safely creates or truncates a crash log file.
+/// Validates that existing target path and opened handle both point to a regular file
+/// prior to calling `set_len(0)` to prevent blocking or truncating non-regular files
+/// (such as FIFOs/named pipes, device nodes, or directories).
+fn create_crash_log_file(target: &std::path::Path) -> std::io::Result<std::fs::File> {
+    if target.exists() {
+        let meta = std::fs::metadata(target)?;
+        if !meta.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(target)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Target path is not a regular file",
+        ));
+    }
+    file.set_len(0)?;
+    Ok(file)
+}
+
 pub fn write_crash_log(report: &str) -> Vec<PathBuf> {
     let mut written_paths = Vec::new();
     let mut candidate_paths = Vec::new();
@@ -124,12 +153,7 @@ pub fn write_crash_log(report: &str) -> Vec<PathBuf> {
 
     // Attempt to write to candidate paths
     for path in &candidate_paths {
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(path)
-        {
+        if let Ok(mut file) = create_crash_log_file(path) {
             if file.write_all(report.as_bytes()).is_ok() {
                 written_paths.push(path.clone());
             }
@@ -139,12 +163,7 @@ pub fn write_crash_log(report: &str) -> Vec<PathBuf> {
     // 3. Fallback to temp directory if all candidates failed
     if written_paths.is_empty() {
         let temp_path = std::env::temp_dir().join("fasttail_crash.log");
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&temp_path)
-        {
+        if let Ok(mut file) = create_crash_log_file(&temp_path) {
             if file.write_all(report.as_bytes()).is_ok() {
                 written_paths.push(temp_path);
             }
@@ -256,5 +275,17 @@ mod tests {
             assert_eq!(content, report);
             let _ = std::fs::remove_file(p);
         }
+    }
+
+    #[test]
+    fn test_create_crash_log_file_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_target = temp_dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        let err = create_crash_log_file(&dir_target)
+            .err()
+            .expect("should fail when target is a directory");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }
