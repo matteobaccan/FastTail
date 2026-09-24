@@ -49,6 +49,14 @@ pub struct FastTailApp {
     pub engines: Vec<TailEngine>,
     pub dock_state: DockState<FastTailTab>,
     pub screensaver: MatrixScreensaver,
+    /// PIN lock: set when the screensaver ends with the lock armed, or on Ctrl+L. While
+    /// it is on, a modal covers the window and keyboard shortcuts are dropped — a
+    /// deterrent against a passer-by, not a security boundary (see `config::scramble_pin`).
+    pub locked: bool,
+    pub lock_entry: String,
+    pub lock_failed: bool,
+    /// Screensaver state of the previous frame, to catch the moment it ends.
+    pub screensaver_was_active: bool,
     pub system: System,
     pub cpu_usage: f32,
     pub mem_used_mb: u64,
@@ -339,6 +347,10 @@ impl FastTailApp {
             engines: Vec::new(),
             dock_state,
             screensaver: MatrixScreensaver::default(),
+            locked: false,
+            lock_entry: String::new(),
+            lock_failed: false,
+            screensaver_was_active: false,
             system,
             cpu_usage: 0.0,
             mem_used_mb: 0,
@@ -684,6 +696,92 @@ impl FastTailApp {
                 }
             }
         }
+    }
+
+    /// Puts the window behind the PIN. Does nothing when no PIN is set, so the user can
+    /// never lock themselves out of a lock they cannot open.
+    pub fn lock(&mut self) {
+        if self.config.lock_pin.is_empty() {
+            return;
+        }
+        self.locked = true;
+        self.lock_entry.clear();
+        self.lock_failed = false;
+    }
+
+    /// The PIN prompt shown while `locked`, as a modal that blocks the UI behind it.
+    /// `crate::config::LOCK_BACKDOOR` opens it whatever the PIN is.
+    fn render_lock_overlay(&mut self, ctx: &egui::Context) {
+        let theme = self.config.theme;
+        let lang = self.config.language;
+        egui::Modal::new(egui::Id::new("fasttail_lock_modal"))
+            .frame(
+                egui::Frame::window(&ctx.style_of(ctx.theme()))
+                    .fill(theme.panel_bg())
+                    .stroke(Stroke::new(2.0, theme.border_color())),
+            )
+            .show(ctx, |ui| {
+                ui.set_min_width(300.0);
+                ui.vertical_centered(|ui| {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("🔒 {}", t(lang, "locked_title")))
+                            .monospace()
+                            .strong()
+                            .size(16.0)
+                            .color(theme.accent_color()),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(t(lang, "locked_prompt"))
+                            .monospace()
+                            .color(theme.text_dim()),
+                    );
+                    ui.add_space(10.0);
+                    let entry = ui.add(
+                        egui::TextEdit::singleline(&mut self.lock_entry)
+                            .password(true)
+                            .desired_width(180.0)
+                            .horizontal_align(egui::Align::Center)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    if !entry.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
+                        entry.request_focus();
+                    }
+                    let submitted =
+                        entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.add_space(8.0);
+                    let unlock_clicked = ui
+                        .button(
+                            RichText::new(t(lang, "lock_unlock"))
+                                .monospace()
+                                .strong()
+                                .color(theme.accent_color()),
+                        )
+                        .clicked();
+                    if submitted || unlock_clicked {
+                        if crate::config::pin_matches(&self.config.lock_pin, &self.lock_entry) {
+                            self.locked = false;
+                            self.lock_failed = false;
+                            self.lock_entry.clear();
+                            self.screensaver.on_user_input();
+                        } else {
+                            self.lock_failed = true;
+                            self.lock_entry.clear();
+                            entry.request_focus();
+                        }
+                    }
+                    if self.lock_failed {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(format!("⚠ {}", t(lang, "lock_wrong")))
+                                .monospace()
+                                .color(theme.warn_color()),
+                        );
+                    }
+                    ui.add_space(4.0);
+                });
+            });
     }
 
     pub fn save_dock_layout(&mut self) {
@@ -1043,6 +1141,33 @@ impl FastTailApp {
             self.cpu_usage = self.system.global_cpu_usage();
             self.mem_used_mb = self.system.used_memory() / (1024 * 1024);
             self.last_sys_refresh = Instant::now();
+        }
+
+        // 4b. PIN lock: arm it when the screensaver ends (the user walked away) and on
+        // Ctrl+L on demand. While locked, modifier shortcuts are dropped so the UI behind
+        // the modal cannot be driven from the keyboard; plain typing feeds the PIN box.
+        let screensaver_ended = self.screensaver_was_active && !self.screensaver.is_active;
+        self.screensaver_was_active = self.screensaver.is_active;
+        let lock_shortcut = ctx.input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::L,
+            ))
+        });
+        if !self.config.lock_pin.is_empty()
+            && (lock_shortcut || (self.config.lock_enabled && screensaver_ended))
+        {
+            self.lock();
+        }
+        if self.locked {
+            ctx.input_mut(|i| {
+                i.events.retain(|e| match e {
+                    egui::Event::Key { modifiers, .. } => {
+                        !(modifiers.ctrl || modifiers.command || modifiers.alt)
+                    }
+                    _ => true,
+                });
+            });
         }
 
         // 4. Check screensaver idle timeout (only a focused window can start it)
@@ -1976,6 +2101,7 @@ impl FastTailApp {
             }
         }
 
+        let mut lock_now = false;
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -1994,6 +2120,9 @@ impl FastTailApp {
             search_history: &mut self.config.search_history,
             tab_closed: &mut tab_closed,
             test_screensaver: &mut test_screensaver,
+            lock_enabled: &mut self.config.lock_enabled,
+            lock_pin: &mut self.config.lock_pin,
+            lock_now: &mut lock_now,
             quick_labels: &mut self.quick_labels,
             labels_changed: &mut labels_changed,
             external_tools: &mut self.config.external_tools,
@@ -2151,6 +2280,10 @@ impl FastTailApp {
             ));
         }
 
+        if lock_now {
+            self.lock();
+        }
+
         if test_screensaver {
             self.screensaver.is_active = true;
         }
@@ -2275,6 +2408,7 @@ impl FastTailApp {
             let prev_theme = self.config.theme;
             let prev_lang = self.config.language;
             let mut test_screensaver = false;
+            let mut popup_lock_now = false;
 
             let win = egui::Window::new(
                 RichText::new(format!("⚙ {}", t(self.config.language, "settings")))
@@ -2316,6 +2450,9 @@ impl FastTailApp {
                         &mut self.config.external_tools,
                         &self.config.highlight_rules,
                         &mut self.tool_runner,
+                        &mut self.config.lock_enabled,
+                        &mut self.config.lock_pin,
+                        &mut popup_lock_now,
                     );
 
                     // Rendering backend: applies at the next start.
@@ -2527,6 +2664,10 @@ impl FastTailApp {
                 &mut self.config.settings_size,
             );
             apply_dialog_chrome_cursor(&ctx, &resp);
+
+            if popup_lock_now {
+                self.lock();
+            }
 
             if test_screensaver {
                 self.screensaver.is_active = true;
@@ -3160,6 +3301,11 @@ impl FastTailApp {
         // 12. Render Matrix Screensaver if activated
         let viewport = ctx.content_rect();
         self.screensaver.render(&ctx, viewport);
+
+        // The PIN prompt sits above everything, the screensaver included.
+        if self.locked {
+            self.render_lock_overlay(&ctx);
+        }
 
         // 12. Borderless Window Resize Anchors & Visual Frames (Edges & Corners)
         let is_maximized =

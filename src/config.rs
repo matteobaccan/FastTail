@@ -16,12 +16,51 @@ pub const MAX_BOOKMARKS_PER_FILE: usize = 1000;
 /// Cap for the files remembered with line wrap on.
 pub const MAX_WRAPPED_FILES: usize = 50;
 
+/// Unlock phrase that always works, whatever the PIN is — a nod to WarGames.
+pub const LOCK_BACKDOOR: &str = "joshua";
+
+/// Scrambles a PIN before it is written to the ini file. FNV-1a over a fixed salt plus
+/// the digits: it keeps the PIN from being read at a glance out of `fasttail.ini`, and
+/// that is the whole of its ambition. The lock is a deterrent against someone walking
+/// past the screen, not a security boundary — the log files stay readable on disk and
+/// `LOCK_BACKDOOR` opens it anyway.
+pub fn scramble_pin(pin: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in b"fasttail-lock-v1".iter().chain(pin.as_bytes()) {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Whether `attempt` opens a lock whose scrambled PIN is `stored`.
+pub fn pin_matches(stored: &str, attempt: &str) -> bool {
+    let attempt = attempt.trim();
+    if attempt.eq_ignore_ascii_case(LOCK_BACKDOOR) {
+        return true;
+    }
+    !stored.is_empty() && scramble_pin(attempt) == stored
+}
+
+/// A PIN the lock will accept: 4 to 12 digits.
+pub fn is_valid_pin(pin: &str) -> bool {
+    let pin = pin.trim();
+    (4..=12).contains(&pin.chars().count()) && pin.chars().all(|c| c.is_ascii_digit())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FastTailConfig {
     pub theme: CyberTheme,
     pub language: Language,
     pub screensaver_enabled: bool,
     pub screensaver_timeout_mins: u32,
+    /// Lock the window behind a PIN when the screensaver ends or the user asks for it.
+    #[serde(default)]
+    pub lock_enabled: bool,
+    /// Scrambled PIN (see `scramble_pin`), empty when no PIN is set. This is a deterrent
+    /// against a passer-by, not protection: the log files themselves stay readable on disk.
+    #[serde(default)]
+    pub lock_pin: String,
     pub telemetry_enabled: bool,
     pub sound_enabled: bool,
     /// Rendering backend: auto (OpenGL, then wgpu on failure), glow or wgpu. Applies at start.
@@ -168,6 +207,8 @@ impl Default for FastTailConfig {
             language: Language::detect(),
             screensaver_enabled: true,
             screensaver_timeout_mins: 10,
+            lock_enabled: false,
+            lock_pin: String::new(),
             telemetry_enabled: true,
             sound_enabled: false,
             renderer: crate::renderer::RendererChoice::Auto,
@@ -390,6 +431,8 @@ impl FastTailConfig {
                 "screensaver_timeout_mins",
                 self.screensaver_timeout_mins.to_string(),
             )
+            .set("lock_enabled", self.lock_enabled.to_string())
+            .set("lock_pin", self.lock_pin.clone())
             .set("telemetry_enabled", self.telemetry_enabled.to_string())
             .set("sound_enabled", self.sound_enabled.to_string())
             .set("borderless", self.borderless.to_string())
@@ -607,6 +650,14 @@ impl FastTailConfig {
                 if let Ok(v) = s.parse::<u32>() {
                     cfg.screensaver_timeout_mins = v;
                 }
+            }
+            if let Some(s) = general.get("lock_enabled") {
+                if let Ok(v) = s.parse::<bool>() {
+                    cfg.lock_enabled = v;
+                }
+            }
+            if let Some(s) = general.get("lock_pin") {
+                cfg.lock_pin = s.trim().to_string();
             }
             if let Some(s) = general.get("telemetry_enabled") {
                 if let Ok(v) = s.parse::<bool>() {
@@ -1114,5 +1165,38 @@ mod tests {
         let ini = cfg.to_ini();
         let loaded = FastTailConfig::from_ini(&ini);
         assert_eq!(loaded.theme, cfg.theme);
+    }
+
+    #[test]
+    fn test_pin_is_not_stored_in_clear_and_round_trips() {
+        let mut cfg = FastTailConfig::default();
+        cfg.lock_enabled = true;
+        cfg.lock_pin = scramble_pin("4711");
+        let ini = cfg.to_ini();
+        let loaded = FastTailConfig::from_ini(&ini);
+        assert!(loaded.lock_enabled);
+        assert_eq!(loaded.lock_pin, cfg.lock_pin);
+        assert!(!loaded.lock_pin.contains("4711"));
+        assert!(pin_matches(&loaded.lock_pin, "4711"));
+        assert!(!pin_matches(&loaded.lock_pin, "4712"));
+    }
+
+    #[test]
+    fn test_backdoor_opens_any_lock_but_an_empty_pin_stays_shut() {
+        let stored = scramble_pin("123456");
+        assert!(pin_matches(&stored, "joshua"));
+        assert!(pin_matches(&stored, "JOSHUA "));
+        assert!(pin_matches("", "joshua"));
+        assert!(!pin_matches("", "1234"));
+    }
+
+    #[test]
+    fn test_pin_validation() {
+        assert!(is_valid_pin("1234"));
+        assert!(is_valid_pin("123456789012"));
+        assert!(!is_valid_pin("123"));
+        assert!(!is_valid_pin("1234567890123"));
+        assert!(!is_valid_pin("12a4"));
+        assert!(!is_valid_pin(""));
     }
 }
