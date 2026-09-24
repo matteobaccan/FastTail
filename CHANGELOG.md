@@ -6,7 +6,7 @@ list of merged pull requests and the compare link below it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.8.0] - 2026-09-24
 
 ### Added
 
@@ -27,9 +27,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   font size in points stays a separate setting.
 - **PIN lock.** A 4 to 12 digit PIN can be set in Settings → PIN lock. With the lock
   armed, leaving the screensaver asks for the PIN, and `Ctrl+L` (or the "Lock now"
-  button) locks the window on demand. The PIN is scrambled before it reaches
-  `fasttail.ini`. The lock is a deterrent against a passer-by, not a security boundary:
-  the log files stay readable on disk and a maintenance unlock phrase always opens it.
+  button) locks the window on demand. While locked, an opaque animated backdrop hides
+  the workspace, every keyboard shortcut is ignored (`Esc` included) and the streams
+  keep tailing behind it; `Enter` confirms the PIN, a wrong one beeps, and three wrong
+  ones in a row replace the entry field with a one-minute countdown. The PIN is
+  scrambled before it reaches `fasttail.ini`. The lock is a deterrent against a
+  passer-by, not a security boundary: the log files stay readable on disk and a
+  maintenance unlock phrase always opens it.
 - **Eleven more interface languages.** German, Portuguese (Brazil), Russian, Ukrainian,
   Japanese, Korean, Turkish, Polish, Dutch, Chinese (traditional) and Friulian join
   English, Italian, French, Spanish and Chinese (simplified), each with the full set of
@@ -58,27 +62,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   value, the interface zoom, which is persisted as `zoom_factor` and restored at
   startup; the log font size in points stays a separate setting. Settings gained a Zoom
   row next to it.
-- **The PIN lock could be talked around.** A bare `Escape` still reached the workspace
-  and closed the dialog behind the lock; only modifier shortcuts were being dropped.
-  The lock now keeps just what the PIN field needs, and the filter runs before anything
-  reads the input — running it afterwards left the handlers having already acted, which
-  is why `Escape` still closed the Settings dialog behind the lock. The borderless
-  resize handles, which read the pointer directly instead of through a widget, are
-  disabled while locked too. Its backdrop is opaque and animated
-  (drifting grid, sweeping glow) instead of translucent, so the log is no longer
-  readable behind the prompt and a locked window does not look like a frozen one.
-- **`Ctrl + wheel` froze the window.** The first fix applied the zoom from inside
-  `ctx.input(…)`, and `set_zoom_factor` takes the same context lock: the frame
-  deadlocked. The wheel delta is now read inside the closure and applied after it.
-
-### Changed
-
-- **The PIN prompt fights guessing.** `Enter` confirms the PIN (in the prompt and when
-  setting it in the settings), a wrong PIN beeps, and three wrong PINs in a row replace
-  the entry field with a one-minute countdown — repeated every three further failures,
-  and cleared by a correct PIN. The prompt is sized from the text it actually shows, so
-  the longer translations of the countdown message no longer wrap inside a dialog cut
-  for English.
 
 ### Documentation
 
@@ -441,6 +424,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.8.0]: https://github.com/matteobaccan/FastTail/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/matteobaccan/FastTail/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/matteobaccan/FastTail/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/matteobaccan/FastTail/compare/v0.5.0...v0.6.0
