@@ -363,48 +363,70 @@ pub struct GotoTarget {
     pub hidden: bool,
 }
 
-/// Efficient case-insensitive substring search.
-/// For ASCII haystack and pre-lowercased needle, avoids heap allocation and uses
-/// SIMD-accelerated `memchr2` to skip non-matching positions rapidly.
-#[inline]
-/// Byte ranges of every non-overlapping, case-insensitive occurrence of `needle_lower`
-/// (already lower-cased) in `haystack`.
-pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
+/// Efficient case-insensitive substring search via callback.
+/// Invokes `on_match(start, end)` for every non-overlapping match.
+/// Returning `false` from `on_match` halts the search early.
+pub(crate) fn find_case_insensitive_cb(
+    haystack: &str,
+    needle_lower: &str,
+    mut on_match: impl FnMut(usize, usize) -> bool,
+) {
     if needle_lower.is_empty() {
-        return out;
+        return;
     }
-    if haystack.is_ascii() && needle_lower.is_ascii() {
+    if needle_lower.is_ascii() {
         let h = haystack.as_bytes();
         let n = needle_lower.as_bytes();
         let n_len = n.len();
         if n_len == 0 || n_len > h.len() {
-            return out;
+            return;
         }
 
         // SIMD-accelerated ASCII case-insensitive search:
-        // Scans rapidly using memchr2 on the first byte's lowercase and uppercase variants,
-        // skipping non-candidate byte positions at SIMD vector speeds.
+        // Scans rapidly using memchr / memchr2 on the first character's byte variants.
+        // In UTF-8, ASCII bytes (0..127) never overlap with multi-byte sequence bytes (128..255),
+        // so checking haystack.is_ascii() upfront is unnecessary overhead.
         let first_lower = n[0].to_ascii_lowercase();
         let first_upper = first_lower.to_ascii_uppercase();
         let max_pos = h.len() - n_len;
         let mut i = 0;
 
-        while i <= max_pos {
-            match memchr::memchr2(first_lower, first_upper, &h[i..=max_pos]) {
-                Some(rel) => {
-                    i += rel;
-                    if h[i..i + n_len].eq_ignore_ascii_case(n) {
-                        out.push((i, i + n_len));
-                        i += n_len;
-                    } else {
-                        i += 1;
+        if first_lower == first_upper {
+            while i <= max_pos {
+                match memchr::memchr(first_lower, &h[i..=max_pos]) {
+                    Some(rel) => {
+                        i += rel;
+                        if h[i..i + n_len].eq_ignore_ascii_case(n) {
+                            if !on_match(i, i + n_len) {
+                                return;
+                            }
+                            i += n_len;
+                        } else {
+                            i += 1;
+                        }
                     }
+                    None => break,
                 }
-                None => break,
+            }
+        } else {
+            while i <= max_pos {
+                match memchr::memchr2(first_lower, first_upper, &h[i..=max_pos]) {
+                    Some(rel) => {
+                        i += rel;
+                        if h[i..i + n_len].eq_ignore_ascii_case(n) {
+                            if !on_match(i, i + n_len) {
+                                return;
+                            }
+                            i += n_len;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    None => break,
+                }
             }
         }
-        return out;
+        return;
     }
     // Lower-casing can change byte lengths: keep a map from each byte of the lowered
     // text back to the start and end offsets of the original character.
@@ -425,9 +447,23 @@ pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(
     while let Some(pos) = lowered[from..].find(needle_lower) {
         let s = from + pos;
         let e = s + needle_lower.len();
-        out.push((starts[s], ends[e - 1]));
+        if !on_match(starts[s], ends[e - 1]) {
+            break;
+        }
         from = e;
     }
+}
+
+/// Efficient case-insensitive substring search.
+/// Byte ranges of every non-overlapping, case-insensitive occurrence of `needle_lower`
+/// (already lower-cased) in `haystack`.
+#[allow(dead_code)]
+pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    find_case_insensitive_cb(haystack, needle_lower, |s, e| {
+        out.push((s, e));
+        true
+    });
     out
 }
 
@@ -435,7 +471,7 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
     if needle_lower.is_empty() {
         return true;
     }
-    if haystack.is_ascii() && needle_lower.is_ascii() {
+    if needle_lower.is_ascii() {
         let h_bytes = haystack.as_bytes();
         let n_bytes = needle_lower.as_bytes();
         let n_len = n_bytes.len();
@@ -443,24 +479,38 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
             return false;
         }
 
-        let first_lower = n_bytes[0];
+        let first_lower = n_bytes[0].to_ascii_lowercase();
         let first_upper = first_lower.to_ascii_uppercase();
         let max_pos = h_bytes.len() - n_len;
         let mut curr = 0;
 
-        while curr <= max_pos {
-            // SIMD-accelerated search for candidate starting positions using first char
-            let match_rel =
-                match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..=max_pos]) {
+        if first_lower == first_upper {
+            while curr <= max_pos {
+                let match_rel = match memchr::memchr(first_lower, &h_bytes[curr..=max_pos]) {
                     Some(rel) => rel,
                     None => return false,
                 };
 
-            curr += match_rel;
-            if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
-                return true;
+                curr += match_rel;
+                if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
+                    return true;
+                }
+                curr += 1;
             }
-            curr += 1;
+        } else {
+            while curr <= max_pos {
+                let match_rel =
+                    match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..=max_pos]) {
+                        Some(rel) => rel,
+                        None => return false,
+                    };
+
+                curr += match_rel;
+                if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
+                    return true;
+                }
+                curr += 1;
+            }
         }
         false
     } else {
@@ -1835,12 +1885,14 @@ impl TailEngine {
         }
         if !full {
             for (label, lower) in &self.quick_labels {
-                for (s, e) in find_case_insensitive(line, lower) {
+                find_case_insensitive_cb(line, lower, |s, e| {
                     if claim_span(&mut out.spans, s, e, SpanStyle::Label(label.color)) {
                         full = true;
-                        break;
+                        false
+                    } else {
+                        true
                     }
-                }
+                });
                 if full {
                     break;
                 }
