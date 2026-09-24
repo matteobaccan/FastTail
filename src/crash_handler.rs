@@ -117,10 +117,7 @@ fn create_crash_log_file(target: &std::path::Path) -> std::io::Result<std::fs::F
             ));
         }
     }
-    let file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(target)?;
+    let file = OpenOptions::new().write(true).create(true).open(target)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(std::io::Error::new(

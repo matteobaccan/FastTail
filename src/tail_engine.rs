@@ -3059,3 +3059,43 @@ impl TailEngine {
             .and_then(|idx| self.search_matches.get(idx).copied())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{contains_case_insensitive, find_case_insensitive};
+
+    #[test]
+    fn ascii_needle_matches_inside_utf8_haystack_on_char_boundaries() {
+        // The fast path scans bytes: UTF-8 continuation bytes are >= 0x80, so an ASCII
+        // needle can only ever match at a character boundary. Slicing must not panic.
+        let haystack = "città: ERROR débordement Error";
+        let hits = find_case_insensitive(haystack, "error");
+        assert_eq!(hits.len(), 2);
+        for (s, e) in hits {
+            assert_eq!(haystack[s..e].to_lowercase(), "error");
+        }
+        assert!(contains_case_insensitive(haystack, "error"));
+        assert!(!contains_case_insensitive(haystack, "warn"));
+    }
+
+    #[test]
+    fn non_ascii_needle_still_uses_the_lowercasing_path() {
+        let haystack = "ERRORE CITTÀ";
+        let hits = find_case_insensitive(haystack, "città");
+        assert_eq!(hits.len(), 1);
+        let (s, e) = hits[0];
+        assert_eq!(&haystack[s..e], "CITTÀ");
+        assert!(contains_case_insensitive(haystack, "città"));
+    }
+
+    #[test]
+    fn matches_are_non_overlapping_and_case_folded() {
+        let haystack = "aaAAaa";
+        assert_eq!(
+            find_case_insensitive(haystack, "aa"),
+            vec![(0, 2), (2, 4), (4, 6)]
+        );
+        assert!(find_case_insensitive(haystack, "").is_empty());
+        assert!(contains_case_insensitive(haystack, ""));
+    }
+}
