@@ -101,6 +101,7 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Ctrl + C` | Copy the selected rows (or the current search hit) as plain text |
 | `Ctrl + G` | Go to line N, or `+N` / `-N` from the current line (hidden lines resolve to the next visible one) |
 | `Ctrl + Shift + T` | Toggle always-on-top (also the 📌 pin in the title bar and a Settings checkbox) |
+| `Ctrl + L` | Lock the window behind the PIN (needs a PIN set in Settings → PIN lock) |
 | `Ctrl + F2` / `F2` / `Shift + F2` | Bookmark the current row (`★` in the marker column) / jump to the next / previous bookmark, wrapping around; bookmarks are saved per file |
 | `Alt + W` | Toggle line wrap for the focused stream (also the `↩ Wrap` button in the stream bar); saved per file |
 | `Ctrl + Shift + 1..9` | Create, recolour or remove the quick colour label (preset 1..9) for the current search text of the focused stream; labels apply to every stream and are listed above the rows |

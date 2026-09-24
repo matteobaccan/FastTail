@@ -15,6 +15,10 @@ Settings SHALL let the user define external tools with a name, a command, an arg
 - **WHEN** the row text is `x; rm -rf /` and a tool with `{line}` is run without the shell flag
 - **THEN** the text is passed as a single argument and no shell command is executed.
 
+#### Scenario: The settings say what tools are for
+- **WHEN** the user opens the External tools section
+- **THEN** the placeholder list is accompanied by a link to the external tools cookbook (`docs/external-tools-cookbook.md`), which holds worked recipes and the safety habits that go with them.
+
 ### Requirement: Tools Bound to Highlight Rules
 A tool MAY be bound to a highlight rule; it SHALL run when the rule matches an appended line, at most once per second per tool and with at most 10 concurrent child processes, dropped runs being counted and shown in the tool's settings row.
 

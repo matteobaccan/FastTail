@@ -37,6 +37,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the line, open a URL or ticket, pretty-print the row's JSON, grep the file on disk,
   fire a webhook from a rule-bound tool) plus the habits that keep them safe. Linked
   from the README and from the External tools section of the settings.
+- **Specs realigned with the code.** `localization-i18n` describes the sixteen
+  languages, BCP-47 detection and per-script CJK fonts instead of five languages; a new
+  `window-lock` capability covers the PIN lock; `cyber-ui-docking` gains the visible zoom
+  level and the stream toolbar affordances (active-toggle styling, fixed position of the
+  TXT/HEX/MD switcher) and its dialog-chrome cursors; `screensaver-matrix` notes that
+  dismissal can hand over to the PIN prompt; `rendering-backend` records that the
+  settings label the software renderer as not recommended; `external-tools` points at
+  the cookbook. `Ctrl+L` added to the README shortcut table.
 
 ## [0.7.1] - 2026-09-21
 

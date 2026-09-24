@@ -40,7 +40,7 @@ The About dialog SHALL provide clickable hyperlinks to the GitHub repository and
 - **THEN** the test suite fails with a message naming the missing feature.
 
 ### Requirement: Localized Tooltips
-All interactive buttons, sliders, and controls SHALL provide informative tooltips fully localized in the currently selected user language (English, Italian, French, Spanish, Chinese).
+All interactive buttons, sliders, and controls SHALL provide informative tooltips fully localized in the currently selected user language (see the localization-i18n capability for the supported set).
 
 #### Scenario: Tooltip follows the selected language
 - **WHEN** the interface language is Italian and the user hovers over the follow-mode toggle
@@ -97,6 +97,10 @@ Modal dialogs (Settings, Highlights, About, Help) SHALL open centered in the vie
 #### Scenario: User repositions a modal dialog
 - **WHEN** a modal dialog opens at the center of the screen and the user drags its title bar
 - **THEN** the window moves smoothly to the dragged position without snapping back to center.
+
+#### Scenario: Modal chrome shows what it does
+- **WHEN** the pointer is over the title strip of a dialog
+- **THEN** the cursor becomes the move cursor over the draggable part and a pointing hand over the collapse and close buttons at its ends.
 
 ### Requirement: Dynamic Active File Status Footer
 The application bottom panel SHALL display exclusively the absolute path of the currently active log tab, updating immediately whenever the user switches active tabs, without redundant status or filter counters.
@@ -165,6 +169,24 @@ Each text stream SHALL offer a wrap toggle (stream bar button and Alt+W) that so
 #### Scenario: Search jump in wrap mode
 - **WHEN** wrap is enabled and the user presses F3
 - **THEN** the viewport scrolls so that the matching line is fully visible.
+
+### Requirement: Visible Zoom Level
+The log font size doubles as the application zoom (`Ctrl+`, `Ctrl-`, `Ctrl+0` and `Ctrl+wheel`), so the current level SHALL be shown as a percentage of the default size next to the always-on-top pin in the title bar, and beside the point size in the settings. Clicking the indicator SHALL reset the zoom to 100%.
+
+#### Scenario: Accidental zoom is explained
+- **WHEN** the user scrolls the wheel with `Ctrl` held and the text changes size
+- **THEN** the title bar shows the new percentage in the accent colour, and a click on it restores 100%.
+
+### Requirement: Stream Toolbar Affordances
+The stream toolbar SHALL show the state of its toggles (follow, monitor, line numbers, wrap, TXT/HEX/MD) with a tinted fill and a border, not with the label colour alone, so the active state is readable on the light theme as well. The TXT/HEX/MD switcher SHALL keep a fixed position in the toolbar, before the controls that appear and disappear with the view mode, so it does not move under the pointer when the mode changes.
+
+#### Scenario: Active toggle on the light theme
+- **WHEN** the light theme is active and line wrap is enabled
+- **THEN** the wrap button is drawn filled and outlined in the accent colour, clearly distinct from the inactive buttons next to it.
+
+#### Scenario: Switching to HEX does not move the switcher
+- **WHEN** the user switches a stream from text to HEX, and the line-number and wrap buttons disappear
+- **THEN** the TXT/HEX/MD buttons stay where they were.
 
 ### Requirement: Named Sessions
 The application SHALL save the workspace (open files and patterns, dock layout, floating windows, per-stream filters, search queries, wrap, encoding, bookmarks) to a named session file and load it back, replacing the current workspace after confirmation. Global preferences SHALL NOT be part of a session. The title bar SHALL show the session name and a `*` when the workspace differs from the saved session. Paths SHALL be stored absolute and, when possible, relative to the session file so moved bundles still open. Missing files SHALL be skipped with a summary. Recent sessions SHALL be listed in a menu.

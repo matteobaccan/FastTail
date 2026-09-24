@@ -16,6 +16,10 @@ The application SHALL render a full-viewport digital rain screensaver (cascading
 - **WHEN** the screensaver is running and the user moves the mouse, clicks, or presses any key
 - **THEN** the screensaver dismisses immediately and returns the user to the exact prior workspace state without delay or visual stutter.
 
+#### Scenario: Dismissal hands over to the PIN lock
+- **WHEN** the screensaver is dismissed and the PIN lock is armed (see the window-lock capability)
+- **THEN** the PIN prompt is shown instead of the workspace, and the workspace reappears only once the PIN is accepted.
+
 #### Scenario: Unfocused window never animates
 - **WHEN** the FastTail window does not have the keyboard focus (it sits behind another window, on another desktop, or is minimized) and the idle timeout elapses
 - **THEN** the screensaver does not start, and a running screensaver stops as soon as the focus is lost, so the animation never consumes CPU while nobody can see it.

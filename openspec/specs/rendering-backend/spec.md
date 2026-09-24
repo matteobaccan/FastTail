@@ -35,6 +35,10 @@ The application SHALL accept `software` (alias `cpu`) as a renderer value in the
 - **WHEN** `renderer = software` is set and wgpu cannot create a CPU adapter
 - **THEN** the application retries with OpenGL and, if that also fails, exits with the OpenGL error.
 
+#### Scenario: The settings warn before the renderer is chosen
+- **WHEN** the user opens the renderer drop-down in the settings
+- **THEN** the software entry is labelled as not recommended, and selecting it shows a warning explaining that it rasterizes on the CPU and keeps consuming CPU even while the window is idle.
+
 ### Requirement: Visible Renderer Indicator
 The status bar SHALL show a chip reading `WGPU` or `GL`, with the suffix `fallback` when the automatic retry took place. Its tooltip and the About dialog SHALL show the adapter details: graphics API (for wgpu: Dx12, Vulkan, Metal or GL; for OpenGL: the GL version) and the adapter or renderer name, plus the driver string when available.
 
