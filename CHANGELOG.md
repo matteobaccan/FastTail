@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Closing a stream no longer risks freezing another file operation on Windows.** When
+  a watched file changed at the moment its stream was closed, the file watcher (notify
+  8.2) could re-arm its read on the directory handle it had just closed; Windows could
+  already have handed that handle value to another open, which then blocked for good.
+  The test suite hung this way now and then on Windows. notify is updated to 9.0.0-rc.5,
+  which fixes it, and the CI test step now fails after 20 minutes instead of hanging.
 - **Zip entries written with `\` separators are kept in sessions.** An entry such as
   `dir\file.log` (written by some Windows tools) was saved with that spelling, so the
   session and the workspace named the wrong archive and reported the stream as missing

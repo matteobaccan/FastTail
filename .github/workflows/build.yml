@@ -76,7 +76,10 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev
 
+      # A hung test fails the job in minutes instead of holding the runner for hours
+      # (the suite takes about a minute plus the build).
       - name: 🧪 Run test suite
+        timeout-minutes: 20
         run: cargo test --target ${{ matrix.target }}
 
   # ---------------------------------------------------------------------------
