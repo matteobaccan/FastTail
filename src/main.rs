@@ -334,7 +334,7 @@ fn attach_parent_console() {}
 
 /// Parses the command line; prints help/version or a usage error and exits when asked to.
 fn parse_command_line() -> CliArgs {
-    let cli = match CliArgs::from_env() {
+    let mut cli = match CliArgs::from_env() {
         Ok(cli) => cli,
         Err(err) => {
             attach_parent_console();
@@ -351,6 +351,13 @@ fn parse_command_line() -> CliArgs {
             print!("{USAGE}");
         }
         std::process::exit(0);
+    }
+    if cli.stdin && fasttail::stdin_source::classify() != fasttail::stdin_source::StdinKind::Piped {
+        // Reported now, while the parent console can still be attached; the rest of the
+        // startup goes on, as for a missing file.
+        attach_parent_console();
+        eprintln!("fasttail: standard input is not a pipe; nothing to read");
+        cli.stdin = false;
     }
     if let Some(cfg) = &cli.config {
         // The config loader reads FASTTAIL_CONFIG first; set it before anything loads it.

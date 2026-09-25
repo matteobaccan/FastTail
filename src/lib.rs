@@ -18,6 +18,7 @@ pub mod scan_job;
 pub mod screensaver;
 pub mod session;
 pub mod spool;
+pub mod stdin_source;
 pub mod tail_engine;
 pub mod theme;
 pub mod timestamp;

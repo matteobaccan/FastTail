@@ -274,6 +274,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         }
                         _ => match &engine.compressed {
                             Some(c) => c.title(),
+                            None if engine.is_stdin() => {
+                                crate::stdin_source::STDIN_TITLE.to_string()
+                            }
                             None => file_name.to_string(),
                         },
                     };
@@ -492,6 +495,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 if let Some(entry) = &c.entry {
                     tip.push_str(&format!("\n› {entry}"));
                 }
+                response.clone().on_hover_text(tip);
+            }
+            // Standard input: the tooltip says where it is spooled.
+            if let Some(s) = find_engine_index(self.ctx.engines, path)
+                .and_then(|i| self.ctx.engines[i].stdin.as_ref())
+            {
+                let tip = t(*self.ctx.language, "stdin_footer")
+                    .replace("{path}", &s.spool_path().display().to_string());
                 response.clone().on_hover_text(tip);
             }
         }
@@ -857,6 +868,60 @@ fn render_compressed_status(
             engine.view_notice = Some(format!("{}: {err}", t(lang, "compressed_failed")));
         }
         ui.ctx().request_repaint();
+    }
+}
+
+/// Stream bar part of the standard-input stream: nothing while input flows, then that
+/// it ended (with the line count) or failed, and that earlier input was discarded when
+/// the spool restarted at its limit.
+fn render_stdin_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
+    use crate::stdin_source::{InputState, RestartReason};
+    let Some(s) = engine.stdin.as_ref() else {
+        return;
+    };
+    let tip = t(lang, "stdin_footer").replace("{path}", &s.spool_path().display().to_string());
+    match s.state() {
+        InputState::Reading => {}
+        InputState::Ended => {
+            ui.separator();
+            ui.label(
+                RichText::new(format!(
+                    "⏹ {}",
+                    t(lang, "stdin_ended").replace("{lines}", &engine.total_lines().to_string())
+                ))
+                .monospace()
+                .color(theme.secondary_accent()),
+            )
+            .on_hover_text(tip.clone());
+        }
+        InputState::Failed(err) => {
+            ui.separator();
+            ui.label(
+                RichText::new(format!(
+                    "⚠ {}",
+                    t(lang, "stdin_failed").replace("{error}", &err)
+                ))
+                .monospace()
+                .color(theme.warn_color()),
+            )
+            .on_hover_text(tip.clone());
+        }
+    }
+    if let Some(reason) = s.restart_reason() {
+        let text = match reason {
+            RestartReason::CapReached(cap) => t(lang, "stdin_restarted_cap")
+                .replace("{size}", &crate::ui::zip_picker::human_size(cap)),
+            RestartReason::LowDisk { volume } => {
+                t(lang, "stdin_restarted_disk").replace("{volume}", &volume)
+            }
+        };
+        ui.separator();
+        ui.label(
+            RichText::new(format!("ⓘ {text}"))
+                .monospace()
+                .color(theme.warn_color()),
+        )
+        .on_hover_text(tip);
     }
 }
 
@@ -1359,6 +1424,7 @@ fn render_log_stream(
                 .request_repaint_after(std::time::Duration::from_millis(500));
         }
         render_compressed_status(ui, engine, theme, lang);
+        render_stdin_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
         if let Some(glob) = engine.pattern.clone() {
@@ -1736,11 +1802,12 @@ fn render_log_stream(
             let export = |engine: &TailEngine, title: &str, matches_only: bool| {
                 let suggested = format!(
                     "{}-{}.txt",
-                    engine
-                        .path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("fasttail"),
+                    if engine.is_stdin() {
+                        Some(crate::stdin_source::STDIN_TITLE)
+                    } else {
+                        engine.path.file_stem().and_then(|s| s.to_str())
+                    }
+                    .unwrap_or("fasttail"),
                     if matches_only { "matches" } else { "export" }
                 );
                 if let Some(target) = rfd::FileDialog::new()
@@ -4258,12 +4325,13 @@ pub fn render_filters_content(
 
     let focus_path = focus.as_deref().cloned().flatten();
     for engine in engines.iter_mut() {
-        let file_name = engine
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Log")
-            .to_string();
+        let file_name = if engine.is_stdin() {
+            Some(crate::stdin_source::STDIN_TITLE)
+        } else {
+            engine.path.file_name().and_then(|n| n.to_str())
+        }
+        .unwrap_or("Log")
+        .to_string();
         let is_focus = focus_path
             .as_deref()
             .is_some_and(|p| paths_equal_fast(p, &engine.path));

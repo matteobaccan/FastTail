@@ -359,6 +359,9 @@ fn find_engine<'a>(engines: &'a [TailEngine], path: &std::path::Path) -> Option<
 /// The stream as its tab names it: the pattern and the file it resolves to, the archive
 /// and the entry, or the file name.
 pub fn stream_name(engine: &TailEngine) -> String {
+    if engine.is_stdin() {
+        return crate::stdin_source::STDIN_TITLE.to_string();
+    }
     let file_name = engine
         .path
         .file_name()
