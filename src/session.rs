@@ -32,6 +32,9 @@ pub struct StreamEntry {
     pub encoding: Option<String>,
     /// Bookmarked line indices, sorted.
     pub bookmarks: Vec<usize>,
+    /// Entry name when the stream is a zip entry: `path` is then `archive/entry` (see
+    /// `compressed::entry_path`), and the file stores the archive path and the entry.
+    pub archive_entry: Option<String>,
 }
 
 impl StreamEntry {
@@ -98,9 +101,18 @@ impl Session {
         }
         for (i, s) in self.streams.iter().enumerate() {
             let mut sec = conf.with_section(Some(format!("stream_{i}")));
-            sec.set("path", s.path.to_string_lossy().to_string());
-            if let Some(rel) = base_dir.and_then(|b| relative_under(&s.path, b)) {
+            // A zip entry is written as its archive plus the entry name, so the file
+            // names a real file and a moved bundle still resolves.
+            let file = match &s.archive_entry {
+                Some(entry) => crate::compressed::archive_of(&s.path, entry),
+                None => s.path.clone(),
+            };
+            sec.set("path", file.to_string_lossy().to_string());
+            if let Some(rel) = base_dir.and_then(|b| relative_under(&file, b)) {
                 sec.set("rel", rel);
+            }
+            if let Some(entry) = &s.archive_entry {
+                sec.set("entry", entry);
             }
             sec.set("include", &s.include_filter);
             sec.set("exclude", &s.exclude_filter);
@@ -160,6 +172,14 @@ impl Session {
                     }
                 },
             };
+            let archive_entry = sec
+                .get("entry")
+                .filter(|e| !e.is_empty())
+                .map(str::to_string);
+            let resolved = match &archive_entry {
+                Some(entry) => crate::compressed::entry_path(&resolved, entry),
+                None => resolved,
+            };
             let bookmarks: Vec<usize> = sec
                 .get("bookmarks")
                 .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
@@ -178,6 +198,7 @@ impl Session {
                     .filter(|e| !e.is_empty())
                     .map(str::to_string),
                 bookmarks,
+                archive_entry,
             });
         }
         if out.relocated {
@@ -221,6 +242,9 @@ impl Session {
                     .cloned()
                     .unwrap_or_else(|| StreamEntry::new(p.clone()));
                 entry.path = p.clone();
+                if entry.archive_entry.is_none() {
+                    entry.archive_entry = crate::compressed::split_entry_path(p).map(|(_, e)| e);
+                }
                 entry.wrap = cfg.wrap_for(p);
                 entry.bookmarks = cfg
                     .bookmarks

@@ -1080,17 +1080,16 @@ impl TailEngine {
         Ok(())
     }
 
-    /// Runs the encoding and view-mode detection again on the first bytes of the file.
+    /// Runs the encoding and binary detection again on the first bytes of the file; a
+    /// binary file switches to the HEX view (the Markdown view was already chosen from
+    /// the name when the file was opened).
     fn redetect_encoding(&mut self) {
         let sample = self.source.read_to_vec(0, ENCODING_SAMPLE_BYTES as usize);
         let (encoding, is_binary) = Self::detect_encoding(&sample);
         self.encoding = encoding;
-        let name = self
-            .current_file
-            .clone()
-            .unwrap_or_else(|| self.path.clone());
-        self.view_mode =
-            Self::initial_view_mode(&name, is_binary, self.file_size, self.markdown_max_bytes);
+        if is_binary {
+            self.view_mode = ViewMode::Hex;
+        }
     }
 
     /// Settles a detection still pending on a stream that will not grow any more (a
@@ -1860,14 +1859,17 @@ impl TailEngine {
             let added_bytes = new_size - self.file_size;
             self.bytes_read_since_tick += added_bytes;
 
-            // Opened empty: the first sample decides the encoding and the view, and the
-            // index is rebuilt with them.
+            // Opened empty: the first sample decides the encoding and the view; the index
+            // is rebuilt when they change, else the append goes on as usual.
             if self.encoding_pending && new_size >= ENCODING_SAMPLE_BYTES {
                 self.encoding_pending = false;
                 self.source.set_len(new_size);
+                let before = (self.encoding, self.view_mode);
                 self.redetect_encoding();
-                self.reload_from_start(new_size, new_modified);
-                return;
+                if (self.encoding, self.view_mode) != before {
+                    self.reload_from_start(new_size, new_modified);
+                    return;
+                }
             }
 
             // A file reset and regrown past its old size can keep the same header (same log

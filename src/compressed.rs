@@ -878,6 +878,9 @@ impl TailEngine {
             let bookmarks = std::mem::take(&mut c.pending_bookmarks);
             if fits {
                 self.set_bookmarks(bookmarks);
+                // A reload rebuilt the index and saved the bookmarks as gone: save
+                // them again.
+                self.bookmarks_dirty = true;
             }
         }
     }

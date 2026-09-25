@@ -92,6 +92,11 @@ pub struct FastTailApp {
     pub pending_session_load: Option<PathBuf>,
     /// Streams of the last loaded session that could not be opened, shown once.
     pub session_missing: Option<Vec<PathBuf>>,
+    /// Entry picker of a zip archive holding several files, while it is shown.
+    pub zip_picker: Option<crate::ui::zip_picker::ZipPicker>,
+    /// Why the last compressed file could not be opened (empty zip, no space...), shown
+    /// once in a small window.
+    pub open_notice: Option<String>,
     /// Window title last sent to the OS, to send it again only when it changes.
     pub title_applied: String,
     /// Timestamp of last live frame render for frame pacing.
@@ -450,6 +455,8 @@ impl FastTailApp {
     pub fn new(cc: &eframe::CreationContext<'_>, cli: crate::cli::CliArgs) -> Self {
         setup_cjk_fonts(&cc.egui_ctx);
         let mut config = FastTailConfig::load();
+        // Spools of an instance that crashed or was killed: nobody else will delete them.
+        crate::spool::sweep(&config.compressed_settings().spool_dir);
         if cli.fresh {
             // Empty workspace: no restored streams, no saved dock layout.
             config.open_files.clear();
@@ -553,6 +560,8 @@ impl FastTailApp {
             last_dirty_check: Instant::now(),
             pending_session_load: None,
             session_missing: None,
+            zip_picker: None,
+            open_notice: None,
             title_applied: String::new(),
             last_frame_render: Instant::now(),
             last_mouse_render: Instant::now(),
@@ -575,17 +584,13 @@ impl FastTailApp {
             }
             for path in tabs_to_open {
                 let is_pattern = crate::wildcard::is_pattern_path(&path);
-                if !is_pattern && !path.exists() {
+                if !is_pattern && !crate::compressed::source_exists(&path) {
                     continue;
                 }
-                let wake = Self::make_wake(&app.egui_ctx);
-                let opened = if is_pattern {
-                    // A pattern tab resolves to the newest match again at every start.
-                    TailEngine::open_pattern_with_wake(&path, wake)
-                } else {
-                    TailEngine::open_with_wake(&path, wake)
-                };
-                if let Ok(mut engine) = opened {
+                // A pattern tab resolves to the newest match again at every start; a
+                // compressed one is decompressed again in the background.
+                let opened = app.open_engine(&path);
+                if let Some(Ok(mut engine)) = opened {
                     engine.size_check_interval =
                         std::time::Duration::from_millis(app.config.size_check_interval_ms as u64);
                     engine
@@ -593,9 +598,7 @@ impl FastTailApp {
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
                     engine.wrap_lines = app.config.wrap_for(&path);
-                    if let Some(lines) = app.config.bookmarks_for(&path, engine.total_lines()) {
-                        engine.set_bookmarks(lines);
-                    }
+                    restore_bookmarks(&mut engine, &app.config, &path);
                     apply_stream_state(&mut engine, &app.config);
                     app.engines.push(engine);
                 }
@@ -603,7 +606,9 @@ impl FastTailApp {
         } else {
             // Clean dock layout: open previously saved files into dock
             for path in app.config.open_files.clone() {
-                if path.exists() || crate::wildcard::is_pattern_path(&path) {
+                if crate::compressed::source_exists(&path)
+                    || crate::wildcard::is_pattern_path(&path)
+                {
                     app.open_log_file(path);
                 }
             }
@@ -1123,9 +1128,76 @@ impl FastTailApp {
         std::sync::Arc::new(move || ctx.request_repaint()) as crate::tail_engine::WakeFn
     }
 
+    /// Opens the engine for `path`: a pattern stream, a decompressed gzip file or zip
+    /// entry, or a plain file. `None` for a zip archive, whose entries are chosen first.
+    fn open_engine(&self, path: &Path) -> Option<Result<TailEngine, crate::compressed::OpenError>> {
+        use crate::compressed::{OpenError, Target};
+        let wake = Self::make_wake(&self.egui_ctx);
+        if crate::wildcard::is_pattern_path(path) {
+            return Some(TailEngine::open_pattern_with_wake(path, wake).map_err(OpenError::Io));
+        }
+        let settings = self.config.compressed_settings();
+        match crate::compressed::classify(path) {
+            Target::Plain => Some(TailEngine::open_with_wake(path, wake).map_err(OpenError::Io)),
+            Target::Gzip => Some(crate::compressed::open_engine(
+                path,
+                None,
+                &settings,
+                Some(wake),
+            )),
+            Target::ZipEntry { archive, entry } => Some(crate::compressed::open_engine(
+                &archive,
+                Some(&entry),
+                &settings,
+                Some(wake),
+            )),
+            Target::ZipArchive | Target::EmptyZip => None,
+        }
+    }
+
+    /// A zip archive was opened: one file entry opens directly, several open the entry
+    /// picker, none is reported.
+    fn open_zip_archive(&mut self, archive: PathBuf) {
+        let lang = self.config.language;
+        let entries = match crate::compressed::list_zip_entries(&archive) {
+            Ok(entries) => entries,
+            Err(err) => {
+                self.open_notice = Some(format!("{}: {err}", archive.display()));
+                return;
+            }
+        };
+        match entries.as_slice() {
+            [] => {
+                self.open_notice = Some(format!("{}: {}", archive.display(), t(lang, "zip_empty")));
+            }
+            [only] if only.refusal.is_none() => {
+                let path = crate::compressed::entry_path(&archive, &only.name);
+                self.open_log_file(path);
+            }
+            _ => {
+                self.zip_picker = Some(crate::ui::zip_picker::ZipPicker::new(archive, entries));
+            }
+        }
+    }
+
+    /// Text of a failed compressed open, in the UI language.
+    fn open_error_text(&self, path: &Path, err: &crate::compressed::OpenError) -> String {
+        use crate::compressed::OpenError;
+        let lang = self.config.language;
+        let reason = match err {
+            OpenError::Io(e) => e.to_string(),
+            OpenError::NotEnoughSpace { volume, needed } => t(lang, "compressed_no_space")
+                .replace("{volume}", volume)
+                .replace("{size}", &crate::ui::zip_picker::human_size(*needed)),
+            OpenError::Refused(refusal) => crate::ui::zip_picker::refusal_text(lang, refusal),
+            OpenError::NoSuchEntry => t(lang, "zip_no_entry").to_string(),
+        };
+        format!("{}: {reason}", path.display())
+    }
+
     pub fn open_log_file(&mut self, path: PathBuf) {
         let is_pattern = crate::wildcard::is_pattern_path(&path);
-        if !is_pattern && !path.exists() {
+        if !is_pattern && !crate::compressed::source_exists(&path) {
             return;
         }
 
@@ -1141,12 +1213,29 @@ impl FastTailApp {
             }
         }
 
-        let wake = Self::make_wake(&self.egui_ctx);
-        let opened = if is_pattern {
-            TailEngine::open_pattern_with_wake(&path, wake)
-        } else {
-            TailEngine::open_with_wake(&path, wake)
+        let opened = match self.open_engine(&path) {
+            Some(opened) => opened,
+            None => {
+                if crate::compressed::sniff(&path) == crate::compressed::Format::EmptyZip {
+                    self.open_notice = Some(format!(
+                        "{}: {}",
+                        path.display(),
+                        t(self.config.language, "zip_empty")
+                    ));
+                } else {
+                    self.open_zip_archive(path);
+                }
+                return;
+            }
         };
+        if let Err(err) = &opened {
+            // A plain file that fails to open is skipped silently, as it always was; a
+            // compressed one says why.
+            if !is_pattern && crate::compressed::classify(&path) != crate::compressed::Target::Plain
+            {
+                self.open_notice = Some(self.open_error_text(&path, err));
+            }
+        }
         if let Ok(mut engine) = opened {
             engine.size_check_interval =
                 std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
@@ -1154,9 +1243,7 @@ impl FastTailApp {
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
-            if let Some(lines) = self.config.bookmarks_for(&path, engine.total_lines()) {
-                engine.set_bookmarks(lines);
-            }
+            restore_bookmarks(&mut engine, &self.config, &path);
             engine.wrap_lines = self.config.wrap_for(&path);
             apply_stream_state(&mut engine, &self.config);
             self.engines.push(engine);
@@ -1308,7 +1395,8 @@ impl FastTailApp {
 
             // Keyboard shortcut: Space = toggle follow tail on active stream
             if i.key_pressed(Key::Space) {
-                for eng in &mut self.engines {
+                // A compressed stream is a static snapshot: follow stays off.
+                for eng in self.engines.iter_mut().filter(|e| !e.is_compressed()) {
                     eng.follow_tail = !eng.follow_tail;
                 }
             }
@@ -2006,7 +2094,7 @@ impl FastTailApp {
                     {
                         for eng in &mut self.engines {
                             eng.is_watching = true;
-                            eng.follow_tail = true;
+                            eng.follow_tail = !eng.is_compressed();
                         }
                         ctx.request_repaint();
                     }
@@ -2951,6 +3039,62 @@ impl FastTailApp {
                                 let _ = self.config.save();
                             }
                         });
+
+                        // Compressed logs: where they are decompressed, and how far.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "compressed_max_size")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.compressed_max_gb)
+                                        .range(
+                                            crate::compressed::MIN_MAX_GB
+                                                ..=crate::compressed::MAX_MAX_GB,
+                                        )
+                                        .suffix(" GB"),
+                                )
+                                .on_hover_text(t(lang, "compressed_max_size_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "spool_dir"))).monospace(),
+                            );
+                            let shown = self.config.compressed_settings().spool_dir;
+                            ui.label(
+                                RichText::new(shown.display().to_string())
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(self.config.theme.text_dim()),
+                            )
+                            .on_hover_text(t(lang, "spool_dir_tip"));
+                            if ui
+                                .button("📁")
+                                .on_hover_text(t(lang, "spool_dir_tip"))
+                                .clicked()
+                            {
+                                if let Some(dir) =
+                                    rfd::FileDialog::new().set_directory(&shown).pick_folder()
+                                {
+                                    self.config.spool_dir = Some(dir);
+                                    let _ = self.config.save();
+                                }
+                            }
+                            if self.config.spool_dir.is_some()
+                                && ui
+                                    .button("↺")
+                                    .on_hover_text(t(lang, "spool_dir_reset"))
+                                    .clicked()
+                            {
+                                self.config.spool_dir = None;
+                                let _ = self.config.save();
+                            }
+                        });
                     });
             });
 
@@ -3638,6 +3782,55 @@ impl FastTailApp {
             }
         }
 
+        // Zip entry picker: each chosen entry opens as its own stream.
+        if let Some(picker) = self.zip_picker.as_mut() {
+            let outcome = picker.show(&ctx, self.config.language, self.config.theme);
+            if let Some(outcome) = outcome {
+                let picker = self.zip_picker.take();
+                if let (crate::ui::zip_picker::PickerOutcome::Open(names), Some(picker)) =
+                    (outcome, picker)
+                {
+                    for name in names {
+                        let path = crate::compressed::entry_path(&picker.archive, &name);
+                        self.open_log_file(path);
+                    }
+                }
+            }
+        }
+        if let Some(notice) = self.open_notice.clone() {
+            let lang = self.config.language;
+            let theme = self.config.theme;
+            let mut is_open = true;
+            let mut close = false;
+            egui::Window::new(
+                RichText::new(format!("🗜 {}", t(lang, "compressed_open_failed")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .id(egui::Id::new("fasttail_open_notice"))
+            .open(&mut is_open)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                ui.label(
+                    RichText::new(notice)
+                        .monospace()
+                        .size(11.5)
+                        .color(theme.text_primary()),
+                );
+                ui.add_space(8.0);
+                if ui.button(t(lang, "session_ok")).clicked()
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            if close || !is_open {
+                self.open_notice = None;
+            }
+        }
+
         // 12. Render Matrix Screensaver if activated
         let viewport = ctx.content_rect();
         self.screensaver.render(&ctx, viewport);
@@ -3812,6 +4005,10 @@ impl eframe::App for FastTailApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_dock_layout();
         let _ = self.config.save();
+        // Dropping the engines stops their decompression jobs and deletes their spools;
+        // whatever is left of this process goes too.
+        self.engines.clear();
+        crate::spool::remove_own(&self.config.compressed_settings().spool_dir);
     }
 }
 
@@ -3884,6 +4081,13 @@ fn dock_signature(dock: &DockState<FastTailTab>) -> String {
 
 /// The session entry describing `engine` as it is now.
 fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
+    let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
+    if let Some(c) = engine.compressed.as_ref() {
+        // A restored compressed stream still waiting for its index to reach them.
+        if bookmarks.is_empty() {
+            bookmarks = c.pending_bookmarks.clone();
+        }
+    }
     StreamEntry {
         path: engine.path.clone(),
         include_filter: engine.include_filter.clone(),
@@ -3891,7 +4095,20 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         search_query: engine.search_query.trim().to_string(),
         wrap: engine.wrap_lines,
         encoding: Some(engine.encoding.name().to_string()),
-        bookmarks: engine.bookmarks.iter().copied().collect(),
+        bookmarks,
+        archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
+    }
+}
+
+/// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
+/// its bookmarks wait until the index covers them (see `TailEngine::poll_compressed`).
+fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
+    if let Some(c) = engine.compressed.as_mut() {
+        if let Some((_, lines)) = cfg.bookmarks.iter().find(|(p, _)| paths_equal(p, path)) {
+            c.pending_bookmarks = lines.clone();
+        }
+    } else if let Some(lines) = cfg.bookmarks_for(path, engine.total_lines()) {
+        engine.set_bookmarks(lines);
     }
 }
 
