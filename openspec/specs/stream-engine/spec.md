@@ -4,7 +4,7 @@
 Defines the tail engine: on-demand streaming access to very large files without holding them in memory, real-time follow with pause, rotation and truncation handling, background scans with progress, multi-encoding decoding, and the Text, Hex and Markdown view modes.
 ## Requirements
 ### Requirement: Streaming access to large files
-The tail engine SHALL access files through an open read handle and a bounded block cache (at most 64 blocks of 64 KB per stream) and SHALL NOT hold a copy of the file in memory. Resident state per stream SHALL be limited to the line index (one 64-bit offset per line), the filtered-line and match lists, selection and bookmarks. Opening a file SHALL show its content immediately; the line index is built synchronously for files up to 256 MB and in the background above, with progress shown. Memory-mapping SHALL NOT be used, because a mapped file blocks the writer's rotation on Windows.
+The tail engine SHALL access files through an open read handle and a bounded block cache (at most 64 blocks of 64 KB per stream) and SHALL NOT hold a copy of the file in memory. Resident state per stream SHALL be limited to the line index (one 64-bit offset per line), the level and timestamp caches once scanned (1 and 8 bytes per line), the per-4096-line error counts, the filtered-line list, the match list (at most 1,000,000 hits), selection and bookmarks. Opening a file SHALL show its content immediately; the line index is built synchronously for files up to 256 MB and in the background above, with progress shown. Memory-mapping SHALL NOT be used, because a mapped file blocks the writer's rotation on Windows.
 
 #### Scenario: Ten growing files
 - **WHEN** ten 50 MB logs with 500-byte lines are open and all of them grow on every frame
@@ -49,7 +49,11 @@ The engine SHALL detect when a monitored file is truncated or rotated (e.g., via
 - **THEN** the engine switches tracking to the new file seamlessly and notifies the user via the status bar.
 
 ### Requirement: Multi-Encoding Support
-The engine SHALL decode log files according to the selected encoding: ASCII, ANSI (Windows-1252), UTF-8 (with or without BOM), Unicode LE (UTF-16 Little Endian), and Unicode BE (UTF-16 Big Endian), with automatic BOM and binary heuristic detection upon opening.
+The engine SHALL decode log files according to the selected encoding: ASCII, ANSI (Windows-1252), UTF-8 (with or without BOM), Unicode LE (UTF-16 Little Endian), and Unicode BE (UTF-16 Big Endian), with automatic BOM and binary heuristic detection upon opening, run again once when a stream opened with fewer than 512 bytes first holds 512 bytes (or when the decompression of a compressed stream ends).
+
+#### Scenario: Log created empty and filled later
+- **WHEN** a log is opened while empty and the writer then fills it with UTF-16 LE text
+- **THEN** the encoding is detected again once the file holds 512 bytes, and the lines are shown as UTF-16 LE instead of UTF-8.
 
 #### Scenario: Opening a UTF-16 log file
 - **WHEN** a user opens a log file formatted in UTF-16 LE
@@ -58,7 +62,7 @@ The engine SHALL decode log files according to the selected encoding: ASCII, ANS
 ### Requirement: View Modes: Text, Hex, and Markdown
 The engine SHALL support three view modes selectable per stream:
 1. **TXT (Text Mode)**: Displays log lines as text with highlight rules and JSON toggles. Include/exclude filters apply automatically whenever their text is non-empty; there is no separate filtered mode.
-2. **HEX (Binary Hex Mode)**: Displays file bytes in hexadecimal and ASCII dump columns. Columns SHALL be configurable in multiples of 8 (starting at 16, incrementing or decrementing by 8 columns). Files detected as binary open in this mode.
+2. **HEX (Binary Hex Mode)**: Displays file bytes in hexadecimal and ASCII dump columns. Columns SHALL be configurable in multiples of 8 (starting at 16, incrementing or decrementing by 8 columns). Files detected as binary open in this mode (gzip and zip files are decompressed instead, see Compressed Log Input).
 3. **MD (Markdown Mode)**: Renders the file as formatted Markdown. Files with a `.md` / `.markdown` extension open in this mode; content that contains real HTML markup is converted to Markdown before rendering, and the converted text is cached until the file changes.
 
 #### Scenario: Opening an HTML report in Markdown mode
@@ -120,4 +124,45 @@ A stream MAY be opened from a directory path plus a file-name pattern with `*` a
 #### Scenario: No match yet
 - **WHEN** the pattern matches no file at open time
 - **THEN** the stream opens empty with a "waiting for a matching file" notice and starts tailing the first file that appears.
+
+### Requirement: Compressed Log Input
+The engine SHALL open gzip files (magic bytes `1f 8b`, including multi-member files) and zip archives (magic bytes `50 4b 03 04`) read-only, whatever their extension, by decompressing them on a background thread into a temporary spool file that is then accessed like any other file, so that no decompressed copy is held in memory and every text, HEX and Markdown feature works on the result. Content SHALL become visible while decompression runs, and the stream bar SHALL show the decompression progress with a cancel action. A zip with one file entry SHALL open that entry directly; a zip with several SHALL show an entry picker from which one or more entries are opened, each as its own stream; a zip without file entries SHALL be reported with a notice, and a file starting with the zip magic bytes whose central directory cannot be read SHALL open as a plain file. Zip entries that are encrypted, use a method other than stored or deflate, or have a name that is absolute or climbs out of the archive (`../`), and tar archives found inside a gzip file, SHALL be refused with a message naming the reason. A compressed stream SHALL NOT follow the archive on disk: follow mode is disabled for it with an explanation, and neither `--follow` nor a restored follow state turns it on; a re-extract button in the stream bar SHALL decompress the archive again. The stream's identity in the tab, the footer, the workspace, sessions, recent files and bookmarks SHALL be the archive path for a gzip file and the entry path `<archive>/<entry>` for a zip entry (a session stores it as the archive path plus `entry=`), never the spool path, and a restored compressed stream SHALL be decompressed again in the background, its bookmarks being applied once the index covers them.
+
+#### Scenario: Rotated gzip log
+- **WHEN** the user opens `app.log.1.gz`, a 300 MB gzip of a 3 GB text log
+- **THEN** the first lines appear within a second, the stream bar shows `decompressing` with a rising percentage, filters and search work on the lines already available, and the follow toggle is disabled with a tooltip explaining that the file is a compressed snapshot.
+
+#### Scenario: Support bundle with several logs
+- **WHEN** the user opens `bundle.zip` holding `server.log`, `worker.log` and `config/`
+- **THEN** an entry picker lists `server.log` and `worker.log` with their sizes, and choosing both opens two streams titled `bundle.zip › server.log` and `bundle.zip › worker.log`.
+
+#### Scenario: Unsupported zip entry
+- **WHEN** a zip entry is compressed with zstd or is encrypted
+- **THEN** the entry is shown disabled in the picker with the reason, and nothing is written to the spool for it.
+
+#### Scenario: Compressed file without the usual extension
+- **WHEN** a gzip file named `trace.dat` is opened
+- **THEN** it is recognised by its magic bytes and opened decompressed instead of in HEX view.
+
+### Requirement: Decompression Space Guard
+Before decompressing a zip entry the engine SHALL check that the spool volume has room for the entry's uncompressed size (at most the output cap) plus a 512 MB margin and refuse otherwise. During any decompression it SHALL re-check the free space at least every 64 MB written and stop when less than 512 MB would remain, and it SHALL stop when the output reaches the cap `compressed_max_gb` (default 20 GB, 1 to 1024, configurable in `fasttail.ini` and Settings). When decompression stops early, the lines already written SHALL stay readable and the stream SHALL say that its content is partial and why.
+
+#### Scenario: Not enough disk space
+- **WHEN** the user opens a zip entry of 40 GB uncompressed and the spool volume has 10 GB free
+- **THEN** the entry is refused with a message naming the volume and the required size, and no spool file is created.
+
+#### Scenario: Archive larger than the cap
+- **WHEN** a gzip file inflates past the 20 GB cap
+- **THEN** decompression stops at the cap, the first 20 GB of lines remain browsable, and the stream bar says the content is partial because the cap was reached.
+
+### Requirement: Temporary Spool Lifecycle
+Spool files SHALL be created in a `fasttail-spool` subfolder of the directory `spool_dir` from `fasttail.ini` when set, otherwise of the system temporary directory (readable by the owner only on Unix), named `<pid>-<counter>-<name>` after the owning process id. A spool file SHALL be deleted when its stream is closed and emptied and refilled when the stream is re-extracted, all spool files of the process SHALL be deleted at normal exit, and at startup the application SHALL delete the spool files in the current spool directory whose owning process is no longer running, so that a crash does not leave decompressed copies behind. Closing a stream while it is being decompressed SHALL cancel the decompression.
+
+#### Scenario: Closing the tab
+- **WHEN** the user closes the tab of a decompressed `app.log.1.gz`
+- **THEN** the decompression, if still running, stops and the spool file is removed from disk.
+
+#### Scenario: Restart after a crash
+- **WHEN** FastTail crashed with two decompressed streams open and is started again
+- **THEN** the two orphaned spool files are deleted at startup, and the restored streams are decompressed into new spool files.
 

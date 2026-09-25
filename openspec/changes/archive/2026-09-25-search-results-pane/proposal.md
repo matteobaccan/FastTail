@@ -16,6 +16,7 @@ A search in FastTail marks the matching rows in place and `F3` walks them one at
 
 ### Modified Capabilities
 - `search-and-navigation`: new Search Results Pane and Overview Strip requirements; Match Navigation Scoped to the Focused Window gains the pane focus rules; Match Counter, Wrap-Around and History gains the match cap and the true total.
+- `selection-and-export`: Export Visible Lines and Search Matches states that "Export search matches" writes the stored hits (at most 1,000,000), and that the exported text is the line without its ANSI escape sequences in ANSI render and strip modes (brought in line with the `ansi-color-codes` change).
 
 ## Impact
 

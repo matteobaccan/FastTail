@@ -33,7 +33,7 @@ The engine SHALL detect a level for each line among FATAL, ERROR, WARN, INFO, DE
 - **THEN** the level is INFO.
 
 ### Requirement: Level Colouring Fallback
-Rows with a detected level SHALL be coloured with the theme's level palette when no user highlight rule matches them. The feature SHALL be on by default and switchable in Settings.
+Rows with a detected level SHALL be coloured with the theme's level palette when no whole-row user highlight rule matches them, on the bytes that no capture-only rule, quick label or ANSI colour span colours. The feature SHALL be on by default and switchable in Settings.
 
 #### Scenario: User rule keeps priority
 - **WHEN** a user rule colours lines containing `payment` green and an ERROR line contains `payment`
