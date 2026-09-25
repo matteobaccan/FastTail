@@ -280,6 +280,8 @@ pub const JOB_THRESHOLD_BYTES: u64 = 16 * 1024 * 1024;
 pub const INDEX_JOB_THRESHOLD_BYTES: u64 = 256 * 1024 * 1024;
 /// Bytes remembered at the head and at the indexed end to recognise rewrites.
 const FINGERPRINT_LEN: usize = 64;
+/// Bytes the encoding and binary detection look at.
+pub const ENCODING_SAMPLE_BYTES: u64 = 512;
 /// Marker appended to a line cut at `MAX_LINE_BYTES`.
 pub const TRUNCATED_LINE_MARKER: &str = " …[line truncated]";
 
@@ -777,6 +779,15 @@ pub struct TailEngine {
     pub last_read_time: Instant,
     pub bytes_read_since_tick: u64,
     pub throughput_bps: f64,
+    /// The stream opened on an empty file: its encoding and binary detection had no
+    /// sample and run again once it holds `ENCODING_SAMPLE_BYTES` (or, for a compressed
+    /// stream, when the decompression ends with fewer).
+    pub encoding_pending: bool,
+    /// Decompression job and spool of a stream read from a gzip file or a zip entry
+    /// (see `compressed`); `path` is then the archive (or `archive/entry`) and
+    /// `current_file` the spool. Declared last so the file handle above is closed before
+    /// the spool is deleted.
+    pub compressed: Option<crate::compressed::CompressedStream>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -849,6 +860,7 @@ impl TailEngine {
         }
 
         let current_file = Some(path_buf.clone());
+        let opened_empty = file_size == 0;
         let mut engine = Self::assemble(
             path_buf,
             source,
@@ -862,6 +874,7 @@ impl TailEngine {
             index_job_threshold_bytes,
         );
         engine.current_file = current_file;
+        engine.encoding_pending = opened_empty;
         Ok(engine)
     }
 
@@ -1067,6 +1080,37 @@ impl TailEngine {
         Ok(())
     }
 
+    /// Runs the encoding and view-mode detection again on the first bytes of the file.
+    fn redetect_encoding(&mut self) {
+        let sample = self.source.read_to_vec(0, ENCODING_SAMPLE_BYTES as usize);
+        let (encoding, is_binary) = Self::detect_encoding(&sample);
+        self.encoding = encoding;
+        let name = self
+            .current_file
+            .clone()
+            .unwrap_or_else(|| self.path.clone());
+        self.view_mode =
+            Self::initial_view_mode(&name, is_binary, self.file_size, self.markdown_max_bytes);
+    }
+
+    /// Settles a detection still pending on a stream that will not grow any more (a
+    /// finished decompression under the sample size), rebuilding the index when the
+    /// encoding changes.
+    pub fn finish_encoding_detection(&mut self) {
+        if !self.encoding_pending {
+            return;
+        }
+        self.encoding_pending = false;
+        if self.file_size == 0 {
+            return;
+        }
+        let before = (self.encoding, self.view_mode);
+        self.redetect_encoding();
+        if (self.encoding, self.view_mode) != before {
+            self.rebuild_line_index();
+        }
+    }
+
     /// Encoding detection on the first bytes of a file: BOMs, UTF-16 without BOM, and a
     /// NUL byte marking a binary file (shown in HEX).
     fn detect_encoding(sample: &[u8]) -> (FileEncoding, bool) {
@@ -1237,6 +1281,8 @@ impl TailEngine {
             last_read_time: Instant::now(),
             bytes_read_since_tick: 0,
             throughput_bps: 0.0,
+            encoding_pending: false,
+            compressed: None,
         };
 
         engine.rebuild_line_index();
@@ -1523,6 +1569,7 @@ impl TailEngine {
 
     pub fn set_encoding(&mut self, encoding: FileEncoding) {
         self.encoding = encoding;
+        self.encoding_pending = false;
         self.rebuild_line_index();
     }
 
@@ -1721,7 +1768,12 @@ impl TailEngine {
         if !self.is_watching {
             return;
         }
-        let mut needs_refresh = false;
+        // A decompression job appended to the spool: index it without waiting for the
+        // watcher or the size check.
+        let mut needs_refresh = self
+            .compressed
+            .as_ref()
+            .is_some_and(|c| c.has_unindexed(self.file_size));
 
         // Drain filesystem watcher events (the file, or the directory of a pattern stream)
         while let Ok(event_res) = self.rx.try_recv() {
@@ -1766,6 +1818,9 @@ impl TailEngine {
         if needs_refresh {
             self.refresh_file();
         }
+        if self.compressed.is_some() {
+            self.poll_compressed();
+        }
 
         // Update throughput measurement once every 500ms
         let elapsed = self.last_read_time.elapsed().as_secs_f64();
@@ -1804,6 +1859,16 @@ impl TailEngine {
             let prev_lines_count = self.line_offsets.len();
             let added_bytes = new_size - self.file_size;
             self.bytes_read_since_tick += added_bytes;
+
+            // Opened empty: the first sample decides the encoding and the view, and the
+            // index is rebuilt with them.
+            if self.encoding_pending && new_size >= ENCODING_SAMPLE_BYTES {
+                self.encoding_pending = false;
+                self.source.set_len(new_size);
+                self.redetect_encoding();
+                self.reload_from_start(new_size, new_modified);
+                return;
+            }
 
             // A file reset and regrown past its old size can keep the same header (same log
             // format): the fingerprints of the head and of the old end tell a rewrite apart
