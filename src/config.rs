@@ -149,6 +149,9 @@ pub struct FastTailConfig {
     /// User-configured external tools (`[tool.N]` sections), see `external_tools`.
     #[serde(default)]
     pub external_tools: Vec<crate::external_tools::ExternalTool>,
+    /// Named filter presets (`[filter_preset.N]` sections), see `filter_preset`.
+    #[serde(default, skip)]
+    pub filter_presets: Vec<crate::filter_preset::FilterPreset>,
     #[serde(default)]
     pub baretail_import: bool,
     pub baretail_prompt_shown: bool,
@@ -323,6 +326,7 @@ impl Default for FastTailConfig {
             wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
             external_tools: Vec::new(),
+            filter_presets: Vec::new(),
             baretail_import: false,
             baretail_prompt_shown: false,
             dock_layout: None,
@@ -748,6 +752,8 @@ impl FastTailConfig {
             sec.set("shell", tool.use_shell.to_string());
             sec.set("match", tool.match_pattern.clone().unwrap_or_default());
         }
+
+        crate::filter_preset::write_presets(&mut conf, &self.filter_presets);
 
         conf
     }
@@ -1206,6 +1212,7 @@ impl FastTailConfig {
             idx += 1;
         }
         cfg.external_tools = tools;
+        cfg.filter_presets = crate::filter_preset::read_presets(conf);
 
         cfg
     }

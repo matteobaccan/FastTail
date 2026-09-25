@@ -2,7 +2,9 @@ use crate::ansi::{AnsiMode, AnsiStyle, StyleRun};
 use crate::audio::SoundAlertPreset;
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
-use crate::scan_job::{FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange};
+use crate::scan_job::{
+    FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange, MAX_FILTER_TERMS,
+};
 use crate::wildcard::{resolve_newest, split_pattern};
 use crate::wrap_layout::{WrapAnchor, WrapScroll};
 use egui::Color32;
@@ -368,6 +370,20 @@ fn counted_hits_from(
 pub fn is_error_level(v: u8) -> bool {
     v == LogLevel::Error as u8 || v == LogLevel::Fatal as u8
 }
+
+/// Sets the first row of a term list, adding it when the list is empty.
+fn set_first_term(terms: &mut Vec<String>, text: &str) {
+    match terms.first_mut() {
+        Some(first) => *first = text.to_string(),
+        None => terms.push(text.to_string()),
+    }
+}
+
+/// Non-empty terms after the first row.
+fn non_empty_after_first(terms: &[String]) -> usize {
+    terms.iter().skip(1).filter(|t| !t.is_empty()).count()
+}
+
 /// Bytes read per step by sequential scans (indexing, byte search).
 const SCAN_CHUNK: usize = 1024 * 1024;
 /// A single line longer than this is shown truncated, with a marker.
@@ -793,8 +809,14 @@ pub struct TailEngine {
     /// One of the two time fields does not parse: the row says so instead of silently
     /// leaving that side open.
     pub time_range_error: bool,
-    pub include_filter: String,
-    pub exclude_filter: String,
+    /// Include terms (all must match) and exclude terms (none may match), at most
+    /// `MAX_FILTER_TERMS` each; empty rows are kept for the editor and ignored. The first
+    /// term of each side is the stream bar's field (`include_filter` / `exclude_filter`).
+    include_terms: Vec<String>,
+    exclude_terms: Vec<String>,
+    /// Preset last applied to this stream, in memory only: with the filter state edited
+    /// since, the presets drop-down shows it as `name *` (see `filter_preset`).
+    pub applied_preset: Option<String>,
     pub filter_case_sensitive: bool,
     pub filter_is_regex: bool,
     /// Minimum-level stage of the filter (`Unknown` = off) and its unknown-level toggle.
@@ -1406,8 +1428,9 @@ impl TailEngine {
             hex_columns: 16,
             size_unit: SizeUnit::Bytes,
             encoding: detected_encoding,
-            include_filter: String::new(),
-            exclude_filter: String::new(),
+            include_terms: Vec::new(),
+            exclude_terms: Vec::new(),
+            applied_preset: None,
             filter_case_sensitive: false,
             filter_is_regex: false,
             time_from: None,
@@ -1560,14 +1583,18 @@ impl TailEngine {
     }
 
     pub fn refresh_filters(&mut self) {
-        self.filter = FilterSpec::build(
-            &self.include_filter,
-            &self.exclude_filter,
+        self.filter = self.build_filter();
+        self.recompute_filtered_lines();
+    }
+
+    fn build_filter(&self) -> FilterSpec {
+        FilterSpec::build(
+            &self.include_terms,
+            &self.exclude_terms,
             self.filter_case_sensitive,
             self.filter_is_regex,
         )
-        .with_levels(self.min_level, self.show_unknown_levels);
-        self.recompute_filtered_lines();
+        .with_levels(self.min_level, self.show_unknown_levels)
     }
 
     /// Sets the minimum level a line must have to be visible (`Unknown` turns it off).
@@ -1826,14 +1853,98 @@ impl TailEngine {
         self.push_levels(&fresh);
     }
 
+    /// First include term: the stream bar's include field and the `--filter` option.
+    pub fn include_filter(&self) -> &str {
+        self.include_terms.first().map_or("", String::as_str)
+    }
+
+    /// First exclude term: the stream bar's exclude field and the `--exclude` option.
+    pub fn exclude_filter(&self) -> &str {
+        self.exclude_terms.first().map_or("", String::as_str)
+    }
+
+    /// Every include term row, empty ones included.
+    pub fn include_terms(&self) -> &[String] {
+        &self.include_terms
+    }
+
+    pub fn exclude_terms(&self) -> &[String] {
+        &self.exclude_terms
+    }
+
+    /// Replaces the first include term, keeping the others.
     pub fn set_include_filter(&mut self, filter: &str) {
-        self.include_filter = filter.to_string();
+        set_first_term(&mut self.include_terms, filter);
         self.refresh_filters();
     }
 
     pub fn set_exclude_filter(&mut self, filter: &str) {
-        self.exclude_filter = filter.to_string();
+        set_first_term(&mut self.exclude_terms, filter);
         self.refresh_filters();
+    }
+
+    /// Replaces both term lists (capped at `MAX_FILTER_TERMS` each) in one recomputation.
+    /// Rows added or removed empty change nothing visible: they skip the recomputation,
+    /// which on a large file is a background scan.
+    pub fn set_filter_terms(&mut self, mut include: Vec<String>, mut exclude: Vec<String>) {
+        include.truncate(MAX_FILTER_TERMS);
+        exclude.truncate(MAX_FILTER_TERMS);
+        let non_empty =
+            |v: &[String]| -> Vec<String> { v.iter().filter(|t| !t.is_empty()).cloned().collect() };
+        let same = non_empty(&include) == non_empty(&self.include_terms)
+            && non_empty(&exclude) == non_empty(&self.exclude_terms);
+        self.include_terms = include;
+        self.exclude_terms = exclude;
+        if same {
+            // Same filter, rows moved: only the per-row error flags need the new order.
+            self.filter = self.build_filter();
+        } else {
+            self.refresh_filters();
+        }
+    }
+
+    /// Non-empty include terms after the first: the `+N` badge of the include field.
+    pub fn extra_include_terms(&self) -> usize {
+        non_empty_after_first(&self.include_terms)
+    }
+
+    pub fn extra_exclude_terms(&self) -> usize {
+        non_empty_after_first(&self.exclude_terms)
+    }
+
+    /// Whether include term `i` is a regex that does not compile (it matches nothing).
+    pub fn include_term_invalid(&self, i: usize) -> bool {
+        self.filter.include.get(i).is_some_and(|t| t.invalid)
+    }
+
+    pub fn exclude_term_invalid(&self, i: usize) -> bool {
+        self.filter.exclude.get(i).is_some_and(|t| t.invalid)
+    }
+
+    /// Replaces the terms, the case and regex toggles and the level stage of the filter
+    /// in one recomputation, and with `time` the time range as typed (a preset without
+    /// one leaves the window as it is). Returns nothing: a time text that does not parse
+    /// sets `time_range_error`, as typing it would.
+    pub fn set_filter_state(&mut self, state: &crate::filter_preset::FilterState) {
+        let mut include = state.include.clone();
+        let mut exclude = state.exclude.clone();
+        include.truncate(MAX_FILTER_TERMS);
+        exclude.truncate(MAX_FILTER_TERMS);
+        self.include_terms = include;
+        self.exclude_terms = exclude;
+        self.filter_case_sensitive = state.case_sensitive;
+        self.filter_is_regex = state.is_regex;
+        self.min_level = state.min_level;
+        self.show_unknown_levels = state.show_unknown_levels;
+        let generation = self.filter_generation;
+        if let Some((from, to)) = &state.time {
+            // A window that changes refreshes the filter itself, fields above included.
+            let (from_ok, to_ok) = self.apply_time_range_text(from, to);
+            self.time_range_error = !from_ok || !to_ok;
+        }
+        if self.filter_generation == generation {
+            self.refresh_filters();
+        }
     }
 
     pub fn set_encoding(&mut self, encoding: FileEncoding) {
@@ -2743,8 +2854,8 @@ impl TailEngine {
     }
 
     pub fn is_filter_active(&self) -> bool {
-        !self.include_filter.is_empty()
-            || !self.exclude_filter.is_empty()
+        self.include_terms.iter().any(|t| !t.is_empty())
+            || self.exclude_terms.iter().any(|t| !t.is_empty())
             || self.min_level != LogLevel::Unknown
             || self.time_from.is_some()
             || self.time_to.is_some()

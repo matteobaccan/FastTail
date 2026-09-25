@@ -417,8 +417,7 @@ mod tests {
             "payment.log",
             "INFO req-7f3a charge\nINFO req-7f3a healthcheck\nDEBUG noise\nINFO req-7f3a done\n",
         );
-        payment.exclude_filter = "healthcheck".into();
-        payment.refresh_filters();
+        payment.set_exclude_filter("healthcheck");
         let audit = open(dir.path(), "audit.log", "INFO nothing here\n");
         let mut engines = vec![gateway, payment, audit];
 

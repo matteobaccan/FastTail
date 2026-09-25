@@ -10,6 +10,7 @@
 //! stream is skipped and reported.
 
 use crate::config::{overwrite_regular_file, FastTailConfig};
+use crate::scan_job::MAX_FILTER_TERMS;
 use crate::wildcard::{is_pattern_path, split_pattern};
 use ini::Ini;
 use std::path::{Path, PathBuf};
@@ -24,8 +25,14 @@ pub const MAX_RECENT_SESSIONS: usize = 10;
 pub struct StreamEntry {
     /// Absolute path of the file, or a directory pattern such as `C:\logs\app-*.log`.
     pub path: PathBuf,
+    /// First include and exclude term, under the keys every version reads.
     pub include_filter: String,
     pub exclude_filter: String,
+    /// Further non-empty terms (2 to `MAX_FILTER_TERMS`), stored as `include.2`,
+    /// `include.3`… next to `include`: an older build reads the first term and ignores
+    /// the rest.
+    pub include_extra: Vec<String>,
+    pub exclude_extra: Vec<String>,
     pub search_query: String,
     pub wrap: bool,
     /// Encoding name as `FileEncoding::name()`; `None` keeps the detected one.
@@ -119,6 +126,11 @@ impl Session {
             }
             sec.set("include", &s.include_filter);
             sec.set("exclude", &s.exclude_filter);
+            for (key, extra) in [("include", &s.include_extra), ("exclude", &s.exclude_extra)] {
+                for (n, term) in extra.iter().filter(|t| !t.is_empty()).enumerate() {
+                    sec.set(format!("{key}.{}", n + 2), term);
+                }
+            }
             sec.set("search", &s.search_query);
             sec.set("wrap", s.wrap.to_string());
             sec.set("encoding", s.encoding.clone().unwrap_or_default());
@@ -186,6 +198,13 @@ impl Session {
                 Some(entry) => crate::compressed::entry_path(&resolved, entry),
                 None => resolved,
             };
+            let extra = |key: &str| -> Vec<String> {
+                (2..=MAX_FILTER_TERMS)
+                    .filter_map(|n| sec.get(format!("{key}.{n}")))
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            };
             let bookmarks: Vec<usize> = sec
                 .get("bookmarks")
                 .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
@@ -194,6 +213,8 @@ impl Session {
                 path: resolved,
                 include_filter: sec.get("include").unwrap_or("").to_string(),
                 exclude_filter: sec.get("exclude").unwrap_or("").to_string(),
+                include_extra: extra("include"),
+                exclude_extra: extra("exclude"),
                 search_query: sec.get("search").unwrap_or("").to_string(),
                 wrap: sec
                     .get("wrap")

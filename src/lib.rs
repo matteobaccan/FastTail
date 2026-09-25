@@ -7,6 +7,7 @@ pub mod config;
 pub mod crash_handler;
 pub mod external_tools;
 pub mod file_source;
+pub mod filter_preset;
 pub mod find_all;
 pub mod html_converter;
 pub mod i18n;

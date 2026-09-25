@@ -34,17 +34,61 @@ pub enum ScanKind {
     Timestamps,
 }
 
-/// The include/exclude filter, compiled once and shareable with a worker thread.
+/// Most include terms, and most exclude terms, a stream can hold.
+pub const MAX_FILTER_TERMS: usize = 8;
+
+/// One include or exclude term: the text as typed, its lower-case form for the
+/// case-insensitive plain search, and the compiled regex in regex mode.
+#[derive(Debug, Clone, Default)]
+pub struct FilterTerm {
+    pub text: String,
+    pub lower: String,
+    pub regex: Option<Regex>,
+    /// Regex mode and the text does not compile: the term matches nothing, and its row
+    /// says so.
+    pub invalid: bool,
+}
+
+impl FilterTerm {
+    fn build(text: &str, case_sensitive: bool, is_regex: bool) -> Self {
+        let regex = if is_regex && !text.is_empty() {
+            regex::RegexBuilder::new(text)
+                .case_insensitive(!case_sensitive)
+                .build()
+                .ok()
+        } else {
+            None
+        };
+        Self {
+            text: text.to_string(),
+            lower: text.to_lowercase(),
+            invalid: is_regex && !text.is_empty() && regex.is_none(),
+            regex,
+        }
+    }
+
+    /// Whether `line` contains the term under the spec's toggles. An invalid regex
+    /// matches nothing.
+    fn matches(&self, line: &str, case_sensitive: bool, is_regex: bool) -> bool {
+        if is_regex {
+            self.regex.as_ref().is_some_and(|re| re.is_match(line))
+        } else if case_sensitive {
+            line.contains(&self.text)
+        } else {
+            contains_case_insensitive(line, &self.lower)
+        }
+    }
+}
+
+/// The include/exclude filter, compiled once and shareable with a worker thread. The
+/// terms keep their position, empty rows included (and ignored), so a row of the term
+/// editor finds its own error flag.
 #[derive(Debug, Clone, Default)]
 pub struct FilterSpec {
-    pub include: String,
-    pub exclude: String,
-    pub include_lower: String,
-    pub exclude_lower: String,
+    pub include: Vec<FilterTerm>,
+    pub exclude: Vec<FilterTerm>,
     pub case_sensitive: bool,
     pub is_regex: bool,
-    pub include_regex: Option<Regex>,
-    pub exclude_regex: Option<Regex>,
     /// Minimum level a line must have to be visible; `Unknown` = no level filter.
     pub min_level: LogLevel,
     /// With a minimum level set, whether lines without a detectable level are shown.
@@ -52,26 +96,24 @@ pub struct FilterSpec {
 }
 
 impl FilterSpec {
-    pub fn build(include: &str, exclude: &str, case_sensitive: bool, is_regex: bool) -> Self {
-        let compile = |p: &str| {
-            if p.is_empty() {
-                None
-            } else {
-                regex::RegexBuilder::new(p)
-                    .case_insensitive(!case_sensitive)
-                    .build()
-                    .ok()
-            }
+    /// Compiles up to `MAX_FILTER_TERMS` terms per side, all with the stream's toggles.
+    pub fn build<S: AsRef<str>>(
+        include: &[S],
+        exclude: &[S],
+        case_sensitive: bool,
+        is_regex: bool,
+    ) -> Self {
+        let terms = |list: &[S]| -> Vec<FilterTerm> {
+            list.iter()
+                .take(MAX_FILTER_TERMS)
+                .map(|t| FilterTerm::build(t.as_ref(), case_sensitive, is_regex))
+                .collect()
         };
         Self {
-            include: include.to_string(),
-            exclude: exclude.to_string(),
-            include_lower: include.to_lowercase(),
-            exclude_lower: exclude.to_lowercase(),
+            include: terms(include),
+            exclude: terms(exclude),
             case_sensitive,
             is_regex,
-            include_regex: if is_regex { compile(include) } else { None },
-            exclude_regex: if is_regex { compile(exclude) } else { None },
             min_level: LogLevel::Unknown,
             show_unknown_levels: false,
         }
@@ -85,7 +127,9 @@ impl FilterSpec {
     }
 
     pub fn is_active(&self) -> bool {
-        !self.include.is_empty() || !self.exclude.is_empty() || self.min_level != LogLevel::Unknown
+        self.include.iter().any(|t| !t.text.is_empty())
+            || self.exclude.iter().any(|t| !t.text.is_empty())
+            || self.min_level != LogLevel::Unknown
     }
 
     /// Third stage after exclude and include: the line's detected level must reach
@@ -101,38 +145,18 @@ impl FilterSpec {
         }
     }
 
-    /// True when the exclude filter is set and matches `line`.
+    /// True when any non-empty exclude term matches `line`.
     pub fn excluded(&self, line: &str) -> bool {
-        if self.exclude.is_empty() {
-            return false;
-        }
-        if self.is_regex {
-            self.exclude_regex
-                .as_ref()
-                .map(|re| re.is_match(line))
-                .unwrap_or(false)
-        } else if self.case_sensitive {
-            line.contains(&self.exclude)
-        } else {
-            contains_case_insensitive(line, &self.exclude_lower)
-        }
+        self.exclude
+            .iter()
+            .any(|t| !t.text.is_empty() && t.matches(line, self.case_sensitive, self.is_regex))
     }
 
-    /// True when the include filter is empty or matches `line`.
+    /// True when every non-empty include term matches `line` (with none, every line).
     pub fn included(&self, line: &str) -> bool {
-        if self.include.is_empty() {
-            return true;
-        }
-        if self.is_regex {
-            self.include_regex
-                .as_ref()
-                .map(|re| re.is_match(line))
-                .unwrap_or(false)
-        } else if self.case_sensitive {
-            line.contains(&self.include)
-        } else {
-            contains_case_insensitive(line, &self.include_lower)
-        }
+        self.include
+            .iter()
+            .all(|t| t.text.is_empty() || t.matches(line, self.case_sensitive, self.is_regex))
     }
 
     /// Exclude wins over include; an empty include lets every non-excluded line through;
