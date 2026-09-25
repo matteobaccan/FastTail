@@ -77,8 +77,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   byte hits keep their 20,000 cap. Visible-row lookups on a filtered view are now a
   binary search instead of a linear scan.
 
-### Changed
-
 - **Building from source needs Rust 1.88.** `zip` 8, used to read `.zip` logs, requires it;
   the release binaries are unaffected.
 
