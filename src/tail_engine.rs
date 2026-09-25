@@ -377,6 +377,20 @@ pub struct GotoTarget {
     pub line: usize,
     /// True when `requested` is hidden by the filters and `line` was substituted.
     pub hidden: bool,
+    /// True when the input is a time and the stream is still being timed in the
+    /// background: nothing to scroll to yet, the jump happens when timing finishes (see
+    /// `TailEngine::take_goto_time_result`). `requested` and `line` mean nothing then.
+    pub waiting: bool,
+}
+
+/// A time window entered before the stream was fully timed, applied once it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingWindow {
+    /// Re-read the two time fields: a bare `14:02` belongs to the day of the first
+    /// timestamp, known only once the head of the file has been timed.
+    Texts,
+    /// A window given in milliseconds (`set_time_range`).
+    Range(Option<i64>, Option<i64>),
 }
 
 /// Efficient case-insensitive substring search via callback.
@@ -657,6 +671,16 @@ pub struct TailEngine {
     timestamps_parsed: usize,
     /// Set when a timed line goes back in time: go-to-time then scans instead of bisecting.
     timestamps_unordered: bool,
+    /// Someone needs the whole stream timed (a time window, a time jump) and the
+    /// background scan has not finished yet: started, or resumed from the prefix, as soon
+    /// as the running job allows it (see `request_timestamps`).
+    timestamps_wanted: bool,
+    /// Time window waiting for the cache to be complete; the view keeps what it showed.
+    pending_window: Option<PendingWindow>,
+    /// Go-to-time input waiting for the cache, and its outcome once resolved, for the
+    /// Ctrl+G popup to pick up (`None` inside: the time could not be resolved).
+    pending_goto_time: Option<String>,
+    goto_time_result: Option<Option<GotoTarget>>,
     /// Lines per level among the cached prefix, indexed by `LogLevel as u8`.
     pub level_counts: [u64; LogLevel::COUNT],
     /// Compiled include/exclude filter, shared with filter and search jobs.
@@ -1167,6 +1191,10 @@ impl TailEngine {
             timestamp_hint: crate::timestamp::FormatHint::default(),
             timestamps_parsed: 0,
             timestamps_unordered: false,
+            timestamps_wanted: false,
+            pending_window: None,
+            pending_goto_time: None,
+            goto_time_result: None,
             level_counts: [0; LogLevel::COUNT],
             filter: FilterSpec::default(),
             job: None,
@@ -1372,8 +1400,23 @@ impl TailEngine {
             .unwrap_or(false)
     }
 
+    /// The timestamp cache as it stands: the effective timestamps of the timed prefix, how
+    /// many of those lines carried a timestamp of their own, the out-of-order flag and the
+    /// format that matched last. For the tests and the benchmark, which compare the
+    /// background scan with the synchronous fill.
+    #[doc(hidden)]
+    pub fn timestamp_cache(&self) -> (&[i64], usize, bool, crate::timestamp::FormatHint) {
+        (
+            &self.timestamps,
+            self.timestamps_parsed,
+            self.timestamps_unordered,
+            self.timestamp_hint,
+        )
+    }
+
     /// Times the next chunk of untimed lines and reports whether the cache is complete.
-    /// Bounded on purpose: the caller runs it once per frame while the feature is in use.
+    /// The synchronous path; `scan_job`'s `Timestamps` scan applies the same rules on a
+    /// worker thread when a large part of the file is still untimed.
     pub fn fill_timestamps(&mut self) -> bool {
         let from = self.timestamps.len();
         let total = self.total_lines();
@@ -1498,18 +1541,33 @@ impl TailEngine {
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
         let mut total_len = self.source.len();
-        // The level cache follows the index: drop what a running level scan would push out
-        // of order, and forget the lines that are about to be rescanned.
+        // The level and timestamp caches follow the index: drop what a running level or
+        // timestamp scan would push out of order, and forget the lines that are about to
+        // be rescanned. Both scans resume from their prefix afterwards.
         if self
             .job
             .as_ref()
-            .map(|j| j.kind == ScanKind::Levels)
+            .map(|j| matches!(j.kind, ScanKind::Levels | ScanKind::Timestamps))
             .unwrap_or(false)
         {
             self.job = None;
         }
         self.truncate_levels(unchanged_lines);
         self.truncate_timestamps(unchanged_lines);
+        if unchanged_lines == 0 && self.is_time_filtered() {
+            // Every line is about to be timed again, and a window over an empty cache
+            // would hide the whole file: hold the window until timing finishes. The
+            // fields are re-read then, so a rotated log gets the day of its own first line.
+            self.pending_window = Some(
+                if self.time_from_text.trim().is_empty() && self.time_to_text.trim().is_empty() {
+                    PendingWindow::Range(self.time_from, self.time_to)
+                } else {
+                    PendingWindow::Texts
+                },
+            );
+            self.time_from = None;
+            self.time_to = None;
+        }
         if unchanged_lines == 0 && total_len > self.index_job_threshold_bytes {
             // Large file: index on a worker thread; the view shows lines as they arrive.
             self.line_offsets = Vec::new();
@@ -1532,6 +1590,10 @@ impl TailEngine {
             self.max_detected_width = self.max_detected_width.max(120.0);
             self.buffer_generation = self.buffer_generation.wrapping_add(1);
             self.scroll_to_line = None;
+            if self.wants_timestamps() {
+                // Nothing to time: a held window applies at once, over no lines.
+                self.request_timestamps();
+            }
             self.refresh_derived_state_from(0);
             return;
         }
@@ -1645,11 +1707,13 @@ impl TailEngine {
         {
             self.scroll_to_line = None;
         }
+        // Time the new lines before refreshing the view: the window filter reads their
+        // timestamps. A timed stream stays timed as it grows.
+        if self.wants_timestamps() || !self.timestamps.is_empty() {
+            self.request_timestamps();
+        }
         self.refresh_derived_state_from(unchanged_lines);
         self.ensure_levels();
-        if self.is_time_filtered() || !self.timestamps.is_empty() {
-            self.ensure_timestamps();
-        }
     }
 
     pub fn poll_updates(&mut self) {
@@ -2114,6 +2178,27 @@ impl TailEngine {
         self.refresh_search_from(unchanged_lines);
     }
 
+    /// Postpones a filter refresh from `start` until the running scan ends.
+    fn defer_filter(&mut self, start: usize) {
+        if start == 0 {
+            self.pending_filter = true;
+        } else {
+            self.pending_refresh_from =
+                Some(self.pending_refresh_from.map_or(start, |p| p.min(start)));
+        }
+    }
+
+    /// Whether a running timestamp scan holds back filter and search scans: it does while
+    /// a time window is set or waits for it, because their result depends on the cache.
+    /// Otherwise a filter or search takes over and the timing resumes afterwards.
+    fn timestamps_hold_scans(&self) -> bool {
+        self.job
+            .as_ref()
+            .map(|j| j.kind == ScanKind::Timestamps)
+            .unwrap_or(false)
+            && (self.is_time_filtered() || self.pending_window.is_some())
+    }
+
     fn recompute_filtered_lines_from(&mut self, start: usize) {
         if !self.is_filter_active() {
             self.filtered_lines = Vec::new();
@@ -2131,10 +2216,23 @@ impl TailEngine {
         }
         let total = self.total_lines();
         let start = start.min(total);
-        if start == 0 && self.source.len() > self.job_threshold_bytes && !self.is_time_filtered() {
-            // Full recomputation of a large file: worker thread, results stream in. Not
-            // while a time window is set: the job filters text, and the window needs the
-            // timestamp cache that lives here.
+        if self.is_time_filtered() && self.timestamps.len() < total {
+            // The window reads the timestamp cache, and a line not timed yet would be
+            // hidden for no reason: filter once the timing is done.
+            self.request_timestamps();
+            if self.timestamps.len() < total {
+                self.defer_filter(start);
+                return;
+            }
+        }
+        if start == 0 && self.source.len() > self.job_threshold_bytes {
+            if self.timestamps_hold_scans() {
+                self.pending_filter = true;
+                return;
+            }
+            // Full recomputation of a large file: worker thread, results stream in. The
+            // job filters text and level; the time window is applied to its batches, by
+            // index, when they are drained (see `drain_job`).
             self.filtered_lines = Vec::new();
             if !self.last_searched_query.is_empty() {
                 self.pending_search = true;
@@ -2307,18 +2405,35 @@ impl TailEngine {
     }
 
     /// Sets the time window and refreshes what is visible. `None` on a side leaves it open.
-    /// Times the whole file first: a window over a half-timed cache would hide the lines
-    /// that simply have not been read yet.
+    /// The window needs the whole file timed: over a half-timed cache it would hide the
+    /// lines that simply have not been read yet. On a stream still being timed in the
+    /// background the window is held (`time_range_pending`) and applied when timing
+    /// finishes; until then the view keeps what it showed.
     pub fn set_time_range(&mut self, from: Option<i64>, to: Option<i64>) {
-        if self.time_from == from && self.time_to == to {
+        self.pending_window = None;
+        if from.is_none() && to.is_none() {
+            self.apply_time_window(None, None);
             return;
+        }
+        self.pending_window = Some(PendingWindow::Range(from, to));
+        self.request_timestamps();
+    }
+
+    /// Makes `[from, to]` the visible window over a complete cache. Returns whether the
+    /// view was refreshed (it is not when the window did not change).
+    fn apply_time_window(&mut self, from: Option<i64>, to: Option<i64>) -> bool {
+        if self.time_from == from && self.time_to == to {
+            return false;
         }
         self.time_from = from;
         self.time_to = to;
-        if from.is_some() || to.is_some() {
-            self.ensure_timestamps();
-        }
         self.refresh_filters();
+        true
+    }
+
+    /// Whether a window has been entered and waits for the stream to be timed.
+    pub fn time_range_pending(&self) -> bool {
+        self.pending_window.is_some()
     }
 
     /// The instant bare times like `14:02` are anchored to: the first timestamp in the
@@ -2337,12 +2452,9 @@ impl TailEngine {
             })
     }
 
-    /// Applies the two fields as the user typed them. Returns which side failed to parse,
-    /// so the field can say so; an empty side is an open end, not an error.
-    pub fn apply_time_range_text(&mut self, from_text: &str, to_text: &str) -> (bool, bool) {
-        self.time_from_text = from_text.to_owned();
-        self.time_to_text = to_text.to_owned();
-        self.ensure_timestamps();
+    /// Reads the two time fields: each side's instant (`None` = open or unreadable) and
+    /// whether it parsed. The "to" side covers the whole minute or second it names.
+    fn parse_time_fields(&self) -> (Option<i64>, bool, Option<i64>, bool) {
         let reference = self.time_reference();
         let parse = |text: &str| -> (Option<i64>, bool) {
             if text.trim().is_empty() {
@@ -2353,24 +2465,138 @@ impl TailEngine {
                 None => (None, false),
             }
         };
-        let (from, from_ok) = parse(from_text);
-        let (to, to_ok) = parse(to_text);
-        // The "to" side covers the whole minute or second it names.
-        let to = to.map(|millis| crate::timestamp::end_of_typed_time(to_text, millis));
-        self.set_time_range(from, to);
+        let (from, from_ok) = parse(&self.time_from_text);
+        let (to, to_ok) = parse(&self.time_to_text);
+        let to = to.map(|millis| crate::timestamp::end_of_typed_time(&self.time_to_text, millis));
+        (from, from_ok, to, to_ok)
+    }
+
+    /// Applies the two fields as the user typed them. Returns which side failed to parse,
+    /// so the field can say so; an empty side is an open end, not an error. On a stream
+    /// still being timed in the background the window is held and the fields are read
+    /// again when it applies: the day a bare `14:02` belongs to comes from the first
+    /// timestamp of the log.
+    pub fn apply_time_range_text(&mut self, from_text: &str, to_text: &str) -> (bool, bool) {
+        self.time_from_text = from_text.to_owned();
+        self.time_to_text = to_text.to_owned();
+        if from_text.trim().is_empty() && to_text.trim().is_empty() {
+            self.pending_window = None;
+            self.apply_time_window(None, None);
+            return (true, true);
+        }
+        self.pending_window = Some(PendingWindow::Texts);
+        self.request_timestamps();
+        let (_, from_ok, _, to_ok) = self.parse_time_fields();
         (from_ok, to_ok)
     }
 
-    /// Clears the window and the two fields.
+    /// Clears the window, a held one included, and the two fields. A background timing
+    /// scan keeps running: the cache is useful to the next window or time jump.
     pub fn clear_time_range(&mut self) {
         self.time_from_text.clear();
         self.time_to_text.clear();
-        self.set_time_range(None, None);
+        self.pending_window = None;
+        self.apply_time_window(None, None);
     }
 
-    /// Times every indexed line, in bounded passes.
+    /// Times every indexed line, in bounded passes, on the calling thread. The interface
+    /// goes through `request_timestamps`, which moves a large file to a background scan;
+    /// this stays for the tests and the benchmark.
     pub fn ensure_timestamps(&mut self) {
         while !self.fill_timestamps() {}
+    }
+
+    /// Whether anything waits on the timestamp cache being complete.
+    fn wants_timestamps(&self) -> bool {
+        self.timestamps_wanted
+            || self.pending_window.is_some()
+            || self.pending_goto_time.is_some()
+            || self.is_time_filtered()
+    }
+
+    /// Asks for every line to be timed. When the untimed lines take at most
+    /// `job_threshold_bytes` this happens right here, as appends always did; above that on
+    /// a background `Timestamps` scan, started now or as soon as the running scan allows
+    /// it: after the index, in place of a level scan (which resumes afterwards), after a
+    /// filter or search scan. Whatever waits on the cache is applied once it is complete.
+    fn request_timestamps(&mut self) {
+        if self.timestamps_complete() {
+            self.on_timestamps_complete();
+            return;
+        }
+        self.timestamps_wanted = true;
+        if self.index_pending {
+            return;
+        }
+        let running = self.job.as_ref().map(|j| j.kind);
+        if running == Some(ScanKind::Timestamps) {
+            return;
+        }
+        let from = self.timestamps.len();
+        let remaining = self.source.len().saturating_sub(self.line_offsets[from]);
+        if remaining <= self.job_threshold_bytes {
+            self.ensure_timestamps();
+            self.on_timestamps_complete();
+            return;
+        }
+        match running {
+            None | Some(ScanKind::Levels) => {
+                // The scan continues the prefix: what the first untimed line inherits and
+                // the format that matched last, exactly what `fill_timestamps` reads.
+                let inherited = if from == 0 {
+                    NO_TIMESTAMP
+                } else {
+                    self.timestamps[from - 1]
+                };
+                let hint = self.timestamp_hint;
+                self.start_job(JobSpec::Timestamps { inherited, hint }, from);
+            }
+            // Queued behind the filter or search scan, started from `finish_job`.
+            _ => {}
+        }
+    }
+
+    /// The cache covers every line: apply the window and the time jump that waited for
+    /// it. Returns whether a held window was applied, in which case the filters and the
+    /// search have just been refreshed from scratch.
+    fn on_timestamps_complete(&mut self) -> bool {
+        self.timestamps_wanted = false;
+        let refreshed = match self.pending_window.take() {
+            None => false,
+            Some(PendingWindow::Range(from, to)) => self.apply_time_window(from, to),
+            Some(PendingWindow::Texts) => {
+                let (from, _, to, _) = self.parse_time_fields();
+                self.apply_time_window(from, to)
+            }
+        };
+        if let Some(input) = self.pending_goto_time.take() {
+            let result = self.resolve_goto_time(&input);
+            if let Some(target) = result {
+                // The jump the user asked for a while ago: like any jump, it stops follow.
+                self.scroll_to_line = Some(target.line);
+                self.follow_tail = false;
+            }
+            self.goto_time_result = Some(result);
+        }
+        refreshed
+    }
+
+    /// Whether a go-to-time request waits for the stream to be timed.
+    pub fn goto_time_waiting(&self) -> bool {
+        self.pending_goto_time.is_some()
+    }
+
+    /// Outcome of a go-to-time request that waited for the timing, once, for the Ctrl+G
+    /// popup: `Some(None)` when the time could not be resolved.
+    pub fn take_goto_time_result(&mut self) -> Option<Option<GotoTarget>> {
+        self.goto_time_result.take()
+    }
+
+    /// Drops a go-to-time request that is still waiting (the popup was closed). The
+    /// timing itself goes on.
+    pub fn cancel_goto_time(&mut self) {
+        self.pending_goto_time = None;
+        self.goto_time_result = None;
     }
 
     /// First line at or after `millis`. Bisects when the log runs forward in time, which
@@ -2516,20 +2742,26 @@ impl TailEngine {
         matches
     }
 
+    /// Whether a search must wait for the running scan: the index, a filter scan (search
+    /// covers the visible lines), or a timestamp scan a time window depends on.
+    fn search_waits(&self) -> bool {
+        self.index_pending
+            || self
+                .job
+                .as_ref()
+                .map(|j| j.kind == ScanKind::Filter)
+                .unwrap_or(false)
+            || self.timestamps_hold_scans()
+    }
+
     /// Re-runs the active search over lines `>= start` after the buffer or the filter
     /// changed, keeping the current match on the same line whenever it still matches.
     fn refresh_search_from(&mut self, start: usize) {
         if self.last_searched_query.is_empty() {
             return;
         }
-        if self.index_pending
-            || self
-                .job
-                .as_ref()
-                .map(|j| j.kind == ScanKind::Filter)
-                .unwrap_or(false)
-        {
-            // Search follows the filter: rerun it when the index / filter job ends.
+        if self.search_waits() {
+            // Search follows the filter: rerun it when the index / filter / timing job ends.
             self.pending_search = true;
             return;
         }
@@ -2827,13 +3059,7 @@ impl TailEngine {
             return;
         }
         self.last_searched_query = trimmed.to_string();
-        if self.index_pending
-            || self
-                .job
-                .as_ref()
-                .map(|j| j.kind == ScanKind::Filter)
-                .unwrap_or(false)
-        {
+        if self.search_waits() {
             self.search_matches = Vec::new();
             self.search_byte_matches = Vec::new();
             self.current_match_idx = None;
@@ -2866,11 +3092,18 @@ impl TailEngine {
         } else {
             None
         };
+        // The time window is applied to the hits as they are drained, so the worker must
+        // not stop at the cap counting hits the window will drop; the drain caps instead.
+        let limit = if self.is_time_filtered() {
+            usize::MAX
+        } else {
+            MAX_SEARCH_MATCHES
+        };
         self.start_job(
             JobSpec::Search {
                 query_lower: query.to_lowercase(),
                 filter,
-                limit: MAX_SEARCH_MATCHES,
+                limit,
             },
             0,
         );
@@ -2908,7 +3141,9 @@ impl TailEngine {
             encoding: self.encoding,
             parent_visible: self.parent_visible_before(start_line),
         };
-        self.job = Some(ScanJob::spawn(self.job_generation, &self.path, range, spec));
+        // The file being tailed: for a pattern stream `path` is the pattern itself.
+        let file = self.current_file.as_deref().unwrap_or(&self.path);
+        self.job = Some(ScanJob::spawn(self.job_generation, file, range, spec));
     }
 
     /// Running background scan, if any: kind, progress in `0..=1`, hits so far.
@@ -2924,12 +3159,18 @@ impl TailEngine {
         let mut finished: Option<Result<usize, ()>> = None;
         while let Some(batch) = job.try_recv() {
             match batch {
-                ScanBatch::Lines(lines) => {
+                ScanBatch::Lines(mut lines) => {
+                    // The job evaluates text and level only; the time window is applied
+                    // here, by index, over the complete timestamp cache.
+                    if self.is_time_filtered() {
+                        lines.retain(|&idx| self.in_time_range(idx));
+                    }
                     job.hits += lines.len();
                     match job.kind {
                         ScanKind::Filter => self.filtered_lines.extend(lines),
                         ScanKind::Search => {
                             self.search_matches.extend(lines);
+                            self.search_matches.truncate(MAX_SEARCH_MATCHES);
                             if self.current_match_idx.is_none()
                                 && self.view_mode != ViewMode::Hex
                                 && !self.search_matches.is_empty()
@@ -2937,12 +3178,25 @@ impl TailEngine {
                                 self.current_match_idx = Some(0);
                             }
                         }
-                        ScanKind::Index | ScanKind::Levels => {}
+                        ScanKind::Index | ScanKind::Levels | ScanKind::Timestamps => {}
                     }
                 }
                 ScanBatch::Levels(levels) => {
                     self.push_levels(&levels);
                     job.hits = self.levels.len();
+                }
+                ScanBatch::Timestamps {
+                    values,
+                    parsed,
+                    unordered,
+                    hint,
+                } => {
+                    // What `fill_timestamps` does at the end of a pass.
+                    self.timestamps.extend_from_slice(&values);
+                    self.timestamps_parsed += parsed;
+                    self.timestamps_unordered |= unordered;
+                    self.timestamp_hint = hint;
+                    job.hits = self.timestamps.len();
                 }
                 ScanBatch::Offsets {
                     offsets,
@@ -2956,7 +3210,16 @@ impl TailEngine {
                         self.max_detected_width = self.max_detected_width.max(estimated_width);
                     }
                 }
-                ScanBatch::Progress(p) => job.progress = p,
+                ScanBatch::Progress(p) => {
+                    job.progress = if job.kind == ScanKind::Timestamps && job.range.end_offset > 0 {
+                        // A resumed timing scan reports the share of the whole file.
+                        let start = job.range.start_offset as f32;
+                        let end = job.range.end_offset as f32;
+                        (start + p * (end - start)) / end
+                    } else {
+                        p
+                    };
+                }
                 ScanBatch::Done { lines } => {
                     finished = Some(Ok(lines));
                     break;
@@ -2971,7 +3234,11 @@ impl TailEngine {
             None => self.job = Some(job),
             Some(Err(())) => {
                 drop(job);
-                if let Ok(metadata) = std::fs::metadata(&self.path) {
+                let file = self
+                    .current_file
+                    .clone()
+                    .unwrap_or_else(|| self.path.clone());
+                if let Ok(metadata) = std::fs::metadata(&file) {
                     let modified = metadata.modified().ok();
                     self.reload_from_start(metadata.len(), modified);
                 }
@@ -3001,6 +3268,11 @@ impl TailEngine {
                     }
                 }
                 self.update_tail_fingerprint();
+                if self.pending_window.is_some() {
+                    // A window waits on the timing: time first, the filters would only
+                    // run again once it applies.
+                    self.request_timestamps();
+                }
                 if self.pending_filter {
                     self.pending_filter = false;
                     self.recompute_filtered_lines_from(0);
@@ -3033,8 +3305,36 @@ impl TailEngine {
                     self.refresh_derived_state_from(from);
                 }
             }
+            ScanKind::Timestamps => {
+                // Appends cancel the scan, so it normally ends with every line timed; if
+                // not, the deferred work stays for the scan that finishes the job.
+                if self.timestamps_complete() {
+                    let pending_filter = std::mem::take(&mut self.pending_filter);
+                    let pending_search = std::mem::take(&mut self.pending_search);
+                    let pending_from = self.pending_refresh_from.take();
+                    // A held window refreshes filters and search from scratch; otherwise
+                    // run what was deferred while the scan ran.
+                    if !self.on_timestamps_complete() {
+                        if pending_filter {
+                            self.recompute_filtered_lines_from(0);
+                        } else if let Some(from) = pending_from {
+                            self.recompute_filtered_lines_from(from);
+                        }
+                        if pending_search {
+                            self.refresh_search_from(0);
+                        } else if let Some(from) = pending_from {
+                            self.refresh_search_from(from);
+                        }
+                    }
+                }
+            }
         }
-        // Lines appended while a scan ran, or a level scan displaced by a filter/search job.
+        // A timestamp scan queued behind this one, or displaced by it, resumes from the
+        // first untimed line; then the levels, the lowest priority.
+        if self.job.is_none() && self.timestamps_wanted {
+            self.request_timestamps();
+        }
+        // Lines appended while a scan ran, or a level scan displaced by another job.
         self.ensure_levels();
     }
 
@@ -3230,13 +3530,23 @@ impl TailEngine {
         let s = input.trim();
         // A time rather than a line number: "14:02", "14:02:05" or a whole timestamp.
         // Checked first, because `14:02` is not a line number in any reading.
+        // A new target replaces a time jump still waiting for the timing.
+        self.cancel_goto_time();
         if s.contains(':') {
             // The cache is otherwise built only once a time window is set; a jump by time
-            // on a fresh stream needs it as much.
-            self.ensure_timestamps();
-            let millis = crate::timestamp::parse_user_time(s, self.time_reference())?;
-            let line = self.goto_time(millis)?;
-            return Some(self.goto_target_for(line, total));
+            // on a fresh stream needs it as much. On a large stream it is built in the
+            // background and the jump happens when it is complete.
+            self.request_timestamps();
+            if !self.timestamps_complete() {
+                self.pending_goto_time = Some(s.to_owned());
+                return Some(GotoTarget {
+                    requested: 0,
+                    line: 0,
+                    hidden: false,
+                    waiting: true,
+                });
+            }
+            return self.resolve_goto_time(s);
         }
         let requested: usize = if let Some(rel) = s.strip_prefix('+') {
             current_line.saturating_add(rel.trim().parse::<usize>().ok()?)
@@ -3249,6 +3559,13 @@ impl TailEngine {
         Some(self.goto_target_for(clamped, total))
     }
 
+    /// A go-to-time input over the complete cache: the first line at or after that time.
+    fn resolve_goto_time(&self, input: &str) -> Option<GotoTarget> {
+        let millis = crate::timestamp::parse_user_time(input, self.time_reference())?;
+        let line = self.goto_time(millis)?;
+        Some(self.goto_target_for(line, self.total_lines()))
+    }
+
     /// Where a jump to `line` actually lands: the line itself when it is visible, the next
     /// visible one when a filter hides it.
     fn goto_target_for(&self, line: usize, total: usize) -> GotoTarget {
@@ -3258,6 +3575,7 @@ impl TailEngine {
                 requested: clamped,
                 line: clamped,
                 hidden: false,
+                waiting: false,
             };
         }
         let Some(&last) = self.filtered_lines.last() else {
@@ -3266,6 +3584,7 @@ impl TailEngine {
                 requested: clamped,
                 line: clamped,
                 hidden: true,
+                waiting: false,
             };
         };
         let pos = self.filtered_lines.partition_point(|&l| l < clamped);
@@ -3278,6 +3597,7 @@ impl TailEngine {
             requested: clamped,
             line,
             hidden: line != clamped,
+            waiting: false,
         }
     }
 

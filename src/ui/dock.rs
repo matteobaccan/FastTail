@@ -454,7 +454,8 @@ fn paint_search_row_background(
 /// The fields take `14:02`, `14:02:05`, a full date and time, or a timestamp copied out
 /// of the log; a bare time belongs to the day of the log, not to today. They are disabled
 /// with a hint when the stream has no timestamps we can read, because a window over a log
-/// we cannot time would just hide everything.
+/// we cannot time would just hide everything. A window typed while the stream is still
+/// being timed in the background is held, with a hint, until timing finishes.
 fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
     let usable = engine.timestamps_usable() || !engine.timestamps_complete();
     ui.label(
@@ -491,7 +492,7 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
         engine.time_range_error = !from_ok || !to_ok;
     }
 
-    if engine.is_time_filtered()
+    if (engine.is_time_filtered() || engine.time_range_pending())
         && ui
             .button("✖")
             .on_hover_text(t(lang, "time_range_clear"))
@@ -508,6 +509,17 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                 .size(10.5)
                 .color(theme.warn_color()),
         );
+    } else if engine.time_range_pending() {
+        // The stream is still being timed in the background (progress in the stream
+        // bar): the window is held and applies by itself once every line is timed.
+        ui.label(
+            RichText::new(format!("⏳ {}", t(lang, "time_range_pending")))
+                .monospace()
+                .size(10.5)
+                .color(theme.warn_color()),
+        );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
     } else if !usable {
         ui.label(
             RichText::new(format!("ⓘ {}", t(lang, "time_range_unavailable")))
@@ -550,6 +562,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Filter => "scan_filtering",
         crate::scan_job::ScanKind::Search => "scan_searching",
         crate::scan_job::ScanKind::Levels => "scan_levels",
+        crate::scan_job::ScanKind::Timestamps => "scan_timestamps",
     }
 }
 
@@ -1210,6 +1223,7 @@ fn render_log_stream(
             engine.goto_open = true;
             engine.goto_input.clear();
             engine.goto_notice = None;
+            engine.cancel_goto_time();
             ui.ctx().memory_mut(|m| m.request_focus(goto_id));
         }
         if engine.goto_open {
@@ -1230,39 +1244,67 @@ fn render_log_stream(
                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             let esc = resp.has_focus()
                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            // Where to land: the target entered now, or a time jump that waited for the
+            // background timing and has just been resolved.
+            let mut landed = engine.take_goto_time_result();
             if enter {
                 let current_line = engine.get_actual_line_idx(top_row(engine)).unwrap_or(0);
                 match engine.resolve_goto(&engine.goto_input.clone(), current_line) {
-                    Some(target) => {
-                        engine.goto_notice = if target.hidden {
-                            Some(format!(
-                                "{} {} {}",
-                                target.requested + 1,
-                                t(lang, "goto_hidden"),
-                                target.line + 1
-                            ))
-                        } else {
-                            None
-                        };
-                        scroll_to_target(engine, target.line);
-                        engine.select_row(target.line);
-                        if !target.hidden {
-                            engine.goto_open = false;
-                            ui.ctx().memory_mut(|m| m.stop_text_input());
-                        }
-                        ui.ctx().request_repaint();
-                    }
-                    None => {
-                        engine.goto_notice = Some(t(lang, "goto_invalid").to_string());
-                    }
+                    Some(target) if target.waiting => engine.goto_notice = None,
+                    result => landed = Some(result),
                 }
             }
+            match landed {
+                Some(Some(target)) => {
+                    engine.goto_notice = if target.hidden {
+                        Some(format!(
+                            "{} {} {}",
+                            target.requested + 1,
+                            t(lang, "goto_hidden"),
+                            target.line + 1
+                        ))
+                    } else {
+                        None
+                    };
+                    scroll_to_target(engine, target.line);
+                    engine.select_row(target.line);
+                    if !target.hidden {
+                        engine.goto_open = false;
+                        ui.ctx().memory_mut(|m| m.stop_text_input());
+                    }
+                    ui.ctx().request_repaint();
+                }
+                Some(None) => {
+                    engine.goto_notice = Some(t(lang, "goto_invalid").to_string());
+                }
+                None => {}
+            }
             if esc {
+                // Drops a time jump still waiting; the timing itself goes on.
+                engine.cancel_goto_time();
                 engine.goto_open = false;
                 engine.goto_notice = None;
                 ui.ctx().memory_mut(|m| m.stop_text_input());
             }
-            if let Some(notice) = &engine.goto_notice {
+            if engine.goto_time_waiting() {
+                // The jump happens when the stream is timed: show how far that is.
+                let waiting = match engine.scan_progress() {
+                    Some((crate::scan_job::ScanKind::Timestamps, progress, _)) => format!(
+                        "⏳ {} {:.0}%",
+                        t(lang, "scan_timestamps"),
+                        (progress * 100.0).clamp(0.0, 100.0)
+                    ),
+                    _ => format!("⏳ {}...", t(lang, "scan_timestamps")),
+                };
+                ui.label(
+                    RichText::new(waiting)
+                        .monospace()
+                        .size(11.0)
+                        .color(theme.warn_color()),
+                );
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+            } else if let Some(notice) = &engine.goto_notice {
                 ui.label(
                     RichText::new(notice)
                         .monospace()
