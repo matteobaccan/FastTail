@@ -306,6 +306,40 @@ impl Default for FastTailConfig {
     }
 }
 
+/// Fails with `InvalidInput` when `path` exists and is not a regular file (a directory,
+/// a FIFO, a device), so that reading or opening it for writing cannot block or
+/// clobber something that is not a config file.
+fn ensure_regular_or_absent(path: &Path) -> std::io::Result<()> {
+    match fs::metadata(path) {
+        Ok(meta) if !meta.is_file() => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target path is not a regular file",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Replaces the content of `path` with `buf`, refusing targets that are not regular
+/// files. The check is repeated on the opened handle, and the file is truncated only
+/// after it passed.
+pub(crate) fn overwrite_regular_file(path: &Path, buf: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    ensure_regular_or_absent(path)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target path is not a regular file",
+        ));
+    }
+    file.set_len(0)?;
+    file.write_all(buf)
+}
+
 impl FastTailConfig {
     /// Resolves where `fasttail.ini` lives, in priority order:
     /// 1. `FASTTAIL_CONFIG` environment variable (explicit file path)
@@ -1128,13 +1162,14 @@ impl FastTailConfig {
     /// bytes. Returns whether the file was actually written. A read error counts as
     /// "different", so an unreadable target is rewritten rather than skipped.
     fn write_if_changed(path: &Path, buf: &[u8]) -> Result<bool, std::io::Error> {
+        ensure_regular_or_absent(path)?;
         if fs::read(path)
             .map(|existing| existing == buf)
             .unwrap_or(false)
         {
             return Ok(false);
         }
-        fs::write(path, buf)?;
+        overwrite_regular_file(path, buf)?;
         Ok(true)
     }
 
@@ -1321,6 +1356,19 @@ mod tests {
         assert!(pin_matches(&stored, "JOSHUA "));
         assert!(pin_matches("", "joshua"));
         assert!(!pin_matches("", "1234"));
+    }
+
+    #[test]
+    fn test_save_to_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_target = temp_dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        let cfg = FastTailConfig::default();
+        let err = cfg
+            .save_to(&dir_target)
+            .expect_err("should fail when target is a directory");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
