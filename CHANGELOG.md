@@ -10,6 +10,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **ANSI colour codes are rendered.** A stream whose first 64 KB, or later appended data,
+  holds an SGR escape sequence (`ESC[31m`) switches from auto to render: the sequences
+  are hidden and the 16 base and bright colours (from a palette per theme, readable on
+  Light), 256-colour and 24-bit colours, bold, dim, italic, underline and inverse are
+  painted as spans of the row. User highlight rules and quick labels win over the ANSI
+  colours, which win over the level colouring, within the 64-span budget of a row. An
+  `ANSI: auto → render` selector in the stream bar also offers strip (sequences hidden,
+  no colour) and raw (the line as stored, `ESC` drawn as `␛`); a chosen mode is saved per
+  file in the workspace and in sessions (`ansi=`). In render and strip modes every text
+  feature sees the line without its sequences — include/exclude filters (background
+  scans included), search, highlight rules and quick labels, level, timestamp and JSON
+  detection, copy, export and the `{line}` placeholder of external tools — so
+  `ESC[31mERROR` is detected as ERROR and matched by `\bERROR\b`; the text search cursor
+  is converted back to the file bytes when switching to HEX, which always shows the file.
+  Other sequences (cursor movement, OSC 8 links, titles) are removed without being
+  interpreted. A log without an escape byte stays in auto (acting as raw) and is read as
+  before, with no extra work per line; the parser is in-house (no new dependency).
+
 - **Compressed logs open directly.** A gzip file (`app.log.1.gz`, multi-member included)
   or a zip archive is recognised by its first bytes, whatever its extension, and
   decompressed on a background thread into a temporary spool file that the normal engine
