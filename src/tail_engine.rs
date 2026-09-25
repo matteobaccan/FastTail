@@ -1,3 +1,4 @@
+use crate::ansi::{AnsiMode, AnsiStyle, StyleRun};
 use crate::audio::SoundAlertPreset;
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
@@ -105,12 +106,14 @@ pub const MAX_SPAN_SCAN: usize = 100_000;
 /// built: enough to step over a stack trace, few enough to stay free per frame.
 pub const SPAN_PROBE_LINES: usize = 256;
 
-/// Style of a painted span: a captures-only rule's style, or preset colour `1..=9` of a
-/// quick label (resolved by the theme in the renderer).
+/// Style of a painted span: a captures-only rule's style, preset colour `1..=9` of a
+/// quick label, or the SGR attributes of an ANSI-coloured run (both resolved by the theme
+/// in the renderer).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SpanStyle {
     Rule(HighlightStyle),
     Label(u8),
+    Ansi(AnsiStyle),
 }
 
 /// A byte range `[start, end)` of a row painted with its own style.
@@ -128,6 +131,39 @@ pub struct HighlightSpan {
 pub struct SpanHighlight {
     pub spans: Vec<HighlightSpan>,
     pub rest: Option<HighlightStyle>,
+}
+
+/// A row as the text view draws it (see `TailEngine::get_row`): the text of the line
+/// (without its escape sequences in render and strip modes), its ANSI style runs in
+/// render mode, and whether raw mode draws its `ESC` bytes as `␛`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowText {
+    pub line: String,
+    pub ansi: Vec<StyleRun>,
+    pub visible_escapes: bool,
+}
+
+impl RowText {
+    /// The text to lay out and `spans` in its offsets: the line itself, or in raw mode the
+    /// line with `␛` glyphs and the spans shifted past them.
+    pub fn display(&self, spans: Option<SpanHighlight>) -> (Cow<'_, str>, Option<SpanHighlight>) {
+        if !self.visible_escapes {
+            return (Cow::Borrowed(&self.line), spans);
+        }
+        let spans = spans.map(|mut highlight| {
+            let mut offsets: Vec<&mut usize> = highlight
+                .spans
+                .iter_mut()
+                .flat_map(|sp| {
+                    let HighlightSpan { start, end, .. } = sp;
+                    [start, end]
+                })
+                .collect();
+            crate::ansi::shift_for_visible_escapes(&self.line, &mut offsets);
+            highlight
+        });
+        (crate::ansi::visible_escapes(&self.line), spans)
+    }
 }
 
 /// An ad-hoc colour label (Ctrl+Shift+1..9): case-insensitive plain text painted with
@@ -288,7 +324,35 @@ pub const TRUNCATED_LINE_MARKER: &str = " …[line truncated]";
 /// Decodes one raw line (bytes between two offsets, newline included) in `encoding`,
 /// dropping the trailing newline / CR LF unless the line was cut by the length cap.
 pub(crate) fn decode_line(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> String {
-    let mut s = match encoding {
+    let mut s = decode_content(bytes, encoding, truncated);
+    if truncated {
+        s.push_str(TRUNCATED_LINE_MARKER);
+    }
+    s
+}
+
+/// `decode_line` for a stream whose text features see the line without its escape
+/// sequences (`strip`): they are removed before the truncation marker is appended, so a
+/// sequence cut by the length cap cannot swallow the marker.
+pub(crate) fn decode_line_ansi(
+    bytes: &[u8],
+    encoding: FileEncoding,
+    truncated: bool,
+    strip: bool,
+) -> String {
+    if !strip {
+        return decode_line(bytes, encoding, truncated);
+    }
+    let mut s = crate::ansi::strip_owned(decode_content(bytes, encoding, truncated));
+    if truncated {
+        s.push_str(TRUNCATED_LINE_MARKER);
+    }
+    s
+}
+
+/// The decoded text of a raw line, without the truncation marker.
+fn decode_content(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> String {
+    match encoding {
         FileEncoding::Utf8 => {
             let end = if truncated {
                 bytes.len()
@@ -334,11 +398,19 @@ pub(crate) fn decode_line(bytes: &[u8], encoding: FileEncoding, truncated: bool)
                 .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
                 .collect()
         }
-    };
-    if truncated {
-        s.push_str(TRUNCATED_LINE_MARKER);
     }
-    s
+}
+
+/// Bytes `text` (decoded from the file) takes in the file in `encoding`, used to turn an
+/// offset inside a decoded line back into a file offset.
+fn encoded_len(text: &str, encoding: FileEncoding) -> usize {
+    match encoding {
+        FileEncoding::Utf8 => text.len(),
+        FileEncoding::Ascii | FileEncoding::Ansi => text.chars().count(),
+        FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
+            text.chars().map(char::len_utf16).sum::<usize>() * 2
+        }
+    }
 }
 
 /// End of the line content for single-byte encodings: strips `\n` and a preceding `\r`.
@@ -783,6 +855,13 @@ pub struct TailEngine {
     /// sample and run again once it holds `ENCODING_SAMPLE_BYTES` (or, for a compressed
     /// stream, when the decompression ends with fewer).
     pub encoding_pending: bool,
+    /// ANSI escape handling chosen for the stream (`Auto` unless the user picked a mode),
+    /// a dirty flag for persistence, whether auto-detection has seen an SGR sequence, and
+    /// when auto mode switched to render on appended data (for the stream bar notice).
+    pub ansi_mode: AnsiMode,
+    pub ansi_dirty: bool,
+    ansi_detected: bool,
+    pub ansi_switched_at: Option<Instant>,
     /// Decompression job and spool of a stream read from a gzip file or a zip entry
     /// (see `compressed`); `path` is then the archive (or `archive/entry`) and
     /// `current_file` the spool. Declared last so the file handle above is closed before
@@ -1282,6 +1361,10 @@ impl TailEngine {
             throughput_bps: 0.0,
             encoding_pending: false,
             compressed: None,
+            ansi_mode: AnsiMode::Auto,
+            ansi_dirty: false,
+            ansi_detected: false,
+            ansi_switched_at: None,
         };
 
         engine.rebuild_line_index();
@@ -1587,6 +1670,27 @@ impl TailEngine {
     /// previous index, so their derived state is kept instead of being rescanned.
     fn rebuild_line_index_from(&mut self, unchanged_lines: usize) {
         let mut total_len = self.source.len();
+        // Auto mode looks for colour codes in the head of the file, then in each append
+        // until it finds one. Switching to render on appended data changes the text of
+        // every line: their derived state is rebuilt from the start (the index itself
+        // stays incremental).
+        let examined_from = if unchanged_lines == 0 {
+            self.bom_len()
+        } else {
+            self.line_offsets
+                .get(unchanged_lines)
+                .copied()
+                .unwrap_or(total_len)
+        };
+        let derived_from = if self.detect_ansi(examined_from) && unchanged_lines > 0 {
+            self.job = None;
+            self.pending_refresh_from = None;
+            self.markdown_text_cache = None;
+            self.ansi_switched_at = Some(Instant::now());
+            0
+        } else {
+            unchanged_lines
+        };
         // The level and timestamp caches follow the index: drop what a running level or
         // timestamp scan would push out of order, and forget the lines that are about to
         // be rescanned. Both scans resume from their prefix afterwards.
@@ -1598,21 +1702,10 @@ impl TailEngine {
         {
             self.job = None;
         }
-        self.truncate_levels(unchanged_lines);
-        self.truncate_timestamps(unchanged_lines);
-        if unchanged_lines == 0 && self.is_time_filtered() {
-            // Every line is about to be timed again, and a window over an empty cache
-            // would hide the whole file: hold the window until timing finishes. The
-            // fields are re-read then, so a rotated log gets the day of its own first line.
-            self.pending_window = Some(
-                if self.time_from_text.trim().is_empty() && self.time_to_text.trim().is_empty() {
-                    PendingWindow::Range(self.time_from, self.time_to)
-                } else {
-                    PendingWindow::Texts
-                },
-            );
-            self.time_from = None;
-            self.time_to = None;
+        self.truncate_levels(derived_from);
+        self.truncate_timestamps(derived_from);
+        if derived_from == 0 {
+            self.hold_time_window();
         }
         if unchanged_lines == 0 && total_len > self.index_job_threshold_bytes {
             // Large file: index on a worker thread; the view shows lines as they arrive.
@@ -1758,7 +1851,117 @@ impl TailEngine {
         if self.wants_timestamps() || !self.timestamps.is_empty() {
             self.request_timestamps();
         }
-        self.refresh_derived_state_from(unchanged_lines);
+        self.refresh_derived_state_from(derived_from);
+        self.ensure_levels();
+    }
+
+    /// Every line is about to be timed again, and a window over an empty cache would hide
+    /// the whole file: holds the window until timing finishes. The fields are re-read
+    /// then, so a rotated log gets the day of its own first line.
+    fn hold_time_window(&mut self) {
+        if !self.is_time_filtered() {
+            return;
+        }
+        self.pending_window = Some(
+            if self.time_from_text.trim().is_empty() && self.time_to_text.trim().is_empty() {
+                PendingWindow::Range(self.time_from, self.time_to)
+            } else {
+                PendingWindow::Texts
+            },
+        );
+        self.time_from = None;
+        self.time_to = None;
+    }
+
+    // ----- ANSI escape sequences -----
+
+    /// The mode the stream behaves in: `Auto` is render once an SGR sequence was found,
+    /// raw until then (identical to the others on a log without escapes).
+    pub fn ansi_effective(&self) -> AnsiMode {
+        match self.ansi_mode {
+            AnsiMode::Auto if self.ansi_detected => AnsiMode::Render,
+            AnsiMode::Auto => AnsiMode::Raw,
+            mode => mode,
+        }
+    }
+
+    /// Whether the text features see the lines without their escape sequences.
+    fn strips_ansi(&self) -> bool {
+        self.ansi_effective().strips()
+    }
+
+    /// Whether auto mode switched to render on appended data less than 5 seconds ago.
+    pub fn ansi_switch_notice(&self) -> bool {
+        self.ansi_switched_at
+            .map(|at| at.elapsed() < SWITCH_NOTICE_DURATION)
+            .unwrap_or(false)
+    }
+
+    /// Chooses how escape sequences are handled. When the resulting behaviour changes,
+    /// the text of every line changes with it: see `line_text_changed`.
+    pub fn set_ansi_mode(&mut self, mode: AnsiMode) {
+        if self.ansi_mode == mode {
+            return;
+        }
+        let before = self.ansi_effective();
+        self.ansi_mode = mode;
+        self.ansi_dirty = true;
+        self.ansi_switched_at = None;
+        if mode == AnsiMode::Auto && !self.index_pending {
+            // Back to auto: look at the head again, like at open.
+            let head = self.bom_len();
+            self.detect_ansi(head);
+        }
+        if self.ansi_effective() != before {
+            self.line_text_changed();
+        }
+    }
+
+    /// Auto-detection on the bytes from `from` (at most `DETECT_SAMPLE_BYTES`): returns
+    /// true when it finds the stream's first SGR sequence. A no-op outside auto mode and
+    /// once a sequence was found (the switch happens at most once per stream).
+    fn detect_ansi(&mut self, from: u64) -> bool {
+        if self.ansi_mode != AnsiMode::Auto || self.ansi_detected {
+            return false;
+        }
+        let end = self.source.len();
+        if from >= end {
+            return false;
+        }
+        let len = ((end - from) as usize).min(crate::ansi::DETECT_SAMPLE_BYTES);
+        let sample = self.source.read_to_vec(from, len);
+        let found = match self.encoding {
+            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
+                let even = sample.len() & !1;
+                let text = decode_content(&sample[..even], self.encoding, true);
+                crate::ansi::contains_sgr(text.as_bytes())
+            }
+            _ => crate::ansi::contains_sgr(&sample),
+        };
+        self.ansi_detected = found;
+        found
+    }
+
+    /// The text of every line changed while the line index did not (the ANSI mode): the
+    /// level and timestamp caches start over and the filters and the search run again,
+    /// as after a rewrite, without re-reading the line offsets.
+    fn line_text_changed(&mut self) {
+        self.buffer_generation = self.buffer_generation.wrapping_add(1);
+        self.markdown_text_cache = None;
+        if self.index_pending {
+            // Nothing is derived yet: the index job ends with the refreshes it deferred.
+            return;
+        }
+        let timed = !self.timestamps.is_empty();
+        self.job = None;
+        self.pending_refresh_from = None;
+        self.truncate_levels(0);
+        self.truncate_timestamps(0);
+        self.hold_time_window();
+        if timed || self.wants_timestamps() {
+            self.request_timestamps();
+        }
+        self.refresh_derived_state_from(0);
         self.ensure_levels();
     }
 
@@ -2068,7 +2271,9 @@ impl TailEngine {
         self.line_offsets.len()
     }
 
-    pub fn get_line(&self, idx: usize) -> Option<Cow<'_, str>> {
+    /// Start offset, byte length to read (capped at `MAX_LINE_BYTES`) and truncation flag
+    /// of line `idx`.
+    fn line_span(&self, idx: usize) -> Option<(u64, usize, bool)> {
         if idx >= self.line_offsets.len() {
             return None;
         }
@@ -2082,14 +2287,50 @@ impl TailEngine {
             return None;
         }
         let raw_len = (next_start - start) as usize;
-        let (len, truncated) = if raw_len > MAX_LINE_BYTES {
-            (MAX_LINE_BYTES, true)
+        Some(if raw_len > MAX_LINE_BYTES {
+            (start, MAX_LINE_BYTES, true)
         } else {
-            (raw_len, false)
-        };
+            (start, raw_len, false)
+        })
+    }
+
+    /// The text of line `idx`, the one every text feature uses: without its escape
+    /// sequences in render and strip modes, as stored in raw mode.
+    pub fn get_line(&self, idx: usize) -> Option<Cow<'_, str>> {
+        let (start, len, truncated) = self.line_span(idx)?;
         let encoding = self.encoding;
+        let strip = self.strips_ansi();
         self.source.read_with(start, len, |bytes| {
-            Cow::Owned(decode_line(bytes, encoding, truncated))
+            Cow::Owned(decode_line_ansi(bytes, encoding, truncated, strip))
+        })
+    }
+
+    /// Line `idx` for the text view: `get_line` plus, in render mode, the SGR style runs
+    /// of the line, and in raw mode whether it holds `ESC` bytes to draw as `␛`.
+    pub fn get_row(&self, idx: usize) -> Option<RowText> {
+        let (start, len, truncated) = self.line_span(idx)?;
+        let encoding = self.encoding;
+        let mode = self.ansi_effective();
+        self.source.read_with(start, len, |bytes| {
+            let text = decode_content(bytes, encoding, truncated);
+            let escaped = crate::ansi::has_escape(text.as_bytes());
+            let (mut line, ansi, visible_escapes) = match mode {
+                AnsiMode::Render if escaped => {
+                    let (line, runs) = crate::ansi::strip_and_style(&text);
+                    (line, runs, false)
+                }
+                AnsiMode::Strip if escaped => (crate::ansi::strip_owned(text), Vec::new(), false),
+                AnsiMode::Raw => (text, Vec::new(), escaped),
+                _ => (text, Vec::new(), false),
+            };
+            if truncated {
+                line.push_str(TRUNCATED_LINE_MARKER);
+            }
+            RowText {
+                line,
+                ansi,
+                visible_escapes,
+            }
         })
     }
 
@@ -2146,6 +2387,19 @@ impl TailEngine {
     /// walk (`rest`); quick labels come after the rules and claim what is left. Spans are
     /// returned sorted, non-overlapping and capped at `MAX_ROW_SPANS`.
     pub fn match_highlight_spans(&self, line: &str) -> SpanHighlight {
+        self.match_highlight_spans_with(line, &[])
+    }
+
+    /// Span evaluation of a row of the text view: `match_highlight_spans` plus, in render
+    /// mode, the row's ANSI colours in the bytes still free (see `match_highlight_spans_with`).
+    pub fn match_row_spans(&self, row: &RowText) -> SpanHighlight {
+        self.match_highlight_spans_with(&row.line, &row.ansi)
+    }
+
+    /// `match_highlight_spans` with the ANSI style runs of the line ranked last: user
+    /// rules, then quick labels, then the ANSI colours claim the bytes left, all within
+    /// the budget of `MAX_ROW_SPANS`. A whole-row rule leaves nothing to the ANSI colours.
+    pub fn match_highlight_spans_with(&self, line: &str, ansi: &[StyleRun]) -> SpanHighlight {
         let mut out = SpanHighlight::default();
         let mut full = false;
         for ch in &self.compiled_highlights {
@@ -2201,6 +2455,18 @@ impl TailEngine {
                     }
                 });
                 if full {
+                    break;
+                }
+            }
+        }
+        if !full {
+            for run in ansi {
+                if claim_span(
+                    &mut out.spans,
+                    run.start,
+                    run.end,
+                    SpanStyle::Ansi(run.style),
+                ) {
                     break;
                 }
             }
@@ -2347,6 +2613,7 @@ impl TailEngine {
                 file_len
             }
         };
+        let strip = self.strips_ansi();
         let mut chunk = vec![0u8; SCAN_CHUNK];
         let mut i = start;
         while i < end {
@@ -2386,11 +2653,19 @@ impl TailEngine {
                     FileEncoding::Utf8 if !truncated => {
                         let content = &bytes[..trim_newline_1(bytes)];
                         match std::str::from_utf8(content) {
+                            Ok(text) if strip => f(idx, &crate::ansi::strip(text)),
                             Ok(text) => f(idx, text),
-                            Err(_) => f(idx, &String::from_utf8_lossy(content)),
+                            Err(_) => {
+                                let text = String::from_utf8_lossy(content);
+                                if strip {
+                                    f(idx, &crate::ansi::strip(&text))
+                                } else {
+                                    f(idx, &text)
+                                }
+                            }
                         }
                     }
-                    enc => f(idx, &decode_line(bytes, enc, truncated)),
+                    enc => f(idx, &decode_line_ansi(bytes, enc, truncated, strip)),
                 };
                 if !go_on {
                     return;
@@ -3022,6 +3297,12 @@ impl TailEngine {
             return;
         }
         self.view_notice = None;
+        // The current hit of the text view, carried to the same file bytes in HEX.
+        let text_hit = if mode == ViewMode::Hex && self.view_mode != ViewMode::Hex {
+            self.current_search_line()
+        } else {
+            None
+        };
         self.view_mode = mode;
         if mode == ViewMode::Hex
             && !self.last_searched_query.is_empty()
@@ -3035,12 +3316,54 @@ impl TailEngine {
             self.search_byte_matches = byte_matches;
             self.search_byte_max_len = max_len;
         }
+        if let Some(offset) = text_hit.and_then(|line| self.search_hit_file_offset(line)) {
+            let pos = self
+                .search_byte_matches
+                .partition_point(|&(off, _)| off < offset);
+            if let Some(&(off, _)) = self.search_byte_matches.get(pos) {
+                self.current_match_idx = Some(pos);
+                self.scroll_to_byte = Some(off);
+                return;
+            }
+        }
         let len = self.active_match_count();
         self.current_match_idx = match self.current_match_idx {
             _ if len == 0 => None,
             Some(i) if i < len => Some(i),
             _ => Some(0),
         };
+    }
+
+    /// File offset of the first hit of the search query in `line`. The hit is found in
+    /// the text the view shows (without escape sequences in render and strip modes) and
+    /// converted back through the removed sequences and the encoding, so HEX lands on
+    /// the bytes of the word, not on a position shifted by the sequences before it.
+    fn search_hit_file_offset(&self, line: usize) -> Option<usize> {
+        let (start, len, truncated) = self.line_span(line)?;
+        let query = self.last_searched_query.to_lowercase();
+        let encoding = self.encoding;
+        let strip = self.strips_ansi();
+        self.source
+            .read_with(start, len, |bytes| {
+                let text = decode_content(bytes, encoding, truncated);
+                let stripped = if strip {
+                    crate::ansi::strip_with_map(&text)
+                } else {
+                    crate::ansi::Stripped {
+                        text: text.clone(),
+                        map: vec![(0, 0)],
+                    }
+                };
+                let mut hit = None;
+                find_case_insensitive_cb(&stripped.text, &query, |s, _| {
+                    hit = Some(s);
+                    false
+                });
+                let raw = stripped.to_raw(hit?).min(text.len());
+                let prefix = text.get(..raw)?;
+                Some(start as usize + encoded_len(prefix, encoding))
+            })
+            .flatten()
     }
 
     pub fn current_search_byte(&self) -> Option<(usize, usize)> {
@@ -3088,7 +3411,16 @@ impl TailEngine {
         let mut bytes = vec![0u8; total];
         let n = self.source.read_direct(0, &mut bytes).unwrap_or(0);
         bytes.truncate(n);
-        let raw = String::from_utf8_lossy(&bytes);
+        let mut raw = String::from_utf8_lossy(&bytes);
+        if self.strips_ansi() && crate::ansi::has_escape(raw.as_bytes()) {
+            // Line by line: an unterminated sequence must not swallow the next lines.
+            raw = Cow::Owned(
+                raw.split('\n')
+                    .map(crate::ansi::strip)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
         let text = if crate::html_converter::contains_html(&raw) {
             crate::html_converter::html_to_markdown(&raw)
         } else {
@@ -3206,6 +3538,7 @@ impl TailEngine {
             end_offset: self.source.len(),
             start_line,
             encoding: self.encoding,
+            ansi: self.ansi_effective(),
             parent_visible: self.parent_visible_before(start_line),
         };
         // The file being tailed: for a pattern stream `path` is the pattern itself.

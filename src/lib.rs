@@ -1,3 +1,4 @@
+pub mod ansi;
 pub mod audio;
 pub mod baretail_bridge;
 pub mod cli;
