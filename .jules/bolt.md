@@ -7,5 +7,9 @@
 **Action:** Omit `haystack.is_ascii()` when `needle.is_ascii()` in UTF-8 text processing hot paths, and branch `first_lower == first_upper` to single-byte `memchr`.
 
 ## 2026-04-18 - Avoid large stack buffer copies and fixed cap risks in hot loops
-**Learning:** Replacing dynamic small `Vec` instances (which hold 1–2 elements in practice) in a loop with fixed stack arrays like `[(usize, usize); 64]` (1 KB each) causes 1 KB of stack copying per iteration on every span subtraction (up to 64 KB per call). Furthermore, fixed arrays risk silently dropping interval pieces if splitting pushes the count past the fixed cap.
-**Action:** Prefer standard dynamic `Vec` or prudent small-vec over copying large fixed stack buffers in tight interval-deduction loops.
+**Learning:** Replacing dynamic small Vec instances (which hold 1–2 elements in practice) in a loop with fixed stack arrays like `[(usize, usize); 64]` (1 KB each) causes 1 KB of stack copying per iteration on every span subtraction (up to 64 KB per call). Furthermore, fixed arrays risk silently dropping interval pieces if splitting pushes the count past the fixed cap.
+**Action:** Prefer standard dynamic Vec or prudent small-vec over copying large fixed stack buffers in tight interval-deduction loops.
+
+## 2026-04-18 - Small stack buffer with dynamic Vec overflow for hot interval deduction
+**Learning:** Using dynamic `Vec` instances in hot row span deduction loops (`claim_span`) causes millions of heap allocations on multi-megabyte logs. Replacing them with a small inline stack buffer (`SmallPieces`, 8 items / 128 bytes) and an `overflow: Option<Vec<T>>` fallback completely eliminates heap allocation churn while guaranteeing zero truncation risk and avoiding large stack frame copying overhead.
+**Action:** Use a small stack-allocated struct (8 elements) with dynamic `Vec` overflow fallback for interval subtraction and piece tracking in tight text/span layout loops.

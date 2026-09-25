@@ -724,6 +724,84 @@ pub struct CompiledHighlight {
     pub sound_alert: SoundAlertPreset,
 }
 
+const SMALL_PIECES_CAP: usize = 8;
+
+/// Inline stack buffer for interval pieces during span deduction, avoiding heap allocations
+/// in the hot row span matching path while falling back to dynamic `Vec` if pieces exceed 8.
+struct SmallPieces {
+    buf: [(usize, usize); SMALL_PIECES_CAP],
+    len: usize,
+    overflow: Option<Vec<(usize, usize)>>,
+}
+
+impl SmallPieces {
+    #[inline]
+    fn new(start: usize, end: usize) -> Self {
+        let mut buf = [(0, 0); SMALL_PIECES_CAP];
+        buf[0] = (start, end);
+        Self {
+            buf,
+            len: 1,
+            overflow: None,
+        }
+    }
+
+    #[inline]
+    fn empty() -> Self {
+        Self {
+            buf: [(0, 0); SMALL_PIECES_CAP],
+            len: 0,
+            overflow: None,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, item: (usize, usize)) {
+        if let Some(ref mut vec) = self.overflow {
+            vec.push(item);
+        } else if self.len < SMALL_PIECES_CAP {
+            self.buf[self.len] = item;
+            self.len += 1;
+        } else {
+            let mut vec = Vec::with_capacity(16);
+            vec.extend_from_slice(&self.buf[..self.len]);
+            vec.push(item);
+            self.overflow = Some(vec);
+        }
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        if let Some(ref vec) = self.overflow {
+            vec.is_empty()
+        } else {
+            self.len == 0
+        }
+    }
+
+    #[inline]
+    fn clear(&mut self) {
+        self.len = 0;
+        if let Some(ref mut vec) = self.overflow {
+            vec.clear();
+        }
+    }
+}
+
+#[inline]
+fn process_piece(s: usize, e: usize, sp: &HighlightSpan, next_pieces: &mut SmallPieces) {
+    if e <= sp.start || s >= sp.end {
+        next_pieces.push((s, e));
+    } else {
+        if s < sp.start {
+            next_pieces.push((s, sp.start));
+        }
+        if e > sp.end {
+            next_pieces.push((sp.end, e));
+        }
+    }
+}
+
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
@@ -732,37 +810,51 @@ fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: S
         spans.push(HighlightSpan { start, end, style });
         return spans.len() >= MAX_ROW_SPANS;
     }
-    // Double-buffer piece vectors and reuse them via drain and swap to eliminate heap
-    // allocation churn during interval subtraction.
-    let mut pieces = vec![(start, end)];
-    let mut next_pieces = Vec::with_capacity(4);
+
+    let mut pieces = SmallPieces::new(start, end);
+    let mut next_pieces = SmallPieces::empty();
+
     for sp in spans.iter() {
-        for (s, e) in pieces.drain(..) {
-            if e <= sp.start || s >= sp.end {
-                next_pieces.push((s, e));
-            } else {
-                if s < sp.start {
-                    next_pieces.push((s, sp.start));
-                }
-                if e > sp.end {
-                    next_pieces.push((sp.end, e));
-                }
+        if let Some(ref mut vec) = pieces.overflow {
+            for (s, e) in vec.drain(..) {
+                process_piece(s, e, sp, &mut next_pieces);
+            }
+        } else {
+            for i in 0..pieces.len {
+                let (s, e) = pieces.buf[i];
+                process_piece(s, e, sp, &mut next_pieces);
             }
         }
+        pieces.clear();
         std::mem::swap(&mut pieces, &mut next_pieces);
         if pieces.is_empty() {
             break;
         }
     }
-    for (s, e) in pieces {
-        if spans.len() >= MAX_ROW_SPANS {
-            return true;
+
+    if let Some(ref vec) = pieces.overflow {
+        for &(s, e) in vec {
+            if spans.len() >= MAX_ROW_SPANS {
+                return true;
+            }
+            spans.push(HighlightSpan {
+                start: s,
+                end: e,
+                style,
+            });
         }
-        spans.push(HighlightSpan {
-            start: s,
-            end: e,
-            style,
-        });
+    } else {
+        for i in 0..pieces.len {
+            if spans.len() >= MAX_ROW_SPANS {
+                return true;
+            }
+            let (s, e) = pieces.buf[i];
+            spans.push(HighlightSpan {
+                start: s,
+                end: e,
+                style,
+            });
+        }
     }
     spans.len() >= MAX_ROW_SPANS
 }
@@ -4888,5 +4980,54 @@ mod tests {
         );
         assert!(find_case_insensitive(haystack, "").is_empty());
         assert!(contains_case_insensitive(haystack, ""));
+    }
+
+    #[test]
+    fn test_claim_span_deduction_and_overflow() {
+        use super::{claim_span, HighlightSpan, HighlightStyle, SpanStyle};
+        use egui::Color32;
+
+        let style_a = SpanStyle::Rule(HighlightStyle {
+            fg: Color32::RED,
+            bg: Color32::BLACK,
+            bold: false,
+            italic: false,
+        });
+        let style_b = SpanStyle::Label(1);
+
+        let mut spans = Vec::new();
+        // Claim first span [10, 50)
+        assert!(!claim_span(&mut spans, 10, 50, style_a));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 10);
+        assert_eq!(spans[0].end, 50);
+
+        // Claim non-overlapping span [60, 80)
+        assert!(!claim_span(&mut spans, 60, 80, style_b));
+        assert_eq!(spans.len(), 2);
+
+        // Claim overlapping span [0, 100) which should subtract [10, 50) and [60, 80)
+        // leaving pieces [0, 10), [50, 60), [80, 100)
+        assert!(!claim_span(&mut spans, 0, 100, style_b));
+        assert_eq!(spans.len(), 5);
+        assert_eq!(spans[2].start, 0);
+        assert_eq!(spans[2].end, 10);
+        assert_eq!(spans[3].start, 50);
+        assert_eq!(spans[3].end, 60);
+        assert_eq!(spans[4].start, 80);
+        assert_eq!(spans[4].end, 100);
+
+        // Test overflow path with many pieces
+        let mut many_spans = Vec::new();
+        for i in 0..10 {
+            many_spans.push(HighlightSpan {
+                start: i * 20 + 5,
+                end: i * 20 + 15,
+                style: style_a,
+            });
+        }
+        // [0, 200) subtracted by 10 existing spans will create 11 pieces, exceeding SMALL_PIECES_CAP (8)
+        assert!(!claim_span(&mut many_spans, 0, 200, style_b));
+        assert_eq!(many_spans.len(), 21);
     }
 }
