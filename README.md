@@ -295,6 +295,15 @@ Yes. Each file opens in its own stream that can be tabbed, split, docked or floa
 ### Does FastTail follow rotated logs?
 Yes. Rotation, truncation and in-place rewrites of a file are detected without locking it for the writer. To follow a logger that creates a new file per day or hour, open a wildcard pattern such as `C:\logs\app-*.log`: the stream follows the newest matching file and keeps its filters when it switches.
 
+### How do I see only the log lines between two times?
+Fill the `🕘 from → to` pair above the buffer: `from 14:02 to 14:10` keeps only the lines stamped inside that window, together with the include / exclude and level filters. Either side can stay empty (`from 14:02` means everything after it). A bare time refers to the day of the log, not to today, and a full `YYYY-MM-DD HH:MM[:SS]` or a timestamp pasted from a line works too. Lines without a timestamp of their own, such as the frames of a stack trace, inherit the one above them and stay with their entry.
+
+### Which timestamp formats does FastTail recognise?
+ISO 8601 (with `T` or a space, optional fraction and time zone), syslog (`Sep 18 14:02:05`), Apache / nginx (`[18/Sep/2026:14:02:05 +0200]`) and bare epoch seconds or milliseconds, found within the first 64 bytes of the line. There is no format to configure. When fewer than half the lines carry a timestamp FastTail can read, the time controls are disabled and say so instead of hiding the file.
+
+### How do I jump to a specific time in a log?
+Press `Ctrl+G` and type a time such as `14:02`: FastTail jumps to the first line at or after it. The same box still takes a line number or `+N` / `-N`. The stream status bar shows the time span of the lines currently on screen.
+
 ### Can it view binary files or non-UTF-8 logs?
 The **HEX** mode shows a live hexadecimal + ASCII dump with byte-level search (text or `0A 0D` patterns). Text encodings are detected automatically and can be overridden: ASCII, ANSI (Windows-1252), UTF-8 with or without BOM, UTF-16 LE and UTF-16 BE.
 
