@@ -8,10 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-25
+
 ### Added
 
-- **ANSI colour codes are rendered.** A stream whose first 64 KB, or later appended data,
-  holds an SGR escape sequence (`ESC[31m`) switches from auto to render: the sequences
+- **ANSI colour codes are rendered.** A stream whose first 64 KB, or the first 64 KB of a
+  later append, holds an SGR escape sequence (`ESC[31m`) switches from auto to render: the sequences
   are hidden and the 16 base and bright colours (from a palette per theme, readable on
   Light), 256-colour and 24-bit colours, bold, dim, italic, underline and inverse are
   painted as spans of the row. User highlight rules and quick labels win over the ANSI
@@ -38,7 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   several files opens an entry picker (filter, sort by name or size, multi-select) and
   each entry becomes its own stream, titled `bundle.zip › server.log`. Follow is locked
   off for these streams: the archive is a snapshot and is not watched. Encrypted entries,
-  zip methods other than stored/deflate, and `.tar.gz` are refused with the reason. A
+  zip methods other than stored/deflate, entries whose name is absolute or climbs out of
+  the archive (`../`), and `.tar.gz` are refused with the reason; `--follow` never turns
+  follow on for them. A
   zip entry must fit on the spool volume with 512 MB to spare, the free space is checked
   again every 64 MB, and `compressed_max_gb` (default 20 GB) caps one extraction. Spools
   go to `fasttail-spool` in the temporary folder, or under `spool_dir`, are deleted when
@@ -56,12 +60,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the pane follows `F3` / `Shift+F3`. With the pane focused the arrows, `PgUp` /
   `PgDown` and `Ctrl+Home` / `Ctrl+End` move its selection without moving the main view,
   `Esc` hands the keyboard back, and the stream shortcuts (`F3`, `Ctrl+F`, `Ctrl+G`,
-  bookmarks, `Ctrl+C`) keep working. Open state and height are saved in `fasttail.ini`
-  (`search_pane`, `search_pane_height`); in HEX view the pane shows a notice.
+  bookmarks, `Ctrl+C`) keep working. Open state and height are one preference for every
+  stream, saved in `fasttail.ini` (`search_pane`, `search_pane_height`); in HEX view the
+  pane shows a notice.
 - **Overview strip.** A narrow column beside the main view's scroll bar marks the search
   hits, the bookmarks, the ERROR/FATAL lines and the current match at their position among
   the visible rows, with the viewport drawn as a box; click or drag it to scroll there,
-  hover it for the line number. Hit and bookmark marks are exact; error marks are exact
+  hover it for the line number. Hit marks (for the listed hits) and bookmark marks are
+  exact; error marks follow the level scan and are exact
   without a filter (from per-4096-line error counts kept beside the level cache) and on
   filtered views up to 4 million rows, sampled above (the tooltip says so). The marks are
   cached and recomputed only when their inputs change, at most four times a second while
@@ -86,6 +92,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and binary check ran only on the bytes present when the file was opened, so a log
   created empty and filled later as UTF-16 was read as UTF-8; it now runs again when the
   file first holds 512 bytes.
+- **The background search checks the hit cap on its running total.** The worker compared
+  the cap with the current batch of hits, which is emptied every 4,096 hits, so on
+  files above 16 MB it never saw the cap and sent every hit to the end of the file for
+  the engine to discard. It now lists hits up to the cap and only counts the rest.
 
 ## [0.9.1] - 2026-09-25
 
@@ -602,6 +612,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.10.0]: https://github.com/matteobaccan/FastTail/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/matteobaccan/FastTail/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/matteobaccan/FastTail/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/matteobaccan/FastTail/compare/v0.7.1...v0.8.0

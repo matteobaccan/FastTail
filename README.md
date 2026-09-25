@@ -27,14 +27,14 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 
 ## 🚀 Feature Highlights
 
-- **Zero-Lag Streaming Engine**: never holds the file in memory. Rows are read on demand through a 4 MB block cache per stream; the only per-file state is the line index (8 bytes per line). Appends are indexed incrementally, log rotation, truncation and in-place rewrites are detected without locking the file for the writer, and files above 16 MB run filters, search and the timestamp scan of the time range on a worker thread with progress shown in the stream bar (above 256 MB the initial index too). Ten 50 MB logs growing continuously cost about 60 MB of RAM and a few milliseconds per frame.
+- **Zero-Lag Streaming Engine**: never holds the file in memory. Rows are read on demand through a 4 MB block cache per stream; the per-file state is the line index (8 bytes per line) plus, once scanned, a level byte and a timestamp per line and the search hits (at most 1,000,000, 8 MB). Appends are indexed incrementally, log rotation, truncation and in-place rewrites are detected without locking the file for the writer, and files above 16 MB run filters, search and the timestamp scan of the time range on a worker thread with progress shown in the stream bar (above 256 MB the initial index too). Ten 50 MB logs growing continuously cost about 60 MB of RAM and a few milliseconds per frame.
 - **Named Sessions**: save the open streams, filters, layout and bookmarks under a name and switch between projects in one click; session files keep relative paths so a log bundle can move with its session.
 - **Three View Modes per Stream**:
   - **TXT**: virtualized text view with highlight rules, inline JSON pretty-printing and stack-trace grouping.
   - **HEX**: live hexadecimal + ASCII dump with byte columns in multiples of 8 (16, 24, 32...).
   - **MD**: rendered Markdown. `.md` files open in this mode automatically and HTML documents are converted to Markdown on the fly.
 - **Powerful Search**: a search box per stream, `F3` / `Shift+F3` navigation scoped to the focused window, match counter, wrap-around beep, last 10 queries history, matches refreshed live as the file grows. In HEX mode the query is matched at byte level (text or `0A 0D` patterns), and a marker column (`▶` current hit, `●` other hits) plus full-row highlight is shown in every view. The `☰` button opens a **search results pane** under the rows listing only the matching lines (line number, text, query tinted), virtualized so a million hits cost what ten do; a click or `Enter` makes a hit current and centres it in the main view. Up to 1,000,000 hits are listed per stream; past that the search keeps counting and the counter shows the true total with a "first 1,000,000 listed" note.
-- **Overview Strip**: a narrow column beside the scroll bar marks where the search hits, the bookmarks and the ERROR/FATAL lines sit in the file, with the viewport drawn as a box; click or drag it to jump there. Marks are exact, except the error marks of a filtered view of more than 4 million rows, which are sampled (the tooltip says so). Switchable off in Settings.
+- **Overview Strip**: a narrow column beside the scroll bar marks where the search hits, the bookmarks and the ERROR/FATAL lines sit among the visible rows, with the viewport drawn as a box; click or drag it to jump there. Hit marks cover the listed hits (the first 1,000,000) and bookmark marks are exact; error marks appear as the level scan reaches the lines and are exact, except on a filtered view of more than 4 million rows, where they are sampled (the tooltip says so). Switchable off in Settings.
 - **Live Include / Exclude Filters**: plain text or regex, case-sensitive or not, applied as you type. Filtered rows are virtualized so the viewport is always full.
 - **Multi-Rule Highlighting**: foreground, background, **bold**, *italic*, top-down priority (reorder with ⬆ / ⬇), and a sound alert preset per rule (Beep, Chime, Warning, Critical).
 - **Capture-Group Highlighting and Quick Labels**: a regex rule can paint only its capture groups (`req=(\d+)` colours the request id, not the row) with "Captures only"; the first rule wins per byte, top-down, and at most 64 spans are painted per row. `Ctrl+Shift+1..9` turns the current search text into a quick colour label with preset colour 1..9, painted in every stream and listed in a strip above the rows with a remove button; labels rank below the rules and are not saved across restarts.
@@ -61,7 +61,7 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 | Feature | FastTail | BareTail (Free/Pro) | Tailviewer | SnakeTail | `tail -f` / CLI |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Engine / Architecture** | **Rust** | Win32 C++ (2006) | .NET / C# | C# / WPF | POSIX C |
-| **Binary Size** | **~10 MB (single binary)** | ~220 KB | ~45 MB | ~1.5 MB | ~50 KB |
+| **Binary Size** | **~8 MB download, ~20 MB executable (single binary)** | ~220 KB | ~45 MB | ~1.5 MB | ~50 KB |
 | **Runtime Dependencies** | **Zero (standalone native)** | Zero (Win32 native) | .NET Runtime required | .NET Framework / WPF | POSIX coreutils |
 | **Large Files (>50 GB)** | **Instant** | Good | Slow / High RAM | Moderate | Fast |
 | **Cross-Platform** | **Windows, Linux, macOS** | Windows only | Windows only | Windows only | Linux/macOS |
@@ -136,7 +136,7 @@ fasttail [OPTIONS] [PATH...]
   --filter <TEXT>    include filter for the files opened from the command line
   --exclude <TEXT>   exclude filter for those files
   --follow / --no-follow
-                     follow mode for those files
+                     follow mode for those files (ignored for compressed files)
   --renderer <NAME>  auto (default), glow, wgpu or software
   --config <FILE>    configuration file to use (same as FASTTAIL_CONFIG)
   --session <FILE>   load a session file (*.fasttail-session.ini) at startup
@@ -160,7 +160,7 @@ Settings are stored in a single `fasttail.ini` file, looked up in this order:
 New installs write next to the executable and fall back to the per-user directory when that folder is read-only (for example `Program Files`). A legacy `fasttail.toml` from older versions is migrated automatically on first start.
 
 ### Sessions
-The 🗂 button in the title bar saves the workspace under a name and loads it back. A session file (`name.fasttail-session.ini`) holds the open files and patterns, the dock layout, and for every stream its include/exclude filters, search query, line wrap, encoding and bookmarks; theme, language, highlight rules and the other preferences stay in `fasttail.ini`. Loading a session replaces the current streams; if the current named session has unsaved changes (a `*` after its name in the title bar) FastTail asks first. Files that no longer exist are listed and skipped.
+The 🗂 button in the title bar saves the workspace under a name and loads it back. A session file (`name.fasttail-session.ini`) holds the open files and patterns, the dock layout, and for every stream its include/exclude filters, search query, line wrap, encoding, ANSI mode and bookmarks (and the entry of a zip, `entry=`); theme, language, highlight rules and the other preferences stay in `fasttail.ini`. Loading a session replaces the current streams; if the current named session has unsaved changes (a `*` after its name in the title bar) FastTail asks first. Files that no longer exist are listed and skipped.
 
 Paths are written absolute and, when the file lies under the session's folder, also relative to it: a session saved next to a log bundle still opens after the bundle is moved or copied elsewhere. "Save current as default workspace" writes the workspace back into `fasttail.ini` and leaves the named session. `fasttail --session incident.fasttail-session.ini` loads a session at startup.
 
@@ -181,7 +181,7 @@ Settings → External tools. Each tool has a name, a program, an argument list a
 Extras: a **shortcut** such as `Ctrl+Shift+F9` (a modifier is required) runs the tool on the current row of the focused stream; **run on rule** binds the tool to a highlight rule, so it runs when the rule matches an appended line, at most once per second per tool and with at most 10 children running at the same time, the excess being counted as dropped runs in the settings row. **Run via shell** wraps the program in `cmd /c` (Windows) or `sh -c`, with every expanded argument quoted for that shell; operators written in the argument list (`|`, `>`, `&&`) are quoted too, so a pipeline belongs in a script. The Windows quoting is weaker than the POSIX one, so keep it off unless the log is trusted. Tools get no standard input and their output is discarded. Tools are stored as `[tool.N]` sections of `fasttail.ini`.
 
 ### Compressed logs
-A gzip file (`1f 8b`) or a zip archive (`PK\x03\x04`) is recognised by its first bytes, whatever its name, and opened read-only. The data is decompressed on a background thread, 1 MB at a time, into a spool file that the engine tails like a growing log; the stream bar shows `decompressing N%` (compressed bytes read) with a ✖ to stop, which keeps what was already read. Follow is off for these streams — the archive is a snapshot and is not watched; the ⟳ button extracts it again. Multi-member gzip (`cat a.gz b.gz`) and zip entries stored or deflated (Zip64 included) are supported; encrypted entries, other zip methods (bzip2, zstd, lzma...), tar archives inside gzip (`.tar.gz`, `.tgz`), `.bz2`, `.xz` and `.zst` are refused with the reason.
+A gzip file (`1f 8b`) or a zip archive (`PK\x03\x04`) is recognised by its first bytes, whatever its name, and opened read-only. The data is decompressed on a background thread, 1 MB at a time, into a spool file that the engine tails like a growing log; the stream bar shows `decompressing N%` (compressed bytes read) with a ✖ to stop, which keeps what was already read. Follow is off for these streams — the archive is a snapshot and is not watched; the ⟳ button extracts it again. Multi-member gzip (`cat a.gz b.gz`) and zip entries stored or deflated (Zip64 included) are supported; encrypted entries, other zip methods (bzip2, zstd, lzma...), tar archives inside gzip (`.tar.gz`, `.tgz`) and zip entries with unsafe names (absolute or `../`) are refused with the reason; `.bz2`, `.xz` and `.zst` files are not decompressed and open as they are (binary content in HEX view).
 
 A zip with a single file opens it directly; with several, the entry picker lists them with their size. The workspace, sessions, recent files and bookmarks remember the archive (plus the entry, stored as `entry=` in a session file), never the spool, and a restored stream is decompressed again.
 
@@ -305,7 +305,7 @@ Download `fasttail-windows-x86_64.zip` from the [Releases](https://github.com/ma
 FastTail is one. The same features ship for Linux x86_64, Linux ARM64 and macOS Apple Silicon as a single binary: `tar -xzf fasttail-linux-x86_64.tar.gz && ./fasttail /var/log/syslog`. The macOS build is unsigned, see [the Gatekeeper note](#macos-apple-cannot-verify-fasttail-is-free-of-malware) for the one-time `xattr` command.
 
 ### Can FastTail open very large log files (multi-GB)?
-Yes. The file is never loaded into memory: rows are read on demand through a small block cache, and the only per-file state is a line index of 8 bytes per line. Files above 16 MB filter, search and read their timestamps on a background thread with progress in the stream bar, so the window stays responsive while a multi-gigabyte log is scanned.
+Yes. The file is never loaded into memory: rows are read on demand through a small block cache, and the per-file state is a line index of 8 bytes per line plus, once scanned, a level byte and a timestamp per line and the search hits (at most 1,000,000, 8 MB). Files above 16 MB filter, search and read their timestamps on a background thread with progress in the stream bar, so the window stays responsive while a multi-gigabyte log is scanned.
 
 ### How do I show only the lines that match a pattern, or hide the noise?
 Every stream has an **Include** and an **Exclude** box above the rows. Both accept plain text or a regular expression, case-sensitive or not, and apply as you type — `ERROR|CRITICAL` in Include, `healthcheck|ping` in Exclude. The `≥ level` selector adds a minimum log level on top. From the command line: `fasttail --filter ERROR --exclude DEBUG app.log`.
@@ -350,7 +350,7 @@ Yes. It is released under the MIT License, which allows use, modification and re
 
 ## 📐 Specifications
 
-Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting (time range included), log intelligence (levels, timestamps, JSON, stack traces), docking UI and named sessions, themes, localization, external tools, window lock, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend, the command line, selection and export. Proposals not yet implemented live in [`openspec/changes`](openspec/changes).
+Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting (time range included), log intelligence (levels, timestamps, JSON, stack traces), ANSI escape codes, compressed input in the stream engine, docking UI and named sessions, themes, localization, external tools, window lock, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend, the command line, selection and export. Proposals not yet implemented live in [`openspec/changes`](openspec/changes).
 
 ---
 

@@ -18,7 +18,7 @@ page is the practical half.
 | Placeholder | What it expands to |
 |---|---|
 | `{line}` | the whole text of the row |
-| `{file}` | the file being tailed (for a pattern stream, the file it currently follows) |
+| `{file}` | the file being tailed (for a pattern stream, the file it currently follows; for a compressed `.gz` / `.zip` stream, the archive) |
 | `{dir}` | the directory of that file |
 | `{lineno}` | the 1-based line number |
 | `{selection}` | the selected rows as text, or the row itself when nothing is selected |
@@ -54,6 +54,10 @@ open where you are looking.
 
 Variants: `notepad++ "{file}" -n{lineno}`, `subl "{file}:{lineno}"`,
 `idea --line {lineno} "{file}"`, `vim +{lineno} "{file}"` (in a terminal).
+
+On a compressed stream (`app.log.1.gz`, a `.zip` entry) `{file}` is the archive while
+`{lineno}` counts lines of the decompressed text, so this recipe and recipe 6 open the
+archive rather than the line; extract the log first if you need them there.
 
 ## 2. Open the folder the log lives in
 
@@ -175,8 +179,10 @@ printf '%s' "$1" | xclip -selection clipboard
 
 ## 8. Search the whole file for what this row shows
 
-The in-app search covers the buffer; `rg` covers the file on disk, including the parts
-FastTail has not loaded.
+The in-app search covers the stream's visible lines; `rg` covers the file on disk
+regardless of FastTail's filters, and other files next to it if you pass `"{dir}"`
+instead. For a compressed stream add `-z` so `rg` searches inside the `.gz` (it does
+not read `.zip` entries).
 
 | Field | Value |
 |---|---|

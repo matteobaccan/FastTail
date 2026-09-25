@@ -29,7 +29,7 @@ The engine is opened on the spool as soon as the job has created it. The job app
 Because the spool starts empty, the encoding/binary sniff done in `open_impl` sees no sample. The engine therefore re-runs `detect_encoding` and `initial_view_mode` once, when a stream that was opened empty first holds 512 bytes (or the job completes with fewer). This is a small general fix: any log opened while empty benefits from it.
 
 ### D3. Follow mode is off and locked for compressed streams
-Once `complete` is true nothing will ever be appended, so follow has no meaning; while extraction runs, jumping to the bottom on every chunk would make the view unreadable. The follow toggle is disabled with a tooltip ("compressed file: read-only snapshot"). The archive on disk is not watched: if it is replaced, the user reopens it (the tab context menu keeps "Reload", which re-extracts).
+Once `complete` is true nothing will ever be appended, so follow has no meaning; while extraction runs, jumping to the bottom on every chunk would make the view unreadable. The follow toggle is disabled with a tooltip ("compressed file: read-only snapshot"). The archive on disk is not watched: if it is replaced, the user re-extracts it with the ⟳ button in the stream bar (implemented as a stream-bar button rather than a tab-menu entry).
 
 ### D4. Sniff by magic bytes, pick entries in a dialog
 `compressed::sniff(path)` reads the first 4 bytes: `1f 8b` → gzip, `50 4b 03 04` → zip (also `50 4b 05 06` for an empty zip, refused as empty). Extensions are not required, so `app.log.1.gz` and a `.zip` renamed `.dat` both work. For gzip, `MultiGzDecoder` handles concatenated members (what `cat a.gz b.gz` and some rotators produce). After the first decompressed 512 bytes, a `ustar` magic at offset 257 means a tar archive: the job stops and the stream shows "tar archives are not supported".
@@ -45,20 +45,20 @@ For zip, the central directory is read once (`zip::ZipArchive`), listing file en
 - On abort the lines already spooled stay readable and the stream bar says the content is partial; the spool is deleted with the tab as usual.
 
 ### D6. Spool location, naming and cleanup
-- Directory: `spool_dir` from `fasttail.ini` if set, else `std::env::temp_dir()/fasttail-spool/`. The setting exists because `%TEMP%` is often on a small system drive.
+- Directory: `<spool_dir>/fasttail-spool/` when `spool_dir` is set in `fasttail.ini`, else `std::env::temp_dir()/fasttail-spool/`. The setting exists because `%TEMP%` is often on a small system drive; the dedicated subfolder keeps the startup sweep and the Unix 0700 permission away from the user's own files.
 - Name: `<pid>-<counter>-<sanitised entry name>`; the pid identifies the owner.
-- Deleted when the stream is closed (after the engine and the job have dropped their handles), when the stream is reloaded, and for all own spools at normal exit.
+- Deleted when the stream is closed (after the engine and the job have dropped their handles) and for all own spools at normal exit; a re-extraction empties and refills the same spool.
 - At startup, `spool::sweep()` deletes spool files whose pid is not a running process (checked with `sysinfo`), which covers crashes and kills. A pid reused by an unrelated process only delays the cleanup to a later start.
 - The spool is opened for writing with the same share mode as `open_file_shared` (read | write | delete) so the reader handle and deletion work on Windows.
 
 *Alternative:* `FILE_FLAG_DELETE_ON_CLOSE` on Windows and unlink-after-open on Unix give crash-proof deletion, but the engine re-opens by path for rotation checks (`is_same_file_as_path`, `reopen`), which an unlinked file breaks on Unix; one sweep-based mechanism on all platforms is simpler to reason about and test.
 
 ### D7. Identity and persistence use the archive, not the spool
-`TailEngine.path` stays the archive path (the stream's identity for the footer, recent files, bookmarks, external tools' `{file}` placeholder, the workspace and sessions); `current_file` is the spool. `StreamEntry` gains `archive_entry: Option<String>` for zip entries. Restoring a workspace with a compressed stream starts a new extraction in the background; bookmarks are keyed by archive path + entry and re-applied once the index covers their lines. The tab title shows the archive name (`app.log.1.gz`, `bundle.zip › server.log`).
+`TailEngine.path` is the archive path for gzip and the entry path `<archive>/<entry>` for a zip entry (the stream's identity for the footer, recent files, bookmarks, external tools' `{file}` placeholder, the workspace and sessions); `current_file` is the spool. `StreamEntry` gains `archive_entry: Option<String>` for zip entries. Restoring a workspace with a compressed stream starts a new extraction in the background; bookmarks are keyed by archive path + entry and re-applied once the index covers their lines. The tab title shows the archive name (`app.log.1.gz`, `bundle.zip › server.log`).
 
 ### D8. Crates and size
 - `flate2` with its default `rust_backend` (`miniz_oxide`): pure Rust, no zlib to link.
-- `zip` with `default-features = false, features = ["deflate"]`, which inflates through `flate2`; no bzip2/zstd/lzma/aes code is pulled in, which is also why those methods are refused.
+- `zip` 8 with `default-features = false, features = ["deflate-flate2"]`, which inflates through `flate2` (zip 8 needs Rust 1.88, the new minimum); no bzip2/zstd/lzma/aes code is pulled in, which is also why those methods are refused.
 - The release profile uses thin LTO; the added code is expected to be a few hundred KB at most. The PR measures `fasttail.exe` before and after and records the delta.
 
 ## Risks / Trade-offs

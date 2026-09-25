@@ -1,7 +1,7 @@
 ## 1. Dependencies and spool
 
-- [x] 1.1 Add `flate2` (default `rust_backend`) and `zip` (`default-features = false, features = ["deflate"]`) to `Cargo.toml`; record the release `fasttail.exe` size before and after
-- [x] 1.2 Add `src/spool.rs`: spool directory (`spool_dir` or `<temp>/fasttail-spool`, 0700 on Unix), `<pid>-<counter>-<name>` naming, a `SpoolFile` handle that deletes the file on drop, `sweep()` removing spools of processes that are not running
+- [x] 1.1 Add `flate2` (default `rust_backend`) and `zip` 8 (`default-features = false, features = ["deflate-flate2"]`, minimum Rust 1.88) to `Cargo.toml`; record the release `fasttail.exe` size before and after
+- [x] 1.2 Add `src/spool.rs`: spool directory (`<spool_dir>/fasttail-spool` or `<temp>/fasttail-spool`, 0700 on Unix), `<pid>-<counter>-<name>` naming, a `SpoolFile` handle that deletes the file on drop, `sweep()` removing spools of processes that are not running
 - [x] 1.3 Tests: naming and sanitising, delete on drop, sweep removes a spool with a dead pid and keeps one with the current pid
 
 ## 2. Decompression job
@@ -14,7 +14,7 @@
 
 - [x] 3.1 Open path: sniff before the binary heuristic; a compressed file opens an engine on its spool with `path` = archive, `current_file` = spool, origin `Compressed { archive, entry, complete }`
 - [x] 3.2 Re-run encoding and view-mode detection once when a stream opened empty first holds 512 bytes (or on job completion)
-- [x] 3.3 Follow forced off and not watched for compressed streams; "Reload" re-extracts
+- [x] 3.3 Follow forced off and not watched for compressed streams; a ⟳ button in the stream bar re-extracts
 - [x] 3.4 Tests: filters, search, levels and bookmarks on a decompressed stream match the same content opened uncompressed; a UTF-16 entry is detected after the first chunk
 
 ## 4. UI
