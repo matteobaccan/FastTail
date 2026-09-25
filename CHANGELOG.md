@@ -38,9 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tail -f` GUI on Windows / Linux / macOS, huge files, filters, highlighting, rotated
   logs, time ranges and timestamp formats, privacy and licence — in plain
   question-and-answer form.
-- **Social preview.** `assets/social-preview.png` (1280×640), the README banner over a crop of the main
-  view, is the card shown when the
-  repository link is shared; it is uploaded in Settings → General → Social preview.
+- **Social preview.** `assets/social-preview.png` (1280×640), the README banner over a
+  crop of the main view, is the card shown when the repository link is shared; it is
+  uploaded in Settings → General → Social preview.
 - **macOS Gatekeeper.** The README explains the "Apple cannot verify fasttail is free of
   malware" dialog: the build is unsigned, and `xattr -d com.apple.quarantine ./fasttail`
   (or Privacy & Security → Open anyway) runs it. Signing and notarizing needs a paid
