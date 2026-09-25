@@ -9,7 +9,7 @@
 //! moves: the relative path wins when it exists, then the absolute one, otherwise the
 //! stream is skipped and reported.
 
-use crate::config::FastTailConfig;
+use crate::config::{overwrite_regular_file, FastTailConfig};
 use crate::wildcard::{is_pattern_path, split_pattern};
 use ini::Ini;
 use std::path::{Path, PathBuf};
@@ -197,31 +197,11 @@ impl Session {
     }
 
     pub fn save_to(&self, file: &Path) -> std::io::Result<()> {
-        if file.exists() {
-            let meta = std::fs::metadata(file)?;
-            if !meta.is_file() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Target path is not a regular file",
-                ));
-            }
-        }
-        let mut out = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(file)?;
-        let metadata = out.metadata()?;
-        if !metadata.is_file() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Target path is not a regular file",
-            ));
-        }
-        out.set_len(0)?;
         let mut conf = Ini::new();
         self.write_into(&mut conf, file.parent());
-        conf.write_to(&mut out)
+        let mut buf = Vec::new();
+        conf.write_to(&mut buf)?;
+        overwrite_regular_file(file, &buf)
     }
 
     pub fn load_from(file: &Path) -> std::io::Result<LoadedSession> {
