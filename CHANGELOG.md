@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Time delta column.** The `Δt` button next to the line-number toggle shows, for each
+  row with a timestamp of its own, the time since the previous visible row (`+0.125`,
+  `+4:05.120`, `+2:03:04`, `+3d 04:05`), so it follows the filters; stack trace frames
+  stay blank and deltas of at least `time_delta_gap_ms` (default 1000, 0 = off, in
+  Settings) are drawn in the accent colour. The switch is global (`show_time_delta` in
+  `fasttail.ini`). "Set time anchor here" in the row context menu measures every row
+  from one line instead, signed (`-0.500` above it), until "Clear time anchor"; the
+  anchor survives filter changes, is dropped on truncation or rewrite and is not saved.
+  A selection of two or more rows shows its elapsed time in the stream status bar
+  (`Δ +2.357 · 14 rows`). Times are those of the timestamp cache, on the clock the log
+  printed; turning the column on never blocks (a file above 16 MB is timed in the
+  background and its rows show `…` until then), and a stream without usable timestamps
+  keeps the column hidden with a tooltip saying why.
+
 ## [0.10.1] - 2026-09-26
 
 ### Changed
