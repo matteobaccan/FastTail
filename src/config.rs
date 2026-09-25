@@ -109,6 +109,14 @@ pub struct FastTailConfig {
     /// Maximum file size in megabytes for Markdown rendering (1..=100 MB, default 1).
     #[serde(default = "default_markdown_max_mb")]
     pub markdown_max_mb: u32,
+    /// Folder the decompressed logs are spooled under (in its `fasttail-spool`
+    /// subfolder); `None` (or empty in the ini) = the system temporary folder. See
+    /// `spool`.
+    #[serde(default)]
+    pub spool_dir: Option<PathBuf>,
+    /// Output cap of one decompression in GB (1..=1024, default 20).
+    #[serde(default = "default_compressed_max_gb")]
+    pub compressed_max_gb: u32,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -244,6 +252,10 @@ fn default_markdown_max_mb() -> u32 {
     1
 }
 
+fn default_compressed_max_gb() -> u32 {
+    crate::compressed::DEFAULT_MAX_GB
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -270,6 +282,8 @@ impl Default for FastTailConfig {
             max_fps_software: default_max_fps_software(),
             mouse_throttle_ms: default_mouse_throttle_ms(),
             markdown_max_mb: default_markdown_max_mb(),
+            spool_dir: None,
+            compressed_max_gb: default_compressed_max_gb(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -484,6 +498,11 @@ impl FastTailConfig {
         }
     }
 
+    /// Where decompressed logs are spooled and how far one extraction may go.
+    pub fn compressed_settings(&self) -> crate::compressed::Settings {
+        crate::compressed::Settings::from_config(self.spool_dir.as_deref(), self.compressed_max_gb)
+    }
+
     pub fn to_ini(&self) -> Ini {
         let mut conf = Ini::new();
 
@@ -530,6 +549,14 @@ impl FastTailConfig {
             .set("max_fps_software", self.max_fps_software.to_string())
             .set("mouse_throttle_ms", self.mouse_throttle_ms.to_string())
             .set("markdown_max_mb", self.markdown_max_mb.to_string())
+            .set(
+                "spool_dir",
+                self.spool_dir
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+            )
+            .set("compressed_max_gb", self.compressed_max_gb.to_string())
             .set("size_unit", unit_str)
             .set("baretail_import", self.baretail_import.to_string())
             .set(
@@ -816,6 +843,16 @@ impl FastTailConfig {
                     cfg.markdown_max_mb = v.clamp(1, 100);
                 }
             }
+            if let Some(s) = general.get("spool_dir") {
+                let s = s.trim();
+                cfg.spool_dir = (!s.is_empty()).then(|| PathBuf::from(s));
+            }
+            if let Some(s) = general.get("compressed_max_gb") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.compressed_max_gb =
+                        v.clamp(crate::compressed::MIN_MAX_GB, crate::compressed::MAX_MAX_GB);
+                }
+            }
             if let Some(s) = general.get("size_unit") {
                 cfg.size_unit = match s.to_lowercase().as_str() {
                     "mb" => SizeUnit::MB,
@@ -848,7 +885,10 @@ impl FastTailConfig {
                 let p = PathBuf::from(val);
                 // A pattern entry (`logs/app-*.log`) never exists as a file: it is kept
                 // and resolved again to the newest match at the next start.
-                let keep = p.exists() || crate::wildcard::is_pattern_path(&p);
+                // A zip entry (`bundle.zip/server.log`) is kept while its archive exists.
+                let keep = p.exists()
+                    || crate::wildcard::is_pattern_path(&p)
+                    || crate::compressed::source_exists(&p);
                 if keep && !cfg.open_files.contains(&p) {
                     cfg.open_files.push(p);
                 }
@@ -1283,6 +1323,45 @@ mod tests {
         let reloaded = FastTailConfig::from_ini(&auto.to_ini());
         assert!(reloaded.language_auto);
         assert_eq!(reloaded.language, Language::detect());
+    }
+
+    #[test]
+    fn test_compressed_settings_round_trip_and_default() {
+        let cfg = FastTailConfig {
+            spool_dir: Some(PathBuf::from("/big/disk/spool")),
+            compressed_max_gb: 64,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.spool_dir, cfg.spool_dir);
+        assert_eq!(loaded.compressed_max_gb, 64);
+        assert_eq!(
+            loaded.compressed_settings().spool_dir,
+            Path::new("/big/disk/spool").join(crate::spool::SPOOL_DIR_NAME)
+        );
+
+        // A file written before the keys existed: temp spool, 20 GB cap.
+        let mut old_style = Ini::new();
+        old_style.with_section(Some("general")).set("theme", "Tron");
+        let loaded = FastTailConfig::from_ini(&old_style);
+        assert_eq!(loaded.spool_dir, None);
+        assert_eq!(loaded.compressed_max_gb, crate::compressed::DEFAULT_MAX_GB);
+        assert_eq!(
+            loaded.compressed_settings().spool_dir,
+            std::env::temp_dir().join(crate::spool::SPOOL_DIR_NAME)
+        );
+        // The default writes an empty spool_dir, read back as "use the temp folder".
+        let reloaded = FastTailConfig::from_ini(&FastTailConfig::default().to_ini());
+        assert_eq!(reloaded.spool_dir, None);
+
+        // Out-of-range caps are clamped.
+        let mut wild = Ini::new();
+        wild.with_section(Some("general"))
+            .set("compressed_max_gb", "0");
+        assert_eq!(FastTailConfig::from_ini(&wild).compressed_max_gb, 1);
+        wild.with_section(Some("general"))
+            .set("compressed_max_gb", "99999");
+        assert_eq!(FastTailConfig::from_ini(&wild).compressed_max_gb, 1024);
     }
 
     #[test]

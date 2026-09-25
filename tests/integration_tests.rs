@@ -766,6 +766,35 @@ fn test_i18n_exhaustive_coverage() {
         "mouse_throttle_tip",
         "markdown_max_size",
         "markdown_max_size_tip",
+        "zip_picker_title",
+        "zip_picker_filter",
+        "zip_picker_all",
+        "zip_picker_none",
+        "zip_picker_name",
+        "zip_picker_size",
+        "zip_picker_open",
+        "zip_entry_encrypted",
+        "zip_entry_method",
+        "zip_entry_unsafe",
+        "zip_empty",
+        "zip_no_entry",
+        "compressed_open_failed",
+        "compressed_no_space",
+        "compressed_follow_tip",
+        "compressed_decompressing",
+        "compressed_cancel",
+        "compressed_cancelled",
+        "compressed_cap_reached",
+        "compressed_disk_full",
+        "compressed_tar",
+        "compressed_failed",
+        "compressed_partial",
+        "compressed_reload",
+        "compressed_max_size",
+        "compressed_max_size_tip",
+        "spool_dir",
+        "spool_dir_tip",
+        "spool_dir_reset",
     ];
 
     for lang in Language::ALL {
@@ -3295,6 +3324,80 @@ fn test_cli_paths_open_streams_with_filters_and_follow() {
     assert_eq!(app.engines.len(), 1);
 }
 
+#[test]
+fn test_compressed_files_open_as_streams_and_zip_bundles_offer_their_entries() {
+    use fasttail::ui::FastTailApp;
+    let dir = tempfile::tempdir().unwrap();
+    let config = FastTailConfig {
+        spool_dir: Some(dir.path().join("spool")),
+        ..FastTailConfig::default()
+    };
+    let mut app = FastTailApp::from_config(config);
+
+    // A gzip without the usual extension opens decompressed, follow locked off.
+    let gz = dir.path().join("trace.dat");
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(b"one\ntwo\n").unwrap();
+    std::fs::write(&gz, enc.finish().unwrap()).unwrap();
+    app.open_log_file(gz.clone());
+    assert_eq!(app.engines.len(), 1);
+    assert!(app.engines[0].is_compressed());
+    assert_eq!(app.engines[0].path, gz);
+    assert!(!app.engines[0].follow_tail);
+
+    // A bundle with two files and a folder: the picker lists the two files.
+    let bundle = dir.path().join("bundle.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&bundle).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    zip.add_directory("config/", options).unwrap();
+    for name in ["server.log", "worker.log"] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(b"started\n").unwrap();
+    }
+    zip.finish().unwrap();
+    app.open_log_file(bundle.clone());
+    assert_eq!(app.engines.len(), 1, "nothing opens before a choice");
+    let picker = app.zip_picker.take().expect("the entry picker is shown");
+    let names: Vec<&str> = picker.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["server.log", "worker.log"]);
+
+    // Each chosen entry is its own stream, keyed by archive + entry.
+    for name in names {
+        app.open_log_file(fasttail::compressed::entry_path(&bundle, name));
+    }
+    assert_eq!(app.engines.len(), 3);
+    let worker = fasttail::compressed::entry_path(&bundle, "worker.log");
+    let engine = app.engines.iter().find(|e| e.path == worker).unwrap();
+    assert_eq!(
+        engine.compressed.as_ref().unwrap().title(),
+        "bundle.zip › worker.log"
+    );
+    assert_eq!(engine.source_file(), bundle);
+    let spool = engine
+        .compressed
+        .as_ref()
+        .unwrap()
+        .spool_path()
+        .to_path_buf();
+    // Opening it again selects the existing tab.
+    app.open_log_file(worker.clone());
+    assert_eq!(app.engines.len(), 3);
+
+    // Closing a stream deletes its spool.
+    assert!(spool.exists());
+    app.engines.retain(|e| e.path != worker);
+    assert!(!spool.exists());
+
+    // An empty zip says so instead of opening anything.
+    let empty = dir.path().join("empty.zip");
+    zip::ZipWriter::new(std::fs::File::create(&empty).unwrap())
+        .finish()
+        .unwrap();
+    app.open_log_file(empty);
+    assert_eq!(app.engines.len(), 2);
+    assert!(app.open_notice.is_some());
+}
+
 fn write_lines(path: &std::path::Path, lines: &[&str]) {
     use std::io::Write;
     let mut f = std::fs::File::create(path).unwrap();
@@ -5027,6 +5130,7 @@ mod named_sessions {
             wrap: true,
             encoding: Some("ANSI".to_string()),
             bookmarks: vec![3, 7, 42],
+            archive_entry: None,
         }
     }
 
@@ -5049,6 +5153,86 @@ mod named_sessions {
         assert!(!loaded.relocated);
         assert_eq!(loaded.session, session);
         assert_eq!(Session::name_of(&file), "incident");
+    }
+
+    /// A zip holding `server.log` and `logs/worker.log`.
+    fn write_bundle(path: &Path) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for name in ["server.log", "logs/worker.log"] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(b"started\n").unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn compressed_streams_are_saved_as_the_archive_and_the_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle.zip");
+        write_bundle(&bundle);
+        let gz = dir.path().join("app.log.1.gz");
+        std::fs::write(&gz, [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        let worker = fasttail::compressed::entry_path(&bundle, "logs/worker.log");
+        let mut zipped = entry(worker.clone());
+        zipped.archive_entry = Some("logs/worker.log".to_string());
+        let session = Session {
+            streams: vec![zipped, entry(gz.clone())],
+            dock_layout: None,
+        };
+        let file = dir.path().join(format!("bundle{SESSION_SUFFIX}"));
+        session.save_to(&file).unwrap();
+
+        // The file names the archive, never the entry path, plus the entry.
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("entry=logs/worker.log"), "{text}");
+        assert!(text.contains("rel=bundle.zip"), "{text}");
+        let loaded = Session::load_from(&file).unwrap();
+        assert!(loaded.missing.is_empty());
+        assert_eq!(loaded.session, session);
+
+        // The bundle and its session move together: the entry follows the archive.
+        let moved = dir.path().join("moved");
+        std::fs::create_dir_all(&moved).unwrap();
+        std::fs::rename(&bundle, moved.join("bundle.zip")).unwrap();
+        std::fs::rename(&gz, moved.join("app.log.1.gz")).unwrap();
+        let moved_file = moved.join(format!("bundle{SESSION_SUFFIX}"));
+        std::fs::rename(&file, &moved_file).unwrap();
+        let loaded = Session::load_from(&moved_file).unwrap();
+        assert!(loaded.missing.is_empty());
+        assert_eq!(
+            loaded.session.streams[0].path,
+            fasttail::compressed::entry_path(&moved.join("bundle.zip"), "logs/worker.log")
+        );
+        assert_eq!(
+            loaded.session.streams[0].archive_entry.as_deref(),
+            Some("logs/worker.log")
+        );
+    }
+
+    #[test]
+    fn the_default_session_keeps_zip_entries_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle.zip");
+        write_bundle(&bundle);
+        let server = fasttail::compressed::entry_path(&bundle, "server.log");
+        let mut cfg = FastTailConfig::default();
+        cfg.open_files = vec![server.clone()];
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.open_files, vec![server.clone()]);
+        assert_eq!(
+            Session::from_config(&loaded).streams[0]
+                .archive_entry
+                .as_deref(),
+            Some("server.log")
+        );
+        // Once the archive is gone the entry is dropped like any missing file.
+        std::fs::remove_file(&bundle).unwrap();
+        assert!(FastTailConfig::from_ini(&cfg.to_ini())
+            .open_files
+            .is_empty());
     }
 
     #[test]
@@ -5355,6 +5539,42 @@ fn test_software_renderer_strips_costly_visuals() {
         ctx.style_of(egui::Theme::Dark).visuals.window_shadow,
         stock_window_shadow
     );
+}
+
+#[test]
+fn test_a_log_opened_empty_detects_its_encoding_once_it_has_a_sample() {
+    use fasttail::tail_engine::{FileEncoding, ViewMode};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("late.log");
+    std::fs::write(&path, b"").unwrap();
+    let mut engine = TailEngine::open(&path).unwrap();
+    engine.size_check_interval = Duration::ZERO;
+    assert!(engine.encoding_pending);
+
+    // UTF-16 LE without a BOM, first under the sample size, then past it.
+    let utf16 =
+        |text: &str| -> Vec<u8> { text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect() };
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    f.write_all(&utf16("hi\n")).unwrap();
+    f.flush().unwrap();
+    engine.poll_updates();
+    assert!(engine.encoding_pending, "a few bytes are not a sample");
+    f.write_all(&utf16(&"line\n".repeat(100))).unwrap();
+    f.flush().unwrap();
+    engine.poll_updates();
+    assert!(!engine.encoding_pending);
+    assert_eq!(engine.encoding, FileEncoding::UnicodeLe);
+    assert_eq!(engine.view_mode, ViewMode::Text);
+    assert_eq!(engine.total_lines(), 101);
+    assert_eq!(engine.get_line(100).as_deref(), Some("line"));
+
+    // A file that had content when it was opened is left alone.
+    let full = dir.path().join("full.log");
+    std::fs::write(&full, b"already here\n").unwrap();
+    assert!(!TailEngine::open(&full).unwrap().encoding_pending);
 }
 
 #[test]

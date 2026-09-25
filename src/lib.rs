@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod baretail_bridge;
 pub mod cli;
+pub mod compressed;
 pub mod config;
 pub mod crash_handler;
 pub mod external_tools;
@@ -13,6 +14,7 @@ pub mod renderer;
 pub mod scan_job;
 pub mod screensaver;
 pub mod session;
+pub mod spool;
 pub mod tail_engine;
 pub mod theme;
 pub mod timestamp;

@@ -82,14 +82,11 @@ pub struct DockContext<'a> {
 }
 
 /// Row data handed to an external tool: the row text, the file being tailed (the resolved
-/// file of a pattern stream), the 1-based line number and the selection text when the
-/// row is part of a selection.
+/// file of a pattern stream, the archive of a compressed one, never its spool), the
+/// 1-based line number and the selection text when the row is part of a selection.
 pub fn tool_context_for_row(engine: &TailEngine, row: usize) -> Option<ToolContext> {
     let line = engine.get_line(row)?.into_owned();
-    let file = engine
-        .current_file
-        .clone()
-        .unwrap_or_else(|| engine.path.clone());
+    let file = engine.source_file();
     let selection = if engine.has_selection() && engine.is_selected(row) {
         engine.copy_selection_text()
     } else {
@@ -167,12 +164,16 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 {
                     let watch_icon = if engine.is_watching { "▶" } else { "■" };
                     let data_dot = if engine.has_new_data { "●" } else { "○" };
-                    // Pattern stream: the tab names the pattern and the file it resolves to.
+                    // Pattern stream: the tab names the pattern and the file it resolves to;
+                    // a zip entry names the archive and the entry.
                     let file_name = match engine.current_file_name() {
                         Some(current) if engine.is_pattern() => {
                             format!("{file_name} ▸ {current}")
                         }
-                        _ => file_name.to_string(),
+                        _ => match &engine.compressed {
+                            Some(c) => c.title(),
+                            None => file_name.to_string(),
+                        },
                     };
                     // Background-tab activity badge: lines appended since the tab was last shown
                     let badge = if !engine.displayed && engine.unseen_lines > 0 {
@@ -329,6 +330,21 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.lock_pin,
                     self.ctx.lock_now,
                 );
+            }
+        }
+    }
+
+    fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
+        // A compressed stream: the tab tooltip names the archive (and the entry).
+        if let FastTailTab::LogStream(path) = tab {
+            if let Some(c) = find_engine_index(self.ctx.engines, path)
+                .and_then(|i| self.ctx.engines[i].compressed.as_ref())
+            {
+                let mut tip = c.archive.display().to_string();
+                if let Some(entry) = &c.entry {
+                    tip.push_str(&format!("\n› {entry}"));
+                }
+                response.clone().on_hover_text(tip);
             }
         }
     }
@@ -555,6 +571,94 @@ fn toggle_button(
     ui.add(button)
 }
 
+/// Stream bar part of a compressed stream: `decompressing N%` with a cancel button while
+/// the job runs, then why the content is partial if it stopped early, and a button that
+/// extracts the archive again.
+fn render_compressed_status(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    use crate::compressed::{JobState, StopReason};
+    let Some(c) = engine.compressed.as_ref() else {
+        return;
+    };
+    ui.separator();
+    let mut tip = c.archive.display().to_string();
+    if let Some(entry) = &c.entry {
+        tip.push_str(&format!("\n› {entry}"));
+    }
+    let state = c.state();
+    let mut cancel = false;
+    let mut reload = false;
+    match &state {
+        JobState::Running => {
+            ui.label(
+                RichText::new(format!(
+                    "🗜 {} {:.0}%",
+                    t(lang, "compressed_decompressing"),
+                    c.progress() * 100.0
+                ))
+                .monospace()
+                .color(theme.warn_color()),
+            )
+            .on_hover_text(tip);
+            cancel = ui
+                .button(RichText::new("✖").monospace())
+                .on_hover_text(t(lang, "compressed_cancel"))
+                .clicked();
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        JobState::Done => {
+            ui.label(
+                RichText::new("🗜")
+                    .monospace()
+                    .color(theme.secondary_accent()),
+            )
+            .on_hover_text(tip);
+        }
+        JobState::Stopped(reason) => {
+            let why = match reason {
+                StopReason::Cancelled => t(lang, "compressed_cancelled").to_string(),
+                StopReason::CapReached(cap) => t(lang, "compressed_cap_reached")
+                    .replace("{size}", &crate::ui::zip_picker::human_size(*cap)),
+                StopReason::DiskFull { volume } => {
+                    t(lang, "compressed_disk_full").replace("{volume}", volume)
+                }
+                StopReason::Tar => t(lang, "compressed_tar").to_string(),
+                StopReason::Failed(err) => format!("{}: {err}", t(lang, "compressed_failed")),
+            };
+            // Nothing was written for a refused tar: the content is not "partial".
+            let text = if matches!(reason, StopReason::Tar) || c.written() == 0 {
+                format!("🗜 {why}")
+            } else {
+                format!("🗜 {} ({why})", t(lang, "compressed_partial"))
+            };
+            ui.label(RichText::new(text).monospace().color(theme.warn_color()))
+                .on_hover_text(tip);
+        }
+    }
+    if !matches!(state, JobState::Running)
+        && ui
+            .button(RichText::new("⟳").monospace())
+            .on_hover_text(t(lang, "compressed_reload"))
+            .clicked()
+    {
+        reload = true;
+    }
+    if cancel {
+        c.cancel();
+    }
+    if reload {
+        if let Err(err) = engine.reload_compressed() {
+            engine.view_notice = Some(format!("{}: {err}", t(lang, "compressed_failed")));
+        }
+        ui.ctx().request_repaint();
+    }
+}
+
 /// Translation key naming a background scan, as shown in the stream bar.
 fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
     match kind {
@@ -648,7 +752,7 @@ fn render_log_stream(
         }
     };
     let scroll_bottom = |engine: &mut TailEngine| {
-        engine.follow_tail = true;
+        engine.follow_tail = !engine.is_compressed();
         if wrap_view(engine) {
             engine.wrap_request = Some(WrapScroll::Bottom);
         } else {
@@ -707,7 +811,14 @@ fn render_log_stream(
         } else {
             "■ Follow"
         };
-        if toggle_button(
+        if engine.is_compressed() {
+            // A compressed stream is a static snapshot of the archive: nothing to follow.
+            ui.add_enabled_ui(false, |ui| {
+                toggle_button(ui, theme, follow_label, false, theme.accent_color())
+            })
+            .inner
+            .on_disabled_hover_text(t(lang, "compressed_follow_tip"));
+        } else if toggle_button(
             ui,
             theme,
             follow_label,
@@ -981,6 +1092,7 @@ fn render_log_stream(
                     .color(theme.warn_color()),
             );
         }
+        render_compressed_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
         if let Some(glob) = engine.pattern.clone() {
