@@ -548,22 +548,29 @@ pub struct CompiledHighlight {
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
+    // Fast path: if no spans exist yet, push directly without any piece vector allocation.
+    if spans.is_empty() {
+        spans.push(HighlightSpan { start, end, style });
+        return spans.len() >= MAX_ROW_SPANS;
+    }
+    // Double-buffer piece vectors and reuse them via drain and swap to eliminate heap
+    // allocation churn during interval subtraction.
     let mut pieces = vec![(start, end)];
+    let mut next_pieces = Vec::with_capacity(4);
     for sp in spans.iter() {
-        let mut next = Vec::with_capacity(pieces.len() + 1);
-        for (s, e) in pieces {
+        for (s, e) in pieces.drain(..) {
             if e <= sp.start || s >= sp.end {
-                next.push((s, e));
-                continue;
-            }
-            if s < sp.start {
-                next.push((s, sp.start));
-            }
-            if e > sp.end {
-                next.push((sp.end, e));
+                next_pieces.push((s, e));
+            } else {
+                if s < sp.start {
+                    next_pieces.push((s, sp.start));
+                }
+                if e > sp.end {
+                    next_pieces.push((sp.end, e));
+                }
             }
         }
-        pieces = next;
+        std::mem::swap(&mut pieces, &mut next_pieces);
         if pieces.is_empty() {
             break;
         }
