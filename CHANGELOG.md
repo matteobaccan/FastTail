@@ -31,11 +31,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documentation
 
+- **Logo.** The banner pills read RUST · GPU, ZERO-LAG ENGINE, REGEX FILTERS and TIME
+  RANGE instead of "MMAP ENGINE" (the engine never memory-maps the file) and "MULTI-TAB",
+  and no longer run under the signature.
 - **FAQ.** The README answers the questions people search for — BareTail alternative,
   `tail -f` GUI on Windows / Linux / macOS, huge files, filters, highlighting, rotated
   logs, time ranges and timestamp formats, privacy and licence — in plain
   question-and-answer form.
-- **Social preview.** `assets/social-preview.png` (1280×640) is the card shown when the
+- **Social preview.** `assets/social-preview.png` (1280×640), the README banner over a crop of the main
+  view, is the card shown when the
   repository link is shared; it is uploaded in Settings → General → Social preview.
 - **macOS Gatekeeper.** The README explains the "Apple cannot verify fasttail is free of
   malware" dialog: the build is unsigned, and `xattr -d com.apple.quarantine ./fasttail`
