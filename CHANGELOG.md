@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-25
+
 ### Added
 
 - **Time range filter and go-to-time.** A `from / to` window above the buffer keeps only
@@ -17,8 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   configure — and a line without one inherits the entry above it, so a stack trace stays
   with its error. `Ctrl+G` now accepts `14:02` as well as a line number, jumping to the
   first line at or after it, and the stream status bar shows the span of the visible
-  lines. A log whose lines FastTail cannot time disables the controls with a hint instead
-  of hiding everything.
+  lines. The fields take `14:02`, `14:02:05`, `YYYY-MM-DD HH:MM[:SS]` or a timestamp
+  pasted from a line, and times are compared on the clock the log printed: a zone suffix
+  such as `+0200` is not applied. A log whose lines FastTail cannot time disables the
+  controls with a hint instead of hiding everything.
 
 ### Changed
 
@@ -31,21 +35,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **Go-to-time and the visible span work on a fresh stream.** `Ctrl+G` with `14:02`
-  answered "not a line number", and the status bar showed no time span, until a time
-  window had been typed once: the timestamps were read only for the window. They are now
-  read when a jump by time needs them, and the span comes from the first and last
-  visible lines directly, without walking the whole view every frame.
-- **`YYYY-MM-DD HH:MM` is accepted without the seconds** in the time fields and in
-  `Ctrl+G`; as a "to" bound it covers the whole minute.
-- **Typed times match the clock printed in the log.** A zone suffix (`+0200`, `Z`) used to
-  be converted to UTC, so on an Apache `+0200` log `14:02` found the lines printed at
-  `16:02`; the zone is now read past and not applied.
-- **An empty view no longer says "detecting levels…"** after a filter on a large file
-  finished with no hits; only indexing and filtering explain an empty view.
+- **Config and session saves refuse a path that is not a regular file.** Saving
+  `fasttail.ini` or a `.fasttail-session.ini` onto a directory, a FIFO or a device now
+  fails with an error instead of blocking on the open or truncating it.
+
+### Performance
+
+- **Highlighting the first span of a row allocates nothing.** `claim_span` pushes the
+  first match directly and reuses two buffers for the rest, instead of a new vector per
+  existing span.
+
+### Known issues
+
+- **The first use of the time controls reads the whole file on the UI thread.** On a
+  multi-GB log the window pauses until every line has been timed, once per stream; after
+  that the cache is kept up to date as the file grows. Moving this scan to a background
+  job is planned for 0.9.1.
 
 ### Documentation
 
+- **Specs and cookbook checked against the code.** The OpenSpec specs now describe the
+  Windows symbols archive, the 1 MB Markdown default, the vsync rule per backend, the JSON
+  toggle, the About dialog, the zoom keys, the empty-stream messages and the time range;
+  the external tools cookbook's JSON and clipboard recipes are scripts that work with the
+  argument quoting FastTail applies.
 - **Logo.** The banner pills read RUST · GPU, ZERO-LAG ENGINE, REGEX FILTERS and TIME
   RANGE instead of "MMAP ENGINE" (the engine never memory-maps the file) and "MULTI-TAB",
   and no longer run under the signature.
@@ -483,6 +496,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.9.0]: https://github.com/matteobaccan/FastTail/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/matteobaccan/FastTail/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/matteobaccan/FastTail/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/matteobaccan/FastTail/compare/v0.6.0...v0.7.0

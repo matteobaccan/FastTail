@@ -70,7 +70,7 @@ The engine SHALL support three view modes selectable per stream:
 - **THEN** the file is rendered as plain Markdown and the generic type is preserved, because code blocks and bare `<name>` tokens are not treated as HTML.
 
 ### Requirement: Background Scans with Progress and Cancellation
-Include/exclude filtering and search SHALL run synchronously for files up to 16 MB and on a worker thread above, delivering results in order as they are found. The stream bar SHALL show the scan kind, the progress percentage and the count so far. A newer filter, search or reload request SHALL cancel the running scan, and results of a cancelled scan SHALL never reach the view. Lines appended during a scan SHALL be evaluated by the incremental paths once the scan completes.
+Include/exclude filtering and search SHALL run synchronously for files up to 16 MB and on a worker thread above, delivering results in order as they are found. The stream bar SHALL show the scan kind, the progress percentage and the count so far. A newer filter, search or reload request SHALL cancel the running scan, and results of a cancelled scan SHALL never reach the view. Lines appended during a scan SHALL be evaluated by the incremental paths once the scan completes. The one exception is the timestamp scan (see the log-intelligence capability): the first use of the time range or of go-to-time currently times every line synchronously on the interface thread, so on a very large file that first use pauses the interface until the whole file has been read; later appends are timed incrementally.
 
 #### Scenario: Typing a filter on a large file
 - **WHEN** the user types an include filter on a 400 MB stream
@@ -81,11 +81,15 @@ Include/exclude filtering and search SHALL run synchronously for files up to 16 
 - **THEN** the set of visible lines is identical.
 
 ### Requirement: Markdown Mode Size Cap
-Rendered Markdown SHALL be available only for files up to 32 MB. Larger files SHALL open in text mode and selecting MD SHALL show a notice instead of reading the whole file.
+Rendered Markdown SHALL be available only for files up to a size limit of 1 MB by default, adjustable from 1 to 100 MB in Settings (`markdown_max_mb` in `fasttail.ini`, overridden by the `FASTTAIL_MARKDOWN_MAX_MB` environment variable). A `.md` / `.markdown` file above 1 MB SHALL open in text mode; selecting MD on a file above the configured limit SHALL show a notice naming the limit instead of reading the whole file.
 
 #### Scenario: Large HTML report
-- **WHEN** the user switches a 100 MB HTML file to MD view
+- **WHEN** the limit is the default 1 MB and the user switches a 5 MB HTML file to MD view
 - **THEN** the stream stays in text view and a notice explains the size limit.
+
+#### Scenario: Raising the limit
+- **WHEN** the user sets the Markdown limit to 10 MB in Settings and switches the same 5 MB file to MD view
+- **THEN** the document is rendered as Markdown.
 
 ### Requirement: Long Line Cap
 A single line longer than 1 MB SHALL be displayed truncated to 1 MB with a visible marker, so that one pathological line cannot exhaust the cache or the layout.

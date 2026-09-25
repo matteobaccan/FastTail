@@ -1,6 +1,6 @@
 [package]
 name = "fasttail"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 authors = ["Matteo Baccan"]
 description = "Ultra-fast multi-stream log monitor and tail viewer with Cyberpunk UI aesthetic"
@@ -24,7 +24,7 @@ exclude = [
     "openspec/**",
     "dist/**",
     # The README renders on crates.io with its images resolved against the repository,
-    # so the artwork does not need to travel in the crate (the jpg alone is 670 KB).
+    # so the artwork does not need to travel in the crate.
     "assets/**",
     "fasttail.ini",
     "renovate.json",

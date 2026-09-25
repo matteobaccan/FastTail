@@ -28,29 +28,33 @@ The release `build` matrix (Windows x86_64, Linux x86_64, Linux ARM64, macOS ARM
 - **THEN** the `test` job and the four `build` jobs start in parallel, and the `release` job starts only after all of them succeed.
 
 ### Requirement: Compressed Release Assets
-Each build job SHALL package its binary before upload: Linux and macOS as `fasttail-<os>-<arch>.tar.gz` containing the executable, Windows as `fasttail-windows-<arch>.zip` containing `fasttail.exe` and `fasttail.pdb`. The release job SHALL publish these archives, never bare binaries.
+Each build job SHALL package its binary before upload: Linux and macOS as `fasttail-<os>-<arch>.tar.gz` containing the executable, Windows as `fasttail-windows-<arch>.zip` containing `fasttail.exe` alone, plus `fasttail-windows-<arch>-symbols.zip` containing `fasttail.pdb`, so the download most people need does not carry the debug symbols. The release job SHALL publish these archives, never bare binaries. No package registry (crates.io, Scoop, winget, Chocolatey) is published to; `docs/distribution-channels.md` records what each would take.
 
 #### Scenario: Linux asset size
 - **WHEN** the Linux x86_64 build job stages its artifact
 - **THEN** the uploaded asset is a `.tar.gz` whose size is a fraction of the uncompressed ELF (about 20 MB instead of about 72 MB) and extracts to an executable `fasttail`.
 
-#### Scenario: Windows archive carries symbols
+#### Scenario: Windows archive without symbols
 - **WHEN** a user extracts `fasttail-windows-x86_64.zip`
-- **THEN** `fasttail.exe` and `fasttail.pdb` sit in the same directory, so a crash backtrace resolves function names.
+- **THEN** it contains `fasttail.exe` and nothing else.
+
+#### Scenario: Symbols for a crash dump
+- **WHEN** a user extracts `fasttail-windows-x86_64-symbols.zip` into the directory of `fasttail.exe`
+- **THEN** `fasttail.pdb` sits next to the executable, so a crash backtrace resolves function names.
 
 ### Requirement: Release Published Non-Draft with All Assets
 The `release` job SHALL depend on both `test` and `build`, SHALL upload every archive produced by the matrix, and SHALL leave the GitHub release published (not draft). The release body SHALL be the `CHANGELOG.md` section whose heading matches the tag version (`v0.3.0` -> `## [0.3.0]`), followed by the GitHub-generated notes (merged pull requests, new contributors, compare link); a tag without a matching section SHALL still publish with the generated notes only.
 
 #### Scenario: Successful tag pipeline
 - **WHEN** all `test` and `build` jobs of a `v*` tag succeed
-- **THEN** a published release for that tag exists with one archive per matrix target.
+- **THEN** a published release for that tag exists with one archive per matrix target plus the Windows symbols archive.
 
 #### Scenario: Test failure blocks release
 - **WHEN** the `test` job fails on a tag run
 - **THEN** the `release` job does not run and no release is created.
 
 ### Requirement: Rust Cache Written Only from main
-The Rust build cache SHALL be restored on every job but saved only by runs on `refs/heads/main`. Pull request and tag runs SHALL restore the latest `main` cache and SHALL NOT create cache entries.
+The Rust build cache SHALL be restored on every job but saved only by runs on `refs/heads/main`: the `test` cache by pushes to `main`, the release-profile `build` cache by manual dispatches on `main` (the build matrix never runs on plain pushes). Pull request and tag runs SHALL restore the latest `main` cache and SHALL NOT create cache entries.
 
 #### Scenario: Pull request run
 - **WHEN** the `test` job runs for a pull request

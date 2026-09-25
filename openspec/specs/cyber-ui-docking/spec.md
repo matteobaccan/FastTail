@@ -25,7 +25,7 @@ The main application window titlebar SHALL display the current crate version alo
 - **THEN** the top navigation bar displays `FastTail v<version> by Matteo Baccan`.
 
 ### Requirement: Clickable External Hyperlinks in About Dialog
-The About dialog SHALL provide clickable hyperlinks to the GitHub repository and to `https://www.baccan.it`, each showing its full URL as a hover tooltip, and SHALL show the git tag and build timestamp of the running binary. The build SHALL include the platform support that opens URLs in the operating system's default browser (the `links` feature of eframe), and a test SHALL fail if that support is dropped from the dependency declaration.
+The About dialog SHALL provide clickable hyperlinks to the GitHub repository and to `https://www.baccan.it`, each showing its full URL as a hover tooltip, and SHALL show the version, the build timestamp and the active renderer of the running binary. The build SHALL include the platform support that opens URLs in the operating system's default browser (the `links` feature of eframe), and a test SHALL fail if that support is dropped from the dependency declaration.
 
 #### Scenario: User clicks website or repository link
 - **WHEN** the user opens the About dialog and clicks the GitHub repository or `www.baccan.it` link
@@ -55,13 +55,14 @@ The log stream viewport SHALL support comprehensive keyboard navigation. Stream-
 - Ctrl + End: Jump directly to the latest line (bottom of buffer) and enable follow mode.
 - Ctrl + F: Focus the search input box of the focused stream.
 - F3 / Shift + F3: Jump to next / previous search match of the focused stream.
+- Ctrl + G: Open the go-to popup of the focused stream (line number, `+N` / `-N`, or a time such as `14:02`; see the Search and Navigation specification).
 - Alt + 1..9: Activate stream tab #1 through #9.
 - Space: Toggle follow mode.
 - Esc: Close the active dialog, or leave the search box.
-- Ctrl + / Ctrl =: Increase font size (zoom in).
-- Ctrl -: Decrease font size (zoom out).
-- Ctrl 0: Reset font size to default (13 pt).
-- Ctrl + MouseWheel: Dynamically adjust font size.
+- Ctrl + / Ctrl =: Increase the interface zoom (see Interface Zoom).
+- Ctrl -: Decrease the interface zoom.
+- Ctrl 0: Reset the interface zoom to 100%.
+- Ctrl + MouseWheel: Adjust the interface zoom.
 - F1: Open the Keyboard Shortcuts & Help modal.
 
 #### Scenario: Shortcuts act on the focused stream only
@@ -103,7 +104,7 @@ Modal dialogs (Settings, Highlights, About, Help) SHALL open centered in the vie
 - **THEN** the cursor becomes the move cursor over the draggable part and a pointing hand over the collapse and close buttons at its ends.
 
 ### Requirement: Dynamic Active File Status Footer
-The application bottom panel SHALL display exclusively the absolute path of the currently active log tab, updating immediately whenever the user switches active tabs, without redundant status or filter counters.
+The application bottom panel SHALL display the absolute path of the currently active log tab, updating immediately whenever the user switches active tabs, and at its far right the renderer chip defined by the rendering-backend capability, without redundant status or filter counters.
 
 #### Scenario: Switching tabs updates the footer path
 - **WHEN** the user switches focus from Tab A to Tab B
@@ -201,7 +202,7 @@ The stream toolbar SHALL show the state of its toggles (follow, monitor, line nu
 - **THEN** the TXT/HEX/MD buttons stay where they were.
 
 ### Requirement: Named Sessions
-The application SHALL save the workspace (open files and patterns, dock layout, floating windows, per-stream filters, search queries, wrap, encoding, bookmarks) to a named session file and load it back, replacing the current workspace after confirmation. Global preferences SHALL NOT be part of a session. The title bar SHALL show the session name and a `*` when the workspace differs from the saved session. Paths SHALL be stored absolute and, when possible, relative to the session file so moved bundles still open. Missing files SHALL be skipped with a summary. Recent sessions SHALL be listed in a menu.
+The application SHALL save the workspace (open files and patterns, dock layout, floating windows, per-stream include/exclude filters, search queries, wrap, encoding, bookmarks) to a named session file and load it back, replacing the current workspace after confirmation. Global preferences SHALL NOT be part of a session, and neither are the minimum-level filter and the time range of a stream. Saving SHALL refuse a target path that exists and is not a regular file (a directory, a FIFO, a device), reporting the error without truncating it or blocking on it. The title bar SHALL show the session name and a `*` when the workspace differs from the saved session. Paths SHALL be stored absolute and, when possible, relative to the session file so moved bundles still open. Missing files SHALL be skipped with a summary. Recent sessions SHALL be listed in a menu.
 
 #### Scenario: Switching projects
 - **WHEN** the user saves the current five tabs as `incident.fasttail-session.ini`, then loads `dev.fasttail-session.ini`
@@ -210,4 +211,23 @@ The application SHALL save the workspace (open files and patterns, dock layout, 
 #### Scenario: Session moved with its logs
 - **WHEN** a session saved in `bundle/` referencing `bundle/app.log` is moved together with the folder to another drive
 - **THEN** loading it opens `app.log` from the new location.
+
+#### Scenario: Saving onto a directory
+- **WHEN** the user saves a session to a path that is an existing directory
+- **THEN** the save fails with an error and the directory is left untouched.
+
+### Requirement: Empty Stream States
+A stream with no visible rows SHALL say why instead of showing a blank area: while the line index or a filter scan is running on the worker, the message SHALL name that scan (`⏳ indexing...`, `⏳ filtering...`); otherwise it SHALL read that the file is empty when the file has no lines, and that no line matches the active filters when lines exist but the include/exclude, level or time filters hide all of them. Search and level-detection scans SHALL NOT replace these messages. The "no file open" message SHALL be reserved for a workspace without streams.
+
+#### Scenario: Filter with no hits
+- **WHEN** an include filter matches none of the lines of a stream and no index or filter scan is running
+- **THEN** the stream shows that no line matches the active filters, not that no file is open.
+
+#### Scenario: Empty file
+- **WHEN** a stream is opened on a file of zero bytes
+- **THEN** the stream shows that the log file is empty and waiting for output.
+
+#### Scenario: Large file still indexing
+- **WHEN** a file above the background indexing threshold is opened and its index has no lines yet
+- **THEN** the stream shows `⏳ indexing...` until the first lines are indexed.
 

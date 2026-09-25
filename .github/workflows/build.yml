@@ -171,8 +171,8 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       # Linux/macOS: tar.gz with the executable.
-      # Windows: zip with the executable and its PDB, so crash backtraces
-      # resolve function names when both sit in the same directory.
+      # Windows: zip with the executable, plus a separate -symbols.zip with the PDB
+      # (unpacked next to the exe, it lets crash backtraces resolve function names).
       - name: 📦 Package release asset
         shell: bash
         run: |

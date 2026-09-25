@@ -101,7 +101,7 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Click` / `Shift + Click` / `Ctrl + Click` | Select a row / extend the selection over the visible rows / toggle a row |
 | `Ctrl + A` | Select every visible row of the focused stream |
 | `Ctrl + C` | Copy the selected rows (or the current search hit) as plain text |
-| `Ctrl + G` | Go to line N, or `+N` / `-N` from the current line (hidden lines resolve to the next visible one) |
+| `Ctrl + G` | Go to line N, `+N` / `-N` from the current line, or a time such as `14:02` (first line at or after it); hidden lines resolve to the next visible one |
 | `Ctrl + Shift + T` | Toggle always-on-top (also the 📌 pin in the title bar and a Settings checkbox) |
 | `Ctrl + L` | Lock the window behind the PIN (needs a PIN set in Settings → PIN lock) |
 | `Ctrl + F2` / `F2` / `Shift + F2` | Bookmark the current row (`★` in the marker column) / jump to the next / previous bookmark, wrapping around; bookmarks are saved per file |
@@ -112,10 +112,10 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Ctrl -` | Zoom the interface out (-10%) |
 | `Ctrl 0` | Reset the zoom to 100% |
 | `Ctrl + MouseWheel` | Smooth zoom with the wheel |
-
-Zoom scales the whole interface, log text included, and is shown as a percentage in the title bar next to the always-on-top pin (dim at 100%, accent colour when zoomed; click it to go back to 100%). Settings → Zoom has the same control, and the value is saved in `fasttail.ini` (`zoom_factor`), so the window reopens at the scale you left it. The separate **Font size** setting sets the log text in points, independently of the zoom.
 | `F1` | Open the Help & Keyboard Shortcuts dialog |
 | `Esc` | Close the active dialog, or leave the search box |
+
+Zoom scales the whole interface, log text included, and is shown as a percentage in the title bar next to the always-on-top pin (dim at 100%, accent colour when zoomed; click it to go back to 100%). Settings → Zoom has the same control, and the value is saved in `fasttail.ini` (`zoom_factor`), so the window reopens at the scale you left it. The separate **Font size** setting sets the log text in points, independently of the zoom.
 
 Files can also be opened by **drag & drop** onto the window or from the command line:
 
@@ -130,6 +130,7 @@ fasttail [OPTIONS] [PATH...]
                      follow mode for those files
   --renderer <NAME>  auto (default), glow, wgpu or software
   --config <FILE>    configuration file to use (same as FASTTAIL_CONFIG)
+  --session <FILE>   load a session file (*.fasttail-session.ini) at startup
   -V, --version      print the version and exit
   -h, --help         print the usage and exit
 ```
@@ -168,7 +169,7 @@ Settings → External tools. Each tool has a name, a program, an argument list a
 | `{selection}` | the selected rows as text, or the row itself |
 | `{match}` | first capture group of the tool's own regex applied to the row (the whole match without a group, empty when it does not match) |
 
-Extras: a **shortcut** such as `Ctrl+Shift+F9` (a modifier is required) runs the tool on the current row of the focused stream; **run on rule** binds the tool to a highlight rule, so it runs when the rule matches an appended line, at most once per second per tool and with at most 10 children running at the same time, the excess being counted as dropped runs in the settings row. **Run via shell** hands the program and the expanded arguments to `cmd /c` (Windows) or `sh -c` as one command line: the shell then parses the row text, so keep it off unless the log is trusted. Tools are stored as `[tool.N]` sections of `fasttail.ini`.
+Extras: a **shortcut** such as `Ctrl+Shift+F9` (a modifier is required) runs the tool on the current row of the focused stream; **run on rule** binds the tool to a highlight rule, so it runs when the rule matches an appended line, at most once per second per tool and with at most 10 children running at the same time, the excess being counted as dropped runs in the settings row. **Run via shell** wraps the program in `cmd /c` (Windows) or `sh -c`, with every expanded argument quoted for that shell; operators written in the argument list (`|`, `>`, `&&`) are quoted too, so a pipeline belongs in a script. The Windows quoting is weaker than the POSIX one, so keep it off unless the log is trusted. Tools get no standard input and their output is discarded. Tools are stored as `[tool.N]` sections of `fasttail.ini`.
 
 ### PIN lock
 Settings → PIN lock. Set a PIN of 4 to 12 digits and the window can be locked behind it: with **Lock when the screensaver ends** on, coming back from the Matrix screensaver asks for the PIN, and `Ctrl+L` (or the **Lock now** button) locks on demand. While locked, an opaque animated backdrop covers the window and every keyboard shortcut is ignored — `Esc` included — while the streams keep tailing behind it, so nothing is missed. `Enter` confirms the PIN, and three wrong PINs in a row replace the entry field with a one-minute countdown.
@@ -320,7 +321,7 @@ Yes. It is released under the MIT License, which allows use, modification and re
 
 ## 📐 Specifications
 
-Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting, docking UI, themes, localization, log intelligence, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend, the command line, selection and export.
+Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting (time range included), log intelligence (levels, timestamps, JSON, stack traces), docking UI and named sessions, themes, localization, external tools, window lock, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend, the command line, selection and export. Proposals not yet implemented live in [`openspec/changes`](openspec/changes).
 
 ---
 

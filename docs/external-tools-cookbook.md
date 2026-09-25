@@ -22,12 +22,20 @@ page is the practical half.
 | `{dir}` | the directory of that file |
 | `{lineno}` | the 1-based line number |
 | `{selection}` | the selected rows as text, or the row itself when nothing is selected |
-| `{match}` | the first capture group of the tool's own regex applied to the row |
+| `{match}` | the first capture group of the tool's own regex applied to the row (the whole match when the regex has no group, empty when it does not match) |
 
 Arguments are split like a command line (quotes group words) and each one is passed to
-the program as its own argv entry. A row containing `; rm -rf /` is therefore just text
-— **unless** you switch "Run via shell" on, which hands the whole line to `cmd /c` or
-`sh -c` and lets the shell parse it. Keep that off unless the log is trusted.
+the program as its own argv entry. A row containing `; rm -rf /` is therefore just text.
+
+"Run via shell" wraps the program in `cmd /c` (Windows) or `sh -c` instead, with every
+expanded argument quoted for that shell. The quoting covers what you write in the
+arguments too, so `|`, `>` and `&&` reach the program as plain text rather than building
+a pipeline: a pipeline belongs in a script (recipes 6 and 7). The Windows quoting is also
+weaker than the POSIX one — a row containing a `"` can still reach `cmd`'s own parser —
+so keep shell mode off unless the log is trusted.
+
+Tools run with no standard input and their output discarded: a program that reads stdin
+(`clip`, `xclip`, `jq`) gets nothing, so give it the value as an argument through a script.
 
 ---
 
@@ -82,7 +90,7 @@ Infrastructure logs name the machine that failed. One shortcut and you are on it
 |---|---|
 | Name | `SSH to host` |
 | Program | `wt` (Windows Terminal) · `gnome-terminal` |
-| Arguments | `ssh {match}` |
+| Arguments | Windows Terminal: `ssh {match}` · gnome-terminal: `-- ssh {match}` |
 | `{match}` regex | `host=([\w.-]+)` |
 
 ## 5. Open the URL or the ticket in the browser
@@ -104,28 +112,66 @@ regex `([A-Z]+-\d+)`, arguments `https://jira.example.com/browse/{match}`.
 Structured logs put a JSON document on one line. FastTail can expand JSON in place with
 the `[+] JSON` toggle; this is for when you want it in a real tool.
 
+`jq` reads standard input and the result has to land somewhere, so this is a pipeline —
+and a pipeline lives in a script, not in the argument list (in shell mode the `|` would
+be quoted like everything else). The script is handed the file and the line number
+rather than the row text, so a JSON document full of quotes never has to survive a
+command line.
+
+Windows, `C:\tools\pretty-json.ps1`:
+
+```powershell
+param([string]$File, [int]$Line)
+$row = Get-Content -LiteralPath $File -TotalCount $Line | Select-Object -Last 1
+$out = Join-Path $env:TEMP 'row.json'
+$row | jq . | Set-Content -LiteralPath $out
+code $out
+```
+
+Linux / macOS, `~/bin/pretty-json.sh` (made executable with `chmod +x`):
+
+```sh
+#!/bin/sh
+out="${TMPDIR:-/tmp}/row.json"
+sed -n "${2}p" "$1" | jq . > "$out" && code "$out"
+```
+
 | Field | Value |
 |---|---|
 | Name | `jq` |
-| Program | `cmd` (Windows) · `sh` (Linux/macOS) |
-| Arguments | `/c echo {line} | jq . > %TEMP%\row.json && code %TEMP%\row.json` |
-| Run via shell | **on** (a pipeline needs a shell) |
+| Program | `powershell` (Windows) · `/home/you/bin/pretty-json.sh` (Linux/macOS) |
+| Arguments | Windows: `-NoProfile -ExecutionPolicy Bypass -File "C:\tools\pretty-json.ps1" "{file}" {lineno}` · Linux/macOS: `"{file}" {lineno}` |
+| Run via shell | off |
 
-This one needs "Run via shell", so it belongs to trusted logs only: the row text is
-parsed by the shell. On an untrusted log, prefer a small script that reads the line as
-a single argument instead.
+Quote Windows paths in the argument list: outside quotes a backslash escapes the next
+character, so an unquoted `C:\tools\x` would arrive as `C:toolsx`.
 
 ## 7. Copy a request id to the clipboard for the next query
+
+`clip` and `xclip` read standard input, which FastTail does not provide, so a
+two-line script turns the captured id (its first argument) into their input.
+
+Windows, `copy-id.cmd` (`set /p` prints the id without a trailing newline):
+
+```bat
+@echo off
+<nul set /p "=%~1" | clip
+```
+
+Linux, `~/bin/copy-id.sh` (made executable with `chmod +x`):
+
+```sh
+#!/bin/sh
+printf '%s' "$1" | xclip -selection clipboard
+```
 
 | Field | Value |
 |---|---|
 | Name | `Copy trace id` |
-| Program | `clip` (Windows) · `xclip` |
-| Arguments | Windows: none (it reads stdin — use the shell form below) · Linux: `-selection clipboard` |
+| Program | `C:\tools\copy-id.cmd` (Windows) · `/home/you/bin/copy-id.sh` (Linux) |
+| Arguments | `{match}` |
 | `{match}` regex | `trace[_-]?id[=:]\s*([\w-]+)` |
-
-Simplest portable form: a one-line script `copy-id.cmd` containing `echo %1| clip`, with
-program `copy-id.cmd` and arguments `{match}` — no shell mode needed.
+| Run via shell | off |
 
 ## 8. Search the whole file for what this row shows
 

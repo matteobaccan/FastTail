@@ -6,7 +6,7 @@ Defines how FastTail chooses between the wgpu and OpenGL rendering backends, the
 ## Requirements
 
 ### Requirement: Renderer Selection with Automatic Fallback
-The application SHALL support both the `wgpu` and the OpenGL (`glow`) rendering backends. The backend SHALL be resolved from the `FASTTAIL_RENDERER` environment variable, then the `renderer` key in `fasttail.ini`, then the default `auto`; accepted values are `auto`, `glow`, `wgpu` and `software`. With `auto` the application SHALL start with wgpu and, if eframe returns an error before the window runs, SHALL retry with OpenGL and log the wgpu error to stderr. With `glow`, `wgpu` or `software` no fallback SHALL happen except the software-to-OpenGL retry defined below. Both backends SHALL run without vsync, because some graphics drivers (including NVIDIA on Windows) busy-wait for the vertical blank and turn every continuous repaint into a full core of CPU.
+The application SHALL support both the `wgpu` and the OpenGL (`glow`) rendering backends. The backend SHALL be resolved from the `FASTTAIL_RENDERER` environment variable, then the `renderer` key in `fasttail.ini`, then the default `auto`; accepted values are `auto`, `glow`, `wgpu` and `software`. With `auto` the application SHALL start with wgpu and, if eframe returns an error before the window runs, SHALL retry with OpenGL and log the wgpu error to stderr. With `glow`, `wgpu` or `software` no fallback SHALL happen except the software-to-OpenGL retry defined below. OpenGL SHALL run without vsync, because some graphics drivers (including NVIDIA on Windows) busy-wait for the vertical blank and turn every continuous repaint into a full core of CPU. wgpu SHALL present with `AutoVsync` on a GPU adapter and with `Immediate` on the software (CPU) adapter, where there is no real vertical blank to wait for and egui's own frame pacing throttles the work.
 
 #### Scenario: Machine without a usable wgpu backend
 - **WHEN** FastTail starts with `renderer = auto` on a machine where neither Direct3D 12 nor Vulkan can create a device
@@ -22,7 +22,7 @@ The application SHALL support both the `wgpu` and the OpenGL (`glow`) rendering 
 
 #### Scenario: Continuous repaint cost
 - **WHEN** the pointer moves over the window continuously for 15 seconds on an NVIDIA Windows machine
-- **THEN** the process uses in the order of 12% of one core on wgpu and no more than about 40% on OpenGL without vsync, instead of a full core with vsync.
+- **THEN** the OpenGL backend, running without vsync, uses no more than about 40% of one core instead of the full core it used with vsync.
 
 ### Requirement: Software (CPU) Renderer Fallback
 The application SHALL accept `software` (alias `cpu`) as a renderer value in the CLI, the `FASTTAIL_RENDERER` environment variable and the `renderer` ini key. With `software` the wgpu path SHALL select a CPU adapter (WARP on Windows, llvmpipe on Linux) regardless of the GPUs present, and SHALL fall back to OpenGL if no CPU adapter can be created. Because WARP distributes rasterization across every logical core, software rendering SHALL be treated as an unoptimized last-resort fallback: while it is active a persistent banner SHALL warn that a GPU is required for optimal performance. The idle CPU cost of WARP is inherent (it is independent of present mode, frame pacing, focus and window occlusion, and only stops when the window is minimized), so the application SHALL NOT attempt to hide it.
@@ -51,7 +51,7 @@ The status bar SHALL show a chip reading `WGPU` or `GL`, with the suffix `fallba
 - **THEN** the chip reads `GL fallback` and the tooltip names the OpenGL renderer string and version.
 
 ### Requirement: Renderer Setting
-The Settings dialog SHALL offer the renderer choice `auto`, `glow`, `wgpu`, persisted as `renderer` in `fasttail.ini`, with a note that it applies at the next start.
+The Settings dialog SHALL offer the renderer choice `auto`, `glow`, `wgpu` and `software` (labelled as not recommended, see the software renderer requirement), persisted as `renderer` in `fasttail.ini`, with a note that it applies at the next start.
 
 #### Scenario: Pinning wgpu
 - **WHEN** the user selects `wgpu` in Settings and restarts

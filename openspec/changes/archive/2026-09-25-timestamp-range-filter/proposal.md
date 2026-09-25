@@ -16,6 +16,7 @@
 ### Modified Capabilities
 - `filters-and-highlighting`: adds the timestamp range filter.
 - `log-intelligence`: adds timestamp detection.
+- `search-and-navigation`: the go-to popup (Ctrl+G) also takes a time.
 
 ## Impact
 
