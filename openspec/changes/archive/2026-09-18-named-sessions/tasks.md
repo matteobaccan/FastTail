@@ -3,7 +3,7 @@
 - [x] 1.1 Extract `Session` from `FastTailConfig` with INI serialisation; keep the default session embedded in `fasttail.ini`
 - [x] 1.2 Absolute + relative path storage and resolution; missing-file summary
 - [x] 1.3 Recent sessions list in `fasttail.ini`
-- [ ] 1.4 Tests: round-trip of every session field, relative resolution, missing files
+- [x] 1.4 Tests: round-trip of every session field, relative resolution, missing files
 
 ## 2. UI
 
