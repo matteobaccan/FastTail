@@ -63,6 +63,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Filters window renames, reorders and deletes presets. Presets live in `fasttail.ini`
   as `[filter_preset.N]` sections, not in sessions. `--filter` / `--exclude` set the
   first term as before.
+- **Standard input as a stream.** `command | fasttail -` copies the command's output,
+  64 KB at a time and flushed as it arrives, into a spool file tailed like any followed
+  log, so every feature works on it; the tab is titled `stdin` and the footer names the
+  spool. Piped or redirected input is also detected without `-`, and its tab appears
+  only when the first byte arrives. When the input ends the stream stays open with
+  `input ended · N lines`. The spool restarts from empty at `stdin_spool_max_mb`
+  (default 2048, in Settings) or when its volume keeps less than 512 MB free, and the
+  stream bar says earlier input was discarded. The stream is never saved in the
+  workspace, recent files or sessions, and its spool is deleted with the tab, at exit or
+  by the next start after a crash. A second `-` is a usage error (exit 2), `-` with
+  nothing piped is reported on stderr, and a file named `-` opens as `./-`. Verified on
+  Windows from cmd.exe, Git Bash, PowerShell 7 and Windows PowerShell 5.1 (see the
+  README for the caveats of each shell).
 
 ### Fixed
 

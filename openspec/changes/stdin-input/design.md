@@ -65,6 +65,24 @@ The README will state what was verified per shell, and anything not verified wil
 ### D7. `-` in the parser
 `CliArgs` gains `stdin: bool`; `-` sets it (before and after `--`, as in `cat`), and a second `-` returns `CliError::Usage("standard input given twice")`, exit code 2. A file literally named `-` is reachable as `./-`. `paths` no longer contains `<cwd>/-`.
 
+## Verification results (Windows 11, debug build, GUI subsystem)
+
+| Case | Result |
+|---|---|
+| cmd.exe `type app.log \| fasttail -` | stdin classified as pipe, 55 of 55 bytes received unchanged (UTF-8 kept); tab `stdin`, `input ended · 3 lines`; cmd waits for FastTail before returning to the prompt |
+| cmd.exe `ping -t localhost \| fasttail -` | lines arrive live (spool grows every second); killing `ping` shows `input ended` |
+| cmd.exe `fasttail - < app.log`, and `type app.log \| fasttail` (no `-`) | redirected disk file classified as piped; auto-detection opens the stream |
+| cmd.exe `fasttail - < NUL` | `FILE_TYPE_CHAR`: classified as terminal, nothing read |
+| Git Bash `cat app.log \| ./fasttail -`, `< app.log` | bytes unchanged; `< /dev/null` maps to NUL: terminal |
+| PowerShell 7.6 `Get-Content app.log \| fasttail -` | pipe connected, the prompt returns at once, complete input, UTF-8 kept, lines re-written with CRLF |
+| PowerShell 7.6 `ping -t localhost \| fasttail -` | pipe connected but nothing arrived until the producer ended (then all 715 bytes): not live; `cmd /c "ping -t localhost \| fasttail -"` from PowerShell is live |
+| Windows PowerShell 5.1 `Get-Content` or native producer `\| fasttail -` | pipe connected; with the default US-ASCII `$OutputEncoding` non-ASCII arrives as `?` and a UTF-8 BOM is prepended; `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` keeps the characters; `cmd /c` keeps the bytes |
+| PowerShell without redirection | console handle: terminal, `-` reports that nothing is piped |
+| `Start-Process`, `cmd /c start` | no standard input handle: absent, no stdin tab |
+| Explorer, desktop shortcut, Windows Terminal | not verified directly |
+| Ctrl+C in the console; broken pipe after closing the tab | not verified by hand (the copier stopping and closing its input on close is unit-tested) |
+| Crash sweep | a spool left by a killed instance was removed at the next start (one other left-over was kept, as when its pid is still seen) |
+
 ## Risks / Trade-offs
 
 - [Unverified PowerShell behaviour] → verification matrix before release; README states the results and the `cmd /c` fallback.
