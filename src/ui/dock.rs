@@ -473,6 +473,16 @@ fn toggle_button(
     ui.add(button)
 }
 
+/// Translation key naming a background scan, as shown in the stream bar.
+fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
+    match kind {
+        crate::scan_job::ScanKind::Index => "scan_indexing",
+        crate::scan_job::ScanKind::Filter => "scan_filtering",
+        crate::scan_job::ScanKind::Search => "scan_searching",
+        crate::scan_job::ScanKind::Levels => "scan_levels",
+    }
+}
+
 fn render_log_stream(
     ui: &mut Ui,
     engine: &mut TailEngine,
@@ -842,12 +852,7 @@ fn render_log_stream(
 
         // Background scan in progress: kind, percentage and hits so far
         if let Some((kind, progress, hits)) = engine.scan_progress() {
-            let key = match kind {
-                crate::scan_job::ScanKind::Index => "scan_indexing",
-                crate::scan_job::ScanKind::Filter => "scan_filtering",
-                crate::scan_job::ScanKind::Search => "scan_searching",
-                crate::scan_job::ScanKind::Levels => "scan_levels",
-            };
+            let key = scan_kind_key(kind);
             ui.label(
                 RichText::new(format!(
                     "⏳ {} {:.0}% ({})",
@@ -1565,17 +1570,17 @@ fn render_log_stream(
 
     let visible_lines = engine.visible_line_count();
     if visible_lines == 0 {
-        let empty_msg = if engine.total_lines() == 0 {
-            t(lang, "file_empty")
+        // While the index or the filter is still being built on the worker, "empty" and
+        // "nothing matches" would both be premature: say what is running instead.
+        let empty_msg = if let Some((kind, _, _)) = engine.scan_progress() {
+            format!("⏳ {}...", t(lang, scan_kind_key(kind)))
+        } else if engine.total_lines() == 0 {
+            t(lang, "file_empty").to_string()
         } else {
-            t(lang, "no_matching_lines")
+            t(lang, "no_matching_lines").to_string()
         };
         ui.centered_and_justified(|ui| {
-            ui.label(
-                RichText::new(empty_msg)
-                    .monospace()
-                    .color(theme.text_dim()),
-            );
+            ui.label(RichText::new(empty_msg).monospace().color(theme.text_dim()));
         });
         return;
     }

@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Empty streams say why they are empty.** An open stream with no rows used to show
+  "No file open"; it now says the file is empty, that no line matches the active
+  filters, or which background scan (indexing, filtering) is still running.
 - **The Windows archive no longer carries the debug symbols.** `fasttail-windows-x86_64.zip`
   holds the executable alone — about 8 MB instead of 24 — and `fasttail.pdb` ships as
   `fasttail-windows-x86_64-symbols.zip` for whoever needs to read a crash dump.
