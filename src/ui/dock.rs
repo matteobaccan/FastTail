@@ -79,6 +79,59 @@ pub struct DockContext<'a> {
     pub tool_runner: &'a mut ToolRunner,
     /// Stream shown in the focused dock leaf: the only one that handles search shortcuts.
     pub focused_stream: Option<PathBuf>,
+    /// Search results pane and overview strip preferences, shared by every stream.
+    pub search_view: &'a mut SearchViewPrefs,
+}
+
+/// Search results pane (open flag, height) and overview strip switch, global preferences
+/// persisted in `fasttail.ini` and applied to every stream.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SearchViewPrefs {
+    pub search_pane: bool,
+    pub search_pane_height: f32,
+    pub overview_strip: bool,
+}
+
+impl Default for SearchViewPrefs {
+    fn default() -> Self {
+        Self {
+            search_pane: false,
+            search_pane_height: DEFAULT_SEARCH_PANE_HEIGHT,
+            overview_strip: true,
+        }
+    }
+}
+
+/// Height of the search results pane until the user drags it.
+pub const DEFAULT_SEARCH_PANE_HEIGHT: f32 = 180.0;
+/// The results pane never gets smaller than this, nor leaves the rows less than this.
+const MIN_SEARCH_PANE_HEIGHT: f32 = 60.0;
+const MIN_ROWS_HEIGHT: f32 = 80.0;
+
+/// Keyboard target of a stream's search results pane (see `hit_list`).
+pub fn search_pane_id(engine: &TailEngine) -> egui::Id {
+    egui::Id::new("search_pane").with(&engine.path)
+}
+
+/// "first 1,000,000 listed": the note of a search that matched more lines than it keeps.
+fn capped_note(lang: Language) -> String {
+    t(lang, "search_capped").replace(
+        "{n}",
+        &group_thousands(crate::tail_engine::MAX_SEARCH_MATCHES),
+    )
+}
+
+/// `1234567` as `1,234,567`.
+pub fn group_thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Row data handed to an external tool: the row text, the file being tailed (the resolved
@@ -284,6 +337,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         self.ctx.labels_changed,
                         self.ctx.external_tools,
                         self.ctx.tool_runner,
+                        self.ctx.search_view,
                     );
                     engine.search_query = search_query;
                 } else {
@@ -329,6 +383,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.lock_enabled,
                     self.ctx.lock_pin,
                     self.ctx.lock_now,
+                    &mut self.ctx.search_view.overview_strip,
                 );
             }
         }
@@ -723,6 +778,7 @@ fn render_log_stream(
     labels_changed: &mut bool,
     external_tools: &[ExternalTool],
     tool_runner: &mut ToolRunner,
+    search_view: &mut SearchViewPrefs,
 ) {
     let font_id = egui::FontId::monospace(font_size);
     let hex_row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
@@ -741,6 +797,14 @@ fn render_log_stream(
             engine.update_search(search_query);
         }
     }
+    // The results pane shows while a query is active; the rows get what it leaves, so
+    // centring a target measures against that.
+    let pane_visible = search_view.search_pane && !engine.last_searched_query.is_empty();
+    let viewport_height = if pane_visible {
+        (viewport_height - search_view.search_pane_height).max(MIN_ROWS_HEIGHT)
+    } else {
+        viewport_height
+    };
 
     // Viewport movement helpers. Extend mode maps lines to pixels through the constant row
     // height; wrap mode hands the wrap renderer a request that it resolves through the real
@@ -1201,7 +1265,7 @@ fn render_log_stream(
         let has_query = !search_query.trim().is_empty();
         let match_count = engine.active_match_count();
 
-        let extra_controls_w = if has_query { 220.0 } else { 70.0 };
+        let extra_controls_w = if has_query { 250.0 } else { 100.0 };
         let box_w = (ui.available_width() - extra_controls_w).clamp(160.0, 360.0);
         let search_edit = egui::TextEdit::singleline(search_query)
             .hint_text(t(lang, "search_placeholder"))
@@ -1299,12 +1363,27 @@ fn render_log_stream(
                 );
             } else {
                 let current_1based = engine.current_match_idx.map(|i| i + 1).unwrap_or(0);
-                ui.label(
-                    RichText::new(format!("[{} / {}]", current_1based, match_count))
-                        .monospace()
-                        .strong()
-                        .color(theme.accent_color()),
+                // The true total: past the cap the hits are counted, not listed.
+                let counter = ui.label(
+                    RichText::new(format!(
+                        "[{} / {}]",
+                        current_1based,
+                        group_thousands(engine.search_total())
+                    ))
+                    .monospace()
+                    .strong()
+                    .color(theme.accent_color()),
                 );
+                if engine.search_capped() {
+                    let note = capped_note(lang);
+                    counter.on_hover_text(&note);
+                    ui.label(
+                        RichText::new(format!("({note})"))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme.warn_color()),
+                    );
+                }
                 // Prev button (Shift+F3)
                 if ui
                     .button(RichText::new("▲").monospace())
@@ -1330,6 +1409,21 @@ fn render_log_stream(
                     }
                 }
             }
+        }
+
+        // Search results pane toggle (a global preference, shown while a query is active)
+        if toggle_button(
+            ui,
+            theme,
+            "☰",
+            search_view.search_pane,
+            theme.accent_color(),
+        )
+        .on_hover_text(t(lang, "tip_search_pane"))
+        .clicked()
+        {
+            search_view.search_pane = !search_view.search_pane;
+            ui.ctx().request_repaint();
         }
 
         // Search History dropdown menu (last 10 searches)
@@ -1558,8 +1652,12 @@ fn render_log_stream(
         .response
         .on_hover_text(t(lang, "export_tip"));
 
-        // Keyboard navigation shortcuts for the focused stream when no input has the keyboard
-        if is_focused && !ui.ctx().egui_wants_keyboard_input() {
+        // Stream shortcuts of the focused stream: when no input has the keyboard, and also
+        // while its search results pane has it (the pane is part of the stream's panel).
+        let keyboard_free = !ui.ctx().egui_wants_keyboard_input();
+        let pane_focused =
+            crate::ui::hit_list::HitList::has_focus(ui.ctx(), search_pane_id(engine));
+        if is_focused && (keyboard_free || pane_focused) {
             // Ctrl+A selects every visible row, Ctrl+C copies the selection (or the
             // current search hit) as plain text.
             let ctrl_a = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::A);
@@ -1607,6 +1705,9 @@ fn render_log_stream(
                     ui.ctx().request_repaint();
                 }
             }
+        }
+        // Main-view navigation keys: not while the results pane (or an input) has them.
+        if is_focused && keyboard_free {
             ui.input(|i| {
                 // Ctrl + Home: Jump to top
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
@@ -1654,8 +1755,20 @@ fn render_log_stream(
 
     ui.separator();
 
-    // If Hex streaming mode is active, render the binary hex stream
+    // If Hex streaming mode is active, render the binary hex stream (the results pane
+    // lists line hits: in HEX view it only says so)
     if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+        if pane_visible {
+            render_search_pane(
+                ui,
+                engine,
+                theme,
+                lang,
+                font_size,
+                level_colors,
+                search_view,
+            );
+        }
         render_hex_stream(ui, engine, theme, lang, font_size);
         return;
     }
@@ -1867,6 +1980,26 @@ fn render_log_stream(
         ui.separator();
     }
 
+    // Search results pane: a resizable region at the bottom of the stream's panel, laid
+    // out before the rows so they take what is left. A committed hit becomes the current
+    // match and the main view centres it, exactly like F3.
+    if pane_visible {
+        let committed = render_search_pane(
+            ui,
+            engine,
+            theme,
+            lang,
+            font_size,
+            level_colors,
+            search_view,
+        );
+        if let Some(target) = committed.and_then(|hit| engine.select_match(hit)) {
+            scroll_to_target(engine, target);
+            push_search_history(search_history, search_query);
+            ui.ctx().request_repaint();
+        }
+    }
+
     let visible_lines = engine.visible_line_count();
     if visible_lines == 0 {
         // While the index or the filter is still being built on the worker, "empty" and
@@ -1898,37 +2031,63 @@ fn render_log_stream(
     // The marker column appears when there is anything to mark: search hits or bookmarks.
     let show_markers = has_search || engine.has_bookmarks();
 
-    let (row_click, toggle_json, tool_run) = if engine.wrap_lines {
-        render_wrapped_rows(
-            ui,
-            engine,
-            theme,
-            lang,
-            font_size,
-            row_height,
-            *show_line_numbers,
-            show_markers,
-            level_colors,
-            has_search,
-            active_search_line,
-            external_tools,
-        )
+    // Overview strip beside the scroll bar: the right edge of the rows area, when the
+    // setting is on and there is anything to mark.
+    // Clipped to what is on screen: a stream bar wider than the panel widens the ui
+    // beyond its right edge, and the strip must stay visible.
+    let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+    let strip_marks = if search_view.overview_strip {
+        overview_marks(ui, engine, area.height())
+            .filter(|marks| !marks.is_empty() || engine.current_search_line().is_some())
     } else {
-        render_extended_rows(
-            ui,
-            engine,
-            theme,
-            lang,
-            font_size,
-            row_height,
-            *show_line_numbers,
-            show_markers,
-            level_colors,
-            has_search,
-            active_search_line,
-            external_tools,
-        )
+        None
     };
+    let rows_rect = if strip_marks.is_some() {
+        area.with_max_x(area.max.x - crate::ui::overview_strip::STRIP_WIDTH)
+    } else {
+        area
+    };
+
+    let (row_click, toggle_json, tool_run) = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(rows_rect), |ui| {
+            render_rows(
+                ui,
+                engine,
+                theme,
+                lang,
+                font_size,
+                row_height,
+                *show_line_numbers,
+                show_markers,
+                level_colors,
+                has_search,
+                active_search_line,
+                external_tools,
+            )
+        })
+        .inner;
+
+    if let Some(marks) = strip_marks {
+        let strip_rect =
+            egui::Rect::from_min_max(egui::pos2(rows_rect.max.x, area.min.y), area.max);
+        let per_row = if engine.wrap_lines {
+            engine.wrap_avg_row_height.max(1.0)
+        } else {
+            row_height
+        };
+        let viewport = crate::ui::overview_strip::Viewport {
+            top_row: top_row(engine),
+            rows_on_screen: (rows_rect.height() / per_row).ceil() as usize,
+        };
+        if let Some(row) =
+            crate::ui::overview_strip::paint(ui, strip_rect, engine, &marks, viewport, theme, lang)
+        {
+            if let Some(line) = engine.get_actual_line_idx(row) {
+                scroll_to_target(engine, line);
+                ui.ctx().request_repaint();
+            }
+        }
+    }
 
     if let Some((tool_idx, row)) = tool_run {
         if let Some(tool) = external_tools.get(tool_idx) {
@@ -1954,6 +2113,191 @@ fn render_log_stream(
             engine.expanded_json_lines.insert(idx);
         }
     }
+}
+
+/// The rows of the Text view, wrapped or not.
+#[allow(clippy::too_many_arguments)]
+fn render_rows(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    font_size: f32,
+    row_height: f32,
+    show_line_numbers: bool,
+    show_markers: bool,
+    level_colors: bool,
+    has_search: bool,
+    active_search_line: Option<usize>,
+    external_tools: &[ExternalTool],
+) -> RowInteractions {
+    if engine.wrap_lines {
+        render_wrapped_rows(
+            ui,
+            engine,
+            theme,
+            lang,
+            font_size,
+            row_height,
+            show_line_numbers,
+            show_markers,
+            level_colors,
+            has_search,
+            active_search_line,
+            external_tools,
+        )
+    } else {
+        render_extended_rows(
+            ui,
+            engine,
+            theme,
+            lang,
+            font_size,
+            row_height,
+            show_line_numbers,
+            show_markers,
+            level_colors,
+            has_search,
+            active_search_line,
+            external_tools,
+        )
+    }
+}
+
+/// Marks of the overview strip for a strip `height` points tall, from the per-stream cache
+/// in egui memory (rebuilt only when its inputs change).
+fn overview_marks(
+    ui: &Ui,
+    engine: &TailEngine,
+    height: f32,
+) -> Option<crate::ui::overview_strip::Marks> {
+    use crate::ui::overview_strip::StripCache;
+    let height = height.round().max(0.0) as usize;
+    if height == 0 {
+        return None;
+    }
+    let id = egui::Id::new("overview_cache").with(&engine.path);
+    let mut cache: StripCache = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    if let Some(wait) = cache.refresh(engine, height) {
+        ui.ctx().request_repaint_after(wait);
+    }
+    let marks = cache.marks.clone();
+    ui.data_mut(|d| d.insert_temp(id, cache));
+    Some(marks)
+}
+
+/// The search results pane of a stream: a header with the query, the true total, the
+/// capped note and the search progress, then the virtualized hit list (see `hit_list`),
+/// or a notice in HEX view. Returns the hit committed by a click or `Enter`.
+fn render_search_pane(
+    ui: &mut Ui,
+    engine: &TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    font_size: f32,
+    level_colors: bool,
+    search_view: &mut SearchViewPrefs,
+) -> Option<usize> {
+    use crate::ui::hit_list::HitList;
+    let id = search_pane_id(engine);
+    let panel_id = id.with("panel");
+    let max_height = (ui.available_height() - MIN_ROWS_HEIGHT).max(MIN_SEARCH_PANE_HEIGHT);
+    let height = search_view
+        .search_pane_height
+        .clamp(MIN_SEARCH_PANE_HEIGHT, max_height);
+    // The height is one preference for every stream: hand it to the panel each frame, and
+    // take the panel's back while the user drags its edge.
+    ui.ctx().data_mut(|d| {
+        d.insert_persisted(
+            panel_id,
+            egui::containers::panel::PanelState {
+                outer_rect: egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(ui.available_width(), height),
+                ),
+            },
+        )
+    });
+    let mut committed = None;
+    let panel = egui::Panel::bottom(panel_id)
+        .resizable(true)
+        .size_range(MIN_SEARCH_PANE_HEIGHT..=max_height)
+        .frame(
+            egui::Frame::NONE
+                .fill(theme.panel_bg())
+                .inner_margin(egui::Margin::symmetric(4, 2)),
+        )
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "☰ {} \"{}\": {}",
+                        t(lang, "search_pane_header"),
+                        engine.last_searched_query,
+                        group_thousands(engine.search_total())
+                    ))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.accent_color()),
+                );
+                if engine.search_capped() {
+                    ui.label(
+                        RichText::new(format!("({})", capped_note(lang)))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme.warn_color()),
+                    );
+                }
+                if let Some((crate::scan_job::ScanKind::Search, progress, _)) =
+                    engine.scan_progress()
+                {
+                    ui.label(
+                        RichText::new(format!(
+                            "⏳ {} {:.0}%",
+                            t(lang, "scan_searching"),
+                            (progress * 100.0).clamp(0.0, 100.0)
+                        ))
+                        .monospace()
+                        .size(11.0)
+                        .color(theme.warn_color()),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("✖")
+                        .on_hover_text(t(lang, "tip_search_pane"))
+                        .clicked()
+                    {
+                        search_view.search_pane = false;
+                    }
+                });
+            });
+            if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        RichText::new(t(lang, "search_pane_hex"))
+                            .monospace()
+                            .color(theme.text_dim()),
+                    );
+                });
+                return;
+            }
+            let output = HitList::new(
+                id,
+                &engine.search_matches,
+                engine.current_match_idx,
+                &engine.last_searched_query,
+            )
+            .font_size(font_size)
+            .level_colors(level_colors)
+            .show(ui, engine, theme, lang);
+            committed = output.committed;
+        });
+    let resize = ui.ctx().read_response(panel_id.with("__resize"));
+    if resize.is_some_and(|r| r.dragged() || r.drag_stopped()) {
+        search_view.search_pane_height = panel.response.rect.height();
+    }
+    committed
 }
 
 /// Text view in extend mode: every row has the same height, so the scroll offset maps to
@@ -3408,6 +3752,7 @@ pub fn render_settings_content(
     lock_enabled: &mut bool,
     lock_pin: &mut String,
     lock_now: &mut bool,
+    overview_strip: &mut bool,
 ) {
     ui.heading(RichText::new(format!("⚙ {}", t(*lang, "settings").to_uppercase())).monospace());
     ui.add_space(10.0);
@@ -3563,6 +3908,8 @@ pub fn render_settings_content(
     ui.checkbox(show_line_numbers, t(*lang, "show_lines"));
     ui.checkbox(level_colors, t(*lang, "level_colors"))
         .on_hover_text(t(*lang, "level_colors_tip"));
+    ui.checkbox(overview_strip, t(*lang, "overview_strip"))
+        .on_hover_text(t(*lang, "overview_strip_tip"));
 
     ui.add_space(6.0);
     ui.separator();

@@ -47,6 +47,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   name the archive, never the spool. `flate2` (pure-Rust miniz_oxide backend) and `zip`
   (read-only, deflate through the same flate2) add about 323 KB (+1.7%) to the Windows release
   executable (19,526,656 → 19,857,408 bytes, thin LTO).
+- **Search results pane.** The `☰` button in the stream bar opens a resizable pane under
+  the rows of a stream with an active query, listing only the matching lines with their
+  line number and the query tinted. It is virtualized over the hit list, so only the rows
+  on screen are read, and hits found by a running search or on appended lines appear as
+  they are found. A click, or `Enter` on the keyboard selection, makes a hit the current
+  match, centres it in the main view and pauses follow; the current match is marked `▶`
+  and the pane follows `F3` / `Shift+F3`. With the pane focused the arrows, `PgUp` /
+  `PgDown` and `Ctrl+Home` / `Ctrl+End` move its selection without moving the main view,
+  `Esc` hands the keyboard back, and the stream shortcuts (`F3`, `Ctrl+F`, `Ctrl+G`,
+  bookmarks, `Ctrl+C`) keep working. Open state and height are saved in `fasttail.ini`
+  (`search_pane`, `search_pane_height`); in HEX view the pane shows a notice.
+- **Overview strip.** A narrow column beside the main view's scroll bar marks the search
+  hits, the bookmarks, the ERROR/FATAL lines and the current match at their position among
+  the visible rows, with the viewport drawn as a box; click or drag it to scroll there,
+  hover it for the line number. Hit and bookmark marks are exact; error marks are exact
+  without a filter (from per-4096-line error counts kept beside the level cache) and on
+  filtered views up to 4 million rows, sampled above (the tooltip says so). The marks are
+  cached and recomputed only when their inputs change, at most four times a second while
+  the stream grows. Settings checkbox `overview_strip`, on by default.
+
+### Changed
+
+- **Search keeps up to 1,000,000 hits and counts the rest.** The stored match list per
+  stream grows from 20,000 to 1,000,000 line hits (8 MB at most); past the cap the search,
+  synchronous or on the worker, and the refresh on appended lines keep counting without
+  storing, and the counter reads the true total with a "first 1,000,000 listed" note.
+  `F3` wraps within the stored hits; the export of matches writes the stored ones. HEX
+  byte hits keep their 20,000 cap. Visible-row lookups on a filtered view are now a
+  binary search instead of a linear scan.
 
 ### Changed
 

@@ -81,6 +81,15 @@ pub struct FastTailConfig {
     /// Colour rows by their detected log level when no highlight rule matches them.
     #[serde(default = "default_true")]
     pub level_colors: bool,
+    /// Search results pane under the rows of a stream with an active query, and its
+    /// height; one preference for every stream.
+    #[serde(default)]
+    pub search_pane: bool,
+    #[serde(default = "default_search_pane_height")]
+    pub search_pane_height: f32,
+    /// Overview strip (hits, bookmarks, errors) beside the main view's scroll bar.
+    #[serde(default = "default_true")]
+    pub overview_strip: bool,
     #[serde(default)]
     pub borderless: bool,
     #[serde(default = "default_true")]
@@ -220,6 +229,13 @@ fn default_font_size() -> f32 {
     DEFAULT_FONT_SIZE
 }
 
+fn default_search_pane_height() -> f32 {
+    crate::ui::dock::DEFAULT_SEARCH_PANE_HEIGHT
+}
+
+/// Height range accepted for the search results pane in `fasttail.ini`.
+const SEARCH_PANE_HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 40.0..=4000.0;
+
 fn default_zoom_factor() -> f32 {
     1.0
 }
@@ -272,6 +288,9 @@ impl Default for FastTailConfig {
             always_on_top: false,
             flash_on_alert: false,
             level_colors: true,
+            search_pane: false,
+            search_pane_height: default_search_pane_height(),
+            overview_strip: true,
             borderless: false,
             show_line_numbers: true,
             font_size: DEFAULT_FONT_SIZE,
@@ -527,6 +546,12 @@ impl FastTailConfig {
             .set("always_on_top", self.always_on_top.to_string())
             .set("flash_on_alert", self.flash_on_alert.to_string())
             .set("level_colors", self.level_colors.to_string())
+            .set("search_pane", self.search_pane.to_string())
+            .set(
+                "search_pane_height",
+                format!("{:.0}", self.search_pane_height),
+            )
+            .set("overview_strip", self.overview_strip.to_string())
             .set("screensaver_enabled", self.screensaver_enabled.to_string())
             .set(
                 "screensaver_timeout_mins",
@@ -764,6 +789,25 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.level_colors = v;
+            }
+            if let Some(v) = general
+                .get("search_pane")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.search_pane = v;
+            }
+            if let Some(v) = general
+                .get("search_pane_height")
+                .and_then(|s| s.trim().parse::<f32>().ok())
+                .filter(|h| SEARCH_PANE_HEIGHT_RANGE.contains(h))
+            {
+                cfg.search_pane_height = v;
+            }
+            if let Some(v) = general
+                .get("overview_strip")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.overview_strip = v;
             }
             if let Some(s) = general.get("screensaver_enabled") {
                 if let Ok(v) = s.parse::<bool>() {
