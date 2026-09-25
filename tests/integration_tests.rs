@@ -5546,4 +5546,38 @@ mod timestamp_range {
         );
         assert!(engine.is_line_visible(before));
     }
+
+    #[test]
+    fn go_to_time_works_on_a_stream_nobody_filtered_by_time() {
+        // No window was ever set, so nothing has built the timestamp cache yet.
+        let tmp = sample_log();
+        let mut engine = TailEngine::open(tmp.path()).unwrap();
+        let target = engine
+            .resolve_goto("14:03", 0)
+            .expect("a time on a fresh stream");
+        assert_eq!(target.line, 4);
+    }
+
+    #[test]
+    fn the_visible_span_shows_without_a_time_window() {
+        let tmp = sample_log();
+        let engine = TailEngine::open(tmp.path()).unwrap();
+        assert_eq!(
+            engine.visible_time_span(),
+            Some((
+                millis("2026-09-18T14:01:00.000Z"),
+                millis("2026-09-18T14:06:00.000Z")
+            ))
+        );
+    }
+
+    #[test]
+    fn a_date_and_minute_is_a_valid_bound() {
+        let tmp = sample_log();
+        let mut engine = TailEngine::open(tmp.path()).unwrap();
+        let (from_ok, to_ok) = engine.apply_time_range_text("2026-09-18 14:02", "2026-09-18 14:03");
+        assert!(from_ok && to_ok, "YYYY-MM-DD HH:MM on both sides");
+        // Through 14:03:59.999: the error, its stack trace and the recovery.
+        assert_eq!(visible(&engine), vec![1, 2, 3, 4]);
+    }
 }

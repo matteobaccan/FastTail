@@ -1671,7 +1671,16 @@ fn render_log_stream(
     if visible_lines == 0 {
         // While the index or the filter is still being built on the worker, "empty" and
         // "nothing matches" would both be premature: say what is running instead.
-        let empty_msg = if let Some((kind, _, _)) = engine.scan_progress() {
+        let building = engine
+            .scan_progress()
+            .map(|(kind, _, _)| kind)
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    crate::scan_job::ScanKind::Index | crate::scan_job::ScanKind::Filter
+                )
+            });
+        let empty_msg = if let Some(kind) = building {
             format!("⏳ {}...", t(lang, scan_kind_key(kind)))
         } else if engine.total_lines() == 0 {
             t(lang, "file_empty").to_string()
