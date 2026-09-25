@@ -332,6 +332,39 @@ fn main() {
         "min level WARN",
         best(rounds, || {
             engine.set_min_level(LogLevel::Unknown);
+
+            // Timing the file: what the first use of the time range pays for, once.
+            let t0 = Instant::now();
+            engine.ensure_timestamps();
+            println!(
+                "{:<16}{:9.1} ms  ({} lines)",
+                "timestamp cache",
+                t0.elapsed().as_secs_f64() * 1000.0,
+                engine.total_lines()
+            );
+
+            // Time range over the middle third of the log: the cache is warm, this is the cost of
+            // the window itself.
+            if let Some((first, last)) = engine.visible_time_span() {
+                let third = (last - first) / 3;
+                report(
+                    "time range",
+                    best(rounds, || {
+                        engine.set_time_range(None, None);
+                        engine.set_time_range(Some(first + third), Some(last - third));
+                        engine.visible_line_count()
+                    }),
+                );
+                // A jump, which is the other thing the cache is for.
+                report(
+                    "go to time",
+                    best(rounds, || {
+                        engine.goto_time(first + third).map(|l| l + 1).unwrap_or(0)
+                    }),
+                );
+                engine.set_time_range(None, None);
+            }
+
             engine.set_min_level(LogLevel::Warn);
             engine.visible_line_count()
         }),

@@ -449,6 +449,76 @@ fn paint_search_row_background(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The "from / to" time window of a stream, next to the text filters.
+///
+/// The fields take `14:02`, `14:02:05`, a full date and time, or a timestamp copied out
+/// of the log; a bare time belongs to the day of the log, not to today. They are disabled
+/// with a hint when the stream has no timestamps we can read, because a window over a log
+/// we cannot time would just hide everything.
+fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let usable = engine.timestamps_usable() || !engine.timestamps_complete();
+    ui.label(
+        RichText::new(format!("🕘 {}:", t(lang, "time_range")))
+            .monospace()
+            .size(11.0)
+            .color(if usable {
+                theme.accent_color()
+            } else {
+                theme.text_dim()
+            }),
+    );
+
+    let mut from = engine.time_from_text.clone();
+    let mut to = engine.time_to_text.clone();
+    let mut changed = false;
+    let field = |ui: &mut Ui, text: &mut String, hint: &str, enabled: bool| {
+        ui.add_enabled(
+            enabled,
+            egui::TextEdit::singleline(text)
+                .hint_text(hint)
+                .desired_width(74.0),
+        )
+    };
+
+    let from_resp = field(ui, &mut from, t(lang, "time_from_hint"), usable);
+    changed |= from_resp.changed();
+    ui.label(RichText::new("→").monospace().color(theme.text_dim()));
+    let to_resp = field(ui, &mut to, t(lang, "time_to_hint"), usable);
+    changed |= to_resp.changed();
+
+    if changed {
+        let (from_ok, to_ok) = engine.apply_time_range_text(&from, &to);
+        engine.time_range_error = !from_ok || !to_ok;
+    }
+
+    if engine.is_time_filtered()
+        && ui
+            .button("✖")
+            .on_hover_text(t(lang, "time_range_clear"))
+            .clicked()
+    {
+        engine.clear_time_range();
+        engine.time_range_error = false;
+    }
+
+    if engine.time_range_error {
+        ui.label(
+            RichText::new(format!("⚠ {}", t(lang, "time_range_invalid")))
+                .monospace()
+                .size(10.5)
+                .color(theme.warn_color()),
+        );
+    } else if !usable {
+        ui.label(
+            RichText::new(format!("ⓘ {}", t(lang, "time_range_unavailable")))
+                .monospace()
+                .size(10.5)
+                .color(theme.text_dim()),
+        )
+        .on_hover_text(t(lang, "time_range_unavailable_tip"));
+    }
+}
+
 /// Toolbar toggle (Follow, Monitor, line numbers, Wrap, TXT/HEX/MD): an active one gets
 /// a tinted fill and an accent border on top of the coloured label. On the light theme
 /// the label colour alone was too close to the inactive grey to read as "on".
@@ -827,6 +897,31 @@ fn render_log_stream(
                 .monospace()
                 .color(theme.text_dim()),
         );
+
+        // Time span of what is on screen: the answer to "which minutes am I looking at".
+        if let Some((from, to)) = engine.visible_time_span() {
+            ui.separator();
+            let span = if from == to {
+                crate::timestamp::format_millis(from)
+            } else {
+                format!(
+                    "{} → {}",
+                    crate::timestamp::format_millis(from),
+                    crate::timestamp::format_millis(to)
+                )
+            };
+            ui.label(
+                RichText::new(format!("🕘 {span}"))
+                    .monospace()
+                    .size(11.0)
+                    .color(if engine.is_time_filtered() {
+                        theme.accent_color()
+                    } else {
+                        theme.text_dim()
+                    }),
+            )
+            .on_hover_text(t(lang, "time_span"));
+        }
 
         // Per-level counters (most severe first), only the levels seen in the file
         if engine.view_mode != crate::tail_engine::ViewMode::Hex {
@@ -1436,6 +1531,10 @@ fn render_log_stream(
         {
             engine.set_exclude_filter("");
         }
+
+        ui.separator();
+
+        render_time_range(ui, engine, theme, lang);
 
         ui.separator();
 
