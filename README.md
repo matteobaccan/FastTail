@@ -43,6 +43,7 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 - **Log Intelligence**: inline `[+] JSON` detection with pretty-printing, multiline stack-trace continuation kept together with its parent line.
 - **Log Level Detection**: the level of every line (`FATAL`, `ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`, plus syslog `<n>` priorities) is detected from the common layouts without configuration. Rows are coloured by level when no highlight rule matches them (switchable in Settings), a `≥ level` selector above the buffer filters by minimum level together with the include / exclude filters, and the stream bar counts the lines per level live.
 - **Directory Wildcard Tail**: open `C:\logspp-*.log` (type it in the `📂*` prompt, drop a folder on the window, or pass it on the command line) and the stream follows the newest file matching the pattern, switching by itself when the logger rotates to a new day or hour. Filters, highlight rules, search and wrap survive the switch; the stream bar shows the pattern, the current file and a "switched to" notice. The pattern, not the resolved file, is what the workspace and the recent list remember.
+- **Compressed Logs**: rotated `app.log.1.gz` files and `.zip` support bundles open directly, recognised by their content rather than their extension. The archive is decompressed on a background thread into a temporary spool file that the normal engine reads, so filters, search, levels, time range, bookmarks, HEX and export all work and nothing decompressed is held in memory; the first lines appear while the rest is still inflating, with `decompressing N%` and a cancel button in the stream bar. A zip with several files opens an entry picker (filter, sort by name or size, multi-select), each entry in its own stream. A free-space check and a configurable output cap stop runaway archives, and the spool is deleted when the tab closes.
 - **Time range**: a "from / to" pair above the buffer keeps only the lines stamped inside the window, with the entry's stack trace travelling with it; `Ctrl+G` takes `14:02` as readily as a line number, and the status bar shows the span you are looking at. Timestamps are read from the line itself (ISO 8601, syslog, Apache/nginx, epoch seconds or millis) with no format to configure; a log FastTail cannot time says so instead of hiding everything.
 - **External Tools**: configurable commands run on a row from the right-click menu, the stream menu or a shortcut (`code -g "{file}:{lineno}"`, `ssh {match}`), with the placeholders `{line}`, `{file}`, `{dir}`, `{lineno}`, `{selection}` and `{match}` (first capture of the tool's own regex). A tool can be bound to a highlight rule and runs when the rule matches an appended line, at most once per second and with at most 10 children at a time. Arguments reach the program as separate argv entries, never through a shell, unless "run via shell" is deliberately switched on.
 - **Line Wrap**: a per-stream `↩ Wrap` toggle (`Alt+W`) soft-wraps long lines (JSON payloads, stack traces, URLs) at the window width instead of scrolling horizontally. Wrapped rows keep their line number, marker and colours; search, bookmarks, go-to and paging still navigate by line. Only the rows in view are laid out, so wrapping stays cheap on huge files; the scroll bar thumb is approximate in wrap mode. The toggle is saved per file.
@@ -70,6 +71,7 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 | **Directory Wildcard Tail** | **`app-*.log` follows the newest match, switch keeps filters** | No | No | Yes | `tail -F` one file |
 | **Include / Exclude Filters** | **Live, text or regex** | Pro version only | Yes | Yes | `grep` pipe |
 | **Log Level Detection** | **Built-in: colouring, `≥ level` filter, counters** | No | Yes | No | N/A |
+| **Compressed Logs** | **`.gz` (multi-member) and `.zip` entries, decompressed in the background** | No | No | No | `zcat \| tail` |
 | **Time Range Filter** | **`from / to` window, go-to-time, visible span** | No | Yes | No | `awk` by hand |
 | **Highlighting Styles** | **FG, BG, Bold, Italic** | FG, BG | FG, BG | FG, BG | ANSI codes |
 | **Capture-Group Highlight / Quick Labels** | **Captures-only rules, `Ctrl+Shift+1..9` labels** | No | No | No | No |
@@ -163,13 +165,25 @@ Settings → External tools. Each tool has a name, a program, an argument list a
 | Placeholder | Value |
 |---|---|
 | `{line}` | text of the row |
-| `{file}` | path of the file being tailed (the resolved file of a pattern stream) |
+| `{file}` | path of the file being tailed (the resolved file of a pattern stream, the archive of a compressed one) |
 | `{dir}` | its directory |
 | `{lineno}` | 1-based line number |
 | `{selection}` | the selected rows as text, or the row itself |
 | `{match}` | first capture group of the tool's own regex applied to the row (the whole match without a group, empty when it does not match) |
 
 Extras: a **shortcut** such as `Ctrl+Shift+F9` (a modifier is required) runs the tool on the current row of the focused stream; **run on rule** binds the tool to a highlight rule, so it runs when the rule matches an appended line, at most once per second per tool and with at most 10 children running at the same time, the excess being counted as dropped runs in the settings row. **Run via shell** wraps the program in `cmd /c` (Windows) or `sh -c`, with every expanded argument quoted for that shell; operators written in the argument list (`|`, `>`, `&&`) are quoted too, so a pipeline belongs in a script. The Windows quoting is weaker than the POSIX one, so keep it off unless the log is trusted. Tools get no standard input and their output is discarded. Tools are stored as `[tool.N]` sections of `fasttail.ini`.
+
+### Compressed logs
+A gzip file (`1f 8b`) or a zip archive (`PK\x03\x04`) is recognised by its first bytes, whatever its name, and opened read-only. The data is decompressed on a background thread, 1 MB at a time, into a spool file that the engine tails like a growing log; the stream bar shows `decompressing N%` (compressed bytes read) with a ✖ to stop, which keeps what was already read. Follow is off for these streams — the archive is a snapshot and is not watched; the ⟳ button extracts it again. Multi-member gzip (`cat a.gz b.gz`) and zip entries stored or deflated (Zip64 included) are supported; encrypted entries, other zip methods (bzip2, zstd, lzma...), tar archives inside gzip (`.tar.gz`, `.tgz`), `.bz2`, `.xz` and `.zst` are refused with the reason.
+
+A zip with a single file opens it directly; with several, the entry picker lists them with their size. The workspace, sessions, recent files and bookmarks remember the archive (plus the entry, stored as `entry=` in a session file), never the spool, and a restored stream is decompressed again.
+
+| Setting in `fasttail.ini` | Default | Meaning |
+|---|---|---|
+| `spool_dir` | empty = the system temporary folder | folder whose `fasttail-spool` subfolder receives the decompressed copies (Settings → Performance & refresh; point it at a larger disk when `%TEMP%` is on a small system drive) |
+| `compressed_max_gb` | `20` (1–1024) | output cap of one decompression; the lines read so far stay browsable and the stream says the content is partial |
+
+Before a zip entry is decompressed its exact size plus a 512 MB margin must fit on the spool volume; during any extraction the free space is checked again every 64 MB and the job stops when less than 512 MB would remain. Spool files are named after the process id, deleted when their stream is closed or reloaded and at exit, and the ones left behind by a crash are swept at the next start.
 
 ### PIN lock
 Settings → PIN lock. Set a PIN of 4 to 12 digits and the window can be locked behind it: with **Lock when the screensaver ends** on, coming back from the Matrix screensaver asks for the PIN, and `Ctrl+L` (or the **Lock now** button) locks on demand. While locked, an opaque animated backdrop covers the window and every keyboard shortcut is ignored — `Esc` included — while the streams keep tailing behind it, so nothing is missed. `Enter` confirms the PIN, and three wrong PINs in a row replace the entry field with a one-minute countdown.
@@ -307,6 +321,9 @@ ISO 8601 (with `T` or a space, optional fraction and time zone), syslog (`Sep 18
 ### How do I jump to a specific time in a log?
 Press `Ctrl+G` and type a time such as `14:02`: FastTail jumps to the first line at or after it. The same box still takes a line number or `+N` / `-N`. The stream status bar shows the time span of the lines currently on screen.
 
+### Can FastTail open compressed logs (`.gz`, `.zip`)?
+Yes. Open `app.log.1.gz` like any other file (the format is read from the content, so a gzip named `trace.dat` works too): it is decompressed on a background thread into a temporary file and every feature — filters, search, levels, time range, bookmarks, HEX — works on the result while the first lines are already on screen. A `.zip` with several logs shows an entry picker and each chosen entry opens in its own stream. Encrypted zip entries, bzip2/zstd/lzma zip entries and `.tar.gz` are not supported and say so. The decompressed copy costs disk space equal to its size, bounded by `compressed_max_gb` (20 GB by default) and a free-space check, and is deleted when the tab is closed.
+
 ### Can it view binary files or non-UTF-8 logs?
 The **HEX** mode shows a live hexadecimal + ASCII dump with byte-level search (text or `0A 0D` patterns). Text encodings are detected automatically and can be overridden: ASCII, ANSI (Windows-1252), UTF-8 with or without BOM, UTF-16 LE and UTF-16 BE.
 
@@ -314,7 +331,7 @@ The **HEX** mode shows a live hexadecimal + ASCII dump with byte-level search (t
 Tailviewer and SnakeTail are Windows-only .NET applications; FastTail is a native single binary on three platforms. klogg is a fast Qt log viewer focused on searching large files; lnav is a terminal log navigator with SQL queries. FastTail sits between them: a GUI built for following live logs, with docking, per-rule sound alerts, hex and Markdown views and external tools bound to rows. See the [comparison table](#-comparison-with-other-tail-tools).
 
 ### Does FastTail send any data over the network?
-No. It reads local files and writes only its own `fasttail.ini`, session files and, after a crash, `fasttail_crash.log`. There is no telemetry upload: the "System Telemetry" setting only shows CPU and memory in the title bar.
+No. It reads local files and writes only its own `fasttail.ini`, session files, the temporary decompressed copies of the compressed logs it opens (deleted when their tab closes) and, after a crash, `fasttail_crash.log`. There is no telemetry upload: the "System Telemetry" setting only shows CPU and memory in the title bar.
 
 ### Is FastTail free for commercial use?
 Yes. It is released under the MIT License, which allows use, modification and redistribution, commercial included.

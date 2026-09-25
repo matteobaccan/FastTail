@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Compressed logs open directly.** A gzip file (`app.log.1.gz`, multi-member included)
+  or a zip archive is recognised by its first bytes, whatever its extension, and
+  decompressed on a background thread into a temporary spool file that the normal engine
+  reads, so filters, search, levels, time range, bookmarks, HEX and export all work and
+  nothing decompressed is held in memory. The first lines appear while the rest is still
+  inflating; the stream bar shows `decompressing N%` with a cancel button, then why the
+  content is partial if it stopped early, and a button to extract it again. A zip with
+  several files opens an entry picker (filter, sort by name or size, multi-select) and
+  each entry becomes its own stream, titled `bundle.zip › server.log`. Follow is locked
+  off for these streams: the archive is a snapshot and is not watched. Encrypted entries,
+  zip methods other than stored/deflate, and `.tar.gz` are refused with the reason. A
+  zip entry must fit on the spool volume with 512 MB to spare, the free space is checked
+  again every 64 MB, and `compressed_max_gb` (default 20 GB) caps one extraction. Spools
+  go to `fasttail-spool` in the temporary folder, or under `spool_dir`, are deleted when
+  their tab closes and at exit, and the ones left by a crash are swept at the next start.
+  The workspace, sessions (`entry=` next to the archive path), recent files and bookmarks
+  name the archive, never the spool. `flate2` (pure-Rust miniz_oxide backend) and `zip`
+  (read-only, deflate through the same flate2) add about 323 KB (+1.7%) to the Windows release
+  executable (19,526,656 → 19,857,408 bytes, thin LTO).
+
+### Fixed
+
+- **A log opened while empty detects its encoding once it has content.** The encoding
+  and binary check ran only on the bytes present when the file was opened, so a log
+  created empty and filled later as UTF-16 was read as UTF-8; it now runs again when the
+  file first holds 512 bytes.
+
 ## [0.9.1] - 2026-09-25
 
 ### Fixed
