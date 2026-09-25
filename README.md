@@ -253,25 +253,25 @@ The standalone executable is written to `target/release/fasttail` (`target/relea
 | `FASTTAIL_BENCH_ROUNDS=<n>` | rounds per phase, best time reported (default 3) |
 
 ### Prebuilt binaries
-Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform:
+Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform. Each name carries the version (`<version>` below, for example `0.10.1`) and each archive holds the program with `LICENSE` and `README.md`:
 
 | Platform | Asset | Contents |
 |---|---|---|
-| Windows x86_64 | `fasttail-windows-x86_64.zip` | `fasttail.exe` |
-| Windows x86_64 debug symbols | `fasttail-windows-x86_64-symbols.zip` | `fasttail.pdb` (only needed to read a crash dump) |
-| Linux x86_64 | `fasttail-linux-x86_64.tar.gz` | `fasttail` |
-| Linux ARM64 | `fasttail-linux-arm64.tar.gz` | `fasttail` |
-| macOS Apple Silicon | `fasttail-macos-arm64.tar.gz` | `fasttail` |
+| Windows x86_64 | `fasttail-windows-x86_64-<version>.zip` | `fasttail.exe`, `LICENSE`, `README.md` |
+| Windows x86_64 debug symbols | `fasttail-windows-x86_64-symbols-<version>.zip` | `fasttail.pdb` (only needed to read a crash dump) |
+| Linux x86_64 | `fasttail-linux-x86_64-<version>.tar.gz` | `fasttail`, `LICENSE`, `README.md` |
+| Linux ARM64 | `fasttail-linux-arm64-<version>.tar.gz` | `fasttail`, `LICENSE`, `README.md` |
+| macOS Apple Silicon | `fasttail-macos-arm64-<version>.tar.gz` | `fasttail`, `LICENSE`, `README.md` |
 
 ```bash
 # Linux / macOS
-tar -xzf fasttail-linux-x86_64.tar.gz && ./fasttail app.log
+tar -xzf fasttail-linux-x86_64-0.10.1.tar.gz && ./fasttail app.log
 
 # Windows (PowerShell)
-Expand-Archive fasttail-windows-x86_64.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
+Expand-Archive fasttail-windows-x86_64-0.10.1.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
 ```
 
-To read a crash report (`fasttail_crash.log`) with function names instead of addresses, unpack `fasttail-windows-x86_64-symbols.zip` and keep `fasttail.pdb` next to `fasttail.exe`.
+To read a crash report (`fasttail_crash.log`) with function names instead of addresses, unpack `fasttail-windows-x86_64-symbols-<version>.zip` (the same version as the program) and keep `fasttail.pdb` next to `fasttail.exe`.
 
 #### macOS: "Apple cannot verify fasttail is free of malware"
 The macOS build is **not signed with an Apple Developer ID**, so the first launch is blocked by Gatekeeper with exactly that message, and the dialog only offers to move the file to the bin. The binary is fine — it is simply unsigned, and macOS quarantines everything downloaded from a browser.
@@ -279,7 +279,7 @@ The macOS build is **not signed with an Apple Developer ID**, so the first launc
 Clear the quarantine flag and run it:
 
 ```bash
-tar -xzf fasttail-macos-arm64.tar.gz
+tar -xzf fasttail-macos-arm64-0.10.1.tar.gz
 xattr -d com.apple.quarantine ./fasttail   # or: xattr -cr ./fasttail
 ./fasttail app.log
 ```
@@ -299,10 +299,10 @@ FastTail is a free, open-source (MIT) desktop application for viewing and follow
 Yes: it was designed as a successor to BareTail. It keeps the things BareTail users rely on — instant opening of huge files, follow mode, coloured highlight rules — and adds include / exclude filters (text or regex) in the free version, regex capture-group highlighting, log level detection, a hex view, Markdown rendering, docking, and Linux and macOS builds. On Windows, when FastTail finds BareTail settings in the registry it offers to import the recent files and highlight colours in one click.
 
 ### How do I tail a log file in real time on Windows?
-Download `fasttail-windows-x86_64.zip` from the [Releases](https://github.com/matteobaccan/FastTail/releases) page, unpack it and run `fasttail.exe app.log` (or drag the file onto the window). Follow mode is on by default and scrolls to every new line; `Space` toggles it. There is no installer and no runtime to install: it is a single executable.
+Download `fasttail-windows-x86_64-<version>.zip` from the [Releases](https://github.com/matteobaccan/FastTail/releases) page, unpack it and run `fasttail.exe app.log` (or drag the file onto the window). Follow mode is on by default and scrolls to every new line; `Space` toggles it. There is no installer and no runtime to install: it is a single executable.
 
 ### Is there a GUI for `tail -f` on Linux or macOS?
-FastTail is one. The same features ship for Linux x86_64, Linux ARM64 and macOS Apple Silicon as a single binary: `tar -xzf fasttail-linux-x86_64.tar.gz && ./fasttail /var/log/syslog`. The macOS build is unsigned, see [the Gatekeeper note](#macos-apple-cannot-verify-fasttail-is-free-of-malware) for the one-time `xattr` command.
+FastTail is one. The same features ship for Linux x86_64, Linux ARM64 and macOS Apple Silicon as a single binary: `tar -xzf fasttail-linux-x86_64-<version>.tar.gz && ./fasttail /var/log/syslog`. The macOS build is unsigned, see [the Gatekeeper note](#macos-apple-cannot-verify-fasttail-is-free-of-malware) for the one-time `xattr` command.
 
 ### Can FastTail open very large log files (multi-GB)?
 Yes. The file is never loaded into memory: rows are read on demand through a small block cache, and the per-file state is a line index of 8 bytes per line plus, once scanned, a level byte and a timestamp per line and the search hits (at most 1,000,000, 8 MB). Files above 16 MB filter, search and read their timestamps on a background thread with progress in the stream bar, so the window stays responsive while a multi-gigabyte log is scanned.
