@@ -28,7 +28,11 @@ The application SHALL prompt the user to confirm or decline the import of discov
 - **THEN** FastTail dismisses the prompt, creates a default clean `fasttail.ini`, and does not prompt again on subsequent boots.
 
 ### Requirement: Cross-platform configuration persistence
-The imported or created configuration SHALL be saved in a portable INI file (`fasttail.ini`), ensuring all settings are preserved and cross-platform portable across Windows, Linux, and macOS. The file is looked up in this order: the path in the `FASTTAIL_CONFIG` environment variable, the current working directory, the executable directory, the per-user configuration directory (`%APPDATA%\FastTail` on Windows, `$XDG_CONFIG_HOME/FastTail` or `~/.config/FastTail` elsewhere). New configurations are written next to the executable, falling back to the per-user directory when that location is read-only. A legacy `fasttail.toml` SHALL be migrated automatically. Cargo test binaries SHALL never read or write the real configuration.
+The imported or created configuration SHALL be saved in a portable INI file (`fasttail.ini`), ensuring all settings are preserved and cross-platform portable across Windows, Linux, and macOS. The file is looked up in this order: the path in the `FASTTAIL_CONFIG` environment variable, the current working directory, the executable directory, the per-user configuration directory (`%APPDATA%\FastTail` on Windows, `$XDG_CONFIG_HOME/FastTail` or `~/.config/FastTail` elsewhere). New configurations are written next to the executable, falling back to the per-user directory when that location is read-only. A legacy `fasttail.toml` SHALL be migrated automatically. Cargo test binaries SHALL never read or write the real configuration. Saving SHALL refuse a configuration path that exists and is not a regular file (a directory, a FIFO, a device): the check SHALL be made on the path and again on the opened handle, the file SHALL be truncated only after both passed, and a refused save SHALL fail with an error instead of blocking or destroying the target, then take the same per-user fallback as any other failed save.
+
+#### Scenario: Configuration path is a FIFO
+- **WHEN** `FASTTAIL_CONFIG` points to a named pipe and the application saves its settings
+- **THEN** nothing blocks waiting on the pipe, the pipe is left as it was, and the settings are written to the per-user configuration file instead.
 
 #### Scenario: Read-only install directory
 - **WHEN** FastTail runs from a directory the user cannot write to (e.g. Program Files)

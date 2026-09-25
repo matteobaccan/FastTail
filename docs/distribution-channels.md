@@ -1,13 +1,14 @@
 # Distribution channels — parked, not abandoned
 
-FastTail ships as a GitHub release: an archive per platform, downloaded by hand. Three
+FastTail ships as a GitHub release: an archive per platform, downloaded by hand. Four
 other channels would make it installable with one command, and this page records what
 each of them costs, so the decision can be taken with the facts rather than re-researched.
 
 **Nothing here is wired up.** The pipeline builds and publishes the GitHub release, full
 stop. The automation described below was written and then parked on purpose: it is easy
-to bring back (see the history of `.github/workflows/build.yml` around v0.8.0), and
-bringing it back is a decision about maintenance, not about code.
+to bring back (see the history of `.github/workflows/build.yml` between v0.8.0 and v0.9.0,
+pull requests #60 to #62), and bringing it back is a decision about maintenance, not about
+code. Chocolatey was never automated.
 
 | Channel | What it gives | What it costs |
 |---|---|---|
@@ -37,7 +38,7 @@ each new release and recompute the hash.
 
 ## winget
 
-`winget install FastTail` needs a manifest in Microsoft's community repository,
+`winget install MatteoBaccan.FastTail` needs a manifest in Microsoft's community repository,
 [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). Manifests get there by
 pull request: a bot validates them, installs the package in a sandbox and, once a
 maintainer approves, merges. From then on every release is one more pull request.
@@ -59,7 +60,7 @@ it pushes the branch to *your* fork of `winget-pkgs`.
 2. Let it build the manifest from the release asset, answering its questions:
 
    ```powershell
-   wingetcreate new https://github.com/matteobaccan/FastTail/releases/download/v0.8.0/fasttail-windows-x86_64.zip
+   wingetcreate new https://github.com/matteobaccan/FastTail/releases/download/v0.9.0/fasttail-windows-x86_64.zip
    ```
 
    What it asks for, and what FastTail answers:
@@ -74,18 +75,19 @@ it pushes the branch to *your* fork of `winget-pkgs`.
    | Licence URL | `https://github.com/matteobaccan/FastTail/blob/main/LICENSE` |
    | Short description | `Ultra-fast multi-stream log monitor and tail viewer with a Cyberpunk UI` |
    | Publisher URL / Package URL | `https://github.com/matteobaccan/FastTail` |
-   | Release notes URL | `https://github.com/matteobaccan/FastTail/releases/tag/v0.8.0` |
+   | Release notes URL | `https://github.com/matteobaccan/FastTail/releases/tag/v0.9.0` |
    | Tags | `log` `tail` `logging` `monitoring` `viewer` |
    | Installer type | `zip`, nested `portable` |
    | Nested installer path | `fasttail.exe` |
    | Command alias | `fasttail` |
 
-   The asset is a zip holding a single executable, so winget treats it as a **portable**
+   From v0.9.0 the asset is a zip holding a single executable (the symbols travel in
+   `fasttail-windows-x86_64-symbols.zip`; earlier zips also carried `fasttail.pdb`), so winget treats it as a **portable**
    package: it unpacks it and puts `fasttail` on the PATH. Nothing is written to the
    registry and uninstalling removes the files.
 
 3. `wingetcreate` submits the pull request for you when you give it a GitHub token, or
-   writes the manifest under `manifests/m/MatteoBaccan/FastTail/0.8.0/` for you to submit
+   writes the manifest under `manifests/m/MatteoBaccan/FastTail/0.9.0/` for you to submit
    yourself. Expect the validation bot to take a few minutes and a maintainer a few days.
 
 ### The token an automation would need
@@ -99,8 +101,9 @@ If the later submissions are ever automated, the action needs a token of yours:
 3. Fork [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) to your account
    (the action pushes the branch there).
 
-Without the secret the job prints a warning and the release carries on, so nothing breaks
-while this is pending.
+The parked job was written so that, without the secret, it printed a warning and let the
+release carry on; bringing it back that way means nothing breaks while the token is
+pending.
 
 ## Chocolatey
 
