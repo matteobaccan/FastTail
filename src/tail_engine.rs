@@ -106,6 +106,20 @@ pub const MAX_SPAN_SCAN: usize = 100_000;
 /// built: enough to step over a stack trace, few enough to stay free per frame.
 pub const SPAN_PROBE_LINES: usize = 256;
 
+/// What the time delta column shows on a row (see `TailEngine::row_time_delta`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeDelta {
+    /// Nothing: a continuation line, the first visible row, or no known time.
+    Blank,
+    /// The row, or the anchor it is measured from, has not been timed yet.
+    Pending,
+    /// The row is the time anchor itself.
+    Anchor,
+    /// Signed milliseconds from the previous visible row, or from the anchor when one is
+    /// set.
+    Millis(i64),
+}
+
 /// Style of a painted span: a captures-only rule's style, preset colour `1..=9` of a
 /// quick label, or the SGR attributes of an ANSI-coloured run (both resolved by the theme
 /// in the renderer).
@@ -798,6 +812,10 @@ pub struct TailEngine {
     /// background scan has not finished yet: started, or resumed from the prefix, as soon
     /// as the running job allows it (see `request_timestamps`).
     timestamps_wanted: bool,
+    /// Line the time delta column measures from ("Set time anchor here"), instead of the
+    /// previous visible row. A line index, so it survives filter changes; dropped with the
+    /// selection when the index is rebuilt, and never persisted.
+    time_anchor: Option<usize>,
     /// Time window waiting for the cache to be complete; the view keeps what it showed.
     pending_window: Option<PendingWindow>,
     /// Go-to-time input waiting for the cache, and its outcome once resolved, for the
@@ -1386,6 +1404,7 @@ impl TailEngine {
             timestamps_parsed: 0,
             timestamps_unordered: false,
             timestamps_wanted: false,
+            time_anchor: None,
             pending_window: None,
             pending_goto_time: None,
             goto_time_result: None,
@@ -1810,6 +1829,7 @@ impl TailEngine {
         self.pending_refresh_from = None;
         self.clear_selection();
         self.clear_bookmarks();
+        self.time_anchor = None;
         self.rebuild_line_index_from(0);
     }
 
@@ -3212,6 +3232,98 @@ impl TailEngine {
         }
         let line = self.get_line(idx)?;
         crate::timestamp::detect_timestamp(&line, self.timestamp_hint).map(|(millis, _)| millis)
+    }
+
+    // ----- Time delta column, time anchor and selection elapsed time -----
+
+    /// Asks for the stream to be timed for the time delta column. Never blocks on a large
+    /// file: past the job threshold the timing runs as a background scan, and the rows
+    /// not timed yet read `TimeDelta::Pending` meanwhile. Cheap to call every frame.
+    pub fn want_timestamps(&mut self) {
+        if !self.timestamps_complete() {
+            self.request_timestamps();
+        }
+    }
+
+    /// Line the time delta column measures from, if any.
+    pub fn time_anchor(&self) -> Option<usize> {
+        self.time_anchor
+    }
+
+    /// Makes `line` the time anchor; on the anchor line itself this clears it instead.
+    pub fn toggle_time_anchor(&mut self, line: usize) {
+        self.time_anchor = if self.time_anchor == Some(line) {
+            None
+        } else {
+            Some(line)
+        };
+    }
+
+    pub fn clear_time_anchor(&mut self) {
+        self.time_anchor = None;
+    }
+
+    /// The time delta column of visible row `row`. Only a line with a timestamp of its own
+    /// shows a value (a stack trace inherits its entry's time and would read `+0.000`),
+    /// told apart by reading the line's head, which is cheap for the rows on screen. The
+    /// value is the difference with the previous visible row, so it follows the filters;
+    /// or, while an anchor is set, with the anchor line.
+    pub fn row_time_delta(&self, row: usize) -> TimeDelta {
+        let Some(line) = self.get_actual_line_idx(row) else {
+            return TimeDelta::Blank;
+        };
+        if self.time_anchor == Some(line) {
+            return TimeDelta::Anchor;
+        }
+        if line >= self.timestamps.len() {
+            return TimeDelta::Pending;
+        }
+        let own = self.get_line(line).is_some_and(|text| {
+            crate::timestamp::detect_timestamp(&text, self.timestamp_hint).is_some()
+        });
+        let Some(millis) = self.line_timestamp(line).filter(|_| own) else {
+            return TimeDelta::Blank;
+        };
+        let reference = match self.time_anchor {
+            Some(anchor) if anchor >= self.timestamps.len() => return TimeDelta::Pending,
+            Some(anchor) => anchor,
+            None if row == 0 => return TimeDelta::Blank,
+            // The previous visible row precedes this line, so it is timed too.
+            None => match self.get_actual_line_idx(row - 1) {
+                Some(prev) => prev,
+                None => return TimeDelta::Blank,
+            },
+        };
+        match self.line_timestamp(reference) {
+            Some(from) => TimeDelta::Millis(millis.saturating_sub(from)),
+            None => TimeDelta::Blank,
+        }
+    }
+
+    /// Time from the first to the last selected row, in file order, and the number of
+    /// selected rows, for the stream status bar. Ctrl+A spans the first and the last
+    /// visible rows. `None` below two rows, on a stream without usable timestamps, or
+    /// when either end has no known time; a negative span (out-of-order log) is kept.
+    pub fn selection_elapsed(&self) -> Option<(i64, usize)> {
+        if !self.timestamps_usable() {
+            return None;
+        }
+        let (first, last, rows) = if self.selection_all {
+            let rows = self.visible_line_count();
+            let last = self.get_actual_line_idx(rows.checked_sub(1)?)?;
+            (self.get_actual_line_idx(0)?, last, rows)
+        } else {
+            let first = *self.selection.first()?;
+            let last = *self.selection.last()?;
+            (first, last, self.selection.len())
+        };
+        if rows < 2 {
+            return None;
+        }
+        let span = self
+            .line_timestamp(last)?
+            .saturating_sub(self.line_timestamp(first)?);
+        Some((span, rows))
     }
 
     /// Visibility of the nearest non-continuation line before `idx`, the state a sequential

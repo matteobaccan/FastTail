@@ -94,6 +94,12 @@ pub struct FastTailConfig {
     pub borderless: bool,
     #[serde(default = "default_true")]
     pub show_line_numbers: bool,
+    /// Time delta column beside the line numbers, one preference for every stream.
+    #[serde(default)]
+    pub show_time_delta: bool,
+    /// Deltas at or above this many milliseconds are drawn in the accent colour; 0 = off.
+    #[serde(default = "default_time_delta_gap_ms")]
+    pub time_delta_gap_ms: u64,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
     /// Interface zoom (egui zoom factor): `Ctrl +`, `Ctrl -`, `Ctrl 0`, `Ctrl + wheel`
@@ -233,6 +239,10 @@ fn default_search_pane_height() -> f32 {
     crate::ui::dock::DEFAULT_SEARCH_PANE_HEIGHT
 }
 
+fn default_time_delta_gap_ms() -> u64 {
+    crate::ui::dock::DEFAULT_TIME_DELTA_GAP_MS
+}
+
 /// Height range accepted for the search results pane in `fasttail.ini`.
 const SEARCH_PANE_HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 40.0..=4000.0;
 
@@ -293,6 +303,8 @@ impl Default for FastTailConfig {
             overview_strip: true,
             borderless: false,
             show_line_numbers: true,
+            show_time_delta: false,
+            time_delta_gap_ms: default_time_delta_gap_ms(),
             font_size: DEFAULT_FONT_SIZE,
             zoom_factor: default_zoom_factor(),
             poll_interval_ms: default_poll_interval_ms(),
@@ -563,6 +575,8 @@ impl FastTailConfig {
             .set("sound_enabled", self.sound_enabled.to_string())
             .set("borderless", self.borderless.to_string())
             .set("show_line_numbers", self.show_line_numbers.to_string())
+            .set("show_time_delta", self.show_time_delta.to_string())
+            .set("time_delta_gap_ms", self.time_delta_gap_ms.to_string())
             .set("font_size", self.font_size.to_string())
             .set("zoom_factor", format!("{:.2}", self.zoom_factor))
             .set("poll_interval_ms", self.poll_interval_ms.to_string())
@@ -846,6 +860,18 @@ impl FastTailConfig {
                 if let Ok(v) = s.parse::<bool>() {
                     cfg.show_line_numbers = v;
                 }
+            }
+            if let Some(v) = general
+                .get("show_time_delta")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.show_time_delta = v;
+            }
+            if let Some(v) = general
+                .get("time_delta_gap_ms")
+                .and_then(|s| s.trim().parse::<u64>().ok())
+            {
+                cfg.time_delta_gap_ms = v;
             }
             if let Some(s) = general.get("font_size") {
                 if let Ok(v) = s.parse::<f32>() {
@@ -1406,6 +1432,34 @@ mod tests {
         wild.with_section(Some("general"))
             .set("compressed_max_gb", "99999");
         assert_eq!(FastTailConfig::from_ini(&wild).compressed_max_gb, 1024);
+    }
+
+    #[test]
+    fn test_time_delta_settings_round_trip_and_default() {
+        let cfg = FastTailConfig {
+            show_time_delta: true,
+            time_delta_gap_ms: 250,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(loaded.show_time_delta);
+        assert_eq!(loaded.time_delta_gap_ms, 250);
+
+        // A file written before the keys existed: column off, 1 s gap threshold.
+        let mut old_style = Ini::new();
+        old_style.with_section(Some("general")).set("theme", "Tron");
+        let loaded = FastTailConfig::from_ini(&old_style);
+        assert!(!loaded.show_time_delta);
+        assert_eq!(loaded.time_delta_gap_ms, 1000);
+
+        // 0 turns the tint off and is kept as such; garbage keeps the default.
+        let mut ini = FastTailConfig::default().to_ini();
+        ini.with_section(Some("general"))
+            .set("time_delta_gap_ms", "0");
+        assert_eq!(FastTailConfig::from_ini(&ini).time_delta_gap_ms, 0);
+        ini.with_section(Some("general"))
+            .set("time_delta_gap_ms", "soon");
+        assert_eq!(FastTailConfig::from_ini(&ini).time_delta_gap_ms, 1000);
     }
 
     #[test]

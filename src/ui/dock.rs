@@ -3,7 +3,8 @@ use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
 use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
 use crate::tail_engine::{
-    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SpanStyle, TailEngine, MAX_LINE_BYTES,
+    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SpanStyle, TailEngine, TimeDelta,
+    MAX_LINE_BYTES,
 };
 use crate::theme::CyberTheme;
 use crate::wrap_layout::{
@@ -81,6 +82,8 @@ pub struct DockContext<'a> {
     pub focused_stream: Option<PathBuf>,
     /// Search results pane and overview strip preferences, shared by every stream.
     pub search_view: &'a mut SearchViewPrefs,
+    /// Time delta column switch and gap threshold, shared by every stream.
+    pub time_delta: &'a mut TimeDeltaPrefs,
 }
 
 /// Search results pane (open flag, height) and overview strip switch, global preferences
@@ -101,6 +104,29 @@ impl Default for SearchViewPrefs {
         }
     }
 }
+
+/// Time delta column (stream toolbar `Δt`, Settings): shown or not, and the gap from
+/// which a delta is drawn in the accent colour. Global preferences in `fasttail.ini`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeDeltaPrefs {
+    pub show: bool,
+    /// Milliseconds; 0 turns the tint off.
+    pub gap_ms: u64,
+}
+
+impl Default for TimeDeltaPrefs {
+    fn default() -> Self {
+        Self {
+            show: false,
+            gap_ms: DEFAULT_TIME_DELTA_GAP_MS,
+        }
+    }
+}
+
+/// Gap tint threshold of the time delta column until the user changes it.
+pub const DEFAULT_TIME_DELTA_GAP_MS: u64 = 1000;
+/// Width of the time delta column, in characters: `-59:59.999` and a space.
+const TIME_DELTA_CHARS: f32 = 11.0;
 
 /// Height of the search results pane until the user drags it.
 pub const DEFAULT_SEARCH_PANE_HEIGHT: f32 = 180.0;
@@ -338,6 +364,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         self.ctx.external_tools,
                         self.ctx.tool_runner,
                         self.ctx.search_view,
+                        self.ctx.time_delta,
                     );
                     engine.search_query = search_query;
                 } else {
@@ -384,6 +411,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.lock_pin,
                     self.ctx.lock_now,
                     &mut self.ctx.search_view.overview_strip,
+                    self.ctx.time_delta,
                 );
             }
         }
@@ -792,6 +820,7 @@ fn render_log_stream(
     external_tools: &[ExternalTool],
     tool_runner: &mut ToolRunner,
     search_view: &mut SearchViewPrefs,
+    time_delta: &mut TimeDeltaPrefs,
 ) {
     let font_id = egui::FontId::monospace(font_size);
     let hex_row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
@@ -1032,6 +1061,21 @@ fn render_log_stream(
                 ui.ctx().request_repaint();
             }
 
+            // Time delta column toggle (global, like the line numbers). A stream whose
+            // timestamps we cannot read keeps the column hidden and says why.
+            let delta_tip = if timestamps_unreadable(engine) {
+                t(lang, "time_delta_unusable")
+            } else {
+                t(lang, "tip_time_delta")
+            };
+            if toggle_button(ui, theme, "Δt", time_delta.show, theme.accent_color())
+                .on_hover_text(delta_tip)
+                .clicked()
+            {
+                time_delta.show = !time_delta.show;
+                ui.ctx().request_repaint();
+            }
+
             // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
             let alt_w = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::W);
             let toggled =
@@ -1159,6 +1203,21 @@ fn render_log_stream(
                     }),
             )
             .on_hover_text(t(lang, "time_span"));
+        }
+
+        // Elapsed time of a selection of two or more timed rows.
+        if let Some((millis, rows)) = engine.selection_elapsed() {
+            ui.separator();
+            let text = t(lang, "selection_elapsed")
+                .replace("{delta}", &crate::timestamp::format_delta(millis))
+                .replace("{n}", &group_thousands(rows));
+            ui.label(
+                RichText::new(text)
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.accent_color()),
+            )
+            .on_hover_text(t(lang, "selection_elapsed_tip"));
         }
 
         // Per-level counters (most severe first), only the levels seen in the file
@@ -2043,6 +2102,7 @@ fn render_log_stream(
     let active_search_line = engine.current_search_line();
     // The marker column appears when there is anything to mark: search hits or bookmarks.
     let show_markers = has_search || engine.has_bookmarks();
+    let time_delta = time_delta_column(ui, engine, *time_delta);
 
     // Overview strip beside the scroll bar: the right edge of the rows area, when the
     // setting is on and there is anything to mark.
@@ -2071,6 +2131,7 @@ fn render_log_stream(
                 font_size,
                 row_height,
                 *show_line_numbers,
+                time_delta,
                 show_markers,
                 level_colors,
                 has_search,
@@ -2128,6 +2189,54 @@ fn render_log_stream(
     }
 }
 
+/// The time delta column for this frame: `Some(gap_ms)` when it is shown. While the
+/// column or a selection's elapsed time needs the stream timed, asks for it - never on the
+/// UI thread for a large file, which a background scan times - and repaints until done.
+fn time_delta_column(ui: &Ui, engine: &mut TailEngine, prefs: TimeDeltaPrefs) -> Option<u64> {
+    let multi_select = engine.selection_all || engine.selection.len() >= 2;
+    if (prefs.show || multi_select)
+        && !engine.timestamps_complete()
+        && !timestamps_unreadable(engine)
+    {
+        engine.want_timestamps();
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
+    }
+    (prefs.show && engine.timestamps_usable()).then_some(prefs.gap_ms)
+}
+
+/// Whether enough of the stream has been timed to tell that we cannot read its times.
+fn timestamps_unreadable(engine: &TailEngine) -> bool {
+    engine
+        .timestamp_rate()
+        .is_some_and(|rate| rate < crate::tail_engine::MIN_TIMESTAMP_RATE)
+}
+
+/// Text and colour of a row's time delta cell, `None` when blank (continuation lines, no
+/// known time): `…` until the row is timed, `⚓` on the anchor, and the accent colour on
+/// a gap of at least `gap_ms` - in previous-row mode only, since large values are the
+/// point of an anchor.
+fn time_delta_cell(
+    engine: &TailEngine,
+    row: usize,
+    gap_ms: u64,
+    theme: &CyberTheme,
+) -> Option<(String, Color32)> {
+    let dim = theme.text_dim().gamma_multiply(0.8);
+    match engine.row_time_delta(row) {
+        TimeDelta::Blank => None,
+        TimeDelta::Pending => Some(("…".to_string(), dim.gamma_multiply(0.6))),
+        TimeDelta::Anchor => Some(("⚓".to_string(), theme.accent_color())),
+        TimeDelta::Millis(millis) => {
+            let gap = gap_ms > 0
+                && engine.time_anchor().is_none()
+                && millis >= i64::try_from(gap_ms).unwrap_or(i64::MAX);
+            let color = if gap { theme.accent_color() } else { dim };
+            Some((crate::timestamp::format_delta(millis), color))
+        }
+    }
+}
+
 /// The rows of the Text view, wrapped or not.
 #[allow(clippy::too_many_arguments)]
 fn render_rows(
@@ -2138,6 +2247,7 @@ fn render_rows(
     font_size: f32,
     row_height: f32,
     show_line_numbers: bool,
+    time_delta: Option<u64>,
     show_markers: bool,
     level_colors: bool,
     has_search: bool,
@@ -2153,6 +2263,7 @@ fn render_rows(
             font_size,
             row_height,
             show_line_numbers,
+            time_delta,
             show_markers,
             level_colors,
             has_search,
@@ -2168,6 +2279,7 @@ fn render_rows(
             font_size,
             row_height,
             show_line_numbers,
+            time_delta,
             show_markers,
             level_colors,
             has_search,
@@ -2324,6 +2436,7 @@ fn render_extended_rows(
     font_size: f32,
     row_height: f32,
     show_line_numbers: bool,
+    time_delta: Option<u64>,
     show_markers: bool,
     level_colors: bool,
     has_search: bool,
@@ -2333,10 +2446,13 @@ fn render_extended_rows(
     let mut toggle_json = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
+    let mut anchor_pick: Option<usize> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
     let font_id = egui::FontId::monospace(font_size);
+    let char_w = ui.ctx().fonts_mut(|f| f.glyph_width(&font_id, '0'));
+    let delta_w = char_w * TIME_DELTA_CHARS;
     let span_rules = engine.has_span_rules();
     let scroll_content_width = engine.max_detected_width.max(HORIZONTAL_SCROLL_EXTENT);
     let mut scroll_area = ScrollArea::both()
@@ -2429,6 +2545,25 @@ fn render_extended_rows(
                             );
                         }
 
+                        // Time delta, right-aligned in a fixed-width cell
+                        if let Some(gap_ms) = time_delta {
+                            let (cell, _) = ui.allocate_exact_size(
+                                egui::vec2(delta_w, row_height),
+                                egui::Sense::hover(),
+                            );
+                            if let Some((text, color)) =
+                                time_delta_cell(engine, row_idx, gap_ms, theme)
+                            {
+                                ui.painter().text(
+                                    egui::pos2(cell.right() - char_w, cell.center().y),
+                                    egui::Align2::RIGHT_CENTER,
+                                    text,
+                                    font_id.clone(),
+                                    color,
+                                );
+                            }
+                        }
+
                         // JSON toggle button
                         if is_json {
                             let btn_label = if is_expanded { "[-] JSON" } else { "[+] JSON" };
@@ -2514,7 +2649,15 @@ fn render_extended_rows(
                 if click.clicked() {
                     row_click = Some((actual_line_idx, ui.input(|i| i.modifiers)));
                 }
-                row_context_menu(&click, actual_line_idx, external_tools, &mut tool_run);
+                row_context_menu(
+                    &click,
+                    actual_line_idx,
+                    lang,
+                    time_delta.map(|_| engine.time_anchor()),
+                    external_tools,
+                    &mut tool_run,
+                    &mut anchor_pick,
+                );
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
                     row_resp.scroll_to_me(Some(egui::Align::Center));
@@ -2551,6 +2694,9 @@ fn render_extended_rows(
     if clear_scroll_to_line {
         engine.scroll_to_line = None;
     }
+    if let Some(line) = anchor_pick {
+        engine.toggle_time_anchor(line);
+    }
     if max_row_natural_width > engine.max_detected_width {
         engine.max_detected_width = max_row_natural_width;
     }
@@ -2568,18 +2714,47 @@ type RowInteractions = (
     Option<(usize, usize)>,
 );
 
-/// Row context menu listing the external tools; records the pick in `tool_run`.
+/// Row context menu: the time anchor entries while the time delta column is shown
+/// (`anchor` is `Some(current anchor)` then), recorded in `anchor_pick` as the line to
+/// toggle, and the external tools, recorded in `tool_run`.
+#[allow(clippy::too_many_arguments)]
 fn row_context_menu(
     click: &egui::Response,
     line: usize,
+    lang: Language,
+    anchor: Option<Option<usize>>,
     tools: &[ExternalTool],
     tool_run: &mut Option<(usize, usize)>,
+    anchor_pick: &mut Option<usize>,
 ) {
-    if tools.is_empty() {
+    if tools.is_empty() && anchor.is_none() {
         return;
     }
     click.context_menu(|ui| {
         ui.set_min_width(160.0);
+        if let Some(current) = anchor {
+            if current != Some(line)
+                && ui
+                    .button(RichText::new(format!("⚓ {}", t(lang, "time_anchor_set"))).monospace())
+                    .clicked()
+            {
+                *anchor_pick = Some(line);
+                ui.close();
+            }
+            if let Some(current) = current {
+                if ui
+                    .button(RichText::new(t(lang, "time_anchor_clear")).monospace())
+                    .clicked()
+                {
+                    // Toggling the anchor line clears it.
+                    *anchor_pick = Some(current);
+                    ui.close();
+                }
+            }
+            if !tools.is_empty() {
+                ui.separator();
+            }
+        }
         for (ti, tool) in tools.iter().enumerate() {
             if ui
                 .button(RichText::new(format!("▶ {}", tool.name)).monospace())
@@ -2728,6 +2903,7 @@ fn render_wrapped_rows(
     font_size: f32,
     row_height: f32,
     show_line_numbers: bool,
+    time_delta: Option<u64>,
     show_markers: bool,
     level_colors: bool,
     has_search: bool,
@@ -2757,6 +2933,7 @@ fn render_wrapped_rows(
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut toggle_json: Option<(usize, bool)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
+    let mut anchor_pick: Option<usize> = None;
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -2766,7 +2943,12 @@ fn render_wrapped_rows(
         let left_pad = 4.0;
         let marker_w = if show_markers { char_w * 2.0 } else { 0.0 };
         let num_w = if show_line_numbers { char_w * 9.0 } else { 0.0 };
-        let text_x = origin.x + left_pad + marker_w + num_w;
+        let delta_w = if time_delta.is_some() {
+            char_w * TIME_DELTA_CHARS
+        } else {
+            0.0
+        };
+        let text_x = origin.x + left_pad + marker_w + num_w + delta_w;
         let json_w = char_w * 9.0;
         let text_w = (origin.x + content_w - text_x - left_pad).max(40.0);
         let pretty_font = egui::FontId::monospace(11.0);
@@ -2987,6 +3169,17 @@ fn render_wrapped_rows(
                     num_color,
                 );
             }
+            if let Some((text, color)) =
+                time_delta.and_then(|gap_ms| time_delta_cell(eng, row, gap_ms, theme))
+            {
+                painter.text(
+                    egui::pos2(text_x - char_w, text_top),
+                    egui::Align2::RIGHT_TOP,
+                    text,
+                    font_id.clone(),
+                    color,
+                );
+            }
             let (color, text_bg) = if is_active {
                 (Color32::BLACK, Some(SEARCH_ACTIVE_BG))
             } else if matches_search {
@@ -3033,7 +3226,15 @@ fn render_wrapped_rows(
             if click.clicked() {
                 row_click = Some((line, ui.input(|i| i.modifiers)));
             }
-            row_context_menu(&click, line, external_tools, &mut tool_run);
+            row_context_menu(
+                &click,
+                line,
+                lang,
+                time_delta.map(|_| eng.time_anchor()),
+                external_tools,
+                &mut tool_run,
+                &mut anchor_pick,
+            );
             // JSON toggle, registered after the row so it wins the click
             if r.is_json {
                 let btn_rect = egui::Rect::from_min_size(
@@ -3083,6 +3284,9 @@ fn render_wrapped_rows(
     engine.wrap_scroll_abs = ended;
     engine.current_scroll_x = 0.0;
     engine.current_scroll_y = ended;
+    if let Some(line) = anchor_pick {
+        engine.toggle_time_anchor(line);
+    }
     (row_click, toggle_json, tool_run)
 }
 
@@ -3766,6 +3970,7 @@ pub fn render_settings_content(
     lock_pin: &mut String,
     lock_now: &mut bool,
     overview_strip: &mut bool,
+    time_delta: &mut TimeDeltaPrefs,
 ) {
     ui.heading(RichText::new(format!("⚙ {}", t(*lang, "settings").to_uppercase())).monospace());
     ui.add_space(10.0);
@@ -3923,6 +4128,17 @@ pub fn render_settings_content(
         .on_hover_text(t(*lang, "level_colors_tip"));
     ui.checkbox(overview_strip, t(*lang, "overview_strip"))
         .on_hover_text(t(*lang, "overview_strip_tip"));
+    ui.checkbox(&mut time_delta.show, t(*lang, "show_time_delta"))
+        .on_hover_text(t(*lang, "tip_time_delta"));
+    ui.horizontal(|ui| {
+        ui.label(t(*lang, "time_delta_gap"));
+        ui.add(
+            egui::DragValue::new(&mut time_delta.gap_ms)
+                .range(0..=86_400_000)
+                .speed(10.0)
+                .suffix(" ms"),
+        );
+    });
 
     ui.add_space(6.0);
     ui.separator();

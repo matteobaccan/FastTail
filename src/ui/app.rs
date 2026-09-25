@@ -2481,6 +2481,11 @@ impl FastTailApp {
             overview_strip: self.config.overview_strip,
         };
         let search_view_before = search_view;
+        let mut time_delta = crate::ui::dock::TimeDeltaPrefs {
+            show: self.config.show_time_delta,
+            gap_ms: self.config.time_delta_gap_ms,
+        };
+        let time_delta_before = time_delta;
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -2509,6 +2514,7 @@ impl FastTailApp {
             tool_runner: &mut self.tool_runner,
             focused_stream,
             search_view: &mut search_view,
+            time_delta: &mut time_delta,
         };
 
         if self.dock_state.iter_all_tabs().count() == 0 {
@@ -2671,6 +2677,12 @@ impl FastTailApp {
                 let _ = self.config.save();
             }
         }
+        // Time delta column switch and gap threshold: saved as soon as they change.
+        if time_delta != time_delta_before {
+            self.config.show_time_delta = time_delta.show;
+            self.config.time_delta_gap_ms = time_delta.gap_ms;
+            let _ = self.config.save();
+        }
         let window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if window_focused {
             self.attention_requested = false;
@@ -2812,6 +2824,10 @@ impl FastTailApp {
             let mut test_screensaver = false;
             let mut popup_lock_now = false;
             let mut overview_strip = self.config.overview_strip;
+            let mut time_delta = crate::ui::dock::TimeDeltaPrefs {
+                show: self.config.show_time_delta,
+                gap_ms: self.config.time_delta_gap_ms,
+            };
 
             let win = egui::Window::new(
                 RichText::new(format!("⚙ {}", t(self.config.language, "settings")))
@@ -2863,6 +2879,7 @@ impl FastTailApp {
                             &mut self.config.lock_pin,
                             &mut popup_lock_now,
                             &mut overview_strip,
+                            &mut time_delta,
                         );
 
                         // Rendering backend: applies at the next start.
@@ -3138,6 +3155,13 @@ impl FastTailApp {
 
             if overview_strip != self.config.overview_strip {
                 self.config.overview_strip = overview_strip;
+                let _ = self.config.save();
+            }
+            if (time_delta.show, time_delta.gap_ms)
+                != (self.config.show_time_delta, self.config.time_delta_gap_ms)
+            {
+                self.config.show_time_delta = time_delta.show;
+                self.config.time_delta_gap_ms = time_delta.gap_ms;
                 let _ = self.config.save();
             }
             if popup_lock_now {
