@@ -216,7 +216,7 @@ When the first backend fails, the error is printed to stderr together with `rend
 ## 🛠️ Building & Installation
 
 ### Prerequisites
-- [Rust](https://rustup.rs/) 1.87 or newer
+- [Rust](https://rustup.rs/) 1.88 or newer
 - On Linux: `libasound2-dev libudev-dev pkg-config libx11-dev libxcb1-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev`
 
 ### Build from Source
