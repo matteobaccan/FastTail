@@ -15,7 +15,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   8.2) could re-arm its read on the directory handle it had just closed; Windows could
   already have handed that handle value to another open, which then blocked for good.
   The test suite hung this way now and then on Windows. notify is updated to 9.0.0-rc.5,
-  which fixes it, and the CI test step now fails after 20 minutes instead of hanging.
+  which fixes it, and the CI test run (built in a step of its own) now fails after 5
+  minutes instead of hanging.
+- **The time range can always be corrected or cleared.** Typing in a "from" or "to"
+  field times the log; when fewer than half of its lines turned out to carry a timestamp,
+  both fields were disabled with what had been typed still in them and the "invalid
+  time" warning stuck, and the clear button only appeared for a window that applied, so
+  there was no way out. A field holding text now stays editable, the clear button shows
+  whenever either field holds text, and the warning waits until the field is left
+  instead of flagging the first keystroke.
 - **Zip entries written with `\` separators are kept in sessions.** An entry such as
   `dir\file.log` (written by some Windows tools) was saved with that spelling, so the
   session and the workspace named the wrong archive and reported the stream as missing

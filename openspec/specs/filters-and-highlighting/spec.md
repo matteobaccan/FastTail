@@ -95,6 +95,14 @@ The filter panel SHALL offer "from" and "to" time inputs, either side optional (
 - **WHEN** fewer than half of the lines of a stream carry a recognised timestamp
 - **THEN** the from/to fields are disabled and a hint says the stream has no usable timestamps, instead of a window hiding the whole file.
 
+#### Scenario: Text typed before the log turned out untimeable
+- **WHEN** the user types `1` in the "from" field of a log that has never been timed and fewer than half of its lines carry a timestamp
+- **THEN** the field stays editable while it holds text, the clear button is shown, and clearing it empties both fields and disables them with the hint.
+
+#### Scenario: Partial input is not an error while typing
+- **WHEN** the user types `14:0` in the "from" field on the way to `14:02`
+- **THEN** no "invalid time" warning is shown while the field has focus; it is shown if the field is left holding text that cannot be read, together with the clear button.
+
 #### Scenario: Window typed while the log is being timed
 - **WHEN** the user enters from `14:02` on a 3 GB stream that has never been timed
 - **THEN** every line stays visible, the hint says the window applies when timing finishes, the stream bar shows the timing progress, and when it reaches 100% only the lines from 14:02 on remain visible.
