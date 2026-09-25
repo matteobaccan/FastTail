@@ -33,7 +33,8 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
   - **TXT**: virtualized text view with highlight rules, inline JSON pretty-printing and stack-trace grouping.
   - **HEX**: live hexadecimal + ASCII dump with byte columns in multiples of 8 (16, 24, 32...).
   - **MD**: rendered Markdown. `.md` files open in this mode automatically and HTML documents are converted to Markdown on the fly.
-- **Powerful Search**: a search box per stream, `F3` / `Shift+F3` navigation scoped to the focused window, match counter, wrap-around beep, last 10 queries history, matches refreshed live as the file grows. In HEX mode the query is matched at byte level (text or `0A 0D` patterns), and a marker column (`▶` current hit, `●` other hits) plus full-row highlight is shown in every view.
+- **Powerful Search**: a search box per stream, `F3` / `Shift+F3` navigation scoped to the focused window, match counter, wrap-around beep, last 10 queries history, matches refreshed live as the file grows. In HEX mode the query is matched at byte level (text or `0A 0D` patterns), and a marker column (`▶` current hit, `●` other hits) plus full-row highlight is shown in every view. The `☰` button opens a **search results pane** under the rows listing only the matching lines (line number, text, query tinted), virtualized so a million hits cost what ten do; a click or `Enter` makes a hit current and centres it in the main view. Up to 1,000,000 hits are listed per stream; past that the search keeps counting and the counter shows the true total with a "first 1,000,000 listed" note.
+- **Overview Strip**: a narrow column beside the scroll bar marks where the search hits, the bookmarks and the ERROR/FATAL lines sit in the file, with the viewport drawn as a box; click or drag it to jump there. Marks are exact, except the error marks of a filtered view of more than 4 million rows, which are sampled (the tooltip says so). Switchable off in Settings.
 - **Live Include / Exclude Filters**: plain text or regex, case-sensitive or not, applied as you type. Filtered rows are virtualized so the viewport is always full.
 - **Multi-Rule Highlighting**: foreground, background, **bold**, *italic*, top-down priority (reorder with ⬆ / ⬇), and a sound alert preset per rule (Beep, Chime, Warning, Critical).
 - **Capture-Group Highlighting and Quick Labels**: a regex rule can paint only its capture groups (`req=(\d+)` colours the request id, not the row) with "Captures only"; the first rule wins per byte, top-down, and at most 64 spans are painted per row. `Ctrl+Shift+1..9` turns the current search text into a quick colour label with preset colour 1..9, painted in every stream and listed in a strip above the rows with a remove button; labels rank below the rules and are not saved across restarts.
@@ -74,6 +75,7 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 | **Log Level Detection** | **Built-in: colouring, `≥ level` filter, counters** | No | Yes | No | N/A |
 | **Compressed Logs** | **`.gz` (multi-member) and `.zip` entries, decompressed in the background** | No | No | No | `zcat \| tail` |
 | **Time Range Filter** | **`from / to` window, go-to-time, visible span** | No | Yes | No | `awk` by hand |
+| **Search Results Pane** | **Matching lines listed under the log, overview strip beside the scroll bar** | No | No | No | `grep` output |
 | **Highlighting Styles** | **FG, BG, Bold, Italic** | FG, BG | FG, BG | FG, BG | ANSI codes |
 | **ANSI Colour Codes in Logs** | **Rendered, stripped or shown raw, per stream; filters see the text without codes** | No | No | No | Rendered by the terminal |
 | **Capture-Group Highlight / Quick Labels** | **Captures-only rules, `Ctrl+Shift+1..9` labels** | No | No | No | No |
@@ -97,6 +99,9 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Ctrl + F` | Focus the search box of the focused stream |
 | `F3` / `Shift + F3` | Next / previous search match in the focused stream |
 | `Enter` / `Shift + Enter` | Next / previous match while typing in the search box |
+| `↑` / `↓` / `PgUp` / `PgDown` / `Ctrl + Home` / `Ctrl + End` in the results pane | Move the pane selection (after a click in the pane); the main view stays where it is |
+| `Enter` in the results pane | Make the selected hit the current match and centre it in the main view (pauses follow) |
+| `Esc` in the results pane | Give the keyboard back to the main view; `F3`, `Ctrl + F`, `Ctrl + G`, bookmarks and `Ctrl + C` keep acting on the stream while the pane has it |
 | `↑` / `↓` / `←` / `→` | Scroll by one line / column (`Ctrl` + `←` / `→` scrolls 5x faster) |
 | `PgUp` / `PgDown` | Scroll by one page |
 | `Home` / `End` | Scroll horizontally to the far left / right |

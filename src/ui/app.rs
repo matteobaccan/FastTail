@@ -2475,6 +2475,12 @@ impl FastTailApp {
         }
 
         let mut lock_now = false;
+        let mut search_view = crate::ui::dock::SearchViewPrefs {
+            search_pane: self.config.search_pane,
+            search_pane_height: self.config.search_pane_height,
+            overview_strip: self.config.overview_strip,
+        };
+        let search_view_before = search_view;
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -2502,6 +2508,7 @@ impl FastTailApp {
             external_tools: &mut self.config.external_tools,
             tool_runner: &mut self.tool_runner,
             focused_stream,
+            search_view: &mut search_view,
         };
 
         if self.dock_state.iter_all_tabs().count() == 0 {
@@ -2652,6 +2659,18 @@ impl FastTailApp {
         if bookmarks_changed {
             let _ = self.config.save();
         }
+        // Results pane and overview strip preferences: a toggle is saved at once, the
+        // pane height once the drag of its edge is over.
+        if search_view != search_view_before {
+            self.config.search_pane = search_view.search_pane;
+            self.config.search_pane_height = search_view.search_pane_height;
+            self.config.overview_strip = search_view.overview_strip;
+            let toggled = search_view.search_pane != search_view_before.search_pane
+                || search_view.overview_strip != search_view_before.overview_strip;
+            if toggled || !ctx.input(|i| i.pointer.any_down()) {
+                let _ = self.config.save();
+            }
+        }
         let window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if window_focused {
             self.attention_requested = false;
@@ -2792,6 +2811,7 @@ impl FastTailApp {
             let prev_lang = self.config.language;
             let mut test_screensaver = false;
             let mut popup_lock_now = false;
+            let mut overview_strip = self.config.overview_strip;
 
             let win = egui::Window::new(
                 RichText::new(format!("⚙ {}", t(self.config.language, "settings")))
@@ -2842,6 +2862,7 @@ impl FastTailApp {
                             &mut self.config.lock_enabled,
                             &mut self.config.lock_pin,
                             &mut popup_lock_now,
+                            &mut overview_strip,
                         );
 
                         // Rendering backend: applies at the next start.
@@ -3115,6 +3136,10 @@ impl FastTailApp {
             );
             apply_dialog_chrome_cursor(&ctx, &resp);
 
+            if overview_strip != self.config.overview_strip {
+                self.config.overview_strip = overview_strip;
+                let _ = self.config.save();
+            }
             if popup_lock_now {
                 self.lock();
             }
@@ -3516,6 +3541,16 @@ impl FastTailApp {
 
                                     ui.label(RichText::new("Alt + W").monospace().strong());
                                     ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("☰ ↑ ↓ PgUp PgDn Enter Esc")
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_search_pane")).monospace(),
+                                    );
                                     ui.end_row();
 
                                     ui.label(
