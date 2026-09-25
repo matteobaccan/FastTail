@@ -876,6 +876,13 @@ fn test_i18n_exhaustive_coverage() {
         "preset_delete",
         "preset_delete_confirm",
         "preset_name_taken",
+        "timeline_tip",
+        "timeline_search_lane_tip",
+        "timeline_peak",
+        "timeline_empty",
+        "timeline_no_level",
+        "timeline_untimed",
+        "timeline_lane_note",
     ];
 
     for lang in Language::ALL {
@@ -6176,7 +6183,7 @@ mod background_timestamps {
     /// A banner line, then one entry per second from 10:00:00 with a stack trace under
     /// every seventh one and an entry stamped a minute early every 500 lines, so the log
     /// has continuation lines, untimed lines and goes back in time.
-    fn write_timed_log(path: &std::path::Path, entries: usize) {
+    pub(super) fn write_timed_log(path: &std::path::Path, entries: usize) {
         let mut f = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
         writeln!(f, "==== service starting, no timestamp here ====").unwrap();
         for i in 0..entries {
@@ -7481,6 +7488,326 @@ mod search_results_pane {
             "HEX view shows a notice, not the list"
         );
         assert!(h.prefs.search_pane, "the preference is untouched");
+    }
+
+    /// 120 entries, one per second from 10:00:00, an ERROR every tenth.
+    fn timeline_log(dir: &std::path::Path) -> std::path::PathBuf {
+        let log = dir.join("timeline.log");
+        let mut text = String::new();
+        for i in 0..120 {
+            let level = if i % 10 == 0 { "ERROR" } else { "INFO" };
+            text.push_str(&format!(
+                "2026-09-25 10:{:02}:{:02} {level} request {i}\n",
+                i / 60,
+                i % 60
+            ));
+        }
+        std::fs::write(&log, text).unwrap();
+        log
+    }
+
+    fn timeline_harness(log: &std::path::Path) -> Harness {
+        let mut h = Harness::new(log, "");
+        h.prefs.timeline_histogram = true;
+        h.frame(Vec::new());
+        h.frame(Vec::new());
+        h
+    }
+
+    fn strip_rect(h: &Harness) -> egui::Rect {
+        h.ctx
+            .read_response(fasttail::ui::timeline_strip::strip_id(h.engine()))
+            .expect("the strip is drawn")
+            .rect
+    }
+
+    #[test]
+    fn opening_the_timeline_times_the_stream_and_draws_every_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = timeline_log(dir.path());
+        let mut h = timeline_harness(&log);
+        assert!(
+            h.engine().timestamps_complete(),
+            "opening the strip times the log"
+        );
+        let histogram = h.engine().time_histogram();
+        assert_eq!(histogram.timed(), 120);
+        assert_eq!(histogram.len(), 120, "one-second buckets");
+        let rect = strip_rect(&h);
+        assert_eq!(rect.height(), fasttail::ui::timeline_strip::STRIP_HEIGHT);
+
+        // Closed again: no strip.
+        h.prefs.timeline_histogram = false;
+        h.frame(Vec::new());
+        h.frame(Vec::new());
+        let id = fasttail::ui::timeline_strip::strip_id(h.engine());
+        assert!(h.ctx.read_response(id).is_none());
+    }
+
+    #[test]
+    fn clicking_a_bar_sets_the_time_range_to_its_second() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = timeline_log(dir.path());
+        let mut h = timeline_harness(&log);
+        let rect = strip_rect(&h);
+        // 120 buckets across the strip: the middle of bucket 30 is 10:00:30.
+        let x = rect.left() + rect.width() * (30.5 / 120.0);
+        h.click(egui::pos2(x, rect.center().y));
+        let engine = h.engine();
+        assert_eq!(engine.time_from_text, "2026-09-25 10:00:30");
+        assert_eq!(engine.time_to_text, "2026-09-25 10:00:30");
+        assert!(engine.is_time_filtered());
+        assert_eq!(engine.filtered_lines, vec![30]);
+    }
+
+    #[test]
+    fn dragging_across_bars_sets_the_dragged_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = timeline_log(dir.path());
+        let mut h = timeline_harness(&log);
+        let rect = strip_rect(&h);
+        let at = |bucket: f32| {
+            egui::pos2(
+                rect.left() + rect.width() * (bucket / 120.0),
+                rect.center().y,
+            )
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // Right to left: the order of the ends does not matter.
+        h.frame(vec![egui::Event::PointerMoved(at(90.5))]);
+        h.frame(vec![button(at(90.5), true)]);
+        for b in [85.5, 75.5, 65.5, 60.5] {
+            h.frame(vec![egui::Event::PointerMoved(at(b))]);
+        }
+        h.frame(vec![button(at(60.5), false)]);
+        h.frame(Vec::new());
+        let engine = h.engine();
+        assert_eq!(engine.time_from_text, "2026-09-25 10:01:00");
+        assert_eq!(engine.time_to_text, "2026-09-25 10:01:30");
+        assert_eq!(engine.filtered_lines, (60..=90).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_stream_without_timestamps_gets_the_hint_instead_of_the_strip() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("plain.log");
+        let text: String = (0..500).map(|i| format!("plain line {i}\n")).collect();
+        std::fs::write(&log, text).unwrap();
+        let h = timeline_harness(&log);
+        assert!(h.engine().timestamps_complete());
+        assert!(!h.engine().timestamps_usable());
+        let id = fasttail::ui::timeline_strip::strip_id(h.engine());
+        assert!(
+            h.ctx.read_response(id).is_none(),
+            "no strip, the hint instead"
+        );
+    }
+
+    #[test]
+    fn timeline_preferences_round_trip_through_the_ini() {
+        let mut cfg = FastTailConfig::default();
+        assert!(!cfg.timeline_histogram, "the timeline is off by default");
+        assert!(cfg.timeline_search_lane, "its search lane is on by default");
+        cfg.timeline_histogram = true;
+        cfg.timeline_search_lane = false;
+        let restored = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(restored.timeline_histogram);
+        assert!(!restored.timeline_search_lane);
+    }
+
+    #[test]
+    fn timeline_i18n_keys_are_translated_everywhere() {
+        let keys = [
+            "timeline_tip",
+            "timeline_search_lane_tip",
+            "timeline_peak",
+            "timeline_empty",
+            "timeline_no_level",
+            "timeline_untimed",
+            "timeline_lane_note",
+        ];
+        for lang in Language::ALL {
+            for key in keys {
+                let text = t(*lang, key);
+                assert!(!text.is_empty() && text != "Unknown", "{key} for {lang:?}");
+                if *lang != Language::En {
+                    assert_ne!(text, t(Language::En, key), "{key} untranslated in {lang:?}");
+                }
+            }
+            assert!(t(*lang, "timeline_peak").contains("{n}"), "{lang:?}");
+            assert!(t(*lang, "timeline_untimed").contains("{n}"), "{lang:?}");
+        }
+    }
+}
+
+// ----- Timeline histogram -----
+
+mod timeline_histogram {
+    use super::background_timestamps::write_timed_log;
+    use super::wait_for_jobs;
+    use fasttail::log_level::LogLevel;
+    use fasttail::scan_job::ScanKind;
+    use fasttail::tail_engine::TailEngine;
+    use fasttail::time_histogram::TimeHistogram;
+    use std::io::Write;
+
+    /// The histogram rebuilt from the engine's caches at the width the incremental one
+    /// reached: the two must be equal after every event.
+    fn assert_matches_caches(engine: &TailEngine) {
+        let incremental = engine.time_histogram();
+        let (stamps, _, _, _) = engine.timestamp_cache();
+        let levels = engine.cached_levels();
+        let lines = stamps.len().min(levels.len());
+        assert_eq!(
+            engine.histogram_lines(),
+            lines,
+            "every line with both caches"
+        );
+        let mut rebuilt = TimeHistogram::with_bucket_ms(incremental.bucket_ms());
+        for idx in 0..lines {
+            rebuilt.add(stamps[idx], levels[idx]);
+        }
+        assert_eq!(incremental, &rebuilt);
+    }
+
+    fn append(path: &std::path::Path, text: &str) {
+        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+    }
+
+    fn timed_log(entries: usize) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("timeline.log");
+        write_timed_log(&log, entries);
+        (dir, log)
+    }
+
+    #[test]
+    fn built_only_once_the_stream_is_timed_and_counts_every_line() {
+        let (_dir, log) = timed_log(3_000);
+        let mut engine = TailEngine::open(&log).unwrap();
+        assert!(
+            engine.time_histogram().is_empty(),
+            "nothing timed, nothing built"
+        );
+        engine.set_include_filter("svc-3");
+        engine.request_timeline();
+        assert!(engine.timestamps_complete());
+        assert_matches_caches(&engine);
+        let histogram = engine.time_histogram();
+        // Filters do not hide the histogram's data; the banner is the only untimed line.
+        assert_eq!(histogram.untimed(), 1);
+        assert_eq!(histogram.timed() as usize, engine.total_lines() - 1);
+        let errors: u64 = (0..histogram.len())
+            .map(|i| u64::from(histogram.bucket(i).unwrap()[LogLevel::Error as usize]))
+            .sum();
+        assert_eq!(errors, 300);
+        // 3,000 s fit in 2,048 buckets of 2 s.
+        assert_eq!(histogram.bucket_ms(), 2_000);
+    }
+
+    #[test]
+    fn appends_and_a_completed_partial_line_are_counted_once() {
+        let (_dir, log) = timed_log(1_000);
+        let mut engine = TailEngine::open(&log).unwrap();
+        engine.size_check_interval = std::time::Duration::ZERO;
+        engine.request_timeline();
+        let before = engine.time_histogram().timed();
+        append(
+            &log,
+            "2026-09-19T11:00:00.000Z ERROR appended\n2026-09-19T11:00:01.000Z IN",
+        );
+        engine.poll_updates();
+        assert_matches_caches(&engine);
+        // The partial last line is re-evaluated with the rest of it: removed, added again.
+        append(&log, "FO done\n");
+        engine.poll_updates();
+        assert_matches_caches(&engine);
+        let histogram = engine.time_histogram();
+        assert_eq!(histogram.timed(), before + 2);
+        let last = histogram.bucket(histogram.len() - 1).unwrap();
+        assert_eq!(
+            last[LogLevel::Info as usize],
+            1,
+            "the completed line is INFO"
+        );
+    }
+
+    #[test]
+    fn a_rewrite_empties_the_histogram_then_shows_the_new_lines() {
+        let (_dir, log) = timed_log(5_000);
+        let mut engine = TailEngine::open(&log).unwrap();
+        engine.size_check_interval = std::time::Duration::ZERO;
+        engine.request_timeline();
+        assert!(engine.time_histogram().bucket_ms() > 1_000);
+        std::fs::write(&log, "").unwrap();
+        engine.poll_updates();
+        assert!(engine.time_histogram().is_empty());
+        assert_eq!(engine.time_histogram().untimed(), 0);
+        append(
+            &log,
+            "2026-09-20 08:00:00 WARN fresh\n2026-09-20 08:00:05 INFO fresh\n",
+        );
+        engine.poll_updates();
+        // The strip asks again every frame: a rewritten stream is timed anew.
+        engine.request_timeline();
+        assert_matches_caches(&engine);
+        let histogram = engine.time_histogram();
+        assert_eq!(
+            histogram.bucket_ms(),
+            1_000,
+            "a full reset starts over at 1 s"
+        );
+        assert_eq!(histogram.timed(), 2);
+        assert_eq!(histogram.len(), 6);
+    }
+
+    #[test]
+    fn a_background_timing_matches_the_synchronous_histogram() {
+        let (_dir, log) = timed_log(40_000);
+        let mut sync = TailEngine::open(&log).unwrap();
+        sync.request_timeline();
+
+        // The level scan starts on open; the timeline's timing preempts it, finishes first,
+        // and the levels resume: the histogram fills as the second cache catches up.
+        let mut bg = TailEngine::open_with_thresholds(&log, 0, u64::MAX).unwrap();
+        assert_eq!(bg.scan_progress().map(|p| p.0), Some(ScanKind::Levels));
+        bg.request_timeline();
+        assert_eq!(bg.scan_progress().map(|p| p.0), Some(ScanKind::Timestamps));
+        wait_for_jobs(&mut bg);
+        assert!(bg.timestamps_complete() && bg.levels_complete());
+        assert_matches_caches(&bg);
+        assert_eq!(bg.time_histogram(), sync.time_histogram());
+    }
+
+    #[test]
+    fn a_timing_scan_preempted_and_resumed_matches_too() {
+        let (_dir, log) = timed_log(150_000);
+        let mut sync = TailEngine::open(&log).unwrap();
+        sync.request_timeline();
+
+        let mut bg = TailEngine::open_with_thresholds(&log, 0, u64::MAX).unwrap();
+        wait_for_jobs(&mut bg); // the level scan
+        bg.request_timeline();
+        let started = std::time::Instant::now();
+        while bg.histogram_lines() == 0 && started.elapsed().as_secs() < 30 {
+            bg.poll_updates();
+            if bg.scan_progress().is_none() {
+                break;
+            }
+        }
+        // A filter takes over; the timing resumes from its prefix afterwards.
+        bg.set_include_filter("ERROR");
+        assert_matches_caches(&bg);
+        wait_for_jobs(&mut bg);
+        assert!(bg.timestamps_complete());
+        assert_matches_caches(&bg);
+        assert_eq!(bg.time_histogram(), sync.time_histogram());
     }
 }
 

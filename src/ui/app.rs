@@ -2658,6 +2658,8 @@ impl FastTailApp {
             search_pane: self.config.search_pane,
             search_pane_height: self.config.search_pane_height,
             overview_strip: self.config.overview_strip,
+            timeline_histogram: self.config.timeline_histogram,
+            timeline_search_lane: self.config.timeline_search_lane,
         };
         let search_view_before = search_view;
         let mut time_delta = crate::ui::dock::TimeDeltaPrefs {
@@ -2870,14 +2872,18 @@ impl FastTailApp {
         if bookmarks_changed {
             let _ = self.config.save();
         }
-        // Results pane and overview strip preferences: a toggle is saved at once, the
-        // pane height once the drag of its edge is over.
+        // Results pane, overview strip and timeline preferences: a toggle is saved at
+        // once, the pane height once the drag of its edge is over.
         if search_view != search_view_before {
             self.config.search_pane = search_view.search_pane;
             self.config.search_pane_height = search_view.search_pane_height;
             self.config.overview_strip = search_view.overview_strip;
+            self.config.timeline_histogram = search_view.timeline_histogram;
+            self.config.timeline_search_lane = search_view.timeline_search_lane;
             let toggled = search_view.search_pane != search_view_before.search_pane
-                || search_view.overview_strip != search_view_before.overview_strip;
+                || search_view.overview_strip != search_view_before.overview_strip
+                || search_view.timeline_histogram != search_view_before.timeline_histogram
+                || search_view.timeline_search_lane != search_view_before.timeline_search_lane;
             if toggled || !ctx.input(|i| i.pointer.any_down()) {
                 let _ = self.config.save();
             }
