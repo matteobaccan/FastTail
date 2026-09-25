@@ -14,6 +14,7 @@
 //! Every phase is timed `rounds` times and the best time is reported.
 
 use fasttail::log_level::LogLevel;
+use fasttail::scan_job::ScanKind;
 use fasttail::tail_engine::{HighlightRule, QuickLabel, TailEngine};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -234,6 +235,20 @@ fn best<F: FnMut() -> usize>(rounds: usize, mut f: F) -> (f64, usize) {
     (best_ms, result)
 }
 
+/// Polls the engine, the way the interface does once per frame, until no background
+/// scan is running but the level scan, which has the lowest priority and is left to run.
+fn settle(engine: &mut TailEngine) {
+    while engine
+        .scan_progress()
+        .map(|(kind, _, _)| kind != ScanKind::Levels)
+        .unwrap_or(false)
+        || engine.goto_time_waiting()
+    {
+        engine.poll_updates();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -332,44 +347,58 @@ fn main() {
         "min level WARN",
         best(rounds, || {
             engine.set_min_level(LogLevel::Unknown);
-
-            // Timing the file: what the first use of the time range pays for, once.
-            let t0 = Instant::now();
-            engine.ensure_timestamps();
-            println!(
-                "{:<16}{:9.1} ms  ({} lines)",
-                "timestamp cache",
-                t0.elapsed().as_secs_f64() * 1000.0,
-                engine.total_lines()
-            );
-
-            // Time range over the middle third of the log: the cache is warm, this is the cost of
-            // the window itself.
-            if let Some((first, last)) = engine.visible_time_span() {
-                let third = (last - first) / 3;
-                report(
-                    "time range",
-                    best(rounds, || {
-                        engine.set_time_range(None, None);
-                        engine.set_time_range(Some(first + third), Some(last - third));
-                        engine.visible_line_count()
-                    }),
-                );
-                // A jump, which is the other thing the cache is for.
-                report(
-                    "go to time",
-                    best(rounds, || {
-                        engine.goto_time(first + third).map(|l| l + 1).unwrap_or(0)
-                    }),
-                );
-                engine.set_time_range(None, None);
-            }
-
             engine.set_min_level(LogLevel::Warn);
             engine.visible_line_count()
         }),
     );
     engine.set_min_level(LogLevel::Unknown);
+
+    // Timing the file: what the first use of the time range pays for, once. First the
+    // background scan the interface uses above 16 MB (request, then poll until the cache
+    // is complete), on a fresh engine; then the synchronous fill on this one.
+    let mut fresh = TailEngine::open(&path).expect("open log file");
+    settle(&mut fresh);
+    let t0 = Instant::now();
+    fresh.resolve_goto("00:00", 0);
+    settle(&mut fresh);
+    println!(
+        "{:<16}{:9.1} ms  ({} lines)",
+        "timestamp job",
+        t0.elapsed().as_secs_f64() * 1000.0,
+        fresh.total_lines()
+    );
+    drop(fresh);
+    let t0 = Instant::now();
+    engine.ensure_timestamps();
+    println!(
+        "{:<16}{:9.1} ms  ({} lines)",
+        "timestamp cache",
+        t0.elapsed().as_secs_f64() * 1000.0,
+        engine.total_lines()
+    );
+
+    // Time range over the middle third of the log: the cache is warm, this is the cost of
+    // the window itself (a filter scan on a large file, applied at drain time).
+    if let Some((first, last)) = engine.visible_time_span() {
+        let third = (last - first) / 3;
+        report(
+            "time range",
+            best(rounds, || {
+                engine.set_time_range(None, None);
+                engine.set_time_range(Some(first + third), Some(last - third));
+                settle(&mut engine);
+                engine.visible_line_count()
+            }),
+        );
+        // A jump, which is the other thing the cache is for.
+        report(
+            "go to time",
+            best(rounds, || {
+                engine.goto_time(first + third).map(|l| l + 1).unwrap_or(0)
+            }),
+        );
+        engine.set_time_range(None, None);
+    }
 
     // Regex include filter.
     engine.filter_is_regex = true;

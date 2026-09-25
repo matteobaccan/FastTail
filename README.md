@@ -27,7 +27,7 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 
 ## 🚀 Feature Highlights
 
-- **Zero-Lag Streaming Engine**: never holds the file in memory. Rows are read on demand through a 4 MB block cache per stream; the only per-file state is the line index (8 bytes per line). Appends are indexed incrementally, log rotation, truncation and in-place rewrites are detected without locking the file for the writer, and files above 16 MB run filters and search on a worker thread with progress shown in the stream bar (above 256 MB the initial index too). Ten 50 MB logs growing continuously cost about 60 MB of RAM and a few milliseconds per frame.
+- **Zero-Lag Streaming Engine**: never holds the file in memory. Rows are read on demand through a 4 MB block cache per stream; the only per-file state is the line index (8 bytes per line). Appends are indexed incrementally, log rotation, truncation and in-place rewrites are detected without locking the file for the writer, and files above 16 MB run filters, search and the timestamp scan of the time range on a worker thread with progress shown in the stream bar (above 256 MB the initial index too). Ten 50 MB logs growing continuously cost about 60 MB of RAM and a few milliseconds per frame.
 - **Named Sessions**: save the open streams, filters, layout and bookmarks under a name and switch between projects in one click; session files keep relative paths so a log bundle can move with its session.
 - **Three View Modes per Stream**:
   - **TXT**: virtualized text view with highlight rules, inline JSON pretty-printing and stack-trace grouping.
@@ -183,6 +183,8 @@ The timestamp of each line is read from the line itself — ISO 8601 (with `T` o
 
 `Ctrl+G` accepts a time as readily as a line number (`14:02` jumps to the first line at or after it), and the stream status bar shows the span of what is currently visible. When fewer than half the lines carry a timestamp FastTail can read, the controls are disabled and say so rather than hiding the whole file.
 
+A stream is timed the first time the time range or a time jump needs it, not when it is opened. Up to 16 MB that is instant; above it the file is timed in the background, with `⏳ timing lines 37%` in the stream bar, and the window stays responsive. A window typed meanwhile is held — every line stays visible and a hint next to the fields says it applies when timing finishes — and a time entered in `Ctrl+G` waits in the popup with the same progress and jumps when the scan completes (`Esc` drops the jump, not the scan). Once timed, the cache follows the file as it grows, and filters and search on a large file keep running in the background with the window applied to their results.
+
 ### Rendering backend
 FastTail starts on `wgpu` (Direct3D 12 or Vulkan on Windows, Vulkan on Linux, Metal on macOS) and, if that backend cannot be created, retries automatically with OpenGL. Both backends run without vsync because many drivers (NVIDIA on Windows among them) busy-wait for the vertical blank and burn CPU cores whenever egui repaints; running without vsync and with paced rendering keeps continuous repaints lightweight. The status bar shows which backend is active: `WGPU`, `GL`, or `GL fallback` when the retry happened; hover it, or open About, for the adapter details.
 
@@ -282,7 +284,7 @@ Download `fasttail-windows-x86_64.zip` from the [Releases](https://github.com/ma
 FastTail is one. The same features ship for Linux x86_64, Linux ARM64 and macOS Apple Silicon as a single binary: `tar -xzf fasttail-linux-x86_64.tar.gz && ./fasttail /var/log/syslog`. The macOS build is unsigned, see [the Gatekeeper note](#macos-apple-cannot-verify-fasttail-is-free-of-malware) for the one-time `xattr` command.
 
 ### Can FastTail open very large log files (multi-GB)?
-Yes. The file is never loaded into memory: rows are read on demand through a small block cache, and the only per-file state is a line index of 8 bytes per line. Files above 16 MB filter and search on a background thread with progress in the stream bar, so the window stays responsive while a multi-gigabyte log is scanned.
+Yes. The file is never loaded into memory: rows are read on demand through a small block cache, and the only per-file state is a line index of 8 bytes per line. Files above 16 MB filter, search and read their timestamps on a background thread with progress in the stream bar, so the window stays responsive while a multi-gigabyte log is scanned.
 
 ### How do I show only the lines that match a pattern, or hide the noise?
 Every stream has an **Include** and an **Exclude** box above the rows. Both accept plain text or a regular expression, case-sensitive or not, and apply as you type — `ERROR|CRITICAL` in Include, `healthcheck|ping` in Exclude. The `≥ level` selector adds a minimum log level on top. From the command line: `fasttail --filter ERROR --exclude DEBUG app.log`.
