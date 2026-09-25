@@ -929,6 +929,9 @@ pub struct TailEngine {
     pub ansi_dirty: bool,
     ansi_detected: bool,
     pub ansi_switched_at: Option<Instant>,
+    /// Auto-detection samples the head of what the stream held when it was read from the
+    /// start (bytes before this offset); every byte appended after it is examined.
+    ansi_head_end: u64,
     /// Decompression job and spool of a stream read from a gzip file or a zip entry
     /// (see `compressed`); `path` is then the archive (or `archive/entry`) and
     /// `current_file` the spool. Declared last so the file handle above is closed before
@@ -1219,6 +1222,7 @@ impl TailEngine {
         self.wrap_request = None;
         self.wrap_at_bottom = true;
         self.bytes_read_since_tick = 0;
+        self.ansi_head_end = self.source.len();
         // Drops selection, bookmarks, jobs and per-line caches; re-applies filters and search.
         self.rebuild_line_index();
         self.update_fingerprints();
@@ -1439,8 +1443,10 @@ impl TailEngine {
             ansi_dirty: false,
             ansi_detected: false,
             ansi_switched_at: None,
+            ansi_head_end: 0,
         };
 
+        engine.ansi_head_end = engine.source.len();
         engine.rebuild_line_index();
         engine.update_fingerprints();
         engine
@@ -1773,6 +1779,8 @@ impl TailEngine {
     pub fn set_encoding(&mut self, encoding: FileEncoding) {
         self.encoding = encoding;
         self.encoding_pending = false;
+        // Read from the start again: only the head is sampled for colour codes.
+        self.ansi_head_end = self.source.len();
         self.rebuild_line_index();
     }
 
@@ -2030,18 +2038,25 @@ impl TailEngine {
         self.ansi_dirty = true;
         self.ansi_switched_at = None;
         if mode == AnsiMode::Auto && !self.index_pending {
-            // Back to auto: look at the head again, like at open.
+            // Back to auto: look at the head again, like at open (the whole stream is
+            // not read again on a click).
             let head = self.bom_len();
+            let head_end = self.ansi_head_end;
+            self.ansi_head_end = self.source.len();
             self.detect_ansi(head);
+            self.ansi_head_end = head_end;
         }
         if self.ansi_effective() != before {
             self.line_text_changed();
         }
     }
 
-    /// Auto-detection on the bytes from `from` (at most `DETECT_SAMPLE_BYTES`): returns
-    /// true when it finds the stream's first SGR sequence. A no-op outside auto mode and
-    /// once a sequence was found (the switch happens at most once per stream).
+    /// Auto-detection on the bytes from `from`: returns true when it finds the stream's
+    /// first SGR sequence. Of the content the stream held when read from the start (before
+    /// `ansi_head_end`) at most `DETECT_SAMPLE_BYTES` are sampled, so opening a large file
+    /// stays cheap; every appended byte after it is examined, in chunks, however large
+    /// the append (a decompressed stream arrives in chunks of a megabyte). A no-op outside
+    /// auto mode and once a sequence was found (the switch happens at most once per stream).
     fn detect_ansi(&mut self, from: u64) -> bool {
         if self.ansi_mode != AnsiMode::Auto || self.ansi_detected {
             return false;
@@ -2050,18 +2065,60 @@ impl TailEngine {
         if from >= end {
             return false;
         }
-        let len = ((end - from) as usize).min(crate::ansi::DETECT_SAMPLE_BYTES);
-        let sample = self.source.read_to_vec(from, len);
-        let found = match self.encoding {
-            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
-                let even = sample.len() & !1;
-                let text = decode_content(&sample[..even], self.encoding, true);
-                crate::ansi::contains_sgr(text.as_bytes())
-            }
-            _ => crate::ansi::contains_sgr(&sample),
-        };
+        let head_end = self.ansi_head_end.min(end);
+        let mut found = false;
+        if from < head_end {
+            let len = ((head_end - from) as usize).min(crate::ansi::DETECT_SAMPLE_BYTES);
+            found = self.sgr_in(&self.source.read_to_vec(from, len));
+        }
+        if !found && end > head_end.max(from) {
+            found = self.sgr_in_range(head_end.max(from), end);
+        }
         self.ansi_detected = found;
         found
+    }
+
+    /// True when the bytes `[from, end)` hold an SGR sequence. Read straight from the file
+    /// in chunks (the block cache is left to the view); the chunks overlap so a sequence
+    /// across a boundary is seen. Bytes without an `ESC` cost a `memchr` pass.
+    fn sgr_in_range(&self, from: u64, end: u64) -> bool {
+        const CHUNK: usize = 256 * 1024;
+        const OVERLAP: u64 = 256;
+        let mut buf = vec![0u8; CHUNK.min((end - from) as usize)];
+        let mut pos = from;
+        while pos < end {
+            let len = ((end - pos) as usize).min(buf.len());
+            let n = match self.source.read_direct(pos, &mut buf[..len]) {
+                Ok(n) if n > 0 => n,
+                _ => return false,
+            };
+            if self.sgr_in(&buf[..n]) {
+                return true;
+            }
+            let next = pos + n as u64;
+            if next >= end {
+                break;
+            }
+            // Step back by an even amount, so UTF-16 chunks stay aligned.
+            pos = if n as u64 > OVERLAP {
+                next - OVERLAP
+            } else {
+                next
+            };
+        }
+        false
+    }
+
+    /// True when the raw bytes `bytes`, read at an even offset, hold an SGR sequence.
+    fn sgr_in(&self, bytes: &[u8]) -> bool {
+        match self.encoding {
+            FileEncoding::UnicodeLe | FileEncoding::UnicodeBe => {
+                let even = bytes.len() & !1;
+                let text = decode_content(&bytes[..even], self.encoding, true);
+                crate::ansi::contains_sgr(text.as_bytes())
+            }
+            _ => crate::ansi::contains_sgr(bytes),
+        }
     }
 
     /// The text of every line changed while the line index did not (the ANSI mode): the
@@ -2192,7 +2249,9 @@ impl TailEngine {
                 let before = (self.encoding, self.view_mode);
                 self.redetect_encoding();
                 if (self.encoding, self.view_mode) != before {
-                    self.reload_from_start(new_size, new_modified);
+                    // The bytes are the appended ones, read in the right encoding: all of
+                    // them are still examined for colour codes.
+                    self.redecode_from_start(new_size, new_modified);
                     return;
                 }
             }
@@ -2235,6 +2294,13 @@ impl TailEngine {
     /// Full reload after a truncation, rotation or in-place rewrite: reopens the handle,
     /// drops the cache and the index, and rebuilds from byte 0.
     fn reload_from_start(&mut self, new_size: u64, new_modified: Option<std::time::SystemTime>) {
+        // New content read from the start: only its head is sampled for colour codes.
+        self.ansi_head_end = new_size;
+        self.redecode_from_start(new_size, new_modified);
+    }
+
+    /// `reload_from_start` keeping the extent of the head sampled for colour codes.
+    fn redecode_from_start(&mut self, new_size: u64, new_modified: Option<std::time::SystemTime>) {
         self.file_size = new_size;
         self.last_modified = new_modified;
         self.max_line_bytes = 0;

@@ -31,6 +31,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   background job, the stream was considered complete while the index was still partial:
   the saved bookmarks were dropped and the encoding detection settled early. Both now
   wait until the index covers everything decompressed.
+- **ANSI colours are detected anywhere in an append.** Auto mode looked only at the first
+  64 KB of each append, so a colour code further into a large append was never seen, and
+  a compressed stream, which arrives in chunks of a megabyte or more, could stay in raw
+  mode for good. Until the first colour code is found, every appended byte is now
+  examined (a fast scan for the escape byte, read in chunks straight from the file); at
+  open, only the first 64 KB of the file are sampled, as before.
 
 ## [0.10.0] - 2026-09-25
 
