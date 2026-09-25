@@ -60,7 +60,7 @@ Switching a stream between Text, Hex and Markdown views SHALL keep the query and
 - **THEN** the query stays in the search box, byte-level hits are computed, and the current match index is clamped to the new hit count.
 
 ### Requirement: Go To Line
-Ctrl+G SHALL open a go-to popup for the focused stream. Entering a 1-based line number and pressing Enter SHALL scroll that line to the middle of the viewport and pause follow mode. Numbers past the end SHALL clamp to the last line. Under active filters the first visible line at or after the target SHALL be used and the popup SHALL say so. The forms `+N` and `-N` SHALL jump relative to the current top line. An input containing `:` SHALL be read as a time instead, in the forms the timestamp range filter accepts (a bare `HH:MM[:SS]` belonging to the day of the stream's first timestamped line, a `YYYY-MM-DD HH:MM[:SS]`, or a timestamp copied out of a line), and SHALL jump to the first line whose timestamp is at or after it, building the timestamp cache first when it has not been built yet. The search SHALL be a binary search when the timestamps never go back in time and a linear scan otherwise. Anything else, including a bare epoch number, is a line number.
+Ctrl+G SHALL open a go-to popup for the focused stream. Entering a 1-based line number and pressing Enter SHALL scroll that line to the middle of the viewport and pause follow mode. Numbers past the end SHALL clamp to the last line. Under active filters the first visible line at or after the target SHALL be used and the popup SHALL say so. The forms `+N` and `-N` SHALL jump relative to the current top line. An input containing `:` SHALL be read as a time instead, in the forms the timestamp range filter accepts (a bare `HH:MM[:SS]` belonging to the day of the stream's first timestamped line, a `YYYY-MM-DD HH:MM[:SS]`, or a timestamp copied out of a line), and SHALL jump to the first line whose timestamp is at or after it. When the stream has not been fully timed yet, the timestamp cache SHALL be built first, in the background when more than 16 MB remain to be timed: the popup SHALL show the timing progress and the jump SHALL happen when the cache is complete. Closing the popup or entering another target SHALL cancel a jump that is still waiting, without stopping the timing. The search SHALL be a binary search when the timestamps never go back in time and a linear scan otherwise. Anything else, including a bare epoch number, is a line number.
 
 #### Scenario: Jumping to a hidden line
 - **WHEN** an include filter hides line 500 and the user goes to line 500
@@ -77,6 +77,14 @@ Ctrl+G SHALL open a go-to popup for the focused stream. Entering a 1-based line 
 #### Scenario: Time past the end of the log
 - **WHEN** the user enters a time later than every timestamp in the stream
 - **THEN** the popup reports that the input cannot be resolved and the viewport does not move.
+
+#### Scenario: Jump to a time on a large untimed log
+- **WHEN** the user enters `09:15` in the Ctrl+G popup of a 4 GB stream that has never been timed
+- **THEN** the interface stays responsive, the popup shows the timing progress, and when timing completes the viewport centres on the first line stamped at or after 09:15.
+
+#### Scenario: Waiting jump cancelled
+- **WHEN** a time jump is waiting for timing and the user presses Esc
+- **THEN** the popup closes, the viewport does not move when timing completes, and the timing itself continues.
 
 ### Requirement: Line Bookmarks
 Each stream SHALL keep a set of bookmarked line indices. Ctrl+F2 SHALL toggle a bookmark on the current row, F2 / Shift+F2 SHALL jump to the next / previous bookmark visible under the active filters with wrap-around, and the stream menu SHALL offer "Clear bookmarks". Bookmarked rows SHALL show `★` in the marker column unless the row is a search match, and SHALL be tinted across their width. Bookmarks SHALL be dropped when the file is truncated or rewritten.

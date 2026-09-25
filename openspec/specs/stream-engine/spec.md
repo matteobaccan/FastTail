@@ -70,7 +70,7 @@ The engine SHALL support three view modes selectable per stream:
 - **THEN** the file is rendered as plain Markdown and the generic type is preserved, because code blocks and bare `<name>` tokens are not treated as HTML.
 
 ### Requirement: Background Scans with Progress and Cancellation
-Include/exclude filtering and search SHALL run synchronously for files up to 16 MB and on a worker thread above, delivering results in order as they are found. The stream bar SHALL show the scan kind, the progress percentage and the count so far. A newer filter, search or reload request SHALL cancel the running scan, and results of a cancelled scan SHALL never reach the view. Lines appended during a scan SHALL be evaluated by the incremental paths once the scan completes. The one exception is the timestamp scan (see the log-intelligence capability): the first use of the time range or of go-to-time currently times every line synchronously on the interface thread, so on a very large file that first use pauses the interface until the whole file has been read; later appends are timed incrementally.
+Include/exclude filtering and search SHALL run synchronously for files up to 16 MB and on a worker thread above, delivering results in order as they are found. The per-line timestamp scan (see the log-intelligence capability) SHALL follow the same rule, measured on the bytes not timed yet: synchronously when they are at most 16 MB, on a worker thread above. The stream bar SHALL show the scan kind, the progress percentage and the count so far. A newer filter, search or reload request SHALL cancel the running scan, and results of a cancelled scan SHALL never reach the view; the exceptions are a timestamp scan that a time window is waiting on, during which filter and search requests SHALL be deferred until it completes, and a level scan, which a timestamp request SHALL preempt. A cancelled timestamp or level scan SHALL resume from the first line it had not reached, not from the start of the file. Lines appended during a scan SHALL be evaluated by the incremental paths once the scan completes. A time window SHALL be applied to the lines returned by a background filter or search scan, so a window never forces a filter or search onto the interface thread.
 
 #### Scenario: Typing a filter on a large file
 - **WHEN** the user types an include filter on a 400 MB stream
@@ -79,6 +79,18 @@ Include/exclude filtering and search SHALL run synchronously for files up to 16 
 #### Scenario: Same result as the synchronous path
 - **WHEN** the same filter is applied to a file below and above the threshold
 - **THEN** the set of visible lines is identical.
+
+#### Scenario: First time range on a multi-gigabyte log
+- **WHEN** the user types a "from" time on a 5 GB stream that has not been timed yet
+- **THEN** the interface stays responsive, the stream bar shows `timing lines 12%` rising to 100%, and the window is applied when the scan completes.
+
+#### Scenario: Timestamp scan resumed after a search
+- **WHEN** a timestamp scan started by a go-to-time request is 40% through a large stream and the user types a search query
+- **THEN** the search runs first, and the timestamp scan then continues from the line it had reached rather than from line 1.
+
+#### Scenario: Filter with a time window on a large file
+- **WHEN** a time window is set on a fully timed 2 GB stream and the user types an include filter
+- **THEN** the filter runs on the worker thread with progress in the stream bar, and only lines inside the window appear.
 
 ### Requirement: Markdown Mode Size Cap
 Rendered Markdown SHALL be available only for files up to a size limit of 1 MB by default, adjustable from 1 to 100 MB in Settings (`markdown_max_mb` in `fasttail.ini`, overridden by the `FASTTAIL_MARKDOWN_MAX_MB` environment variable). A `.md` / `.markdown` file above 1 MB SHALL open in text mode; selecting MD on a file above the configured limit SHALL show a notice naming the limit instead of reading the whole file.
