@@ -86,6 +86,9 @@ pub enum EntryRefusal {
     Method(String),
     /// A name that climbs out of the archive (`../x`) or is absolute.
     UnsafeName,
+    /// Another entry earlier in the archive has the same stream path (`a/b.log` and
+    /// `a\b.log`, or names differing only by case on Windows): only the first opens.
+    DuplicateName,
 }
 
 /// One file entry of a zip archive, as listed by the entry picker.
@@ -103,6 +106,9 @@ pub fn list_zip_entries(path: &Path) -> std::io::Result<Vec<ZipEntryInfo>> {
     let file = crate::file_source::open_file_shared(path)?;
     let mut archive = zip::ZipArchive::new(BufReader::new(file)).map_err(zip_err)?;
     let mut out = Vec::with_capacity(archive.len());
+    // Stream paths of the entries that open: a later entry with the same one is refused,
+    // so each tab reads one entry.
+    let mut opened_keys = std::collections::HashSet::new();
     for i in 0..archive.len() {
         // Raw access reads the metadata without decrypting or decompressing anything.
         let entry = archive.by_index_raw(i).map_err(zip_err)?;
@@ -119,6 +125,8 @@ pub fn list_zip_entries(path: &Path) -> std::io::Result<Vec<ZipEntryInfo>> {
             Some(EntryRefusal::Method(format!("{method:?}")))
         } else if entry.enclosed_name().is_none() {
             Some(EntryRefusal::UnsafeName)
+        } else if !opened_keys.insert(entry_key(entry.name())) {
+            Some(EntryRefusal::DuplicateName)
         } else {
             None
         };
@@ -136,12 +144,37 @@ fn zip_err(e: zip::result::ZipError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
 }
 
+/// The parts of a zip entry name: split on `/` and on the `\` some Windows tools write,
+/// without the empty and `.` parts a path would drop anyway.
+fn entry_parts(entry: &str) -> impl Iterator<Item = &str> {
+    entry
+        .split(['/', '\\'])
+        .filter(|p| !p.is_empty() && *p != ".")
+}
+
+/// The name a zip entry is known by in FastTail (its stream identity and the value
+/// sessions save): `dir\./file.log` is `dir/file.log`.
+pub fn normalize_entry(entry: &str) -> String {
+    entry_parts(entry).collect::<Vec<_>>().join("/")
+}
+
+/// Key of the stream path of an entry: two entries with the same key would be one tab.
+/// Paths compare without case on Windows (see `paths::paths_equal_fast`).
+fn entry_key(entry: &str) -> String {
+    let name = normalize_entry(entry);
+    if cfg!(windows) {
+        name.to_ascii_lowercase()
+    } else {
+        name
+    }
+}
+
 /// Stream identity of the zip entry `entry` of `archive`: `archive/entry`, one path
-/// component per `/`-separated part. It names the stream in tabs, the workspace and the
+/// component per part of the name. It names the stream in tabs, the workspace and the
 /// bookmarks; nothing is ever written at that path.
 pub fn entry_path(archive: &Path, entry: &str) -> PathBuf {
     let mut path = archive.to_path_buf();
-    for part in entry.split('/').filter(|p| !p.is_empty()) {
+    for part in entry_parts(entry) {
         path.push(part);
     }
     path
@@ -149,7 +182,7 @@ pub fn entry_path(archive: &Path, entry: &str) -> PathBuf {
 
 /// The archive of the entry path `path` holding `entry` (the inverse of `entry_path`).
 pub fn archive_of(path: &Path, entry: &str) -> PathBuf {
-    let parts = entry.split('/').filter(|p| !p.is_empty()).count();
+    let parts = entry_parts(entry).count();
     let mut archive = path.to_path_buf();
     for _ in 0..parts {
         archive.pop();
@@ -621,9 +654,12 @@ fn low_on_space(spool_dir: &Path, limits: &Limits) -> Option<String> {
 /// A stream decompressed into a spool: owned by the engine (`TailEngine::compressed`).
 /// Fields drop in order: the job (cancelled and joined) before the spool (deleted).
 pub struct CompressedStream {
-    /// The archive on disk and, for a zip, the entry.
+    /// The archive on disk and, for a zip, the entry: its `/`-separated identity
+    /// (`normalize_entry`), the name `path` and saved sessions know it by.
     pub archive: PathBuf,
     pub entry: Option<String>,
+    /// The entry name as the archive spells it, which the job looks up.
+    pub real_entry: Option<String>,
     pub settings: Settings,
     job: DecompressJob,
     spool: SpoolFile,
@@ -636,17 +672,20 @@ pub struct CompressedStream {
 }
 
 impl CompressedStream {
+    /// `entry`: for a zip, the entry's identity and its name as the archive spells it.
     fn start(
         archive: &Path,
-        entry: Option<&str>,
+        entry: Option<(String, String)>,
         settings: &Settings,
         spool: SpoolFile,
         out: File,
         wake: Option<WakeFn>,
     ) -> Self {
+        let (entry, real_entry) = entry.unzip();
         let mut stream = Self {
             archive: archive.to_path_buf(),
-            entry: entry.map(str::to_string),
+            entry,
+            real_entry,
             settings: settings.clone(),
             job: DecompressJob::idle(),
             spool,
@@ -659,7 +698,7 @@ impl CompressedStream {
     }
 
     fn new_job(&self, out: File) -> DecompressJob {
-        let source = match &self.entry {
+        let source = match &self.real_entry {
             Some(entry) => JobSource::ZipEntry {
                 archive: self.archive.clone(),
                 entry: entry.clone(),
@@ -771,8 +810,22 @@ fn gzip_inner_name(archive: &Path) -> String {
     name
 }
 
+/// The entry of `entries` whose stream path is the one of `entry` (however either spells
+/// its separators): the one that opens when several share it, else the first.
+fn find_entry(entries: Vec<ZipEntryInfo>, entry: &str) -> Result<ZipEntryInfo, OpenError> {
+    let key = entry_key(entry);
+    let mut matching = entries
+        .into_iter()
+        .filter(|e| e.refusal != Some(EntryRefusal::DuplicateName) && entry_key(&e.name) == key);
+    let first = matching.next().ok_or(OpenError::NoSuchEntry)?;
+    if first.refusal.is_none() {
+        return Ok(first);
+    }
+    Ok(matching.find(|e| e.refusal.is_none()).unwrap_or(first))
+}
+
 /// Opens a decompressed stream: `entry` is `None` for a gzip file, the entry name for a
-/// zip. The engine starts on an empty spool with follow off; the job fills the spool
+/// zip (any spelling of its stream path). The engine starts on an empty spool with follow off; the job fills the spool
 /// in the background and the engine's poll indexes it as it grows.
 pub fn open_engine(
     archive: &Path,
@@ -781,14 +834,10 @@ pub fn open_engine(
     wake: Option<WakeFn>,
 ) -> Result<TailEngine, OpenError> {
     // The entry name as the archive spells it, for the job.
-    let mut real_entry = entry.map(str::to_string);
+    let mut real_entry = None;
     let spool_name = match entry {
         Some(entry) => {
-            // Some Windows tools write `\` separators: the entry path only knows `/`.
-            let info = list_zip_entries(archive)?
-                .into_iter()
-                .find(|e| e.name == entry || e.name.replace('\\', "/") == entry)
-                .ok_or(OpenError::NoSuchEntry)?;
+            let info = find_entry(list_zip_entries(archive)?, entry)?;
             if let Some(refusal) = info.refusal {
                 return Err(OpenError::Refused(refusal));
             }
@@ -817,13 +866,11 @@ pub fn open_engine(
     // Nothing is appended once the job ends, and jumping to the bottom on every chunk
     // while it runs would make the view unreadable: follow stays off.
     engine.follow_tail = false;
+    let entry = entry
+        .zip(real_entry)
+        .map(|(entry, real)| (normalize_entry(entry), real));
     engine.compressed = Some(CompressedStream::start(
-        archive,
-        real_entry.as_deref(),
-        settings,
-        spool,
-        out,
-        wake,
+        archive, entry, settings, spool, out, wake,
     ));
     Ok(engine)
 }
@@ -869,6 +916,11 @@ impl TailEngine {
             return;
         };
         if c.finalized {
+            return;
+        }
+        // While a background index job runs, `file_size` is ahead of the index and
+        // `total_lines` is partial: nothing is settled until the index catches up.
+        if self.index_pending {
             return;
         }
         let finished = !c.is_running() && !c.has_unindexed(file_size);
@@ -1419,6 +1471,121 @@ mod tests {
         assert_eq!(
             engine.bookmarks.iter().copied().collect::<Vec<_>>(),
             [5, 2999]
+        );
+    }
+
+    #[test]
+    fn a_backslash_entry_keeps_the_slash_name_as_its_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("win.zip");
+        write_zip(
+            &bundle,
+            &[(
+                "dir\\file.log",
+                Some(b"from windows\n"),
+                zip::CompressionMethod::Deflated,
+            )],
+        );
+        let settings = test_settings(dir.path());
+        let mut engine = open_engine(&bundle, Some("dir/file.log"), &settings, None).unwrap();
+        let c = engine.compressed.as_ref().unwrap();
+        // The identity (and what sessions save) is the `/` name; the job reads the entry
+        // as the archive spells it.
+        assert_eq!(c.entry.as_deref(), Some("dir/file.log"));
+        assert_eq!(c.real_entry.as_deref(), Some("dir\\file.log"));
+        assert_eq!(engine.path, entry_path(&bundle, "dir/file.log"));
+        assert_eq!(archive_of(&engine.path, "dir/file.log"), bundle);
+        // A value saved by 0.10.0 still names the right archive and entry path.
+        assert_eq!(archive_of(&engine.path, "dir\\file.log"), bundle);
+        assert_eq!(entry_path(&bundle, "dir\\file.log"), engine.path);
+        settle(&mut engine);
+        assert_eq!(engine.get_line(0).as_deref(), Some("from windows"));
+    }
+
+    #[test]
+    fn a_dot_slash_entry_opens_by_its_stream_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("dot.zip");
+        write_zip(
+            &bundle,
+            &[("./x.log", Some(b"dot\n"), zip::CompressionMethod::Stored)],
+        );
+        let path = entry_path(&bundle, "./x.log");
+        assert_eq!(path, bundle.join("x.log"));
+        let Target::ZipEntry { archive, entry } = classify(&path) else {
+            panic!("not an entry path");
+        };
+        let settings = test_settings(dir.path());
+        let mut engine = open_engine(&archive, Some(&entry), &settings, None).unwrap();
+        assert_eq!(engine.path, path);
+        assert_eq!(
+            engine.compressed.as_ref().unwrap().entry.as_deref(),
+            Some("x.log")
+        );
+        settle(&mut engine);
+        assert_eq!(engine.get_line(0).as_deref(), Some("dot"));
+    }
+
+    #[test]
+    fn entries_sharing_a_stream_path_are_refused_after_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("twins.zip");
+        write_zip(
+            &bundle,
+            &[
+                (
+                    "a\\b.log",
+                    Some(b"backslash\n"),
+                    zip::CompressionMethod::Stored,
+                ),
+                ("a/b.log", Some(b"slash\n"), zip::CompressionMethod::Stored),
+                ("c.log", Some(b"c\n"), zip::CompressionMethod::Stored),
+            ],
+        );
+        let entries = list_zip_entries(&bundle).unwrap();
+        let refusals: Vec<_> = entries.iter().map(|e| e.refusal.clone()).collect();
+        assert_eq!(refusals, [None, Some(EntryRefusal::DuplicateName), None]);
+        // The stream path opens the first of the two, whichever spelling asks for it.
+        let settings = test_settings(dir.path());
+        for asked in ["a/b.log", "a\\b.log"] {
+            let mut engine = open_engine(&bundle, Some(asked), &settings, None).unwrap();
+            assert_eq!(
+                engine.compressed.as_ref().unwrap().real_entry.as_deref(),
+                Some("a\\b.log")
+            );
+            settle(&mut engine);
+            assert_eq!(engine.get_line(0).as_deref(), Some("backslash"));
+        }
+        if cfg!(windows) {
+            // Names differing only by case are one stream path on Windows.
+            let cased = dir.path().join("cased.zip");
+            write_zip(
+                &cased,
+                &[
+                    ("App.log", Some(b"upper\n"), zip::CompressionMethod::Stored),
+                    ("app.log", Some(b"lower\n"), zip::CompressionMethod::Stored),
+                ],
+            );
+            let entries = list_zip_entries(&cased).unwrap();
+            assert_eq!(entries[1].refusal, Some(EntryRefusal::DuplicateName));
+        }
+    }
+
+    #[test]
+    fn restored_bookmarks_survive_a_background_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = log_text(50_000);
+        let gz = dir.path().join("app.gz");
+        std::fs::write(&gz, gzip(&data)).unwrap();
+        let mut engine = open_engine(&gz, None, &test_settings(dir.path()), None).unwrap();
+        // Index every append on a worker thread, as a large stream does.
+        engine.index_job_threshold_bytes = 0;
+        engine.compressed.as_mut().unwrap().pending_bookmarks = vec![5, 49_999];
+        settle(&mut engine);
+        assert_eq!(engine.total_lines(), 50_000);
+        assert_eq!(
+            engine.bookmarks.iter().copied().collect::<Vec<_>>(),
+            [5, 49_999]
         );
     }
 }
