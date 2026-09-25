@@ -302,8 +302,58 @@ impl HighlightRule {
     }
 }
 
-/// Upper bound on remembered search hits, keeps F3 navigation responsive on huge files.
-const MAX_SEARCH_MATCHES: usize = 20_000;
+/// Upper bound on the stored line hits of a search: 8 bytes each, so at most 8 MB per
+/// stream. Past it the search keeps counting (`search_total`) without storing.
+pub const MAX_SEARCH_MATCHES: usize = 1_000_000;
+/// Upper bound on the byte-level hits of the HEX view.
+pub const MAX_BYTE_MATCHES: usize = 20_000;
+/// Lines per bucket of the ERROR / FATAL counts kept beside the level cache.
+pub const ERROR_BLOCK_LINES: usize = 4096;
+
+/// Outcome of a synchronous line search: the hits listed (at most the limit), every hit
+/// counted, and the last line counted.
+#[derive(Debug, Default)]
+struct LineHits {
+    lines: Vec<usize>,
+    total: usize,
+    last: Option<usize>,
+}
+
+/// How many of the `total` counted hits lie at or after line `start`, which a rescan
+/// from `start` replaces. `keep` of the `stored` listed hits are before `start`; the hits
+/// counted past the cap all follow the listed ones, and `last_counted` bounds the last of
+/// them (`exact` when it is that line). `None` when the answer is not known: the list is
+/// capped, every listed hit is before `start`, and counted-only hits may sit on both
+/// sides of it.
+fn counted_hits_from(
+    start: usize,
+    keep: usize,
+    stored: usize,
+    total: usize,
+    last_counted: usize,
+    exact: bool,
+) -> Option<usize> {
+    if total <= stored {
+        return Some(stored - keep);
+    }
+    if keep < stored {
+        // A listed hit is at or after `start`, so every counted-only hit is too.
+        return Some(total - keep);
+    }
+    if last_counted < start {
+        Some(0)
+    } else if exact && last_counted == start {
+        // The counted hits are distinct lines, and the last one is `start` itself.
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// Whether a cached level byte is ERROR or FATAL (the levels the overview strip marks).
+pub fn is_error_level(v: u8) -> bool {
+    v == LogLevel::Error as u8 || v == LogLevel::Fatal as u8
+}
 /// Bytes read per step by sequential scans (indexing, byte search).
 const SCAN_CHUNK: usize = 1024 * 1024;
 /// A single line longer than this is shown truncated, with a marker.
@@ -561,7 +611,6 @@ pub(crate) fn find_case_insensitive_cb(
 /// Efficient case-insensitive substring search.
 /// Byte ranges of every non-overlapping, case-insensitive occurrence of `needle_lower`
 /// (already lower-cased) in `haystack`.
-#[allow(dead_code)]
 pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     find_case_insensitive_cb(haystack, needle_lower, |s, e| {
@@ -757,6 +806,9 @@ pub struct TailEngine {
     goto_time_result: Option<Option<GotoTarget>>,
     /// Lines per level among the cached prefix, indexed by `LogLevel as u8`.
     pub level_counts: [u64; LogLevel::COUNT],
+    /// ERROR and FATAL lines per `ERROR_BLOCK_LINES` lines of the cached level prefix,
+    /// for the overview strip: block `b` covers lines `b * ERROR_BLOCK_LINES ..`.
+    error_blocks: Vec<u32>,
     /// Compiled include/exclude filter, shared with filter and search jobs.
     filter: FilterSpec,
     /// Running background scan, if any (one at a time per stream).
@@ -773,8 +825,21 @@ pub struct TailEngine {
     pub job_threshold_bytes: u64,
     pub index_job_threshold_bytes: u64,
     pub filtered_lines: Vec<usize>,
+    /// Bumped whenever `filtered_lines` or the filter behind it may have changed; keys
+    /// the UI caches built over the visible rows.
+    pub filter_generation: u64,
     pub search_query: String,
+    /// Line hits of the active search in file order, at most `MAX_SEARCH_MATCHES`.
     pub search_matches: Vec<usize>,
+    /// Every visible line matching the active search, counted past the cap too.
+    search_total: usize,
+    /// Upper bound on the last line counted in `search_total`, and whether it is that line
+    /// exactly. Only read once the list is capped: an append that re-examines lines past
+    /// the stored hits needs to know which of the counted-only hits it replaces.
+    search_last_counted: usize,
+    search_last_counted_exact: bool,
+    /// Bumped whenever `search_matches` changes; keys the UI caches built over the hits.
+    pub search_generation: u64,
     /// Selected rows (line indices) for copy/export; `selection_all` marks "every visible row".
     pub selection: BTreeSet<usize>,
     pub selection_all: bool,
@@ -789,6 +854,8 @@ pub struct TailEngine {
     pub bookmarks: BTreeSet<usize>,
     pub bookmark_cursor: Option<usize>,
     pub bookmarks_dirty: bool,
+    /// Bumped whenever the bookmark set changes (keys the overview strip).
+    pub bookmarks_generation: u64,
     /// Soft-wrap rows at the viewport width (per stream, persisted in the workspace) and a
     /// dirty flag for persistence.
     pub wrap_lines: bool,
@@ -1279,6 +1346,7 @@ impl TailEngine {
             bookmarks: BTreeSet::new(),
             bookmark_cursor: None,
             bookmarks_dirty: false,
+            bookmarks_generation: 0,
             wrap_lines: false,
             wrap_dirty: false,
             wrap_anchor: WrapAnchor::TOP,
@@ -1318,6 +1386,7 @@ impl TailEngine {
             pending_goto_time: None,
             goto_time_result: None,
             level_counts: [0; LogLevel::COUNT],
+            error_blocks: Vec::new(),
             filter: FilterSpec::default(),
             job: None,
             job_generation: 0,
@@ -1328,8 +1397,13 @@ impl TailEngine {
             job_threshold_bytes,
             index_job_threshold_bytes,
             filtered_lines: Vec::new(),
+            filter_generation: 0,
             search_query: String::new(),
             search_matches: Vec::new(),
+            search_total: 0,
+            search_last_counted: 0,
+            search_last_counted_exact: false,
+            search_generation: 0,
             search_byte_matches: Vec::new(),
             search_byte_max_len: 0,
             current_match_idx: None,
@@ -1486,10 +1560,52 @@ impl TailEngine {
     }
 
     fn push_levels(&mut self, fresh: &[u8]) {
-        for &v in fresh {
+        for (idx, &v) in (self.levels.len()..).zip(fresh) {
             self.level_counts[(v as usize).min(LogLevel::COUNT - 1)] += 1;
+            let block = idx / ERROR_BLOCK_LINES;
+            if self.error_blocks.len() <= block {
+                self.error_blocks.resize(block + 1, 0);
+            }
+            if is_error_level(v) {
+                self.error_blocks[block] += 1;
+            }
         }
         self.levels.extend_from_slice(fresh);
+    }
+
+    /// Detected levels (`LogLevel as u8`) of the cached prefix of the lines.
+    pub fn cached_levels(&self) -> &[u8] {
+        &self.levels
+    }
+
+    /// ERROR and FATAL lines per block of `ERROR_BLOCK_LINES` lines of the cached prefix.
+    pub fn error_block_counts(&self) -> &[u32] {
+        &self.error_blocks
+    }
+
+    /// ERROR and FATAL lines among `lines`, counting only lines whose level is cached:
+    /// whole blocks from the block counts, the partial ends from the level cache.
+    pub fn error_lines_in(&self, lines: std::ops::Range<usize>) -> u64 {
+        let end = lines.end.min(self.levels.len());
+        let mut at = lines.start.min(end);
+        let mut count = 0u64;
+        while at < end {
+            let block = at / ERROR_BLOCK_LINES;
+            let block_start = block * ERROR_BLOCK_LINES;
+            let block_end = block_start + ERROR_BLOCK_LINES;
+            if at == block_start && block_end <= end {
+                count += u64::from(self.error_blocks[block]);
+                at = block_end;
+            } else {
+                let stop = block_end.min(end);
+                count += self.levels[at..stop]
+                    .iter()
+                    .filter(|&&v| is_error_level(v))
+                    .count() as u64;
+                at = stop;
+            }
+        }
+        count
     }
 
     /// Whether every indexed line has been timed.
@@ -1605,11 +1721,16 @@ impl TailEngine {
         if self.levels.len() <= keep {
             return;
         }
-        for &v in &self.levels[keep..] {
+        for (idx, &v) in self.levels.iter().enumerate().skip(keep) {
             let slot = &mut self.level_counts[(v as usize).min(LogLevel::COUNT - 1)];
             *slot = slot.saturating_sub(1);
+            if is_error_level(v) {
+                let block = &mut self.error_blocks[idx / ERROR_BLOCK_LINES];
+                *block = block.saturating_sub(1);
+            }
         }
         self.levels.truncate(keep);
+        self.error_blocks.truncate(keep.div_ceil(ERROR_BLOCK_LINES));
     }
 
     /// Detects the levels of the lines not cached yet: synchronously when the remaining
@@ -1711,7 +1832,8 @@ impl TailEngine {
             // Large file: index on a worker thread; the view shows lines as they arrive.
             self.line_offsets = Vec::new();
             self.filtered_lines = Vec::new();
-            self.search_matches = Vec::new();
+            self.filter_generation = self.filter_generation.wrapping_add(1);
+            self.clear_search_hits();
             self.search_byte_matches = Vec::new();
             self.current_match_idx = None;
             self.max_line_bytes = 0;
@@ -2533,6 +2655,7 @@ impl TailEngine {
     }
 
     fn recompute_filtered_lines_from(&mut self, start: usize) {
+        self.filter_generation = self.filter_generation.wrapping_add(1);
         if !self.is_filter_active() {
             self.filtered_lines = Vec::new();
             return;
@@ -2695,7 +2818,8 @@ impl TailEngine {
 
     pub fn get_visible_row_of_line(&self, line_idx: usize) -> Option<usize> {
         if self.is_filter_active() {
-            self.filtered_lines.iter().position(|&idx| idx == line_idx)
+            // The visible lines are in file order.
+            self.filtered_lines.binary_search(&line_idx).ok()
         } else if line_idx < self.total_lines() {
             Some(line_idx)
         } else {
@@ -3025,18 +3149,26 @@ impl TailEngine {
     }
 
     pub fn find_matches(&self, query: &str) -> Vec<usize> {
-        self.find_matches_from(query, 0, MAX_SEARCH_MATCHES)
+        self.find_matches_from(query, 0, MAX_SEARCH_MATCHES).lines
     }
 
-    /// Case-insensitive search over the visible lines `>= start`, at most `limit` hits.
-    fn find_matches_from(&self, query: &str, start: usize, limit: usize) -> Vec<usize> {
-        let mut matches = Vec::new();
-        if query.is_empty() || limit == 0 {
-            return matches;
+    /// Case-insensitive search over the visible lines `>= start`: the first `limit` hits
+    /// are listed, the others only counted.
+    fn find_matches_from(&self, query: &str, start: usize, limit: usize) -> LineHits {
+        let mut hits = LineHits::default();
+        if query.is_empty() {
+            return hits;
         }
         let q_lower = query.to_lowercase();
 
         let check_match = |line: &str| -> bool { contains_case_insensitive(line, &q_lower) };
+        let mut record = |idx: usize| {
+            if hits.lines.len() < limit {
+                hits.lines.push(idx);
+            }
+            hits.total += 1;
+            hits.last = Some(idx);
+        };
         let total = self.total_lines();
 
         if self.is_filter_active() {
@@ -3047,10 +3179,7 @@ impl TailEngine {
                 for &idx in visible {
                     if let Some(line) = self.get_line(idx) {
                         if check_match(&line) {
-                            matches.push(idx);
-                            if matches.len() >= limit {
-                                break;
-                            }
+                            record(idx);
                         }
                     }
                 }
@@ -3062,10 +3191,7 @@ impl TailEngine {
                         p += 1;
                     }
                     if p < visible.len() && visible[p] == idx && check_match(line) {
-                        matches.push(idx);
-                        if matches.len() >= limit {
-                            return false;
-                        }
+                        record(idx);
                     }
                     true
                 });
@@ -3073,15 +3199,36 @@ impl TailEngine {
         } else {
             self.scan_lines(start, total, |idx, line| {
                 if check_match(line) {
-                    matches.push(idx);
-                    if matches.len() >= limit {
-                        return false;
-                    }
+                    record(idx);
                 }
                 true
             });
         }
-        matches
+        hits
+    }
+
+    /// Every visible line matching the active search, the ones past `MAX_SEARCH_MATCHES`
+    /// included (those are counted, not listed). Byte hits in HEX view.
+    pub fn search_total(&self) -> usize {
+        if self.view_mode == ViewMode::Hex {
+            self.search_byte_matches.len()
+        } else {
+            self.search_total.max(self.search_matches.len())
+        }
+    }
+
+    /// Whether the search matched more lines than it lists (see `MAX_SEARCH_MATCHES`).
+    pub fn search_capped(&self) -> bool {
+        self.view_mode != ViewMode::Hex && self.search_total > self.search_matches.len()
+    }
+
+    /// Forgets the line hits of the search, listed and counted.
+    fn clear_search_hits(&mut self) {
+        self.search_matches = Vec::new();
+        self.search_total = 0;
+        self.search_last_counted = 0;
+        self.search_last_counted_exact = false;
+        self.search_generation = self.search_generation.wrapping_add(1);
     }
 
     /// Whether a search must wait for the running scan: the index, a filter scan (search
@@ -3112,6 +3259,26 @@ impl TailEngine {
                 Some(self.pending_refresh_from.map_or(start, |p| p.min(start)));
             return;
         }
+        let keep = self.search_matches.partition_point(|&idx| idx < start);
+        // The counted hits the rescan replaces: those at or after `start`.
+        let replaced = if start == 0 {
+            Some(self.search_total)
+        } else {
+            counted_hits_from(
+                start,
+                keep,
+                self.search_matches.len(),
+                self.search_total,
+                self.search_last_counted,
+                self.search_last_counted_exact,
+            )
+        };
+        let Some(replaced) = replaced else {
+            // Capped, and the counted-only hits reach into the changed lines: which of
+            // them were before `start` is not known, count everything again.
+            self.refresh_search_from(0);
+            return;
+        };
         if start == 0 && self.source.len() > self.job_threshold_bytes {
             self.start_search_job();
             return;
@@ -3120,11 +3287,24 @@ impl TailEngine {
         let current_byte = self.current_search_byte().map(|(off, _)| off);
         let query = std::mem::take(&mut self.last_searched_query);
 
-        let keep = self.search_matches.partition_point(|&idx| idx < start);
         self.search_matches.truncate(keep);
         let remaining = MAX_SEARCH_MATCHES.saturating_sub(self.search_matches.len());
         let fresh = self.find_matches_from(&query, start, remaining);
-        self.search_matches.extend(fresh);
+        self.search_total = self.search_total.saturating_sub(replaced) + fresh.total;
+        match fresh.last {
+            Some(last) => {
+                self.search_last_counted = last;
+                self.search_last_counted_exact = true;
+            }
+            None if replaced > 0 => {
+                // The last counted hit was dropped: the one before it lies before `start`.
+                self.search_last_counted = start.saturating_sub(1);
+                self.search_last_counted_exact = false;
+            }
+            None => {}
+        }
+        self.search_matches.extend(fresh.lines);
+        self.search_generation = self.search_generation.wrapping_add(1);
 
         // Byte matches: everything ending before the first changed byte is still valid
         let start_offset = self
@@ -3137,7 +3317,7 @@ impl TailEngine {
             .partition_point(|&(off, len)| off + len <= start_offset);
         self.search_byte_matches.truncate(keep_bytes);
         let rescan_from = start_offset.saturating_sub(self.search_byte_max_len.saturating_sub(1));
-        let remaining = MAX_SEARCH_MATCHES.saturating_sub(self.search_byte_matches.len());
+        let remaining = MAX_BYTE_MATCHES.saturating_sub(self.search_byte_matches.len());
         let (fresh, max_len) = self.find_byte_matches_from(&query, rescan_from, remaining);
         self.search_byte_matches.extend(
             fresh
@@ -3308,11 +3488,8 @@ impl TailEngine {
             && !self.last_searched_query.is_empty()
             && self.search_byte_matches.is_empty()
         {
-            let (byte_matches, max_len) = self.find_byte_matches_from(
-                &self.last_searched_query.clone(),
-                0,
-                MAX_SEARCH_MATCHES,
-            );
+            let (byte_matches, max_len) =
+                self.find_byte_matches_from(&self.last_searched_query.clone(), 0, MAX_BYTE_MATCHES);
             self.search_byte_matches = byte_matches;
             self.search_byte_max_len = max_len;
         }
@@ -3447,7 +3624,9 @@ impl TailEngine {
     pub fn update_search(&mut self, query: &str) {
         let trimmed = query.trim();
         if trimmed.is_empty() {
-            self.search_matches.clear();
+            if !self.search_matches.is_empty() || self.search_total > 0 {
+                self.clear_search_hits();
+            }
             self.search_byte_matches.clear();
             self.search_byte_max_len = 0;
             self.current_match_idx = None;
@@ -3459,7 +3638,7 @@ impl TailEngine {
         }
         self.last_searched_query = trimmed.to_string();
         if self.search_waits() {
-            self.search_matches = Vec::new();
+            self.clear_search_hits();
             self.search_byte_matches = Vec::new();
             self.current_match_idx = None;
             self.pending_search = true;
@@ -3469,8 +3648,13 @@ impl TailEngine {
             self.start_search_job();
             return;
         }
-        self.search_matches = self.find_matches(trimmed);
-        let (byte_matches, max_len) = self.find_byte_matches_from(trimmed, 0, MAX_SEARCH_MATCHES);
+        let hits = self.find_matches_from(trimmed, 0, MAX_SEARCH_MATCHES);
+        self.search_matches = hits.lines;
+        self.search_total = hits.total;
+        self.search_last_counted = hits.last.unwrap_or(0);
+        self.search_last_counted_exact = hits.last.is_some();
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let (byte_matches, max_len) = self.find_byte_matches_from(trimmed, 0, MAX_BYTE_MATCHES);
         self.search_byte_matches = byte_matches;
         self.search_byte_max_len = max_len;
         self.current_match_idx = if self.active_match_count() > 0 {
@@ -3484,7 +3668,7 @@ impl TailEngine {
     /// hits (HEX view) are computed synchronously only while the HEX view is showing.
     fn start_search_job(&mut self) {
         let query = self.last_searched_query.clone();
-        self.search_matches = Vec::new();
+        self.clear_search_hits();
         self.current_match_idx = None;
         let filter = if self.filter.is_active() {
             Some(self.filter.clone())
@@ -3492,7 +3676,8 @@ impl TailEngine {
             None
         };
         // The time window is applied to the hits as they are drained, so the worker must
-        // not stop at the cap counting hits the window will drop; the drain caps instead.
+        // not stop at the cap counting hits the window will drop; the drain caps and
+        // counts instead. Otherwise the worker lists up to the cap and counts past it.
         let limit = if self.is_time_filtered() {
             usize::MAX
         } else {
@@ -3503,12 +3688,12 @@ impl TailEngine {
                 query_lower: query.to_lowercase(),
                 filter,
                 limit,
+                count_past_limit: true,
             },
             0,
         );
         if self.view_mode == ViewMode::Hex {
-            let (byte_matches, max_len) =
-                self.find_byte_matches_from(&query, 0, MAX_SEARCH_MATCHES);
+            let (byte_matches, max_len) = self.find_byte_matches_from(&query, 0, MAX_BYTE_MATCHES);
             self.search_byte_matches = byte_matches;
             self.search_byte_max_len = max_len;
             self.current_match_idx = if self.search_byte_matches.is_empty() {
@@ -3567,10 +3752,21 @@ impl TailEngine {
                     }
                     job.hits += lines.len();
                     match job.kind {
-                        ScanKind::Filter => self.filtered_lines.extend(lines),
+                        ScanKind::Filter => {
+                            self.filtered_lines.extend(lines);
+                            self.filter_generation = self.filter_generation.wrapping_add(1);
+                        }
                         ScanKind::Search => {
-                            self.search_matches.extend(lines);
-                            self.search_matches.truncate(MAX_SEARCH_MATCHES);
+                            // Hits past the cap are counted, not stored (a job under a
+                            // time window sends them all, see `start_search_job`).
+                            if let Some(&last) = lines.last() {
+                                self.search_last_counted = last;
+                                self.search_last_counted_exact = true;
+                            }
+                            self.search_total += lines.len();
+                            let room = MAX_SEARCH_MATCHES.saturating_sub(self.search_matches.len());
+                            self.search_matches.extend(lines.into_iter().take(room));
+                            self.search_generation = self.search_generation.wrapping_add(1);
                             if self.current_match_idx.is_none()
                                 && self.view_mode != ViewMode::Hex
                                 && !self.search_matches.is_empty()
@@ -3580,6 +3776,13 @@ impl TailEngine {
                         }
                         ScanKind::Index | ScanKind::Levels | ScanKind::Timestamps => {}
                     }
+                }
+                ScanBatch::Counted { hits, last_line } => {
+                    // Search hits past the cap: counted by the worker, never listed.
+                    job.hits += hits;
+                    self.search_total += hits;
+                    self.search_last_counted = last_line;
+                    self.search_last_counted_exact = true;
                 }
                 ScanBatch::Levels(levels) => {
                     self.push_levels(&levels);
@@ -3766,6 +3969,12 @@ impl TailEngine {
         Some(self.jump_to_match(prev_idx, wrapped && sound_enabled))
     }
 
+    /// Makes hit `idx` of the navigated list the current match (a click in the search
+    /// results pane) and returns its target like `search_next`; `None` out of range.
+    pub fn select_match(&mut self, idx: usize) -> Option<usize> {
+        (idx < self.active_match_count()).then(|| self.jump_to_match(idx, false))
+    }
+
     fn jump_to_match(&mut self, idx: usize, beep: bool) -> usize {
         self.current_match_idx = Some(idx);
         let target = if self.view_mode == ViewMode::Hex {
@@ -3794,6 +4003,7 @@ impl TailEngine {
         }
         self.bookmark_cursor = Some(idx);
         self.bookmarks_dirty = true;
+        self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
     }
 
     pub fn clear_bookmarks(&mut self) {
@@ -3802,6 +4012,7 @@ impl TailEngine {
         }
         self.bookmarks.clear();
         self.bookmark_cursor = None;
+        self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
     }
 
     /// Replaces the bookmarks (used when restoring them from the configuration).
@@ -3810,6 +4021,7 @@ impl TailEngine {
         self.bookmarks = lines.into_iter().filter(|&l| l < total).collect();
         self.bookmark_cursor = None;
         self.bookmarks_dirty = false;
+        self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
     }
 
     pub fn has_bookmarks(&self) -> bool {
@@ -4143,7 +4355,21 @@ impl TailEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_case_insensitive, find_case_insensitive};
+    use super::{contains_case_insensitive, counted_hits_from, find_case_insensitive};
+
+    #[test]
+    fn counted_hits_replaced_by_a_rescan() {
+        // Not capped: the listed hits at or after `start`.
+        assert_eq!(counted_hits_from(10, 3, 5, 5, 40, true), Some(2));
+        // Capped with a listed hit past `start`: every counted-only hit follows it.
+        assert_eq!(counted_hits_from(10, 3, 5, 9, 90, true), Some(6));
+        // Capped, every listed hit before `start`: known only at the edges.
+        assert_eq!(counted_hits_from(100, 5, 5, 9, 90, true), Some(0));
+        assert_eq!(counted_hits_from(100, 5, 5, 9, 99, false), Some(0));
+        assert_eq!(counted_hits_from(90, 5, 5, 9, 90, true), Some(1));
+        assert_eq!(counted_hits_from(90, 5, 5, 9, 90, false), None);
+        assert_eq!(counted_hits_from(80, 5, 5, 9, 90, true), None);
+    }
 
     #[test]
     fn ascii_needle_matches_inside_utf8_haystack_on_char_boundaries() {

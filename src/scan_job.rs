@@ -171,11 +171,13 @@ pub enum JobSpec {
     /// last, so a job resumed halfway fills the same cache as one that never stopped.
     Timestamps { inherited: i64, hint: FormatHint },
     /// Emit the indices of the visible lines containing the query (case-insensitive),
-    /// at most `limit`.
+    /// at most `limit`; past it the scan stops, or with `count_past_limit` goes on
+    /// counting the hits it no longer lists (`ScanBatch::Counted`).
     Search {
         query_lower: String,
         filter: Option<FilterSpec>,
         limit: usize,
+        count_past_limit: bool,
     },
 }
 
@@ -184,6 +186,9 @@ pub enum JobSpec {
 pub enum ScanBatch {
     /// Line indices found so far (filter / search), in increasing order.
     Lines(Vec<usize>),
+    /// Search hits past the limit since the last batch: counted, not listed, the last of
+    /// them on `last_line`.
+    Counted { hits: usize, last_line: usize },
     /// Detected levels (`LogLevel as u8`) of the next lines, in order.
     Levels(Vec<u8>),
     /// Effective timestamps of the next lines, in order, plus how many of them carried a
@@ -336,6 +341,26 @@ impl Timing {
     }
 }
 
+/// Running state of a `Search` job: hits listed so far, and the hits past the limit
+/// counted since the last `Counted` batch with the last of them.
+#[derive(Default)]
+struct Tally {
+    listed: usize,
+    counted: usize,
+    last_counted: usize,
+}
+
+impl Tally {
+    fn take_batch(&mut self) -> ScanBatch {
+        let batch = ScanBatch::Counted {
+            hits: self.counted,
+            last_line: self.last_counted,
+        };
+        self.counted = 0;
+        batch
+    }
+}
+
 /// Worker body: streams the range, splits lines, evaluates the spec, sends batches.
 fn run(
     generation: u64,
@@ -373,6 +398,7 @@ fn run(
     let mut offsets: Vec<u64> = Vec::new();
     let mut max_line_bytes = 0usize;
     let mut limit_reached = false;
+    let mut tally = Tally::default();
     let (inherited, hint) = match &spec {
         JobSpec::Timestamps { inherited, hint } => (*inherited, *hint),
         _ => (NO_TIMESTAMP, FormatHint::default()),
@@ -398,7 +424,8 @@ fn run(
                     bytes: &[u8],
                     hits: &mut Vec<usize>,
                     levels: &mut Vec<u8>,
-                    timing: &mut Timing|
+                    timing: &mut Timing,
+                    tally: &mut Tally|
      -> bool {
         match &spec {
             JobSpec::Index => true,
@@ -431,6 +458,7 @@ fn run(
                 query_lower,
                 filter,
                 limit,
+                count_past_limit,
             } => {
                 let hit = line_passes(bytes, range.encoding, strip, |s| {
                     let visible = match filter {
@@ -444,9 +472,15 @@ fn run(
                     visible && contains_case_insensitive(s, query_lower)
                 });
                 if hit {
-                    hits.push(idx);
-                    if hits.len() >= *limit {
-                        return false;
+                    if tally.listed < *limit {
+                        hits.push(idx);
+                        tally.listed += 1;
+                        if tally.listed >= *limit && !*count_past_limit {
+                            return false;
+                        }
+                    } else {
+                        tally.counted += 1;
+                        tally.last_counted = idx;
                     }
                 }
                 true
@@ -491,7 +525,14 @@ fn run(
                 if content_len / char_bytes > max_line_bytes {
                     max_line_bytes = content_len / char_bytes;
                 }
-                if !eval(line_idx, &line_bytes, &mut hits, &mut levels, &mut timing) {
+                if !eval(
+                    line_idx,
+                    &line_bytes,
+                    &mut hits,
+                    &mut levels,
+                    &mut timing,
+                    &mut tally,
+                ) {
                     limit_reached = true;
                     break 'outer;
                 }
@@ -534,6 +575,14 @@ fn run(
                     return;
                 }
             }
+        } else if tally.counted > 0 {
+            // Past the limit: the last listed hits, then the count, in that order.
+            if !hits.is_empty() && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
+                return;
+            }
+            if !send(tally.take_batch()) {
+                return;
+            }
         } else if hits.len() >= BATCH_HITS && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
             return;
         }
@@ -554,7 +603,14 @@ fn run(
             max_line_bytes = len;
         }
         let bytes = std::mem::take(&mut carry);
-        eval(line_idx, &bytes, &mut hits, &mut levels, &mut timing);
+        eval(
+            line_idx,
+            &bytes,
+            &mut hits,
+            &mut levels,
+            &mut timing,
+            &mut tally,
+        );
         line_idx += 1;
     }
     if cancel.load(Ordering::Relaxed) {
@@ -581,6 +637,9 @@ fn run(
             if !send(batch) {
                 return;
             }
+        }
+        if tally.counted > 0 && !send(tally.take_batch()) {
+            return;
         }
     }
     send(ScanBatch::Done {
