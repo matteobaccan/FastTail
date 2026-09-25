@@ -218,6 +218,7 @@ pub fn refusal_text(lang: Language, refusal: &EntryRefusal) -> String {
         EntryRefusal::Encrypted => t(lang, "zip_entry_encrypted").to_string(),
         EntryRefusal::Method(method) => t(lang, "zip_entry_method").replace("{method}", method),
         EntryRefusal::UnsafeName => t(lang, "zip_entry_unsafe").to_string(),
+        EntryRefusal::DuplicateName => t(lang, "zip_entry_duplicate").to_string(),
     }
 }
 

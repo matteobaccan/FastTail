@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Zip entries written with `\` separators are kept in sessions.** An entry such as
+  `dir\file.log` (written by some Windows tools) was saved with that spelling, so the
+  session and the workspace named the wrong archive and reported the stream as missing
+  on the next start. The stream now saves the `/`-separated name (`dir/file.log`) and
+  reads the entry as the archive spells it; sessions saved by 0.10.0 still resolve.
+- **An entry named `./x.log` opens.** Its stream path drops the `.`, and the lookup no
+  longer compared the two spellings, so the open failed with "no longer holds this
+  entry". Entries of one archive that would share a tab (`a/b.log` and `a\b.log`, or
+  names differing only by case on Windows) now open the first of them; the others are
+  shown disabled in the entry picker as having the same name, instead of focusing the
+  tab of another entry.
+- **Bookmarks of a large compressed stream are restored.** When the line index ran as a
+  background job, the stream was considered complete while the index was still partial:
+  the saved bookmarks were dropped and the encoding detection settled early. Both now
+  wait until the index covers everything decompressed.
+
 ## [0.10.0] - 2026-09-25
 
 ### Added

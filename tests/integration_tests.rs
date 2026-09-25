@@ -776,6 +776,7 @@ fn test_i18n_exhaustive_coverage() {
         "zip_entry_encrypted",
         "zip_entry_method",
         "zip_entry_unsafe",
+        "zip_entry_duplicate",
         "zip_empty",
         "zip_no_entry",
         "compressed_open_failed",
@@ -5236,6 +5237,47 @@ mod named_sessions {
             loaded.session.streams[0].archive_entry.as_deref(),
             Some("logs/worker.log")
         );
+    }
+
+    #[test]
+    fn a_backslash_zip_entry_survives_a_session_round_trip() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("win.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&bundle).unwrap());
+        zip.start_file("dir\\file.log", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"started\n").unwrap();
+        zip.finish().unwrap();
+        let settings = fasttail::compressed::Settings {
+            spool_dir: dir.path().join("spool"),
+            limits: fasttail::compressed::Limits::default(),
+        };
+        let engine =
+            fasttail::compressed::open_engine(&bundle, Some("dir/file.log"), &settings, None)
+                .unwrap();
+        // What the app saves for the stream: its path and its entry identity.
+        let mut zipped = entry(engine.path.clone());
+        zipped.archive_entry = engine.compressed.as_ref().unwrap().entry.clone();
+        let session = Session {
+            streams: vec![zipped],
+            dock_layout: None,
+        };
+        let file = dir.path().join(format!("win{SESSION_SUFFIX}"));
+        session.save_to(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("entry=dir/file.log"), "{text}");
+        let loaded = Session::load_from(&file).unwrap();
+        assert!(loaded.missing.is_empty(), "{:?}", loaded.missing);
+        assert_eq!(loaded.session, session);
+
+        // A session written by 0.10.0 saved the archive spelling: it still resolves.
+        let mut old = session.clone();
+        old.streams[0].archive_entry = Some("dir\\file.log".to_string());
+        old.save_to(&file).unwrap();
+        let loaded = Session::load_from(&file).unwrap();
+        assert!(loaded.missing.is_empty(), "{:?}", loaded.missing);
+        assert_eq!(loaded.session.streams[0].path, engine.path);
     }
 
     #[test]
