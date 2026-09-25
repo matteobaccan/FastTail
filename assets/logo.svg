@@ -75,23 +75,23 @@
     <text x="20" font-family="'Consolas', 'JetBrains Mono', 'Segoe UI', sans-serif" font-size="14" font-weight="600" letter-spacing="2" fill="#88A0C0">HIGH-PERFORMANCE REAL-TIME LOG MONITOR</text>
   </g>
 
-  <!-- Tagline / Features bar -->
+  <!-- Tagline / Features bar: kept short of x=620 so the signature below stays clear -->
   <g transform="translate(232, 185)">
-    <!-- Pill 1: MMAP ENGINE -->
-    <rect x="0" y="0" width="100" height="22" rx="4" fill="#00E5FF" fill-opacity="0.12" stroke="#00E5FF" stroke-width="1" />
-    <text x="50" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#00E5FF">MMAP ENGINE</text>
+    <!-- Pill 1: RUST · GPU -->
+    <rect x="0" y="0" width="80" height="22" rx="4" fill="#00E5FF" fill-opacity="0.12" stroke="#00E5FF" stroke-width="1" />
+    <text x="40" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#00E5FF">RUST · GPU</text>
 
-    <!-- Pill 2: MULTI-TAB -->
-    <rect x="110" y="0" width="85" height="22" rx="4" fill="#FF007F" fill-opacity="0.12" stroke="#FF007F" stroke-width="1" />
-    <text x="152.5" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#FF007F">MULTI-TAB</text>
+    <!-- Pill 2: ZERO-LAG ENGINE -->
+    <rect x="90" y="0" width="108" height="22" rx="4" fill="#FF007F" fill-opacity="0.12" stroke="#FF007F" stroke-width="1" />
+    <text x="144" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#FF007F">ZERO-LAG ENGINE</text>
 
-    <!-- Pill 3: REGEX & SOUND -->
-    <rect x="205" y="0" width="115" height="22" rx="4" fill="#FFD700" fill-opacity="0.12" stroke="#FFD700" stroke-width="1" />
-    <text x="262.5" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#FFD700">AUDIO ALERTS</text>
+    <!-- Pill 3: REGEX FILTERS -->
+    <rect x="208" y="0" width="96" height="22" rx="4" fill="#FFD700" fill-opacity="0.12" stroke="#FFD700" stroke-width="1" />
+    <text x="256" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#FFD700">REGEX FILTERS</text>
 
-    <!-- Pill 4: HEX & FILTERED -->
-    <rect x="330" y="0" width="125" height="22" rx="4" fill="#00FF88" fill-opacity="0.12" stroke="#00FF88" stroke-width="1" />
-    <text x="392.5" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#00FF88">HEX &amp; FILTERED</text>
+    <!-- Pill 4: TIME RANGE -->
+    <rect x="314" y="0" width="80" height="22" rx="4" fill="#00FF88" fill-opacity="0.12" stroke="#00FF88" stroke-width="1" />
+    <text x="354" y="15" text-anchor="middle" font-family="'Consolas', monospace" font-size="10" font-weight="bold" fill="#00FF88">TIME RANGE</text>
   </g>
 
   <!-- Author Signature -->
