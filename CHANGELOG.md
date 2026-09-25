@@ -37,6 +37,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   mode for good. Until the first colour code is found, every appended byte is now
   examined (a fast scan for the escape byte, read in chunks straight from the file); at
   open, only the first 64 KB of the file are sampled, as before.
+- **The external tools cookbook link is translated in every language.** Its label and
+  tooltip were shown in English in German, Portuguese, Russian, Ukrainian, Japanese,
+  Korean, Turkish, Polish, Dutch, Traditional Chinese and Friulian. The translation test
+  now checks every key in every language, so a single string falling back to English is
+  caught.
 
 ## [0.10.0] - 2026-09-25
 
