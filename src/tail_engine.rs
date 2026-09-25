@@ -89,6 +89,20 @@ pub struct HighlightStyle {
 /// Upper bound on painted spans per row: bounds the layout work on pathological lines.
 pub const MAX_ROW_SPANS: usize = 64;
 
+/// Timestamp of a line that has none and inherits none (before the first timed line).
+pub const NO_TIMESTAMP: i64 = i64::MIN;
+/// Lines timed per call of `fill_timestamps`: the cache completes over a few frames
+/// instead of freezing the window on a multi-million-line file.
+pub const TIMESTAMP_FILL_BUDGET: usize = 200_000;
+/// Below this share of timed lines the file is not one we can read times from, and the
+/// time controls say so instead of hiding everything.
+pub const MIN_TIMESTAMP_RATE: f32 = 0.5;
+/// Lines to look at before trusting the rate above (a header of untimed banner lines
+/// must not disable the controls for the whole file).
+pub const TIMESTAMP_RATE_SAMPLE: usize = 200;
+/// Visible lines scanned for the time span of an out-of-order log.
+pub const MAX_SPAN_SCAN: usize = 100_000;
+
 /// Style of a painted span: a captures-only rule's style, or preset colour `1..=9` of a
 /// quick label (resolved by the theme in the renderer).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -599,6 +613,17 @@ pub struct TailEngine {
     pub hex_columns: usize,
     pub size_unit: SizeUnit,
     pub encoding: FileEncoding,
+    /// Visible time window, either side optional (`None` = open). Applied on top of the
+    /// include/exclude filters and the level filter.
+    pub time_from: Option<i64>,
+    pub time_to: Option<i64>,
+    /// What the user typed into the two time fields, kept verbatim: the text is what the
+    /// field shows, and re-reading it is how "14:02" follows the day of the log.
+    pub time_from_text: String,
+    pub time_to_text: String,
+    /// One of the two time fields does not parse: the row says so instead of silently
+    /// leaving that side open.
+    pub time_range_error: bool,
     pub include_filter: String,
     pub exclude_filter: String,
     pub filter_case_sensitive: bool,
@@ -610,6 +635,19 @@ pub struct TailEngine {
     /// `>= levels.len()` have not been examined yet. Filled on append, on open for files up
     /// to the job threshold, and by a background `Levels` job for larger ones.
     levels: Vec<u8>,
+    /// Effective timestamp of each indexed line in milliseconds since the epoch, with
+    /// `NO_TIMESTAMP` for the lines before the first one that carried a time. A line
+    /// without a timestamp of its own inherits the previous line's, so a stack trace stays
+    /// with the entry it belongs to. Filled lazily: a log is only timed when the time
+    /// range or a time jump asks for it.
+    timestamps: Vec<i64>,
+    /// Format that matched last, tried first on the next line (see `crate::timestamp`).
+    timestamp_hint: crate::timestamp::FormatHint,
+    /// Lines that carried a timestamp of their own, out of the lines timed so far: the
+    /// time controls are pointless on a log whose format we do not read.
+    timestamps_parsed: usize,
+    /// Set when a timed line goes back in time: go-to-time then scans instead of bisecting.
+    timestamps_unordered: bool,
     /// Lines per level among the cached prefix, indexed by `LogLevel as u8`.
     pub level_counts: [u64; LogLevel::COUNT],
     /// Compiled include/exclude filter, shared with filter and search jobs.
@@ -1108,9 +1146,18 @@ impl TailEngine {
             exclude_filter: String::new(),
             filter_case_sensitive: false,
             filter_is_regex: false,
+            time_from: None,
+            time_to: None,
+            time_from_text: String::new(),
+            time_to_text: String::new(),
+            time_range_error: false,
             min_level: LogLevel::Unknown,
             show_unknown_levels: false,
             levels: Vec::new(),
+            timestamps: Vec::new(),
+            timestamp_hint: crate::timestamp::FormatHint::default(),
+            timestamps_parsed: 0,
+            timestamps_unordered: false,
             level_counts: [0; LogLevel::COUNT],
             filter: FilterSpec::default(),
             job: None,
@@ -1280,6 +1327,99 @@ impl TailEngine {
         self.levels.extend_from_slice(fresh);
     }
 
+    /// Whether every indexed line has been timed.
+    pub fn timestamps_complete(&self) -> bool {
+        self.timestamps.len() >= self.line_offsets.len()
+    }
+
+    /// Effective timestamp of a line: its own, or the one it inherits from the entry it
+    /// continues. `None` when the line has not been timed yet or precedes the first time.
+    pub fn line_timestamp(&self, idx: usize) -> Option<i64> {
+        match self.timestamps.get(idx) {
+            Some(&NO_TIMESTAMP) | None => None,
+            Some(&millis) => Some(millis),
+        }
+    }
+
+    /// Share of timed lines that carried a timestamp of their own. `None` until enough
+    /// lines have been timed to judge.
+    pub fn timestamp_rate(&self) -> Option<f32> {
+        let timed = self.timestamps.len();
+        if timed < TIMESTAMP_RATE_SAMPLE.min(self.line_offsets.len().max(1)) {
+            return None;
+        }
+        (timed > 0).then(|| self.timestamps_parsed as f32 / timed as f32)
+    }
+
+    /// Whether a time window is currently narrowing the view.
+    pub fn is_time_filtered(&self) -> bool {
+        self.time_from.is_some() || self.time_to.is_some()
+    }
+
+    /// Whether the time range and the time jump can work on this stream at all.
+    pub fn timestamps_usable(&self) -> bool {
+        self.timestamp_rate()
+            .map(|rate| rate >= MIN_TIMESTAMP_RATE)
+            .unwrap_or(false)
+    }
+
+    /// Times the next chunk of untimed lines and reports whether the cache is complete.
+    /// Bounded on purpose: the caller runs it once per frame while the feature is in use.
+    pub fn fill_timestamps(&mut self) -> bool {
+        let from = self.timestamps.len();
+        let total = self.total_lines();
+        if from >= total {
+            return true;
+        }
+        let to = (from + TIMESTAMP_FILL_BUDGET).min(total);
+        let mut inherited = if from == 0 {
+            NO_TIMESTAMP
+        } else {
+            self.timestamps[from - 1]
+        };
+        let mut hint = self.timestamp_hint;
+        let mut parsed = 0usize;
+        let mut unordered = false;
+        let mut fresh = Vec::with_capacity(to - from);
+        self.scan_lines(from, to, |_, text| {
+            match crate::timestamp::detect_timestamp(text, hint) {
+                Some((millis, format)) => {
+                    hint = format;
+                    parsed += 1;
+                    if inherited != NO_TIMESTAMP && millis < inherited {
+                        unordered = true;
+                    }
+                    inherited = millis;
+                }
+                // No timestamp of its own: it belongs to the entry above it.
+                None => {}
+            }
+            fresh.push(inherited);
+            true
+        });
+        self.timestamps.extend_from_slice(&fresh);
+        self.timestamp_hint = hint;
+        self.timestamps_parsed += parsed;
+        self.timestamps_unordered |= unordered;
+        self.timestamps.len() >= self.total_lines()
+    }
+
+    /// Forgets the cached timestamps of lines `>= keep` (the index changed from there).
+    fn truncate_timestamps(&mut self, keep: usize) {
+        if self.timestamps.len() <= keep {
+            return;
+        }
+        // The parsed count cannot be corrected line by line without re-reading them, and a
+        // rewritten tail is small compared to the file: start the rate over from what is
+        // left rather than carry a wrong one.
+        self.timestamps.truncate(keep);
+        self.timestamps_parsed = self.timestamps_parsed.min(keep);
+        if keep == 0 {
+            self.timestamp_hint = crate::timestamp::FormatHint::default();
+            self.timestamps_unordered = false;
+        }
+    }
+
     /// Forgets the cached levels of lines `>= keep` (the index changed from there).
     fn truncate_levels(&mut self, keep: usize) {
         if self.levels.len() <= keep {
@@ -1360,6 +1500,7 @@ impl TailEngine {
             self.job = None;
         }
         self.truncate_levels(unchanged_lines);
+        self.truncate_timestamps(unchanged_lines);
         if unchanged_lines == 0 && total_len > self.index_job_threshold_bytes {
             // Large file: index on a worker thread; the view shows lines as they arrive.
             self.line_offsets = Vec::new();
@@ -1497,6 +1638,9 @@ impl TailEngine {
         }
         self.refresh_derived_state_from(unchanged_lines);
         self.ensure_levels();
+        if self.is_time_filtered() || !self.timestamps.is_empty() {
+            self.ensure_timestamps();
+        }
     }
 
     pub fn poll_updates(&mut self) {
@@ -1946,6 +2090,8 @@ impl TailEngine {
         !self.include_filter.is_empty()
             || !self.exclude_filter.is_empty()
             || self.min_level != LogLevel::Unknown
+            || self.time_from.is_some()
+            || self.time_to.is_some()
     }
 
     pub fn recompute_filtered_lines(&mut self) {
@@ -1976,8 +2122,10 @@ impl TailEngine {
         }
         let total = self.total_lines();
         let start = start.min(total);
-        if start == 0 && self.source.len() > self.job_threshold_bytes {
-            // Full recomputation of a large file: worker thread, results stream in.
+        if start == 0 && self.source.len() > self.job_threshold_bytes && !self.is_time_filtered() {
+            // Full recomputation of a large file: worker thread, results stream in. Not
+            // while a time window is set: the job filters text, and the window needs the
+            // timestamp cache that lives here.
             self.filtered_lines = Vec::new();
             if !self.last_searched_query.is_empty() {
                 self.pending_search = true;
@@ -1997,7 +2145,9 @@ impl TailEngine {
         self.scan_lines(start, total, |idx, line| {
             let (visible, next) = self.filter.visible_in_sequence(line, parent_visible);
             parent_visible = next;
-            if visible {
+            // The time window is applied by index, on top of the text and level filters:
+            // a continuation line inherits the entry's time, so it travels with it.
+            if visible && self.in_time_range(idx) {
                 fresh.push(idx);
             }
             true
@@ -2105,6 +2255,9 @@ impl TailEngine {
     }
 
     pub fn is_line_visible(&self, idx: usize) -> bool {
+        if !self.in_time_range(idx) {
+            return false;
+        }
         let Some(line) = self.get_line(idx) else {
             return false;
         };
@@ -2119,6 +2272,149 @@ impl TailEngine {
             return self.parent_visible_before(idx);
         }
         false
+    }
+
+    /// Whether the time window lets this line through. A line with no timestamp at all -
+    /// the banner lines before the first timed entry - cannot be placed in time, so it is
+    /// hidden while a window is set; without a window nothing is filtered.
+    pub fn in_time_range(&self, idx: usize) -> bool {
+        if self.time_from.is_none() && self.time_to.is_none() {
+            return true;
+        }
+        let Some(millis) = self.line_timestamp(idx) else {
+            return false;
+        };
+        if let Some(from) = self.time_from {
+            if millis < from {
+                return false;
+            }
+        }
+        if let Some(to) = self.time_to {
+            if millis > to {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Sets the time window and refreshes what is visible. `None` on a side leaves it open.
+    /// Times the whole file first: a window over a half-timed cache would hide the lines
+    /// that simply have not been read yet.
+    pub fn set_time_range(&mut self, from: Option<i64>, to: Option<i64>) {
+        if self.time_from == from && self.time_to == to {
+            return;
+        }
+        self.time_from = from;
+        self.time_to = to;
+        if from.is_some() || to.is_some() {
+            self.ensure_timestamps();
+        }
+        self.refresh_filters();
+    }
+
+    /// The instant bare times like `14:02` are anchored to: the first timestamp in the
+    /// stream, so a log from last week reads the way it is written. Falls back to now for
+    /// a stream that has no timestamps at all.
+    pub fn time_reference(&self) -> i64 {
+        self.timestamps
+            .iter()
+            .find(|&&ts| ts != NO_TIMESTAMP)
+            .copied()
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0)
+            })
+    }
+
+    /// Applies the two fields as the user typed them. Returns which side failed to parse,
+    /// so the field can say so; an empty side is an open end, not an error.
+    pub fn apply_time_range_text(&mut self, from_text: &str, to_text: &str) -> (bool, bool) {
+        self.time_from_text = from_text.to_owned();
+        self.time_to_text = to_text.to_owned();
+        self.ensure_timestamps();
+        let reference = self.time_reference();
+        let parse = |text: &str| -> (Option<i64>, bool) {
+            if text.trim().is_empty() {
+                return (None, true);
+            }
+            match crate::timestamp::parse_user_time(text, reference) {
+                Some(millis) => (Some(millis), true),
+                None => (None, false),
+            }
+        };
+        let (from, from_ok) = parse(from_text);
+        let (to, to_ok) = parse(to_text);
+        // The "to" side covers the whole minute or second it names.
+        let to = to.map(|millis| crate::timestamp::end_of_typed_time(to_text, millis));
+        self.set_time_range(from, to);
+        (from_ok, to_ok)
+    }
+
+    /// Clears the window and the two fields.
+    pub fn clear_time_range(&mut self) {
+        self.time_from_text.clear();
+        self.time_to_text.clear();
+        self.set_time_range(None, None);
+    }
+
+    /// Times every indexed line, in bounded passes.
+    pub fn ensure_timestamps(&mut self) {
+        while !self.fill_timestamps() {}
+    }
+
+    /// First line at or after `millis`. Bisects when the log runs forward in time, which
+    /// is the normal case; scans when it does not, because a bisection would land anywhere.
+    pub fn goto_time(&self, millis: i64) -> Option<usize> {
+        let timed = self.timestamps.len();
+        if timed == 0 {
+            return None;
+        }
+        if self.timestamps_unordered {
+            return self.timestamps[..timed]
+                .iter()
+                .position(|&ts| ts != NO_TIMESTAMP && ts >= millis);
+        }
+        let at = self.timestamps[..timed].partition_point(|&ts| ts == NO_TIMESTAMP || ts < millis);
+        (at < timed).then_some(at)
+    }
+
+    /// Earliest and latest timestamp among the visible lines, for the stream status bar.
+    /// On a forward-running log this is the first and the last visible line; otherwise the
+    /// visible lines are scanned, bounded so a filter over millions of rows stays cheap.
+    pub fn visible_time_span(&self) -> Option<(i64, i64)> {
+        let visible: Box<dyn Iterator<Item = usize>> = if self.is_filter_active() {
+            Box::new(self.filtered_lines.iter().copied())
+        } else {
+            Box::new(0..self.total_lines())
+        };
+        if !self.timestamps_unordered {
+            let mut first = None;
+            let mut last = None;
+            for idx in visible {
+                if let Some(millis) = self.line_timestamp(idx) {
+                    if first.is_none() {
+                        first = Some(millis);
+                    }
+                    last = Some(millis);
+                }
+            }
+            return match (first, last) {
+                (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+                _ => None,
+            };
+        }
+        let mut span: Option<(i64, i64)> = None;
+        for idx in visible.take(MAX_SPAN_SCAN) {
+            if let Some(millis) = self.line_timestamp(idx) {
+                span = Some(match span {
+                    Some((lo, hi)) => (lo.min(millis), hi.max(millis)),
+                    None => (millis, millis),
+                });
+            }
+        }
+        span
     }
 
     /// Visibility of the nearest non-continuation line before `idx`, the state a sequential
@@ -2912,6 +3208,13 @@ impl TailEngine {
             return None;
         }
         let s = input.trim();
+        // A time rather than a line number: "14:02", "14:02:05" or a whole timestamp.
+        // Checked first, because `14:02` is not a line number in any reading.
+        if s.contains(':') {
+            let millis = crate::timestamp::parse_user_time(s, self.time_reference())?;
+            let line = self.goto_time(millis)?;
+            return Some(self.goto_target_for(line, total));
+        }
         let requested: usize = if let Some(rel) = s.strip_prefix('+') {
             current_line.saturating_add(rel.trim().parse::<usize>().ok()?)
         } else if let Some(rel) = s.strip_prefix('-') {
@@ -2920,27 +3223,39 @@ impl TailEngine {
             s.parse::<usize>().ok()?.checked_sub(1)?
         };
         let clamped = requested.min(total - 1);
+        Some(self.goto_target_for(clamped, total))
+    }
+
+    /// Where a jump to `line` actually lands: the line itself when it is visible, the next
+    /// visible one when a filter hides it.
+    fn goto_target_for(&self, line: usize, total: usize) -> GotoTarget {
+        let clamped = line.min(total.saturating_sub(1));
         if !self.is_filter_active() {
-            return Some(GotoTarget {
+            return GotoTarget {
                 requested: clamped,
                 line: clamped,
                 hidden: false,
-            });
+            };
         }
-        if self.filtered_lines.is_empty() {
-            return None;
-        }
+        let Some(&last) = self.filtered_lines.last() else {
+            // Every line is filtered out: there is nowhere to jump, so stay put.
+            return GotoTarget {
+                requested: clamped,
+                line: clamped,
+                hidden: true,
+            };
+        };
         let pos = self.filtered_lines.partition_point(|&l| l < clamped);
         let line = if pos < self.filtered_lines.len() {
             self.filtered_lines[pos]
         } else {
-            *self.filtered_lines.last().unwrap()
+            last
         };
-        Some(GotoTarget {
+        GotoTarget {
             requested: clamped,
             line,
             hidden: line != clamped,
-        })
+        }
     }
 
     // ----- Row selection, clipboard text and export -----

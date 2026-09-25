@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Time range filter and go-to-time.** A `from / to` window above the buffer keeps only
+  the lines stamped inside it, combined with the include/exclude and level filters; both
+  sides are optional. Timestamps are read from the line itself — ISO 8601, syslog,
+  Apache/nginx, epoch seconds or millis, within the first 64 bytes, no format to
+  configure — and a line without one inherits the entry above it, so a stack trace stays
+  with its error. `Ctrl+G` now accepts `14:02` as well as a line number, jumping to the
+  first line at or after it, and the stream status bar shows the span of the visible
+  lines. A log whose lines FastTail cannot time disables the controls with a hint instead
+  of hiding everything.
+
 ### Changed
 
 - **The Windows archive no longer carries the debug symbols.** `fasttail-windows-x86_64.zip`
