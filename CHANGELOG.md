@@ -23,6 +23,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   printed; turning the column on never blocks (a file above 16 MB is timed in the
   background and its rows show `…` until then), and a stream without usable timestamps
   keeps the column hidden with a tooltip saying why.
+- **Search all streams.** `Ctrl+Shift+F`, or the `🔎` button next to a stream's search
+  box, opens a Find results tab (split below the streams) with the focused stream's query;
+  `Enter` or Find runs it over every open stream with the per-stream search's
+  case-insensitive match, over the lines each stream shows under its own include/exclude,
+  level and time filters, with ANSI codes stripped where the stream strips them. Streams
+  in HEX view are skipped and listed as skipped. Each stream is searched by a background
+  job of its own, never cancelling or cancelled by the stream's own index, filter, search,
+  level or timestamp scans; at most four run at once (fewer on machines with fewer cores),
+  the others wait in the order of the streams, and a stream still being indexed waits its
+  turn. Up to 100,000 hits are listed per stream and the true total is still counted. The
+  results are grouped by stream in one virtualized list: a header per stream with its
+  match count, progress and notes (queued, stopped, capped, skipped, stale), collapsible
+  with a click or `Enter`, then its lines with line number, level colour and the query
+  tinted. A click or `Enter` on a result activates that stream's tab, centres the line
+  (or the next visible one when the stream's filters now hide it), selects it and pauses
+  follow; the stream's own search query and matches are untouched. Results are a
+  snapshot (its age is shown): Refresh runs the query again, Stop keeps what was found,
+  a new query, closing the tab or closing a stream cancels its jobs, and a stream reloaded
+  since (truncated, rotated, rewritten, switched to another file) is marked stale, its rows
+  dimmed and no longer jumping. The tab is not saved in the dock layout. Help dialog and
+  all 16 languages updated.
 
 ## [0.10.1] - 2026-09-26
 
