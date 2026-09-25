@@ -391,16 +391,11 @@ pub(crate) fn find_case_insensitive_cb(
         let max_pos = h.len() - n_len;
         let mut i = 0;
 
-        // Scanning with &h[i..] passes an unbounded slice to SIMD memchr, avoiding
-        // slice subsegmenting bounds calculations on every loop iteration.
         if first_lower == first_upper {
             while i <= max_pos {
-                match memchr::memchr(first_lower, &h[i..]) {
+                match memchr::memchr(first_lower, &h[i..=max_pos]) {
                     Some(rel) => {
                         i += rel;
-                        if i > max_pos {
-                            break;
-                        }
                         if h[i..i + n_len].eq_ignore_ascii_case(n) {
                             if !on_match(i, i + n_len) {
                                 return;
@@ -415,12 +410,9 @@ pub(crate) fn find_case_insensitive_cb(
             }
         } else {
             while i <= max_pos {
-                match memchr::memchr2(first_lower, first_upper, &h[i..]) {
+                match memchr::memchr2(first_lower, first_upper, &h[i..=max_pos]) {
                     Some(rel) => {
                         i += rel;
-                        if i > max_pos {
-                            break;
-                        }
                         if h[i..i + n_len].eq_ignore_ascii_case(n) {
                             if !on_match(i, i + n_len) {
                                 return;
@@ -492,19 +484,14 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
         let max_pos = h_bytes.len() - n_len;
         let mut curr = 0;
 
-        // Scanning with &h_bytes[curr..] passes an unbounded slice to SIMD memchr,
-        // avoiding slice subsegmenting bounds calculations on every loop iteration.
         if first_lower == first_upper {
             while curr <= max_pos {
-                let match_rel = match memchr::memchr(first_lower, &h_bytes[curr..]) {
+                let match_rel = match memchr::memchr(first_lower, &h_bytes[curr..=max_pos]) {
                     Some(rel) => rel,
                     None => return false,
                 };
 
                 curr += match_rel;
-                if curr > max_pos {
-                    return false;
-                }
                 if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
                     return true;
                 }
@@ -513,15 +500,12 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
         } else {
             while curr <= max_pos {
                 let match_rel =
-                    match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..]) {
+                    match memchr::memchr2(first_lower, first_upper, &h_bytes[curr..=max_pos]) {
                         Some(rel) => rel,
                         None => return false,
                     };
 
                 curr += match_rel;
-                if curr > max_pos {
-                    return false;
-                }
                 if h_bytes[curr..curr + n_len].eq_ignore_ascii_case(n_bytes) {
                     return true;
                 }
@@ -552,11 +536,7 @@ pub struct CompiledHighlight {
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
     // Fast path: if no spans exist yet, push directly without any piece vector allocation.
     if spans.is_empty() {
-        spans.push(HighlightSpan {
-            start,
-            end,
-            style,
-        });
+        spans.push(HighlightSpan { start, end, style });
         return spans.len() >= MAX_ROW_SPANS;
     }
     // Double-buffer piece vectors and reuse them via drain and swap to eliminate heap
