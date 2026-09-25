@@ -1,4 +1,5 @@
-//! Background scans over a log file: indexing, filtering and searching on a worker thread.
+//! Background scans over a log file: indexing, filtering, searching and the per-line level
+//! and timestamp caches, on a worker thread.
 //!
 //! A job owns its own file handle, streams the file in 1 MB chunks, splits lines with the
 //! same rules as the engine's index, and sends ordered batches through a channel. Every
@@ -14,7 +15,8 @@ use regex::Regex;
 
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
-use crate::tail_engine::{contains_case_insensitive, decode_line, FileEncoding};
+use crate::tail_engine::{contains_case_insensitive, decode_line, FileEncoding, NO_TIMESTAMP};
+use crate::timestamp::{detect_timestamp, FormatHint};
 
 const CHUNK: usize = 1024 * 1024;
 /// Hits accumulated before a batch is sent (keeps the channel traffic low).
@@ -27,6 +29,8 @@ pub enum ScanKind {
     Search,
     /// Detects the log level of every line (fills the engine's per-line level cache).
     Levels,
+    /// Detects the timestamp of every line (fills the engine's per-line timestamp cache).
+    Timestamps,
 }
 
 /// The include/exclude filter, compiled once and shareable with a worker thread.
@@ -160,6 +164,11 @@ pub enum JobSpec {
     Filter(FilterSpec),
     /// Emit the detected level of every line, one byte per line, in order.
     Levels,
+    /// Emit the effective timestamp of every line, in order, with the rules of the
+    /// engine's `fill_timestamps`: `inherited` is the timestamp of the line before the
+    /// range (`NO_TIMESTAMP` at the start of the file) and `hint` the format that matched
+    /// last, so a job resumed halfway fills the same cache as one that never stopped.
+    Timestamps { inherited: i64, hint: FormatHint },
     /// Emit the indices of the visible lines containing the query (case-insensitive),
     /// at most `limit`.
     Search {
@@ -176,6 +185,15 @@ pub enum ScanBatch {
     Lines(Vec<usize>),
     /// Detected levels (`LogLevel as u8`) of the next lines, in order.
     Levels(Vec<u8>),
+    /// Effective timestamps of the next lines, in order, plus how many of them carried a
+    /// timestamp of their own, whether one went back in time, and the format hint after
+    /// the last of them.
+    Timestamps {
+        values: Vec<i64>,
+        parsed: usize,
+        unordered: bool,
+        hint: FormatHint,
+    },
     /// Line start offsets (index), in increasing order, plus the longest line in the batch.
     Offsets {
         offsets: Vec<u64>,
@@ -219,6 +237,7 @@ impl ScanJob {
             JobSpec::Filter(_) => ScanKind::Filter,
             JobSpec::Search { .. } => ScanKind::Search,
             JobSpec::Levels => ScanKind::Levels,
+            JobSpec::Timestamps { .. } => ScanKind::Timestamps,
         };
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -271,6 +290,48 @@ impl Drop for ScanJob {
     }
 }
 
+/// Running state of a `Timestamps` job: the values of the current batch, what the batch
+/// adds to the engine's counters, and what the next line inherits.
+struct Timing {
+    values: Vec<i64>,
+    parsed: usize,
+    unordered: bool,
+    inherited: i64,
+    hint: FormatHint,
+}
+
+impl Timing {
+    /// One line, exactly as `TailEngine::fill_timestamps` times it.
+    fn push(&mut self, line: &str) {
+        if let Some((millis, format)) = detect_timestamp(line, self.hint) {
+            self.hint = format;
+            self.parsed += 1;
+            if self.inherited != NO_TIMESTAMP && millis < self.inherited {
+                self.unordered = true;
+            }
+            self.inherited = millis;
+        }
+        // No timestamp of its own: it belongs to the entry above it.
+        self.values.push(self.inherited);
+    }
+
+    /// The batch accumulated since the last one, if any.
+    fn take_batch(&mut self) -> Option<ScanBatch> {
+        if self.values.is_empty() {
+            return None;
+        }
+        let batch = ScanBatch::Timestamps {
+            values: std::mem::take(&mut self.values),
+            parsed: self.parsed,
+            unordered: self.unordered,
+            hint: self.hint,
+        };
+        self.parsed = 0;
+        self.unordered = false;
+        Some(batch)
+    }
+}
+
 /// Worker body: streams the range, splits lines, evaluates the spec, sends batches.
 fn run(
     generation: u64,
@@ -308,6 +369,17 @@ fn run(
     let mut offsets: Vec<u64> = Vec::new();
     let mut max_line_bytes = 0usize;
     let mut limit_reached = false;
+    let (inherited, hint) = match &spec {
+        JobSpec::Timestamps { inherited, hint } => (*inherited, *hint),
+        _ => (NO_TIMESTAMP, FormatHint::default()),
+    };
+    let mut timing = Timing {
+        values: Vec::new(),
+        parsed: 0,
+        unordered: false,
+        inherited,
+        hint,
+    };
 
     if matches!(spec, JobSpec::Index) && range.start_offset < range.end_offset {
         offsets.push(range.start_offset);
@@ -317,54 +389,65 @@ fn run(
     // Visibility of the previous non-continuation line (stack trace continuation lines
     // follow their parent); a job starting after line 0 receives it from the engine.
     let mut parent_visible = range.parent_visible;
-    let mut eval =
-        |idx: usize, bytes: &[u8], hits: &mut Vec<usize>, levels: &mut Vec<u8>| -> bool {
-            match &spec {
-                JobSpec::Index => true,
-                JobSpec::Levels => {
-                    line_passes(bytes, range.encoding, |s| {
-                        levels.push(detect_level(s) as u8);
-                        true
-                    });
+    let mut eval = |idx: usize,
+                    bytes: &[u8],
+                    hits: &mut Vec<usize>,
+                    levels: &mut Vec<u8>,
+                    timing: &mut Timing|
+     -> bool {
+        match &spec {
+            JobSpec::Index => true,
+            JobSpec::Levels => {
+                line_passes(bytes, range.encoding, |s| {
+                    levels.push(detect_level(s) as u8);
                     true
-                }
-                JobSpec::Filter(filter) => {
-                    let visible = line_passes(bytes, range.encoding, |s| {
-                        let (v, next) = filter.visible_in_sequence(s, parent_visible);
-                        parent_visible = next;
-                        v
-                    });
-                    if visible {
-                        hits.push(idx);
-                    }
-                    true
-                }
-                JobSpec::Search {
-                    query_lower,
-                    filter,
-                    limit,
-                } => {
-                    let hit = line_passes(bytes, range.encoding, |s| {
-                        let visible = match filter {
-                            Some(f) => {
-                                let (v, next) = f.visible_in_sequence(s, parent_visible);
-                                parent_visible = next;
-                                v
-                            }
-                            None => true,
-                        };
-                        visible && contains_case_insensitive(s, query_lower)
-                    });
-                    if hit {
-                        hits.push(idx);
-                        if hits.len() >= *limit {
-                            return false;
-                        }
-                    }
-                    true
-                }
+                });
+                true
             }
-        };
+            JobSpec::Timestamps { .. } => {
+                line_passes(bytes, range.encoding, |s| {
+                    timing.push(s);
+                    true
+                });
+                true
+            }
+            JobSpec::Filter(filter) => {
+                let visible = line_passes(bytes, range.encoding, |s| {
+                    let (v, next) = filter.visible_in_sequence(s, parent_visible);
+                    parent_visible = next;
+                    v
+                });
+                if visible {
+                    hits.push(idx);
+                }
+                true
+            }
+            JobSpec::Search {
+                query_lower,
+                filter,
+                limit,
+            } => {
+                let hit = line_passes(bytes, range.encoding, |s| {
+                    let visible = match filter {
+                        Some(f) => {
+                            let (v, next) = f.visible_in_sequence(s, parent_visible);
+                            parent_visible = next;
+                            v
+                        }
+                        None => true,
+                    };
+                    visible && contains_case_insensitive(s, query_lower)
+                });
+                if hit {
+                    hits.push(idx);
+                    if hits.len() >= *limit {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    };
 
     'outer: while pos < range.end_offset {
         if cancel.load(Ordering::Relaxed) {
@@ -403,7 +486,7 @@ fn run(
                 if content_len / char_bytes > max_line_bytes {
                     max_line_bytes = content_len / char_bytes;
                 }
-                if !eval(line_idx, &line_bytes, &mut hits, &mut levels) {
+                if !eval(line_idx, &line_bytes, &mut hits, &mut levels, &mut timing) {
                     limit_reached = true;
                     break 'outer;
                 }
@@ -440,6 +523,12 @@ fn run(
             if !levels.is_empty() && !send(ScanBatch::Levels(std::mem::take(&mut levels))) {
                 return;
             }
+        } else if matches!(spec, JobSpec::Timestamps { .. }) {
+            if let Some(batch) = timing.take_batch() {
+                if !send(batch) {
+                    return;
+                }
+            }
         } else if hits.len() >= BATCH_HITS && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
             return;
         }
@@ -460,7 +549,7 @@ fn run(
             max_line_bytes = len;
         }
         let bytes = std::mem::take(&mut carry);
-        eval(line_idx, &bytes, &mut hits, &mut levels);
+        eval(line_idx, &bytes, &mut hits, &mut levels, &mut timing);
         line_idx += 1;
     }
     if cancel.load(Ordering::Relaxed) {
@@ -478,6 +567,8 @@ fn run(
     } else {
         let last = if matches!(spec, JobSpec::Levels) {
             (!levels.is_empty()).then(|| ScanBatch::Levels(std::mem::take(&mut levels)))
+        } else if matches!(spec, JobSpec::Timestamps { .. }) {
+            timing.take_batch()
         } else {
             (!hits.is_empty()).then(|| ScanBatch::Lines(std::mem::take(&mut hits)))
         };
@@ -512,5 +603,197 @@ fn trim_cr(bytes: &[u8]) -> usize {
         bytes.len() - 1
     } else {
         bytes.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn millis(text: &str) -> i64 {
+        detect_timestamp(text, FormatHint::default())
+            .expect("test timestamp")
+            .0
+    }
+
+    /// Runs a `Timestamps` job over `bytes[start_offset..]` and gathers what the engine
+    /// would append to its cache: values, parsed count, out-of-order flag, final hint.
+    fn time_file(
+        bytes: &[u8],
+        start_offset: u64,
+        start_line: usize,
+        encoding: FileEncoding,
+        inherited: i64,
+        hint: FormatHint,
+    ) -> (Vec<i64>, usize, bool, FormatHint) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("timing.log");
+        std::fs::write(&path, bytes).unwrap();
+        let range = ScanRange {
+            start_offset,
+            end_offset: bytes.len() as u64,
+            start_line,
+            encoding,
+            parent_visible: false,
+        };
+        let job = ScanJob::spawn(1, &path, range, JobSpec::Timestamps { inherited, hint });
+        assert_eq!(job.kind, ScanKind::Timestamps);
+        let (mut values, mut parsed, mut unordered, mut last_hint) = (Vec::new(), 0, false, hint);
+        let started = Instant::now();
+        loop {
+            match job.try_recv() {
+                Some(ScanBatch::Timestamps {
+                    values: v,
+                    parsed: p,
+                    unordered: u,
+                    hint: h,
+                }) => {
+                    values.extend(v);
+                    parsed += p;
+                    unordered |= u;
+                    last_hint = h;
+                }
+                Some(ScanBatch::Done { lines }) => {
+                    assert_eq!(lines, values.len(), "one value per line");
+                    return (values, parsed, unordered, last_hint);
+                }
+                Some(ScanBatch::Failed) => panic!("timing job failed"),
+                Some(_) => {}
+                None => {
+                    assert!(started.elapsed() < Duration::from_secs(20), "job hangs");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn timing_job_reads_every_format_and_inherits_on_continuation_lines() {
+        let epoch = millis("2026-09-18T14:04:00.000Z");
+        let text = format!(
+            "==== banner ====\n\
+             2026-09-18T14:02:05.123Z ERROR boom\n\
+             \x20   at Foo.bar(Foo.java:10)\n\
+             [18/Sep/2026:14:03:00 +0200] \"GET / HTTP/1.1\" 200\n\
+             {epoch} epoch millis\n\
+             2026-09-18T14:01:00.000Z INFO back in time\n\
+             no newline at the end"
+        );
+        let (values, parsed, unordered, hint) = time_file(
+            text.as_bytes(),
+            0,
+            0,
+            FileEncoding::Utf8,
+            NO_TIMESTAMP,
+            FormatHint::default(),
+        );
+        let boom = millis("2026-09-18T14:02:05.123Z");
+        let back = millis("2026-09-18T14:01:00.000Z");
+        assert_eq!(
+            values,
+            vec![
+                NO_TIMESTAMP,
+                boom,
+                boom,
+                millis("[18/Sep/2026:14:03:00 +0200]"),
+                epoch,
+                back,
+                back,
+            ]
+        );
+        assert_eq!(parsed, 4, "banner, stack frame and last line carry none");
+        assert!(unordered, "14:01 after 14:04 goes back in time");
+        assert_eq!(hint, FormatHint::Iso8601);
+    }
+
+    #[test]
+    fn timing_job_resumed_mid_file_continues_the_prefix() {
+        let text =
+            "2026-09-18T14:00:00.000Z first\n    at a\n    at b\n2026-09-18T14:05:00.000Z next\n";
+        // Start at line 2 ("    at b"), as a job resumed after line 1 would.
+        let start_offset = text.find("    at b").unwrap() as u64;
+        let inherited = millis("2026-09-18T14:00:00.000Z");
+        let (values, parsed, unordered, hint) = time_file(
+            text.as_bytes(),
+            start_offset,
+            2,
+            FileEncoding::Utf8,
+            inherited,
+            FormatHint::Iso8601,
+        );
+        assert_eq!(values, vec![inherited, millis("2026-09-18T14:05:00.000Z")]);
+        assert_eq!(parsed, 1);
+        assert!(!unordered);
+        assert_eq!(hint, FormatHint::Iso8601);
+
+        // A value inherited from the prefix still counts for the out-of-order check.
+        let later = millis("2026-09-18T15:00:00.000Z");
+        let (_, _, unordered, _) = time_file(
+            text.as_bytes(),
+            start_offset,
+            2,
+            FileEncoding::Utf8,
+            later,
+            FormatHint::Iso8601,
+        );
+        assert!(unordered);
+    }
+
+    #[test]
+    fn timing_job_decodes_utf16() {
+        let text = "2026-09-18T14:02:00.000Z INFO a\r\n    continuation\r\n2026-09-18T14:03:00.000Z INFO b\r\n";
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let (values, parsed, _, _) = time_file(
+            &bytes,
+            2,
+            0,
+            FileEncoding::UnicodeLe,
+            NO_TIMESTAMP,
+            FormatHint::default(),
+        );
+        let a = millis("2026-09-18T14:02:00.000Z");
+        assert_eq!(values, vec![a, a, millis("2026-09-18T14:03:00.000Z")]);
+        assert_eq!(parsed, 2);
+    }
+
+    #[test]
+    fn cancelled_timing_job_never_reports_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.log");
+        let line = "2026-09-18T14:02:00.000Z INFO a line of padding to fill the chunks\n";
+        std::fs::write(&path, line.repeat(8 * 1024 * 1024 / line.len())).unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        let range = ScanRange {
+            start_offset: 0,
+            end_offset: len,
+            start_line: 0,
+            encoding: FileEncoding::Utf8,
+            parent_visible: false,
+        };
+        let job = ScanJob::spawn(
+            7,
+            &path,
+            range,
+            JobSpec::Timestamps {
+                inherited: NO_TIMESTAMP,
+                hint: FormatHint::default(),
+            },
+        );
+        job.cancel();
+        // The flag is checked before every 1 MB chunk: at most one of the eight is read.
+        let started = Instant::now();
+        let mut timed = 0usize;
+        while started.elapsed() < Duration::from_millis(500) {
+            match job.try_recv() {
+                Some(ScanBatch::Done { .. }) => panic!("a cancelled job must not complete"),
+                Some(ScanBatch::Timestamps { values, .. }) => timed += values.len(),
+                _ => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        assert!(timed < (len as usize) / line.len());
     }
 }

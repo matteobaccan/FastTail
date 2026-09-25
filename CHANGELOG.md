@@ -13,6 +13,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **The About dialog and the status bar are translated everywhere.** "Website" in About
   and "No file open" in the footer were English in every language; both now follow the
   interface language like the rest of the window.
+- **The first use of the time controls no longer blocks the window.** Closes the 0.9.0
+  known issue: when more than 16 MB of a stream remain to be timed, the timestamps are
+  read by a background scan with `timing lines 37%` in the stream bar, like indexing,
+  filtering and search. A time window typed meanwhile is held — nothing is hidden, a hint
+  next to the fields says it applies when timing finishes — and applies by itself at
+  100%; a time entered in `Ctrl+G` waits in the popup with the progress and jumps when the
+  scan completes, and `Esc` drops the jump without stopping the scan. The scan gives way
+  to a filter or search typed without a window and resumes where it stopped, and the
+  cache it builds is identical to the synchronous one. Small files and appended lines are
+  still timed at once.
+- **Filter and search scans honour the time window on large files.** With a window set,
+  filtering a file above 16 MB no longer falls back to the interface thread, and search
+  hits outside the window are no longer listed: the background scans apply the window to
+  the lines they return.
+- **Lines appended under a time window are timed before they are filtered**, so a new
+  line inside the window shows up at once instead of after the next full refresh.
+- **Background scans of a pattern stream read the file it follows.** On a `*`/`?`
+  stream above 16 MB the worker opened the pattern instead of the matched file, so a
+  filter or search there never produced results.
 
 ## [0.9.0] - 2026-09-25
 
