@@ -254,6 +254,113 @@ impl CyberTheme {
         }
     }
 
+    /// The 16 base ANSI colours (SGR 30-37 and 90-97, and the first 16 entries of the
+    /// 256-colour table) for this theme. The dark themes lift black so it stays visible
+    /// on their near-black backgrounds; Light darkens white, yellow and the bright colours
+    /// so that every entry reads on its pale background (contrast checked in the tests).
+    pub fn ansi_palette(&self) -> [Color32; 16] {
+        const DARK: [[u8; 3]; 16] = [
+            [96, 100, 112],
+            [240, 82, 82],
+            [80, 200, 105],
+            [230, 200, 80],
+            [92, 142, 250],
+            [210, 112, 230],
+            [60, 205, 220],
+            [205, 210, 218],
+            [135, 140, 152],
+            [255, 115, 115],
+            [120, 240, 145],
+            [255, 235, 125],
+            [135, 175, 255],
+            [240, 150, 255],
+            [120, 240, 250],
+            [255, 255, 255],
+        ];
+        const LIGHT: [[u8; 3]; 16] = [
+            [24, 28, 36],
+            [185, 28, 42],
+            [22, 120, 48],
+            [135, 90, 0],
+            [25, 80, 200],
+            [145, 40, 155],
+            [0, 115, 130],
+            [88, 94, 105],
+            [85, 94, 110],
+            [205, 40, 55],
+            [26, 124, 54],
+            [125, 95, 0],
+            [45, 95, 215],
+            [165, 55, 175],
+            [0, 120, 134],
+            [60, 65, 76],
+        ];
+        let table = if *self == CyberTheme::Light {
+            &LIGHT
+        } else {
+            &DARK
+        };
+        table.map(|[r, g, b]| Color32::from_rgb(r, g, b))
+    }
+
+    /// An ANSI colour: the theme palette for 0..16, the xterm table for the rest of the
+    /// 256 colours, a 24-bit colour as given.
+    pub fn ansi_color(&self, color: crate::ansi::AnsiColor) -> Color32 {
+        match color {
+            crate::ansi::AnsiColor::Indexed(i) if i < 16 => self.ansi_palette()[i as usize],
+            crate::ansi::AnsiColor::Indexed(i) => {
+                let [r, g, b] = crate::ansi::xterm_color(i);
+                Color32::from_rgb(r, g, b)
+            }
+            crate::ansi::AnsiColor::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+        }
+    }
+
+    /// Foreground and background of an ANSI-styled run over a row whose own colours are
+    /// `base_fg` / `base_bg`. Bold turns a base colour 0-7 into its bright variant, as
+    /// terminals do (a monospace font has no bold weight here); dim fades the text;
+    /// inverse swaps the two; a background without a foreground gets black or white text,
+    /// whichever reads on it.
+    pub fn ansi_colors(
+        &self,
+        style: &crate::ansi::AnsiStyle,
+        base_fg: Color32,
+        base_bg: Color32,
+    ) -> (Color32, Color32) {
+        use crate::ansi::AnsiColor;
+        let fg_color = match style.fg {
+            Some(AnsiColor::Indexed(i)) if style.bold && i < 8 => Some(AnsiColor::Indexed(i + 8)),
+            other => other,
+        };
+        let bg = style.bg.map(|c| self.ansi_color(c));
+        let mut fg = match (fg_color, bg) {
+            (Some(c), _) => self.ansi_color(c),
+            (None, Some(bg)) => readable_on(bg),
+            (None, None) if style.bold => {
+                if *self == CyberTheme::Light {
+                    Color32::BLACK
+                } else {
+                    Color32::WHITE
+                }
+            }
+            (None, None) => base_fg,
+        };
+        let mut bg = bg.unwrap_or(base_bg);
+        if style.inverse {
+            let behind = if bg == Color32::TRANSPARENT {
+                self.panel_bg()
+            } else {
+                bg
+            };
+            bg = fg;
+            fg = behind;
+        }
+        if style.dim {
+            fg = fg.gamma_multiply(0.6);
+        }
+        (fg, bg)
+    }
+
     pub fn apply(&self, ctx: &egui::Context) {
         let is_light = *self == CyberTheme::Light;
         let mut visuals = if is_light {
@@ -325,5 +432,115 @@ impl CyberTheme {
         };
         ctx.set_style_of(egui::Theme::Dark, style.clone());
         ctx.set_style_of(egui::Theme::Light, style);
+    }
+}
+
+/// Relative luminance of a colour (WCAG 2), for the contrast choices above.
+fn luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// Contrast ratio between two colours (1 to 21).
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// Black or white, whichever contrasts more with `bg`.
+fn readable_on(bg: Color32) -> Color32 {
+    if contrast(Color32::BLACK, bg) >= contrast(Color32::WHITE, bg) {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ansi::{AnsiColor, AnsiStyle};
+
+    #[test]
+    fn ansi_palette_reads_on_every_theme() {
+        for theme in [
+            CyberTheme::Tron,
+            CyberTheme::Matrix,
+            CyberTheme::Blade,
+            CyberTheme::Light,
+        ] {
+            for (i, c) in theme.ansi_palette().iter().enumerate() {
+                let ratio = contrast(*c, theme.bg_color());
+                // WCAG AA for normal text on Light; on the dark themes the dim entries
+                // (black, bright black) only need to stay visible.
+                let min = if theme == CyberTheme::Light || !matches!(i, 0 | 8) {
+                    4.5
+                } else {
+                    3.0
+                };
+                assert!(ratio >= min, "{theme:?} colour {i}: contrast {ratio:.2}");
+            }
+        }
+    }
+
+    #[test]
+    fn ansi_colors_resolve_bold_inverse_dim_and_backgrounds() {
+        let theme = CyberTheme::Tron;
+        let pal = theme.ansi_palette();
+        let base_fg = theme.text_primary();
+        let clear = Color32::TRANSPARENT;
+        let red = AnsiStyle {
+            fg: Some(AnsiColor::Indexed(1)),
+            ..Default::default()
+        };
+        assert_eq!(theme.ansi_colors(&red, base_fg, clear), (pal[1], clear));
+        let bold_red = AnsiStyle { bold: true, ..red };
+        assert_eq!(theme.ansi_colors(&bold_red, base_fg, clear).0, pal[9]);
+        let inverse = AnsiStyle {
+            inverse: true,
+            ..red
+        };
+        assert_eq!(
+            theme.ansi_colors(&inverse, base_fg, clear),
+            (theme.panel_bg(), pal[1])
+        );
+        let dim = AnsiStyle { dim: true, ..red };
+        assert_eq!(
+            theme.ansi_colors(&dim, base_fg, clear).0,
+            pal[1].gamma_multiply(0.6)
+        );
+        let on_white = AnsiStyle {
+            bg: Some(AnsiColor::Indexed(15)),
+            ..Default::default()
+        };
+        assert_eq!(
+            theme.ansi_colors(&on_white, base_fg, clear),
+            (Color32::BLACK, pal[15])
+        );
+        let rgb = AnsiStyle {
+            fg: Some(AnsiColor::Rgb(1, 2, 3)),
+            bg: Some(AnsiColor::Indexed(196)),
+            ..Default::default()
+        };
+        assert_eq!(
+            theme.ansi_colors(&rgb, base_fg, clear),
+            (Color32::from_rgb(1, 2, 3), Color32::from_rgb(255, 0, 0))
+        );
+        // Underline or italic alone keep the row's colours.
+        let underline = AnsiStyle {
+            underline: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            theme.ansi_colors(&underline, base_fg, clear),
+            (base_fg, clear)
+        );
     }
 }

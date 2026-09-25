@@ -1,5 +1,5 @@
 //! Named sessions: the workspace (open files and patterns, dock layout, per-stream
-//! filters, search query, wrap, encoding and bookmarks) saved to and loaded from a
+//! filters, search query, wrap, encoding, ANSI mode and bookmarks) saved to and loaded from a
 //! `*.fasttail-session.ini` file. Global preferences stay in `fasttail.ini`, which embeds
 //! the default session with the same sections so the behaviour of users who never name a
 //! session is unchanged.
@@ -30,6 +30,9 @@ pub struct StreamEntry {
     pub wrap: bool,
     /// Encoding name as `FileEncoding::name()`; `None` keeps the detected one.
     pub encoding: Option<String>,
+    /// ANSI mode chosen by the user as `AnsiMode::name()` (`render`, `strip`, `raw`);
+    /// `None` is auto, and old files without the key read as auto.
+    pub ansi: Option<String>,
     /// Bookmarked line indices, sorted.
     pub bookmarks: Vec<usize>,
     /// Entry name when the stream is a zip entry: `path` is then `archive/entry` (see
@@ -119,6 +122,9 @@ impl Session {
             sec.set("search", &s.search_query);
             sec.set("wrap", s.wrap.to_string());
             sec.set("encoding", s.encoding.clone().unwrap_or_default());
+            if let Some(ansi) = &s.ansi {
+                sec.set("ansi", ansi);
+            }
             sec.set(
                 "bookmarks",
                 s.bookmarks
@@ -197,6 +203,11 @@ impl Session {
                     .get("encoding")
                     .filter(|e| !e.is_empty())
                     .map(str::to_string),
+                ansi: sec
+                    .get("ansi")
+                    .and_then(crate::ansi::AnsiMode::from_name)
+                    .filter(|m| *m != crate::ansi::AnsiMode::Auto)
+                    .map(|m| m.name().to_string()),
                 bookmarks,
                 archive_entry,
             });

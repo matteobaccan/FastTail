@@ -1,5 +1,6 @@
 //! Engine hot-path benchmark: line indexing, include/exclude filters, regex
-//! filter, search with match navigation and highlight-rule scanning.
+//! filter, search with match navigation and highlight-rule scanning, then the same
+//! filters and the row styling on a log coloured with ANSI escape sequences.
 //!
 //! Runs only with `cargo bench` (custom harness, `bench` profile inherits the
 //! release settings), never with `cargo test`.
@@ -44,6 +45,12 @@ impl XorShift {
 
 /// Writes a synthetic log of roughly `target_bytes` bytes and returns the line count.
 fn generate_log(path: &Path, target_bytes: u64) -> std::io::Result<usize> {
+    generate_log_with(path, target_bytes, false)
+}
+
+/// `generate_log`, optionally coloured like a container log: the timestamp dimmed, the
+/// level in its colour, the service in bold (`ESC[...m` sequences on every line).
+fn generate_log_with(path: &Path, target_bytes: u64, coloured: bool) -> std::io::Result<usize> {
     const LEVELS: [&str; 4] = ["INFO", "DEBUG", "WARN", "ERROR"];
     const LEVEL_WEIGHTS: [usize; 4] = [70, 15, 10, 5];
     const SERVICES: [&str; 6] = [
@@ -82,18 +89,39 @@ fn generate_log(path: &Path, target_bytes: u64) -> std::io::Result<usize> {
         let service = SERVICES[rng.below(SERVICES.len())];
         let message = MESSAGES[rng.below(MESSAGES.len())];
         let number = rng.below(100_000);
-        let line = format!(
-            "2026-09-18 12:{:02}:{:02}.{:03} [{}] {}-{} req={:09} {}{}\n",
-            (lines / 60_000) % 60,
-            (lines / 1_000) % 60,
-            lines % 1_000,
-            level,
-            service,
-            lines % 17,
-            lines,
-            message,
-            number
-        );
+        let line = if coloured {
+            let colour = match level {
+                "ERROR" => 31,
+                "WARN" => 33,
+                "DEBUG" => 36,
+                _ => 32,
+            };
+            format!(
+                "\x1b[2m2026-09-18 12:{:02}:{:02}.{:03}\x1b[0m [\x1b[{colour}m{}\x1b[0m] \x1b[1m{}-{}\x1b[0m req={:09} {}{}\n",
+                (lines / 60_000) % 60,
+                (lines / 1_000) % 60,
+                lines % 1_000,
+                level,
+                service,
+                lines % 17,
+                lines,
+                message,
+                number
+            )
+        } else {
+            format!(
+                "2026-09-18 12:{:02}:{:02}.{:03} [{}] {}-{} req={:09} {}{}\n",
+                (lines / 60_000) % 60,
+                (lines / 1_000) % 60,
+                lines % 1_000,
+                level,
+                service,
+                lines % 17,
+                lines,
+                message,
+                number
+            )
+        };
         out.write_all(line.as_bytes())?;
         written += line.len() as u64;
         lines += 1;
@@ -504,6 +532,57 @@ fn main() {
         size
     );
     drop(engine);
+
+    // A coloured log (every line carries SGR sequences, at most 100 MB): auto mode
+    // renders it, so every text feature strips the sequences first. Compare with the
+    // plain phases above.
+    if generated {
+        let bytes = env_u64("FASTTAIL_BENCH_BYTES", DEFAULT_BYTES).min(100_000_000);
+        let coloured = _tmp.as_ref().unwrap().path().join("coloured.log");
+        generate_log_with(&coloured, bytes, true).expect("write coloured log");
+        let t0 = Instant::now();
+        let mut engine = TailEngine::open(&coloured).expect("open coloured log");
+        let open_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let total = engine.total_lines();
+        println!(
+            "ansi open       {open_ms:9.1} ms  ({total} lines, {bytes} bytes, {:?})",
+            engine.ansi_effective()
+        );
+        settle(&mut engine);
+        report(
+            "ansi include ci",
+            best(rounds, || {
+                engine.set_include_filter("");
+                engine.set_include_filter("error");
+                settle(&mut engine);
+                engine.visible_line_count()
+            }),
+        );
+        engine.set_include_filter("");
+        report(
+            "ansi search",
+            best(rounds, || {
+                engine.update_search("");
+                engine.update_search("timeout after");
+                settle(&mut engine);
+                engine.search_matches.len()
+            }),
+        );
+        engine.update_search("");
+        report(
+            "ansi row spans",
+            best(rounds, || {
+                let mut spans = 0;
+                for idx in 0..total {
+                    if let Some(row) = engine.get_row(idx) {
+                        spans += engine.match_row_spans(&row).spans.len();
+                    }
+                }
+                spans
+            }),
+        );
+        drop(engine);
+    }
 
     // The maintainer's workload: ten 50 MB logs, all growing on every frame.
     if generated {

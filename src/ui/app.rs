@@ -1,3 +1,4 @@
+use crate::ansi::AnsiMode;
 use crate::baretail_bridge::{detect_baretail_config, BareTailConfig};
 use crate::config::FastTailConfig;
 use crate::external_tools::ToolRunner;
@@ -2635,6 +2636,15 @@ impl FastTailApp {
                 self.config.set_wrap(&eng.path, eng.wrap_lines);
                 bookmarks_changed = true;
             }
+            if eng.ansi_dirty {
+                // The ANSI mode lives in the stream entry, as in `save_dock_layout`.
+                eng.ansi_dirty = false;
+                let mut entry = stream_entry_of(eng);
+                entry.wrap = false;
+                entry.bookmarks.clear();
+                self.config.set_stream_state(entry);
+                bookmarks_changed = true;
+            }
             if !eng.displayed && eng.unseen_severity >= 2 {
                 critical_in_background = true;
             }
@@ -4095,6 +4105,7 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         search_query: engine.search_query.trim().to_string(),
         wrap: engine.wrap_lines,
         encoding: Some(engine.encoding.name().to_string()),
+        ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),
         bookmarks,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
     }
@@ -4112,12 +4123,17 @@ fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path)
     }
 }
 
-/// Applies the persisted filters, search query and encoding of the engine's path (wrap
-/// and bookmarks are applied by the caller from their own sections).
+/// Applies the persisted filters, search query, encoding and ANSI mode of the engine's
+/// path (wrap and bookmarks are applied by the caller from their own sections).
 fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     let Some(entry) = cfg.stream_state_for(&engine.path).cloned() else {
         return;
     };
+    // First, so the filters and the search below run once, on the right text.
+    if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
+        engine.set_ansi_mode(mode);
+        engine.ansi_dirty = false;
+    }
     if let Some(enc) = entry.encoding.as_deref().and_then(FileEncoding::from_name) {
         if enc != engine.encoding {
             // Re-decoding rebuilds the index and drops bookmarks: restore them after.

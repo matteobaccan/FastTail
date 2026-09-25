@@ -571,6 +571,42 @@ fn toggle_button(
     ui.add(button)
 }
 
+/// Toolbar selector of the stream's ANSI mode: `ANSI: auto → render` shows what auto
+/// resolved to; picking a mode applies it at once (filters and search run again).
+fn render_ansi_mode_selector(ui: &mut Ui, engine: &mut TailEngine, lang: Language) {
+    use crate::ansi::AnsiMode;
+    let mode_name = |mode: AnsiMode| match mode {
+        AnsiMode::Auto => t(lang, "ansi_auto"),
+        AnsiMode::Render => t(lang, "ansi_render"),
+        AnsiMode::Strip => t(lang, "ansi_strip"),
+        AnsiMode::Raw => t(lang, "ansi_raw"),
+    };
+    let selected = match engine.ansi_mode {
+        AnsiMode::Auto => format!(
+            "ANSI: {} → {}",
+            mode_name(AnsiMode::Auto),
+            mode_name(engine.ansi_effective())
+        ),
+        mode => format!("ANSI: {}", mode_name(mode)),
+    };
+    let mut current = engine.ansi_mode;
+    egui::ComboBox::from_id_salt(format!("ansi_sel_{}", engine.path.display()))
+        .selected_text(RichText::new(selected).monospace().size(11.0))
+        .show_ui(ui, |ui| {
+            for mode in AnsiMode::ALL {
+                if ui
+                    .selectable_value(&mut current, mode, mode_name(mode))
+                    .clicked()
+                {
+                    engine.set_ansi_mode(mode);
+                    ui.ctx().request_repaint();
+                }
+            }
+        })
+        .response
+        .on_hover_text(t(lang, "tip_ansi"));
+}
+
 /// Stream bar part of a compressed stream: `decompressing N%` with a cancel button while
 /// the job runs, then why the content is partial if it stopped early, and a button that
 /// extracts the archive again.
@@ -954,6 +990,7 @@ fn render_log_stream(
                         }
                     }
                 });
+            render_ansi_mode_selector(ui, engine, lang);
         }
 
         // Hex column count selector (multiples of 8: 8, 16, 24, 32...)
@@ -1091,6 +1128,15 @@ fn render_log_stream(
                     .monospace()
                     .color(theme.warn_color()),
             );
+        }
+        if engine.ansi_switch_notice() {
+            ui.label(
+                RichText::new(format!("ⓘ {}", t(lang, "ansi_switched")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            );
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
         }
         render_compressed_status(ui, engine, theme, lang);
 
@@ -1958,8 +2004,9 @@ fn render_extended_rows(
                 None => continue,
             };
 
-            if let Some(raw_line) = engine.get_line(actual_line_idx) {
-                let is_json = TailEngine::is_json_line(&raw_line);
+            if let Some(row) = engine.get_row(actual_line_idx) {
+                let raw_line: &str = &row.line;
+                let is_json = TailEngine::is_json_line(raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
                 let matches_search = has_search
                     && engine
@@ -1968,19 +2015,23 @@ fn render_extended_rows(
                         .is_ok();
                 let is_active_search = active_search_line == Some(actual_line_idx);
                 // User rules first; the level palette only colours rows no rule matched.
-                // Span rules (captures-only, quick labels) only run when one exists, and
-                // never on search hits, which keep their own colours.
-                let spans = if span_rules && !matches_search && !is_active_search {
-                    Some(engine.match_highlight_spans(&raw_line))
-                } else {
-                    None
-                };
+                // Span rules (captures-only, quick labels, ANSI colours) only run when one
+                // exists, and never on search hits, which keep their own colours.
+                let spans =
+                    if (span_rules || !row.ansi.is_empty()) && !matches_search && !is_active_search
+                    {
+                        Some(engine.match_row_spans(&row))
+                    } else {
+                        None
+                    };
                 let highlight = match &spans {
                     Some(s) => s
                         .rest
                         .or_else(|| level_fallback(engine, theme, level_colors, actual_line_idx)),
-                    None => row_highlight(engine, theme, level_colors, actual_line_idx, &raw_line),
+                    None => row_highlight(engine, theme, level_colors, actual_line_idx, raw_line),
                 };
+                // Raw mode draws ESC as ␛, with the spans moved past the wider glyphs.
+                let (shown, spans) = row.display(spans);
                 let is_selected = engine.is_selected(actual_line_idx);
                 let is_bookmarked = engine.is_bookmarked(actual_line_idx);
 
@@ -2052,12 +2103,11 @@ fn render_extended_rows(
                                 italics: highlight.map(|h| h.italic).unwrap_or(false),
                                 ..Default::default()
                             };
-                            let job =
-                                span_layout_job(&raw_line, &font_id, base, &spans.spans, theme);
+                            let job = span_layout_job(&shown, &font_id, base, &spans.spans, theme);
                             ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend));
                             return;
                         }
-                        let mut text = RichText::new(&*raw_line).monospace().size(font_size);
+                        let mut text = RichText::new(&*shown).monospace().size(font_size);
                         if is_active_search {
                             text = text
                                 .color(Color32::BLACK)
@@ -2116,7 +2166,7 @@ fn render_extended_rows(
 
                 // Render expanded pretty JSON
                 if is_json && is_expanded {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw_line) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw_line) {
                         if let Ok(pretty) = serde_json::to_string_pretty(&val) {
                             egui::Frame::NONE
                                 .fill(theme.panel_bg().linear_multiply(1.3))
@@ -2219,7 +2269,8 @@ fn level_fallback(
 }
 
 /// Lays out `text` as sections: `base` for the bytes no span claimed, and per span the
-/// rule's colours or the theme's preset for a quick label. Spans are sorted and
+/// rule's colours, the theme's preset for a quick label, or the theme's reading of an
+/// ANSI style (drawn over the row's own colours, with underline). Spans are sorted and
 /// non-overlapping (see `TailEngine::match_highlight_spans`); ranges past the end of the
 /// (possibly capped) text are dropped.
 fn span_layout_job(
@@ -2244,11 +2295,23 @@ fn span_layout_job(
         if start > pos {
             job.append(&text[pos..start], 0.0, base.clone());
         }
-        let (fg, bg, italics) = match sp.style {
-            SpanStyle::Rule(s) => (s.fg, s.bg, s.italic),
+        let (fg, bg, italics, underline) = match sp.style {
+            SpanStyle::Rule(s) => (s.fg, s.bg, s.italic, false),
             SpanStyle::Label(n) => {
                 let (fg, bg) = theme.label_style(n);
-                (fg, bg, false)
+                (fg, bg, false, false)
+            }
+            SpanStyle::Ansi(s) => {
+                // The wrapped view leaves the row colour to the painter (placeholder).
+                let base_fg = if base.color == Color32::PLACEHOLDER {
+                    theme.text_primary()
+                } else {
+                    base.color
+                };
+                let (fg, bg) = theme.ansi_colors(&s, base_fg, base.background);
+                let plain = s.fg.is_none() && !s.bold && !s.dim && !s.inverse && s.bg.is_none();
+                let fg = if plain { base.color } else { fg };
+                (fg, bg, s.italic || base.italics, s.underline)
             }
         };
         job.append(
@@ -2259,6 +2322,18 @@ fn span_layout_job(
                 color: fg,
                 background: bg,
                 italics,
+                underline: if underline {
+                    Stroke::new(
+                        1.0,
+                        if fg == Color32::PLACEHOLDER {
+                            theme.text_primary()
+                        } else {
+                            fg
+                        },
+                    )
+                } else {
+                    Stroke::NONE
+                },
                 ..Default::default()
             },
         );
@@ -2350,17 +2425,18 @@ fn render_wrapped_rows(
             let Some(line) = eng.get_actual_line_idx(row) else {
                 return row_height;
             };
-            let Some(raw) = eng.get_line(line) else {
+            let Some(row_text) = eng.get_row(line) else {
                 return row_height;
             };
-            let is_json = TailEngine::is_json_line(&raw);
+            let raw: &str = &row_text.line;
+            let is_json = TailEngine::is_json_line(raw);
             let expanded = is_json && eng.expanded_json_lines.contains(&line);
             // Search hits keep their own colours; other rows take the span path only when
-            // a captures-only rule or a quick label exists.
+            // a captures-only rule, a quick label or ANSI colours exist.
             let is_hit = active_search_line == Some(line)
                 || (has_search && eng.search_matches.binary_search(&line).is_ok());
-            let spans = if span_rules && !is_hit {
-                Some(eng.match_highlight_spans(&raw))
+            let spans = if (span_rules || !row_text.ansi.is_empty()) && !is_hit {
+                Some(eng.match_row_spans(&row_text))
             } else {
                 None
             };
@@ -2368,8 +2444,9 @@ fn render_wrapped_rows(
                 Some(s) => s
                     .rest
                     .or_else(|| level_fallback(eng, theme, level_colors, line)),
-                None => row_highlight(eng, theme, level_colors, line, &raw),
+                None => row_highlight(eng, theme, level_colors, line, raw),
             };
+            let (shown, spans) = row_text.display(spans);
             let format = egui::TextFormat {
                 font_id: font_id.clone(),
                 color: Color32::PLACEHOLDER,
@@ -2377,16 +2454,16 @@ fn render_wrapped_rows(
                 ..Default::default()
             };
             let mut job = match spans.filter(|s| !s.spans.is_empty()) {
-                Some(s) => span_layout_job(layout_slice(&raw), &font_id, format, &s.spans, theme),
+                Some(s) => span_layout_job(layout_slice(&shown), &font_id, format, &s.spans, theme),
                 None => {
-                    egui::text::LayoutJob::single_section(layout_slice(&raw).to_owned(), format)
+                    egui::text::LayoutJob::single_section(layout_slice(&shown).to_owned(), format)
                 }
             };
             job.wrap.max_width = if is_json { text_w - json_w } else { text_w }.max(20.0);
             let galley = ctx.fonts_mut(|f| f.layout_job(job));
             let mut height = galley.size().y.max(font_row_h) + pad;
             let pretty = if expanded {
-                serde_json::from_str::<serde_json::Value>(&raw)
+                serde_json::from_str::<serde_json::Value>(raw)
                     .ok()
                     .and_then(|v| serde_json::to_string_pretty(&v).ok())
                     .map(|pretty| {

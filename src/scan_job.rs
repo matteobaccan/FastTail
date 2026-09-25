@@ -13,9 +13,10 @@ use std::thread;
 
 use regex::Regex;
 
+use crate::ansi::AnsiMode;
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
-use crate::tail_engine::{contains_case_insensitive, decode_line, FileEncoding, NO_TIMESTAMP};
+use crate::tail_engine::{contains_case_insensitive, decode_line_ansi, FileEncoding, NO_TIMESTAMP};
 use crate::timestamp::{detect_timestamp, FormatHint};
 
 const CHUNK: usize = 1024 * 1024;
@@ -215,6 +216,9 @@ pub struct ScanRange {
     /// Index of the line that starts at `start_offset`.
     pub start_line: usize,
     pub encoding: FileEncoding,
+    /// Resolved ANSI mode of the stream: in render and strip modes every line is evaluated
+    /// without its escape sequences, exactly like the engine's synchronous path.
+    pub ansi: AnsiMode,
     /// Visibility of the nearest non-continuation line before `start_line` under the filter.
     pub parent_visible: bool,
 }
@@ -389,6 +393,7 @@ fn run(
     // Visibility of the previous non-continuation line (stack trace continuation lines
     // follow their parent); a job starting after line 0 receives it from the engine.
     let mut parent_visible = range.parent_visible;
+    let strip = range.ansi.strips();
     let mut eval = |idx: usize,
                     bytes: &[u8],
                     hits: &mut Vec<usize>,
@@ -398,21 +403,21 @@ fn run(
         match &spec {
             JobSpec::Index => true,
             JobSpec::Levels => {
-                line_passes(bytes, range.encoding, |s| {
+                line_passes(bytes, range.encoding, strip, |s| {
                     levels.push(detect_level(s) as u8);
                     true
                 });
                 true
             }
             JobSpec::Timestamps { .. } => {
-                line_passes(bytes, range.encoding, |s| {
+                line_passes(bytes, range.encoding, strip, |s| {
                     timing.push(s);
                     true
                 });
                 true
             }
             JobSpec::Filter(filter) => {
-                let visible = line_passes(bytes, range.encoding, |s| {
+                let visible = line_passes(bytes, range.encoding, strip, |s| {
                     let (v, next) = filter.visible_in_sequence(s, parent_visible);
                     parent_visible = next;
                     v
@@ -427,7 +432,7 @@ fn run(
                 filter,
                 limit,
             } => {
-                let hit = line_passes(bytes, range.encoding, |s| {
+                let hit = line_passes(bytes, range.encoding, strip, |s| {
                     let visible = match filter {
                         Some(f) => {
                             let (v, next) = f.visible_in_sequence(s, parent_visible);
@@ -583,18 +588,32 @@ fn run(
     });
 }
 
-/// Decodes a raw line (newline already stripped) and applies `pred`, borrowing UTF-8 text
-/// when it is valid.
-fn line_passes(bytes: &[u8], encoding: FileEncoding, pred: impl FnOnce(&str) -> bool) -> bool {
+/// Decodes a raw line (newline already stripped), removes its escape sequences when
+/// `strip` is set, and applies `pred`, borrowing UTF-8 text when it is valid and holds no
+/// sequence.
+fn line_passes(
+    bytes: &[u8],
+    encoding: FileEncoding,
+    strip: bool,
+    pred: impl FnOnce(&str) -> bool,
+) -> bool {
     match encoding {
         FileEncoding::Utf8 => {
             let content = &bytes[..trim_cr(bytes)];
             match std::str::from_utf8(content) {
+                Ok(s) if strip => pred(&crate::ansi::strip(s)),
                 Ok(s) => pred(s),
-                Err(_) => pred(&String::from_utf8_lossy(content)),
+                Err(_) => {
+                    let s = String::from_utf8_lossy(content);
+                    if strip {
+                        pred(&crate::ansi::strip(&s))
+                    } else {
+                        pred(&s)
+                    }
+                }
             }
         }
-        enc => pred(&decode_line(bytes, enc, false)),
+        enc => pred(&decode_line_ansi(bytes, enc, false, strip)),
     }
 }
 
@@ -635,6 +654,7 @@ mod tests {
             end_offset: bytes.len() as u64,
             start_line,
             encoding,
+            ansi: AnsiMode::Raw,
             parent_visible: false,
         };
         let job = ScanJob::spawn(1, &path, range, JobSpec::Timestamps { inherited, hint });
@@ -772,6 +792,7 @@ mod tests {
             end_offset: len,
             start_line: 0,
             encoding: FileEncoding::Utf8,
+            ansi: AnsiMode::Raw,
             parent_visible: false,
         };
         let job = ScanJob::spawn(
