@@ -91,8 +91,7 @@ pub const MAX_ROW_SPANS: usize = 64;
 
 /// Timestamp of a line that has none and inherits none (before the first timed line).
 pub const NO_TIMESTAMP: i64 = i64::MIN;
-/// Lines timed per call of `fill_timestamps`: the cache completes over a few frames
-/// instead of freezing the window on a multi-million-line file.
+/// Lines timed per call of `fill_timestamps`, the unit `ensure_timestamps` loops over.
 pub const TIMESTAMP_FILL_BUDGET: usize = 200_000;
 /// Below this share of timed lines the file is not one we can read times from, and the
 /// time controls say so instead of hiding everything.
@@ -102,6 +101,9 @@ pub const MIN_TIMESTAMP_RATE: f32 = 0.5;
 pub const TIMESTAMP_RATE_SAMPLE: usize = 200;
 /// Visible lines scanned for the time span of an out-of-order log.
 pub const MAX_SPAN_SCAN: usize = 100_000;
+/// Lines looked at from each end of the view for the time span before the cache is
+/// built: enough to step over a stack trace, few enough to stay free per frame.
+pub const SPAN_PROBE_LINES: usize = 256;
 
 /// Style of a painted span: a captures-only rule's style, or preset colour `1..=9` of a
 /// quick label (resolved by the theme in the renderer).
@@ -2388,40 +2390,51 @@ impl TailEngine {
     }
 
     /// Earliest and latest timestamp among the visible lines, for the stream status bar.
-    /// On a forward-running log this is the first and the last visible line; otherwise the
-    /// visible lines are scanned, bounded so a filter over millions of rows stays cheap.
+    /// On a forward-running log these are the first and the last visible timed lines,
+    /// found from each end without walking the whole view and without needing the cache:
+    /// a stream nobody has filtered by time still shows its span. An out-of-order log (known
+    /// only once the cache is built) is scanned instead, bounded so a filter over millions
+    /// of rows stays cheap.
     pub fn visible_time_span(&self) -> Option<(i64, i64)> {
-        let visible: Box<dyn Iterator<Item = usize>> = if self.is_filter_active() {
-            Box::new(self.filtered_lines.iter().copied())
-        } else {
-            Box::new(0..self.total_lines())
+        let count = self.visible_line_count();
+        let nth = |i: usize| -> usize {
+            if self.is_filter_active() {
+                self.filtered_lines[i]
+            } else {
+                i
+            }
         };
-        if !self.timestamps_unordered {
-            let mut first = None;
-            let mut last = None;
-            for idx in visible {
+        if self.timestamps_unordered {
+            let mut span: Option<(i64, i64)> = None;
+            for idx in (0..count).take(MAX_SPAN_SCAN).map(nth) {
                 if let Some(millis) = self.line_timestamp(idx) {
-                    if first.is_none() {
-                        first = Some(millis);
-                    }
-                    last = Some(millis);
+                    span = Some(match span {
+                        Some((lo, hi)) => (lo.min(millis), hi.max(millis)),
+                        None => (millis, millis),
+                    });
                 }
             }
-            return match (first, last) {
-                (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
-                _ => None,
-            };
+            return span;
         }
-        let mut span: Option<(i64, i64)> = None;
-        for idx in visible.take(MAX_SPAN_SCAN) {
-            if let Some(millis) = self.line_timestamp(idx) {
-                span = Some(match span {
-                    Some((lo, hi)) => (lo.min(millis), hi.max(millis)),
-                    None => (millis, millis),
-                });
-            }
+        let first = (0..count)
+            .take(SPAN_PROBE_LINES)
+            .find_map(|i| self.probe_timestamp(nth(i)))?;
+        let last = (0..count)
+            .rev()
+            .take(SPAN_PROBE_LINES)
+            .find_map(|i| self.probe_timestamp(nth(i)))?;
+        Some((first.min(last), first.max(last)))
+    }
+
+    /// Timestamp of a line from the cache when it has been timed, else read from its own
+    /// text. A continuation line is `None` on the second path: the caller moves on to the
+    /// next line, which is what the span wants anyway.
+    fn probe_timestamp(&self, idx: usize) -> Option<i64> {
+        if idx < self.timestamps.len() {
+            return self.line_timestamp(idx);
         }
-        span
+        let line = self.get_line(idx)?;
+        crate::timestamp::detect_timestamp(&line, self.timestamp_hint).map(|(millis, _)| millis)
     }
 
     /// Visibility of the nearest non-continuation line before `idx`, the state a sequential
@@ -3209,7 +3222,7 @@ impl TailEngine {
     /// `current_line` (0-based). Returns the resolved 0-based target and whether the requested
     /// line was hidden by the filters (in which case the first visible line at or after it,
     /// or the last visible line, is returned). `None` when the input is not a number.
-    pub fn resolve_goto(&self, input: &str, current_line: usize) -> Option<GotoTarget> {
+    pub fn resolve_goto(&mut self, input: &str, current_line: usize) -> Option<GotoTarget> {
         let total = self.total_lines();
         if total == 0 {
             return None;
@@ -3218,6 +3231,9 @@ impl TailEngine {
         // A time rather than a line number: "14:02", "14:02:05" or a whole timestamp.
         // Checked first, because `14:02` is not a line number in any reading.
         if s.contains(':') {
+            // The cache is otherwise built only once a time window is set; a jump by time
+            // on a fresh stream needs it as much.
+            self.ensure_timestamps();
             let millis = crate::timestamp::parse_user_time(s, self.time_reference())?;
             let line = self.goto_time(millis)?;
             return Some(self.goto_target_for(line, total));

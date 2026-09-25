@@ -29,6 +29,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   holds the executable alone — about 8 MB instead of 24 — and `fasttail.pdb` ships as
   `fasttail-windows-x86_64-symbols.zip` for whoever needs to read a crash dump.
 
+### Fixed
+
+- **Go-to-time and the visible span work on a fresh stream.** `Ctrl+G` with `14:02`
+  answered "not a line number", and the status bar showed no time span, until a time
+  window had been typed once: the timestamps were read only for the window. They are now
+  read when a jump by time needs them, and the span comes from the first and last
+  visible lines directly, without walking the whole view every frame.
+- **`YYYY-MM-DD HH:MM` is accepted without the seconds** in the time fields and in
+  `Ctrl+G`; as a "to" bound it covers the whole minute.
+- **Typed times match the clock printed in the log.** A zone suffix (`+0200`, `Z`) used to
+  be converted to UTC, so on an Apache `+0200` log `14:02` found the lines printed at
+  `16:02`; the zone is now read past and not applied.
+- **An empty view no longer says "detecting levels…"** after a filter on a large file
+  finished with no hits; only indexing and filtering explain an empty view.
+
 ### Documentation
 
 - **Logo.** The banner pills read RUST · GPU, ZERO-LAG ENGINE, REGEX FILTERS and TIME

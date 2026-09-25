@@ -5,9 +5,12 @@
 //! format matched last (`FormatHint`) and tries it first, which is the common case: a log
 //! file does not change its timestamp format halfway through.
 //!
-//! The result is milliseconds since the Unix epoch. Times without a zone are read as UTC:
+//! The result is milliseconds on the clock the log printed, counted from 1970-01-01 00:00
+//! of that clock. A zone suffix (`Z`, `+02:00`, `+0200`) is read past but not applied:
 //! FastTail compares timestamps with each other and with what the user typed, never with
-//! wall-clock time, so a constant offset cancels out on both sides.
+//! wall-clock time, so `14:02` must mean the `14:02` written in the line - converting an
+//! Apache `+0200` log to UTC would put every typed time two hours off. Bare epoch values
+//! have no printed clock and are read as UTC.
 
 /// Only the head of a line can carry the timestamp; a match further in is a coincidence.
 pub const SCAN_BYTES: usize = 64;
@@ -76,7 +79,8 @@ pub fn detect_timestamp(line: &str, hint: FormatHint) -> Option<(i64, FormatHint
 }
 
 /// `2026-09-18T14:02:05.123Z`, `2026-09-18 14:02:05,123`, `2026-09-18 14:02:05+02:00`.
-/// The date and the time are required; the fraction and the zone are optional.
+/// The date and the time are required; the fraction and the zone are optional, and the
+/// zone is skipped rather than applied (see the module comment).
 fn parse_iso8601(head: &[u8]) -> Option<i64> {
     let start = skip_leading_bracket(head);
     let b = head.get(start..)?;
@@ -96,10 +100,9 @@ fn parse_iso8601(head: &[u8]) -> Option<i64> {
         return None;
     }
     let (time_millis, after_time) = parse_clock(b, 11)?;
-    let (frac, after_frac) = parse_fraction(b, after_time);
-    let zone = parse_zone(b, after_frac);
+    let (frac, _) = parse_fraction(b, after_time);
     let days = days_from_civil(year, month, day)?;
-    Some(days * 86_400_000 + time_millis + frac - zone)
+    Some(days * 86_400_000 + time_millis + frac)
 }
 
 /// Syslog: `Sep 18 14:02:05` — no year, so the current one is assumed, which is what every
@@ -129,7 +132,7 @@ fn parse_syslog(head: &[u8]) -> Option<i64> {
     Some(days * 86_400_000 + time_millis + frac)
 }
 
-/// Apache and nginx: `[18/Sep/2026:14:02:05 +0200]`.
+/// Apache and nginx: `[18/Sep/2026:14:02:05 +0200]`, the zone skipped as in ISO 8601.
 fn parse_apache(head: &[u8]) -> Option<i64> {
     let start = head.iter().position(|b| *b == b'[').map(|i| i + 1)?;
     // The bracket has to be at the very start of the line, or right after the client and
@@ -150,14 +153,9 @@ fn parse_apache(head: &[u8]) -> Option<i64> {
     if b[11] != b':' {
         return None;
     }
-    let (time_millis, after_time) = parse_clock(b, 12)?;
-    let zone = if b.get(after_time) == Some(&b' ') {
-        parse_zone(b, after_time + 1)
-    } else {
-        0
-    };
+    let (time_millis, _) = parse_clock(b, 12)?;
     let days = days_from_civil(year, month, day)?;
-    Some(days * 86_400_000 + time_millis - zone)
+    Some(days * 86_400_000 + time_millis)
 }
 
 /// Bare epoch seconds (10 digits) or milliseconds (13 digits), the way container runtimes
@@ -226,27 +224,6 @@ fn parse_fraction(b: &[u8], at: usize) -> (i64, usize) {
         seen += 1;
     }
     (millis, idx)
-}
-
-/// `Z`, `+02:00`, `-0500`: the offset in milliseconds to subtract to reach UTC.
-fn parse_zone(b: &[u8], at: usize) -> i64 {
-    match b.get(at) {
-        Some(b'Z') | Some(b'z') => 0,
-        Some(sign @ (b'+' | b'-')) => {
-            let sign = if *sign == b'-' { -1 } else { 1 };
-            let Some(hours) = number(b, at + 1, 2) else {
-                return 0;
-            };
-            let minutes_at = if b.get(at + 3) == Some(&b':') {
-                at + 4
-            } else {
-                at + 3
-            };
-            let minutes = number(b, minutes_at, 2).unwrap_or(0);
-            sign * (hours as i64 * 3600 + minutes as i64 * 60) * 1000
-        }
-        _ => 0,
-    }
 }
 
 fn skip_leading_bracket(head: &[u8]) -> usize {
@@ -348,8 +325,7 @@ fn year_from_days(days: i64) -> u32 {
 }
 
 /// `YYYY-MM-DD HH:MM:SS` for a timestamp in milliseconds, for the status bar and the
-/// tooltips. Same reading as the parser: the value is shown as it was parsed, without a
-/// zone conversion that would move the number the log itself printed.
+/// tooltips: the clock the log printed, since the parser never applies a zone.
 pub fn format_millis(millis: i64) -> String {
     let days = millis.div_euclid(86_400_000);
     let rest = millis.rem_euclid(86_400_000);
@@ -385,8 +361,9 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 /// Reads what the user typed into the time-range or go-to-time fields.
 ///
-/// Accepts `HH:MM`, `HH:MM:SS` (that time on the day of `reference`), `YYYY-MM-DD HH:MM[:SS]`
-/// and anything the line parser reads, so a timestamp copied straight out of the log works.
+/// Accepts `HH:MM`, `HH:MM:SS` (that time on the day of `reference`), `YYYY-MM-DD HH:MM`
+/// (`T` or a space in between) and anything the line parser reads, so a timestamp copied
+/// straight out of the log works.
 /// `reference` is the day the bare times belong to — the first timestamp of the stream,
 /// which is what the user means by "14:02" while looking at yesterday's log.
 pub fn parse_user_time(input: &str, reference: i64) -> Option<i64> {
@@ -397,6 +374,10 @@ pub fn parse_user_time(input: &str, reference: i64) -> Option<i64> {
     // A full timestamp, in any of the formats a log line can carry.
     if let Some((millis, _)) = detect_timestamp(text, FormatHint::Unknown) {
         return Some(millis);
+    }
+    // A date and a time without the seconds, which the line parser insists on.
+    if is_date_minute(text) {
+        return detect_timestamp(&format!("{text}:00"), FormatHint::Iso8601).map(|(ms, _)| ms);
     }
     // `HH:MM` or `HH:MM:SS` on the reference day.
     let b = text.as_bytes();
@@ -418,11 +399,27 @@ pub fn parse_user_time(input: &str, reference: i64) -> Option<i64> {
 /// The end of the minute or second the user named, so "from 14:02 to 14:05" includes
 /// everything stamped 14:05:59.999 — the window a person means when they type two times.
 pub fn end_of_typed_time(input: &str, millis: i64) -> i64 {
-    match input.trim().len() {
+    let text = input.trim();
+    match text.len() {
         5 => millis + 59_999, // HH:MM  -> to the end of that minute
         8 => millis + 999,    // HH:MM:SS -> to the end of that second
+        16 if is_date_minute(text) => millis + 59_999, // YYYY-MM-DD HH:MM
+        19 if is_date_minute(&text[..16]) => millis + 999, // YYYY-MM-DD HH:MM:SS
         _ => millis,
     }
+}
+
+/// `YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`, nothing after the minutes.
+fn is_date_minute(text: &str) -> bool {
+    let b = text.as_bytes();
+    b.len() == 16
+        && [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15]
+            .iter()
+            .all(|&i| b[i].is_ascii_digit())
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && matches!(b[10], b' ' | b'T')
+        && b[13] == b':'
 }
 
 #[cfg(test)]
@@ -442,13 +439,13 @@ mod tests {
         assert_eq!(detect("2026-09-18T14:02:05.123456Z trailing"), Some(base));
         assert_eq!(detect("2026-09-18T14:02:05Z no fraction"), Some(base - 123));
         assert_eq!(detect("[2026-09-18 14:02:05.123] bracketed"), Some(base));
-        // +02:00 means the same instant two hours earlier in UTC.
+        // The zone is read past, not applied: 14:02 stays 14:02, as printed.
         assert_eq!(
-            detect("2026-09-18T16:02:05.123+02:00 zoned"),
+            detect("2026-09-18T14:02:05.123+02:00 zoned"),
             Some(base),
-            "a zone offset must be subtracted"
+            "the printed clock must be kept"
         );
-        assert_eq!(detect("2026-09-18T11:02:05.123-0300 zoned"), Some(base));
+        assert_eq!(detect("2026-09-18T14:02:05.123-0300 zoned"), Some(base));
     }
 
     #[test]
@@ -462,8 +459,9 @@ mod tests {
             Some(1_789_740_125_000)
         );
         assert_eq!(
-            detect("[18/Sep/2026:16:02:05 +0200] zoned"),
-            Some(1_789_740_125_000)
+            detect("[18/Sep/2026:14:02:05 +0200] zoned"),
+            Some(1_789_740_125_000),
+            "the printed clock must be kept"
         );
 
         assert_eq!(detect("1789480925 epoch seconds"), Some(1_789_480_925_000));
@@ -531,6 +529,18 @@ mod tests {
             parse_user_time("2026-09-18 14:02:05", 0),
             Some(1_789_740_125_000)
         );
+        // Without the seconds, with a space or a `T`.
+        assert_eq!(
+            parse_user_time("2026-09-18 14:02", 0),
+            Some(1_789_740_120_000)
+        );
+        assert_eq!(
+            parse_user_time("2026-09-18T14:02", 0),
+            Some(1_789_740_120_000)
+        );
+        // A typed time is the clock of the log: an Apache +0200 line at 14:02 matches 14:02.
+        let apache = detect("[18/Sep/2026:14:02:05 +0200] GET /").unwrap();
+        assert_eq!(parse_user_time("14:02:05", apache), Some(apache));
         // Rubbish stays rubbish.
         assert_eq!(parse_user_time("", noon), None);
         assert_eq!(parse_user_time("25:00", noon), None);
@@ -565,6 +575,8 @@ mod tests {
         assert_eq!(end_of_typed_time("14:05", 1_000), 60_999);
         assert_eq!(end_of_typed_time("14:05:30", 1_000), 1_999);
         assert_eq!(end_of_typed_time("2026-09-18T14:05:30Z", 1_000), 1_000);
+        assert_eq!(end_of_typed_time("2026-09-18 14:05", 1_000), 60_999);
+        assert_eq!(end_of_typed_time("2026-09-18 14:05:30", 1_000), 1_999);
     }
 
     #[test]
