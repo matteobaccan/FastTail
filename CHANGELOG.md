@@ -30,6 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (read-only, deflate through the same flate2) add about 323 KB (+1.7%) to the Windows release
   executable (19,526,656 → 19,857,408 bytes, thin LTO).
 
+### Changed
+
+- **Building from source needs Rust 1.88.** `zip` 8, used to read `.zip` logs, requires it;
+  the release binaries are unaffected.
+
 ### Fixed
 
 - **A log opened while empty detects its encoding once it has content.** The encoding
