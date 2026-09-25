@@ -266,6 +266,49 @@ Signing and notarizing the build would remove the prompt for everyone, and needs
 
 ---
 
+## ❓ FAQ
+
+### What is FastTail?
+FastTail is a free, open-source (MIT) desktop application for viewing and following log files in real time — a graphical `tail -f`. It is written in Rust, renders on the GPU, runs on Windows, Linux and macOS, and opens several logs side by side in a docking workspace with live filters, highlighting, search and a hex view.
+
+### Is FastTail a good BareTail alternative?
+Yes: it was designed as a successor to BareTail. It keeps the things BareTail users rely on — instant opening of huge files, follow mode, coloured highlight rules — and adds include / exclude filters (text or regex) in the free version, regex capture-group highlighting, log level detection, a hex view, Markdown rendering, docking, and Linux and macOS builds. On Windows, when FastTail finds BareTail settings in the registry it offers to import the recent files and highlight colours in one click.
+
+### How do I tail a log file in real time on Windows?
+Download `fasttail-windows-x86_64.zip` from the [Releases](https://github.com/matteobaccan/FastTail/releases) page, unpack it and run `fasttail.exe app.log` (or drag the file onto the window). Follow mode is on by default and scrolls to every new line; `Space` toggles it. There is no installer and no runtime to install: it is a single executable.
+
+### Is there a GUI for `tail -f` on Linux or macOS?
+FastTail is one. The same features ship for Linux x86_64, Linux ARM64 and macOS Apple Silicon as a single binary: `tar -xzf fasttail-linux-x86_64.tar.gz && ./fasttail /var/log/syslog`. The macOS build is unsigned, see [the Gatekeeper note](#macos-apple-cannot-verify-fasttail-is-free-of-malware) for the one-time `xattr` command.
+
+### Can FastTail open very large log files (multi-GB)?
+Yes. The file is never loaded into memory: rows are read on demand through a small block cache, and the only per-file state is a line index of 8 bytes per line. Files above 16 MB filter and search on a background thread with progress in the stream bar, so the window stays responsive while a multi-gigabyte log is scanned.
+
+### How do I show only the lines that match a pattern, or hide the noise?
+Every stream has an **Include** and an **Exclude** box above the rows. Both accept plain text or a regular expression, case-sensitive or not, and apply as you type — `ERROR|CRITICAL` in Include, `healthcheck|ping` in Exclude. The `≥ level` selector adds a minimum log level on top. From the command line: `fasttail --filter ERROR --exclude DEBUG app.log`.
+
+### How do I highlight errors in colour?
+Open **Color Filters** and add a rule: text or regex, foreground and background colour, bold, italic and optionally a sound (Beep, Chime, Warning, Critical). Rules are applied top-down and can be reordered. A regex rule with "Captures only" colours just its capture groups, and `Ctrl+Shift+1..9` turns the current search into a quick colour label.
+
+### Can I monitor several log files at the same time?
+Yes. Each file opens in its own stream that can be tabbed, split, docked or floated; the layout is restored at the next start. Named sessions save the whole set — files, filters, layout, bookmarks — so you can switch between projects in one click.
+
+### Does FastTail follow rotated logs?
+Yes. Rotation, truncation and in-place rewrites of a file are detected without locking it for the writer. To follow a logger that creates a new file per day or hour, open a wildcard pattern such as `C:\logs\app-*.log`: the stream follows the newest matching file and keeps its filters when it switches.
+
+### Can it view binary files or non-UTF-8 logs?
+The **HEX** mode shows a live hexadecimal + ASCII dump with byte-level search (text or `0A 0D` patterns). Text encodings are detected automatically and can be overridden: ASCII, ANSI (Windows-1252), UTF-8 with or without BOM, UTF-16 LE and UTF-16 BE.
+
+### How does FastTail compare with Tailviewer, SnakeTail, klogg or lnav?
+Tailviewer and SnakeTail are Windows-only .NET applications; FastTail is a native single binary on three platforms. klogg is a fast Qt log viewer focused on searching large files; lnav is a terminal log navigator with SQL queries. FastTail sits between them: a GUI built for following live logs, with docking, per-rule sound alerts, hex and Markdown views and external tools bound to rows. See the [comparison table](#-comparison-with-other-tail-tools).
+
+### Does FastTail send any data over the network?
+No. It reads local files and writes only its own `fasttail.ini`, session files and, after a crash, `fasttail_crash.log`. There is no telemetry upload: the "System Telemetry" setting only shows CPU and memory in the title bar.
+
+### Is FastTail free for commercial use?
+Yes. It is released under the MIT License, which allows use, modification and redistribution, commercial included.
+
+---
+
 ## 📐 Specifications
 
 Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting, docking UI, themes, localization, log intelligence, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend, the command line, selection and export.
