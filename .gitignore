@@ -2,3 +2,5 @@
 fasttail.toml
 fasttail.ini
 *.log
+# Claude Code agent worktrees
+.claude/worktrees/
