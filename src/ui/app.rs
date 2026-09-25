@@ -1105,7 +1105,7 @@ impl FastTailApp {
                     engine.set_exclude_filter(x);
                 }
                 if let Some(follow) = cli.follow {
-                    engine.follow_tail = follow;
+                    engine.follow_tail = follow && !engine.is_compressed();
                 }
             }
         }

@@ -21,18 +21,23 @@ const MAX_NAME_CHARS: usize = 80;
 /// Counter making the spool names of one process unique.
 static SPOOL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// The spool directory: `configured` when set (and not empty), else
-/// `<temp>/fasttail-spool`.
+/// The spool directory: `fasttail-spool` inside `configured` when set (and not empty),
+/// else inside the system temporary directory. The dedicated folder keeps the startup
+/// sweep and the Unix permissions away from the user's own files, whatever folder the
+/// setting names.
 pub fn spool_dir(configured: Option<&Path>) -> PathBuf {
     match configured {
-        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join(SPOOL_DIR_NAME),
         _ => std::env::temp_dir().join(SPOOL_DIR_NAME),
     }
 }
 
-/// Creates the spool directory if needed; on Unix it is readable by its owner only
-/// (`%TEMP%` is per-user on Windows already).
+/// Creates the spool directory if needed; on Unix a newly created one is readable by
+/// its owner only (`%TEMP%` is per-user on Windows already).
 pub fn ensure_dir(dir: &Path) -> std::io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
@@ -217,7 +222,7 @@ mod tests {
         );
         assert_eq!(
             spool_dir(Some(Path::new("/big/disk"))),
-            PathBuf::from("/big/disk")
+            Path::new("/big/disk").join(SPOOL_DIR_NAME)
         );
     }
 

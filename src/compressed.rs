@@ -205,7 +205,10 @@ pub fn classify(path: &Path) -> Target {
     if path.is_file() {
         return match sniff(path) {
             Format::Gzip => Target::Gzip,
-            Format::Zip => Target::ZipArchive,
+            // A text file that merely starts with `PK\x03\x04` is not a zip: when the
+            // central directory does not parse, the file opens as it is.
+            Format::Zip if list_zip_entries(path).is_ok() => Target::ZipArchive,
+            Format::Zip => Target::Plain,
             Format::EmptyZip => Target::EmptyZip,
             Format::Plain => Target::Plain,
         };
@@ -777,11 +780,14 @@ pub fn open_engine(
     settings: &Settings,
     wake: Option<WakeFn>,
 ) -> Result<TailEngine, OpenError> {
+    // The entry name as the archive spells it, for the job.
+    let mut real_entry = entry.map(str::to_string);
     let spool_name = match entry {
         Some(entry) => {
+            // Some Windows tools write `\` separators: the entry path only knows `/`.
             let info = list_zip_entries(archive)?
                 .into_iter()
-                .find(|e| e.name == entry)
+                .find(|e| e.name == entry || e.name.replace('\\', "/") == entry)
                 .ok_or(OpenError::NoSuchEntry)?;
             if let Some(refusal) = info.refusal {
                 return Err(OpenError::Refused(refusal));
@@ -794,7 +800,8 @@ pub fn open_engine(
                     return Err(OpenError::NotEnoughSpace { volume, needed });
                 }
             }
-            entry.to_string()
+            real_entry = Some(info.name.clone());
+            info.name
         }
         None => gzip_inner_name(archive),
     };
@@ -811,7 +818,12 @@ pub fn open_engine(
     // while it runs would make the view unreadable: follow stays off.
     engine.follow_tail = false;
     engine.compressed = Some(CompressedStream::start(
-        archive, entry, settings, spool, out, wake,
+        archive,
+        real_entry.as_deref(),
+        settings,
+        spool,
+        out,
+        wake,
     ));
     Ok(engine)
 }
@@ -1014,6 +1026,10 @@ mod tests {
         let log = dir.path().join("plain.log");
         std::fs::write(&log, b"hello\n").unwrap();
         assert_eq!(classify(&log), Target::Plain);
+        let fake = dir.path().join("fake.log");
+        std::fs::write(&fake, b"PK\x03\x04 is how this line starts\n").unwrap();
+        assert_eq!(sniff(&fake), Format::Zip);
+        assert_eq!(classify(&fake), Target::Plain);
     }
 
     #[test]

@@ -109,8 +109,9 @@ pub struct FastTailConfig {
     /// Maximum file size in megabytes for Markdown rendering (1..=100 MB, default 1).
     #[serde(default = "default_markdown_max_mb")]
     pub markdown_max_mb: u32,
-    /// Directory of the spool files that decompressed logs are written to; `None` (or
-    /// empty in the ini) = `<temp>/fasttail-spool`. See `spool`.
+    /// Folder the decompressed logs are spooled under (in its `fasttail-spool`
+    /// subfolder); `None` (or empty in the ini) = the system temporary folder. See
+    /// `spool`.
     #[serde(default)]
     pub spool_dir: Option<PathBuf>,
     /// Output cap of one decompression in GB (1..=1024, default 20).
@@ -1336,7 +1337,7 @@ mod tests {
         assert_eq!(loaded.compressed_max_gb, 64);
         assert_eq!(
             loaded.compressed_settings().spool_dir,
-            PathBuf::from("/big/disk/spool")
+            Path::new("/big/disk/spool").join(crate::spool::SPOOL_DIR_NAME)
         );
 
         // A file written before the keys existed: temp spool, 20 GB cap.
