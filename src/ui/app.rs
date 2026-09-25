@@ -2220,7 +2220,7 @@ impl FastTailApp {
                             path.display().to_string()
                         }
                     } else {
-                        "No file open".to_string()
+                        t(self.config.language, "status_no_file").to_string()
                     };
 
                     ui.label(
@@ -3161,7 +3161,9 @@ impl FastTailApp {
                                 );
                                 ui.end_row();
 
-                                ui.label(RichText::new("Website").monospace().strong());
+                                ui.label(
+                                    RichText::new(t(lang, "about_website")).monospace().strong(),
+                                );
                                 ui.hyperlink_to(
                                     RichText::new("www.baccan.it")
                                         .monospace()

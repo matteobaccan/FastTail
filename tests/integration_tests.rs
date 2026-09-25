@@ -654,6 +654,8 @@ fn test_i18n_exhaustive_coverage() {
         "about_build_date",
         "about_author",
         "about_repo",
+        "about_website",
+        "status_no_file",
         "about_license",
         "about_tagline",
         "help_cat_zoom",
@@ -5043,6 +5045,60 @@ mod named_sessions {
         assert!(!loaded.relocated);
         assert_eq!(loaded.session, session);
         assert_eq!(Session::name_of(&file), "incident");
+    }
+
+    #[test]
+    fn files_that_no_longer_exist_are_listed_and_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = dir.path().join("kept.log");
+        let gone = dir.path().join("gone.log");
+        std::fs::write(&kept, "a\n").unwrap();
+        std::fs::write(&gone, "b\n").unwrap();
+        // A pattern whose directory disappears counts as missing too.
+        let gone_dir = dir.path().join("rotated");
+        std::fs::create_dir_all(&gone_dir).unwrap();
+        let pattern = gone_dir.join("app-*.log");
+        let file = dir.path().join(format!("partial{SESSION_SUFFIX}"));
+        Session {
+            streams: vec![
+                entry(kept.clone()),
+                entry(gone.clone()),
+                StreamEntry::new(pattern.clone()),
+            ],
+            dock_layout: Some("(layout)".to_string()),
+        }
+        .save_to(&file)
+        .unwrap();
+
+        std::fs::remove_file(&gone).unwrap();
+        std::fs::remove_dir_all(&gone_dir).unwrap();
+
+        let loaded = Session::load_from(&file).unwrap();
+        let opened: Vec<&Path> = loaded
+            .session
+            .streams
+            .iter()
+            .map(|s| s.path.as_path())
+            .collect();
+        assert_eq!(
+            opened,
+            vec![kept.as_path()],
+            "only the file still on disk is opened"
+        );
+        assert_eq!(loaded.missing.len(), 2, "{:?}", loaded.missing);
+        let named = |p: &Path| {
+            loaded
+                .missing
+                .iter()
+                .any(|m| m.file_name() == p.file_name())
+        };
+        assert!(named(&gone), "the deleted file is reported");
+        assert!(
+            named(&pattern),
+            "the pattern of a deleted directory is reported"
+        );
+        // The surviving stream keeps what was saved for it.
+        assert_eq!(loaded.session.streams[0], entry(kept));
     }
 
     #[test]
