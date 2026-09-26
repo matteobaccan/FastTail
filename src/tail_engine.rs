@@ -863,6 +863,9 @@ pub struct TailEngine {
     /// have both a cached level and a cached timestamp: `0..histogram_len`.
     histogram: TimeHistogram,
     histogram_len: usize,
+    /// Line of the next level a running `Timestamps` job sends along with the times
+    /// (`None`: it sends none, or the cache moved and the rest is ignored).
+    timing_levels_next: Option<usize>,
     /// Bumped whenever the histogram changes; keys the UI caches built over it.
     pub histogram_generation: u64,
     /// Compiled include/exclude filter, shared with filter and search jobs.
@@ -1464,6 +1467,7 @@ impl TailEngine {
             error_blocks: Vec::new(),
             histogram: TimeHistogram::default(),
             histogram_len: 0,
+            timing_levels_next: None,
             histogram_generation: 0,
             filter: FilterSpec::default(),
             job: None,
@@ -3364,7 +3368,16 @@ impl TailEngine {
                     self.timestamps[from - 1]
                 };
                 let hint = self.timestamp_hint;
-                self.start_job(JobSpec::Timestamps { inherited, hint }, from);
+                // Levels come along from where their cache stops, when that is inside
+                // the range; a cache behind it is completed by a level scan afterwards.
+                let levels_from = (self.levels.len() >= from).then_some(self.levels.len());
+                self.timing_levels_next = levels_from;
+                let spec = JobSpec::Timestamps {
+                    inherited,
+                    hint,
+                    levels_from,
+                };
+                self.start_job(spec, from);
             }
             // Queued behind the filter or search scan, started from `finish_job`.
             _ => {}
@@ -4224,6 +4237,15 @@ impl TailEngine {
                     self.search_total += hits;
                     self.search_last_counted = last_line;
                     self.search_last_counted_exact = true;
+                }
+                ScanBatch::Levels(levels) if job.kind == ScanKind::Timestamps => {
+                    // Taken only where the cache stands, or it would misalign.
+                    if self.timing_levels_next == Some(self.levels.len()) {
+                        self.push_levels(&levels);
+                        self.timing_levels_next = Some(self.levels.len());
+                    } else {
+                        self.timing_levels_next = None;
+                    }
                 }
                 ScanBatch::Levels(levels) => {
                     self.push_levels(&levels);

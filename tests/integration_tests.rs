@@ -7786,6 +7786,34 @@ mod timeline_histogram {
     }
 
     #[test]
+    fn the_timing_scan_brings_the_levels_along() {
+        let (_dir, log) = timed_log(150_000);
+        let mut sync = TailEngine::open(&log).unwrap();
+        sync.request_timeline();
+
+        // The timeline preempts the level scan on open: the timing scan detects the
+        // levels too, so the bars grow with it and no second pass is needed.
+        let mut bg = TailEngine::open_with_thresholds(&log, 0, u64::MAX).unwrap();
+        bg.request_timeline();
+        assert_eq!(bg.scan_progress().map(|p| p.0), Some(ScanKind::Timestamps));
+        let started = std::time::Instant::now();
+        while bg.scan_progress().map(|p| p.0) == Some(ScanKind::Timestamps) {
+            bg.poll_updates();
+            assert_eq!(
+                bg.histogram_lines(),
+                bg.timestamp_cache().0.len(),
+                "every timed line is already in the bars"
+            );
+            assert!(started.elapsed().as_secs() < 30, "timing hangs");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(bg.timestamps_complete() && bg.levels_complete());
+        assert!(bg.scan_progress().is_none(), "no level scan left to run");
+        assert_matches_caches(&bg);
+        assert_eq!(bg.time_histogram(), sync.time_histogram());
+    }
+
+    #[test]
     fn a_timing_scan_preempted_and_resumed_matches_too() {
         let (_dir, log) = timed_log(150_000);
         let mut sync = TailEngine::open(&log).unwrap();

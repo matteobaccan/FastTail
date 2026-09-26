@@ -89,9 +89,16 @@ pub struct TimelineCache {
 impl TimelineCache {
     /// Brings columns and lane up to date for a strip `width` pixels wide. A width change
     /// or a toggled lane rebuilds at once; the rest moves while the stream grows or is
-    /// timed and rebuilds at most every `REBUILD_INTERVAL`. Returns the time after which a
-    /// throttled rebuild is due, if one is waiting.
-    pub fn refresh(&mut self, engine: &TailEngine, width: usize, lane: bool) -> Option<Duration> {
+    /// timed and rebuilds at most every `REBUILD_INTERVAL`, and not at all while `hold`
+    /// (a press or drag on the strip, whose column indices must keep their meaning).
+    /// Returns the time after which a throttled rebuild is due, if one is waiting.
+    pub fn refresh(
+        &mut self,
+        engine: &TailEngine,
+        width: usize,
+        lane: bool,
+        hold: bool,
+    ) -> Option<Duration> {
         let key = CacheKey {
             width,
             histogram_generation: engine.histogram_generation,
@@ -105,6 +112,9 @@ impl TimelineCache {
         let urgent = self
             .key
             .is_none_or(|old| old.width != key.width || old.lane != key.lane);
+        if !urgent && hold && self.key.is_some() {
+            return Some(REBUILD_INTERVAL);
+        }
         if !urgent {
             if let Some(since) = self.built_at.map(|at| at.elapsed()) {
                 if since < REBUILD_INTERVAL {
@@ -189,7 +199,9 @@ pub fn show(
     let response = ui.interact(rect, strip_id(engine), egui::Sense::click_and_drag());
     let id = egui::Id::new("timeline_cache").with(&engine.path);
     let mut cache: TimelineCache = ui.data(|d| d.get_temp(id)).unwrap_or_default();
-    if let Some(wait) = cache.refresh(engine, rect.width().round().max(1.0) as usize, lane_on) {
+    let hold = response.is_pointer_button_down_on() || response.dragged();
+    let width_px = rect.width().round().max(1.0) as usize;
+    if let Some(wait) = cache.refresh(engine, width_px, lane_on, hold) {
         ui.ctx().request_repaint_after(wait);
     }
 
@@ -421,6 +433,49 @@ mod tests {
         assert_eq!(lane.len(), 100);
         assert!(lane[42]);
         assert!(search_lane(&TimeHistogram::default(), 10, &[1], at).is_empty());
+    }
+
+    #[test]
+    fn a_press_on_the_strip_holds_the_columns_while_the_stream_grows() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.log");
+        let line = |s: u32| {
+            format!(
+                "2026-09-18T14:02:{s:02}Z INFO tick
+"
+            )
+        };
+        std::fs::write(&path, (0..10).map(line).collect::<String>()).unwrap();
+        let mut engine = TailEngine::open(&path).unwrap();
+        engine.size_check_interval = Duration::ZERO;
+        engine.request_timeline();
+        let mut cache = TimelineCache::default();
+        assert!(cache.refresh(&engine, 200, false, false).is_none());
+        let before = cache.columns.clone();
+
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all((10..40).map(line).collect::<String>().as_bytes())
+            .unwrap();
+        drop(f);
+        let started = Instant::now();
+        while engine.histogram_lines() < 40 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "append not seen"
+            );
+            engine.poll_updates();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Past the throttle: held while pressed, rebuilt once released.
+        cache.built_at = Some(Instant::now() - REBUILD_INTERVAL * 2);
+        assert!(cache.refresh(&engine, 200, false, true).is_some());
+        assert_eq!(cache.columns, before, "the drag keeps its columns");
+        assert!(cache.refresh(&engine, 200, false, false).is_none());
+        assert_ne!(cache.columns, before);
     }
 
     #[test]
