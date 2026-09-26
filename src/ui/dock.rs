@@ -2205,11 +2205,13 @@ fn time_delta_column(ui: &Ui, engine: &mut TailEngine, prefs: TimeDeltaPrefs) ->
     (prefs.show && engine.timestamps_usable()).then_some(prefs.gap_ms)
 }
 
-/// Whether enough of the stream has been timed to tell that we cannot read its times.
+/// Whether enough of the stream has been timed to tell that we cannot read its times:
+/// the same coverage rule as `timestamps_usable`, so a log of stack traces (lines that
+/// inherit the time of their entry) is readable.
 fn timestamps_unreadable(engine: &TailEngine) -> bool {
     engine
-        .timestamp_rate()
-        .is_some_and(|rate| rate < crate::tail_engine::MIN_TIMESTAMP_RATE)
+        .timestamp_coverage()
+        .is_some_and(|coverage| coverage < crate::tail_engine::MIN_TIMESTAMP_RATE)
 }
 
 /// Text and colour of a row's time delta cell, `None` when blank (continuation lines, no
