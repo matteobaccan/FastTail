@@ -106,7 +106,8 @@ jobs:
           - name: 🪟 Windows x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            asset: fasttail-windows-x86_64.zip
+            asset: fasttail-windows-x86_64
+            ext: zip
             binary: fasttail.exe
 
           # Windows ARM64 is not built: Windows on ARM runs the x86_64 exe
@@ -116,13 +117,15 @@ jobs:
           - name: 🐧 Linux x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            asset: fasttail-linux-x86_64.tar.gz
+            asset: fasttail-linux-x86_64
+            ext: tar.gz
             binary: fasttail
 
           - name: 🐧 Linux ARM64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            asset: fasttail-linux-arm64.tar.gz
+            asset: fasttail-linux-arm64
+            ext: tar.gz
             binary: fasttail
 
           # macOS
@@ -130,13 +133,15 @@ jobs:
           # - name: macOS x86_64 (Intel)
           #   os: macos-13
           #   target: x86_64-apple-darwin
-          #   asset: fasttail-macos-x86_64.tar.gz
+          #   asset: fasttail-macos-x86_64
+          #   ext: tar.gz
           #   binary: fasttail
 
           - name: 🍎 macOS ARM64 (Apple Silicon)
             os: macos-latest
             target: aarch64-apple-darwin
-            asset: fasttail-macos-arm64.tar.gz
+            asset: fasttail-macos-arm64
+            ext: tar.gz
             binary: fasttail
 
     steps:
@@ -177,27 +182,37 @@ jobs:
       - name: 🛠️ Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      # Linux/macOS: tar.gz with the executable.
-      # Windows: zip with the executable, plus a separate -symbols.zip with the PDB
-      # (unpacked next to the exe, it lets crash backtraces resolve function names).
+      # Asset names carry the version (fasttail-linux-x86_64-0.10.1.tar.gz), read from
+      # Cargo.toml; on a tag run it must match the tag.
+      # Linux/macOS: tar.gz, Windows: zip, each with the executable, LICENSE and
+      # README.md. Windows also gets a separate -symbols zip with the PDB (unpacked next
+      # to the exe, it lets crash backtraces resolve function names).
       - name: 📦 Package release asset
         shell: bash
         run: |
           set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "::error::No version in Cargo.toml"; exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version $version"; exit 1
+          fi
+          asset="${{ matrix.asset }}-$version.${{ matrix.ext }}"
           out="target/${{ matrix.target }}/release"
           mkdir -p stage dist
-          cp "$out/${{ matrix.binary }}" stage/
-          case "${{ matrix.asset }}" in
-            *.tar.gz)
-              tar -C stage -czf "dist/${{ matrix.asset }}" "${{ matrix.binary }}"
+          cp "$out/${{ matrix.binary }}" LICENSE README.md stage/
+          case "${{ matrix.ext }}" in
+            tar.gz)
+              tar -C stage -czf "dist/$asset" "${{ matrix.binary }}" LICENSE README.md
               ;;
-            *.zip)
-              # The executable alone: this is what people download and what the Windows
-              # package managers point at. The 53 MB of debug symbols, which made the
-              # download 24 MB for everyone, travel in their own asset.
-              7z a -tzip "dist/${{ matrix.asset }}" ./stage/fasttail.exe
+            zip)
+              # The executable (with LICENSE and README.md) is what people download and
+              # what the Windows package managers point at. The 53 MB of debug symbols,
+              # which made the download 24 MB for everyone, travel in their own asset.
+              (cd stage && 7z a -tzip "../dist/$asset" fasttail.exe LICENSE README.md)
               cp "$out/fasttail.pdb" stage/
-              7z a -tzip "dist/fasttail-windows-x86_64-symbols.zip" ./stage/fasttail.pdb
+              (cd stage && 7z a -tzip "../dist/${{ matrix.asset }}-symbols-$version.zip" fasttail.pdb)
               ;;
           esac
           ls -la dist

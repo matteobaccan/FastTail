@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Release file names carry the version, and every archive holds `LICENSE` and
+  `README.md`.** `fasttail-windows-x86_64.zip` becomes `fasttail-windows-x86_64-0.10.1.zip`
+  (likewise the Linux and macOS archives and `fasttail-windows-x86_64-symbols-0.10.1.zip`),
+  so downloads of different versions no longer overwrite each other. A tag whose version
+  differs from `Cargo.toml` now fails the release build.
+
 ### Fixed
 
 - **Closing a stream no longer risks freezing another file operation on Windows.** When

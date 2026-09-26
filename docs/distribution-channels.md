@@ -60,7 +60,7 @@ it pushes the branch to *your* fork of `winget-pkgs`.
 2. Let it build the manifest from the release asset, answering its questions:
 
    ```powershell
-   wingetcreate new https://github.com/matteobaccan/FastTail/releases/download/v0.9.0/fasttail-windows-x86_64.zip
+   wingetcreate new https://github.com/matteobaccan/FastTail/releases/download/v0.10.1/fasttail-windows-x86_64-0.10.1.zip
    ```
 
    What it asks for, and what FastTail answers:
@@ -82,7 +82,9 @@ it pushes the branch to *your* fork of `winget-pkgs`.
    | Command alias | `fasttail` |
 
    From v0.9.0 the asset is a zip holding a single executable (the symbols travel in
-   `fasttail-windows-x86_64-symbols.zip`; earlier zips also carried `fasttail.pdb`), so winget treats it as a **portable**
+   their own zip; earlier zips also carried `fasttail.pdb`); from v0.10.1 its name carries
+   the version (`fasttail-windows-x86_64-0.10.1.zip`) and it also holds `LICENSE` and
+   `README.md`, next to the executable. winget treats it as a **portable**
    package: it unpacks it and puts `fasttail` on the PATH. Nothing is written to the
    registry and uninstalling removes the files.
 

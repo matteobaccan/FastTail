@@ -28,19 +28,23 @@ The release `build` matrix (Windows x86_64, Linux x86_64, Linux ARM64, macOS ARM
 - **THEN** the `test` job and the four `build` jobs start in parallel, and the `release` job starts only after all of them succeed.
 
 ### Requirement: Compressed Release Assets
-Each build job SHALL package its binary before upload: Linux and macOS as `fasttail-<os>-<arch>.tar.gz` containing the executable, Windows as `fasttail-windows-<arch>.zip` containing `fasttail.exe` alone, plus `fasttail-windows-<arch>-symbols.zip` containing `fasttail.pdb`, so the download most people need does not carry the debug symbols. The release job SHALL publish these archives, never bare binaries. No package registry (crates.io, Scoop, winget, Chocolatey) is published to; `docs/distribution-channels.md` records what each would take.
+Each build job SHALL package its binary before upload: Linux and macOS as `fasttail-<os>-<arch>-<version>.tar.gz` containing the executable, Windows as `fasttail-windows-<arch>-<version>.zip` containing `fasttail.exe`, each with `LICENSE` and `README.md` next to the executable, plus `fasttail-windows-<arch>-symbols-<version>.zip` containing `fasttail.pdb`, so the download most people need does not carry the debug symbols. `<version>` is the `Cargo.toml` package version; on a tag run a tag that does not match it (`v` + version) SHALL fail the build job. The release job SHALL publish these archives, never bare binaries. No package registry (crates.io, Scoop, winget, Chocolatey) is published to; `docs/distribution-channels.md` records what each would take.
 
 #### Scenario: Linux asset size
 - **WHEN** the Linux x86_64 build job stages its artifact
 - **THEN** the uploaded asset is a `.tar.gz` whose size is a fraction of the uncompressed ELF (about 20 MB instead of about 72 MB) and extracts to an executable `fasttail`.
 
 #### Scenario: Windows archive without symbols
-- **WHEN** a user extracts `fasttail-windows-x86_64.zip`
-- **THEN** it contains `fasttail.exe` and nothing else.
+- **WHEN** a user extracts `fasttail-windows-x86_64-0.10.1.zip`
+- **THEN** it contains `fasttail.exe`, `LICENSE` and `README.md`, and no debug symbols.
 
 #### Scenario: Symbols for a crash dump
-- **WHEN** a user extracts `fasttail-windows-x86_64-symbols.zip` into the directory of `fasttail.exe`
+- **WHEN** a user extracts `fasttail-windows-x86_64-symbols-0.10.1.zip` into the directory of `fasttail.exe`
 - **THEN** `fasttail.pdb` sits next to the executable, so a crash backtrace resolves function names.
+
+#### Scenario: Tag and version disagree
+- **WHEN** the tag `v0.10.2` is pushed while `Cargo.toml` still says `0.10.1`
+- **THEN** every build job fails before uploading, and no release is created.
 
 ### Requirement: Release Published Non-Draft with All Assets
 The `release` job SHALL depend on both `test` and `build`, SHALL upload every archive produced by the matrix, and SHALL leave the GitHub release published (not draft). The release body SHALL be the `CHANGELOG.md` section whose heading matches the tag version (`v0.3.0` -> `## [0.3.0]`), followed by the GitHub-generated notes (merged pull requests, new contributors, compare link); a tag without a matching section SHALL still publish with the generated notes only.
