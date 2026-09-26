@@ -109,15 +109,14 @@ pub struct PresetEvents {
     pub open_filters: Option<PathBuf>,
 }
 
-/// Search results pane (open flag, height), overview strip switch and timeline histogram
-/// (shown flag, search lane), global preferences persisted in `fasttail.ini` and applied
-/// to every stream.
+/// Search results pane (open flag, height), overview strip switch and the timeline
+/// histogram's search lane, global preferences persisted in `fasttail.ini` and applied
+/// to every stream (the histogram itself is opened per stream).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchViewPrefs {
     pub search_pane: bool,
     pub search_pane_height: f32,
     pub overview_strip: bool,
-    pub timeline_histogram: bool,
     pub timeline_search_lane: bool,
 }
 
@@ -127,7 +126,6 @@ impl Default for SearchViewPrefs {
             search_pane: false,
             search_pane_height: DEFAULT_SEARCH_PANE_HEIGHT,
             overview_strip: true,
-            timeline_histogram: false,
             timeline_search_lane: true,
         }
     }
@@ -728,13 +726,14 @@ fn render_time_range(
 
     // Timeline histogram toggle, and its search lane toggle while it is shown.
     let accent = theme.accent_color();
-    if toggle_button(ui, theme, "📊", search_view.timeline_histogram, accent)
+    if toggle_button(ui, theme, "📊", engine.timeline_open, accent)
         .on_hover_text(t(lang, "timeline_tip"))
         .clicked()
     {
-        search_view.timeline_histogram = !search_view.timeline_histogram;
+        engine.timeline_open = !engine.timeline_open;
+        engine.timeline_dirty = true;
     }
-    if search_view.timeline_histogram
+    if engine.timeline_open
         && toggle_button(ui, theme, "🔍", search_view.timeline_search_lane, accent)
             .on_hover_text(t(lang, "timeline_search_lane_tip"))
             .clicked()
@@ -1041,7 +1040,7 @@ fn render_log_stream(
     } else {
         viewport_height
     };
-    let viewport_height = if search_view.timeline_histogram {
+    let viewport_height = if engine.timeline_open {
         (viewport_height - crate::ui::timeline_strip::STRIP_HEIGHT).max(MIN_ROWS_HEIGHT)
     } else {
         viewport_height
@@ -2281,7 +2280,7 @@ fn render_log_stream(
         ui.separator();
     }
 
-    if search_view.timeline_histogram {
+    if engine.timeline_open {
         render_timeline(ui, engine, theme, lang, search_view);
     }
 
