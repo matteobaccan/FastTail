@@ -1,7 +1,9 @@
 //! Command line: `fasttail [OPTIONS] [PATH...]`.
 //!
 //! Hand-written parser: a handful of options and positional paths do not justify a
-//! dependency. Paths are resolved against the current directory at parse time.
+//! dependency. Paths are resolved against the current directory at parse time. A PATH of
+//! exactly `-` means standard input (`stdin`), before or after `--` as in `cat`; a file
+//! named `-` is reachable as `./-`.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +17,8 @@ USAGE:
 
 ARGS:
     PATH...              Log files to open in addition to the restored workspace
+    -                    Read standard input (`command | fasttail -`); piped input is
+                         also picked up without it
 
 OPTIONS:
     --gui                Accepted and ignored: FastTail is GUI-only (kept for old shortcuts)
@@ -34,6 +38,8 @@ OPTIONS:
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CliArgs {
     pub paths: Vec<PathBuf>,
+    /// `-` was given: read standard input as a stream.
+    pub stdin: bool,
     pub fresh: bool,
     pub filter: Option<String>,
     pub exclude: Option<String>,
@@ -83,7 +89,14 @@ impl CliArgs {
 
         while let Some(arg) = iter.next() {
             let arg = arg.as_ref();
-            if only_paths || !arg.starts_with('-') || arg == "-" {
+            if arg == "-" {
+                if out.stdin {
+                    return Err(CliError::Usage("standard input given twice".to_string()));
+                }
+                out.stdin = true;
+                continue;
+            }
+            if only_paths || !arg.starts_with('-') {
                 out.paths.push(resolve(arg, cwd));
                 continue;
             }
@@ -200,6 +213,43 @@ mod tests {
         let a = CliArgs::parse(["--", "--fresh", "-h"], &cwd()).unwrap();
         assert_eq!(a.paths, vec![cwd().join("--fresh"), cwd().join("-h")]);
         assert!(!a.fresh && !a.show_help);
+    }
+
+    #[test]
+    fn dash_means_standard_input() {
+        let a = CliArgs::parse(["-"], &cwd()).unwrap();
+        assert!(a.stdin);
+        assert!(a.paths.is_empty());
+        // After `--` too, as in `cat`.
+        let a = CliArgs::parse(["--", "-"], &cwd()).unwrap();
+        assert!(a.stdin && a.paths.is_empty());
+        // With a filter and other paths, in any order.
+        let a = CliArgs::parse(["--filter", "ERROR", "app.log", "-", "err.log"], &cwd()).unwrap();
+        assert!(a.stdin);
+        assert_eq!(a.filter.as_deref(), Some("ERROR"));
+        assert_eq!(a.paths, vec![cwd().join("app.log"), cwd().join("err.log")]);
+        let a = CliArgs::parse(["app.log"], &cwd()).unwrap();
+        assert!(!a.stdin);
+    }
+
+    #[test]
+    fn dash_twice_is_a_usage_error() {
+        assert!(matches!(
+            CliArgs::parse(["-", "-"], &cwd()),
+            Err(CliError::Usage(m)) if m.contains("standard input")
+        ));
+        assert!(matches!(
+            CliArgs::parse(["-", "--", "-"], &cwd()),
+            Err(CliError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn a_file_named_dash_is_reached_as_dot_slash_dash() {
+        let a = CliArgs::parse(["./-"], &cwd()).unwrap();
+        assert!(!a.stdin);
+        assert_eq!(a.paths, vec![cwd().join("./-")]);
+        assert_eq!(a.paths[0].file_name().unwrap(), "-");
     }
 
     #[test]

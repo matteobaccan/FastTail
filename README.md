@@ -137,6 +137,8 @@ Files can also be opened by **drag & drop** onto the window or from the command 
 fasttail [OPTIONS] [PATH...]
 
   PATH...            log files to open in addition to the restored workspace
+  -                  read standard input (`command | fasttail -`); a file named `-`
+                     is opened as `./-`
   --fresh            start with an empty workspace instead of the saved one
   --filter <TEXT>    include filter for the files opened from the command line
   --exclude <TEXT>   exclude filter for those files
@@ -150,6 +152,32 @@ fasttail [OPTIONS] [PATH...]
 ```
 
 Example: `fasttail --fresh --filter ERROR app.log err.log`.
+
+### Standard input
+`command | fasttail -` copies the command's output into a spool file (in the same `spool_dir` as compressed logs) that is tailed like any followed log, so filters, search, levels, time range, highlight rules, bookmarks and export all work on it. The tab is titled `stdin`; the footer and the tab tooltip name the spool. When the command ends the stream stays open and its bar says `input ended · N lines`. Without `-`, piped or redirected input (`command | fasttail`, `fasttail < app.log`) is picked up too, but the tab only appears once the first byte arrives, so a launcher that hands FastTail a silent pipe does not get an empty tab. `-` given twice is a usage error (exit code 2); `-` with nothing piped prints `standard input is not a pipe; nothing to read` on stderr and the rest of the command line still opens. `--filter`, `--exclude` and `--follow` / `--no-follow` apply to the stdin stream too.
+
+The stdin stream is never saved in the workspace, the recent files or a session (saving a session says it was left out) and is kept when another session is loaded; its spool is deleted when the tab is closed and at exit. Closing the tab closes FastTail's end of the pipe, so the producer gets a broken pipe on a later write. The spool is bounded by `stdin_spool_max_mb` (default `2048`, 64–65536, Settings → Performance & refresh) and by a 512 MB free-space margin checked every 64 MB: at either limit the spool restarts from empty, the view restarts with the new lines, and the stream bar says that earlier input was discarded.
+
+```text
+# bash, zsh, Git Bash
+kubectl logs -f pod-7 | fasttail --filter ERROR -
+# cmd.exe
+ping -t localhost | fasttail -
+# PowerShell: for a live producer, go through cmd (see the table)
+cmd /c "kubectl logs -f pod-7 | fasttail -"
+```
+
+Checked on Windows 11 with the GUI-subsystem build (`#![windows_subsystem = "windows"]`), which reads the standard-input handle the shell passes:
+
+| Shell | Result |
+|---|---|
+| cmd.exe | `type app.log \| fasttail -`, `ping -t localhost \| fasttail -` and `fasttail - < app.log` work, lines arrive live and UTF-8 is kept byte for byte; cmd waits for FastTail to close before showing the prompt again. Auto-detection without `-` works. |
+| Git Bash (MSYS2) | `cat app.log \| ./fasttail -` and `./fasttail - < app.log` work, bytes unchanged. `< /dev/null` counts as a console: nothing is read. |
+| PowerShell 7.6 | The pipe is connected and the prompt returns at once. `Get-Content app.log \| fasttail -` arrives complete (UTF-8 kept, lines re-written with CRLF). Between two native programs (`ping -t localhost \| fasttail -`) the output only arrived when the producer ended, so a live producer is not live: use `cmd /c "producer \| fasttail -"`, which streams. |
+| Windows PowerShell 5.1 | The pipe is connected, but text is re-encoded with `$OutputEncoding` (US-ASCII by default): non-ASCII characters arrive as `?`. Set `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)` first, or use `cmd /c "producer \| fasttail -"`, which keeps the bytes. |
+| Start-Process, `start`, shortcuts | Launched without redirection, standard input is absent: no stdin tab. Launching from Explorer, a desktop shortcut and Windows Terminal was not checked directly. |
+
+Not verified: Ctrl+C in the console while a producer runs (a producer that ends, here a killed `ping`, is shown as `input ended`), and the producer receiving a broken pipe when the tab is closed (covered by an automated test of the copier, not by a manual run).
 
 ---
 
@@ -347,6 +375,9 @@ Press `Ctrl+G` and type a time such as `14:02`: FastTail jumps to the first line
 
 ### Can FastTail open compressed logs (`.gz`, `.zip`)?
 Yes. Open `app.log.1.gz` like any other file (the format is read from the content, so a gzip named `trace.dat` works too): it is decompressed on a background thread into a temporary file and every feature — filters, search, levels, time range, bookmarks, HEX — works on the result while the first lines are already on screen. A `.zip` with several logs shows an entry picker and each chosen entry opens in its own stream. Encrypted zip entries, bzip2/zstd/lzma zip entries and `.tar.gz` are not supported and say so. The decompressed copy costs disk space equal to its size, bounded by `compressed_max_gb` (20 GB by default) and a free-space check, and is deleted when the tab is closed.
+
+### Can I pipe a command into FastTail, like `less`?
+Yes: `kubectl logs -f pod | fasttail -` (or `docker compose logs -f`, `journalctl -f`, `ssh host tail -f app.log`). The output is copied into a temporary spool file and opened as a followed `stdin` stream with every feature available; when the command ends the stream stays open and says so. The copy is capped by `stdin_spool_max_mb` (2 GB by default), after which it restarts from empty, and it is deleted when the tab is closed. On Windows it works from cmd.exe and Git Bash; from PowerShell, use `cmd /c "command | fasttail -"` for a live command (see [Standard input](#standard-input)).
 
 ### Why does my `docker logs` capture show `[32m` everywhere, and can FastTail show the colours?
 Those are ANSI colour codes written by the logger. FastTail detects them and renders the colours (16, 256 and 24-bit, bold, underline...) with a palette readable on the active theme; the `ANSI` selector in the stream bar switches a stream to **strip** (codes hidden, no colour) or **raw** (codes visible as `␛[32m`). While the codes are hidden, filters, search, highlight rules, level detection, copy and export work on the plain text, so an include filter `\bERROR\b` or the `≥ WARN` level filter keeps a red `ERROR` line. To match the codes themselves (`\x1b\[31m`), use raw mode.

@@ -132,6 +132,10 @@ pub struct FastTailConfig {
     /// Output cap of one decompression in GB (1..=1024, default 20).
     #[serde(default = "default_compressed_max_gb")]
     pub compressed_max_gb: u32,
+    /// Size in MB at which the standard-input spool restarts from empty (64..=65536,
+    /// default 2048).
+    #[serde(default = "default_stdin_spool_max_mb")]
+    pub stdin_spool_max_mb: u32,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -285,6 +289,10 @@ fn default_compressed_max_gb() -> u32 {
     crate::compressed::DEFAULT_MAX_GB
 }
 
+fn default_stdin_spool_max_mb() -> u32 {
+    crate::stdin_source::DEFAULT_MAX_MB
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -318,6 +326,7 @@ impl Default for FastTailConfig {
             markdown_max_mb: default_markdown_max_mb(),
             spool_dir: None,
             compressed_max_gb: default_compressed_max_gb(),
+            stdin_spool_max_mb: default_stdin_spool_max_mb(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -538,6 +547,14 @@ impl FastTailConfig {
         crate::compressed::Settings::from_config(self.spool_dir.as_deref(), self.compressed_max_gb)
     }
 
+    /// Where standard input is spooled and how far the spool may grow.
+    pub fn stdin_settings(&self) -> crate::stdin_source::Settings {
+        crate::stdin_source::Settings::from_config(
+            self.spool_dir.as_deref(),
+            self.stdin_spool_max_mb,
+        )
+    }
+
     pub fn to_ini(&self) -> Ini {
         let mut conf = Ini::new();
 
@@ -600,6 +617,7 @@ impl FastTailConfig {
                     .unwrap_or_default(),
             )
             .set("compressed_max_gb", self.compressed_max_gb.to_string())
+            .set("stdin_spool_max_mb", self.stdin_spool_max_mb.to_string())
             .set("size_unit", unit_str)
             .set("baretail_import", self.baretail_import.to_string())
             .set(
@@ -927,6 +945,14 @@ impl FastTailConfig {
                 if let Ok(v) = s.parse::<u32>() {
                     cfg.compressed_max_gb =
                         v.clamp(crate::compressed::MIN_MAX_GB, crate::compressed::MAX_MAX_GB);
+                }
+            }
+            if let Some(s) = general.get("stdin_spool_max_mb") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.stdin_spool_max_mb = v.clamp(
+                        crate::stdin_source::MIN_MAX_MB,
+                        crate::stdin_source::MAX_MAX_MB,
+                    );
                 }
             }
             if let Some(s) = general.get("size_unit") {
@@ -1467,6 +1493,36 @@ mod tests {
         ini.with_section(Some("general"))
             .set("time_delta_gap_ms", "soon");
         assert_eq!(FastTailConfig::from_ini(&ini).time_delta_gap_ms, 1000);
+    }
+
+    #[test]
+    fn test_stdin_spool_limit_round_trip_default_and_clamp() {
+        let cfg = FastTailConfig {
+            stdin_spool_max_mb: 512,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.stdin_spool_max_mb, 512);
+        assert_eq!(loaded.stdin_settings().limits.max_bytes, 512 * 1024 * 1024);
+        assert_eq!(
+            loaded.stdin_settings().spool_dir,
+            loaded.compressed_settings().spool_dir
+        );
+
+        let mut old_style = Ini::new();
+        old_style.with_section(Some("general")).set("theme", "Tron");
+        assert_eq!(
+            FastTailConfig::from_ini(&old_style).stdin_spool_max_mb,
+            crate::stdin_source::DEFAULT_MAX_MB
+        );
+
+        let mut wild = Ini::new();
+        wild.with_section(Some("general"))
+            .set("stdin_spool_max_mb", "1");
+        assert_eq!(FastTailConfig::from_ini(&wild).stdin_spool_max_mb, 64);
+        wild.with_section(Some("general"))
+            .set("stdin_spool_max_mb", "9999999");
+        assert_eq!(FastTailConfig::from_ini(&wild).stdin_spool_max_mb, 65536);
     }
 
     #[test]

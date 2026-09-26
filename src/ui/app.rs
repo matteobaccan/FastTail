@@ -101,6 +101,12 @@ pub struct FastTailApp {
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
     /// once in a small window.
     pub open_notice: Option<String>,
+    /// Standard input piped without `-`, waiting for its first byte before its stream
+    /// (and tab) is created, and the command line options to apply to it then.
+    pub pending_stdin: Option<crate::stdin_source::StdinStream>,
+    pub stdin_options: StdinOptions,
+    /// Streams a session save left out (standard input), shown once after the save.
+    pub save_notice: Option<String>,
     /// Window title last sent to the OS, to send it again only when it changes.
     pub title_applied: String,
     /// Timestamp of last live frame render for frame pacing.
@@ -481,6 +487,13 @@ impl FastTailApp {
         if let Some(file) = &cli.session {
             app.load_session_file(file.clone(), true);
         }
+        // Standard input: with `-` the stream opens now, else piped input opens it on its
+        // first byte. `-` without piped input was reported by `main` and cleared.
+        if crate::stdin_source::classify() == crate::stdin_source::StdinKind::Piped {
+            if let Some(input) = crate::stdin_source::take_stdin() {
+                app.start_stdin(input, cli.stdin, StdinOptions::from_cli(&cli));
+            }
+        }
         app.renderer = crate::renderer::ActiveRenderer::from_creation_context(cc);
         crate::renderer::mark_app_created();
         // On a software rasterizer the costly per-frame effects are stripped here, before
@@ -569,6 +582,9 @@ impl FastTailApp {
             session_missing: None,
             zip_picker: None,
             open_notice: None,
+            pending_stdin: None,
+            stdin_options: StdinOptions::default(),
+            save_notice: None,
             title_applied: String::new(),
             last_frame_render: Instant::now(),
             last_mouse_render: Instant::now(),
@@ -666,7 +682,8 @@ impl FastTailApp {
         }
         // Results are not persisted: the Find results tab is left out (after the window
         // rects are applied, since dropping it may drop a floating window).
-        let dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
+        let mut dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
+        dock_to_save.retain_tabs(|tab| !is_stdin_tab(tab));
         ron::to_string(&dock_to_save).ok()
     }
 
@@ -676,7 +693,7 @@ impl FastTailApp {
         let mut paths: Vec<PathBuf> = Vec::new();
         for (_, tab) in self.dock_state.iter_all_tabs() {
             if let FastTailTab::LogStream(p) = tab {
-                if !paths.iter().any(|e| paths_equal(e, p)) {
+                if !is_stdin_tab(tab) && !paths.iter().any(|e| paths_equal(e, p)) {
                     paths.push(p.clone());
                 }
             }
@@ -745,6 +762,13 @@ impl FastTailApp {
     pub fn save_session_as(&mut self, file: PathBuf) -> std::io::Result<()> {
         let session = self.capture_session();
         session.save_to(&file)?;
+        if self.engines.iter().any(|e| e.is_stdin()) {
+            self.save_notice = Some(format!(
+                "{}\n  {}",
+                t(self.config.language, "stdin_not_saved"),
+                crate::stdin_source::STDIN_TITLE
+            ));
+        }
         self.config.current_session = Some(file.clone());
         self.config.add_recent_session(&file);
         let _ = self.config.save();
@@ -795,6 +819,12 @@ impl FastTailApp {
         // The Find results tab goes with the old dock: cancel its jobs and forget its
         // results, or reopened streams would show them as current.
         self.find_all.close();
+        // Standard input cannot be reopened: its stream survives the switch.
+        let stdin = self
+            .engines
+            .iter()
+            .position(|e| e.is_stdin())
+            .map(|i| self.engines.remove(i));
         self.engines.clear();
         self.dock_state = DockState::new(vec![]);
         self.floating_window_rects.clear();
@@ -815,7 +845,8 @@ impl FastTailApp {
                         _ => None,
                     })
                     .collect();
-                let matches = tabs.len() == self.engines.len()
+                let matches = !tabs.iter().any(|p| crate::stdin_source::is_stdin_path(p))
+                    && tabs.len() == self.engines.len()
                     && tabs
                         .iter()
                         .all(|t| self.engines.iter().any(|e| paths_equal(&e.path, t)));
@@ -831,6 +862,10 @@ impl FastTailApp {
                     self.dock_state = ds;
                 }
             }
+        }
+        if let Some(engine) = stdin {
+            self.add_stream_tab(engine.path.clone());
+            self.engines.push(engine);
         }
         self.config.current_session = file.clone();
         if let Some(f) = &file {
@@ -1066,9 +1101,10 @@ impl FastTailApp {
         let mut current_open: Vec<PathBuf> = Vec::new();
         for (_, tab) in self.dock_state.iter_all_tabs() {
             if let FastTailTab::LogStream(p) = tab {
-                if !current_open
-                    .iter()
-                    .any(|existing| paths_equal(existing.as_path(), p.as_path()))
+                if !is_stdin_tab(tab)
+                    && !current_open
+                        .iter()
+                        .any(|existing| paths_equal(existing.as_path(), p.as_path()))
                 {
                     current_open.push(p.clone());
                 }
@@ -1077,7 +1113,7 @@ impl FastTailApp {
         self.config.open_files = current_open;
 
         // Per-stream state of the default session (filters, search, encoding).
-        for eng in &self.engines {
+        for eng in self.engines.iter().filter(|e| !e.is_stdin()) {
             let mut entry = stream_entry_of(eng);
             entry.wrap = false;
             entry.bookmarks.clear();
@@ -1101,8 +1137,10 @@ impl FastTailApp {
                 }
             }
         }
-        let dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
+        let mut dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
 
+        // After the floating rectangles, whose surface indices this may shift.
+        dock_to_save.retain_tabs(|tab| !is_stdin_tab(tab));
         if let Ok(ron_str) = ron::to_string(&dock_to_save) {
             if self.config.dock_layout.as_deref() != Some(&ron_str) {
                 self.config.dock_layout = Some(ron_str);
@@ -1137,6 +1175,107 @@ impl FastTailApp {
                 if let Some(follow) = cli.follow {
                     engine.follow_tail = follow && !engine.is_compressed();
                 }
+            }
+        }
+    }
+
+    /// Starts copying `input` (standard input) into a spool. `explicit` (`-` given)
+    /// opens the stream at once; otherwise it opens on the first byte (see
+    /// `poll_pending_stdin`), so a launcher's silent pipe never shows an empty tab.
+    pub fn start_stdin(
+        &mut self,
+        input: impl std::io::Read + Send + 'static,
+        explicit: bool,
+        options: StdinOptions,
+    ) {
+        let wake = Self::make_wake(&self.egui_ctx);
+        let stream = match crate::stdin_source::StdinStream::start(
+            input,
+            &self.config.stdin_settings(),
+            Some(wake),
+        ) {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!("fasttail: cannot spool standard input: {err}");
+                return;
+            }
+        };
+        self.stdin_options = options;
+        if explicit {
+            self.open_stdin_stream(stream);
+        } else {
+            self.pending_stdin = Some(stream);
+        }
+    }
+
+    /// Opens the stream of piped standard input once its first byte arrived; drops it
+    /// when the input ended empty.
+    pub fn poll_pending_stdin(&mut self) {
+        let Some(stream) = self.pending_stdin.as_ref() else {
+            return;
+        };
+        if stream.received() > 0 {
+            if let Some(stream) = self.pending_stdin.take() {
+                self.open_stdin_stream(stream);
+            }
+        } else if !stream.is_reading() {
+            self.pending_stdin = None;
+        }
+    }
+
+    /// Adds the standard-input stream and its tab. Unlike `open_log_file` it is not
+    /// recorded in the open files, the recent files or the stream state.
+    fn open_stdin_stream(&mut self, stream: crate::stdin_source::StdinStream) {
+        let wake = Self::make_wake(&self.egui_ctx);
+        let mut engine = match crate::stdin_source::open_engine(stream, Some(wake)) {
+            Ok(engine) => engine,
+            Err(err) => {
+                eprintln!("fasttail: cannot open standard input: {err}");
+                return;
+            }
+        };
+        engine.size_check_interval =
+            std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
+        engine.set_markdown_max_bytes((self.config.markdown_max_mb as u64) * 1024 * 1024);
+        engine.set_highlight_rules(self.config.highlight_rules.clone());
+        engine.set_quick_labels(&self.quick_labels);
+        engine.size_unit = self.config.size_unit;
+        let options = self.stdin_options.clone();
+        if let Some(f) = &options.filter {
+            engine.set_include_filter(f);
+        }
+        if let Some(x) = &options.exclude {
+            engine.set_exclude_filter(x);
+        }
+        if let Some(follow) = options.follow {
+            engine.follow_tail = follow;
+        }
+        let path = engine.path.clone();
+        self.engines.push(engine);
+        crate::audio::play_sound(
+            crate::audio::CyberSound::BlipAttach,
+            self.config.sound_enabled,
+        );
+        self.add_stream_tab(path);
+        self.save_dock_layout();
+    }
+
+    /// Puts the tab of `path` in the dock unless it is there already.
+    fn add_stream_tab(&mut self, path: PathBuf) {
+        let tab = FastTailTab::LogStream(path.clone());
+        let already_in_dock = self.dock_state.find_tab(&tab).is_some()
+            || self.dock_state.iter_all_tabs().any(|(_, t)| {
+                if let FastTailTab::LogStream(p) = t {
+                    paths_equal(p, &path)
+                } else {
+                    false
+                }
+            });
+        if !already_in_dock {
+            if self.dock_state.iter_all_tabs().count() == 0 {
+                self.dock_state = egui_dock::DockState::new(vec![tab]);
+            } else {
+                self.dock_state.main_surface_mut().push_to_first_leaf(tab);
             }
         }
     }
@@ -1296,22 +1435,7 @@ impl FastTailApp {
             }
             let _ = self.config.save();
 
-            let tab = FastTailTab::LogStream(path.clone());
-            let already_in_dock = self.dock_state.find_tab(&tab).is_some()
-                || self.dock_state.iter_all_tabs().any(|(_, t)| {
-                    if let FastTailTab::LogStream(p) = t {
-                        paths_equal(p, &path)
-                    } else {
-                        false
-                    }
-                });
-            if !already_in_dock {
-                if self.dock_state.iter_all_tabs().count() == 0 {
-                    self.dock_state = egui_dock::DockState::new(vec![tab]);
-                } else {
-                    self.dock_state.main_surface_mut().push_to_first_leaf(tab);
-                }
-            }
+            self.add_stream_tab(path);
             self.save_dock_layout();
         }
     }
@@ -1497,6 +1621,7 @@ impl FastTailApp {
         }
 
         // 2. Poll file updates, then run the tools bound to the rules that matched
+        self.poll_pending_stdin();
         let size_interval =
             std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
         for eng in &mut self.engines {
@@ -2334,8 +2459,16 @@ impl FastTailApp {
                         })
                     };
 
+                    let stdin_spool = self
+                        .engines
+                        .iter()
+                        .find_map(|e| e.stdin.as_ref())
+                        .map(|s| s.spool_path().display().to_string());
                     let path_str = if let Some(path) = active_path {
-                        if path.is_absolute() {
+                        if crate::stdin_source::is_stdin_path(&path) {
+                            t(self.config.language, "stdin_footer")
+                                .replace("{path}", stdin_spool.as_deref().unwrap_or("?"))
+                        } else if path.is_absolute() {
                             path.display().to_string()
                         } else if let Ok(cwd) = std::env::current_dir() {
                             cwd.join(&path).display().to_string()
@@ -2704,6 +2837,12 @@ impl FastTailApp {
         let mut bookmarks_changed = false;
         let mut critical_in_background = false;
         for eng in &mut self.engines {
+            if eng.is_stdin() {
+                // Nothing of the standard-input stream is persisted.
+                eng.bookmarks_dirty = false;
+                eng.wrap_dirty = false;
+                eng.ansi_dirty = false;
+            }
             if eng.bookmarks_dirty {
                 eng.bookmarks_dirty = false;
                 let lines: Vec<usize> = eng.bookmarks.iter().copied().collect();
@@ -3179,6 +3318,27 @@ impl FastTailApp {
                                         .suffix(" GB"),
                                 )
                                 .on_hover_text(t(lang, "compressed_max_size_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
+                            }
+                        });
+                        // Standard input: the size its spool restarts from empty at.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "stdin_spool_max")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.stdin_spool_max_mb)
+                                        .range(
+                                            crate::stdin_source::MIN_MAX_MB
+                                                ..=crate::stdin_source::MAX_MAX_MB,
+                                        )
+                                        .suffix(" MB"),
+                                )
+                                .on_hover_text(t(lang, "stdin_spool_max_tip"))
                                 .changed()
                             {
                                 let _ = self.config.save();
@@ -3997,6 +4157,39 @@ impl FastTailApp {
                 self.open_notice = None;
             }
         }
+        if let Some(notice) = self.save_notice.clone() {
+            let lang = self.config.language;
+            let theme = self.config.theme;
+            let mut is_open = true;
+            let mut close = false;
+            egui::Window::new(
+                RichText::new(format!("💾 {}", t(lang, "stdin_not_saved_title")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .id(egui::Id::new("fasttail_save_notice"))
+            .open(&mut is_open)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                ui.label(
+                    RichText::new(notice)
+                        .monospace()
+                        .size(11.5)
+                        .color(theme.text_primary()),
+                );
+                ui.add_space(8.0);
+                if ui.button(t(lang, "session_ok")).clicked()
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            if close || !is_open {
+                self.save_notice = None;
+            }
+        }
 
         // 12. Render Matrix Screensaver if activated
         let viewport = ctx.content_rect();
@@ -4233,7 +4426,7 @@ impl FastTailApp {
 /// Structure of the dock (surface, node and tab order) without geometry.
 fn dock_signature(dock: &DockState<FastTailTab>) -> String {
     let mut out = String::new();
-    for (path, tab) in dock.iter_all_tabs() {
+    for (path, tab) in dock.iter_all_tabs().filter(|(_, tab)| !is_stdin_tab(tab)) {
         let name = match tab {
             FastTailTab::LogStream(p) => p.to_string_lossy().to_string(),
             other => format!("{other:?}"),
@@ -4254,6 +4447,29 @@ fn extra_terms(terms: &[String]) -> Vec<String> {
         .filter(|t| !t.is_empty())
         .cloned()
         .collect()
+}
+
+/// True for the tab of the standard-input stream, which no workspace or session keeps.
+fn is_stdin_tab(tab: &FastTailTab) -> bool {
+    matches!(tab, FastTailTab::LogStream(p) if crate::stdin_source::is_stdin_path(p))
+}
+
+/// Command line options applied to the standard-input stream when it opens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StdinOptions {
+    pub filter: Option<String>,
+    pub exclude: Option<String>,
+    pub follow: Option<bool>,
+}
+
+impl StdinOptions {
+    pub fn from_cli(cli: &crate::cli::CliArgs) -> Self {
+        Self {
+            filter: cli.filter.clone(),
+            exclude: cli.exclude.clone(),
+            follow: cli.follow,
+        }
+    }
 }
 
 /// The session entry describing `engine` as it is now.

@@ -996,6 +996,9 @@ pub struct TailEngine {
     /// `current_file` the spool. Declared last so the file handle above is closed before
     /// the spool is deleted.
     pub compressed: Option<crate::compressed::CompressedStream>,
+    /// Copier and spool of the standard-input stream (see `stdin_source`); `path` is
+    /// then `<stdin>` and `current_file` the spool. Last for the same reason.
+    pub stdin: Option<crate::stdin_source::StdinStream>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -1503,6 +1506,7 @@ impl TailEngine {
             throughput_bps: 0.0,
             encoding_pending: false,
             compressed: None,
+            stdin: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             ansi_detected: false,
@@ -2328,6 +2332,14 @@ impl TailEngine {
             .compressed
             .as_ref()
             .is_some_and(|c| c.has_unindexed(self.file_size));
+        // Standard input: the same, and a spool restarted at its limit rebuilds first.
+        if self.stdin.is_some() {
+            self.poll_stdin_restart();
+            needs_refresh |= self
+                .stdin
+                .as_ref()
+                .is_some_and(|s| s.has_unindexed(self.file_size));
+        }
 
         // Drain filesystem watcher events (the file, or the directory of a pattern stream)
         while let Ok(event_res) = self.rx.try_recv() {
@@ -2374,6 +2386,9 @@ impl TailEngine {
         }
         if self.compressed.is_some() {
             self.poll_compressed();
+        }
+        if self.stdin.is_some() {
+            self.poll_stdin_end();
         }
 
         // Update throughput measurement once every 500ms
@@ -2462,6 +2477,18 @@ impl TailEngine {
         if new_modified != self.last_modified || !self.source.is_same_file_as_path() {
             self.reload_from_start(new_size, new_modified);
         }
+    }
+
+    /// Rebuilds from byte 0 after the file was restarted from empty (a standard-input
+    /// spool at its limit), whatever size it has grown back to since.
+    pub(crate) fn restart_from_empty(&mut self) {
+        let (size, modified) = self
+            .current_file
+            .as_ref()
+            .and_then(|f| std::fs::metadata(f).ok())
+            .map(|m| (m.len(), m.modified().ok()))
+            .unwrap_or((0, None));
+        self.reload_from_start(size, modified);
     }
 
     /// Full reload after a truncation, rotation or in-place rewrite: reopens the handle,
