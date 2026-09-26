@@ -53,6 +53,7 @@ ron = "0.12"
 toml = "1.0"
 rust-ini = "0.21"
 regex = "1.11"
+smallvec = "1.13"
 rfd = "0.17"
 
 # Telemetry

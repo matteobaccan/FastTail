@@ -11,5 +11,5 @@
 **Action:** Prefer standard dynamic Vec or prudent small-vec over copying large fixed stack buffers in tight interval-deduction loops.
 
 ## 2026-04-18 - Small stack buffer with dynamic Vec overflow for hot interval deduction
-**Learning:** Using dynamic `Vec` instances in hot row span deduction loops (`claim_span`) causes millions of heap allocations on multi-megabyte logs. Replacing them with a small inline stack buffer (`SmallPieces`, 8 items / 128 bytes) and an `overflow: Option<Vec<T>>` fallback completely eliminates heap allocation churn while guaranteeing zero truncation risk and avoiding large stack frame copying overhead.
-**Action:** Use a small stack-allocated struct (8 elements) with dynamic `Vec` overflow fallback for interval subtraction and piece tracking in tight text/span layout loops.
+**Learning:** Using dynamic `Vec` instances in hot row span deduction loops (`claim_span`) causes millions of heap allocations on multi-megabyte logs. Replacing them with `smallvec::SmallVec<[(usize, usize); 8]>` (128 bytes inline, spilling to the heap past 8) eliminates heap allocation churn while guaranteeing zero truncation risk and avoiding large stack frame copying overhead.
+**Action:** Use `SmallVec` (already in the dependency tree) rather than a hand-written inline buffer for interval subtraction and piece tracking in tight text/span layout loops.

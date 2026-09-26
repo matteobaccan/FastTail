@@ -724,83 +724,9 @@ pub struct CompiledHighlight {
     pub sound_alert: SoundAlertPreset,
 }
 
-const SMALL_PIECES_CAP: usize = 8;
-
-/// Inline stack buffer for interval pieces during span deduction, avoiding heap allocations
-/// in the hot row span matching path while falling back to dynamic `Vec` if pieces exceed 8.
-struct SmallPieces {
-    buf: [(usize, usize); SMALL_PIECES_CAP],
-    len: usize,
-    overflow: Option<Vec<(usize, usize)>>,
-}
-
-impl SmallPieces {
-    #[inline]
-    fn new(start: usize, end: usize) -> Self {
-        let mut buf = [(0, 0); SMALL_PIECES_CAP];
-        buf[0] = (start, end);
-        Self {
-            buf,
-            len: 1,
-            overflow: None,
-        }
-    }
-
-    #[inline]
-    fn empty() -> Self {
-        Self {
-            buf: [(0, 0); SMALL_PIECES_CAP],
-            len: 0,
-            overflow: None,
-        }
-    }
-
-    #[inline]
-    fn push(&mut self, item: (usize, usize)) {
-        if let Some(ref mut vec) = self.overflow {
-            vec.push(item);
-        } else if self.len < SMALL_PIECES_CAP {
-            self.buf[self.len] = item;
-            self.len += 1;
-        } else {
-            let mut vec = Vec::with_capacity(16);
-            vec.extend_from_slice(&self.buf[..self.len]);
-            vec.push(item);
-            self.overflow = Some(vec);
-        }
-    }
-
-    #[inline]
-    fn is_empty(&self) -> bool {
-        if let Some(ref vec) = self.overflow {
-            vec.is_empty()
-        } else {
-            self.len == 0
-        }
-    }
-
-    #[inline]
-    fn clear(&mut self) {
-        self.len = 0;
-        if let Some(ref mut vec) = self.overflow {
-            vec.clear();
-        }
-    }
-}
-
-#[inline]
-fn process_piece(s: usize, e: usize, sp: &HighlightSpan, next_pieces: &mut SmallPieces) {
-    if e <= sp.start || s >= sp.end {
-        next_pieces.push((s, e));
-    } else {
-        if s < sp.start {
-            next_pieces.push((s, sp.start));
-        }
-        if e > sp.end {
-            next_pieces.push((sp.end, e));
-        }
-    }
-}
+/// Pieces of a span still unclaimed, kept on the stack: a row rarely splits one into more
+/// than a few (the vector spills to the heap past 8).
+type Pieces = smallvec::SmallVec<[(usize, usize); 8]>;
 
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
@@ -810,51 +736,37 @@ fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: S
         spans.push(HighlightSpan { start, end, style });
         return spans.len() >= MAX_ROW_SPANS;
     }
-
-    let mut pieces = SmallPieces::new(start, end);
-    let mut next_pieces = SmallPieces::empty();
-
+    // Double-buffered piece lists, swapped per claimed span, with no heap allocation in the
+    // common case.
+    let mut pieces: Pieces = smallvec::smallvec![(start, end)];
+    let mut next_pieces = Pieces::new();
     for sp in spans.iter() {
-        if let Some(ref mut vec) = pieces.overflow {
-            for (s, e) in vec.drain(..) {
-                process_piece(s, e, sp, &mut next_pieces);
-            }
-        } else {
-            for i in 0..pieces.len {
-                let (s, e) = pieces.buf[i];
-                process_piece(s, e, sp, &mut next_pieces);
+        for (s, e) in pieces.drain(..) {
+            if e <= sp.start || s >= sp.end {
+                next_pieces.push((s, e));
+            } else {
+                if s < sp.start {
+                    next_pieces.push((s, sp.start));
+                }
+                if e > sp.end {
+                    next_pieces.push((sp.end, e));
+                }
             }
         }
-        pieces.clear();
         std::mem::swap(&mut pieces, &mut next_pieces);
         if pieces.is_empty() {
             break;
         }
     }
-
-    if let Some(ref vec) = pieces.overflow {
-        for &(s, e) in vec {
-            if spans.len() >= MAX_ROW_SPANS {
-                return true;
-            }
-            spans.push(HighlightSpan {
-                start: s,
-                end: e,
-                style,
-            });
+    for (s, e) in pieces {
+        if spans.len() >= MAX_ROW_SPANS {
+            return true;
         }
-    } else {
-        for i in 0..pieces.len {
-            if spans.len() >= MAX_ROW_SPANS {
-                return true;
-            }
-            let (s, e) = pieces.buf[i];
-            spans.push(HighlightSpan {
-                start: s,
-                end: e,
-                style,
-            });
-        }
+        spans.push(HighlightSpan {
+            start: s,
+            end: e,
+            style,
+        });
     }
     spans.len() >= MAX_ROW_SPANS
 }
@@ -5026,7 +4938,7 @@ mod tests {
                 style: style_a,
             });
         }
-        // [0, 200) subtracted by 10 existing spans will create 11 pieces, exceeding SMALL_PIECES_CAP (8)
+        // [0, 200) subtracted by 10 existing spans will create 11 pieces, more than the 8 kept on the stack
         assert!(!claim_span(&mut many_spans, 0, 200, style_b));
         assert_eq!(many_spans.len(), 21);
     }
