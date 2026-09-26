@@ -5867,6 +5867,52 @@ mod timestamp_range {
     }
 
     #[test]
+    fn a_log_mostly_made_of_stack_traces_can_be_timed() {
+        // One timestamped entry followed by a three-line stack trace: a quarter of the lines
+        // carry a timestamp of their own, every line inherits one, so a window places them all.
+        let mut tmp = NamedTempFile::new().unwrap();
+        for i in 0..100 {
+            writeln!(tmp, "2026-09-18 14:{:02}:00 ERROR failure {i}", i % 60).unwrap();
+            writeln!(tmp, "java.lang.IllegalStateException: boom").unwrap();
+            writeln!(tmp, "\tat com.example.Service.run(Service.java:42)").unwrap();
+            writeln!(tmp, "\tat java.base/java.lang.Thread.run(Thread.java:1583)").unwrap();
+        }
+        tmp.flush().unwrap();
+        let mut engine = TailEngine::open(tmp.path()).unwrap();
+        engine.ensure_timestamps();
+        assert!(engine.timestamps_usable());
+
+        // Most lines before the first timestamp: a window would hide them, the hint stays.
+        let mut late = NamedTempFile::new().unwrap();
+        for i in 0..300 {
+            writeln!(late, "banner line {i}").unwrap();
+        }
+        writeln!(late, "2026-09-18 14:00:00 INFO started").unwrap();
+        late.flush().unwrap();
+        let mut engine = TailEngine::open(late.path()).unwrap();
+        engine.ensure_timestamps();
+        assert!(!engine.timestamps_usable());
+    }
+
+    #[test]
+    fn a_date_alone_covers_the_whole_day() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "2026-09-17T23:59:59.000Z before").unwrap();
+        writeln!(tmp, "2026-09-18T00:00:00.000Z first").unwrap();
+        writeln!(tmp, "2026-09-18T12:00:00.000Z middle").unwrap();
+        writeln!(tmp, "2026-09-18T23:59:59.500Z last").unwrap();
+        writeln!(tmp, "2026-09-19T00:00:00.000Z after").unwrap();
+        tmp.flush().unwrap();
+        let mut engine = TailEngine::open(tmp.path()).unwrap();
+        assert_eq!(
+            engine.apply_time_range_text("2026-09-18", "2026-09-18"),
+            (true, true)
+        );
+        // From 00:00:00.000 through 23:59:59.999 of that day.
+        assert_eq!(visible(&engine), vec![1, 2, 3]);
+    }
+
+    #[test]
     fn the_visible_span_follows_the_window() {
         let tmp = sample_log();
         let mut engine = TailEngine::open(tmp.path()).unwrap();

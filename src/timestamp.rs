@@ -362,8 +362,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// Reads what the user typed into the time-range or go-to-time fields.
 ///
 /// Accepts `HH:MM`, `HH:MM:SS` (that time on the day of `reference`), `YYYY-MM-DD HH:MM`
-/// (`T` or a space in between) and anything the line parser reads, so a timestamp copied
-/// straight out of the log works.
+/// (`T` or a space in between), a bare `YYYY-MM-DD` (the start of that day) and anything
+/// the line parser reads, so a timestamp copied straight out of the log works.
 /// `reference` is the day the bare times belong to — the first timestamp of the stream,
 /// which is what the user means by "14:02" while looking at yesterday's log.
 pub fn parse_user_time(input: &str, reference: i64) -> Option<i64> {
@@ -378,6 +378,11 @@ pub fn parse_user_time(input: &str, reference: i64) -> Option<i64> {
     // A date and a time without the seconds, which the line parser insists on.
     if is_date_minute(text) {
         return detect_timestamp(&format!("{text}:00"), FormatHint::Iso8601).map(|(ms, _)| ms);
+    }
+    // A date alone: midnight, the start of that day.
+    if is_date(text) {
+        return detect_timestamp(&format!("{text} 00:00:00"), FormatHint::Iso8601)
+            .map(|(ms, _)| ms);
     }
     // `HH:MM` or `HH:MM:SS` on the reference day.
     let b = text.as_bytes();
@@ -396,17 +401,30 @@ pub fn parse_user_time(input: &str, reference: i64) -> Option<i64> {
     Some(day_start + (hour as i64 * 3600 + minute as i64 * 60 + second as i64) * 1000)
 }
 
-/// The end of the minute or second the user named, so "from 14:02 to 14:05" includes
-/// everything stamped 14:05:59.999 — the window a person means when they type two times.
+/// The end of the day, minute or second the user named, so "from 14:02 to 14:05" includes
+/// everything stamped 14:05:59.999 and "to 2026-09-18" everything up to 23:59:59.999 —
+/// the window a person means when they type two times.
 pub fn end_of_typed_time(input: &str, millis: i64) -> i64 {
     let text = input.trim();
     match text.len() {
-        5 => millis + 59_999, // HH:MM  -> to the end of that minute
-        8 => millis + 999,    // HH:MM:SS -> to the end of that second
+        10 if is_date(text) => millis + 86_399_999, // YYYY-MM-DD -> to the end of that day
+        5 => millis + 59_999,                       // HH:MM  -> to the end of that minute
+        8 => millis + 999,                          // HH:MM:SS -> to the end of that second
         16 if is_date_minute(text) => millis + 59_999, // YYYY-MM-DD HH:MM
         19 if is_date_minute(&text[..16]) => millis + 999, // YYYY-MM-DD HH:MM:SS
         _ => millis,
     }
+}
+
+/// `YYYY-MM-DD`, nothing after the day.
+fn is_date(text: &str) -> bool {
+    let b = text.as_bytes();
+    b.len() == 10
+        && [0, 1, 2, 3, 5, 6, 8, 9]
+            .iter()
+            .all(|&i| b[i].is_ascii_digit())
+        && b[4] == b'-'
+        && b[7] == b'-'
 }
 
 /// `YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`, nothing after the minutes.
@@ -538,6 +556,11 @@ mod tests {
             parse_user_time("2026-09-18T14:02", 0),
             Some(1_789_740_120_000)
         );
+        // A date alone is the start of that day.
+        assert_eq!(parse_user_time("2026-09-18", noon), Some(day));
+        assert_eq!(parse_user_time("2026-09-18", 0), Some(day));
+        assert_eq!(parse_user_time("2026-02-30", 0), None);
+        assert_eq!(parse_user_time("2026-13-01", 0), None);
         // A typed time is the clock of the log: an Apache +0200 line at 14:02 matches 14:02.
         let apache = detect("[18/Sep/2026:14:02:05 +0200] GET /").unwrap();
         assert_eq!(parse_user_time("14:02:05", apache), Some(apache));
@@ -577,6 +600,8 @@ mod tests {
         assert_eq!(end_of_typed_time("2026-09-18T14:05:30Z", 1_000), 1_000);
         assert_eq!(end_of_typed_time("2026-09-18 14:05", 1_000), 60_999);
         assert_eq!(end_of_typed_time("2026-09-18 14:05:30", 1_000), 1_999);
+        // "to 2026-09-18" means through 23:59:59.999 of that day.
+        assert_eq!(end_of_typed_time("2026-09-18", 1_000), 86_400_999);
     }
 
     #[test]

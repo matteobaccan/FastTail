@@ -94,8 +94,8 @@ pub const MAX_ROW_SPANS: usize = 64;
 pub const NO_TIMESTAMP: i64 = i64::MIN;
 /// Lines timed per call of `fill_timestamps`, the unit `ensure_timestamps` loops over.
 pub const TIMESTAMP_FILL_BUDGET: usize = 200_000;
-/// Below this share of timed lines the file is not one we can read times from, and the
-/// time controls say so instead of hiding everything.
+/// Below this share of timed lines that can be placed in time (a timestamp of their own
+/// or inherited) the file is not one we can read times from, and the time controls say so.
 pub const MIN_TIMESTAMP_RATE: f32 = 0.5;
 /// Lines to look at before trusting the rate above (a header of untimed banner lines
 /// must not disable the controls for the whole file).
@@ -1638,14 +1638,33 @@ impl TailEngine {
         (timed > 0).then(|| self.timestamps_parsed as f32 / timed as f32)
     }
 
+    /// Share of timed lines a window can place in time: those with a timestamp of their
+    /// own or inherited from the entry they continue (a stack trace line). Only the lines
+    /// before the first timestamp have none, and they form a prefix of the cache, so the
+    /// count is a binary search. `None` until enough lines have been timed to judge.
+    pub fn timestamp_coverage(&self) -> Option<f32> {
+        let timed = self.timestamps.len();
+        if timed < TIMESTAMP_RATE_SAMPLE.min(self.line_offsets.len().max(1)) {
+            return None;
+        }
+        let untimed = if self.timestamps_parsed == 0 {
+            timed
+        } else {
+            self.timestamps.partition_point(|&ts| ts == NO_TIMESTAMP)
+        };
+        (timed > 0).then(|| (timed - untimed) as f32 / timed as f32)
+    }
+
     /// Whether a time window is currently narrowing the view.
     pub fn is_time_filtered(&self) -> bool {
         self.time_from.is_some() || self.time_to.is_some()
     }
 
-    /// Whether the time range and the time jump can work on this stream at all.
+    /// Whether the time range and the time jump can work on this stream at all: most of
+    /// its lines can be placed in time. A log made mostly of stack traces qualifies, since
+    /// every trace line inherits the timestamp of its entry.
     pub fn timestamps_usable(&self) -> bool {
-        self.timestamp_rate()
+        self.timestamp_coverage()
             .map(|rate| rate >= MIN_TIMESTAMP_RATE)
             .unwrap_or(false)
     }

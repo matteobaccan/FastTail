@@ -523,14 +523,14 @@ fn paint_search_row_background(
 /// The "from / to" time window of a stream, next to the text filters.
 ///
 /// The fields take `14:02`, `14:02:05`, a full date and time, or a timestamp copied out
-/// of the log; a bare time belongs to the day of the log, not to today. They are disabled
-/// with a hint when the stream has no timestamps we can read, because a window over a log
-/// we cannot time would just hide everything. A window typed while the stream is still
-/// being timed in the background is held, with a hint, until timing finishes.
+/// of the log, or a date alone (the whole day); a bare time belongs to the day of the log,
+/// not to today. A hint says when most lines cannot be placed in time, since a window over
+/// such a log hides them; the fields stay usable, so a window can always be typed, fixed
+/// or cleared. A window typed while the stream is still being timed in the background is
+/// held, with a hint, until timing finishes.
 fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
     let usable = engine.timestamps_usable() || !engine.timestamps_complete();
-    let controls = time_range_controls(
-        usable,
+    let show_clear = time_range_clear_shown(
         !engine.time_from_text.trim().is_empty() || !engine.time_to_text.trim().is_empty(),
         engine.is_time_filtered() || engine.time_range_pending(),
     );
@@ -548,29 +548,18 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
     let mut from = engine.time_from_text.clone();
     let mut to = engine.time_to_text.clone();
     let mut changed = false;
-    let field = |ui: &mut Ui, text: &mut String, hint: &str, enabled: bool| {
-        ui.add_enabled(
-            enabled,
+    let field = |ui: &mut Ui, text: &mut String, hint: &str| {
+        ui.add(
             egui::TextEdit::singleline(text)
                 .hint_text(hint)
                 .desired_width(74.0),
         )
     };
 
-    let from_resp = field(
-        ui,
-        &mut from,
-        t(lang, "time_from_hint"),
-        controls.fields_enabled,
-    );
+    let from_resp = field(ui, &mut from, t(lang, "time_from_hint"));
     changed |= from_resp.changed();
     ui.label(RichText::new("→").monospace().color(theme.text_dim()));
-    let to_resp = field(
-        ui,
-        &mut to,
-        t(lang, "time_to_hint"),
-        controls.fields_enabled,
-    );
+    let to_resp = field(ui, &mut to, t(lang, "time_to_hint"));
     // A side is judged once the user leaves it: `1` on the way to `14:02` is no error.
     let typing = from_resp.has_focus() || to_resp.has_focus();
     changed |= to_resp.changed();
@@ -580,7 +569,7 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
         engine.time_range_error = !from_ok || !to_ok;
     }
 
-    if controls.show_clear
+    if show_clear
         && ui
             .button("✖")
             .on_hover_text(t(lang, "time_range_clear"))
@@ -619,24 +608,11 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
     }
 }
 
-/// What the time range controls allow, from whether the stream can be timed (`usable`,
-/// optimistic until timing finishes), whether either field holds text and whether a
-/// window is applied or held.
-#[derive(Debug, PartialEq, Eq)]
-struct TimeRangeControls {
-    /// The fields take input. A field holding text stays editable on a stream that turned
-    /// out not to be timeable, so what was typed can still be corrected or deleted.
-    fields_enabled: bool,
-    /// The ✖ that clears both fields and the window: shown as soon as there is anything
-    /// to clear, an unparsable text included.
-    show_clear: bool,
-}
-
-fn time_range_controls(usable: bool, has_text: bool, windowed: bool) -> TimeRangeControls {
-    TimeRangeControls {
-        fields_enabled: usable || has_text,
-        show_clear: has_text || windowed,
-    }
+/// Whether the ✖ that clears both time fields and the window is shown: as soon as there
+/// is anything to clear, an unparsable text included, from whether either field holds
+/// text and whether a window is applied or held.
+fn time_range_clear_shown(has_text: bool, windowed: bool) -> bool {
+    has_text || windowed
 }
 
 /// Toolbar toggle (Follow, Monitor, line numbers, Wrap, TXT/HEX/MD): an active one gets
@@ -4207,23 +4183,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn time_range_fields_stay_editable_while_they_hold_text() {
-        // A log that turned out not to be timeable: empty fields are disabled...
-        let empty = time_range_controls(false, false, false);
-        assert!(!empty.fields_enabled);
-        assert!(!empty.show_clear);
-        // ...but what was typed before timing finished can still be fixed or cleared.
-        let typed = time_range_controls(false, true, false);
-        assert!(typed.fields_enabled);
-        assert!(typed.show_clear);
-    }
-
-    #[test]
     fn the_clear_button_shows_for_text_or_a_window() {
         // An unparsable text is not a window, yet there is something to clear.
-        assert!(time_range_controls(true, true, false).show_clear);
-        assert!(time_range_controls(true, false, true).show_clear);
-        assert!(!time_range_controls(true, false, false).show_clear);
-        assert!(time_range_controls(true, false, false).fields_enabled);
+        assert!(time_range_clear_shown(true, false));
+        assert!(time_range_clear_shown(false, true));
+        assert!(!time_range_clear_shown(false, false));
     }
 }

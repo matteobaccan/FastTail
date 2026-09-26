@@ -53,6 +53,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   mode for good. Until the first colour code is found, every appended byte is now
   examined (a fast scan for the escape byte, read in chunks straight from the file); at
   open, only the first 64 KB of the file are sampled, as before.
+- **A date alone is a valid time bound.** `2026-09-18` in the "from" field starts at
+  00:00:00 of that day and in the "to" field covers it through 23:59:59.999; it was
+  flagged as an invalid time.
+- **The time fields stay usable after clearing on logs full of stack traces.** A log was
+  judged untimeable when fewer than half of its lines carried a timestamp of their own, so
+  on a Java log where stack traces outnumber the entries the fields were disabled as soon
+  as the ✖ cleared them. The rule now counts the lines a window can place in time (trace
+  lines inherit the timestamp of their entry), and the fields are never disabled: on a log
+  that really has no timestamps a hint says so.
 - **The external tools cookbook link is translated in every language.** Its label and
   tooltip were shown in English in German, Portuguese, Russian, Ukrainian, Japanese,
   Korean, Turkish, Polish, Dutch, Traditional Chinese and Friulian. The translation test
