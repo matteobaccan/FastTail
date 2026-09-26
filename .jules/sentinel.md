@@ -12,3 +12,8 @@
 **Vulnerability:** Running user-configured external tools in shell mode (`sh -c` / `cmd /c`) without quoting expanded placeholder values (`{line}`, `{selection}`, `{file}`) allows arbitrary command injection if log file content contains shell control characters (e.g., `;`, `&`, `|`, `$()`, quotes).
 **Learning:** Even when shell execution is explicitly requested for an external command line, individual argument placeholders derived from untrusted inputs must be escaped or quoted specifically for the target shell (`sh -c` or `cmd /c`) before concatenation.
 **Prevention:** Always pass untrusted placeholder values through POSIX (`quote_sh_arg`) or Windows CMD (`quote_cmd_arg`) argument quoter helpers when joining command lines for shell execution.
+
+## 2026-04-18 - Always enforce restricted directory permissions on spool directory
+**Vulnerability:** Bypassing permission updates (`set_permissions`) when a directory already exists (`dir.is_dir()`) allows temporary spool files containing log content to be exposed if the directory pre-existed with permissive access rights (e.g. 0755 or 0777 in `/tmp`).
+**Learning:** `create_dir_all` in Rust returns `Ok(())` if the directory already exists. Bypassing `set_permissions(dir, 0o700)` via an early `if dir.is_dir()` check leaves existing or pre-created directories insecurely open to local users on multi-user systems.
+**Prevention:** Do not early-return on directory existence when ensuring secure directory permissions; always apply `set_permissions(dir, 0o700)` on Unix.
