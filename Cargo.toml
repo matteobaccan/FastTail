@@ -39,7 +39,7 @@ egui_commonmark = "0.25"
 memchr = "2"
 
 # File I/O & Streaming
-notify = "8.0"
+notify = "9.0.0-rc.5"
 # Compressed logs: gzip through the pure-Rust miniz_oxide backend, zip entries (stored
 # or deflate) inflated through that same flate2. zip's own `deflate` feature would add
 # the zopfli compressor and the zlib-rs backend, neither needed to read.

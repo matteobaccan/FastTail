@@ -76,7 +76,14 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev
 
+      # Compile first so the timeout below measures the tests alone: a cold
+      # build can take several minutes, the suite itself well under one.
+      - name: 🔨 Build test binaries
+        run: cargo test --no-run --target ${{ matrix.target }}
+
+      # A hung test fails the job in minutes instead of holding the runner for hours.
       - name: 🧪 Run test suite
+        timeout-minutes: 5
         run: cargo test --target ${{ matrix.target }}
 
   # ---------------------------------------------------------------------------
