@@ -12,4 +12,4 @@
 ## 3. Wrap-up
 
 - [x] 3.1 Open a `chore/openspec-config` PR (no CHANGELOG entry: the file is not shipped)
-- [ ] 3.2 After merge, archive the change so `openspec/specs/spec-authoring/spec.md` is created with `## Purpose` and `## Requirements`
+- [x] 3.2 After merge, archive the change so `openspec/specs/spec-authoring/spec.md` is created with `## Purpose` and `## Requirements`

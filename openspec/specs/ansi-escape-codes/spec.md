@@ -1,7 +1,7 @@
 # ansi-escape-codes Specification
 
 ## Purpose
-TBD - created by archiving change ansi-color-codes. Update Purpose after archive.
+How FastTail handles ANSI escape sequences in log lines: the per-stream auto, render, strip and raw modes, SGR colour and attribute rendering, and removal of the other sequences.
 ## Requirements
 ### Requirement: ANSI Escape Sequence Modes
 Each text stream SHALL have an ANSI mode among auto, render, strip and raw, selectable from a selector in the stream toolbar that shows the resolved mode (`ANSI: auto → render`), an explicitly chosen mode being persisted per stream in the workspace and in sessions (`ansi=`). In render mode, ANSI CSI and OSC escape sequences SHALL be hidden and SGR attributes (the 16 base and bright colours mapped to a palette of the active theme, 256-colour and 24-bit colours, bold, dim, italic, underline, inverse, and their resets) SHALL be painted as styled spans of the row. In strip mode the sequences SHALL be hidden and no ANSI style painted. In raw mode the line SHALL be shown as stored, with the escape character drawn as `␛`. Auto SHALL resolve to render once an SGR sequence is found in the first 64 KB of the file or, later, in the first 64 KB of each appended chunk, and SHALL behave as raw until then; the switch SHALL happen at most once per stream, and choosing auto again SHALL re-examine the head of the file. Escape sequences other than SGR SHALL be removed in render and strip modes without being interpreted. HEX view SHALL always show the file bytes.
