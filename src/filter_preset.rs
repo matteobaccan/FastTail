@@ -127,10 +127,12 @@ pub fn preset_label<'a>(presets: &'a [FilterPreset], engine: &TailEngine) -> Pre
 
 /// Index of the preset named `name`, without regard to case.
 pub fn find(presets: &[FilterPreset], name: &str) -> Option<usize> {
-    let wanted = name.trim().to_lowercase();
-    presets
-        .iter()
-        .position(|p| p.name.trim().to_lowercase() == wanted)
+    presets.iter().position(|p| same_name(&p.name, name))
+}
+
+/// Whether two preset names are the same, without regard to case or surrounding spaces.
+pub fn same_name(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
 }
 
 /// Whether `name` is taken by a preset other than the one at `except`.
@@ -153,6 +155,33 @@ pub fn upsert(presets: &mut Vec<FilterPreset>, preset: FilterPreset) -> usize {
     }
 }
 
+/// A term as an ini value that reads back unchanged. rust-ini trims the ends of a value
+/// and takes a leading `"` or `'` as a quote, so `"status":500` would come back as
+/// `status:500` and ` ERROR ` as `ERROR`. Such a value is written as quoted chunks, which
+/// the parser joins: runs without `'` inside `'…'`, runs of `'` inside `"…"`. Backslashes
+/// are escaped by the writer and restored by the reader, quoted or not.
+pub fn ini_value(term: &str) -> String {
+    let needs_quotes = term.starts_with(['"', '\'']) || term.trim() != term;
+    if !needs_quotes {
+        return term.to_string();
+    }
+    let mut out = String::with_capacity(term.len() + 4);
+    let mut rest = term;
+    while !rest.is_empty() {
+        let quotes = rest.len() - rest.trim_start_matches('\'').len();
+        let (chunk, wrap) = if quotes > 0 {
+            (&rest[..quotes], '"')
+        } else {
+            (&rest[..rest.find('\'').unwrap_or(rest.len())], '\'')
+        };
+        out.push(wrap);
+        out.push_str(chunk);
+        out.push(wrap);
+        rest = &rest[chunk.len()..];
+    }
+    out
+}
+
 /// Writes one `[filter_preset.N]` section per preset, numbered from 0 in list order.
 pub fn write_presets(conf: &mut Ini, presets: &[FilterPreset]) {
     for (i, preset) in presets.iter().enumerate() {
@@ -160,10 +189,10 @@ pub fn write_presets(conf: &mut Ini, presets: &[FilterPreset]) {
         let mut sec = conf.with_section(Some(format!("{SECTION_PREFIX}{i}")));
         sec.set("name", &preset.name);
         for (n, term) in s.include.iter().enumerate() {
-            sec.set(format!("include.{}", n + 1), term);
+            sec.set(format!("include.{}", n + 1), ini_value(term));
         }
         for (n, term) in s.exclude.iter().enumerate() {
-            sec.set(format!("exclude.{}", n + 1), term);
+            sec.set(format!("exclude.{}", n + 1), ini_value(term));
         }
         sec.set("case_sensitive", s.case_sensitive.to_string());
         sec.set("regex", s.is_regex.to_string());

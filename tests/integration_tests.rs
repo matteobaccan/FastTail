@@ -5325,6 +5325,41 @@ mod named_sessions {
         assert_eq!(Session::name_of(&file), "incident");
     }
 
+    #[test]
+    fn filter_terms_and_search_keep_quotes_and_edge_spaces_in_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("app.log");
+        std::fs::write(
+            &log, "a
+",
+        )
+        .unwrap();
+        let tricky: Vec<String> = TRICKY.iter().map(|t| t.to_string()).collect();
+        let mut stream = entry(log);
+        stream.include_filter = tricky[0].clone();
+        stream.exclude_filter = tricky[1].clone();
+        stream.search_query = tricky[2].clone();
+        stream.include_extra = tricky[3..].to_vec();
+        stream.exclude_extra = tricky[3..].to_vec();
+        let session = Session {
+            streams: vec![stream],
+            dock_layout: None,
+        };
+        let file = dir.path().join(format!("quotes{SESSION_SUFFIX}"));
+        session.save_to(&file).unwrap();
+        assert_eq!(Session::load_from(&file).unwrap().session, session);
+    }
+
+    const TRICKY: [&str; 7] = [
+        "\"status\":500",
+        " ERROR ",
+        "'user'",
+        "it's \"x\" 'y'",
+        "''\"",
+        "\tpad\\d+\t",
+        "a\\\\b",
+    ];
+
     /// A zip holding `server.log` and `logs/worker.log`.
     fn write_bundle(path: &Path) {
         use std::io::Write;
@@ -8443,6 +8478,31 @@ mod filter_terms_and_presets {
 
         let loaded = FastTailConfig::from_ini(&ini);
         assert_eq!(loaded.filter_presets, vec![timed, payment_errors()]);
+    }
+
+    #[test]
+    fn preset_terms_keep_quotes_and_edge_spaces_in_fasttail_ini() {
+        let tricky = terms(&[
+            "\"status\":500",
+            " ERROR ",
+            "'user'",
+            "it's \"x\" 'y'",
+            "''\"",
+            "\tpad\\d+\t",
+            "a\\\\b",
+        ]);
+        let mut preset = payment_errors();
+        preset.state.include = tricky.clone();
+        preset.state.exclude = tricky;
+        let cfg = FastTailConfig {
+            filter_presets: vec![preset.clone()],
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fasttail.ini");
+        cfg.save_to(&path).unwrap();
+        let loaded = FastTailConfig::from_ini(&ini::Ini::load_from_file(&path).unwrap());
+        assert_eq!(loaded.filter_presets, vec![preset]);
     }
 
     #[test]

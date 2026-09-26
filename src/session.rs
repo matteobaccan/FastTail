@@ -10,6 +10,7 @@
 //! stream is skipped and reported.
 
 use crate::config::{overwrite_regular_file, FastTailConfig};
+use crate::filter_preset::ini_value;
 use crate::scan_job::MAX_FILTER_TERMS;
 use crate::wildcard::{is_pattern_path, split_pattern};
 use ini::Ini;
@@ -124,14 +125,14 @@ impl Session {
             if let Some(entry) = &s.archive_entry {
                 sec.set("entry", entry);
             }
-            sec.set("include", &s.include_filter);
-            sec.set("exclude", &s.exclude_filter);
+            sec.set("include", ini_value(&s.include_filter));
+            sec.set("exclude", ini_value(&s.exclude_filter));
             for (key, extra) in [("include", &s.include_extra), ("exclude", &s.exclude_extra)] {
                 for (n, term) in extra.iter().filter(|t| !t.is_empty()).enumerate() {
-                    sec.set(format!("{key}.{}", n + 2), term);
+                    sec.set(format!("{key}.{}", n + 2), ini_value(term));
                 }
             }
-            sec.set("search", &s.search_query);
+            sec.set("search", ini_value(&s.search_query));
             sec.set("wrap", s.wrap.to_string());
             sec.set("encoding", s.encoding.clone().unwrap_or_default());
             if let Some(ansi) = &s.ansi {

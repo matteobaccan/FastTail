@@ -4095,7 +4095,11 @@ fn render_preset_manager(
         let old = std::mem::replace(&mut presets[i].name, name.clone());
         if old != name {
             for eng in engines.iter_mut() {
-                if eng.applied_preset.as_deref() == Some(old.as_str()) {
+                if eng
+                    .applied_preset
+                    .as_deref()
+                    .is_some_and(|a| crate::filter_preset::same_name(a, &old))
+                {
                     eng.applied_preset = Some(name.clone());
                 }
             }
@@ -4106,7 +4110,11 @@ fn render_preset_manager(
     if let Some(i) = delete_done {
         let removed = presets.remove(i);
         for eng in engines.iter_mut() {
-            if eng.applied_preset.as_deref() == Some(removed.name.as_str()) {
+            if eng
+                .applied_preset
+                .as_deref()
+                .is_some_and(|a| crate::filter_preset::same_name(a, &removed.name))
+            {
                 eng.applied_preset = None;
             }
         }
@@ -4249,7 +4257,6 @@ pub fn render_filters_content(
     ui.add_space(8.0);
 
     let focus_path = focus.as_deref().cloned().flatten();
-    let mut focused_shown = false;
     for engine in engines.iter_mut() {
         let file_name = engine
             .path
@@ -4307,14 +4314,13 @@ pub fn render_filters_content(
         });
         if is_focus {
             resp.header_response.scroll_to_me(Some(egui::Align::TOP));
-            focused_shown = true;
         }
         ui.add_space(4.0);
     }
-    if focused_shown {
-        if let Some(f) = focus {
-            *f = None;
-        }
+    // Consumed once drawn, and also when its stream was closed meanwhile, so a later
+    // reopening of that file does not scroll the window to it.
+    if let Some(f) = focus {
+        *f = None;
     }
 }
 

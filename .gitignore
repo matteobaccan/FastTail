@@ -4,3 +4,6 @@ fasttail.ini
 *.log
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Local test logs (not part of the repo)
+tests/logs/

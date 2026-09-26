@@ -64,6 +64,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as `[filter_preset.N]` sections, not in sessions. `--filter` / `--exclude` set the
   first term as before.
 
+### Fixed
+
+- **Filters and searches keep their quotes and edge spaces in session files.** A term
+  starting with a quote (`"status":500`, `'user'`) came back from a session or the
+  workspace without its quotes, and one with leading or trailing spaces (` ERROR `)
+  came back trimmed, so the restored stream filtered on different text. Such values are
+  now written quoted and read back exactly as typed; filter presets are stored the same
+  way.
+
 ## [0.10.1] - 2026-09-26
 
 ### Changed
