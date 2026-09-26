@@ -1450,6 +1450,23 @@ mod tests {
     }
 
     #[test]
+    fn colours_past_the_first_sample_of_a_chunk_are_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut data = log_text(20_000);
+        assert!(data.len() > 4 * crate::ansi::DETECT_SAMPLE_BYTES);
+        data.extend_from_slice(b"\x1b[31mERROR\x1b[0m payment failed\n");
+        let gz = dir.path().join("docker.log.gz");
+        std::fs::write(&gz, gzip(&data)).unwrap();
+        let mut engine = open_engine(&gz, None, &test_settings(dir.path()), None).unwrap();
+        settle(&mut engine);
+        assert_eq!(engine.ansi_effective(), crate::ansi::AnsiMode::Render);
+        assert_eq!(
+            engine.get_line(20_000).as_deref(),
+            Some("ERROR payment failed")
+        );
+    }
+
+    #[test]
     fn reload_extracts_again_and_restored_bookmarks_come_back() {
         let dir = tempfile::tempdir().unwrap();
         let data = log_text(3000);

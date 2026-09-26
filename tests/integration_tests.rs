@@ -6419,6 +6419,39 @@ mod ansi_escape_codes {
     }
 
     #[test]
+    fn colours_deep_in_a_large_append_are_detected() {
+        let (_dir, path) = log_with("started\n");
+        let mut engine = TailEngine::open(&path).unwrap();
+        engine.size_check_interval = std::time::Duration::ZERO;
+        // One append far larger than the detection sample, the colour at its end.
+        let mut burst: String = (0..20_000).map(|i| format!("plain line {i}\n")).collect();
+        assert!(burst.len() > 4 * fasttail::ansi::DETECT_SAMPLE_BYTES);
+        burst.push_str("\x1b[31mERROR\x1b[0m payment failed\n");
+        append(&path, &burst);
+        engine.poll_updates();
+        wait_for_jobs(&mut engine);
+        assert_eq!(engine.ansi_effective(), AnsiMode::Render);
+        assert_eq!(
+            engine.get_line(20_001).as_deref(),
+            Some("ERROR payment failed")
+        );
+
+        // Opened empty, like a decompression spool: the first append is all new bytes.
+        let (_dir, path) = log_with("");
+        let mut engine = TailEngine::open(&path).unwrap();
+        engine.size_check_interval = std::time::Duration::ZERO;
+        append(&path, &burst);
+        engine.poll_updates();
+        wait_for_jobs(&mut engine);
+        assert_eq!(engine.ansi_effective(), AnsiMode::Render);
+
+        // At open only the head is sampled: a file is not read end to end to decide.
+        let (_dir, path) = log_with(&burst);
+        let engine = TailEngine::open(&path).unwrap();
+        assert_eq!(engine.ansi_effective(), AnsiMode::Raw);
+    }
+
+    #[test]
     fn colours_after_the_banner_switch_auto_once_and_rescan() {
         let banner: String = (0..10_000).map(|i| format!("banner {i}\n")).collect();
         let (_dir, path) = log_with(&banner);
