@@ -8438,6 +8438,17 @@ mod search_all_streams {
             )
         }
 
+        /// The stream's tab is the one shown in its dock leaf.
+        fn stream_shown(&self, idx: usize) -> bool {
+            let tab = FastTailTab::LogStream(self.engines[idx].path.clone());
+            let Some(path) = self.dock.find_tab(&tab) else {
+                return false;
+            };
+            self.dock
+                .leaf(path.node_path())
+                .is_ok_and(|leaf| leaf.active == path.tab)
+        }
+
         fn active_is_stream(&mut self, idx: usize) -> bool {
             let path = self.engines[idx].path.clone();
             matches!(
@@ -8557,7 +8568,10 @@ mod search_all_streams {
 
         let list = results_list_id();
         h.click(GroupedHitList::hit_id(list, 1, 1));
-        assert!(h.active_is_stream(1));
+        assert!(
+            h.stream_shown(1),
+            "the stream's tab is brought to the front"
+        );
         let payment = &h.engines[1];
         assert!(
             payment.pending_jump.is_none(),
@@ -8569,9 +8583,10 @@ mod search_all_streams {
         assert_eq!(payment.last_searched_query, "old line");
         assert_eq!(payment.search_matches, own_matches);
         assert!(
-            !h.ctx.memory(|m| m.has_focus(list)),
-            "the stream takes the keyboard back"
+            h.ctx.memory(|m| m.has_focus(list)),
+            "the results keep the keyboard"
         );
+        assert!(h.active_is_results(), "and the dock focus");
 
         // A header click collapses its group: the next header follows it directly.
         open_find_results_tab(&mut h.dock);
@@ -8609,7 +8624,82 @@ mod search_all_streams {
         h.frame(vec![key(egui::Key::Enter)], false);
         h.frame(Vec::new(), false);
         assert!(h.engines[1].is_selected(120));
-        assert!(h.active_is_stream(1));
+        assert!(h.stream_shown(1));
+        assert!(h.active_is_results());
+    }
+
+    #[test]
+    fn typing_a_query_and_enter_runs_the_search() {
+        let mut h = Harness::new(&logs());
+        open_find_results_tab(&mut h.dock);
+        h.frame(Vec::new(), false);
+        h.frame(Vec::new(), false);
+        h.click(fasttail::ui::find_results::query_input_id());
+        assert!(h
+            .ctx
+            .memory(|m| m.has_focus(fasttail::ui::find_results::query_input_id())));
+        h.frame(vec![egui::Event::Text("req-7f3a".into())], false);
+        assert_eq!(h.session.input, "req-7f3a");
+        h.frame(vec![key(egui::Key::Enter)], false);
+        assert_eq!(h.session.query, "req-7f3a", "Enter runs the search");
+        h.run_to_end();
+        assert_eq!(h.session.total_hits(), 6);
+    }
+
+    #[test]
+    fn after_a_click_the_keys_walk_the_results_and_the_stream_follows() {
+        let mut h = Harness::new(&logs());
+        open_find_results_tab(&mut h.dock);
+        h.session.input = "req-7f3a".into();
+        h.session.start(&h.engines);
+        h.run_to_end();
+        h.frame(Vec::new(), false);
+        let list = results_list_id();
+        let still_on_results = |h: &mut Harness| {
+            assert!(
+                h.ctx.memory(|m| m.has_focus(list)),
+                "the list keeps the keyboard"
+            );
+            assert!(h.active_is_results(), "and the dock focus");
+        };
+        // Rows: header 0, hits 3 13 23 33 (gateway), header 1, hits 120 250 (payment).
+        h.click(GroupedHitList::hit_id(list, 0, 0));
+        assert!(
+            h.engines[0].is_selected(3),
+            "the stream shows the clicked line"
+        );
+        still_on_results(&mut h);
+
+        h.frame(vec![key(egui::Key::ArrowDown)], false);
+        h.frame(Vec::new(), false);
+        assert!(
+            h.engines[0].is_selected(13),
+            "Down: the next result is shown"
+        );
+        still_on_results(&mut h);
+
+        h.frame(vec![key(egui::Key::End)], false);
+        h.frame(Vec::new(), false);
+        assert!(h.engines[1].is_selected(250), "End: the last result");
+        assert!(h.stream_shown(1));
+        still_on_results(&mut h);
+
+        h.frame(vec![key(egui::Key::Home)], false);
+        h.frame(vec![key(egui::Key::ArrowDown)], false);
+        h.frame(Vec::new(), false);
+        assert!(
+            h.engines[0].is_selected(3),
+            "Home then Down: the first result"
+        );
+        assert!(h.stream_shown(0));
+
+        h.frame(vec![key(egui::Key::PageDown)], false);
+        h.frame(Vec::new(), false);
+        assert!(
+            h.engines[1].is_selected(250),
+            "PageDown past the end: the last"
+        );
+        still_on_results(&mut h);
     }
 
     #[test]
