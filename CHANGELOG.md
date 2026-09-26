@@ -101,8 +101,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tooltip: the pattern prompt's Go (the pattern is invalid), the zip picker's Open
   (nothing selected), the ⬆ / ⬇ of highlight rules and filter presets at the ends of
   their lists, the preset rename ✔, and Stop / Refresh in the Find results tab.
-- **Shortcuts in the help read `CTRL`, `SHIFT` and `ALT`** in capitals throughout, in
-  every language (`STRG`, `UMSCHALT` in German).
+- **Shortcuts in the help read `CTRL`, `SHIFT` and `ALT`** in capitals throughout; the
+  translated descriptions spell them in capitals too (`STRG`, `UMSCHALT` in German).
 - **Less allocation while painting a row.** Highlight spans and ANSI colour parameters
   are worked out in small stack buffers instead of a heap allocation per row or per
   escape sequence.

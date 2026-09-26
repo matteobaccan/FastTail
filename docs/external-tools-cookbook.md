@@ -18,7 +18,7 @@ page is the practical half.
 | Placeholder | What it expands to |
 |---|---|
 | `{line}` | the whole text of the row |
-| `{file}` | the file being tailed (for a pattern stream, the file it currently follows; for a compressed `.gz` / `.zip` stream, the archive) |
+| `{file}` | the file being tailed (for a pattern stream, the file it currently follows; for a compressed `.gz` / `.zip` stream, the archive; for the `stdin` stream, its temporary spool file, deleted when the tab closes) |
 | `{dir}` | the directory of that file |
 | `{lineno}` | the 1-based line number |
 | `{selection}` | the selected rows as text, or the row itself when nothing is selected |

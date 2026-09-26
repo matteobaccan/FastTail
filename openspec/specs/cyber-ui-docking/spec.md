@@ -40,7 +40,7 @@ The About dialog SHALL provide clickable hyperlinks to the GitHub repository and
 - **THEN** the test suite fails with a message naming the missing feature.
 
 ### Requirement: Localized Tooltips
-All interactive buttons, sliders, and controls SHALL provide informative tooltips fully localized in the currently selected user language (see the localization-i18n capability for the supported set).
+All interactive buttons, sliders, and controls SHALL provide informative tooltips, also shown while the control is disabled (saying why when the reason is not obvious), fully localized in the currently selected user language (see the localization-i18n capability for the supported set).
 
 #### Scenario: Tooltip follows the selected language
 - **WHEN** the interface language is Italian and the user hovers over the follow-mode toggle
