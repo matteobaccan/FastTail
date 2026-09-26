@@ -4150,6 +4150,7 @@ fn render_preset_manager(
             if ui
                 .add_enabled(i > 0, egui::Button::new("⬆"))
                 .on_hover_text(t(lang, "move_up"))
+                .on_disabled_hover_text(t(lang, "move_up"))
                 .clicked()
             {
                 move_up = Some(i);
@@ -4157,6 +4158,7 @@ fn render_preset_manager(
             if ui
                 .add_enabled(i + 1 < count, egui::Button::new("⬇"))
                 .on_hover_text(t(lang, "move_down"))
+                .on_disabled_hover_text(t(lang, "move_down"))
                 .clicked()
             {
                 move_down = Some(i);
@@ -4177,6 +4179,7 @@ fn render_preset_manager(
                     if ui
                         .add_enabled(!name.is_empty() && !taken, egui::Button::new("✔"))
                         .on_hover_text(t(lang, "preset_rename"))
+                        .on_disabled_hover_text(t(lang, "preset_rename"))
                         .clicked()
                     {
                         rename_done = Some((i, name));

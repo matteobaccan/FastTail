@@ -136,6 +136,8 @@ pub fn render_find_results(
                     RichText::new(format!("■ {}", t(lang, "find_all_stop"))).monospace(),
                 ),
             )
+            .on_hover_text(t(lang, "find_all_stop"))
+            .on_disabled_hover_text(t(lang, "find_all_stop"))
             .clicked()
         {
             session.stop();
@@ -148,6 +150,7 @@ pub fn render_find_results(
                 ),
             )
             .on_hover_text(t(lang, "tip_find_all_refresh"))
+            .on_disabled_hover_text(t(lang, "tip_find_all_refresh"))
             .clicked()
         {
             refresh = true;
