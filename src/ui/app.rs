@@ -788,6 +788,9 @@ impl FastTailApp {
     /// Closes every stream and opens the ones of `loaded`, restoring their state and, when
     /// its tabs match, the saved dock layout.
     pub fn replace_workspace(&mut self, loaded: LoadedSession, file: Option<PathBuf>) {
+        // The Find results tab goes with the old dock: cancel its jobs and forget its
+        // results, or reopened streams would show them as current.
+        self.find_all.close();
         self.engines.clear();
         self.dock_state = DockState::new(vec![]);
         self.floating_window_rects.clear();
