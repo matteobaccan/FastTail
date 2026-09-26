@@ -80,3 +80,10 @@ is paused on entry. Nothing opens or locks the file, so Windows sharing is uncha
   stream bar filter fields are drawn dimmed with the "suspended" tooltip.
 - [A 30-million-line filtered view: restoring the top row] → by line index with one
   binary search in `filtered_lines`, no scan.
+
+## Decisions (maintainer, 2026-09-27)
+
+- `CTRL + K` confirmed.
+- In the context view `F3` / `SHIFT + F3` walk the hits of the filtered view only (decision
+  5 above), so entering and leaving never re-run the search; the lines the context adds
+  are read but not navigated with `F3`, unless the user types a new query there.

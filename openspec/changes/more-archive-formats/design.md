@@ -142,9 +142,10 @@ and the partial content stays readable; ⟳ re-extracts.
   gzip/zip sniff today.
 - [First-wins duplicates differ from `tar -x`] → documented in the picker reason text.
 
-## Open Questions
+## Decisions (maintainer, 2026-09-27)
 
-- Should a scan that ends with one entry auto-open it even if the user already typed in
-  the picker filter? (Proposed: only if nothing was opened and no row was checked.)
-- Is the 256 MiB decoder memory cap right, or should `--long=31` zstd (2 GiB window) be
-  allowed?
+- A scan that ends with exactly one openable entry opens it only if nothing was opened
+  and no row was checked (as proposed).
+- The 256 MiB decoder memory cap stays: zstd files written with `--long=31` are refused
+  with a reason.
+- Duplicate entry names: the first one opens, later ones are listed disabled, as in zip.

@@ -2,14 +2,16 @@
 
 - [ ] 1.1 `TailEngine::bookmark_notes: BTreeMap<usize, String>` with `set_bookmark_note` / `bookmark_note` (trim, line breaks and tabs to spaces, 200 chars, empty removes the note, a note adds the manual bookmark); `toggle_bookmark` and `clear_bookmarks` drop notes; every change sets `bookmarks_dirty` and bumps `bookmarks_generation`
 - [ ] 1.2 `HighlightRule::auto_bookmark` (serde default `false`) and `CompiledHighlight::auto_bookmark`; extract `CompiledHighlight::is_match(&str)` and use it in `check_sound_alerts`
-- [ ] 1.3 `auto_bookmarks` and `dismissed_auto` sets, `MAX_AUTO_BOOKMARKS = 10_000`, capped flag; `is_bookmarked`, `visible_bookmarks`, `bookmark_next` / `bookmark_prev` use manual ∪ (auto − dismissed); `is_auto_bookmark` for the glyph; `CTRL + F2` on an auto-only row dismisses it
+- [ ] 1.3 `auto_bookmarks` and `dismissed_auto` sets, cap from the `auto_bookmark_max` setting, capped flag; `is_bookmarked`, `visible_bookmarks`, `bookmark_next` / `bookmark_prev` use manual ∪ (auto − dismissed); `is_auto_bookmark` for the glyph; `CTRL + F2` on an auto-only row dismisses it
 - [ ] 1.4 Synchronous recomputation for files up to 16 MB on open, `reload_from_start` and `set_highlight_rules` (rules change clears dismissals); skipped when no flagged rule is enabled
-- [ ] 1.5 `JobSpec::AutoBookmarks` / `ScanKind::AutoBookmarks` in `src/scan_job.rs` emitting `ScanBatch::Lines`, stopping at 10,000; started after the index job for files above 16 MB, progress in the stream bar, stale generations dropped
+- [ ] 1.5 `JobSpec::AutoBookmarks` / `ScanKind::AutoBookmarks` in `src/scan_job.rs` emitting `ScanBatch::Lines`, stopping at the cap; started after the index job for files above 16 MB, progress in the stream bar, stale generations dropped
 - [ ] 1.6 `collect_auto_bookmarks(prev_lines_count)` on every append beside `collect_tool_hits`, covering only lines past a running job's range
 - [ ] 1.7 `reload_from_start` clears notes, auto-bookmarks and dismissals; compressed `pending_bookmarks` carry notes and the auto scan starts once the index settles
-- [ ] 1.8 Unit tests: note normalisation and 200-char cut; note on auto row becomes manual; dismissal; cap at 10,000 with capped flag; appended lines bookmarked once while a job runs; job result equals the synchronous path (thresholds at 0); truncation clears everything; rule hidden by a higher rule still bookmarks
+- [ ] 1.8 Unit tests: note normalisation and 200-char cut; note on auto row becomes manual; dismissal; cap (default 10,000 and a custom value) with capped flag; appended lines bookmarked once while a job runs; job result equals the synchronous path (thresholds at 0); truncation clears everything; rule hidden by a higher rule still bookmarks
 
 ## 2. Persistence
+
+- [ ] 2.0 `auto_bookmark_max` in `[general]` (default 10,000, clamped to 100..100,000), a Settings field under Performance & refresh, and recomputation of the open streams when it changes
 
 - [ ] 2.1 `FastTailConfig::bookmarks` carries notes; `set_bookmarks` / `bookmarks_for` take and return them; `[bookmarks]` writes `note_<i>_<line>` via `filter_preset::ini_value` and loads them, ignoring notes of unsaved lines
 - [ ] 2.2 `[highlight_<n>]` writes and reads `bookmark`

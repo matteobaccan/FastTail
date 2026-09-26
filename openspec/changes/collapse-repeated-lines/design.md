@@ -115,8 +115,9 @@ so they do not depend on the row mapping. Per-stream view flags (`wrap`, `ansi`,
 Additive. Streams load with mode Off unless `collapse=` is present; older builds ignore
 the key. Rollback: remove the option; saved keys are ignored.
 
-## Open Questions
+## Decisions (maintainer, 2026-09-27)
 
-- Should copy of a closed group offer an "as shown" variant (first entry plus `×N`)?
-  The design copies every underlying line.
-- Is `CTRL + SHIFT + D` the right shortcut, or should the mode stay toolbar-only?
+- Besides the normal copy (every underlying line), the row context menu offers
+  **"Copy as shown"**: one line per selected row, a collapsed row written as its first
+  entry followed by ` ×N`.
+- The mode is set both from the toolbar selector and with `CTRL + SHIFT + D`.
