@@ -107,6 +107,8 @@ pub struct FastTailApp {
     /// Visuals last applied for the active renderer; reapplied when the software-UI flag
     /// changes so hardware and software rasterizers keep separate styling.
     pub applied_visuals: Option<(bool, CyberTheme)>,
+    /// Search across every open stream (Ctrl+Shift+F), shown by the Find results tab.
+    pub find_all: crate::find_all::FindAllSession,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -567,6 +569,7 @@ impl FastTailApp {
             last_frame_render: Instant::now(),
             last_mouse_render: Instant::now(),
             applied_visuals: None,
+            find_all: crate::find_all::FindAllSession::default(),
         };
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -657,6 +660,9 @@ impl FastTailApp {
                 }
             }
         }
+        // Results are not persisted: the Find results tab is left out (after the window
+        // rects are applied, since dropping it may drop a floating window).
+        let dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
         ron::to_string(&dock_to_save).ok()
     }
 
@@ -692,7 +698,9 @@ impl FastTailApp {
     fn session_fingerprint(&mut self) -> String {
         let base = self.session_base_dir();
         let mut session = self.capture_session();
-        session.dock_layout = Some(dock_signature(&self.dock_state));
+        session.dock_layout = Some(dock_signature(
+            &crate::ui::find_results::without_find_results(&self.dock_state),
+        ));
         session.serialized(base.as_deref())
     }
 
@@ -780,6 +788,9 @@ impl FastTailApp {
     /// Closes every stream and opens the ones of `loaded`, restoring their state and, when
     /// its tabs match, the saved dock layout.
     pub fn replace_workspace(&mut self, loaded: LoadedSession, file: Option<PathBuf>) {
+        // The Find results tab goes with the old dock: cancel its jobs and forget its
+        // results, or reopened streams would show them as current.
+        self.find_all.close();
         self.engines.clear();
         self.dock_state = DockState::new(vec![]);
         self.floating_window_rects.clear();
@@ -1034,6 +1045,19 @@ impl FastTailApp {
             });
     }
 
+    /// Opens or focuses the Find results tab; a non-empty `query` replaces the text of
+    /// its query box, which takes the keyboard.
+    pub fn open_find_results(&mut self, query: Option<String>) {
+        if let Some(q) = query
+            .map(|q| q.trim().to_string())
+            .filter(|q| !q.is_empty())
+        {
+            self.find_all.input = q;
+        }
+        self.find_all.focus_input = true;
+        crate::ui::find_results::open_find_results_tab(&mut self.dock_state);
+    }
+
     pub fn save_dock_layout(&mut self) {
         let mut current_open: Vec<PathBuf> = Vec::new();
         for (_, tab) in self.dock_state.iter_all_tabs() {
@@ -1073,6 +1097,7 @@ impl FastTailApp {
                 }
             }
         }
+        let dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
 
         if let Ok(ron_str) = ron::to_string(&dock_to_save) {
             if self.config.dock_layout.as_deref() != Some(&ron_str) {
@@ -1475,6 +1500,11 @@ impl FastTailApp {
             eng.poll_updates();
         }
         self.run_rule_bound_tools();
+        // The search across streams drains its jobs and notices closed or reloaded streams.
+        self.find_all.poll(&self.engines);
+        if self.find_all.is_active() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
 
         // 3. Periodic telemetry refresh
         if self.last_sys_refresh.elapsed().as_secs_f32() >= 1.0 {
@@ -2474,6 +2504,17 @@ impl FastTailApp {
             }
         }
 
+        // Keyboard shortcut: Ctrl + Shift + F opens or focuses the Find results tab with the
+        // focused stream's query. Consumed here, before the dock is drawn, so the stream's
+        // own Ctrl + F does not also take it.
+        if crate::ui::find_results::consume_find_all_shortcut(&ctx) {
+            let query = focused_stream
+                .as_ref()
+                .and_then(|p| self.engines.iter().find(|e| paths_equal(&e.path, p)))
+                .map(|e| e.search_query.clone());
+            self.open_find_results(query);
+        }
+
         let mut lock_now = false;
         let mut search_view = crate::ui::dock::SearchViewPrefs {
             search_pane: self.config.search_pane,
@@ -2515,6 +2556,7 @@ impl FastTailApp {
             focused_stream,
             search_view: &mut search_view,
             time_delta: &mut time_delta,
+            find_all: &mut self.find_all,
         };
 
         if self.dock_state.iter_all_tabs().count() == 0 {
@@ -2612,6 +2654,23 @@ impl FastTailApp {
             DockArea::new(&mut self.dock_state)
                 .style(dock_style)
                 .show_inside(ui, &mut tab_viewer);
+        }
+
+        // Requests of the Find results tab and the stream bars, applied now that the dock
+        // is drawn: a result to show, or the tab to open with a stream's query.
+        if crate::ui::find_results::apply_find_jump(
+            &mut self.find_all,
+            &mut self.engines,
+            &mut self.dock_state,
+            self.config.language,
+        ) {
+            ctx.request_repaint();
+        }
+        if let Some(eng) = self.engines.iter_mut().find(|e| e.find_all_request) {
+            eng.find_all_request = false;
+            let query = eng.search_query.clone();
+            self.open_find_results(Some(query));
+            ctx.request_repaint();
         }
 
         // Record positions and sizes of floating dock windows from egui memory
@@ -3532,6 +3591,14 @@ impl FastTailApp {
                                     ui.label(RichText::new("CTRL F").monospace().strong());
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_search")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("Ctrl + Shift + F").monospace().strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_find_all")).monospace(),
                                     );
                                     ui.end_row();
 

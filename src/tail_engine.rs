@@ -521,6 +521,15 @@ pub struct GotoTarget {
     pub waiting: bool,
 }
 
+/// Whether a line timed at `millis` falls inside the window `[from, to]` (either side
+/// open when `None`). A line with no timestamp cannot be placed in time and is outside.
+pub fn time_window_contains(millis: Option<i64>, from: Option<i64>, to: Option<i64>) -> bool {
+    let Some(millis) = millis else {
+        return false;
+    };
+    from.is_none_or(|from| millis >= from) && to.is_none_or(|to| millis <= to)
+}
+
 /// A time window entered before the stream was fully timed, applied once it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingWindow {
@@ -907,6 +916,16 @@ pub struct TailEngine {
     pub search_edited_at: Option<Instant>,
     /// Bumped every time the buffer / line index is rebuilt; keys derived caches.
     pub buffer_generation: u64,
+    /// Bumped when line indices stop meaning the same lines: reload after a truncation,
+    /// rotation or rewrite, a re-decode, a pattern switch. Appends leave it alone. Results
+    /// kept outside the engine (a search across streams) compare it to know they are stale.
+    pub reload_generation: u64,
+    /// Line a search across streams asked the view to show (see `request_jump`); the
+    /// stream viewer centres it on its next frame, when it knows the row geometry.
+    pub pending_jump: Option<usize>,
+    /// The stream bar's "search all streams" button was pressed: the app opens the Find
+    /// results tab with this stream's query after the dock is drawn.
+    pub find_all_request: bool,
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
     pub markdown_text_cache: Option<(u64, String)>,
     pub highlight_rules: Vec<HighlightRule>,
@@ -1434,6 +1453,9 @@ impl TailEngine {
             scroll_to_byte: None,
             search_edited_at: None,
             buffer_generation: 0,
+            reload_generation: 0,
+            pending_jump: None,
+            find_all_request: false,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
@@ -1824,6 +1846,7 @@ impl TailEngine {
 
     pub fn rebuild_line_index(&mut self) {
         // The file was truncated, rewritten or re-decoded: row indices no longer mean the same.
+        self.reload_generation = self.reload_generation.wrapping_add(1);
         self.job = None;
         self.index_pending = false;
         self.pending_refresh_from = None;
@@ -2959,20 +2982,36 @@ impl TailEngine {
         if self.time_from.is_none() && self.time_to.is_none() {
             return true;
         }
-        let Some(millis) = self.line_timestamp(idx) else {
-            return false;
+        time_window_contains(self.line_timestamp(idx), self.time_from, self.time_to)
+    }
+
+    /// The time window, when one is set: `(from, to)`, either side optional.
+    pub fn time_window(&self) -> Option<(Option<i64>, Option<i64>)> {
+        self.is_time_filtered()
+            .then_some((self.time_from, self.time_to))
+    }
+
+    /// The include / exclude / level filter as a job evaluates it, `None` when it is off.
+    pub fn filter_spec(&self) -> Option<FilterSpec> {
+        self.filter.is_active().then(|| self.filter.clone())
+    }
+
+    /// The file a job reads and the range covering every line indexed so far, from the
+    /// start of the file, as the stream's own full scans see it (encoding, BOM, ANSI mode).
+    pub fn full_scan_range(&self) -> (PathBuf, ScanRange) {
+        let file = self
+            .current_file
+            .clone()
+            .unwrap_or_else(|| self.path.clone());
+        let range = ScanRange {
+            start_offset: self.bom_len(),
+            end_offset: self.source.len(),
+            start_line: 0,
+            encoding: self.encoding,
+            ansi: self.ansi_effective(),
+            parent_visible: false,
         };
-        if let Some(from) = self.time_from {
-            if millis < from {
-                return false;
-            }
-        }
-        if let Some(to) = self.time_to {
-            if millis > to {
-                return false;
-            }
-        }
-        true
+        (file, range)
     }
 
     /// Sets the time window and refreshes what is visible. `None` on a side leaves it open.
@@ -4377,7 +4416,7 @@ impl TailEngine {
 
     /// Where a jump to `line` actually lands: the line itself when it is visible, the next
     /// visible one when a filter hides it.
-    fn goto_target_for(&self, line: usize, total: usize) -> GotoTarget {
+    pub fn goto_target_for(&self, line: usize, total: usize) -> GotoTarget {
         let clamped = line.min(total.saturating_sub(1));
         if !self.is_filter_active() {
             return GotoTarget {
@@ -4408,6 +4447,26 @@ impl TailEngine {
             hidden: line != clamped,
             waiting: false,
         }
+    }
+
+    /// Shows `line` from outside the stream (a result of a search across streams): the
+    /// line itself, or the next visible one when the filters now hide it (as for Ctrl+G,
+    /// with the same notice). Follow pauses, the row is selected, and the viewer centres
+    /// it on its next frame. The stream's own search is left alone.
+    pub fn request_jump(&mut self, line: usize, lang: crate::i18n::Language) -> GotoTarget {
+        let target = self.goto_target_for(line, self.total_lines());
+        self.follow_tail = false;
+        self.pending_jump = Some(target.line);
+        self.select_row(target.line);
+        self.view_notice = target.hidden.then(|| {
+            format!(
+                "{} {} {}",
+                target.requested + 1,
+                crate::i18n::t(lang, "goto_hidden"),
+                target.line + 1
+            )
+        });
+        target
     }
 
     // ----- Row selection, clipboard text and export -----

@@ -43,6 +43,9 @@ pub enum FastTailTab {
     Filters,
     Highlights,
     Settings,
+    /// Results of a search across every open stream (`find_all`); never saved in the
+    /// dock layout.
+    FindResults,
 }
 
 pub struct DockContext<'a> {
@@ -84,6 +87,8 @@ pub struct DockContext<'a> {
     pub search_view: &'a mut SearchViewPrefs,
     /// Time delta column switch and gap threshold, shared by every stream.
     pub time_delta: &'a mut TimeDeltaPrefs,
+    /// Search across every open stream, shown by the Find results tab.
+    pub find_all: &'a mut crate::find_all::FindAllSession,
 }
 
 /// Search results pane (open flag, height) and overview strip switch, global preferences
@@ -326,6 +331,21 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .monospace()
                     .strong(),
             ),
+            FastTailTab::FindResults => {
+                let busy = if self.ctx.find_all.is_active() {
+                    " ⏳"
+                } else {
+                    ""
+                };
+                WidgetText::from(
+                    RichText::new(format!(
+                        "🔎 {}{busy}",
+                        t(*self.ctx.language, "find_results_title")
+                    ))
+                    .monospace()
+                    .strong(),
+                )
+            }
         }
     }
 
@@ -414,6 +434,17 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.time_delta,
                 );
             }
+            FastTailTab::FindResults => {
+                crate::ui::find_results::render_find_results(
+                    ui,
+                    self.ctx.find_all,
+                    self.ctx.engines,
+                    self.ctx.theme,
+                    *self.ctx.language,
+                    *self.ctx.font_size,
+                    *self.ctx.level_colors,
+                );
+            }
         }
     }
 
@@ -440,6 +471,10 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .engines
                     .retain(|e| !paths_equal_fast(&e.path, path));
                 *self.ctx.tab_closed = true;
+            }
+            FastTailTab::FindResults => {
+                // Closing the results cancels every search job.
+                self.ctx.find_all.close();
             }
             _ => {
                 *self.ctx.tab_closed = true;
@@ -927,6 +962,19 @@ fn render_log_stream(
         }
     };
 
+    // A result of the search across streams asked for this line (`request_jump`).
+    if let Some(line) = engine.pending_jump.take() {
+        let target = if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+            engine.line_offsets.get(line).map(|&off| off as usize)
+        } else {
+            Some(line)
+        };
+        if let Some(target) = target {
+            scroll_to_target(engine, target);
+            ui.ctx().request_repaint();
+        }
+    }
+
     // F3 and Shift+F3 shortcuts: only the stream in the focused dock leaf reacts
     let f3_pressed = is_focused && ui.input(|i| i.key_pressed(egui::Key::F3));
     let shift_f3 = f3_pressed && ui.input(|i| i.modifiers.shift);
@@ -1337,7 +1385,7 @@ fn render_log_stream(
         let has_query = !search_query.trim().is_empty();
         let match_count = engine.active_match_count();
 
-        let extra_controls_w = if has_query { 250.0 } else { 100.0 };
+        let extra_controls_w = if has_query { 278.0 } else { 128.0 };
         let box_w = (ui.available_width() - extra_controls_w).clamp(160.0, 360.0);
         let search_edit = egui::TextEdit::singleline(search_query)
             .hint_text(t(lang, "search_placeholder"))
@@ -1346,6 +1394,14 @@ fn render_log_stream(
         let search_resp = ui.add(search_edit).on_hover_text(t(lang, "tip_search_box"));
         if search_resp.changed() {
             engine.search_edited_at = Some(Instant::now());
+        }
+        // Search every open stream with this query (the app opens the Find results tab).
+        if ui
+            .small_button(RichText::new("🔎").monospace())
+            .on_hover_text(t(lang, "tip_find_all"))
+            .clicked()
+        {
+            engine.find_all_request = true;
         }
 
         // Ctrl+F in the focused stream: requests focus on its search input and selects all text
