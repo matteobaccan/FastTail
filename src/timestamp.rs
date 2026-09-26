@@ -345,6 +345,27 @@ pub fn format_clock(millis: i64) -> String {
     )
 }
 
+/// A signed time difference for the delta column and the selection span, as short as the
+/// size allows while keeping milliseconds where they matter: `+12.300` below a minute,
+/// `+4:05.120` below an hour, `+2:03:04` below a day, `+3d 04:05` beyond.
+pub fn format_delta(millis: i64) -> String {
+    let sign = if millis < 0 { '-' } else { '+' };
+    let abs = millis.unsigned_abs();
+    let (ms, secs) = (abs % 1000, abs / 1000);
+    let (s, mins) = (secs % 60, secs / 60);
+    let (m, hours) = (mins % 60, mins / 60);
+    let (h, days) = (hours % 24, hours / 24);
+    if days > 0 {
+        format!("{sign}{days}d {h:02}:{m:02}")
+    } else if hours > 0 {
+        format!("{sign}{h}:{m:02}:{s:02}")
+    } else if mins > 0 {
+        format!("{sign}{m}:{s:02}.{ms:03}")
+    } else {
+        format!("{sign}{s}.{ms:03}")
+    }
+}
+
 /// Civil date of a day count since the epoch (Howard Hinnant's `civil_from_days`).
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
@@ -446,6 +467,29 @@ mod tests {
 
     fn detect(line: &str) -> Option<i64> {
         detect_timestamp(line, FormatHint::Unknown).map(|(millis, _)| millis)
+    }
+
+    #[test]
+    fn deltas_are_signed_and_shortened_by_size() {
+        assert_eq!(format_delta(0), "+0.000");
+        assert_eq!(format_delta(125), "+0.125");
+        assert_eq!(format_delta(12_300), "+12.300");
+        assert_eq!(format_delta(59_999), "+59.999");
+        assert_eq!(format_delta(60_000), "+1:00.000");
+        assert_eq!(format_delta(245_120), "+4:05.120");
+        assert_eq!(format_delta(3_599_999), "+59:59.999");
+        assert_eq!(format_delta(3_600_000), "+1:00:00");
+        assert_eq!(format_delta(7_384_999), "+2:03:04", "seconds are truncated");
+        assert_eq!(format_delta(86_399_999), "+23:59:59");
+        assert_eq!(format_delta(86_400_000), "+1d 00:00");
+        assert_eq!(format_delta(273_900_000), "+3d 04:05");
+        // Rows above the anchor and out-of-order lines.
+        assert_eq!(format_delta(-500), "-0.500");
+        assert_eq!(format_delta(-245_120), "-4:05.120");
+        assert_eq!(format_delta(-273_900_000), "-3d 04:05");
+        assert_eq!(format_delta(i64::MIN).chars().next(), Some('-'));
+        // The widest value below a day fits the 10-character column.
+        assert!(format_delta(-3_599_999).len() <= 10);
     }
 
     #[test]
