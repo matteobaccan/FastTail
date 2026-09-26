@@ -446,6 +446,37 @@ mod tests {
     }
 
     #[test]
+    fn every_include_and_exclude_term_is_honoured() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = open(
+            dir.path(),
+            "app.log",
+            "payment timeout job
+payment ok job
+payment timeout healthcheck job
+timeout job
+payment timeout retry=0 job
+",
+        );
+        engine.set_filter_terms(
+            vec!["payment".into(), "timeout".into()],
+            vec!["healthcheck".into(), "retry=0".into()],
+        );
+        let engines = vec![engine];
+
+        let mut session = FindAllSession::with_limits(4, FIND_ALL_MAX_HITS);
+        session.input = "job".into();
+        session.start(&engines);
+        run_to_end(&mut session, &engines);
+
+        assert_eq!(
+            session.groups[0].hits,
+            vec![0],
+            "only the line passing all terms"
+        );
+    }
+
+    #[test]
     fn level_filter_time_window_and_ansi_strip_are_honoured() {
         let dir = tempfile::tempdir().unwrap();
         let mut timed = open(
