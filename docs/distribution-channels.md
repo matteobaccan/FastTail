@@ -75,7 +75,7 @@ it pushes the branch to *your* fork of `winget-pkgs`.
    | Licence URL | `https://github.com/matteobaccan/FastTail/blob/main/LICENSE` |
    | Short description | `Ultra-fast multi-stream log monitor and tail viewer with a Cyberpunk UI` |
    | Publisher URL / Package URL | `https://github.com/matteobaccan/FastTail` |
-   | Release notes URL | `https://github.com/matteobaccan/FastTail/releases/tag/v0.9.0` |
+   | Release notes URL | `https://github.com/matteobaccan/FastTail/releases/tag/v0.11.0` |
    | Tags | `log` `tail` `logging` `monitoring` `viewer` |
    | Installer type | `zip`, nested `portable` |
    | Nested installer path | `fasttail.exe` |
@@ -89,7 +89,7 @@ it pushes the branch to *your* fork of `winget-pkgs`.
    registry and uninstalling removes the files.
 
 3. `wingetcreate` submits the pull request for you when you give it a GitHub token, or
-   writes the manifest under `manifests/m/MatteoBaccan/FastTail/0.9.0/` for you to submit
+   writes the manifest under `manifests/m/MatteoBaccan/FastTail/0.11.0/` for you to submit
    yourself. Expect the validation bot to take a few minutes and a maintainer a few days.
 
 ### The token an automation would need

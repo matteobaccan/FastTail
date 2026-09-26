@@ -101,10 +101,10 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Space` | Toggle Follow mode (auto-scroll to the latest line) |
 | `Ctrl + F` | Focus the search box of the focused stream |
 | `Ctrl + Shift + F` | Open or focus the Find results tab to search every open stream, prefilled with the focused stream's query (`Enter` runs it) |
-| `↑` / `↓` / `PgUp` / `PgDown` / `Ctrl + Home` / `Ctrl + End`, `Enter`, `Esc` in the Find results list | Move the selection across the groups; `Enter` on a header collapses / expands it, on a result shows it in its stream; `Esc` leaves the list |
+| `↑` / `↓` / `PgUp` / `PgDown` / `Home` / `End` (or `Ctrl + Home` / `Ctrl + End`), `Enter`, `Esc` in the Find results list | Walk the results: the stream holding each hit comes to the front with the line centred, and the list keeps the keyboard; `Enter` on a header collapses / expands it; `Esc` leaves the list |
 | `F3` / `Shift + F3` | Next / previous search match in the focused stream |
 | `Enter` / `Shift + Enter` | Next / previous match while typing in the search box |
-| `↑` / `↓` / `PgUp` / `PgDown` / `Ctrl + Home` / `Ctrl + End` in the results pane | Move the pane selection (after a click in the pane); the main view stays where it is |
+| `↑` / `↓` / `PgUp` / `PgDown` / `Home` / `End` (or `Ctrl + Home` / `Ctrl + End`) in the results pane | Move the pane selection (after a click in the pane); the main view stays where it is |
 | `Enter` in the results pane | Make the selected hit the current match and centre it in the main view (pauses follow) |
 | `Esc` in the results pane | Give the keyboard back to the main view; `F3`, `Ctrl + F`, `Ctrl + G`, bookmarks and `Ctrl + C` keep acting on the stream while the pane has it |
 | `↑` / `↓` / `←` / `→` | Scroll by one line / column (`Ctrl` + `←` / `→` scrolls 5x faster) |
@@ -140,6 +140,7 @@ fasttail [OPTIONS] [PATH...]
   -                  read standard input (`command | fasttail -`); a file named `-`
                      is opened as `./-`
   --fresh            start with an empty workspace instead of the saved one
+  --gui              accepted and ignored (FastTail is GUI-only; kept for old shortcuts)
   --filter <TEXT>    include filter for the files opened from the command line
   --exclude <TEXT>   exclude filter for those files
   --follow / --no-follow
@@ -205,7 +206,7 @@ Settings → External tools. Each tool has a name, a program, an argument list a
 | Placeholder | Value |
 |---|---|
 | `{line}` | text of the row |
-| `{file}` | path of the file being tailed (the resolved file of a pattern stream, the archive of a compressed one) |
+| `{file}` | path of the file being tailed (the resolved file of a pattern stream, the archive of a compressed one, the temporary spool file of the `stdin` stream, deleted when its tab closes) |
 | `{dir}` | its directory |
 | `{lineno}` | 1-based line number |
 | `{selection}` | the selected rows as text, or the row itself |
@@ -220,7 +221,7 @@ A zip with a single file opens it directly; with several, the entry picker lists
 
 | Setting in `fasttail.ini` | Default | Meaning |
 |---|---|---|
-| `spool_dir` | empty = the system temporary folder | folder whose `fasttail-spool` subfolder receives the decompressed copies (Settings → Performance & refresh; point it at a larger disk when `%TEMP%` is on a small system drive) |
+| `spool_dir` | empty = the system temporary folder | folder whose `fasttail-spool` subfolder receives the decompressed copies (Settings → Performance & refresh; point it at a larger disk when `%TEMP%` is on a small system drive); on Linux and macOS the `fasttail-spool` folder is kept owner-only (0700), and one owned by another user is refused |
 | `compressed_max_gb` | `20` (1–1024) | output cap of one decompression; the lines read so far stay browsable and the stream says the content is partial |
 
 Before a zip entry is decompressed its exact size plus a 512 MB margin must fit on the spool volume; during any extraction the free space is checked again every 64 MB and the job stops when less than 512 MB would remain. Spool files are named after the process id, deleted when their stream is closed or reloaded and at exit, and the ones left behind by a crash are swept at the next start.
