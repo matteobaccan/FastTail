@@ -373,28 +373,57 @@ fn apply_sgr(style: &mut AnsiStyle, params: &[u8]) {
         return;
     }
     // `;` separates parameters; `:` separates the sub-parameters of one of them.
-    let groups: Vec<&[u8]> = params.split(|&b| b == b';').collect();
+    // Stack-allocate parameter groups for zero heap allocations in hot paths.
+    let mut stack_groups = [&[] as &[u8]; 16];
+    let heap_groups;
+    let groups: &[&[u8]] = if params.iter().filter(|&&b| b == b';').count() < 16 {
+        let mut len = 0;
+        for group in params.split(|&b| b == b';') {
+            stack_groups[len] = group;
+            len += 1;
+        }
+        &stack_groups[..len]
+    } else {
+        heap_groups = params.split(|&b| b == b';').collect::<Vec<_>>();
+        &heap_groups
+    };
+
     let mut i = 0;
     while i < groups.len() {
         let group = groups[i];
         i += 1;
-        if group.contains(&b':') {
-            let sub: Vec<u32> = group.split(|&b| b == b':').map(number).collect();
-            match sub[0] {
-                38 | 48 | 58 => {
-                    let color = match sub.get(1) {
-                        Some(5) => sub.get(2).map(|&n| AnsiColor::Indexed(n.min(255) as u8)),
-                        // `38:2:r:g:b` or, with the colour-space id, `38:2::r:g:b`.
-                        Some(2) if sub.len() >= 5 => {
-                            let c = &sub[sub.len() - 3..];
-                            Some(AnsiColor::Rgb(byte(c[0]), byte(c[1]), byte(c[2])))
-                        }
-                        _ => None,
-                    };
-                    set_color(style, sub[0], color);
+        if memchr::memchr(b':', group).is_some() {
+            let mut stack_sub = [0u32; 16];
+            let heap_sub;
+            let sub: &[u32] = if group.iter().filter(|&&b| b == b':').count() < 16 {
+                let mut len = 0;
+                for part in group.split(|&b| b == b':') {
+                    stack_sub[len] = number(part);
+                    len += 1;
                 }
-                4 => style.underline = sub.get(1).copied().unwrap_or(1) != 0,
-                code => apply_code(style, code),
+                &stack_sub[..len]
+            } else {
+                heap_sub = group.split(|&b| b == b':').map(number).collect::<Vec<_>>();
+                &heap_sub
+            };
+
+            if let Some(&sub0) = sub.first() {
+                match sub0 {
+                    38 | 48 | 58 => {
+                        let color = match sub.get(1) {
+                            Some(5) => sub.get(2).map(|&n| AnsiColor::Indexed(n.min(255) as u8)),
+                            // `38:2:r:g:b` or, with the colour-space id, `38:2::r:g:b`.
+                            Some(2) if sub.len() >= 5 => {
+                                let c = &sub[sub.len() - 3..];
+                                Some(AnsiColor::Rgb(byte(c[0]), byte(c[1]), byte(c[2])))
+                            }
+                            _ => None,
+                        };
+                        set_color(style, sub0, color);
+                    }
+                    4 => style.underline = sub.get(1).copied().unwrap_or(1) != 0,
+                    code => apply_code(style, code),
+                }
             }
             continue;
         }
@@ -408,15 +437,14 @@ fn apply_sgr(style: &mut AnsiStyle, params: &[u8]) {
                         n.map(|n| AnsiColor::Indexed(n.min(255) as u8))
                     }
                     Some(2) => {
-                        let c: Vec<u32> = groups
-                            .get(i + 1..)
-                            .unwrap_or(&[])
-                            .iter()
-                            .take(3)
-                            .map(|g| number(g))
-                            .collect();
-                        i += 1 + c.len();
-                        (c.len() == 3).then(|| AnsiColor::Rgb(byte(c[0]), byte(c[1]), byte(c[2])))
+                        let mut c = [0u32; 3];
+                        let mut c_len = 0;
+                        while c_len < 3 && i + 1 + c_len < groups.len() {
+                            c[c_len] = number(groups[i + 1 + c_len]);
+                            c_len += 1;
+                        }
+                        i += 1 + c_len;
+                        (c_len == 3).then(|| AnsiColor::Rgb(byte(c[0]), byte(c[1]), byte(c[2])))
                     }
                     _ => None,
                 };
