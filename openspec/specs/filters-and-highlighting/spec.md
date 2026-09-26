@@ -77,7 +77,7 @@ Ctrl+Shift+1..9 SHALL create or toggle a quick label for the current search text
 - **THEN** every occurrence of `sess-8f3a` in every stream is painted with preset colour 2 until the label is removed or the application restarts.
 
 ### Requirement: Timestamp Range Filter
-The filter panel SHALL offer "from" and "to" time inputs, either side optional (an empty side is an open end). Each input SHALL accept a bare `HH:MM` or `HH:MM:SS`, a `YYYY-MM-DD HH:MM[:SS]` (space or `T` separator), or any timestamp the line parser recognises, so a timestamp copied out of a line works. A bare time SHALL belong to the day of the stream's first timestamped line, not to the current day. The "to" side SHALL cover the whole unit typed: a time without seconds covers the whole minute, a time with seconds the whole second. Only lines whose detected timestamp (or the timestamp inherited by a continuation line) lies inside the range SHALL be visible, combined with the include/exclude and level filters; while a window is set, the lines before the first timestamped line cannot be placed in time and SHALL be hidden. An input that cannot be read SHALL be flagged next to the fields, and a clear button SHALL remove the window. The stream status bar SHALL show the time span of the visible lines. The controls SHALL be disabled with a hint when fewer than half of the timed lines carry a recognised timestamp of their own. When the window is entered before the stream has been fully timed and the timing runs in the background, the window SHALL be kept as pending: the view SHALL keep showing the lines it showed, a hint next to the fields SHALL say that the window applies when timing finishes, and the window SHALL be applied automatically once every line is timed. Editing the fields while pending SHALL replace the pending window, and clearing them SHALL drop it.
+The filter panel SHALL offer "from" and "to" time inputs, either side optional (an empty side is an open end). Each input SHALL accept a bare `HH:MM` or `HH:MM:SS`, a `YYYY-MM-DD HH:MM[:SS]` (space or `T` separator), a bare `YYYY-MM-DD` (00:00:00.000 of that day on the "from" side), or any timestamp the line parser recognises, so a timestamp copied out of a line works. A bare time SHALL belong to the day of the stream's first timestamped line, not to the current day. The "to" side SHALL cover the whole unit typed: a date alone covers the whole day (through 23:59:59.999), a time without seconds the whole minute, a time with seconds the whole second. Only lines whose detected timestamp (or the timestamp inherited by a continuation line) lies inside the range SHALL be visible, combined with the include/exclude and level filters; while a window is set, the lines before the first timestamped line cannot be placed in time and SHALL be hidden. An input that cannot be read SHALL be flagged next to the fields, and a clear button SHALL remove the window. The stream status bar SHALL show the time span of the visible lines. A hint SHALL say the stream has no usable timestamps when fewer than half of the timed lines can be placed in time (a recognised timestamp of their own, or one inherited from the entry they continue); the fields SHALL stay editable in every case, so a window can always be typed, corrected or cleared. When the window is entered before the stream has been fully timed and the timing runs in the background, the window SHALL be kept as pending: the view SHALL keep showing the lines it showed, a hint next to the fields SHALL say that the window applies when timing finishes, and the window SHALL be applied automatically once every line is timed. Editing the fields while pending SHALL replace the pending window, and clearing them SHALL drop it.
 
 #### Scenario: Three-minute window
 - **WHEN** the user enters from `14:02` to `14:05` on a log whose first entry is dated 2026-09-18
@@ -92,12 +92,16 @@ The filter panel SHALL offer "from" and "to" time inputs, either side optional (
 - **THEN** every line stamped at or after 14:02:00.000 is visible, up to the end of the log.
 
 #### Scenario: A log that cannot be timed
-- **WHEN** fewer than half of the lines of a stream carry a recognised timestamp
-- **THEN** the from/to fields are disabled and a hint says the stream has no usable timestamps, instead of a window hiding the whole file.
+- **WHEN** fewer than half of the lines of a stream can be placed in time
+- **THEN** a hint next to the fields says the stream has no usable timestamps, and the fields stay editable.
 
-#### Scenario: Text typed before the log turned out untimeable
-- **WHEN** the user types `1` in the "from" field of a log that has never been timed and fewer than half of its lines carry a timestamp
-- **THEN** the field stays editable while it holds text, the clear button is shown, and clearing it empties both fields and disables them with the hint.
+#### Scenario: A log made mostly of stack traces
+- **WHEN** a log has one timestamped entry every four lines, each followed by a three-line stack trace
+- **THEN** no hint is shown, since every line inherits the timestamp of its entry, and after a window is cleared with the clear button both fields are still editable.
+
+#### Scenario: A date alone
+- **WHEN** the user enters from `2026-09-18` to `2026-09-18`
+- **THEN** every line stamped between 2026-09-18 00:00:00.000 and 23:59:59.999 is visible, and no "invalid time" warning is shown.
 
 #### Scenario: Partial input is not an error while typing
 - **WHEN** the user types `14:0` in the "from" field on the way to `14:02`
