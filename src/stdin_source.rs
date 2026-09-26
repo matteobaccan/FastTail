@@ -319,6 +319,9 @@ impl Drop for StdinStream {
         // The copier stops after its read in progress and closes the input; the spool
         // (deleted right after) is removed from disk once its write handle is closed.
         self.shared.closed.store(true, Ordering::Release);
+        // That read may never return (a quiet producer): empty the spool now so its
+        // space is freed at once, not when the copier's handle finally closes.
+        let _ = restart(self.spool.path());
     }
 }
 
@@ -361,6 +364,14 @@ impl Copier {
             let n = match input.read(&mut buf) {
                 Ok(n) => n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                // Standard input left non-blocking by the parent: nothing to read yet.
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if shared.closed.load(Ordering::Acquire) {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
+                }
                 // Windows reports the writer's end closing as a broken pipe.
                 Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => 0,
                 Err(e) => return Some(InputState::Failed(e.to_string())),
@@ -704,6 +715,59 @@ mod tests {
         wait_for("the restart", || s.written() == 25);
         poll_until(&mut engine, "the rebuild", |e| e.total_lines() == 1);
         assert_eq!(engine.get_line(0).unwrap(), "c".repeat(24));
+    }
+
+    #[test]
+    fn closing_while_the_producer_is_quiet_empties_the_spool() {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = Limits {
+            max_bytes: u64::MAX,
+            min_free: 0,
+            check_every: u64::MAX,
+        };
+        let (tx, input) = producer();
+        let stream = StdinStream::start(input, &settings(dir.path(), limits), None).unwrap();
+        tx.send(vec![b'x'; 1000]).unwrap();
+        wait_for("the bytes", || stream.written() == 1000);
+        // A handle of our own sees the file even once its name is gone (unlinked, or
+        // pending deletion on Windows), like the copier's write handle keeps it alive.
+        let probe = File::open(stream.spool_path()).unwrap();
+        // The copier is blocked reading the (quiet, still open) producer.
+        drop(stream);
+        let left = probe.metadata().unwrap().len();
+        assert_eq!(left, 0, "the spool's bytes are released at once");
+        drop(tx);
+    }
+
+    #[test]
+    fn a_non_blocking_input_waits_instead_of_failing() {
+        struct NonBlocking(u32);
+        impl Read for NonBlocking {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                match self.0 {
+                    1 | 2 => Err(std::io::ErrorKind::WouldBlock.into()),
+                    3 => {
+                        buf[..3].copy_from_slice(
+                            b"ok
+",
+                        );
+                        Ok(3)
+                    }
+                    _ => Ok(0),
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let limits = Limits {
+            max_bytes: u64::MAX,
+            min_free: 0,
+            check_every: u64::MAX,
+        };
+        let stream =
+            StdinStream::start(NonBlocking(0), &settings(dir.path(), limits), None).unwrap();
+        wait_for("the end", || stream.state() == InputState::Ended);
+        assert_eq!(stream.written(), 3);
     }
 
     #[test]
