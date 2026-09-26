@@ -1,20 +1,32 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  FastTail: desktop log viewer and tail (successor to BareTail), Rust 2021, one binary.
+  UI: egui / eframe 0.36 + egui_dock; renderer auto (wgpu first), glow or software.
+  File watching: notify 9. Regex: regex crate. No async runtime; heavy work on threads.
+  Platforms: Windows x86_64, Linux x86_64 and ARM64, macOS ARM64 (no Windows ARM64).
+  Engine rule: a file is never held in memory. Rows are read on demand through a block
+  cache; per-file state is the line index (8 bytes per line) plus level and timestamp
+  caches. Files above 16 MB filter, search and time their lines on a worker thread with
+  progress in the stream bar.
+  Settings live in fasttail.ini; sessions in *.fasttail-session.ini.
+  Every user-visible string goes through src/i18n.rs, translated in every language.
+  Conventions: conventional commits, one branch and PR per change, squash merge.
+  CHANGELOG.md follows Keep a Changelog; entries are user-facing, open with a bold
+  sentence and say what happened before and what happens now. Docs and specs in English.
+  CI: cargo fmt --check (Linux), cargo test on Linux and Windows.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - State the user-visible problem before the change, and include Non-goals
+    - Name the target release and any key added to fasttail.ini
+  specs:
+    - Every spec has "## Purpose" and "## Requirements"
+    - Every requirement has at least one "#### Scenario:" with WHEN / THEN
+    - Give limits as numbers (bytes, lines, ms), never "fast" or "large"
+  design:
+    - Say what runs on the UI thread and what on a worker, and the memory per file or line
+    - Where relevant, cover files above 16 MB, growing, rotated or truncated files, and Windows file sharing
+  tasks:
+    - Include translations in every language, README / docs, CHANGELOG [Unreleased] and tests
+    - End with cargo fmt, cargo test, and archiving the change after the release
