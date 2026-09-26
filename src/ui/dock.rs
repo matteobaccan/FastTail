@@ -1,7 +1,9 @@
 use crate::config::push_search_history;
 use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
+use crate::filter_preset::{FilterPreset, FilterState, PresetLabel};
 use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
+use crate::scan_job::MAX_FILTER_TERMS;
 use crate::tail_engine::{
     HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SpanStyle, TailEngine, TimeDelta,
     MAX_LINE_BYTES,
@@ -89,6 +91,22 @@ pub struct DockContext<'a> {
     pub time_delta: &'a mut TimeDeltaPrefs,
     /// Search across every open stream, shown by the Find results tab.
     pub find_all: &'a mut crate::find_all::FindAllSession,
+    /// Named filter presets (global preferences) and what the stream bars asked about
+    /// them this frame.
+    pub filter_presets: &'a mut Vec<FilterPreset>,
+    pub preset_events: &'a mut PresetEvents,
+}
+
+/// Requests from the presets menus and the term buttons, handled by the app after the
+/// dock is drawn (the dock itself handles "apply to all open streams").
+#[derive(Debug, Default)]
+pub struct PresetEvents {
+    /// The presets changed: `fasttail.ini` is saved.
+    pub changed: bool,
+    /// Apply this preset to every open stream.
+    pub apply_to_all: Option<FilterPreset>,
+    /// Open the Filters window on this stream (its term rows, the preset manager).
+    pub open_filters: Option<PathBuf>,
 }
 
 /// Search results pane (open flag, height) and overview strip switch, global preferences
@@ -385,10 +403,18 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         self.ctx.tool_runner,
                         self.ctx.search_view,
                         self.ctx.time_delta,
+                        self.ctx.filter_presets,
+                        self.ctx.preset_events,
                     );
                     engine.search_query = search_query;
                 } else {
                     ui.label(t(*self.ctx.language, "no_file_open"));
+                }
+                // "Apply to all open streams" from the presets menu of this stream.
+                if let Some(preset) = self.ctx.preset_events.apply_to_all.take() {
+                    for eng in self.ctx.engines.iter_mut() {
+                        preset.apply_to(eng);
+                    }
                 }
                 if let Some(unit) = new_size_unit {
                     *self.ctx.size_unit = unit;
@@ -398,7 +424,15 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 }
             }
             FastTailTab::Filters => {
-                render_filters_content(ui, self.ctx.engines, self.ctx.theme, *self.ctx.language);
+                render_filters_content(
+                    ui,
+                    self.ctx.engines,
+                    self.ctx.filter_presets,
+                    self.ctx.preset_events,
+                    None,
+                    self.ctx.theme,
+                    *self.ctx.language,
+                );
             }
             FastTailTab::Highlights => {
                 render_highlights_content(
@@ -856,6 +890,8 @@ fn render_log_stream(
     tool_runner: &mut ToolRunner,
     search_view: &mut SearchViewPrefs,
     time_delta: &mut TimeDeltaPrefs,
+    filter_presets: &mut Vec<FilterPreset>,
+    preset_events: &mut PresetEvents,
 ) {
     let font_id = egui::FontId::monospace(font_size);
     let hex_row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
@@ -1925,7 +1961,7 @@ fn render_log_stream(
                 .size(11.0)
                 .color(theme.accent_color()),
         );
-        let mut inc = engine.include_filter.clone();
+        let mut inc = engine.include_filter().to_string();
         if ui
             .add(
                 egui::TextEdit::singleline(&mut inc)
@@ -1936,7 +1972,7 @@ fn render_log_stream(
         {
             engine.set_include_filter(&inc);
         }
-        if !engine.include_filter.is_empty()
+        if !engine.include_filter().is_empty()
             && ui
                 .button("✖")
                 .on_hover_text(t(lang, "clear_filter"))
@@ -1944,6 +1980,7 @@ fn render_log_stream(
         {
             engine.set_include_filter("");
         }
+        extra_terms_controls(ui, engine, theme, lang, TermSide::Include, preset_events);
 
         ui.separator();
 
@@ -1953,7 +1990,7 @@ fn render_log_stream(
                 .size(11.0)
                 .color(theme.warn_color()),
         );
-        let mut exc = engine.exclude_filter.clone();
+        let mut exc = engine.exclude_filter().to_string();
         if ui
             .add(
                 egui::TextEdit::singleline(&mut exc)
@@ -1964,7 +2001,7 @@ fn render_log_stream(
         {
             engine.set_exclude_filter(&exc);
         }
-        if !engine.exclude_filter.is_empty()
+        if !engine.exclude_filter().is_empty()
             && ui
                 .button("✖")
                 .on_hover_text(t(lang, "clear_filter"))
@@ -1972,6 +2009,7 @@ fn render_log_stream(
         {
             engine.set_exclude_filter("");
         }
+        extra_terms_controls(ui, engine, theme, lang, TermSide::Exclude, preset_events);
 
         ui.separator();
 
@@ -2068,7 +2106,12 @@ fn render_log_stream(
                 engine.set_show_unknown_levels(show);
             }
         }
+
+        ui.separator();
+
+        render_presets_menu(ui, engine, filter_presets, preset_events, theme, lang);
     });
+    render_preset_save_dialog(ui.ctx(), engine, filter_presets, preset_events, theme, lang);
 
     ui.separator();
 
@@ -3580,16 +3623,611 @@ fn render_hex_stream(
     engine.current_scroll_y = scroll_output.state.offset.y;
 }
 
-pub fn render_filters_content(
+/// Which term list of a stream a control edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TermSide {
+    Include,
+    Exclude,
+}
+
+impl TermSide {
+    fn terms(self, engine: &TailEngine) -> &[String] {
+        match self {
+            TermSide::Include => engine.include_terms(),
+            TermSide::Exclude => engine.exclude_terms(),
+        }
+    }
+
+    fn invalid(self, engine: &TailEngine, row: usize) -> bool {
+        match self {
+            TermSide::Include => engine.include_term_invalid(row),
+            TermSide::Exclude => engine.exclude_term_invalid(row),
+        }
+    }
+
+    /// Replaces this side's rows, keeping the other side.
+    fn set(self, engine: &mut TailEngine, rows: Vec<String>) {
+        let (include, exclude) = match self {
+            TermSide::Include => (rows, engine.exclude_terms().to_vec()),
+            TermSide::Exclude => (engine.include_terms().to_vec(), rows),
+        };
+        engine.set_filter_terms(include, exclude);
+    }
+
+    /// Row list header: include terms are ANDed, exclude terms ORed.
+    fn heading_key(self) -> &'static str {
+        match self {
+            TermSide::Include => "filter_terms_all_of",
+            TermSide::Exclude => "filter_terms_none_of",
+        }
+    }
+}
+
+/// The `+N` badge of a stream bar filter field (further terms active, listed in its
+/// tooltip) and the `+` button that adds a term row and opens the Filters window on it.
+fn extra_terms_controls(
     ui: &mut Ui,
-    engines: &mut [TailEngine],
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    side: TermSide,
+    events: &mut PresetEvents,
+) {
+    let extra = match side {
+        TermSide::Include => engine.extra_include_terms(),
+        TermSide::Exclude => engine.extra_exclude_terms(),
+    };
+    if extra > 0 {
+        let list: Vec<String> = side
+            .terms(engine)
+            .iter()
+            .skip(1)
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("• {t}"))
+            .collect();
+        let color = match side {
+            TermSide::Include => theme.accent_color(),
+            TermSide::Exclude => theme.warn_color(),
+        };
+        ui.label(
+            RichText::new(format!("+{extra}"))
+                .monospace()
+                .size(11.0)
+                .strong()
+                .color(color),
+        )
+        .on_hover_text(format!(
+            "{}\n{}:\n{}",
+            t(lang, "filter_extra_terms_tip"),
+            t(lang, side.heading_key()),
+            list.join("\n")
+        ));
+    }
+    if ui
+        .small_button("+")
+        .on_hover_text(t(lang, "filter_add_term_tip"))
+        .clicked()
+    {
+        let mut rows = side.terms(engine).to_vec();
+        if rows.is_empty() {
+            rows.push(String::new());
+        }
+        if rows.len() < MAX_FILTER_TERMS && rows.last().is_some_and(|r| !r.is_empty()) {
+            rows.push(String::new());
+        }
+        side.set(engine, rows);
+        events.open_filters = Some(engine.path.clone());
+    }
+}
+
+/// The `Presets ▾` drop-down of the stream bar: shows the preset the stream equals
+/// (`name *` once edited after applying it) and applies, saves, updates and manages them.
+fn render_presets_menu(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    presets: &mut [FilterPreset],
+    events: &mut PresetEvents,
     theme: &CyberTheme,
     lang: Language,
 ) {
-    let active_streams = engines
-        .iter()
-        .filter(|e| !e.include_filter.is_empty() || !e.exclude_filter.is_empty())
-        .count();
+    let label = crate::filter_preset::preset_label(presets, engine);
+    let (text, modified) = match label {
+        PresetLabel::None => (
+            RichText::new(format!("{} ▾", t(lang, "presets")))
+                .monospace()
+                .size(11.0)
+                .color(theme.text_dim()),
+            None,
+        ),
+        PresetLabel::Matches(name) => (
+            RichText::new(format!("{name} ▾"))
+                .monospace()
+                .size(11.0)
+                .strong()
+                .color(theme.accent_color()),
+            None,
+        ),
+        PresetLabel::Modified(name) => (
+            RichText::new(format!("{name} * ▾"))
+                .monospace()
+                .size(11.0)
+                .strong()
+                .color(theme.warn_color()),
+            Some(name.to_string()),
+        ),
+    };
+    let current = match label {
+        PresetLabel::Matches(name) => Some(name.to_string()),
+        _ => None,
+    };
+    let mut apply: Option<usize> = None;
+    let mut apply_all: Option<usize> = None;
+    let mut save = false;
+    let mut update = false;
+    ui.menu_button(text, |ui| {
+        ui.set_min_width(240.0);
+        if presets.is_empty() {
+            ui.label(
+                RichText::new(t(lang, "presets_none"))
+                    .monospace()
+                    .small()
+                    .color(theme.text_dim()),
+            );
+        }
+        for (i, preset) in presets.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let selected = current.as_deref() == Some(preset.name.as_str());
+                if ui
+                    .selectable_label(selected, RichText::new(&preset.name).monospace())
+                    .on_hover_text(preset_summary(&preset.state, lang))
+                    .clicked()
+                {
+                    apply = Some(i);
+                    ui.close();
+                }
+                if ui
+                    .small_button(t(lang, "preset_apply_all"))
+                    .on_hover_text(t(lang, "preset_apply_all_tip"))
+                    .clicked()
+                {
+                    apply_all = Some(i);
+                    ui.close();
+                }
+            });
+        }
+        ui.separator();
+        if ui
+            .button(RichText::new(format!("💾 {}", t(lang, "preset_save_current"))).monospace())
+            .clicked()
+        {
+            save = true;
+            ui.close();
+        }
+        if let Some(name) = &modified {
+            if ui
+                .button(
+                    RichText::new(format!(
+                        "⟳ {}",
+                        t(lang, "preset_update").replace("{name}", name)
+                    ))
+                    .monospace(),
+                )
+                .clicked()
+            {
+                update = true;
+                ui.close();
+            }
+        }
+        if ui
+            .button(RichText::new(format!("⚙ {}", t(lang, "preset_manage"))).monospace())
+            .clicked()
+        {
+            events.open_filters = Some(engine.path.clone());
+            ui.close();
+        }
+    })
+    .response
+    .on_hover_text(t(lang, "presets_tip"));
+
+    if let Some(i) = apply {
+        presets[i].apply_to(engine);
+    }
+    if let Some(i) = apply_all {
+        events.apply_to_all = Some(presets[i].clone());
+    }
+    if save {
+        let draft = PresetSaveDraft {
+            name: current.or(modified.clone()).unwrap_or_default(),
+            with_time: engine.is_time_filtered(),
+        };
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(preset_save_id(engine), draft));
+    }
+    if update {
+        if let Some(i) = modified
+            .as_deref()
+            .and_then(|name| crate::filter_preset::find(presets, name))
+        {
+            let with_time = presets[i].state.time.is_some();
+            presets[i].state = FilterState::of_engine(engine, with_time);
+            events.changed = true;
+        }
+    }
+}
+
+/// One-line description of a preset for its tooltip: terms, level and time range.
+fn preset_summary(state: &FilterState, lang: Language) -> String {
+    let mut parts = Vec::new();
+    if !state.include.is_empty() {
+        parts.push(format!(
+            "{}: {}",
+            t(lang, "filter_terms_all_of"),
+            state.include.join(", ")
+        ));
+    }
+    if !state.exclude.is_empty() {
+        parts.push(format!(
+            "{}: {}",
+            t(lang, "filter_terms_none_of"),
+            state.exclude.join(", ")
+        ));
+    }
+    if state.min_level != LogLevel::Unknown {
+        parts.push(format!("≥ {}", state.min_level.name()));
+    }
+    if let Some((from, to)) = &state.time {
+        parts.push(format!("🕘 {from} → {to}"));
+    }
+    parts.join("\n")
+}
+
+/// State of the "save current as preset" dialog of one stream, kept in egui's memory
+/// while the dialog is open.
+#[derive(Debug, Clone, Default)]
+struct PresetSaveDraft {
+    name: String,
+    with_time: bool,
+}
+
+fn preset_save_id(engine: &TailEngine) -> egui::Id {
+    egui::Id::new("preset_save").with(&engine.path)
+}
+
+/// The save dialog opened from the presets menu: a name, whether the time range goes
+/// in, and a warning with an "Overwrite" button when the name is taken.
+fn render_preset_save_dialog(
+    ctx: &egui::Context,
+    engine: &mut TailEngine,
+    presets: &mut Vec<FilterPreset>,
+    events: &mut PresetEvents,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    let id = preset_save_id(engine);
+    let Some(mut draft) = ctx.data(|d| d.get_temp::<PresetSaveDraft>(id)) else {
+        return;
+    };
+    let mut close = false;
+    let modal = egui::Modal::new(id.with("modal")).show(ctx, |ui| {
+        ui.set_width(320.0);
+        ui.heading(
+            RichText::new(format!("💾 {}", t(lang, "preset_save_title")))
+                .monospace()
+                .color(theme.accent_color()),
+        );
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{}:", t(lang, "preset_name"))).monospace());
+            ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(200.0))
+                .request_focus();
+        });
+        ui.checkbox(&mut draft.with_time, t(lang, "preset_include_time"));
+        let name = draft.name.trim().to_string();
+        let taken = crate::filter_preset::find(presets, &name).is_some();
+        if taken {
+            ui.label(
+                RichText::new(format!("⚠ {}", t(lang, "preset_exists")))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.warn_color()),
+            );
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            let save_label = if taken {
+                t(lang, "preset_overwrite")
+            } else {
+                t(lang, "preset_save")
+            };
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui
+                .add_enabled(!name.is_empty(), egui::Button::new(save_label))
+                .clicked()
+                || (enter && !name.is_empty() && !taken)
+            {
+                let preset = FilterPreset {
+                    name: name.clone(),
+                    state: FilterState::of_engine(engine, draft.with_time),
+                };
+                crate::filter_preset::upsert(presets, preset);
+                engine.applied_preset = Some(name.clone());
+                events.changed = true;
+                close = true;
+            }
+            if ui.button(t(lang, "preset_cancel")).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Escape))
+            {
+                close = true;
+            }
+        });
+    });
+    close |= modal.should_close();
+    ctx.data_mut(|d| {
+        if close {
+            d.remove::<PresetSaveDraft>(id);
+        } else {
+            d.insert_temp(id, draft);
+        }
+    });
+}
+
+/// Rename or delete confirmation in progress in the preset manager.
+#[derive(Debug, Clone)]
+enum PresetEdit {
+    Rename(usize, String),
+    Delete(usize),
+}
+
+/// The preset manager of the Filters window: rename, delete (after confirmation) and
+/// reorder. Renaming and deleting keep the streams' "last applied" name in step.
+fn render_preset_manager(
+    ui: &mut Ui,
+    engines: &mut [TailEngine],
+    presets: &mut Vec<FilterPreset>,
+    events: &mut PresetEvents,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    ui.label(
+        RichText::new(format!("⭐ {}", t(lang, "filter_presets")))
+            .monospace()
+            .strong()
+            .color(theme.accent_color()),
+    );
+    if presets.is_empty() {
+        ui.label(
+            RichText::new(t(lang, "presets_none"))
+                .monospace()
+                .size(11.0)
+                .color(theme.text_dim()),
+        );
+        return;
+    }
+    let edit_id = egui::Id::new("preset_manager_edit");
+    let mut edit = ui.data(|d| d.get_temp::<PresetEdit>(edit_id));
+    let mut move_up = None;
+    let mut move_down = None;
+    let mut rename_done: Option<(usize, String)> = None;
+    let mut delete_done: Option<usize> = None;
+    let mut cancel = false;
+    let count = presets.len();
+    for (i, preset) in presets.iter().enumerate() {
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(i > 0, egui::Button::new("⬆"))
+                .on_hover_text(t(lang, "move_up"))
+                .clicked()
+            {
+                move_up = Some(i);
+            }
+            if ui
+                .add_enabled(i + 1 < count, egui::Button::new("⬇"))
+                .on_hover_text(t(lang, "move_down"))
+                .clicked()
+            {
+                move_down = Some(i);
+            }
+            match &mut edit {
+                Some(PresetEdit::Rename(idx, text)) if *idx == i => {
+                    ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
+                    let name = text.trim().to_string();
+                    let taken = crate::filter_preset::name_taken(presets, &name, Some(i));
+                    if taken {
+                        ui.label(
+                            RichText::new(format!("⚠ {}", t(lang, "preset_name_taken")))
+                                .monospace()
+                                .size(11.0)
+                                .color(theme.warn_color()),
+                        );
+                    }
+                    if ui
+                        .add_enabled(!name.is_empty() && !taken, egui::Button::new("✔"))
+                        .on_hover_text(t(lang, "preset_rename"))
+                        .clicked()
+                    {
+                        rename_done = Some((i, name));
+                    }
+                    if ui
+                        .button("✖")
+                        .on_hover_text(t(lang, "preset_cancel"))
+                        .clicked()
+                    {
+                        rename_done = Some((i, preset.name.clone()));
+                    }
+                }
+                Some(PresetEdit::Delete(idx)) if *idx == i => {
+                    ui.label(
+                        RichText::new(
+                            t(lang, "preset_delete_confirm").replace("{name}", &preset.name),
+                        )
+                        .monospace()
+                        .color(theme.warn_color()),
+                    );
+                    if ui.button(t(lang, "preset_delete")).clicked() {
+                        delete_done = Some(i);
+                    }
+                    if ui.button(t(lang, "preset_cancel")).clicked() {
+                        cancel = true;
+                    }
+                }
+                _ => {
+                    ui.label(RichText::new(&preset.name).monospace().strong())
+                        .on_hover_text(preset_summary(&preset.state, lang));
+                    if ui
+                        .small_button("✏")
+                        .on_hover_text(t(lang, "preset_rename"))
+                        .clicked()
+                    {
+                        edit = Some(PresetEdit::Rename(i, preset.name.clone()));
+                    }
+                    if ui
+                        .small_button("🗑")
+                        .on_hover_text(t(lang, "preset_delete"))
+                        .clicked()
+                    {
+                        edit = Some(PresetEdit::Delete(i));
+                    }
+                }
+            }
+        });
+    }
+    if let Some((i, name)) = rename_done {
+        let old = std::mem::replace(&mut presets[i].name, name.clone());
+        if old != name {
+            for eng in engines.iter_mut() {
+                if eng
+                    .applied_preset
+                    .as_deref()
+                    .is_some_and(|a| crate::filter_preset::same_name(a, &old))
+                {
+                    eng.applied_preset = Some(name.clone());
+                }
+            }
+            events.changed = true;
+        }
+        edit = None;
+    }
+    if let Some(i) = delete_done {
+        let removed = presets.remove(i);
+        for eng in engines.iter_mut() {
+            if eng
+                .applied_preset
+                .as_deref()
+                .is_some_and(|a| crate::filter_preset::same_name(a, &removed.name))
+            {
+                eng.applied_preset = None;
+            }
+        }
+        events.changed = true;
+        edit = None;
+    }
+    if cancel {
+        edit = None;
+    }
+    if let Some(i) = move_up {
+        presets.swap(i, i - 1);
+        edit = None;
+        events.changed = true;
+    }
+    if let Some(i) = move_down {
+        presets.swap(i, i + 1);
+        edit = None;
+        events.changed = true;
+    }
+    ui.data_mut(|d| {
+        if let Some(e) = edit {
+            d.insert_temp(edit_id, e);
+        } else {
+            d.remove::<PresetEdit>(edit_id);
+        }
+    });
+}
+
+/// The term rows of one side of a stream: each row a field, its remove button and its
+/// invalid-regex flag, then "add term" while fewer than `MAX_FILTER_TERMS`.
+fn render_term_rows(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    side: TermSide,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    let (hint, color) = match side {
+        TermSide::Include => ("ERROR|CRITICAL|Exception...", theme.accent_color()),
+        TermSide::Exclude => ("healthcheck|ping|DEBUG...", theme.warn_color()),
+    };
+    ui.label(
+        RichText::new(format!("{}:", t(lang, side.heading_key())))
+            .monospace()
+            .color(color),
+    );
+    let mut rows = side.terms(engine).to_vec();
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    let mut changed = false;
+    let mut remove = None;
+    for (i, row) in rows.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("{}.", i + 1))
+                    .monospace()
+                    .color(theme.text_dim()),
+            );
+            changed |= ui
+                .add(
+                    egui::TextEdit::singleline(row)
+                        .hint_text(hint)
+                        .desired_width(260.0),
+                )
+                .changed();
+            if ui
+                .button("✖")
+                .on_hover_text(t(lang, "filter_remove_term"))
+                .clicked()
+            {
+                remove = Some(i);
+            }
+            if side.invalid(engine, i) {
+                ui.label(
+                    RichText::new(format!("⚠ {}", t(lang, "filter_term_invalid")))
+                        .monospace()
+                        .size(11.0)
+                        .color(theme.warn_color()),
+                );
+            }
+        });
+    }
+    if let Some(i) = remove {
+        rows.remove(i);
+        changed = true;
+    }
+    if rows.len() < MAX_FILTER_TERMS
+        && ui
+            .small_button(format!("+ {}", t(lang, "filter_add_term")))
+            .clicked()
+    {
+        rows.push(String::new());
+        changed = true;
+    }
+    if changed {
+        side.set(engine, rows);
+    }
+}
+
+/// The Filters window: the preset manager, then every stream with its include and
+/// exclude term rows and its case and regex toggles. `focus` names the stream a `+`
+/// button or "Manage presets" asked for: it is opened and scrolled to once.
+pub fn render_filters_content(
+    ui: &mut Ui,
+    engines: &mut [TailEngine],
+    presets: &mut Vec<FilterPreset>,
+    events: &mut PresetEvents,
+    focus: Option<&mut Option<PathBuf>>,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    let active_streams = engines.iter().filter(|e| e.is_filter_active()).count();
 
     ui.horizontal(|ui| {
         ui.heading(
@@ -3608,14 +4246,17 @@ pub fn render_filters_content(
     });
 
     ui.label(
-        RichText::new(t(lang, "visibility_filters_desc"))
+        RichText::new(t(lang, "filter_terms_desc"))
             .monospace()
             .size(11.0)
             .color(theme.text_dim()),
     );
 
+    ui.add_space(6.0);
+    render_preset_manager(ui, engines, presets, events, theme, lang);
     ui.add_space(8.0);
 
+    let focus_path = focus.as_deref().cloned().flatten();
     for engine in engines.iter_mut() {
         let file_name = engine
             .path
@@ -3623,37 +4264,23 @@ pub fn render_filters_content(
             .and_then(|n| n.to_str())
             .unwrap_or("Log")
             .to_string();
-
-        ui.group(|ui| {
-            ui.label(
-                RichText::new(format!("📄 {}", file_name))
-                    .monospace()
-                    .strong(),
-            );
-
+        let is_focus = focus_path
+            .as_deref()
+            .is_some_and(|p| paths_equal_fast(p, &engine.path));
+        let header = egui::CollapsingHeader::new(
+            RichText::new(format!("📄 {}", file_name))
+                .monospace()
+                .strong(),
+        )
+        .id_salt(egui::Id::new("filters_stream").with(&engine.path))
+        .default_open(engines_default_open(engine))
+        .open(is_focus.then_some(true));
+        let resp = header.show(ui, |ui| {
+            render_term_rows(ui, engine, TermSide::Include, theme, lang);
+            ui.add_space(4.0);
+            render_term_rows(ui, engine, TermSide::Exclude, theme, lang);
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{}:", t(lang, "filter_include"))).monospace());
-                let mut inc = engine.include_filter.clone();
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut inc)
-                            .hint_text("ERROR|CRITICAL|Exception..."),
-                    )
-                    .changed()
-                {
-                    engine.set_include_filter(&inc);
-                }
-                if !engine.include_filter.is_empty()
-                    && ui
-                        .button("✖")
-                        .on_hover_text(t(lang, "clear_filter"))
-                        .clicked()
-                {
-                    engine.set_include_filter("");
-                }
-
-                ui.separator();
-
                 // Match Case toggle
                 let case_text = if engine.filter_case_sensitive {
                     RichText::new("Aa").strong().color(theme.accent_color())
@@ -3684,30 +4311,22 @@ pub fn render_filters_content(
                     engine.refresh_filters();
                 }
             });
-
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{}:", t(lang, "filter_exclude"))).monospace());
-                let mut exc = engine.exclude_filter.clone();
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut exc).hint_text("healthcheck|ping|DEBUG..."),
-                    )
-                    .changed()
-                {
-                    engine.set_exclude_filter(&exc);
-                }
-                if !engine.exclude_filter.is_empty()
-                    && ui
-                        .button("✖")
-                        .on_hover_text(t(lang, "clear_filter"))
-                        .clicked()
-                {
-                    engine.set_exclude_filter("");
-                }
-            });
         });
+        if is_focus {
+            resp.header_response.scroll_to_me(Some(egui::Align::TOP));
+        }
         ui.add_space(4.0);
     }
+    // Consumed once drawn, and also when its stream was closed meanwhile, so a later
+    // reopening of that file does not scroll the window to it.
+    if let Some(f) = focus {
+        *f = None;
+    }
+}
+
+/// A stream starts open in the Filters window when it has more than one term.
+fn engines_default_open(engine: &TailEngine) -> bool {
+    engine.extra_include_terms() > 0 || engine.extra_exclude_terms() > 0
 }
 
 pub fn render_highlights_content(

@@ -417,8 +417,7 @@ mod tests {
             "payment.log",
             "INFO req-7f3a charge\nINFO req-7f3a healthcheck\nDEBUG noise\nINFO req-7f3a done\n",
         );
-        payment.exclude_filter = "healthcheck".into();
-        payment.refresh_filters();
+        payment.set_exclude_filter("healthcheck");
         let audit = open(dir.path(), "audit.log", "INFO nothing here\n");
         let mut engines = vec![gateway, payment, audit];
 
@@ -443,6 +442,37 @@ mod tests {
             session.groups[1].hits,
             vec![0, 3],
             "the healthcheck line is excluded"
+        );
+    }
+
+    #[test]
+    fn every_include_and_exclude_term_is_honoured() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = open(
+            dir.path(),
+            "app.log",
+            "payment timeout job
+payment ok job
+payment timeout healthcheck job
+timeout job
+payment timeout retry=0 job
+",
+        );
+        engine.set_filter_terms(
+            vec!["payment".into(), "timeout".into()],
+            vec!["healthcheck".into(), "retry=0".into()],
+        );
+        let engines = vec![engine];
+
+        let mut session = FindAllSession::with_limits(4, FIND_ALL_MAX_HITS);
+        session.input = "job".into();
+        session.start(&engines);
+        run_to_end(&mut session, &engines);
+
+        assert_eq!(
+            session.groups[0].hits,
+            vec![0],
+            "only the line passing all terms"
         );
     }
 

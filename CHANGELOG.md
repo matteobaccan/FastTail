@@ -44,6 +44,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   since (truncated, rotated, rewritten, switched to another file) is marked stale, its rows
   dimmed and no longer jumping. The tab is not saved in the dock layout. Help dialog and
   all 16 languages updated.
+- **Several include and exclude terms per stream, and filter presets.** The `+` beside
+  the stream bar's include or exclude field adds a term row, edited in the Filters
+  window under "All of" / "None of": a line is visible when it contains every include
+  term and none of the exclude terms (up to 8 per side), then the minimum level and the
+  time range apply as before and stack-trace lines still follow their entry. Terms are
+  matched as typed with the stream's case and regex toggles — no operator syntax; OR
+  inside a term stays the regex `a|b` — and a regex term that does not compile is
+  flagged in its row. The bar keeps the first term of each side with a `+N` badge.
+  Background filter and search scans on large files, the ANSI strip/render modes and the
+  time window all see the combined filter. Terms are saved per stream in the workspace
+  and in sessions as `include.2`, `include.3`… next to the existing keys, so older builds
+  still open the file with the first term. A `Presets ▾` drop-down saves the stream's
+  terms, toggles, minimum level, unknown-level toggle and optionally the time range as
+  typed (a bare `14:02` follows the day of the log it is applied to) under a name,
+  applies it to the stream or to all open streams in one recomputation, shows the
+  matching preset's name (`name *` once edited, with "Update from this stream"), and the
+  Filters window renames, reorders and deletes presets. Presets live in `fasttail.ini`
+  as `[filter_preset.N]` sections, not in sessions. `--filter` / `--exclude` set the
+  first term as before.
+
+### Fixed
+
+- **Filters and searches keep their quotes and edge spaces in session files.** A term
+  starting with a quote (`"status":500`, `'user'`) came back from a session or the
+  workspace without its quotes, and one with leading or trailing spaces (` ERROR `)
+  came back trimmed, so the restored stream filtered on different text. Such values are
+  now written quoted and read back exactly as typed; filter presets are stored the same
+  way.
 
 ## [0.10.1] - 2026-09-26
 

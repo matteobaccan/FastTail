@@ -84,6 +84,9 @@ pub struct FastTailApp {
     pub pattern_prompt: Option<String>,
     /// Spawns external tools and enforces the rule-bound throttle and cap.
     pub tool_runner: ToolRunner,
+    /// Stream whose term rows the Filters window opens and scrolls to (a `+` button or
+    /// "Manage presets" of its stream bar), cleared once shown.
+    pub filters_focus: Option<PathBuf>,
     /// INI text of the named session as last saved or loaded; compared with the live
     /// workspace at most once per second to show the `*` in the title bar.
     pub session_saved: String,
@@ -558,6 +561,7 @@ impl FastTailApp {
             quick_labels: Vec::new(),
             pattern_prompt: None,
             tool_runner: ToolRunner::default(),
+            filters_focus: None,
             session_saved: String::new(),
             session_dirty: false,
             last_dirty_check: Instant::now(),
@@ -2516,6 +2520,7 @@ impl FastTailApp {
         }
 
         let mut lock_now = false;
+        let mut preset_events = crate::ui::dock::PresetEvents::default();
         let mut search_view = crate::ui::dock::SearchViewPrefs {
             search_pane: self.config.search_pane,
             search_pane_height: self.config.search_pane_height,
@@ -2557,6 +2562,8 @@ impl FastTailApp {
             search_view: &mut search_view,
             time_delta: &mut time_delta,
             find_all: &mut self.find_all,
+            filter_presets: &mut self.config.filter_presets,
+            preset_events: &mut preset_events,
         };
 
         if self.dock_state.iter_all_tabs().count() == 0 {
@@ -2770,6 +2777,15 @@ impl FastTailApp {
                 eng.set_quick_labels(&self.quick_labels);
             }
             ctx.request_repaint();
+        }
+
+        if let Some(path) = preset_events.open_filters.take() {
+            self.filters_focus = Some(path);
+            self.config.filters_open = true;
+            preset_events.changed = true;
+        }
+        if preset_events.changed {
+            let _ = self.config.save();
         }
 
         if self.config.borderless != prev_borderless {
@@ -3299,6 +3315,21 @@ impl FastTailApp {
                     // dragged (and the one restored from the config) is thrown away.
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // Filter terms and presets first, then the colour rules.
+                        let mut events = crate::ui::dock::PresetEvents::default();
+                        crate::ui::dock::render_filters_content(
+                            ui,
+                            &mut self.engines,
+                            &mut self.config.filter_presets,
+                            &mut events,
+                            Some(&mut self.filters_focus),
+                            &theme,
+                            lang,
+                        );
+                        if events.changed {
+                            let _ = self.config.save();
+                        }
+                        ui.separator();
                         crate::ui::dock::render_highlights_content(
                             ui,
                             &mut self.config.highlight_rules,
@@ -4215,6 +4246,16 @@ fn dock_signature(dock: &DockState<FastTailTab>) -> String {
     out
 }
 
+/// The non-empty terms after the first row, as a session stores them.
+fn extra_terms(terms: &[String]) -> Vec<String> {
+    terms
+        .iter()
+        .skip(1)
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .collect()
+}
+
 /// The session entry describing `engine` as it is now.
 fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
     let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
@@ -4226,8 +4267,10 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
     }
     StreamEntry {
         path: engine.path.clone(),
-        include_filter: engine.include_filter.clone(),
-        exclude_filter: engine.exclude_filter.clone(),
+        include_filter: engine.include_filter().to_string(),
+        exclude_filter: engine.exclude_filter().to_string(),
+        include_extra: extra_terms(engine.include_terms()),
+        exclude_extra: extra_terms(engine.exclude_terms()),
         search_query: engine.search_query.trim().to_string(),
         wrap: engine.wrap_lines,
         encoding: Some(engine.encoding.name().to_string()),
@@ -4270,11 +4313,15 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
             }
         }
     }
-    if !entry.include_filter.is_empty() {
-        engine.set_include_filter(&entry.include_filter);
-    }
-    if !entry.exclude_filter.is_empty() {
-        engine.set_exclude_filter(&entry.exclude_filter);
+    let terms = |first: &String, extra: &[String]| -> Vec<String> {
+        std::iter::once(first.clone())
+            .chain(extra.iter().cloned())
+            .collect()
+    };
+    let include = terms(&entry.include_filter, &entry.include_extra);
+    let exclude = terms(&entry.exclude_filter, &entry.exclude_extra);
+    if include.iter().chain(&exclude).any(|t| !t.is_empty()) {
+        engine.set_filter_terms(include, exclude);
     }
     if !entry.search_query.is_empty() {
         engine.search_query = entry.search_query.clone();
