@@ -724,6 +724,10 @@ pub struct CompiledHighlight {
     pub sound_alert: SoundAlertPreset,
 }
 
+/// Pieces of a span still unclaimed, kept on the stack: a row rarely splits one into more
+/// than a few (the vector spills to the heap past 8).
+type Pieces = smallvec::SmallVec<[(usize, usize); 8]>;
+
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
@@ -732,10 +736,10 @@ fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: S
         spans.push(HighlightSpan { start, end, style });
         return spans.len() >= MAX_ROW_SPANS;
     }
-    // Double-buffer piece vectors and reuse them via drain and swap to eliminate heap
-    // allocation churn during interval subtraction.
-    let mut pieces = vec![(start, end)];
-    let mut next_pieces = Vec::with_capacity(4);
+    // Double-buffered piece lists, swapped per claimed span, with no heap allocation in the
+    // common case.
+    let mut pieces: Pieces = smallvec::smallvec![(start, end)];
+    let mut next_pieces = Pieces::new();
     for sp in spans.iter() {
         for (s, e) in pieces.drain(..) {
             if e <= sp.start || s >= sp.end {
@@ -4888,5 +4892,54 @@ mod tests {
         );
         assert!(find_case_insensitive(haystack, "").is_empty());
         assert!(contains_case_insensitive(haystack, ""));
+    }
+
+    #[test]
+    fn test_claim_span_deduction_and_overflow() {
+        use super::{claim_span, HighlightSpan, HighlightStyle, SpanStyle};
+        use egui::Color32;
+
+        let style_a = SpanStyle::Rule(HighlightStyle {
+            fg: Color32::RED,
+            bg: Color32::BLACK,
+            bold: false,
+            italic: false,
+        });
+        let style_b = SpanStyle::Label(1);
+
+        let mut spans = Vec::new();
+        // Claim first span [10, 50)
+        assert!(!claim_span(&mut spans, 10, 50, style_a));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 10);
+        assert_eq!(spans[0].end, 50);
+
+        // Claim non-overlapping span [60, 80)
+        assert!(!claim_span(&mut spans, 60, 80, style_b));
+        assert_eq!(spans.len(), 2);
+
+        // Claim overlapping span [0, 100) which should subtract [10, 50) and [60, 80)
+        // leaving pieces [0, 10), [50, 60), [80, 100)
+        assert!(!claim_span(&mut spans, 0, 100, style_b));
+        assert_eq!(spans.len(), 5);
+        assert_eq!(spans[2].start, 0);
+        assert_eq!(spans[2].end, 10);
+        assert_eq!(spans[3].start, 50);
+        assert_eq!(spans[3].end, 60);
+        assert_eq!(spans[4].start, 80);
+        assert_eq!(spans[4].end, 100);
+
+        // Test overflow path with many pieces
+        let mut many_spans = Vec::new();
+        for i in 0..10 {
+            many_spans.push(HighlightSpan {
+                start: i * 20 + 5,
+                end: i * 20 + 15,
+                style: style_a,
+            });
+        }
+        // [0, 200) subtracted by 10 existing spans will create 11 pieces, more than the 8 kept on the stack
+        assert!(!claim_span(&mut many_spans, 0, 200, style_b));
+        assert_eq!(many_spans.len(), 21);
     }
 }
