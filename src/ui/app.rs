@@ -2658,7 +2658,6 @@ impl FastTailApp {
             search_pane: self.config.search_pane,
             search_pane_height: self.config.search_pane_height,
             overview_strip: self.config.overview_strip,
-            timeline_histogram: self.config.timeline_histogram,
             timeline_search_lane: self.config.timeline_search_lane,
         };
         let search_view_before = search_view;
@@ -2856,9 +2855,11 @@ impl FastTailApp {
                 self.config.set_wrap(&eng.path, eng.wrap_lines);
                 bookmarks_changed = true;
             }
-            if eng.ansi_dirty {
-                // The ANSI mode lives in the stream entry, as in `save_dock_layout`.
+            if eng.ansi_dirty || eng.timeline_dirty {
+                // The ANSI mode and the timeline flag live in the stream entry, as in
+                // `save_dock_layout`.
                 eng.ansi_dirty = false;
+                eng.timeline_dirty = false;
                 let mut entry = stream_entry_of(eng);
                 entry.wrap = false;
                 entry.bookmarks.clear();
@@ -2878,11 +2879,9 @@ impl FastTailApp {
             self.config.search_pane = search_view.search_pane;
             self.config.search_pane_height = search_view.search_pane_height;
             self.config.overview_strip = search_view.overview_strip;
-            self.config.timeline_histogram = search_view.timeline_histogram;
             self.config.timeline_search_lane = search_view.timeline_search_lane;
             let toggled = search_view.search_pane != search_view_before.search_pane
                 || search_view.overview_strip != search_view_before.overview_strip
-                || search_view.timeline_histogram != search_view_before.timeline_histogram
                 || search_view.timeline_search_lane != search_view_before.timeline_search_lane;
             if toggled || !ctx.input(|i| i.pointer.any_down()) {
                 let _ = self.config.save();
@@ -4498,6 +4497,7 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         wrap: engine.wrap_lines,
         encoding: Some(engine.encoding.name().to_string()),
         ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),
+        timeline: engine.timeline_open,
         bookmarks,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
     }
@@ -4521,6 +4521,7 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     let Some(entry) = cfg.stream_state_for(&engine.path).cloned() else {
         return;
     };
+    engine.timeline_open = entry.timeline;
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);

@@ -90,9 +90,8 @@ pub struct FastTailConfig {
     /// Overview strip (hits, bookmarks, errors) beside the main view's scroll bar.
     #[serde(default = "default_true")]
     pub overview_strip: bool,
-    /// Timeline histogram above the rows of every stream, and its search hit lane.
-    #[serde(default)]
-    pub timeline_histogram: bool,
+    /// Search hit lane of the timeline histogram (the histogram itself is shown per
+    /// stream, see `StreamEntry::timeline`).
     #[serde(default = "default_true")]
     pub timeline_search_lane: bool,
     #[serde(default)]
@@ -317,7 +316,6 @@ impl Default for FastTailConfig {
             search_pane: false,
             search_pane_height: default_search_pane_height(),
             overview_strip: true,
-            timeline_histogram: false,
             timeline_search_lane: true,
             borderless: false,
             show_line_numbers: true,
@@ -592,7 +590,6 @@ impl FastTailConfig {
                 format!("{:.0}", self.search_pane_height),
             )
             .set("overview_strip", self.overview_strip.to_string())
-            .set("timeline_histogram", self.timeline_histogram.to_string())
             .set(
                 "timeline_search_lane",
                 self.timeline_search_lane.to_string(),
@@ -858,12 +855,6 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.overview_strip = v;
-            }
-            if let Some(v) = general
-                .get("timeline_histogram")
-                .and_then(|s| s.parse::<bool>().ok())
-            {
-                cfg.timeline_histogram = v;
             }
             if let Some(v) = general
                 .get("timeline_search_lane")

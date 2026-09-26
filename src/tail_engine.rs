@@ -1000,6 +1000,10 @@ pub struct TailEngine {
     /// when auto mode switched to render on appended data (for the stream bar notice).
     pub ansi_mode: AnsiMode,
     pub ansi_dirty: bool,
+    /// The timeline histogram is shown above this stream's rows, and a dirty flag for
+    /// persistence (it is kept per stream, like the ANSI mode).
+    pub timeline_open: bool,
+    pub timeline_dirty: bool,
     ansi_detected: bool,
     pub ansi_switched_at: Option<Instant>,
     /// Auto-detection samples the head of what the stream held when it was read from the
@@ -1527,6 +1531,8 @@ impl TailEngine {
             stdin: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
+            timeline_open: false,
+            timeline_dirty: false,
             ansi_detected: false,
             ansi_switched_at: None,
             ansi_head_end: 0,

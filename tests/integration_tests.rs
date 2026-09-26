@@ -5316,6 +5316,7 @@ mod named_sessions {
             wrap: true,
             encoding: Some("ANSI".to_string()),
             ansi: Some("strip".to_string()),
+            timeline: true,
             bookmarks: vec![3, 7, 42],
             archive_entry: None,
         }
@@ -7509,7 +7510,7 @@ mod search_results_pane {
 
     fn timeline_harness(log: &std::path::Path) -> Harness {
         let mut h = Harness::new(log, "");
-        h.prefs.timeline_histogram = true;
+        h.engines[0].timeline_open = true;
         h.frame(Vec::new());
         h.frame(Vec::new());
         h
@@ -7538,7 +7539,7 @@ mod search_results_pane {
         assert_eq!(rect.height(), fasttail::ui::timeline_strip::STRIP_HEIGHT);
 
         // Closed again: no strip.
-        h.prefs.timeline_histogram = false;
+        h.engines[0].timeline_open = false;
         h.frame(Vec::new());
         h.frame(Vec::new());
         let id = fasttail::ui::timeline_strip::strip_id(h.engine());
@@ -7612,13 +7613,64 @@ mod search_results_pane {
     #[test]
     fn timeline_preferences_round_trip_through_the_ini() {
         let mut cfg = FastTailConfig::default();
-        assert!(!cfg.timeline_histogram, "the timeline is off by default");
         assert!(cfg.timeline_search_lane, "its search lane is on by default");
-        cfg.timeline_histogram = true;
         cfg.timeline_search_lane = false;
         let restored = FastTailConfig::from_ini(&cfg.to_ini());
-        assert!(restored.timeline_histogram);
         assert!(!restored.timeline_search_lane);
+        // The histogram is shown per stream: no global key is written.
+        let ini = cfg.to_ini();
+        let general = ini.section(Some("general")).unwrap();
+        assert!(general.get("timeline_histogram").is_none());
+    }
+
+    #[test]
+    fn the_timeline_opens_only_on_its_stream_and_is_saved_with_it() {
+        use fasttail::session::{Session, StreamEntry, SESSION_SUFFIX};
+        let dir = tempfile::tempdir().unwrap();
+        let a = timeline_log(dir.path());
+        let b = dir.path().join("other.log");
+        std::fs::copy(&a, &b).unwrap();
+        let config = FastTailConfig {
+            spool_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let mut app = fasttail::ui::FastTailApp::from_config(config);
+        app.open_log_file(a.clone());
+        app.open_log_file(b.clone());
+        let ctx = egui::Context::default();
+        let frame = |app: &mut fasttail::ui::FastTailApp| {
+            let mut out = ctx.run_ui(Default::default(), |ui| app.render_ui(ui));
+            out.textures_delta.clear();
+        };
+        frame(&mut app);
+        let first = app.engines.iter_mut().find(|e| e.path == a).unwrap();
+        first.timeline_open = true;
+        first.timeline_dirty = true;
+        frame(&mut app);
+        frame(&mut app);
+        let engine = |app: &fasttail::ui::FastTailApp, p: &std::path::Path| {
+            app.engines
+                .iter()
+                .find(|e| e.path == p)
+                .unwrap()
+                .timeline_open
+        };
+        assert!(engine(&app, &a));
+        assert!(!engine(&app, &b), "the other stream keeps its view");
+        let other = app.engines.iter().find(|e| e.path == b).unwrap();
+        assert!(!other.timestamps_complete(), "and is not timed for it");
+
+        // Saved with the stream: in the workspace entry and in a session file.
+        assert!(app.config.stream_state_for(&a).is_some_and(|s| s.timeline));
+        let mut entry = StreamEntry::new(a.clone());
+        entry.timeline = true;
+        let session = Session {
+            streams: vec![entry, StreamEntry::new(b.clone())],
+            dock_layout: None,
+        };
+        let file = dir.path().join(format!("t{SESSION_SUFFIX}"));
+        session.save_to(&file).unwrap();
+        assert_eq!(Session::load_from(&file).unwrap().session, session);
     }
 
     #[test]

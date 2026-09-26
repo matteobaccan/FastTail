@@ -87,8 +87,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   background above 16 MB, the bars growing as it goes); a log without usable timestamps
   gets the fields' hint. The histogram is kept incrementally from the timestamp and level
   caches in at most 2,048 buckets, one second wide and doubling as the span grows, and
-  follows appends, truncation and rewrites. Shown state and search lane are saved in
-  `fasttail.ini` (`timeline_histogram`, `timeline_search_lane`).
+  follows appends, truncation and rewrites. The histogram is opened per stream and saved
+  with it in the workspace and in sessions (`timeline=true`); the search lane is a global
+  preference (`timeline_search_lane` in `fasttail.ini`).
 
 ### Fixed
 
