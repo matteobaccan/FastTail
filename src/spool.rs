@@ -32,12 +32,9 @@ pub fn spool_dir(configured: Option<&Path>) -> PathBuf {
     }
 }
 
-/// Creates the spool directory if needed; on Unix a newly created one is readable by
+/// Creates the spool directory if needed; on Unix it is made readable by
 /// its owner only (`%TEMP%` is per-user on Windows already).
 pub fn ensure_dir(dir: &Path) -> std::io::Result<()> {
-    if dir.is_dir() {
-        return Ok(());
-    }
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
@@ -281,5 +278,19 @@ mod tests {
     fn sweep_of_a_missing_dir_is_a_no_op() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(sweep(&dir.path().join("absent")), 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ensure_dir_enforces_permissions_on_existing_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let spool = dir.path().join("test-spool");
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::set_permissions(&spool, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        ensure_dir(&spool).unwrap();
+        let mode = std::fs::metadata(&spool).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
     }
 }
