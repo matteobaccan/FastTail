@@ -23,8 +23,8 @@ it is the gap found by the post-0.11.0 competitor scan.
   later — is bookmarked automatically, shown with `☆` (manual bookmarks keep `★`), included
   in `F2` / `SHIFT + F2` navigation and in the overview strip with a dimmer mark.
 - Auto-bookmarks are **derived, not stored**: they are recomputed from the rules when a
-  file is opened, reloaded or the rules change, capped at 10,000 per stream (a stream-bar
-  notice says so), and never count toward the 1,000 saved bookmarks per file. `CTRL + F2`
+  file is opened, reloaded or the rules change, capped per stream by the setting `auto_bookmark_max`
+  (default 10,000, 100 to 100,000; a stream-bar notice says so), and never count toward the 1,000 saved bookmarks per file. `CTRL + F2`
   on an auto-bookmarked row dismisses it for the session; adding a note turns it into a
   manual bookmark, which is saved.
 - Files above 16 MB find their existing auto-bookmarks on a worker thread with progress in

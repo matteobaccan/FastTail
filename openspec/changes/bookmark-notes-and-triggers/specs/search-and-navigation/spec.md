@@ -56,7 +56,7 @@ A manual bookmark SHALL be able to carry one note: a single line of at most 200 
 - **THEN** row 42 becomes a manual bookmark with that note, is saved in `fasttail.ini`, and counts toward the 1,000 per file.
 
 ### Requirement: Automatic Bookmarks from Rules
-Every line matching an enabled highlight rule with "Bookmark matching lines" on SHALL carry an automatic bookmark, whatever the stream's filters: the lines already in the file when it is opened, reloaded or when the rules change, and every line appended afterwards, checked as it arrives. At most 10,000 automatic bookmarks SHALL be kept per stream, the first ones in file order; once the cap is reached no more are added and the stream bar SHALL show that automatic bookmarks are capped at 10,000. For files above 16 MB the existing lines SHALL be matched on a worker thread with progress in the stream bar, the UI staying responsive, and lines appended during that scan SHALL be matched exactly once. Automatic bookmarks SHALL appear in the overview strip with a dimmer mark than manual bookmarks. Turning the option off or disabling the rule SHALL remove the automatic bookmarks it produced at the next recomputation, and a rules change SHALL clear the dismissals. Standard-input and compressed streams SHALL be covered, compressed streams once their index is complete.
+Every line matching an enabled highlight rule with "Bookmark matching lines" on SHALL carry an automatic bookmark, whatever the stream's filters: the lines already in the file when it is opened, reloaded or when the rules change, and every line appended afterwards, checked as it arrives. At most `auto_bookmark_max` automatic bookmarks SHALL be kept per stream (a setting in `fasttail.ini` and in Settings, default 10,000, clamped to 100..100,000), the first ones in file order; once the cap is reached no more are added and the stream bar SHALL show that automatic bookmarks are capped at that number. Notes SHALL NOT be written by copy or export. For files above 16 MB the existing lines SHALL be matched on a worker thread with progress in the stream bar, the UI staying responsive, and lines appended during that scan SHALL be matched exactly once. Automatic bookmarks SHALL appear in the overview strip with a dimmer mark than manual bookmarks. Turning the option off or disabling the rule SHALL remove the automatic bookmarks it produced at the next recomputation, and a rules change SHALL clear the dismissals. Standard-input and compressed streams SHALL be covered, compressed streams once their index is complete.
 
 #### Scenario: Existing and appended lines
 - **WHEN** a rule `OutOfMemoryError` has "Bookmark matching lines" on, the opened file has 3 matching lines, and 2 more matching lines are appended
@@ -68,7 +68,11 @@ Every line matching an enabled highlight rule with "Bookmark matching lines" on 
 
 #### Scenario: Cap reached
 - **WHEN** an auto-bookmark rule `INFO` matches 250,000 lines of a file
-- **THEN** the first 10,000 matching lines are bookmarked, the stream bar shows the capped notice, and further appended `INFO` lines are not bookmarked.
+- **THEN** with the default setting the first 10,000 matching lines are bookmarked, the stream bar shows the capped notice, and further appended `INFO` lines are not bookmarked.
+
+#### Scenario: A larger cap
+- **WHEN** the user sets `auto_bookmark_max` to 50,000 in Settings while that stream is open
+- **THEN** the stream recomputes its automatic bookmarks and the first 50,000 matching lines are bookmarked.
 
 #### Scenario: Not saved
 - **WHEN** a file has 12 automatic bookmarks and 3 manual bookmarks and FastTail is restarted

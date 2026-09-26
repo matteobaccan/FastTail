@@ -15,6 +15,7 @@
 
 ## 3. UI and persistence
 
+- [ ] 3.0 Row context menu "Copy as shown" (first entry of a collapsed row plus ` ×N`, one line per selected row) with a test
 - [ ] 3.1 Stream toolbar selector (Off / Exact / Numbers) and `CTRL + SHIFT + D` cycling, ignored while a text field has focus; hidden in HEX and Markdown views
 - [ ] 3.2 `×N` badge (thousands grouped, `×1.2M` above 999,999) before the text of the head row in normal and wrap layouts, tooltip with line range and time span, click toggles expansion; match and bookmark markers on group rows; line number of the head line
 - [ ] 3.3 Overview strip and scrollbar over collapsed rows, marks of hidden lines at their group row

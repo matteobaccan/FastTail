@@ -50,13 +50,15 @@ loses every note of the file.
 `is_bookmarked` = manual ∪ (auto − dismissed); F2 navigation and the overview strip use the
 union; the marker glyph is `★` for manual, `☆` for auto-only. Auto-bookmarks are never
 written to `fasttail.ini` or sessions (they are recomputed from the rules), so they do not
-count toward the 1,000 saved per file. Cap: `MAX_AUTO_BOOKMARKS = 10_000` per stream
-(16 bytes/entry in a BTreeSet ≈ 0.4 MB worst case with node overhead). Past the cap no new
-auto-bookmark is added (the first 10,000 in file order are kept, later appends are
-ignored) and the stream bar shows "auto-bookmarks capped at 10,000".
+count toward the 1,000 saved per file. Cap: the setting `auto_bookmark_max` (`[general]` in `fasttail.ini`, Settings →
+Performance & refresh; default 10,000, clamped to 100..100,000), read per stream
+(16 bytes/entry in a BTreeSet ≈ 0.4 MB at 10,000, ≈ 4 MB at 100,000 with node overhead).
+Past the cap no new auto-bookmark is added (the first ones in file order are kept, later
+appends are ignored) and the stream bar shows "auto-bookmarks capped at N". Changing the
+setting recomputes the auto-bookmarks of the open streams.
 *Alternative:* insert auto matches into `bookmarks` — rejected: they would be saved, hit
 the 1,000 cap, and could not be told apart or recomputed when a rule is turned off.
-*Alternative:* ring buffer keeping the newest 10,000 — rejected, jumps from the start of
+*Alternative:* ring buffer keeping the newest ones — rejected, jumps from the start of
 the file would silently lose marks; a stable set is easier to explain.
 
 ### D4. Manual interaction with auto rows
@@ -77,8 +79,8 @@ the file would silently lose marks; a stable set is easier to explain.
   thread with `scan_lines` (same budget as today's synchronous filter).
 - **> 16 MB**: new `JobSpec::AutoBookmarks { rules: Vec<CompiledHighlight> }` (only the
   flagged, enabled ones; `Regex` is `Clone + Send`) and `ScanKind::AutoBookmarks`,
-  emitting `ScanBatch::Lines` in file order; the worker stops once it has sent 10,000
-  lines. Progress shows in the stream bar like other scans; a new rule set or reload bumps
+  emitting `ScanBatch::Lines` in file order; the worker stops once it has sent the cap
+  (`auto_bookmark_max`) lines. Progress shows in the stream bar like other scans; a new rule set or reload bumps
   the job generation so stale batches are dropped. The job starts after the index job
   (`index_pending` false) and covers `[0, indexed_lines)`.
 - **Appended lines**: `collect_auto_bookmarks(prev_lines_count)` runs on each append next
@@ -106,7 +108,7 @@ below the largest saved index are discarded with their notes (existing rule).
 
 ## Risks / Trade-offs
 
-- [A broad rule (e.g. `INFO`) bookmarks everything] → 10,000 cap plus the capped notice;
+- [A broad rule (e.g. `INFO`) bookmarks everything] → the `auto_bookmark_max` cap plus the capped notice;
   auto marks are dimmer so manual ones stay visible.
 - [UI-thread cost of the synchronous scan for files just under 16 MB] → same budget
   already accepted for filters; skipped entirely when no rule has the option.
@@ -121,7 +123,8 @@ below the largest saved index are discarded with their notes (existing rule).
 No migration: new keys default to empty / `false`. Rollback to an older build keeps
 bookmarks and rules and loses notes and the `bookmark` rule flag.
 
-## Open Questions
+## Decisions (maintainer, 2026-09-27)
 
-- Should notes also be included when copying rows or exporting (non-goal for now)?
-- Is 10,000 the right auto-bookmark cap, or should it be a setting?
+- The auto-bookmark cap is a setting, `auto_bookmark_max` (default 10,000, 100..100,000).
+- Notes are not written by copy or export: those reproduce the log lines as they are;
+  notes are read in the bookmark tooltip, the overview strip and the bookmark list.
