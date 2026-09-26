@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-26
+
 ### Changed
 
 - **Release file names carry the version, and every archive holds `LICENSE` and
@@ -67,6 +69,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Korean, Turkish, Polish, Dutch, Traditional Chinese and Friulian. The translation test
   now checks every key in every language, so a single string falling back to English is
   caught.
+- **Only regular files are opened as streams.** Opening a directory or a device path
+  now fails with "Target path is not a regular file" instead of being read as a stream.
 
 ## [0.10.0] - 2026-09-25
 
@@ -672,6 +676,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.10.1]: https://github.com/matteobaccan/FastTail/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/matteobaccan/FastTail/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/matteobaccan/FastTail/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/matteobaccan/FastTail/compare/v0.8.0...v0.9.0
