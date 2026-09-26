@@ -109,14 +109,15 @@ pub struct PresetEvents {
     pub open_filters: Option<PathBuf>,
 }
 
-/// Search results pane (open flag, height), overview strip switch and the timeline
-/// histogram's search lane, global preferences persisted in `fasttail.ini` and applied
-/// to every stream (the histogram itself is opened per stream).
+/// Search results pane (open flag, height), overview strip switch and timeline histogram
+/// (shown flag, search lane), global preferences persisted in `fasttail.ini` and applied
+/// to every stream.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchViewPrefs {
     pub search_pane: bool,
     pub search_pane_height: f32,
     pub overview_strip: bool,
+    pub timeline_histogram: bool,
     pub timeline_search_lane: bool,
 }
 
@@ -126,6 +127,7 @@ impl Default for SearchViewPrefs {
             search_pane: false,
             search_pane_height: DEFAULT_SEARCH_PANE_HEIGHT,
             overview_strip: true,
+            timeline_histogram: false,
             timeline_search_lane: true,
         }
     }
@@ -726,14 +728,13 @@ fn render_time_range(
 
     // Timeline histogram toggle, and its search lane toggle while it is shown.
     let accent = theme.accent_color();
-    if toggle_button(ui, theme, "📊", engine.timeline_open, accent)
+    if toggle_button(ui, theme, "📊", search_view.timeline_histogram, accent)
         .on_hover_text(t(lang, "timeline_tip"))
         .clicked()
     {
-        engine.timeline_open = !engine.timeline_open;
-        engine.timeline_dirty = true;
+        search_view.timeline_histogram = !search_view.timeline_histogram;
     }
-    if engine.timeline_open
+    if search_view.timeline_histogram
         && toggle_button(ui, theme, "🔍", search_view.timeline_search_lane, accent)
             .on_hover_text(t(lang, "timeline_search_lane_tip"))
             .clicked()
@@ -1040,7 +1041,7 @@ fn render_log_stream(
     } else {
         viewport_height
     };
-    let viewport_height = if engine.timeline_open {
+    let viewport_height = if search_view.timeline_histogram {
         (viewport_height - crate::ui::timeline_strip::STRIP_HEIGHT).max(MIN_ROWS_HEIGHT)
     } else {
         viewport_height
@@ -2280,7 +2281,7 @@ fn render_log_stream(
         ui.separator();
     }
 
-    if engine.timeline_open {
+    if search_view.timeline_histogram {
         render_timeline(ui, engine, theme, lang, search_view);
     }
 
@@ -4149,7 +4150,6 @@ fn render_preset_manager(
             if ui
                 .add_enabled(i > 0, egui::Button::new("⬆"))
                 .on_hover_text(t(lang, "move_up"))
-                .on_disabled_hover_text(t(lang, "move_up"))
                 .clicked()
             {
                 move_up = Some(i);
@@ -4157,7 +4157,6 @@ fn render_preset_manager(
             if ui
                 .add_enabled(i + 1 < count, egui::Button::new("⬇"))
                 .on_hover_text(t(lang, "move_down"))
-                .on_disabled_hover_text(t(lang, "move_down"))
                 .clicked()
             {
                 move_down = Some(i);
@@ -4178,7 +4177,6 @@ fn render_preset_manager(
                     if ui
                         .add_enabled(!name.is_empty() && !taken, egui::Button::new("✔"))
                         .on_hover_text(t(lang, "preset_rename"))
-                        .on_disabled_hover_text(t(lang, "preset_rename"))
                         .clicked()
                     {
                         rename_done = Some((i, name));
@@ -4531,15 +4529,13 @@ pub fn render_highlights_content(
                     // Move Up / Move Down buttons for priority reordering (disabled when at boundary)
                     let up_btn = ui
                         .add_enabled(i > 0, egui::Button::new("⬆"))
-                        .on_hover_text(t(lang, "move_up"))
-                        .on_disabled_hover_text(t(lang, "move_up"));
+                        .on_hover_text(t(lang, "move_up"));
                     if up_btn.clicked() {
                         to_move_up = Some(i);
                     }
                     let down_btn = ui
                         .add_enabled(i + 1 < rules_len, egui::Button::new("⬇"))
-                        .on_hover_text(t(lang, "move_down"))
-                        .on_disabled_hover_text(t(lang, "move_down"));
+                        .on_hover_text(t(lang, "move_down"));
                     if down_btn.clicked() {
                         to_move_down = Some(i);
                     }

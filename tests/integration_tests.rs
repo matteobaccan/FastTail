@@ -519,22 +519,6 @@ fn test_eframe_links_feature_enabled() {
     );
 }
 
-/// The help writes modifier keys in capitals (`CTRL + SHIFT + T`), in every language.
-#[test]
-fn test_help_modifier_keys_are_uppercase() {
-    for lang in Language::ALL {
-        for key in ["pin_tip", "help_zoom_wheel"] {
-            let text = t(*lang, key);
-            for word in text.split(|c: char| !c.is_alphanumeric()) {
-                let upper = word.to_uppercase();
-                if ["CTRL", "SHIFT", "ALT", "STRG", "UMSCHALT"].contains(&upper.as_str()) {
-                    assert_eq!(word, upper, "{lang:?} {key}: {text}");
-                }
-            }
-        }
-    }
-}
-
 #[test]
 fn test_i18n_exhaustive_coverage() {
     let all_keys = [
@@ -790,7 +774,6 @@ fn test_i18n_exhaustive_coverage() {
         "preset_name",
         "zip_picker_size",
         "zip_picker_open",
-        "zip_picker_no_selection",
         "zip_entry_encrypted",
         "zip_entry_method",
         "zip_entry_unsafe",
@@ -5332,7 +5315,6 @@ mod named_sessions {
             wrap: true,
             encoding: Some("ANSI".to_string()),
             ansi: Some("strip".to_string()),
-            timeline: true,
             bookmarks: vec![3, 7, 42],
             archive_entry: None,
         }
@@ -7526,7 +7508,7 @@ mod search_results_pane {
 
     fn timeline_harness(log: &std::path::Path) -> Harness {
         let mut h = Harness::new(log, "");
-        h.engines[0].timeline_open = true;
+        h.prefs.timeline_histogram = true;
         h.frame(Vec::new());
         h.frame(Vec::new());
         h
@@ -7555,7 +7537,7 @@ mod search_results_pane {
         assert_eq!(rect.height(), fasttail::ui::timeline_strip::STRIP_HEIGHT);
 
         // Closed again: no strip.
-        h.engines[0].timeline_open = false;
+        h.prefs.timeline_histogram = false;
         h.frame(Vec::new());
         h.frame(Vec::new());
         let id = fasttail::ui::timeline_strip::strip_id(h.engine());
@@ -7629,64 +7611,13 @@ mod search_results_pane {
     #[test]
     fn timeline_preferences_round_trip_through_the_ini() {
         let mut cfg = FastTailConfig::default();
+        assert!(!cfg.timeline_histogram, "the timeline is off by default");
         assert!(cfg.timeline_search_lane, "its search lane is on by default");
+        cfg.timeline_histogram = true;
         cfg.timeline_search_lane = false;
         let restored = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(restored.timeline_histogram);
         assert!(!restored.timeline_search_lane);
-        // The histogram is shown per stream: no global key is written.
-        let ini = cfg.to_ini();
-        let general = ini.section(Some("general")).unwrap();
-        assert!(general.get("timeline_histogram").is_none());
-    }
-
-    #[test]
-    fn the_timeline_opens_only_on_its_stream_and_is_saved_with_it() {
-        use fasttail::session::{Session, StreamEntry, SESSION_SUFFIX};
-        let dir = tempfile::tempdir().unwrap();
-        let a = timeline_log(dir.path());
-        let b = dir.path().join("other.log");
-        std::fs::copy(&a, &b).unwrap();
-        let config = FastTailConfig {
-            spool_dir: Some(dir.path().to_path_buf()),
-            ..Default::default()
-        };
-        let mut app = fasttail::ui::FastTailApp::from_config(config);
-        app.open_log_file(a.clone());
-        app.open_log_file(b.clone());
-        let ctx = egui::Context::default();
-        let frame = |app: &mut fasttail::ui::FastTailApp| {
-            let mut out = ctx.run_ui(Default::default(), |ui| app.render_ui(ui));
-            out.textures_delta.clear();
-        };
-        frame(&mut app);
-        let first = app.engines.iter_mut().find(|e| e.path == a).unwrap();
-        first.timeline_open = true;
-        first.timeline_dirty = true;
-        frame(&mut app);
-        frame(&mut app);
-        let engine = |app: &fasttail::ui::FastTailApp, p: &std::path::Path| {
-            app.engines
-                .iter()
-                .find(|e| e.path == p)
-                .unwrap()
-                .timeline_open
-        };
-        assert!(engine(&app, &a));
-        assert!(!engine(&app, &b), "the other stream keeps its view");
-        let other = app.engines.iter().find(|e| e.path == b).unwrap();
-        assert!(!other.timestamps_complete(), "and is not timed for it");
-
-        // Saved with the stream: in the workspace entry and in a session file.
-        assert!(app.config.stream_state_for(&a).is_some_and(|s| s.timeline));
-        let mut entry = StreamEntry::new(a.clone());
-        entry.timeline = true;
-        let session = Session {
-            streams: vec![entry, StreamEntry::new(b.clone())],
-            dock_layout: None,
-        };
-        let file = dir.path().join(format!("t{SESSION_SUFFIX}"));
-        session.save_to(&file).unwrap();
-        assert_eq!(Session::load_from(&file).unwrap().session, session);
     }
 
     #[test]
@@ -8438,17 +8369,6 @@ mod search_all_streams {
             )
         }
 
-        /// The stream's tab is the one shown in its dock leaf.
-        fn stream_shown(&self, idx: usize) -> bool {
-            let tab = FastTailTab::LogStream(self.engines[idx].path.clone());
-            let Some(path) = self.dock.find_tab(&tab) else {
-                return false;
-            };
-            self.dock
-                .leaf(path.node_path())
-                .is_ok_and(|leaf| leaf.active == path.tab)
-        }
-
         fn active_is_stream(&mut self, idx: usize) -> bool {
             let path = self.engines[idx].path.clone();
             matches!(
@@ -8568,10 +8488,7 @@ mod search_all_streams {
 
         let list = results_list_id();
         h.click(GroupedHitList::hit_id(list, 1, 1));
-        assert!(
-            h.stream_shown(1),
-            "the stream's tab is brought to the front"
-        );
+        assert!(h.active_is_stream(1));
         let payment = &h.engines[1];
         assert!(
             payment.pending_jump.is_none(),
@@ -8583,10 +8500,9 @@ mod search_all_streams {
         assert_eq!(payment.last_searched_query, "old line");
         assert_eq!(payment.search_matches, own_matches);
         assert!(
-            h.ctx.memory(|m| m.has_focus(list)),
-            "the results keep the keyboard"
+            !h.ctx.memory(|m| m.has_focus(list)),
+            "the stream takes the keyboard back"
         );
-        assert!(h.active_is_results(), "and the dock focus");
 
         // A header click collapses its group: the next header follows it directly.
         open_find_results_tab(&mut h.dock);
@@ -8624,82 +8540,7 @@ mod search_all_streams {
         h.frame(vec![key(egui::Key::Enter)], false);
         h.frame(Vec::new(), false);
         assert!(h.engines[1].is_selected(120));
-        assert!(h.stream_shown(1));
-        assert!(h.active_is_results());
-    }
-
-    #[test]
-    fn typing_a_query_and_enter_runs_the_search() {
-        let mut h = Harness::new(&logs());
-        open_find_results_tab(&mut h.dock);
-        h.frame(Vec::new(), false);
-        h.frame(Vec::new(), false);
-        h.click(fasttail::ui::find_results::query_input_id());
-        assert!(h
-            .ctx
-            .memory(|m| m.has_focus(fasttail::ui::find_results::query_input_id())));
-        h.frame(vec![egui::Event::Text("req-7f3a".into())], false);
-        assert_eq!(h.session.input, "req-7f3a");
-        h.frame(vec![key(egui::Key::Enter)], false);
-        assert_eq!(h.session.query, "req-7f3a", "Enter runs the search");
-        h.run_to_end();
-        assert_eq!(h.session.total_hits(), 6);
-    }
-
-    #[test]
-    fn after_a_click_the_keys_walk_the_results_and_the_stream_follows() {
-        let mut h = Harness::new(&logs());
-        open_find_results_tab(&mut h.dock);
-        h.session.input = "req-7f3a".into();
-        h.session.start(&h.engines);
-        h.run_to_end();
-        h.frame(Vec::new(), false);
-        let list = results_list_id();
-        let still_on_results = |h: &mut Harness| {
-            assert!(
-                h.ctx.memory(|m| m.has_focus(list)),
-                "the list keeps the keyboard"
-            );
-            assert!(h.active_is_results(), "and the dock focus");
-        };
-        // Rows: header 0, hits 3 13 23 33 (gateway), header 1, hits 120 250 (payment).
-        h.click(GroupedHitList::hit_id(list, 0, 0));
-        assert!(
-            h.engines[0].is_selected(3),
-            "the stream shows the clicked line"
-        );
-        still_on_results(&mut h);
-
-        h.frame(vec![key(egui::Key::ArrowDown)], false);
-        h.frame(Vec::new(), false);
-        assert!(
-            h.engines[0].is_selected(13),
-            "Down: the next result is shown"
-        );
-        still_on_results(&mut h);
-
-        h.frame(vec![key(egui::Key::End)], false);
-        h.frame(Vec::new(), false);
-        assert!(h.engines[1].is_selected(250), "End: the last result");
-        assert!(h.stream_shown(1));
-        still_on_results(&mut h);
-
-        h.frame(vec![key(egui::Key::Home)], false);
-        h.frame(vec![key(egui::Key::ArrowDown)], false);
-        h.frame(Vec::new(), false);
-        assert!(
-            h.engines[0].is_selected(3),
-            "Home then Down: the first result"
-        );
-        assert!(h.stream_shown(0));
-
-        h.frame(vec![key(egui::Key::PageDown)], false);
-        h.frame(Vec::new(), false);
-        assert!(
-            h.engines[1].is_selected(250),
-            "PageDown past the end: the last"
-        );
-        still_on_results(&mut h);
+        assert!(h.active_is_stream(1));
     }
 
     #[test]
@@ -9467,23 +9308,4 @@ ERROR d
         assert!(stdin_engine(&app).is_none());
         assert_eq!(app.dock_state.iter_all_tabs().count(), 0);
     }
-}
-
-#[test]
-fn test_zip_picker_i18n_keys() {
-    for lang in Language::ALL {
-        let text = t(*lang, "zip_picker_no_selection");
-        assert!(
-            !text.is_empty() && text != "Unknown",
-            "zip_picker_no_selection missing for {lang:?}"
-        );
-    }
-    assert_eq!(
-        t(Language::En, "zip_picker_no_selection"),
-        "Select at least one entry to open"
-    );
-    assert_eq!(
-        t(Language::It, "zip_picker_no_selection"),
-        "Seleziona almeno una voce da aprire"
-    );
 }

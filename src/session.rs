@@ -41,9 +41,6 @@ pub struct StreamEntry {
     /// ANSI mode chosen by the user as `AnsiMode::name()` (`render`, `strip`, `raw`);
     /// `None` is auto, and old files without the key read as auto.
     pub ansi: Option<String>,
-    /// The timeline histogram is shown above the stream (`timeline=true`, written only
-    /// when set).
-    pub timeline: bool,
     /// Bookmarked line indices, sorted.
     pub bookmarks: Vec<usize>,
     /// Entry name when the stream is a zip entry: `path` is then `archive/entry` (see
@@ -141,9 +138,6 @@ impl Session {
             if let Some(ansi) = &s.ansi {
                 sec.set("ansi", ansi);
             }
-            if s.timeline {
-                sec.set("timeline", "true");
-            }
             sec.set(
                 "bookmarks",
                 s.bookmarks
@@ -236,10 +230,6 @@ impl Session {
                     .and_then(crate::ansi::AnsiMode::from_name)
                     .filter(|m| *m != crate::ansi::AnsiMode::Auto)
                     .map(|m| m.name().to_string()),
-                timeline: sec
-                    .get("timeline")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(false),
                 bookmarks,
                 archive_entry,
             });

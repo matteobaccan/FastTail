@@ -166,15 +166,11 @@ The user SHALL be able to run one query across every open stream. The match SHAL
 - **THEN** every running and queued job stops, and the results found so far stay listed.
 
 ### Requirement: Find Results Tab
-The results of a search across streams SHALL be shown in a single "Find results" dock tab, opened or focused by `Ctrl+Shift+F` with the focused stream's query prefilled, and not saved in the dock layout. Results SHALL be grouped by stream, each group headed by the stream name, its match count, its progress while running and a note when only the first 100,000 hits are listed; groups SHALL be collapsible, and the whole list SHALL be virtualized. Pressing `Enter` in the query box SHALL run the search. Clicking a result, selecting it with the keyboard and pressing `Enter`, or reaching it with the arrow, `Page Up` / `Page Down` or `Home` / `End` keys SHALL bring that stream's tab to the front of its panel, centre the line (or the next visible line when the stream's filters now hide it) and pause follow mode, without changing the stream's own search query; the Find results list SHALL keep the keyboard and the dock focus. When a stream has been reloaded, truncated, rewritten or switched to another file since its results were found, its group SHALL be marked stale and its results SHALL NOT jump.
+The results of a search across streams SHALL be shown in a single "Find results" dock tab, opened or focused by `Ctrl+Shift+F` with the focused stream's query prefilled, and not saved in the dock layout. Results SHALL be grouped by stream, each group headed by the stream name, its match count, its progress while running and a note when only the first 100,000 hits are listed; groups SHALL be collapsible, and the whole list SHALL be virtualized. Clicking a result, or selecting it with the keyboard and pressing `Enter`, SHALL activate that stream's tab, focus its panel, centre the line (or the next visible line when the stream's filters now hide it) and pause follow mode, without changing the stream's own search query. When a stream has been reloaded, truncated, rewritten or switched to another file since its results were found, its group SHALL be marked stale and its results SHALL NOT jump.
 
 #### Scenario: Jumping to a result
 - **WHEN** the Find results tab lists a match on line 88,120 of `payment.log`, which is a background tab, and the user clicks it
-- **THEN** the `payment.log` tab comes to the front, line 88,120 is centred, follow is paused, the search box of `payment.log` keeps its previous query, and the Find results list keeps the keyboard.
-
-#### Scenario: Walking the results with the keys
-- **WHEN** after that click the user presses `↓`, then `End`
-- **THEN** each key selects the next result, then the last one, and the stream holding it comes to the front with the line centred, while the keyboard stays on the list.
+- **THEN** the `payment.log` tab becomes active and focused, line 88,120 is centred, follow is paused, and the search box of `payment.log` keeps its previous query.
 
 #### Scenario: Stream rewritten after the search
 - **WHEN** `gateway.log` is truncated by its writer after the search and the user clicks one of its results

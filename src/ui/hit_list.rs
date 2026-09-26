@@ -513,17 +513,9 @@ impl<'a> GroupedHitList<'a> {
                 )
             });
             let page = ((state.view_height / row_height).floor() as usize).max(1);
-            let keys = take_nav_keys(ui);
-            for &key in &keys {
+            for key in take_nav_keys(ui) {
                 state.selected = move_selection(state.selected, len, key, page);
                 state.reveal = Some(state.selected);
-            }
-            // The stream follows the keys: a hit reached by them is shown at once (a
-            // header only moves the selection).
-            if !keys.is_empty() {
-                if let Some(GroupRow::Hit { group, hit }) = layout.row(state.selected) {
-                    out.committed = Some((group, hit));
-                }
             }
             if len > 0 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
                 activate(state.selected, &mut out);
@@ -685,8 +677,6 @@ fn take_nav_keys(ui: &mut Ui) -> Vec<NavKey> {
         take(egui::Modifiers::NONE, egui::Key::ArrowDown, NavKey::Down);
         take(egui::Modifiers::NONE, egui::Key::PageUp, NavKey::PageUp);
         take(egui::Modifiers::NONE, egui::Key::PageDown, NavKey::PageDown);
-        take(egui::Modifiers::NONE, egui::Key::Home, NavKey::First);
-        take(egui::Modifiers::NONE, egui::Key::End, NavKey::Last);
         take(egui::Modifiers::COMMAND, egui::Key::Home, NavKey::First);
         take(egui::Modifiers::COMMAND, egui::Key::End, NavKey::Last);
         keys
