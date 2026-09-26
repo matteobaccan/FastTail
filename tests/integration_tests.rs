@@ -519,6 +519,22 @@ fn test_eframe_links_feature_enabled() {
     );
 }
 
+/// The help writes modifier keys in capitals (`CTRL + SHIFT + T`), in every language.
+#[test]
+fn test_help_modifier_keys_are_uppercase() {
+    for lang in Language::ALL {
+        for key in ["pin_tip", "help_zoom_wheel"] {
+            let text = t(*lang, key);
+            for word in text.split(|c: char| !c.is_alphanumeric()) {
+                let upper = word.to_uppercase();
+                if ["CTRL", "SHIFT", "ALT", "STRG", "UMSCHALT"].contains(&upper.as_str()) {
+                    assert_eq!(word, upper, "{lang:?} {key}: {text}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn test_i18n_exhaustive_coverage() {
     let all_keys = [

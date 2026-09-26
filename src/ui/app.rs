@@ -3792,7 +3792,7 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("Ctrl + Shift + F").monospace().strong(),
+                                        RichText::new("CTRL + SHIFT + F").monospace().strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_find_all")).monospace(),
@@ -3800,7 +3800,7 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("F3  /  Shift + F3").monospace().strong(),
+                                        RichText::new("F3  /  SHIFT + F3").monospace().strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_find_next")).monospace(),
@@ -3808,7 +3808,7 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("Click / Shift + Click / Ctrl + Click")
+                                        RichText::new("Click / SHIFT + Click / CTRL + Click")
                                             .monospace()
                                             .strong(),
                                     );
@@ -3818,16 +3818,16 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("Ctrl + A  /  Ctrl + C").monospace().strong(),
+                                        RichText::new("CTRL + A  /  CTRL + C").monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "help_desc_copy")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("Ctrl + G").monospace().strong());
+                                    ui.label(RichText::new("CTRL + G").monospace().strong());
                                     ui.label(RichText::new(t(lang, "help_desc_goto")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("Alt + W").monospace().strong());
+                                    ui.label(RichText::new("ALT + W").monospace().strong());
                                     ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
                                     ui.end_row();
 
@@ -3842,7 +3842,7 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("Ctrl + Shift + 1..9").monospace().strong(),
+                                        RichText::new("CTRL + SHIFT + 1..9").monospace().strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_labels")).monospace(),
@@ -3858,13 +3858,13 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("Ctrl + Shift + T").monospace().strong(),
+                                        RichText::new("CTRL + SHIFT + T").monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "pin_tip")).monospace());
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("Ctrl + F2  /  F2  /  Shift + F2")
+                                        RichText::new("CTRL + F2  /  F2  /  SHIFT + F2")
                                             .monospace()
                                             .strong(),
                                     );
