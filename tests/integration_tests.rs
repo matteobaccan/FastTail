@@ -844,6 +844,51 @@ fn test_i18n_exhaustive_coverage() {
             all_keys.len()
         );
     }
+
+    // Key by key, since one missing key is far below that threshold: a string may equal
+    // the English one only where that is the right translation (a product name, an
+    // abbreviation, a word several languages share), and those keys are listed here.
+    const SAME_AS_ENGLISH: &[&str] = &[
+        "cpu",
+        "ram",
+        "lock_pin",
+        "zoom",
+        "help",
+        "filters",
+        "quick_labels",
+        "session_ok",
+        "ansi_auto",
+        "renderer",
+        "renderer_wgpu",
+        "renderer_glow",
+        "renderer_software",
+        "hex_bytes",
+        "hex_offset",
+        "view_mode_text",
+        "zip_picker_name",
+        "ext_tool_name",
+        "ext_tool_program",
+        "ext_tool_args",
+        "about_version",
+        "about_renderer",
+        "about_repo",
+        "about_website",
+    ];
+    let fallbacks: Vec<String> = Language::ALL
+        .iter()
+        .filter(|lang| **lang != Language::En)
+        .flat_map(|lang| {
+            all_keys
+                .iter()
+                .filter(|key| !SAME_AS_ENGLISH.contains(key))
+                .filter(move |key| t(*lang, key) == t(Language::En, key))
+                .map(move |key| format!("{lang:?} {key}"))
+        })
+        .collect();
+    assert!(
+        fallbacks.is_empty(),
+        "keys falling back to English: {fallbacks:?}"
+    );
 }
 
 #[test]
