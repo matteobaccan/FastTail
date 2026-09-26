@@ -60,7 +60,7 @@ it pushes the branch to *your* fork of `winget-pkgs`.
 2. Let it build the manifest from the release asset, answering its questions:
 
    ```powershell
-   wingetcreate new https://github.com/matteobaccan/FastTail/releases/download/v0.10.1/fasttail-windows-x86_64-0.10.1.zip
+   wingetcreate new https://github.com/matteobaccan/FastTail/releases/download/v0.11.0/fasttail-windows-x86_64-0.11.0.zip
    ```
 
    What it asks for, and what FastTail answers:

@@ -300,7 +300,7 @@ The standalone executable is written to `target/release/fasttail` (`target/relea
 | `FASTTAIL_BENCH_ROUNDS=<n>` | rounds per phase, best time reported (default 3) |
 
 ### Prebuilt binaries
-Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform. Each name carries the version (`<version>` below, for example `0.10.1`) and each archive holds the program with `LICENSE` and `README.md`:
+Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform. Each name carries the version (`<version>` below, for example `0.11.0`) and each archive holds the program with `LICENSE` and `README.md`:
 
 | Platform | Asset | Contents |
 |---|---|---|
@@ -312,10 +312,10 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 
 ```bash
 # Linux / macOS
-tar -xzf fasttail-linux-x86_64-0.10.1.tar.gz && ./fasttail app.log
+tar -xzf fasttail-linux-x86_64-0.11.0.tar.gz && ./fasttail app.log
 
 # Windows (PowerShell)
-Expand-Archive fasttail-windows-x86_64-0.10.1.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
+Expand-Archive fasttail-windows-x86_64-0.11.0.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
 ```
 
 To read a crash report (`fasttail_crash.log`) with function names instead of addresses, unpack `fasttail-windows-x86_64-symbols-<version>.zip` (the same version as the program) and keep `fasttail.pdb` next to `fasttail.exe`.
@@ -326,7 +326,7 @@ The macOS build is **not signed with an Apple Developer ID**, so the first launc
 Clear the quarantine flag and run it:
 
 ```bash
-tar -xzf fasttail-macos-arm64-0.10.1.tar.gz
+tar -xzf fasttail-macos-arm64-0.11.0.tar.gz
 xattr -d com.apple.quarantine ./fasttail   # or: xattr -cr ./fasttail
 ./fasttail app.log
 ```

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-27
+
 ### Added
 
 - **Time delta column.** The `Δt` button next to the line-number toggle shows, for each
@@ -93,6 +95,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with it in the workspace and in sessions (`timeline=true`); the search lane is a global
   preference (`timeline_search_lane` in `fasttail.ini`).
 
+### Changed
+
+- **Disabled buttons explain themselves.** Hovering a greyed-out button now shows its
+  tooltip: the pattern prompt's Go (the pattern is invalid), the zip picker's Open
+  (nothing selected), the ⬆ / ⬇ of highlight rules and filter presets at the ends of
+  their lists, the preset rename ✔, and Stop / Refresh in the Find results tab.
+- **Shortcuts in the help read `CTRL`, `SHIFT` and `ALT`** in capitals throughout, in
+  every language (`STRG`, `UMSCHALT` in German).
+- **Less allocation while painting a row.** Highlight spans and ANSI colour parameters
+  are worked out in small stack buffers instead of a heap allocation per row or per
+  escape sequence.
+
 ### Fixed
 
 - **Filters and searches keep their quotes and edge spaces in session files.** A term
@@ -101,6 +115,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   came back trimmed, so the restored stream filtered on different text. Such values are
   now written quoted and read back exactly as typed; filter presets are stored the same
   way.
+- **The spool folder is kept private on Linux and macOS.** An existing
+  `fasttail-spool` directory is set back to owner-only access (0700) before a
+  decompressed stream or standard input is spooled into it, and one owned by another
+  user is refused instead of used, so its copies of your logs are not readable by
+  other local users.
 
 ## [0.10.1] - 2026-09-26
 
@@ -770,6 +789,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.11.0]: https://github.com/matteobaccan/FastTail/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/matteobaccan/FastTail/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/matteobaccan/FastTail/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/matteobaccan/FastTail/compare/v0.9.0...v0.9.1
