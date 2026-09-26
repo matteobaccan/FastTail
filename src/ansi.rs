@@ -9,6 +9,7 @@
 //! A line without an `ESC` byte (`0x1B`) is found with one `memchr` and returned
 //! untouched, so plain logs pay nothing for any of this.
 
+use smallvec::SmallVec;
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
@@ -372,14 +373,16 @@ fn apply_sgr(style: &mut AnsiStyle, params: &[u8]) {
         *style = AnsiStyle::default();
         return;
     }
-    // `;` separates parameters; `:` separates the sub-parameters of one of them.
-    let groups: Vec<&[u8]> = params.split(|&b| b == b';').collect();
+    // `;` separates parameters; `:` separates the sub-parameters of one of them. The
+    // lists live on the stack (a sequence rarely has more than a few parameters) and
+    // spill to the heap past their inline size.
+    let groups: SmallVec<[&[u8]; 16]> = params.split(|&b| b == b';').collect();
     let mut i = 0;
     while i < groups.len() {
         let group = groups[i];
         i += 1;
         if group.contains(&b':') {
-            let sub: Vec<u32> = group.split(|&b| b == b':').map(number).collect();
+            let sub: SmallVec<[u32; 8]> = group.split(|&b| b == b':').map(number).collect();
             match sub[0] {
                 38 | 48 | 58 => {
                     let color = match sub.get(1) {
@@ -408,7 +411,7 @@ fn apply_sgr(style: &mut AnsiStyle, params: &[u8]) {
                         n.map(|n| AnsiColor::Indexed(n.min(255) as u8))
                     }
                     Some(2) => {
-                        let c: Vec<u32> = groups
+                        let c: SmallVec<[u32; 3]> = groups
                             .get(i + 1..)
                             .unwrap_or(&[])
                             .iter()
@@ -618,6 +621,16 @@ mod tests {
             vec![(0, 1), (1, 3)],
             "`b` and `c` share bold red: one run"
         );
+    }
+
+    #[test]
+    fn long_parameter_lists_past_the_inline_size_still_apply() {
+        // 20 `;` parameters and a 10-part `:` group: both lists spill to the heap.
+        let (_, runs) = strip_and_style("\x1b[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;1;4;38;5;208mx");
+        assert!(runs[0].style.bold && runs[0].style.underline);
+        assert_eq!(runs[0].style.fg, fg(208));
+        let (_, runs) = strip_and_style("\x1b[38:2:0:0:0:0:0:7:8:9mx");
+        assert_eq!(runs[0].style.fg, Some(AnsiColor::Rgb(7, 8, 9)));
     }
 
     #[test]
