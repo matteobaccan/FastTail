@@ -196,6 +196,7 @@ impl ZipPicker {
                 let label = format!("📂 {} ({})", t(lang, "zip_picker_open"), chosen.len());
                 if ui
                     .add_enabled(!chosen.is_empty(), egui::Button::new(label))
+                    .on_disabled_hover_text(t(lang, "zip_picker_no_selection"))
                     .clicked()
                 {
                     outcome = Some(PickerOutcome::Open(chosen));

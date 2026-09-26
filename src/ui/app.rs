@@ -4002,6 +4002,7 @@ impl FastTailApp {
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(valid, egui::Button::new(t(lang, "open_pattern_go")))
+                        .on_disabled_hover_text(t(lang, "open_pattern_invalid"))
                         .clicked()
                         || (enter && valid)
                     {

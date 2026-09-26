@@ -4529,13 +4529,15 @@ pub fn render_highlights_content(
                     // Move Up / Move Down buttons for priority reordering (disabled when at boundary)
                     let up_btn = ui
                         .add_enabled(i > 0, egui::Button::new("⬆"))
-                        .on_hover_text(t(lang, "move_up"));
+                        .on_hover_text(t(lang, "move_up"))
+                        .on_disabled_hover_text(t(lang, "move_up"));
                     if up_btn.clicked() {
                         to_move_up = Some(i);
                     }
                     let down_btn = ui
                         .add_enabled(i + 1 < rules_len, egui::Button::new("⬇"))
-                        .on_hover_text(t(lang, "move_down"));
+                        .on_hover_text(t(lang, "move_down"))
+                        .on_disabled_hover_text(t(lang, "move_down"));
                     if down_btn.clicked() {
                         to_move_down = Some(i);
                     }

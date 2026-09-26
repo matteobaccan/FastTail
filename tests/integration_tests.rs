@@ -774,6 +774,7 @@ fn test_i18n_exhaustive_coverage() {
         "preset_name",
         "zip_picker_size",
         "zip_picker_open",
+        "zip_picker_no_selection",
         "zip_entry_encrypted",
         "zip_entry_method",
         "zip_entry_unsafe",
@@ -9308,4 +9309,23 @@ ERROR d
         assert!(stdin_engine(&app).is_none());
         assert_eq!(app.dock_state.iter_all_tabs().count(), 0);
     }
+}
+
+#[test]
+fn test_zip_picker_i18n_keys() {
+    for lang in Language::ALL {
+        let text = t(*lang, "zip_picker_no_selection");
+        assert!(
+            !text.is_empty() && text != "Unknown",
+            "zip_picker_no_selection missing for {lang:?}"
+        );
+    }
+    assert_eq!(
+        t(Language::En, "zip_picker_no_selection"),
+        "Select at least one entry to open"
+    );
+    assert_eq!(
+        t(Language::It, "zip_picker_no_selection"),
+        "Seleziona almeno una voce da aprire"
+    );
 }
