@@ -5,6 +5,7 @@ use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{
     FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange, MAX_FILTER_TERMS,
 };
+use crate::time_histogram::TimeHistogram;
 use crate::wildcard::{resolve_newest, split_pattern};
 use crate::wrap_layout::{WrapAnchor, WrapScroll};
 use egui::Color32;
@@ -858,6 +859,15 @@ pub struct TailEngine {
     /// ERROR and FATAL lines per `ERROR_BLOCK_LINES` lines of the cached level prefix,
     /// for the overview strip: block `b` covers lines `b * ERROR_BLOCK_LINES ..`.
     error_blocks: Vec<u32>,
+    /// Lines per level over time (see `crate::time_histogram`), fed from the lines that
+    /// have both a cached level and a cached timestamp: `0..histogram_len`.
+    histogram: TimeHistogram,
+    histogram_len: usize,
+    /// Line of the next level a running `Timestamps` job sends along with the times
+    /// (`None`: it sends none, or the cache moved and the rest is ignored).
+    timing_levels_next: Option<usize>,
+    /// Bumped whenever the histogram changes; keys the UI caches built over it.
+    pub histogram_generation: u64,
     /// Compiled include/exclude filter, shared with filter and search jobs.
     filter: FilterSpec,
     /// Running background scan, if any (one at a time per stream).
@@ -1455,6 +1465,10 @@ impl TailEngine {
             goto_time_result: None,
             level_counts: [0; LogLevel::COUNT],
             error_blocks: Vec::new(),
+            histogram: TimeHistogram::default(),
+            histogram_len: 0,
+            timing_levels_next: None,
+            histogram_generation: 0,
             filter: FilterSpec::default(),
             job: None,
             job_generation: 0,
@@ -1649,6 +1663,60 @@ impl TailEngine {
             }
         }
         self.levels.extend_from_slice(fresh);
+        self.feed_histogram();
+    }
+
+    /// Adds to the histogram the lines that now have both a level and a timestamp. Called
+    /// whenever either cache grows, so each line is counted once, right after the work
+    /// that produced the second of the two.
+    fn feed_histogram(&mut self) {
+        let end = self.levels.len().min(self.timestamps.len());
+        if end <= self.histogram_len {
+            return;
+        }
+        for idx in self.histogram_len..end {
+            self.histogram.add(self.timestamps[idx], self.levels[idx]);
+        }
+        self.histogram_len = end;
+        self.histogram_generation = self.histogram_generation.wrapping_add(1);
+    }
+
+    /// Takes the lines `>= keep` out of the histogram, before either cache drops them
+    /// (their level and time are still cached). `keep == 0` starts over at one-second
+    /// buckets; otherwise the width stays.
+    fn truncate_histogram(&mut self, keep: usize) {
+        if keep >= self.histogram_len {
+            return;
+        }
+        if keep == 0 {
+            self.histogram.reset();
+        } else {
+            for idx in keep..self.histogram_len {
+                self.histogram
+                    .remove(self.timestamps[idx], self.levels[idx]);
+            }
+        }
+        self.histogram_len = keep;
+        self.histogram_generation = self.histogram_generation.wrapping_add(1);
+    }
+
+    /// Lines per level over time of every timed line of the stream, whatever the filters.
+    pub fn time_histogram(&self) -> &TimeHistogram {
+        &self.histogram
+    }
+
+    /// Lines counted by the histogram so far (timed and with a level).
+    pub fn histogram_lines(&self) -> usize {
+        self.histogram_len
+    }
+
+    /// The timeline histogram wants the stream timed: starts timing (in the background for
+    /// a large file) unless it is complete or already on its way.
+    pub fn request_timeline(&mut self) {
+        if self.timestamps_complete() || self.timestamps_wanted {
+            return;
+        }
+        self.request_timestamps();
     }
 
     /// Detected levels (`LogLevel as u8`) of the cached prefix of the lines.
@@ -1794,11 +1862,13 @@ impl TailEngine {
         self.timestamp_hint = hint;
         self.timestamps_parsed += parsed;
         self.timestamps_unordered |= unordered;
+        self.feed_histogram();
         self.timestamps.len() >= self.total_lines()
     }
 
     /// Forgets the cached timestamps of lines `>= keep` (the index changed from there).
     fn truncate_timestamps(&mut self, keep: usize) {
+        self.truncate_histogram(keep);
         if self.timestamps.len() <= keep {
             return;
         }
@@ -1815,6 +1885,7 @@ impl TailEngine {
 
     /// Forgets the cached levels of lines `>= keep` (the index changed from there).
     fn truncate_levels(&mut self, keep: usize) {
+        self.truncate_histogram(keep);
         if self.levels.len() <= keep {
             return;
         }
@@ -3297,7 +3368,16 @@ impl TailEngine {
                     self.timestamps[from - 1]
                 };
                 let hint = self.timestamp_hint;
-                self.start_job(JobSpec::Timestamps { inherited, hint }, from);
+                // Levels come along from where their cache stops, when that is inside
+                // the range; a cache behind it is completed by a level scan afterwards.
+                let levels_from = (self.levels.len() >= from).then_some(self.levels.len());
+                self.timing_levels_next = levels_from;
+                let spec = JobSpec::Timestamps {
+                    inherited,
+                    hint,
+                    levels_from,
+                };
+                self.start_job(spec, from);
             }
             // Queued behind the filter or search scan, started from `finish_job`.
             _ => {}
@@ -4158,6 +4238,15 @@ impl TailEngine {
                     self.search_last_counted = last_line;
                     self.search_last_counted_exact = true;
                 }
+                ScanBatch::Levels(levels) if job.kind == ScanKind::Timestamps => {
+                    // Taken only where the cache stands, or it would misalign.
+                    if self.timing_levels_next == Some(self.levels.len()) {
+                        self.push_levels(&levels);
+                        self.timing_levels_next = Some(self.levels.len());
+                    } else {
+                        self.timing_levels_next = None;
+                    }
+                }
                 ScanBatch::Levels(levels) => {
                     self.push_levels(&levels);
                     job.hits = self.levels.len();
@@ -4173,6 +4262,7 @@ impl TailEngine {
                     self.timestamps_parsed += parsed;
                     self.timestamps_unordered |= unordered;
                     self.timestamp_hint = hint;
+                    self.feed_histogram();
                     job.hits = self.timestamps.len();
                 }
                 ScanBatch::Offsets {

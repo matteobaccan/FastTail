@@ -109,13 +109,16 @@ pub struct PresetEvents {
     pub open_filters: Option<PathBuf>,
 }
 
-/// Search results pane (open flag, height) and overview strip switch, global preferences
-/// persisted in `fasttail.ini` and applied to every stream.
+/// Search results pane (open flag, height), overview strip switch and timeline histogram
+/// (shown flag, search lane), global preferences persisted in `fasttail.ini` and applied
+/// to every stream.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchViewPrefs {
     pub search_pane: bool,
     pub search_pane_height: f32,
     pub overview_strip: bool,
+    pub timeline_histogram: bool,
+    pub timeline_search_lane: bool,
 }
 
 impl Default for SearchViewPrefs {
@@ -124,6 +127,8 @@ impl Default for SearchViewPrefs {
             search_pane: false,
             search_pane_height: DEFAULT_SEARCH_PANE_HEIGHT,
             overview_strip: true,
+            timeline_histogram: false,
+            timeline_search_lane: true,
         }
     }
 }
@@ -636,7 +641,13 @@ fn paint_search_row_background(
 /// such a log hides them; the fields stay usable, so a window can always be typed, fixed
 /// or cleared. A window typed while the stream is still being timed in the background is
 /// held, with a hint, until timing finishes.
-fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+fn render_time_range(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    search_view: &mut SearchViewPrefs,
+) {
     let usable = engine.timestamps_usable() || !engine.timestamps_complete();
     let show_clear = time_range_clear_shown(
         !engine.time_from_text.trim().is_empty() || !engine.time_to_text.trim().is_empty(),
@@ -713,6 +724,53 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                 .color(theme.text_dim()),
         )
         .on_hover_text(t(lang, "time_range_unavailable_tip"));
+    }
+
+    // Timeline histogram toggle, and its search lane toggle while it is shown.
+    let accent = theme.accent_color();
+    if toggle_button(ui, theme, "📊", search_view.timeline_histogram, accent)
+        .on_hover_text(t(lang, "timeline_tip"))
+        .clicked()
+    {
+        search_view.timeline_histogram = !search_view.timeline_histogram;
+    }
+    if search_view.timeline_histogram
+        && toggle_button(ui, theme, "🔍", search_view.timeline_search_lane, accent)
+            .on_hover_text(t(lang, "timeline_search_lane_tip"))
+            .clicked()
+    {
+        search_view.timeline_search_lane = !search_view.timeline_search_lane;
+    }
+}
+
+/// The timeline histogram above the rows (see `timeline_strip`): opening it times the
+/// stream, in the background for a large file; a stream without usable timestamps gets
+/// the time fields' hint instead. A click or drag becomes the time range, written into
+/// the fields and applied like a typed one.
+fn render_timeline(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    search_view: &SearchViewPrefs,
+) {
+    engine.request_timeline();
+    if engine.timestamps_complete() && !engine.timestamps_usable() {
+        ui.label(
+            RichText::new(format!("📊 ⓘ {}", t(lang, "time_range_unavailable")))
+                .monospace()
+                .size(10.5)
+                .color(theme.text_dim()),
+        )
+        .on_hover_text(t(lang, "time_range_unavailable_tip"));
+        return;
+    }
+    if let Some((from, to)) =
+        crate::ui::timeline_strip::show(ui, engine, theme, lang, search_view.timeline_search_lane)
+    {
+        let (from_ok, to_ok) = engine.apply_time_range_text(&from, &to);
+        engine.time_range_error = !from_ok || !to_ok;
+        ui.ctx().request_repaint();
     }
 }
 
@@ -980,6 +1038,11 @@ fn render_log_stream(
     let pane_visible = search_view.search_pane && !engine.last_searched_query.is_empty();
     let viewport_height = if pane_visible {
         (viewport_height - search_view.search_pane_height).max(MIN_ROWS_HEIGHT)
+    } else {
+        viewport_height
+    };
+    let viewport_height = if search_view.timeline_histogram {
+        (viewport_height - crate::ui::timeline_strip::STRIP_HEIGHT).max(MIN_ROWS_HEIGHT)
     } else {
         viewport_height
     };
@@ -2080,7 +2143,7 @@ fn render_log_stream(
 
         ui.separator();
 
-        render_time_range(ui, engine, theme, lang);
+        render_time_range(ui, engine, theme, lang, search_view);
 
         ui.separator();
 
@@ -2216,6 +2279,10 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
         ui.separator();
+    }
+
+    if search_view.timeline_histogram {
+        render_timeline(ui, engine, theme, lang, search_view);
     }
 
     // Search results pane: a resizable region at the bottom of the stream's panel, laid

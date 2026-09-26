@@ -193,7 +193,14 @@ pub enum JobSpec {
     /// engine's `fill_timestamps`: `inherited` is the timestamp of the line before the
     /// range (`NO_TIMESTAMP` at the start of the file) and `hint` the format that matched
     /// last, so a job resumed halfway fills the same cache as one that never stopped.
-    Timestamps { inherited: i64, hint: FormatHint },
+    /// From line `levels_from` on it also emits the level of every line, in a `Levels`
+    /// batch sent before each `Timestamps` batch, so the level cache (and what is built
+    /// on both, the timeline histogram) keeps pace instead of waiting for a later scan.
+    Timestamps {
+        inherited: i64,
+        hint: FormatHint,
+        levels_from: Option<usize>,
+    },
     /// Emit the indices of the visible lines containing the query (case-insensitive),
     /// at most `limit`; past it the scan stops, or with `count_past_limit` goes on
     /// counting the hits it no longer lists (`ScanBatch::Counted`).
@@ -424,7 +431,9 @@ fn run(
     let mut limit_reached = false;
     let mut tally = Tally::default();
     let (inherited, hint) = match &spec {
-        JobSpec::Timestamps { inherited, hint } => (*inherited, *hint),
+        JobSpec::Timestamps {
+            inherited, hint, ..
+        } => (*inherited, *hint),
         _ => (NO_TIMESTAMP, FormatHint::default()),
     };
     let mut timing = Timing {
@@ -460,9 +469,13 @@ fn run(
                 });
                 true
             }
-            JobSpec::Timestamps { .. } => {
+            JobSpec::Timestamps { levels_from, .. } => {
+                let with_level = levels_from.is_some_and(|from| idx >= from);
                 line_passes(bytes, range.encoding, strip, |s| {
                     timing.push(s);
+                    if with_level {
+                        levels.push(detect_level(s) as u8);
+                    }
                     true
                 });
                 true
@@ -594,6 +607,9 @@ fn run(
                 return;
             }
         } else if matches!(spec, JobSpec::Timestamps { .. }) {
+            if !levels.is_empty() && !send(ScanBatch::Levels(std::mem::take(&mut levels))) {
+                return;
+            }
             if let Some(batch) = timing.take_batch() {
                 if !send(batch) {
                     return;
@@ -653,6 +669,9 @@ fn run(
         let last = if matches!(spec, JobSpec::Levels) {
             (!levels.is_empty()).then(|| ScanBatch::Levels(std::mem::take(&mut levels)))
         } else if matches!(spec, JobSpec::Timestamps { .. }) {
+            if !levels.is_empty() && !send(ScanBatch::Levels(std::mem::take(&mut levels))) {
+                return;
+            }
             timing.take_batch()
         } else {
             (!hits.is_empty()).then(|| ScanBatch::Lines(std::mem::take(&mut hits)))
@@ -740,7 +759,12 @@ mod tests {
             ansi: AnsiMode::Raw,
             parent_visible: false,
         };
-        let job = ScanJob::spawn(1, &path, range, JobSpec::Timestamps { inherited, hint });
+        let spec = JobSpec::Timestamps {
+            inherited,
+            hint,
+            levels_from: None,
+        };
+        let job = ScanJob::spawn(1, &path, range, spec);
         assert_eq!(job.kind, ScanKind::Timestamps);
         let (mut values, mut parsed, mut unordered, mut last_hint) = (Vec::new(), 0, false, hint);
         let started = Instant::now();
@@ -885,6 +909,7 @@ mod tests {
             JobSpec::Timestamps {
                 inherited: NO_TIMESTAMP,
                 hint: FormatHint::default(),
+                levels_from: None,
             },
         );
         job.cancel();

@@ -76,6 +76,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing piped is reported on stderr, and a file named `-` opens as `./-`. Verified on
   Windows from cmd.exe, Git Bash, PowerShell 7 and Windows PowerShell 5.1 (see the
   README for the caveats of each shell).
+- **Timeline histogram.** `📊` next to the time range fields opens a strip above the rows
+  with the stream's lines per level over time: bars stacked ERROR/FATAL, WARN, INFO,
+  DEBUG/TRACE and no level in the theme's level colours, counting every timed line
+  whatever the filters, so a burst of errors or a gap in logging stands out. A click on a
+  bar sets the time range to its span, a drag to the span between two bars; the bounds are
+  written into the from/to fields as whole seconds and applied like a typed window, which
+  is shaded on the strip. Hovering a bar shows its span and counts per level; an optional
+  lane (`🔍`) marks where the current search hits fall. Opening it times the stream (in the
+  background above 16 MB, the bars growing as it goes); a log without usable timestamps
+  gets the fields' hint. The histogram is kept incrementally from the timestamp and level
+  caches in at most 2,048 buckets, one second wide and doubling as the span grows, and
+  follows appends, truncation and rewrites. Shown state and search lane are saved in
+  `fasttail.ini` (`timeline_histogram`, `timeline_search_lane`).
 
 ### Fixed
 
