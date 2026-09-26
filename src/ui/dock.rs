@@ -529,6 +529,11 @@ fn paint_search_row_background(
 /// being timed in the background is held, with a hint, until timing finishes.
 fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
     let usable = engine.timestamps_usable() || !engine.timestamps_complete();
+    let controls = time_range_controls(
+        usable,
+        !engine.time_from_text.trim().is_empty() || !engine.time_to_text.trim().is_empty(),
+        engine.is_time_filtered() || engine.time_range_pending(),
+    );
     ui.label(
         RichText::new(format!("🕘 {}:", t(lang, "time_range")))
             .monospace()
@@ -552,10 +557,22 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
         )
     };
 
-    let from_resp = field(ui, &mut from, t(lang, "time_from_hint"), usable);
+    let from_resp = field(
+        ui,
+        &mut from,
+        t(lang, "time_from_hint"),
+        controls.fields_enabled,
+    );
     changed |= from_resp.changed();
     ui.label(RichText::new("→").monospace().color(theme.text_dim()));
-    let to_resp = field(ui, &mut to, t(lang, "time_to_hint"), usable);
+    let to_resp = field(
+        ui,
+        &mut to,
+        t(lang, "time_to_hint"),
+        controls.fields_enabled,
+    );
+    // A side is judged once the user leaves it: `1` on the way to `14:02` is no error.
+    let typing = from_resp.has_focus() || to_resp.has_focus();
     changed |= to_resp.changed();
 
     if changed {
@@ -563,7 +580,7 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
         engine.time_range_error = !from_ok || !to_ok;
     }
 
-    if (engine.is_time_filtered() || engine.time_range_pending())
+    if controls.show_clear
         && ui
             .button("✖")
             .on_hover_text(t(lang, "time_range_clear"))
@@ -573,7 +590,7 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
         engine.time_range_error = false;
     }
 
-    if engine.time_range_error {
+    if engine.time_range_error && !typing {
         ui.label(
             RichText::new(format!("⚠ {}", t(lang, "time_range_invalid")))
                 .monospace()
@@ -599,6 +616,26 @@ fn render_time_range(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                 .color(theme.text_dim()),
         )
         .on_hover_text(t(lang, "time_range_unavailable_tip"));
+    }
+}
+
+/// What the time range controls allow, from whether the stream can be timed (`usable`,
+/// optimistic until timing finishes), whether either field holds text and whether a
+/// window is applied or held.
+#[derive(Debug, PartialEq, Eq)]
+struct TimeRangeControls {
+    /// The fields take input. A field holding text stays editable on a stream that turned
+    /// out not to be timeable, so what was typed can still be corrected or deleted.
+    fields_enabled: bool,
+    /// The ✖ that clears both fields and the window: shown as soon as there is anything
+    /// to clear, an unparsable text included.
+    show_clear: bool,
+}
+
+fn time_range_controls(usable: bool, has_text: bool, windowed: bool) -> TimeRangeControls {
+    TimeRangeControls {
+        fields_enabled: usable || has_text,
+        show_clear: has_text || windowed,
     }
 }
 
@@ -4163,4 +4200,30 @@ fn render_markdown_stream(
 
     engine.current_scroll_y = scroll_output.state.offset.y;
     engine.current_scroll_x = scroll_output.state.offset.x;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_range_fields_stay_editable_while_they_hold_text() {
+        // A log that turned out not to be timeable: empty fields are disabled...
+        let empty = time_range_controls(false, false, false);
+        assert!(!empty.fields_enabled);
+        assert!(!empty.show_clear);
+        // ...but what was typed before timing finished can still be fixed or cleared.
+        let typed = time_range_controls(false, true, false);
+        assert!(typed.fields_enabled);
+        assert!(typed.show_clear);
+    }
+
+    #[test]
+    fn the_clear_button_shows_for_text_or_a_window() {
+        // An unparsable text is not a window, yet there is something to clear.
+        assert!(time_range_controls(true, true, false).show_clear);
+        assert!(time_range_controls(true, false, true).show_clear);
+        assert!(!time_range_controls(true, false, false).show_clear);
+        assert!(time_range_controls(true, false, false).fields_enabled);
+    }
 }
