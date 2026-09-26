@@ -112,10 +112,16 @@ pub fn render_find_results(
                 )));
             state.store(ui.ctx(), input_id);
         }
-        if resp.has_focus()
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+        // A single-line box gives the keyboard up on Enter, in the same frame: the key
+        // is read off the focus it just lost.
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.is_none());
+        if (resp.lost_focus() && enter)
+            || (resp.has_focus()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)))
         {
             run = true;
+            // The results take the keyboard: the arrows walk them as they come in.
+            ui.memory_mut(|m| m.request_focus(results_list_id()));
         }
         if resp.has_focus()
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -248,11 +254,11 @@ pub fn render_find_results(
             group.collapsed = !group.collapsed;
         }
     }
+    // A result clicked, entered or reached with the keys is shown in its stream; the
+    // list keeps the keyboard, so the arrows, Page Up / Down and Home / End go on
+    // walking the results.
     if let Some((g, hit)) = output.committed {
-        if session.commit(g, hit) {
-            // The stream takes the keyboard after the jump: F3 walks its own matches.
-            ui.memory_mut(|m| m.surrender_focus(results_list_id()));
-        }
+        session.commit(g, hit);
     }
 }
 
@@ -287,8 +293,9 @@ pub fn open_find_results_tab(dock: &mut DockState<FastTailTab>) {
     }
 }
 
-/// Applies the jump a committed result left in the session: the stream's tab becomes
-/// active and focused, and the stream centres the line (the next visible one when its
+/// Applies the jump a committed result left in the session: the stream's tab is brought
+/// to the front of its leaf (the dock focus stays on the Find results), and the stream
+/// centres the line (the next visible one when its
 /// filters now hide it) with follow paused. Its own search query is left alone.
 /// Returns whether a jump happened.
 pub fn apply_find_jump(
@@ -306,7 +313,6 @@ pub fn apply_find_jump(
     engine.request_jump(line, lang);
     if let Some(tab) = dock.find_tab(&FastTailTab::LogStream(engine.path.clone())) {
         let _ = dock.set_active_tab(tab);
-        dock.set_focused_node_and_surface(tab.node_path());
     }
     true
 }

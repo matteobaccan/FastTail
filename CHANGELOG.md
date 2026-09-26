@@ -36,9 +36,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   results are grouped by stream in one virtualized list: a header per stream with its
   match count, progress and notes (queued, stopped, capped, skipped, stale), collapsible
   with a click or `Enter`, then its lines with line number, level colour and the query
-  tinted. A click or `Enter` on a result activates that stream's tab, centres the line
-  (or the next visible one when the stream's filters now hide it), selects it and pauses
-  follow; the stream's own search query and matches are untouched. Results are a
+  tinted. A click or `Enter` on a result brings that stream's tab to the front, centres
+  the line (or the next visible one when the stream's filters now hide it), selects it
+  and pauses follow; the stream's own search query and matches are untouched. The list
+  keeps the keyboard: the arrows, `Page Up` / `Page Down` and `Home` / `End` walk the
+  results and the stream follows each one. Results are a
   snapshot (its age is shown): Refresh runs the query again, Stop keeps what was found,
   a new query, closing the tab or closing a stream cancels its jobs, and a stream reloaded
   since (truncated, rotated, rewritten, switched to another file) is marked stale, its rows
