@@ -9,6 +9,7 @@ pub mod external_tools;
 pub mod file_source;
 pub mod filter_preset;
 pub mod find_all;
+pub mod global_filter;
 pub mod html_converter;
 pub mod i18n;
 pub mod log_level;

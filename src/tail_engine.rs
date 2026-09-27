@@ -874,6 +874,8 @@ pub struct TailEngine {
     pub histogram_generation: u64,
     /// Compiled include/exclude filter, shared with filter and search jobs.
     filter: FilterSpec,
+    /// The global filter shared by every stream (see `set_global_filter`).
+    global_filter: Option<Arc<FilterSpec>>,
     /// Running background scan, if any (one at a time per stream).
     job: Option<ScanJob>,
     job_generation: u64,
@@ -1478,6 +1480,7 @@ impl TailEngine {
             timing_levels_next: None,
             histogram_generation: 0,
             filter: FilterSpec::default(),
+            global_filter: None,
             job: None,
             job_generation: 0,
             pending_refresh_from: None,
@@ -1623,6 +1626,34 @@ impl TailEngine {
             self.filter_is_regex,
         )
         .with_levels(self.min_level, self.show_unknown_levels)
+        .with_global(self.global_filter.clone())
+    }
+
+    /// Sets the global filter this stream combines with its own (`None`: off, or no
+    /// term). The app passes the same compiled set to every stream; handing the one
+    /// already in place again changes nothing.
+    pub fn set_global_filter(&mut self, global: Option<Arc<FilterSpec>>) {
+        if !self.holds_global_filter(&global) {
+            self.global_filter = global.filter(|g| g.has_terms());
+            self.refresh_filters();
+        }
+    }
+
+    /// Whether this stream already applies `global` (the same compiled set, or none).
+    pub fn holds_global_filter(&self, global: &Option<Arc<FilterSpec>>) -> bool {
+        match (
+            &self.global_filter,
+            global.as_ref().filter(|g| g.has_terms()),
+        ) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    /// The global filter this stream applies, if any (for the stream bar badge).
+    pub fn global_filter(&self) -> Option<&FilterSpec> {
+        self.global_filter.as_deref()
     }
 
     /// Sets the minimum level a line must have to be visible (`Unknown` turns it off).
@@ -2964,6 +2995,7 @@ impl TailEngine {
     pub fn is_filter_active(&self) -> bool {
         self.include_terms.iter().any(|t| !t.is_empty())
             || self.exclude_terms.iter().any(|t| !t.is_empty())
+            || self.global_filter.is_some()
             || self.min_level != LogLevel::Unknown
             || self.time_from.is_some()
             || self.time_to.is_some()

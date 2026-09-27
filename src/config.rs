@@ -160,6 +160,9 @@ pub struct FastTailConfig {
     /// Named filter presets (`[filter_preset.N]` sections), see `filter_preset`.
     #[serde(default, skip)]
     pub filter_presets: Vec<crate::filter_preset::FilterPreset>,
+    /// The global filter every stream combines with its own (`[global_filter]`).
+    #[serde(default, skip)]
+    pub global_filter: crate::global_filter::GlobalFilter,
     #[serde(default)]
     pub baretail_import: bool,
     pub baretail_prompt_shown: bool,
@@ -341,6 +344,7 @@ impl Default for FastTailConfig {
             highlight_rules: Vec::new(),
             external_tools: Vec::new(),
             filter_presets: Vec::new(),
+            global_filter: Default::default(),
             baretail_import: false,
             baretail_prompt_shown: false,
             dock_layout: None,
@@ -781,6 +785,7 @@ impl FastTailConfig {
         }
 
         crate::filter_preset::write_presets(&mut conf, &self.filter_presets);
+        self.global_filter.write(&mut conf);
 
         conf
     }
@@ -1254,6 +1259,7 @@ impl FastTailConfig {
         }
         cfg.external_tools = tools;
         cfg.filter_presets = crate::filter_preset::read_presets(conf);
+        cfg.global_filter = crate::global_filter::GlobalFilter::read(conf);
 
         cfg
     }

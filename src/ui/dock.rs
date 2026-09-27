@@ -2239,6 +2239,7 @@ fn render_log_stream(
         ui.separator();
 
         render_presets_menu(ui, engine, filter_presets, preset_events, theme, lang);
+        render_global_filter_badge(ui, engine, theme, lang);
     });
     render_preset_save_dialog(ui.ctx(), engine, filter_presets, preset_events, theme, lang);
 
@@ -3853,6 +3854,45 @@ fn extra_terms_controls(
     }
 }
 
+/// `🌐` in the stream bar while the global filter applies to this stream, its terms in
+/// the tooltip, so a condition set outside the stream is never invisible.
+fn render_global_filter_badge(
+    ui: &mut Ui,
+    engine: &TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    if let Some(global) = engine.global_filter() {
+        ui.label(
+            RichText::new("🌐")
+                .monospace()
+                .strong()
+                .color(theme.accent_color()),
+        )
+        .on_hover_text(format!(
+            "{}
+{}",
+            t(lang, "global_filter_badge_tip"),
+            global_terms_text(global)
+        ));
+    }
+}
+
+/// The terms of a compiled global filter, `+term` for an include and `-term` for an
+/// exclude, one per line.
+pub fn global_terms_text(global: &crate::scan_job::FilterSpec) -> String {
+    let side = |terms: &[crate::scan_job::FilterTerm], sign: char| -> Vec<String> {
+        terms
+            .iter()
+            .filter(|t| !t.text.is_empty())
+            .map(|t| format!("{sign}{}", t.text))
+            .collect()
+    };
+    let mut lines = side(&global.include, '+');
+    lines.extend(side(&global.exclude, '-'));
+    lines.join("\n")
+}
+
 /// The `Presets ▾` drop-down of the stream bar: shows the preset the stream equals
 /// (`name *` once edited after applying it) and applies, saves, updates and manages them.
 fn render_presets_menu(
@@ -4388,6 +4428,20 @@ pub fn render_filters_content(
             .color(theme.text_dim()),
     );
 
+    // The global filter applies on top of every stream listed below.
+    if let Some(global) = engines.first().and_then(|e| e.global_filter()) {
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!(
+                "🌐 {}\n{}",
+                t(lang, "global_filter_badge_tip"),
+                global_terms_text(global)
+            ))
+            .monospace()
+            .size(11.0)
+            .color(theme.accent_color()),
+        );
+    }
     ui.add_space(6.0);
     render_preset_manager(ui, engines, presets, events, theme, lang);
     ui.add_space(8.0);

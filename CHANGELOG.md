@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Global filter.** `CTRL + SHIFT + H`, or `🌐` in the title bar, shows a bar with up to 8
+  include and 8 exclude terms (and their own `Aa` / `.*` toggles) that every stream, open
+  now or later, applies on top of its own filters: a line is shown when it passes the
+  stream's terms, level and time range and contains every global include term and no
+  global exclude term; a stack-trace line follows its entry unless an exclude term
+  matches it. Each stream bar shows `🌐` with the global terms in its tooltip, and the
+  Filters window lists them. Edits reach the streams 300 ms after the last key; large
+  files refilter in the background; the Find results tab honours it. An **On** switch
+  suspends it without losing the terms, and hiding the bar keeps it on. Saved in
+  `fasttail.ini` as `[global_filter]`; not in sessions or presets. Help dialog and all 16
+  languages updated.
+
 ## [0.11.0] - 2026-09-27
 
 ### Added
