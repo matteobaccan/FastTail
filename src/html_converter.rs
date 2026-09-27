@@ -105,7 +105,9 @@ static RE_HEADINGS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 /// Converts HTML strings to Markdown formatted text
 pub fn html_to_markdown(html: &str) -> String {
-    let mut out = html.to_string();
+    // Sanitize pre-existing placeholder delimiters from untrusted input to prevent collision
+    let html_clean = html.replace('\u{E000}', "").replace('\u{E001}', "");
+    let mut out = html_clean;
 
     // 1. Remove comments <!-- ... -->
     out = RE_COMMENT.replace_all(&out, "").into_owned();
@@ -436,5 +438,15 @@ mod tests {
         assert!(!contains_html("`<div>` in inline code"));
         assert!(contains_html("<div><p>x</p></div>"));
         assert!(contains_html("a<br>b"));
+    }
+
+    #[test]
+    fn test_placeholder_collision_prevented() {
+        // Attempting to inject the internal placeholder marker in untrusted HTML input
+        let html = "<p>User input with \u{E000}PRE0\u{E001}</p><pre><code>let secret = 42;</code></pre>";
+        let md = html_to_markdown(html);
+        assert!(!md.contains("\u{E000}"));
+        assert!(!md.contains("\u{E001}"));
+        assert!(md.contains("let secret = 42;"));
     }
 }

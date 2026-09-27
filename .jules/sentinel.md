@@ -17,3 +17,8 @@
 **Vulnerability:** Bypassing permission updates (`set_permissions`) when a directory already exists (`dir.is_dir()`) allows temporary spool files containing log content to be exposed if the directory pre-existed with permissive access rights (e.g. 0755 or 0777 in `/tmp`).
 **Learning:** `create_dir_all` in Rust returns `Ok(())` if the directory already exists. Bypassing `set_permissions(dir, 0o700)` via an early `if dir.is_dir()` check leaves existing or pre-created directories insecurely open to local users on multi-user systems.
 **Prevention:** Do not early-return on directory existence when ensuring secure directory permissions; always apply `set_permissions(dir, 0o700)` on Unix.
+
+## 2026-04-19 - OpenOptions::new() defaults truncate to false in Rust
+**Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
+**Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
+**Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
