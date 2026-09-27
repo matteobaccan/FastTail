@@ -23,26 +23,27 @@ state shared by every stream.
 
 ## Decisions
 
-1. **Global terms live inside `FilterSpec`.** A new `global: Option<Arc<TermSet>>` field,
-   where `TermSet` holds the compiled include / exclude terms with their own case and
-   regex flags (the type the stream's terms already use, factored out). `matches(line)`
-   becomes: stream exclude or global exclude → hidden; stream include and global include
-   both pass → then the level check. `visible_in_sequence` applies the same rule, so a
-   continuation line follows its entry unless a stream *or global* exclude term matches
-   it. Alternative rejected: a second filtering pass over `filtered_lines` — it would
-   double the work on large files and break the continuation rule.
+1. **Global terms live inside `FilterSpec`.** A new `global: Option<Arc<FilterSpec>>`
+   field: the global set is itself a `FilterSpec` (terms, per-term regexes, its own case
+   and regex flags, no level), so no separate type is needed. `excluded(line)` is true
+   when a stream *or* global exclude term matches, `included(line)` when the stream's
+   *and* the global include terms all match; `matches` and `visible_in_sequence` build on
+   them, so a continuation line follows its entry unless a stream or global exclude term
+   matches it. Alternative rejected: a second filtering pass over `filtered_lines` — it
+   would double the work on large files and break the continuation rule.
 2. **One compiled set shared by all streams.** The app compiles the global terms once per
-   edit into an `Arc<TermSet>` and hands the same `Arc` to every engine
-   (`TailEngine::set_global_filter(Option<Arc<TermSet>>)`), so N streams cost one
+   edit into an `Arc<FilterSpec>` and hands the same `Arc` to every engine
+   (`TailEngine::set_global_filter(Option<Arc<FilterSpec>>)`), so N streams cost one
    compilation and 8 bytes each. `None` when the filter is off or has no non-empty term.
 3. **Recomputation per engine uses the existing path.** `set_global_filter` rebuilds the
    engine's `FilterSpec` and calls `refresh_filters`, which recomputes synchronously up to
    16 MB and starts a background filter job above; the search refresh follows as it does
    for a stream filter change. Edits in the bar are debounced by 300 ms before they are
    pushed to the engines, so typing a term does not restart N background jobs per key.
-4. **Streams opened later** receive the current `Arc` right after they are created (in
-   `open_log_file`, the workspace / session restore, standard input and zip entries),
-   before their first filter computation.
+4. **Streams opened later** receive the current `Arc` in the same frame, before the dock
+   draws them: every frame the app hands the current set to each engine, a no-op when it
+   already holds the same `Arc`, so every way a stream appears (open, workspace or
+   session restore, standard input, zip entry) is covered in one place.
 5. **UI.** A `🌐` toggle in the toolbar (and `CTRL + SHIFT + H`, consumed before the dock
    is drawn, as `CTRL + SHIFT + F` is, because egui matches shortcuts with extra Shift
    ignored) shows or hides the global filter bar under the menu bar: an on / off switch,
@@ -57,7 +58,7 @@ state shared by every stream.
 
 Threads and memory: compiling the terms and pushing the `Arc` run on the UI thread (≤ 16
 regexes, microseconds); recomputation follows the stream filter rules (UI thread up to
-16 MB, worker above). Memory: one `TermSet` for the whole app plus one `Arc` per stream;
+16 MB, worker above). Memory: one global `FilterSpec` for the whole app plus one `Arc` per stream;
 no per-line cost beyond the existing `filtered_lines`. Growing files filter their appended
 lines with the same `FilterSpec`; a rotated or truncated file rebuilds with it; nothing
 touches the file itself, so Windows sharing is unchanged.

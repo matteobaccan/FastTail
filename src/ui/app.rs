@@ -118,6 +118,11 @@ pub struct FastTailApp {
     pub applied_visuals: Option<(bool, CyberTheme)>,
     /// Search across every open stream (Ctrl+Shift+F), shown by the Find results tab.
     pub find_all: crate::find_all::FindAllSession,
+    /// The global filter as compiled for the streams (`None`: off or no term), shared by
+    /// every engine; rebuilt from `config.global_filter` after an edit settles.
+    pub global_spec: Option<std::sync::Arc<crate::scan_job::FilterSpec>>,
+    /// When the terms of the global filter bar were last edited, until applied.
+    global_edit_at: Option<Instant>,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -590,7 +595,10 @@ impl FastTailApp {
             last_mouse_render: Instant::now(),
             applied_visuals: None,
             find_all: crate::find_all::FindAllSession::default(),
+            global_spec: None,
+            global_edit_at: None,
         };
+        app.global_spec = app.config.global_filter.compile();
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
         if has_restored_tabs {
@@ -1440,6 +1448,14 @@ impl FastTailApp {
         }
     }
 
+    /// Compiles the global filter as it stands and saves it; the streams pick the new set
+    /// up before they are drawn (see `render_ui`).
+    pub fn apply_global_filter(&mut self) {
+        self.global_edit_at = None;
+        self.global_spec = self.config.global_filter.compile();
+        let _ = self.config.save();
+    }
+
     pub fn render_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
 
@@ -1846,6 +1862,22 @@ impl FastTailApp {
                             }
 
                             ui.separator();
+                        }
+
+                        // Global filter bar (CTRL + SHIFT + H); lit while the filter applies.
+                        let globe_color = if self.config.global_filter.is_applied() {
+                            self.config.theme.accent_color()
+                        } else {
+                            self.config.theme.text_dim()
+                        };
+                        if ui
+                            .button(RichText::new(" 🌐 ").monospace().color(globe_color))
+                            .on_hover_text(t(self.config.language, "global_filter_tip"))
+                            .clicked()
+                        {
+                            self.config.global_filter.bar_open =
+                                !self.config.global_filter.bar_open;
+                            let _ = self.config.save();
                         }
 
                         // Always-on-top pin (Ctrl+Shift+T)
@@ -2650,6 +2682,39 @@ impl FastTailApp {
                 .and_then(|p| self.engines.iter().find(|e| paths_equal(&e.path, p)))
                 .map(|e| e.search_query.clone());
             self.open_find_results(query);
+        }
+
+        // Global filter: CTRL + SHIFT + H shows or hides its bar (consumed before the dock,
+        // like CTRL + SHIFT + F); an edit of the terms reaches the streams once typing
+        // pauses, a switch or toggle at once; every stream, new ones included, gets the
+        // same compiled set before it is drawn.
+        if crate::ui::global_filter_bar::consume_shortcut(&ctx) {
+            self.config.global_filter.bar_open = !self.config.global_filter.bar_open;
+            let _ = self.config.save();
+        }
+        if self.config.global_filter.bar_open {
+            let out = crate::ui::global_filter_bar::render(
+                ui,
+                &mut self.config.global_filter,
+                &self.config.theme,
+                self.config.language,
+            );
+            if out.terms_edited {
+                self.global_edit_at = Some(Instant::now());
+            }
+            if out.switched || out.closed {
+                self.apply_global_filter();
+            }
+        }
+        if let Some(at) = self.global_edit_at {
+            let delay = std::time::Duration::from_millis(crate::global_filter::APPLY_DELAY_MS);
+            match delay.checked_sub(at.elapsed()) {
+                Some(wait) if !wait.is_zero() => ctx.request_repaint_after(wait),
+                _ => self.apply_global_filter(),
+            }
+        }
+        for engine in &mut self.engines {
+            engine.set_global_filter(self.global_spec.clone());
         }
 
         let mut lock_now = false;
@@ -3795,6 +3860,15 @@ impl FastTailApp {
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_find_all")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("CTRL + SHIFT + H").monospace().strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_global_filter"))
+                                            .monospace(),
                                     );
                                     ui.end_row();
 

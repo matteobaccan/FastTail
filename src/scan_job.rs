@@ -93,6 +93,9 @@ pub struct FilterSpec {
     pub min_level: LogLevel,
     /// With a minimum level set, whether lines without a detectable level are shown.
     pub show_unknown_levels: bool,
+    /// The global filter every stream combines with its own terms (see `with_global`):
+    /// one compiled set shared by all streams and their jobs.
+    pub global: Option<Arc<FilterSpec>>,
 }
 
 impl FilterSpec {
@@ -116,7 +119,21 @@ impl FilterSpec {
             is_regex,
             min_level: LogLevel::Unknown,
             show_unknown_levels: false,
+            global: None,
         }
+    }
+
+    /// Adds the global filter: its exclude terms hide a line as the stream's own do, and
+    /// its include terms must match as well as the stream's.
+    pub fn with_global(mut self, global: Option<Arc<FilterSpec>>) -> Self {
+        self.global = global.filter(|g| g.has_terms());
+        self
+    }
+
+    /// Whether any include or exclude term is non-empty.
+    pub fn has_terms(&self) -> bool {
+        self.include.iter().any(|t| !t.text.is_empty())
+            || self.exclude.iter().any(|t| !t.text.is_empty())
     }
 
     /// Adds the minimum-level stage (see `level_passes`).
@@ -127,9 +144,7 @@ impl FilterSpec {
     }
 
     pub fn is_active(&self) -> bool {
-        self.include.iter().any(|t| !t.text.is_empty())
-            || self.exclude.iter().any(|t| !t.text.is_empty())
-            || self.min_level != LogLevel::Unknown
+        self.has_terms() || self.min_level != LogLevel::Unknown || self.global.is_some()
     }
 
     /// Third stage after exclude and include: the line's detected level must reach
@@ -145,18 +160,22 @@ impl FilterSpec {
         }
     }
 
-    /// True when any non-empty exclude term matches `line`.
+    /// True when any non-empty exclude term, of the stream or of the global filter,
+    /// matches `line`.
     pub fn excluded(&self, line: &str) -> bool {
         self.exclude
             .iter()
             .any(|t| !t.text.is_empty() && t.matches(line, self.case_sensitive, self.is_regex))
+            || self.global.as_ref().is_some_and(|g| g.excluded(line))
     }
 
-    /// True when every non-empty include term matches `line` (with none, every line).
+    /// True when every non-empty include term, of the stream and of the global filter,
+    /// matches `line` (with none, every line).
     pub fn included(&self, line: &str) -> bool {
         self.include
             .iter()
             .all(|t| t.text.is_empty() || t.matches(line, self.case_sensitive, self.is_regex))
+            && self.global.as_ref().is_none_or(|g| g.included(line))
     }
 
     /// Exclude wins over include; an empty include lets every non-excluded line through;
