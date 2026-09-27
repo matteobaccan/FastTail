@@ -906,6 +906,8 @@ fn test_i18n_exhaustive_coverage() {
         "timeline_no_level",
         "timeline_untimed",
         "timeline_lane_note",
+        "already_at_top",
+        "already_at_bottom",
     ];
 
     for lang in Language::ALL {
@@ -997,6 +999,8 @@ fn test_move_up_move_down_translations() {
     ] {
         let up = t(lang, "move_up");
         let down = t(lang, "move_down");
+        let at_top = t(lang, "already_at_top");
+        let at_bottom = t(lang, "already_at_bottom");
         assert!(
             !up.is_empty() && up != "Unknown",
             "move_up missing for {lang:?}"
@@ -1005,11 +1009,23 @@ fn test_move_up_move_down_translations() {
             !down.is_empty() && down != "Unknown",
             "move_down missing for {lang:?}"
         );
+        assert!(
+            !at_top.is_empty() && at_top != "Unknown",
+            "already_at_top missing for {lang:?}"
+        );
+        assert!(
+            !at_bottom.is_empty() && at_bottom != "Unknown",
+            "already_at_bottom missing for {lang:?}"
+        );
     }
     assert_eq!(t(Language::En, "move_up"), "Move Up");
     assert_eq!(t(Language::En, "move_down"), "Move Down");
+    assert_eq!(t(Language::En, "already_at_top"), "Already at top");
+    assert_eq!(t(Language::En, "already_at_bottom"), "Already at bottom");
     assert_eq!(t(Language::It, "move_up"), "Sposta su");
     assert_eq!(t(Language::It, "move_down"), "Sposta giù");
+    assert_eq!(t(Language::It, "already_at_top"), "Già in cima");
+    assert_eq!(t(Language::It, "already_at_bottom"), "Già in fondo");
     assert_eq!(t(Language::Fr, "move_up"), "Déplacer vers le haut");
     assert_eq!(t(Language::Fr, "move_down"), "Déplacer vers le bas");
     assert_eq!(t(Language::Es, "move_up"), "Mover arriba");

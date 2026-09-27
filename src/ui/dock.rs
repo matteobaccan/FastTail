@@ -4189,7 +4189,7 @@ fn render_preset_manager(
             if ui
                 .add_enabled(i > 0, egui::Button::new("⬆"))
                 .on_hover_text(t(lang, "move_up"))
-                .on_disabled_hover_text(t(lang, "move_up"))
+                .on_disabled_hover_text(t(lang, "already_at_top"))
                 .clicked()
             {
                 move_up = Some(i);
@@ -4197,7 +4197,7 @@ fn render_preset_manager(
             if ui
                 .add_enabled(i + 1 < count, egui::Button::new("⬇"))
                 .on_hover_text(t(lang, "move_down"))
-                .on_disabled_hover_text(t(lang, "move_down"))
+                .on_disabled_hover_text(t(lang, "already_at_bottom"))
                 .clicked()
             {
                 move_down = Some(i);
@@ -4586,14 +4586,14 @@ pub fn render_highlights_content(
                     let up_btn = ui
                         .add_enabled(i > 0, egui::Button::new("⬆"))
                         .on_hover_text(t(lang, "move_up"))
-                        .on_disabled_hover_text(t(lang, "move_up"));
+                        .on_disabled_hover_text(t(lang, "already_at_top"));
                     if up_btn.clicked() {
                         to_move_up = Some(i);
                     }
                     let down_btn = ui
                         .add_enabled(i + 1 < rules_len, egui::Button::new("⬇"))
                         .on_hover_text(t(lang, "move_down"))
-                        .on_disabled_hover_text(t(lang, "move_down"));
+                        .on_disabled_hover_text(t(lang, "already_at_bottom"));
                     if down_btn.clicked() {
                         to_move_down = Some(i);
                     }
