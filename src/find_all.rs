@@ -96,6 +96,9 @@ pub struct FindAllSession {
     /// A result was committed: the app activates that stream and shows the line after
     /// the dock is drawn (the tab cannot change the dock while it is drawn).
     pub jump: Option<(PathBuf, usize)>,
+    /// The committed result asked for "Show in context": the stream shows it in its full
+    /// log (filters suspended) rather than at the next visible line.
+    pub jump_in_context: bool,
     /// The query box takes the keyboard on the next frame (Ctrl+Shift+F).
     pub focus_input: bool,
     limit: usize,
@@ -118,6 +121,7 @@ impl FindAllSession {
             started_at: None,
             groups: Vec::new(),
             jump: None,
+            jump_in_context: false,
             focus_input: false,
             limit: limit.max(1),
             max_hits,
@@ -307,7 +311,15 @@ impl FindAllSession {
             return false;
         }
         self.jump = Some((g.path.clone(), line));
+        self.jump_in_context = false;
         true
+    }
+
+    /// Like `commit`, for "Show in context" (`CTRL + K` or the result's context menu).
+    pub fn commit_in_context(&mut self, group: usize, hit: usize) -> bool {
+        let committed = self.commit(group, hit);
+        self.jump_in_context = committed;
+        committed
     }
 }
 
