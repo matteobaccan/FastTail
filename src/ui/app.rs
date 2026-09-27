@@ -123,6 +123,9 @@ pub struct FastTailApp {
     pub global_spec: Option<std::sync::Arc<crate::scan_job::FilterSpec>>,
     /// When the terms of the global filter bar were last edited, until applied.
     global_edit_at: Option<Instant>,
+    /// Key of `global_spec`: an apply that does not change it keeps the same set, so no
+    /// stream refilters.
+    global_key: Option<crate::global_filter::AppliedKey>,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -597,7 +600,9 @@ impl FastTailApp {
             find_all: crate::find_all::FindAllSession::default(),
             global_spec: None,
             global_edit_at: None,
+            global_key: None,
         };
+        app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -1452,7 +1457,11 @@ impl FastTailApp {
     /// up before they are drawn (see `render_ui`).
     pub fn apply_global_filter(&mut self) {
         self.global_edit_at = None;
-        self.global_spec = self.config.global_filter.compile();
+        let key = self.config.global_filter.applied_key();
+        if key != self.global_key {
+            self.global_key = key;
+            self.global_spec = self.config.global_filter.compile();
+        }
         let _ = self.config.save();
     }
 
@@ -2713,8 +2722,22 @@ impl FastTailApp {
                 _ => self.apply_global_filter(),
             }
         }
+        // At most `SYNC_BUDGET_BYTES` refiltered on the UI thread per frame: with many
+        // streams the rest follow on the next frames (the first always goes).
+        let mut budget = crate::global_filter::SYNC_BUDGET_BYTES;
         for engine in &mut self.engines {
+            if engine.holds_global_filter(&self.global_spec) {
+                continue;
+            }
+            let synchronous = engine.file_size <= engine.job_threshold_bytes;
+            if synchronous && budget == 0 {
+                ctx.request_repaint();
+                continue;
+            }
             engine.set_global_filter(self.global_spec.clone());
+            if synchronous {
+                budget = budget.saturating_sub(engine.file_size.max(1));
+            }
         }
 
         let mut lock_now = false;

@@ -9651,6 +9651,35 @@ mod global_filter {
     }
 
     #[test]
+    fn an_apply_without_a_real_change_refilters_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = FastTailConfig {
+            spool_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let mut app = FastTailApp::from_config(config);
+        app.config.global_filter = GlobalFilter {
+            enabled: true,
+            exclude: vec!["healthcheck".into()],
+            ..Default::default()
+        };
+        app.apply_global_filter();
+        let first = app.global_spec.clone().expect("applied");
+        // An empty row added, the bar closed, a term typed then deleted: same filter.
+        app.config.global_filter.include.push(String::new());
+        app.config.global_filter.bar_open = false;
+        app.apply_global_filter();
+        app.config.global_filter.exclude[0].push('x');
+        app.config.global_filter.exclude[0].pop();
+        app.apply_global_filter();
+        assert!(Arc::ptr_eq(&first, app.global_spec.as_ref().unwrap()));
+        // A real change does compile a new set.
+        app.config.global_filter.case_sensitive = true;
+        app.apply_global_filter();
+        assert!(!Arc::ptr_eq(&first, app.global_spec.as_ref().unwrap()));
+    }
+
+    #[test]
     fn ctrl_shift_h_shows_and_hides_the_bar_and_typing_waits_for_a_pause() {
         let dir = tempfile::tempdir().unwrap();
         let config = FastTailConfig {

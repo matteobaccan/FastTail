@@ -1633,15 +1633,21 @@ impl TailEngine {
     /// term). The app passes the same compiled set to every stream; handing the one
     /// already in place again changes nothing.
     pub fn set_global_filter(&mut self, global: Option<Arc<FilterSpec>>) {
-        let global = global.filter(|g| g.has_terms());
-        let same = match (&self.global_filter, &global) {
+        if !self.holds_global_filter(&global) {
+            self.global_filter = global.filter(|g| g.has_terms());
+            self.refresh_filters();
+        }
+    }
+
+    /// Whether this stream already applies `global` (the same compiled set, or none).
+    pub fn holds_global_filter(&self, global: &Option<Arc<FilterSpec>>) -> bool {
+        match (
+            &self.global_filter,
+            global.as_ref().filter(|g| g.has_terms()),
+        ) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
-        };
-        if !same {
-            self.global_filter = global;
-            self.refresh_filters();
         }
     }
 

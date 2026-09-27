@@ -16,6 +16,14 @@ pub const SECTION: &str = "global_filter";
 /// does not restart every stream's background filter job at each key.
 pub const APPLY_DELAY_MS: u64 = 300;
 
+/// Bytes of streams refiltered on the UI thread per frame when the global filter changes
+/// (streams above the job threshold refilter in the background and do not count): the
+/// others follow on the next frames instead of freezing one.
+pub const SYNC_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+
+/// What decides the compiled set: two filters with the same key hide the same lines.
+pub type AppliedKey = (bool, bool, Vec<String>, Vec<String>);
+
 /// What the user set in the global filter bar. Term rows are kept as typed (empty rows
 /// included) while editing; only the non-empty ones are saved and applied.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -53,6 +61,23 @@ impl GlobalFilter {
             self.case_sensitive,
             self.is_regex,
         )
+    }
+
+    /// The key of the set the streams apply (`None` when off or without a term): the
+    /// toggles and the non-empty terms, so an empty row or a bar closed without an edit
+    /// changes nothing.
+    pub fn applied_key(&self) -> Option<AppliedKey> {
+        let non_empty = |list: &[String]| -> Vec<String> {
+            list.iter().filter(|t| !t.is_empty()).cloned().collect()
+        };
+        self.is_applied().then(|| {
+            (
+                self.case_sensitive,
+                self.is_regex,
+                non_empty(&self.include),
+                non_empty(&self.exclude),
+            )
+        })
     }
 
     /// The set the streams apply: `None` when off or without a term.

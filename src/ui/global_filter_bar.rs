@@ -34,7 +34,7 @@ pub fn term_id(exclude: bool, index: usize) -> egui::Id {
 
 pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Language) -> BarOutput {
     let mut out = BarOutput::default();
-    let spec = gf.spec();
+    let (include_invalid, exclude_invalid) = invalid_flags(ui, gf);
     ui.horizontal_wrapped(|ui| {
         let title_color = if gf.is_applied() {
             theme.accent_color()
@@ -93,11 +93,13 @@ pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Lang
             let mut remove = None;
             for (i, row) in rows.iter_mut().enumerate() {
                 let invalid = if exclude {
-                    spec.exclude.get(i)
+                    &exclude_invalid
                 } else {
-                    spec.include.get(i)
+                    &include_invalid
                 }
-                .is_some_and(|term| term.invalid);
+                .get(i)
+                .copied()
+                .unwrap_or(false);
                 let mut edit = egui::TextEdit::singleline(row)
                     .id(term_id(exclude, i))
                     .desired_width(140.0);
@@ -148,4 +150,32 @@ pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Lang
     });
     ui.separator();
     out
+}
+
+/// Which include and exclude rows hold a regex that does not compile, recomputed only
+/// when the terms or the toggles change (compiling up to 16 regexes every frame the bar
+/// is shown would be wasted work). Plain-text terms are never invalid.
+fn invalid_flags(ui: &Ui, gf: &GlobalFilter) -> (Vec<bool>, Vec<bool>) {
+    use std::hash::{Hash, Hasher};
+    if !gf.is_regex {
+        return (Vec::new(), Vec::new());
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (&gf.include, &gf.exclude, gf.case_sensitive).hash(&mut hasher);
+    let key = hasher.finish();
+    let id = egui::Id::new("global_filter_bar_invalid");
+    if let Some((cached, include, exclude)) =
+        ui.data(|d| d.get_temp::<(u64, Vec<bool>, Vec<bool>)>(id))
+    {
+        if cached == key {
+            return (include, exclude);
+        }
+    }
+    let spec = gf.spec();
+    let flags = |terms: &[crate::scan_job::FilterTerm]| -> Vec<bool> {
+        terms.iter().map(|t| t.invalid).collect()
+    };
+    let (include, exclude) = (flags(&spec.include), flags(&spec.exclude));
+    ui.data_mut(|d| d.insert_temp(id, (key, include.clone(), exclude.clone())));
+    (include, exclude)
 }
