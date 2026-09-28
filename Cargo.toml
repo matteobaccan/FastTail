@@ -79,10 +79,33 @@ winreg = "0.56"
 [features]
 default = []
 audio = ["dep:rodio"]
+# Terminal front end (feasibility prototype): builds the `fasttail-tui` binary. Off by
+# default, so the GUI build and the release artifacts do not change.
+tui = ["dep:ratatui", "dep:crossterm", "dep:arboard"]
 
 [dependencies.rodio]
 version = "0.22"
 optional = true
+
+[dependencies.ratatui]
+version = "0.30"
+optional = true
+
+[dependencies.crossterm]
+version = "0.29"
+optional = true
+
+# Clipboard of the terminal front end: the crate egui-winit already builds for the GUI,
+# named here so the TUI can use it (no new code is compiled).
+[dependencies.arboard]
+version = "3.6"
+optional = true
+default-features = false
+
+[[bin]]
+name = "fasttail-tui"
+path = "src/bin/fasttail-tui/main.rs"
+required-features = ["tui"]
 
 [dev-dependencies]
 tempfile = "3.17"
