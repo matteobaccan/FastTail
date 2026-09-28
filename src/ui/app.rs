@@ -1231,15 +1231,16 @@ impl FastTailApp {
                 .iter_mut()
                 .find(|e| e.path == *path || paths_equal(&e.path, path))
             {
-                if let Some(f) = &cli.filter {
+                if let Some(f) = cli.window_filter() {
                     engine.set_include_filter(f);
                 }
-                if let Some(x) = &cli.exclude {
+                if let Some(x) = cli.window_exclude() {
                     engine.set_exclude_filter(x);
                 }
                 if let Some(follow) = cli.follow {
                     engine.follow_tail = follow && !engine.is_compressed();
                 }
+                apply_cli_time_window(engine, cli.since.as_deref(), cli.until.as_deref());
             }
         }
     }
@@ -1317,6 +1318,11 @@ impl FastTailApp {
         if let Some(follow) = options.follow {
             engine.follow_tail = follow;
         }
+        apply_cli_time_window(
+            &mut engine,
+            options.since.as_deref(),
+            options.until.as_deref(),
+        );
         let path = engine.path.clone();
         self.engines.push(engine);
         crate::audio::play_sound(
@@ -4770,15 +4776,46 @@ pub struct StdinOptions {
     pub filter: Option<String>,
     pub exclude: Option<String>,
     pub follow: Option<bool>,
+    pub since: Option<String>,
+    pub until: Option<String>,
 }
 
 impl StdinOptions {
     pub fn from_cli(cli: &crate::cli::CliArgs) -> Self {
         Self {
-            filter: cli.filter.clone(),
-            exclude: cli.exclude.clone(),
+            filter: cli.window_filter().cloned(),
+            exclude: cli.window_exclude().cloned(),
             follow: cli.follow,
+            since: cli.since.clone(),
+            until: cli.until.clone(),
         }
+    }
+}
+
+/// Applies `--since` / `--until` to a stream opened from the command line, as if typed in
+/// the time range popup. A relative time (`-3h`, `now`) is turned into the instant it
+/// names now, written as a timestamp with its milliseconds: exact on both sides (a "to"
+/// is not widened to the end of its second), and fixed where it was put, not sliding.
+fn apply_cli_time_window(engine: &mut TailEngine, since: Option<&str>, until: Option<&str>) {
+    if since.is_none() && until.is_none() {
+        return;
+    }
+    let now = crate::timestamp::local_now_millis();
+    let text = |value: Option<&str>| value.map(|v| cli_time_text(v, now)).unwrap_or_default();
+    let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
+    engine.time_range_error = !from_ok || !to_ok;
+}
+
+/// The popup text for a `--since` / `--until` value: a relative time becomes the instant
+/// it names at `now`, with its milliseconds; anything else is kept as typed.
+fn cli_time_text(value: &str, now: i64) -> String {
+    match crate::timestamp::parse_relative(value, now) {
+        Some(millis) => format!(
+            "{}.{:03}",
+            crate::timestamp::format_millis(millis),
+            millis.rem_euclid(1000)
+        ),
+        None => value.to_string(),
     }
 }
 
@@ -4891,6 +4928,23 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
 mod tests {
     use super::allowed_while_locked;
     use egui::{Event, Key, Modifiers};
+
+    #[test]
+    fn a_relative_cli_time_keeps_its_milliseconds_and_is_exact_on_the_to_side() {
+        use crate::timestamp::{end_of_typed_time, parse_user_time};
+        let now = 20_000 * 86_400_000 + 14 * 3_600_000 + 2 * 60_000 + 3_456;
+        for (value, instant) in [
+            ("now", now),
+            ("-1h30m", now - 90 * 60_000),
+            ("-45s", now - 45_000),
+        ] {
+            let text = super::cli_time_text(value, now);
+            let parsed = parse_user_time(&text, 0).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!(parsed, instant, "{text}");
+            assert_eq!(end_of_typed_time(&text, parsed), instant, "{text}");
+        }
+        assert_eq!(super::cli_time_text("14:02", now), "14:02");
+    }
 
     fn key(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {

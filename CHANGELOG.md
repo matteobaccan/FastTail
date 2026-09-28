@@ -25,10 +25,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nested `.gz` entries, workspace, sessions (`entry=`), recent files and bookmarks work
   as for zip entries. Pure-Rust decoder (`sevenz-rust2`); all 16 languages updated.
 
+- **Print mode.** `fasttail --print [OPTIONS] PATH...` writes the lines that pass the
+  filters to standard output and exits, without a window and without touching the
+  workspace or `fasttail.ini`. The matching is the window's: `--filter` and `--exclude`
+  (each up to 8 times), `--regex`, `--case-sensitive`, `--level`, `--since` / `--until`
+  (everything the time range popup reads, plus `now`, `-15m`, `-1h30m`, `-2d`, `-1w`), with stack-trace
+  lines following their entry; `--context N` adds lines around each match with `--`
+  between groups, `--line-numbers` and the `file:` prefix (several inputs, `--no-prefix`
+  to drop it) label them, `--color auto|always|never` paints the theme's level colours,
+  the highlight rules and the log's own ANSI colours. Inputs are files, patterns,
+  single compressed files and standard input, read as streams in constant memory;
+  `--follow` keeps printing appended lines, handling truncation and newer pattern
+  files. Exit codes 0 (printed), 1 (no match), 2 (usage), 3 (unreadable input). On
+  Windows, redirected output is used as it is and the parent console is attached only
+  when there is none. Command-line output stays in English, like `--help`.
+
+- **`--since` / `--until` in the window.** Without `--print` they set the time range of
+  the streams opened from the command line (a relative time is fixed at start, to the
+  millisecond); repeated `--filter` / `--exclude` still mean the last one.
+
 ### Changed
 
 - **Building from source needs Rust 1.93.** `sevenz-rust2` 0.23, used to read `.7z`
   logs, requires it; the release binaries are unaffected.
+- `--filter` and `--exclude` can be repeated with `--print` (the window keeps using the last one, as before);
+  `--level`, `--context`, `--color`, `--line-numbers`, `--no-prefix`, `--regex` and
+  `--case-sensitive` without `--print` are usage errors. `--help`, `--version` and usage
+  errors now go to a redirected standard output or error as they are.
 
 ## [0.12.0] - 2026-09-28
 

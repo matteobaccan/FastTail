@@ -1335,6 +1335,16 @@ impl FastTailConfig {
     }
 
     pub fn load() -> Self {
+        Self::load_with(true)
+    }
+
+    /// `load` without any write: an old TOML configuration is read but not migrated.
+    /// Print mode reads the theme and the rules this way and never touches the file.
+    pub fn load_read_only() -> Self {
+        Self::load_with(false)
+    }
+
+    fn load_with(migrate: bool) -> Self {
         let path = Self::config_path();
         let mut cfg = if path.exists() {
             if let Ok(conf) = Ini::load_from_file(&path) {
@@ -1345,7 +1355,9 @@ impl FastTailConfig {
         } else if let Some(old_toml) = Self::old_toml_path() {
             if let Ok(content) = fs::read_to_string(&old_toml) {
                 if let Ok(config) = toml::from_str::<FastTailConfig>(&content) {
-                    let _ = config.save();
+                    if migrate {
+                        let _ = config.save();
+                    }
                     config
                 } else {
                     Self::default()

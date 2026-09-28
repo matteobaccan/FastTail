@@ -37,7 +37,10 @@ feature split and, on Windows, a console-subsystem `fasttail-tui.exe` next to th
    `FilterSpec::visible_in_sequence`, the level stage and the time window on the fly. The
    timestamp of a line without one is inherited from the previous line, as
    `JobSpec::Timestamps` does, so a stack trace follows its entry through `--since`. A
-   bare `--since 14:02` refers to the day of the first timestamped line, as in the popup;
+   bare `--since 14:02` refers to the day of the input's first timestamped line, whether
+   or not that line passes the filters, as in the popup; a relative time (`now`, `-15m`,
+   `-1h30m`, `-1w`: `timestamp::parse_relative`, shared with `relative-time-windows`) is
+   an exact instant on both sides, a relative "to" not being widened to a unit's end;
    lines before the first timestamped line are dropped while a window is set, as in the
    window. *Rejected:* opening a `TailEngine` per input — it indexes the whole file before
    the first line can be printed (minutes on a 20 GB log, 8 bytes per line of memory),
@@ -72,9 +75,13 @@ feature split and, on Windows, a console-subsystem `fasttail-tui.exe` next to th
    check. Growth: read from the offset to the last complete line. Shrink or fingerprint
    change: a notice on standard error (`fasttail: app.log truncated, reading from the
    start`) and read from byte 0. Pattern inputs rescan the directory every 2 s and switch
-   to a newer match with a notice. Standard input ends the program when it ends; a
+   to a newer match with a notice. Before either restart the last line still waiting for
+   its newline goes through the filters as complete, and the notice is written only once
+   the file to read is open (a file that cannot be opened yet is tried again at the next
+   check, silently). Standard input ends the program when it ends; a
    compressed input is not followed (notice). `CTRL + C` ends the program with the code
-   earned so far. Files are opened with `file_source::open_file_shared`, so the writer is
+   earned so far: a console control handler / `SIGINT` handler sets a flag the follow
+   loop checks, which flushes standard output and returns. Files are opened with `file_source::open_file_shared`, so the writer is
    never locked out on Windows.
    *Rejected:* polling only: `notify` gives sub-100 ms latency on local disks, the
    250 ms size check covers network shares where events do not arrive.
@@ -126,7 +133,11 @@ line (at most 1 MB, the engine's long-line cap applies with the same truncation 
 
 ## Migration Plan
 
-Additive: without `--print` the command line behaves as before. The print-only options
+Additive: without `--print` the command line behaves as before (`--filter` / `--exclude`
+given more than once: the last one counts, no limit on how many times). `--since` /
+`--until` without `--print` set the window's time range; a relative value is turned into
+the instant it names at start, with its milliseconds, until `relative-time-windows` makes
+it slide. The print-only options
 (`--level`, `--context`, `--color`, `--line-numbers`, `--no-prefix`,
 `--regex`, `--case-sensitive`) are usage errors without `--print`.
 

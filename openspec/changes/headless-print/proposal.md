@@ -21,7 +21,8 @@ gap 7, and the planned terminal interface (0.20.0) needs the same thing for
   - `--level <LEVEL>` (minimum level, as the `≥ level` selector);
   - `--since <TIME>` / `--until <TIME>`: anything the time range popup accepts
     (`14:02`, `2026-09-28 14:02`, a timestamp from a line) plus relative times
-    (`-15m`, `-3h`, `-2d`, measured back from now);
+    (`now`, `-15m`, `-3h`, `-1h30m`, `-2d`, `-1w`, measured back from now, with the
+    `relative-time-windows` syntax shared through `timestamp::parse_relative`);
   - `--context <N>`: `N` lines before and after each match (as the `context-lines`
     change defines it);
   - `--follow`: after the existing content, keep printing appended lines (rotation and
@@ -49,7 +50,7 @@ Target release: **0.13.0** (basics and quick wins), per the release plan in
 
 ### Non-goals
 
-- Zip and tar archives (their entries need the picker); a clear message says so.
+- Zip, tar and 7z archives (their entries need the picker); a clear message says so.
 - The `journald://` and `docker://` sources of the `system-sources` change: in a shell,
   `journalctl` and `docker logs` can already be piped into `fasttail --print -`.
 - Output formats other than lines (JSON, CSV) and field projections: the

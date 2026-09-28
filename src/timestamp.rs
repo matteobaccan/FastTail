@@ -622,6 +622,41 @@ pub fn local_offset_millis(_utc_millis: i64) -> i64 {
     0
 }
 
+/// A relative time: `now`, or `-` followed by one or more number-and-unit pairs with the
+/// units `s`, `m`, `h`, `d` and `w` (case-insensitive, no spaces inside: `-15m`, `-3h`,
+/// `-1h30m`), meaning `now` minus that duration. `None` for anything else, which is how
+/// every form `parse_user_time` reads comes out (none starts with `-` or is `now`). The
+/// result is an exact instant: a relative "to" side is not widened to the end of a unit.
+pub fn parse_relative(input: &str, now: i64) -> Option<i64> {
+    let text = input.trim();
+    if text.eq_ignore_ascii_case("now") {
+        return Some(now);
+    }
+    let mut rest = text.strip_prefix('-')?.as_bytes();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut back: i64 = 0;
+    while !rest.is_empty() {
+        let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        if digits == 0 || digits == rest.len() {
+            return None;
+        }
+        let n: i64 = std::str::from_utf8(&rest[..digits]).ok()?.parse().ok()?;
+        let unit: i64 = match rest[digits].to_ascii_lowercase() {
+            b's' => 1_000,
+            b'm' => 60_000,
+            b'h' => 3_600_000,
+            b'd' => 86_400_000,
+            b'w' => 7 * 86_400_000,
+            _ => return None,
+        };
+        back = back.checked_add(n.checked_mul(unit)?)?;
+        rest = &rest[digits + 1..];
+    }
+    now.checked_sub(back)
+}
+
 /// Whether the user typed a date alone (`YYYY-MM-DD`), which names a whole day rather
 /// than an instant.
 pub fn is_bare_date(input: &str) -> bool {
@@ -965,5 +1000,38 @@ mod tests {
 
         let (_, epoch) = detect_timestamp("1789480925 x", FormatHint::Epoch).unwrap();
         assert_eq!(epoch, FormatHint::Epoch);
+    }
+
+    #[test]
+    fn relative_times() {
+        let now = 1_000_000_000_000;
+        assert_eq!(parse_relative("now", now), Some(now));
+        assert_eq!(parse_relative(" NOW ", now), Some(now));
+        assert_eq!(parse_relative("-15m", now), Some(now - 15 * 60_000));
+        assert_eq!(parse_relative("-3h", now), Some(now - 3 * 3_600_000));
+        assert_eq!(parse_relative("-2d", now), Some(now - 2 * 86_400_000));
+        assert_eq!(parse_relative("-1w", now), Some(now - 7 * 86_400_000));
+        assert_eq!(parse_relative("-90s", now), Some(now - 90_000));
+        assert_eq!(
+            parse_relative("-1H30M", now),
+            Some(now - 3_600_000 - 30 * 60_000)
+        );
+        for bad in [
+            "15m",
+            "-",
+            "-m",
+            "-1.5h",
+            "-3x",
+            "-1h 30m",
+            "-1h30",
+            "",
+            "nowish",
+            "- 1h",
+            "14:02",
+            "2026-09-28",
+        ] {
+            assert_eq!(parse_relative(bad, now), None, "{bad}");
+        }
+        assert_eq!(parse_relative("-99999999999999999w", now), None);
     }
 }

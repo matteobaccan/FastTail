@@ -150,6 +150,7 @@ Files can also be opened by **drag & drop** onto the window or from the command 
 
 ```text
 fasttail [OPTIONS] [PATH...]
+fasttail --print [OPTIONS] [PATH...]
 
   PATH...            log files to open in addition to the restored workspace
   -                  read standard input (`command | fasttail -`); a file named `-`
@@ -157,7 +158,12 @@ fasttail [OPTIONS] [PATH...]
   --fresh            start with an empty workspace instead of the saved one
   --gui              accepted and ignored (FastTail is GUI-only; kept for old shortcuts)
   --filter <TEXT>    include filter for the files opened from the command line
+                     (given more than once, the last one counts)
   --exclude <TEXT>   exclude filter for those files
+  --since <TIME>     start of the time window of those files: 14:02, 2026-09-28 14:02,
+                     a timestamp copied from a line, or now / -15m / -1h30m / -2d / -1w
+                     (units s, m, h, d, w, back from now)
+  --until <TIME>     end of that time window, in the same forms
   --follow / --no-follow
                      follow mode for those files (ignored for compressed files)
   --renderer <NAME>  auto (default), glow, wgpu or software
@@ -169,6 +175,43 @@ fasttail [OPTIONS] [PATH...]
 ```
 
 Example: `fasttail --fresh --filter ERROR app.log err.log`.
+
+Without `--print`, `--since` and `--until` fill the time range of the streams opened from the command line (the stdin stream included) as if typed in the popup; a relative time is turned into the instant it names at start, to the millisecond and exact on both sides (`-3h` becomes that timestamp; the window does not slide yet). A time FastTail cannot read is a usage error (exit code 2).
+
+### Print mode (no window)
+`fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme and the highlight rules). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.
+
+```text
+  --filter <TEXT>    include term, up to 8 times: every term must match
+  --exclude <TEXT>   exclude term, up to 8 times: any term hides the line
+  --regex            the terms are regular expressions
+  --case-sensitive   the terms match case-sensitively
+  --level <LEVEL>    minimum level: trace, debug, info, warn, error, fatal
+  --since / --until  time window, as above (a bare 14:02 is on the day of the first
+                     timestamp of each input, whatever the filters; lines before it
+                     are skipped)
+  --context <N>      N lines (0-100) before and after each match, `--` between groups
+  --follow           then keep printing appended lines until Ctrl+C (which exits
+                     with the code earned so far)
+  --color <WHEN>     auto (default: on a terminal, unless NO_COLOR is set), always, never
+  --line-numbers     prefix each line with its line number and `:`
+  --no-prefix        no `file:` prefix when several inputs are given
+```
+
+Inputs are plain files, file-name patterns (`logs/app-*.log`, the newest match), single compressed files (`.gz`, `.bz2`, `.xz`, `.zst`, decompressed as they are read, nothing written to disk) and `-` for standard input; with no PATH, piped input is read. They are printed one after the other, in the order given; with several, each line starts with `name:`. Zip, tar and 7z archives are refused with a message (their entries need the picker). With `--follow`, appended lines are printed within a fraction of a second; a truncated or rewritten file is read again from the start after a notice on stderr, a pattern switches to a newer file, compressed inputs are not followed, and standard input ends the program when it ends. Colours are the theme's level colours, the highlight rules of `fasttail.ini` and the log's own ANSI colours, in 24-bit colour when `COLORTERM` says so (and on Windows), 256 colours otherwise; without colour, escape sequences are removed. Exit codes: `0` lines printed, `1` nothing matched, `2` usage error, `3` an input could not be read (the others are still printed). A reader that stops early (`| head`) ends FastTail quietly with `0`.
+
+```text
+# the errors of the last hour, with their stack traces
+fasttail --print --level error --since -1h app.log
+# in a pipe
+kubectl logs pod-7 | fasttail --print --exclude DEBUG | wc -l
+# CI: fail the job when the log holds a FATAL line
+fasttail --print --level fatal build.log && exit 1
+# two terms over a live log and a rotated one
+fasttail --print --filter payment --filter timeout gateway.log payment.log.1.gz
+```
+
+On Windows `fasttail.exe` is a GUI-subsystem program: redirected or piped output (`> out.txt`, `| findstr payment`, Git Bash) is used as it is, and in an interactive console it attaches to the console of cmd or PowerShell. Those shells do not wait for a GUI-subsystem program, so the prompt can come back while lines are still being printed: use `start /wait /b fasttail --print ...` in cmd, or pipe the output (`| more`, `| Out-Host`), when the order matters.
 
 ### Standard input
 `command | fasttail -` copies the command's output into a spool file (in the same `spool_dir` as compressed logs) that is tailed like any followed log, so filters, search, levels, time range, highlight rules, bookmarks and export all work on it. The tab is titled `stdin`; the footer and the tab tooltip name the spool. When the command ends the stream stays open and its bar says `input ended · N lines`. Without `-`, piped or redirected input (`command | fasttail`, `fasttail < app.log`) is picked up too, but the tab only appears once the first byte arrives, so a launcher that hands FastTail a silent pipe does not get an empty tab. `-` given twice is a usage error (exit code 2); `-` with nothing piped prints `standard input is not a pipe; nothing to read` on stderr and the rest of the command line still opens. `--filter`, `--exclude` and `--follow` / `--no-follow` apply to the stdin stream too.
@@ -418,6 +461,9 @@ Press `Ctrl+G` and type a time such as `14:02`: FastTail jumps to the first line
 
 ### Can FastTail open compressed logs (`.gz`, `.bz2`, `.xz`, `.zst`, `.zip`, `.7z`, `.tar.gz`)?
 Yes. Open `app.log.1.gz`, `syslog.2.xz` or `journal.zst` like any other file (the format is read from the content, so a gzip or xz file named `trace.dat` works too): it is decompressed on a background thread into a temporary file and every feature — filters, search, levels, time range, bookmarks, HEX — works on the result while the first lines are already on screen. A `.zip` or `.7z` with several logs, or a `.tar`, `.tgz`, `.tar.bz2`, `.tar.xz` or `.tar.zst` support bundle, shows an entry picker and each chosen entry opens in its own stream; a tar's picker fills in while its headers are scanned, and entries can be opened before the scan ends. A rotated `.gz` inside a bundle is decompressed too. Encrypted zip and 7z entries, bzip2/zstd/lzma zip entries, tar links, devices and sparse files, and entries with unsafe names are not supported and say so; rar archives open as they are (binary). The decompressed copy costs disk space equal to its size, bounded by `compressed_max_gb` (20 GB by default) and a free-space check, and is deleted when the tab is closed.
+
+### Can I use FastTail's filters in a script, without the window?
+Yes: `fasttail --print` writes the matching lines to standard output and exits, with the same matching as the window — include and exclude terms, the minimum level, a time window (`--since -1h`), context lines — on files, rotated `.gz` files, patterns and standard input. `--follow` keeps printing new lines like `tail -f | grep`. The exit code says whether anything matched, so a CI job can fail on an error line. See [Print mode](#print-mode-no-window).
 
 ### Can I pipe a command into FastTail, like `less`?
 Yes: `kubectl logs -f pod | fasttail -` (or `docker compose logs -f`, `journalctl -f`, `ssh host tail -f app.log`). The output is copied into a temporary spool file and opened as a followed `stdin` stream with every feature available; when the command ends the stream stays open and says so. The copy is capped by `stdin_spool_max_mb` (2 GB by default), after which it restarts from empty, and it is deleted when the tab is closed. On Windows it works from cmd.exe and Git Bash; from PowerShell, use `cmd /c "command | fasttail -"` for a live command (see [Standard input](#standard-input)).
