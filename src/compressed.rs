@@ -23,7 +23,7 @@
 
 use crate::spool::SpoolFile;
 use crate::tail_engine::{TailEngine, WakeFn};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -137,13 +137,108 @@ pub fn sniff(path: &Path) -> Format {
     }
 }
 
-/// The first `SNIFF_BYTES` decompressed bytes of the `codec` file at `path` (fewer when
-/// it is shorter, damaged or unreadable). Runs on the calling thread: one decoder and at
-/// most one block of it.
-fn decoded_head(path: &Path, codec: Codec) -> Vec<u8> {
-    match crate::file_source::open_file_shared(path) {
-        Ok(file) => read_head(&mut open_decoder(codec, BufReader::new(file))),
-        Err(_) => Vec::new(),
+/// Window a decoder may allocate for the UI-thread peek of `codec_holds_tar`: enough for
+/// `xz -6` and `zstd -19` (8 MiB). The xz decoder zero-fills its whole dictionary up front,
+/// so a larger one is not decoded on the UI thread at all.
+const PEEK_WINDOW: u64 = 8 * 1024 * 1024;
+
+/// True for a name that says tar: `.tar.gz`, `.tgz`, `.tar.xz`, `.txz`...
+fn has_tar_name(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let stem = name.rsplit_once('.').map_or("", |(stem, _)| stem);
+    stem.ends_with(".tar")
+        || [".tgz", ".tbz", ".tbz2", ".txz", ".tzst"]
+            .iter()
+            .any(|s| name.ends_with(s))
+}
+
+/// The first `SNIFF_BYTES` decompressed bytes of the `codec` file at `path` (fewer when it
+/// is shorter, damaged or unreadable), with the decoder window capped at `PEEK_WINDOW`;
+/// `None` when the file needs a larger window.
+fn peek_decoded(path: &Path, codec: Codec) -> Option<Vec<u8>> {
+    let Ok(file) = crate::file_source::open_file_shared(path) else {
+        return Some(Vec::new());
+    };
+    let mut decoder = open_decoder_capped(codec, BufReader::new(file), PEEK_WINDOW);
+    let mut head = vec![0u8; SNIFF_BYTES];
+    let mut filled = 0;
+    while filled < head.len() {
+        match decoder.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if is_window_too_large(&e) => return None,
+            Err(_) => break,
+        }
+    }
+    head.truncate(filled);
+    Some(head)
+}
+
+/// Whether the `codec` file at `path` holds a tar. It runs on the UI thread (opening a
+/// file), so it costs at most one small decoder: a name that says tar is believed, other
+/// files are peeked at with `PEEK_WINDOW`, one needing more is taken for a single log, and
+/// the answer is kept per (path, size, modification time).
+fn codec_holds_tar(path: &Path, codec: Codec) -> bool {
+    if has_tar_name(path) {
+        return true;
+    }
+    let Some(when) = stamp(path) else {
+        return false;
+    };
+    static PEEKS: OnceLock<Mutex<StampedLru<bool>>> = OnceLock::new();
+    let peeks = PEEKS.get_or_init(|| Mutex::new(StampedLru::new(64)));
+    if let Some(known) = peeks.lock().ok().and_then(|mut p| p.get(path, when)) {
+        return known;
+    }
+    let holds = peek_decoded(path, codec).is_some_and(|head| is_tar_head(&head));
+    if let Ok(mut p) = peeks.lock() {
+        p.insert(path, when, holds);
+    }
+    holds
+}
+
+/// A small most-recently-used map keyed by path, whose values hold while the file's size
+/// and modification time do.
+struct StampedLru<V> {
+    items: Vec<(PathBuf, Stamp, V)>,
+    capacity: usize,
+}
+
+impl<V: Clone> StampedLru<V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            items: Vec::new(),
+            capacity,
+        }
+    }
+
+    /// The value for `path` if its stamp still matches (it becomes the most recent).
+    fn get(&mut self, path: &Path, when: Stamp) -> Option<V> {
+        let i = self.items.iter().position(|(p, _, _)| p == path)?;
+        let item = self.items.remove(i);
+        let value = (item.1 == when).then(|| item.2.clone());
+        if value.is_some() {
+            self.items.push(item);
+        }
+        value
+    }
+
+    /// Forgets `path` when its value passes `test`.
+    fn remove_if(&mut self, path: &Path, test: impl Fn(&V) -> bool) {
+        self.items.retain(|(p, _, v)| p != path || !test(v));
+    }
+
+    /// Stores `value` as the most recent, evicting the least recently used past capacity.
+    fn insert(&mut self, path: &Path, when: Stamp, value: V) {
+        self.items.retain(|(p, _, _)| p != path);
+        self.items.push((path.to_path_buf(), when, value));
+        if self.items.len() > self.capacity {
+            self.items.remove(0);
+        }
     }
 }
 
@@ -177,16 +272,25 @@ fn is_window_too_large(e: &std::io::Error) -> bool {
 /// frames are skipped. The xz dictionary and the zstd window are capped at
 /// `MAX_DECODER_WINDOW`.
 pub fn open_decoder<'a, R: BufRead + 'a>(codec: Codec, input: R) -> Box<dyn Read + 'a> {
+    open_decoder_capped(codec, input, MAX_DECODER_WINDOW)
+}
+
+/// `open_decoder` with the xz dictionary and the zstd window capped at `max_window`.
+fn open_decoder_capped<'a, R: BufRead + 'a>(
+    codec: Codec,
+    input: R,
+    max_window: u64,
+) -> Box<dyn Read + 'a> {
     match codec {
         Codec::Gzip => Box::new(flate2::bufread::MultiGzDecoder::new(input)),
         Codec::Bzip2 => Box::new(bzip2::bufread::MultiBzDecoder::new(input)),
         Codec::Xz => {
             // The limit counts the dictionary plus the decoder's own buffers (under
-            // 1 MiB): a 256 MiB dictionary still fits, anything larger does not.
-            let limit_kib = (MAX_DECODER_WINDOW / 1024 + 1024) as u32;
+            // 1 MiB): a dictionary of `max_window` still fits, anything larger does not.
+            let limit_kib = (max_window / 1024 + 1024) as u32;
             Box::new(lzma_rust2::XzReader::new_mem_limit(input, true, limit_kib))
         }
-        Codec::Zstd => Box::new(MultiZstd::new(input)),
+        Codec::Zstd => Box::new(MultiZstd::new(input, max_window)),
     }
 }
 
@@ -198,9 +302,9 @@ struct MultiZstd<R> {
 }
 
 impl<R: BufRead> MultiZstd<R> {
-    fn new(input: R) -> Self {
+    fn new(input: R, max_window: u64) -> Self {
         let mut frame = ruzstd::decoding::FrameDecoder::new();
-        frame.set_max_window_size(MAX_DECODER_WINDOW);
+        frame.set_max_window_size(max_window);
         Self {
             input,
             frame,
@@ -416,9 +520,21 @@ pub fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     match sniff(path) {
         Format::Zip => Some(ArchiveKind::Zip),
         Format::Tar => Some(ArchiveKind::Tar(None)),
-        Format::Compressed(codec) if is_tar_head(&decoded_head(path, codec)) => {
+        Format::Compressed(codec) if codec_holds_tar(path, codec) => {
             Some(ArchiveKind::Tar(Some(codec)))
         }
+        _ => None,
+    }
+}
+
+/// The archive kind of `path` as the ancestor of an entry path, from its raw magic bytes
+/// alone (nothing is decompressed): any codec file may hold a tar, and the extraction job
+/// finds out. Session saves and the config load call this for every stream.
+fn entry_ancestor_kind(path: &Path) -> Option<ArchiveKind> {
+    match sniff(path) {
+        Format::Zip => Some(ArchiveKind::Zip),
+        Format::Tar => Some(ArchiveKind::Tar(None)),
+        Format::Compressed(codec) => Some(ArchiveKind::Tar(Some(codec))),
         _ => None,
     }
 }
@@ -435,7 +551,7 @@ fn split_entry_path_kind(path: &Path) -> Option<(PathBuf, String, ArchiveKind)> 
         return None;
     }
     let archive = path.ancestors().skip(1).find(|a| a.is_file())?;
-    let kind = archive_kind(archive)?;
+    let kind = entry_ancestor_kind(archive)?;
     let rel = path.strip_prefix(archive).ok()?;
     let entry = rel
         .components()
@@ -477,7 +593,7 @@ pub enum Target {
 pub fn classify(path: &Path) -> Target {
     if path.is_file() {
         return match sniff(path) {
-            Format::Compressed(codec) if is_tar_head(&decoded_head(path, codec)) => {
+            Format::Compressed(codec) if codec_holds_tar(path, codec) => {
                 Target::TarArchive(Some(codec))
             }
             Format::Compressed(codec) => Target::Compressed(codec),
@@ -868,18 +984,227 @@ fn tar_type_refusal(kind: tar::EntryType) -> Option<EntryRefusal> {
     }
 }
 
-/// True for a tar header that is not a listed entry: a directory (also an old-style one,
-/// a regular entry named `dir/`), a pax global header or a GNU volume label.
+/// True for a tar member that is not a listed entry: a directory (also an old-style one,
+/// a regular entry named `dir/`) or a GNU volume label.
 fn is_tar_structure(kind: tar::EntryType, name: &str) -> bool {
-    kind.is_dir()
-        || kind.is_pax_global_extensions()
-        || kind == tar::EntryType::new(b'V')
-        || name.ends_with('/')
+    kind.is_dir() || kind == tar::EntryType::new(b'V') || name.ends_with('/')
 }
 
-/// The entry name as the archive spells it (GNU long names and pax paths resolved).
-fn tar_entry_name<R: Read>(entry: &tar::Entry<'_, R>) -> String {
-    String::from_utf8_lossy(&entry.path_bytes()).to_string()
+/// Largest GNU long-name / long-link or pax extension header read. The `tar` crate reads
+/// them whole into memory with no bound, so a header declaring gigabytes would abort the
+/// process: FastTail walks the headers itself and treats a larger one as damage.
+pub const MAX_TAR_EXTENSION: u64 = 64 * 1024;
+
+fn damaged(what: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, what.into())
+}
+
+/// How a tar walk moves past data it does not read.
+trait Skip: Read {
+    fn skip(&mut self, bytes: u64) -> std::io::Result<()>;
+}
+
+/// A decompressed tar: skipped data is read and dropped (and must all be there).
+struct ReadSkip<R>(R);
+
+impl<R: Read> Read for ReadSkip<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<R: Read> Skip for ReadSkip<R> {
+    fn skip(&mut self, bytes: u64) -> std::io::Result<()> {
+        let skipped = std::io::copy(&mut (&mut self.0).take(bytes), &mut std::io::sink())?;
+        if skipped < bytes {
+            return Err(damaged("the tar archive is truncated"));
+        }
+        Ok(())
+    }
+}
+
+/// A plain tar file: skipped data is seeked over, never read. A seek past the end of the
+/// file is truncation (a seek alone would not notice it).
+struct SeekSkip<R> {
+    inner: R,
+    len: u64,
+}
+
+impl<R: Read> Read for SeekSkip<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl<R: Read + Seek> Skip for SeekSkip<R> {
+    fn skip(&mut self, bytes: u64) -> std::io::Result<()> {
+        let at = self.inner.seek(SeekFrom::Current(bytes as i64))?;
+        if at > self.len {
+            return Err(damaged("the tar archive is truncated"));
+        }
+        Ok(())
+    }
+}
+
+/// One member of a tar, its extension headers resolved.
+struct TarMember {
+    name: String,
+    kind: tar::EntryType,
+    /// Bytes of data stored in the archive (for a sparse file, not its expanded size).
+    size: u64,
+    /// Where the headers of this member start (its first extension header), relative to
+    /// where the walk started.
+    start: u64,
+}
+
+/// A tar walk that reads every header itself: GNU long names and pax paths are resolved
+/// with `MAX_TAR_EXTENSION` as the bound, pax sizes and GNU sparse extension blocks are
+/// honoured, and a checksum mismatch or data cut short is an error (damage).
+struct TarWalker<R> {
+    reader: R,
+    /// Position in the tar stream, relative to where the walk started.
+    pos: u64,
+    /// Padded data of the last member not read yet (skipped before the next header).
+    pending: u64,
+}
+
+fn padded(size: u64) -> u64 {
+    size.div_ceil(TAR_BLOCK) * TAR_BLOCK
+}
+
+impl<R: Skip> TarWalker<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            pos: 0,
+            pending: 0,
+        }
+    }
+
+    /// One 512-byte block; `None` at a clean end of the stream.
+    fn block(&mut self) -> std::io::Result<Option<[u8; 512]>> {
+        let mut block = [0u8; 512];
+        match read_full(&mut self.reader, &mut block)? {
+            0 => Ok(None),
+            512 => {
+                self.pos += TAR_BLOCK;
+                Ok(Some(block))
+            }
+            _ => Err(damaged("the tar archive is truncated")),
+        }
+    }
+
+    /// The data of an extension header, at most `MAX_TAR_EXTENSION` bytes.
+    fn extension(&mut self, size: u64) -> std::io::Result<Vec<u8>> {
+        if size > MAX_TAR_EXTENSION {
+            return Err(damaged(format!(
+                "tar extension header of {size} bytes (at most {MAX_TAR_EXTENSION})"
+            )));
+        }
+        let mut data = vec![0u8; padded(size) as usize];
+        if read_full(&mut self.reader, &mut data)? < data.len() {
+            return Err(damaged("the tar archive is truncated"));
+        }
+        self.pos += data.len() as u64;
+        data.truncate(size as usize);
+        Ok(data)
+    }
+
+    /// The next member, skipping the data of the previous one; `None` at the end.
+    fn next_member(&mut self) -> std::io::Result<Option<TarMember>> {
+        if self.pending > 0 {
+            self.reader.skip(self.pending)?;
+            self.pos += self.pending;
+            self.pending = 0;
+        }
+        let start = self.pos;
+        let mut long_name: Option<Vec<u8>> = None;
+        let mut pax_path: Option<Vec<u8>> = None;
+        let mut pax_size: Option<u64> = None;
+        loop {
+            let Some(block) = self.block()? else {
+                return if long_name.is_some() || pax_path.is_some() || pax_size.is_some() {
+                    Err(damaged("the tar archive is truncated"))
+                } else {
+                    Ok(None)
+                };
+            };
+            // Two zero blocks end the archive; one is enough to stop reading.
+            if block.iter().all(|&b| b == 0) {
+                return Ok(None);
+            }
+            let header = tar::Header::from_byte_slice(&block);
+            let sum: u32 = block[..148]
+                .iter()
+                .chain(&block[156..])
+                .map(|&b| b as u32)
+                .sum::<u32>()
+                + 8 * 32;
+            if header.cksum()? != sum {
+                return Err(damaged("tar header checksum mismatch"));
+            }
+            let kind = header.entry_type();
+            let size = header.entry_size()?;
+            if kind.is_gnu_longname() {
+                let mut name = self.extension(size)?;
+                if let Some(end) = name.iter().position(|&b| b == 0) {
+                    name.truncate(end);
+                }
+                long_name = Some(name);
+                continue;
+            }
+            if kind.is_gnu_longlink() || kind.is_pax_global_extensions() {
+                self.extension(size)?;
+                continue;
+            }
+            if kind.is_pax_local_extensions() {
+                let records = self.extension(size)?;
+                for record in tar::PaxExtensions::new(&records) {
+                    let record = record.map_err(|_| damaged("damaged pax header"))?;
+                    match record.key_bytes() {
+                        b"path" => pax_path = Some(record.value_bytes().to_vec()),
+                        b"size" => {
+                            pax_size = std::str::from_utf8(record.value_bytes())
+                                .ok()
+                                .and_then(|v| v.parse().ok());
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            let mut stored = pax_size.unwrap_or(size);
+            // An old-style GNU sparse file is followed by extension blocks of its map
+            // before the data; its size field already is the data stored.
+            if kind.is_gnu_sparse() {
+                let mut extended = block[482] != 0;
+                while extended {
+                    let Some(ext) = self.block()? else {
+                        return Err(damaged("the tar archive is truncated"));
+                    };
+                    extended = ext[504] != 0;
+                }
+                stored = size;
+            }
+            let name = long_name
+                .filter(|n| !n.is_empty())
+                .or(pax_path)
+                .unwrap_or_else(|| header.path_bytes().to_vec());
+            self.pending = padded(stored);
+            return Ok(Some(TarMember {
+                name: String::from_utf8_lossy(&name).to_string(),
+                kind,
+                size: stored,
+                start,
+            }));
+        }
+    }
+
+    /// The data of the member `next_member` just returned.
+    fn data(&mut self, member: &TarMember) -> impl Read + '_ {
+        self.pending = 0;
+        (&mut self.reader).take(member.size)
+    }
 }
 
 /// Extracts the tar entry `entry` of `archive`. A plain tar whose scan indexed the entry
@@ -898,16 +1223,19 @@ fn run_tar_entry(
     let shared = env.shared;
     if let (None, Some(offset)) = (codec, offset) {
         if let Ok(file) = crate::file_source::open_file_shared(archive) {
+            let len = file.metadata().map(|m| m.len()).unwrap_or(0);
             let mut reader = BufReader::new(file);
             if reader.seek(SeekFrom::Start(offset)).is_ok() {
-                let mut tar = tar::Archive::new(reader);
-                if let Some(Ok(found)) = tar.entries().ok().and_then(|mut e| e.next()) {
-                    let name = tar_entry_name(&found);
-                    let kind = found.header().entry_type();
-                    if entry_key(&name) == key && is_regular(kind) && !is_unsafe_name(&name) {
+                let mut walker = TarWalker::new(SeekSkip { inner: reader, len });
+                if let Ok(Some(found)) = walker.next_member() {
+                    if entry_key(&found.name) == key
+                        && is_regular(found.kind)
+                        && !is_unsafe_name(&found.name)
+                    {
                         // Progress is the share of the entry copied.
-                        shared.total.store(found.size().max(1), Ordering::Relaxed);
-                        let counted = CountingReader::new(found, &shared.consumed, None);
+                        shared.total.store(found.size.max(1), Ordering::Relaxed);
+                        let data = walker.data(&found);
+                        let counted = CountingReader::new(data, &shared.consumed, None);
                         return pump_entry(counted, out, env);
                     }
                 }
@@ -919,52 +1247,53 @@ fn run_tar_entry(
         Ok(f) => f,
         Err(e) => return JobState::Stopped(StopReason::Failed(e.to_string())),
     };
+    let len = shared.total.load(Ordering::Relaxed);
     let counted = CountingReader::new(BufReader::new(file), &shared.consumed, Some(env.cancel));
     match codec {
-        None => {
-            let mut tar = tar::Archive::new(counted);
-            match tar.entries_with_seek() {
-                Ok(entries) => walk_to_entry(entries, &key, out, env),
-                Err(e) => read_failure(e, env),
-            }
-        }
-        Some(codec) => {
-            let mut tar = tar::Archive::new(open_decoder(codec, BufReader::new(counted)));
-            match tar.entries() {
-                Ok(entries) => walk_to_entry(entries, &key, out, env),
-                Err(e) => read_failure(e, env),
-            }
-        }
+        None => walk_to_entry(
+            TarWalker::new(SeekSkip {
+                inner: counted,
+                len,
+            }),
+            &key,
+            out,
+            env,
+        ),
+        Some(codec) => walk_to_entry(
+            TarWalker::new(ReadSkip(open_decoder(codec, BufReader::new(counted)))),
+            &key,
+            out,
+            env,
+        ),
     }
 }
 
 /// Walks the tar headers to the first openable entry whose stream path is `key` and
 /// extracts it. The first match wins, as in the picker; a match that cannot be opened is
 /// reported only when no later one can.
-fn walk_to_entry<R: Read>(
-    entries: tar::Entries<'_, R>,
+fn walk_to_entry<R: Skip>(
+    mut walker: TarWalker<R>,
     key: &str,
     out: File,
     env: &JobEnv,
 ) -> JobState {
     let mut refused = None;
-    for item in entries {
-        let found = match item {
-            Ok(found) => found,
+    loop {
+        let found = match walker.next_member() {
+            Ok(Some(found)) => found,
+            Ok(None) => break,
             Err(e) => return read_failure(e, env),
         };
-        let name = tar_entry_name(&found);
-        let kind = found.header().entry_type();
-        if is_tar_structure(kind, &name) || entry_key(&name) != key {
+        if is_tar_structure(found.kind, &found.name) || entry_key(&found.name) != key {
             continue;
         }
-        let refusal = if is_unsafe_name(&name) {
+        let refusal = if is_unsafe_name(&found.name) {
             Some(EntryRefusal::UnsafeName)
         } else {
-            tar_type_refusal(kind)
+            tar_type_refusal(found.kind)
         };
         match refusal {
-            None => return pump_entry(found, out, env),
+            None => return pump_entry(walker.data(&found), out, env),
             Some(refusal) => {
                 refused.get_or_insert(refusal);
             }
@@ -1310,7 +1639,7 @@ pub fn open_engine(
     // The entry name as the archive spells it, for the job.
     let mut real_entry = None;
     let source = match entry {
-        Some(entry) => match archive_kind(archive) {
+        Some(entry) => match entry_ancestor_kind(archive) {
             Some(ArchiveKind::Zip) => {
                 let entries = list_zip_entries(archive)?;
                 let info = find_entry(&entries, entry).ok_or(OpenError::NoSuchEntry)?;
@@ -1449,22 +1778,21 @@ fn stamp(path: &Path) -> Option<Stamp> {
     Some((meta.len(), meta.modified().ok()))
 }
 
-type ScanCache = Mutex<HashMap<PathBuf, (Stamp, Arc<ScanShared>)>>;
+/// Scans kept: a picker list is at most about 10 MB, so the cache stays bounded.
+const CACHED_SCANS: usize = 8;
 
-/// Scans by archive path, for the lifetime of the process: a finished scan is reused
-/// (reopening the picker does not scan again) and a running one tells `open_engine` where
-/// the entries found so far are.
-fn scan_cache() -> &'static ScanCache {
-    static CACHE: OnceLock<ScanCache> = OnceLock::new();
-    CACHE.get_or_init(Default::default)
+/// The last `CACHED_SCANS` scans by archive path: a finished scan is reused (reopening the
+/// picker does not scan again) and a running one tells `open_engine` where the entries
+/// found so far are.
+fn scan_cache() -> &'static Mutex<StampedLru<Arc<ScanShared>>> {
+    static CACHE: OnceLock<Mutex<StampedLru<Arc<ScanShared>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(StampedLru::new(CACHED_SCANS)))
 }
 
 /// The scan of `archive` in the cache, if its size and modification time still match.
 fn cached_scan(archive: &Path) -> Option<Arc<ScanShared>> {
     let now = stamp(archive)?;
-    let cache = scan_cache().lock().ok()?;
-    let (when, shared) = cache.get(archive)?;
-    (*when == now).then(|| shared.clone())
+    scan_cache().lock().ok()?.get(archive, now)
 }
 
 /// What a scan of `archive` knows about `entry`: `Ok(None)` when no scan has listed it
@@ -1506,7 +1834,7 @@ impl TarScan {
             state: Mutex::new(ScanState::Running),
         });
         if let (Some(when), Ok(mut cache)) = (stamp(archive), scan_cache().lock()) {
-            cache.insert(archive.to_path_buf(), (when, shared.clone()));
+            cache.insert(archive, when, shared.clone());
         }
         let (thread_shared, thread_cancel) = (shared.clone(), cancel.clone());
         let path = archive.to_path_buf();
@@ -1517,12 +1845,7 @@ impl TarScan {
                 if matches!(state, ScanState::Cancelled | ScanState::Failed(_)) {
                     // Only a finished listing is worth keeping.
                     if let Ok(mut cache) = scan_cache().lock() {
-                        if cache
-                            .get(&path)
-                            .is_some_and(|(_, s)| Arc::ptr_eq(s, &thread_shared))
-                        {
-                            cache.remove(&path);
-                        }
+                        cache.remove_if(&path, |s| Arc::ptr_eq(s, &thread_shared));
                     }
                 }
                 if let Ok(mut s) = thread_shared.state.lock() {
@@ -1610,13 +1933,15 @@ fn run_scan(
     let hit = AtomicBool::new(false);
     let result = match codec {
         // A plain tar is listed by seeking over the entry data: only the headers are read.
-        None => {
-            let mut tar = tar::Archive::new(counted);
-            match tar.entries_with_seek() {
-                Ok(entries) => list_tar(entries, true, limits, shared),
-                Err(e) => Err(e),
-            }
-        }
+        None => list_tar(
+            TarWalker::new(SeekSkip {
+                inner: counted,
+                len: total,
+            }),
+            true,
+            limits,
+            shared,
+        ),
         Some(codec) => {
             let decoded = DecodedLimit {
                 inner: open_decoder(codec, BufReader::new(counted)),
@@ -1624,11 +1949,7 @@ fn run_scan(
                 max: limits.max_decoded,
                 hit: &hit,
             };
-            let mut tar = tar::Archive::new(decoded);
-            match tar.entries() {
-                Ok(entries) => list_tar(entries, false, limits, shared),
-                Err(e) => Err(e),
-            }
+            list_tar(TarWalker::new(ReadSkip(decoded)), false, limits, shared)
         }
     };
     match result {
@@ -1641,38 +1962,31 @@ fn run_scan(
 }
 
 /// Lists the entries of a tar into `shared` as they are found. `seekable`: offsets are
-/// positions in the archive file (a plain tar), worth recording.
-fn list_tar<R: Read>(
-    entries: tar::Entries<'_, R>,
+/// positions in the archive file (a plain tar), worth recording. The walk ends `Done` only
+/// after the last member's data was seen whole (a truncated tar is damaged).
+fn list_tar<R: Skip>(
+    mut walker: TarWalker<R>,
     seekable: bool,
     limits: ScanLimits,
     shared: &ScanShared,
 ) -> std::io::Result<ScanState> {
     let mut keys = HashSet::new();
     let mut listed = 0usize;
-    // Where the headers of the next entry start: the end of the previous entry's data.
-    let mut next_start = 0u64;
-    for item in entries {
-        let entry = item?;
-        let start = next_start;
-        let padded = entry.size().div_ceil(TAR_BLOCK) * TAR_BLOCK;
-        next_start = entry.raw_file_position().saturating_add(padded);
-        let name = tar_entry_name(&entry);
-        let kind = entry.header().entry_type();
-        if is_tar_structure(kind, &name) {
+    while let Some(member) = walker.next_member()? {
+        if is_tar_structure(member.kind, &member.name) {
             continue;
         }
-        let refusal = if is_unsafe_name(&name) {
+        let refusal = if is_unsafe_name(&member.name) {
             Some(EntryRefusal::UnsafeName)
         } else {
-            tar_type_refusal(kind).or_else(|| claim_name(&name, &mut keys))
+            tar_type_refusal(member.kind).or_else(|| claim_name(&member.name, &mut keys))
         };
         let info = ArchiveEntryInfo {
-            size: entry.size(),
-            compressed_size: entry.size(),
-            offset: seekable.then_some(start),
+            size: member.size,
+            compressed_size: member.size,
+            offset: seekable.then_some(member.start),
             refusal,
-            name,
+            name: member.name,
         };
         if let Ok(mut list) = shared.entries.lock() {
             list.push(info);
@@ -3039,5 +3353,188 @@ mod tests {
         if state == ScanState::Cancelled {
             assert!(cached_scan(&cancelled_path).is_none());
         }
+    }
+
+    /// A GNU long-name header declaring `size` bytes, with none of them behind it.
+    fn huge_extension(kind: tar::EntryType, size: u64) -> Vec<u8> {
+        let mut header = raw_header("././@LongLink", kind, 0);
+        header.set_size(size);
+        header.set_cksum();
+        let mut tar = header.as_bytes().to_vec();
+        tar.extend(tar_bytes(&[Item::File("after.log", b"after\n")]));
+        tar
+    }
+
+    #[test]
+    fn a_huge_extension_header_is_damage_not_an_allocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = test_settings(dir.path());
+        // 64 GiB of long name, 64 GiB of pax records: nothing is allocated for them.
+        for kind in [tar::EntryType::GNULongName, tar::EntryType::XHeader] {
+            let tar = huge_extension(kind, 64 << 30);
+            for (name, bytes, codec) in [
+                ("huge.tar", tar.clone(), None),
+                ("huge.tgz", gzip(&tar), Some(Codec::Gzip)),
+            ] {
+                let path = dir.path().join(name);
+                std::fs::write(&path, bytes).unwrap();
+                let (state, entries) = scan_all(&path, codec, ScanLimits::default());
+                assert!(matches!(state, ScanState::Damaged(_)), "{state:?}");
+                assert!(entries.is_empty());
+                let mut engine = open_engine(&path, Some("after.log"), &settings, None).unwrap();
+                settle(&mut engine);
+                assert!(
+                    matches!(
+                        engine.compressed.as_ref().unwrap().state(),
+                        JobState::Stopped(StopReason::Failed(_))
+                    ),
+                    "{name}"
+                );
+            }
+        }
+        // Within the bound, a long name still resolves.
+        let tar = huge_extension(tar::EntryType::GNULongName, 0);
+        let path = dir.path().join("fine.tar");
+        std::fs::write(&path, tar).unwrap();
+        let (state, entries) = scan_all(&path, None, ScanLimits::default());
+        assert_eq!(state, ScanState::Done);
+        assert_eq!(entries[0].name, "after.log");
+    }
+
+    #[test]
+    fn a_truncated_plain_tar_is_damaged_not_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tar = tar_bytes(&[
+            Item::File("first.log", b"first\n"),
+            Item::File("cut.log", &log_text(200)),
+        ]);
+        // Keep the header of `cut.log` and a few bytes of its data.
+        tar.truncate(1024 + 512 + 100);
+        let path = dir.path().join("cut.tar");
+        std::fs::write(&path, &tar).unwrap();
+        let (state, entries) = scan_all(&path, None, ScanLimits::default());
+        assert!(matches!(state, ScanState::Damaged(_)), "{state:?}");
+        assert_eq!(entries.len(), 2);
+        // An incomplete list does not answer "no such entry" with authority.
+        assert!(matches!(cached_tar_entry(&path, "later.log"), Ok(None)));
+    }
+
+    #[test]
+    fn the_entry_after_a_sparse_file_keeps_its_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        // A GNU sparse header whose map continues in one extension block, 512 bytes of
+        // stored data (the expanded size is larger), then a regular file.
+        let mut sparse = raw_header("sparse.dat", tar::EntryType::GNUSparse, 512);
+        sparse.as_gnu_mut().unwrap().set_real_size(1 << 20);
+        sparse.as_gnu_mut().unwrap().set_is_extended(true);
+        sparse.set_cksum();
+        let mut tar = sparse.as_bytes().to_vec();
+        tar.extend([0u8; 512]); // extension block, not extended further
+        tar.extend([7u8; 512]); // stored data
+        tar.extend(tar_bytes(&[Item::File("after.log", b"after\n")]));
+        let path = dir.path().join("sparse.tar");
+        std::fs::write(&path, &tar).unwrap();
+        let (state, entries) = scan_all(&path, None, ScanLimits::default());
+        assert_eq!(state, ScanState::Done);
+        assert_eq!(entries[0].refusal, Some(EntryRefusal::Sparse));
+        assert_eq!(entries[1].name, "after.log");
+        assert_eq!(entries[1].offset, Some(3 * 512));
+        let (state, out, _) = run_to_spool(
+            JobSource::TarEntry {
+                archive: path.clone(),
+                codec: None,
+                entry: "after.log".to_string(),
+                offset: entries[1].offset,
+            },
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(state, JobState::Done);
+        assert_eq!(out, b"after\n");
+    }
+
+    /// `xz` with the LZMA2 dictionary declared in its first block header replaced by the
+    /// property byte `prop` (dictionary `(2 | prop & 1) << (prop / 2 + 11)`), the header's
+    /// CRC32 fixed up. Nothing but the declaration changes.
+    fn xz_with_dict_prop(data: &[u8], prop: u8) -> Vec<u8> {
+        let mut xz = encode(Codec::Xz, data);
+        let start = 12; // after the stream header
+        let len = (xz[start] as usize + 1) * 4;
+        let header = &mut xz[start..start + len];
+        let at = header
+            .windows(2)
+            .position(|w| w == [0x21, 0x01])
+            .expect("LZMA2 filter flags")
+            + 2;
+        header[at] = prop;
+        let mut crc = flate2::Crc::new();
+        crc.update(&header[..len - 4]);
+        header[len - 4..].copy_from_slice(&crc.sum().to_le_bytes());
+        xz
+    }
+
+    #[test]
+    fn the_ui_thread_does_not_decode_a_large_xz_dictionary() {
+        let dir = tempfile::tempdir().unwrap();
+        let tar = tar_bytes(&[Item::File("a.log", b"a\n"), Item::File("b.log", b"b\n")]);
+        // A small dictionary is peeked at: the content says tar, whatever the name.
+        let small = dir.path().join("small.bin");
+        std::fs::write(&small, encode(Codec::Xz, &tar)).unwrap();
+        assert_eq!(classify(&small), Target::TarArchive(Some(Codec::Xz)));
+        // A 16 MiB dictionary is over the peek bound: without a tar name it is taken for
+        // a single log, with one it is a tar; either way the job still decodes it.
+        let big = xz_with_dict_prop(&tar, 24);
+        let unnamed = dir.path().join("big.bin");
+        std::fs::write(&unnamed, &big).unwrap();
+        assert_eq!(classify(&unnamed), Target::Compressed(Codec::Xz));
+        let named = dir.path().join("big.tar.xz");
+        std::fs::write(&named, &big).unwrap();
+        assert_eq!(classify(&named), Target::TarArchive(Some(Codec::Xz)));
+        let (state, entries) = scan_all(&named, Some(Codec::Xz), ScanLimits::default());
+        assert_eq!(state, ScanState::Done);
+        assert_eq!(entries.len(), 2);
+        // A dictionary over 256 MiB is refused by the job before it is allocated.
+        let huge = dir.path().join("huge.xz");
+        std::fs::write(&huge, xz_with_dict_prop(b"hello\n", 34)).unwrap();
+        let (state, out, _) = run_to_spool(
+            JobSource::Compressed(huge, Codec::Xz),
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(state, JobState::Stopped(StopReason::WindowTooLarge));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn entry_paths_are_told_from_the_raw_magic_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let tgz = dir.path().join("bundle.bin");
+        std::fs::write(&tgz, gzip(&tar_bytes(&[Item::File("a.log", b"a\n")]))).unwrap();
+        let entry = entry_path(&tgz, "a.log");
+        assert_eq!(
+            split_entry_path(&entry),
+            Some((tgz.clone(), "a.log".into()))
+        );
+        assert!(source_exists(&entry));
+        let plain = dir.path().join("plain.log");
+        std::fs::write(&plain, b"text\n").unwrap();
+        assert!(!source_exists(&plain.join("a.log")));
+    }
+
+    #[test]
+    fn the_stamped_cache_keeps_the_most_recent_entries() {
+        let mut lru = StampedLru::new(2);
+        let when = (1, None);
+        lru.insert(Path::new("a"), when, 1);
+        lru.insert(Path::new("b"), when, 2);
+        assert_eq!(lru.get(Path::new("a"), when), Some(1));
+        lru.insert(Path::new("c"), when, 3);
+        // `b` was the least recently used.
+        assert_eq!(lru.get(Path::new("b"), when), None);
+        assert_eq!(lru.get(Path::new("a"), when), Some(1));
+        // A changed file is a miss.
+        assert_eq!(lru.get(Path::new("c"), (2, None)), None);
+        lru.remove_if(Path::new("a"), |v| *v == 1);
+        assert_eq!(lru.get(Path::new("a"), when), None);
     }
 }

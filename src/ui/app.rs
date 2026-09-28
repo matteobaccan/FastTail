@@ -1366,13 +1366,28 @@ impl FastTailApp {
     /// entry, or a plain file. `None` for a zip or tar archive, whose entries are chosen
     /// first.
     fn open_engine(&self, path: &Path) -> Option<Result<TailEngine, crate::compressed::OpenError>> {
+        let target = if crate::wildcard::is_pattern_path(path) {
+            crate::compressed::Target::Plain
+        } else {
+            crate::compressed::classify(path)
+        };
+        self.open_engine_for(path, &target)
+    }
+
+    /// `open_engine` for a `path` already classified as `target` (the classification may
+    /// peek at decompressed bytes: it is done once per open).
+    fn open_engine_for(
+        &self,
+        path: &Path,
+        target: &crate::compressed::Target,
+    ) -> Option<Result<TailEngine, crate::compressed::OpenError>> {
         use crate::compressed::{OpenError, Target};
         let wake = Self::make_wake(&self.egui_ctx);
         if crate::wildcard::is_pattern_path(path) {
             return Some(TailEngine::open_pattern_with_wake(path, wake).map_err(OpenError::Io));
         }
         let settings = self.config.compressed_settings();
-        match crate::compressed::classify(path) {
+        match target {
             Target::Plain => Some(TailEngine::open_with_wake(path, wake).map_err(OpenError::Io)),
             Target::Compressed(_) => Some(crate::compressed::open_engine(
                 path,
@@ -1381,8 +1396,8 @@ impl FastTailApp {
                 Some(wake),
             )),
             Target::Entry { archive, entry, .. } => Some(crate::compressed::open_engine(
-                &archive,
-                Some(&entry),
+                archive,
+                Some(entry),
                 &settings,
                 Some(wake),
             )),
@@ -1390,12 +1405,12 @@ impl FastTailApp {
         }
     }
 
-    /// An archive was opened (`open_engine` gave `None`): an empty zip is reported, a zip
-    /// goes through `open_zip_archive`, and a tar opens the entry picker at once while
-    /// its headers are scanned in the background.
-    fn open_archive(&mut self, archive: PathBuf) {
+    /// An archive was opened (`open_engine` gave `None` for `target`): an empty zip is
+    /// reported, a zip goes through `open_zip_archive`, and a tar opens the entry picker at
+    /// once while its headers are scanned in the background.
+    fn open_archive(&mut self, archive: PathBuf, target: crate::compressed::Target) {
         use crate::compressed::Target;
-        match crate::compressed::classify(&archive) {
+        match target {
             Target::EmptyZip => {
                 self.open_notice = Some(format!(
                     "{}: {}",
@@ -1507,18 +1522,22 @@ impl FastTailApp {
             }
         }
 
-        let opened = match self.open_engine(&path) {
+        let target = if is_pattern {
+            crate::compressed::Target::Plain
+        } else {
+            crate::compressed::classify(&path)
+        };
+        let opened = match self.open_engine_for(&path, &target) {
             Some(opened) => opened,
             None => {
-                self.open_archive(path);
+                self.open_archive(path, target);
                 return;
             }
         };
         if let Err(err) = &opened {
             // A plain file that fails to open is skipped silently, as it always was; a
             // compressed one says why.
-            if !is_pattern && crate::compressed::classify(&path) != crate::compressed::Target::Plain
-            {
+            if target != crate::compressed::Target::Plain {
                 self.open_notice = Some(self.open_error_text(&path, err));
             }
         }
