@@ -11,7 +11,9 @@
 use crate::i18n::{t, Language};
 use crate::tail_engine::TailEngine;
 use crate::theme::CyberTheme;
-use crate::timestamp::{days_to_date, format_clock, format_millis, is_bare_date, parse_user_time};
+use crate::timestamp::{
+    days_to_date, format_clock, format_millis, is_bare_date, local_now_millis, parse_user_time,
+};
 use crate::ui::calendar::{self, Marks, Month};
 use egui::{Id, Key, Modifiers, Response, RichText, Ui};
 
@@ -38,6 +40,8 @@ pub struct TimeRangeDraft {
     pub to: String,
     pub from_month: Month,
     pub to_month: Month,
+    /// Today on the local clock, as a day count, read once when the popup opens.
+    pub today: i64,
 }
 
 impl TimeRangeDraft {
@@ -46,12 +50,13 @@ impl TimeRangeDraft {
     fn open(engine: &TailEngine) -> Self {
         let reference = engine.time_reference();
         let first = engine.first_timestamp();
-        let now = now_millis();
+        let now = local_now_millis();
         Self {
             from: engine.time_from_text.clone(),
             to: engine.time_to_text.clone(),
             from_month: opening_month(&engine.time_from_text, reference, first, now),
             to_month: opening_month(&engine.time_to_text, reference, first, now),
+            today: day_of(now),
         }
     }
 
@@ -134,13 +139,6 @@ fn day_of(millis: i64) -> i64 {
 fn format_date(days: i64) -> String {
     let (year, month, day) = days_to_date(days);
     format!("{year:04}-{month:02}-{day:02}")
-}
-
-fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// The month a side's calendar opens on: the side's own, else the log's first timestamp,
@@ -422,16 +420,19 @@ fn popup_contents(
     let reference = engine.time_reference();
     let timed = engine.timestamps_complete();
     let usable = engine.timestamps_usable();
+    // Both are read from the ends of the timestamp cache: nothing here walks the lines.
     let first = engine.first_timestamp();
-    // Walking back to the last timestamp is instant once timestamps are usable.
     let last = if timed && usable {
         engine.last_timestamp()
     } else {
         None
     };
-    let today = day_of(now_millis());
+    let today = draft.today;
+    // On a log that goes back in time the first and last timestamps are not its bounds,
+    // and finding those would mean reading every line: the span is left unshaded.
     let span = first
         .zip(last)
+        .filter(|_| !engine.timestamps_unordered())
         .map(|(a, b)| (day_of(a.min(b)), day_of(a.max(b))));
 
     let mut enter = false;

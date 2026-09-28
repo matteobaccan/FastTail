@@ -11407,6 +11407,28 @@ mod time_range_popup {
             engine.last_timestamp(),
             parse_user_time("2026-09-18 16:30:12", 0)
         );
+        assert!(!engine.timestamps_unordered());
+        // Out of order: the first and last lines, not the earliest and the latest.
+        let back = dir.path().join("back.log");
+        std::fs::write(
+            &back,
+            "2026-09-18 14:00:00 a
+2026-09-18 09:00:00 b
+2026-09-18 12:00:00 c
+",
+        )
+        .unwrap();
+        let mut engine = TailEngine::open(&back).unwrap();
+        engine.ensure_timestamps();
+        assert!(engine.timestamps_unordered());
+        assert_eq!(
+            engine.first_timestamp(),
+            parse_user_time("2026-09-18 14:00:00", 0)
+        );
+        assert_eq!(
+            engine.last_timestamp(),
+            parse_user_time("2026-09-18 12:00:00", 0)
+        );
         let plain = dir.path().join("plain.log");
         std::fs::write(&plain, "no\ntimes\nhere\n").unwrap();
         let mut engine = TailEngine::open(&plain).unwrap();

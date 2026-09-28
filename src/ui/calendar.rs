@@ -11,9 +11,12 @@ use egui::{Align2, FontId, Id, RichText, Sense, Stroke, Ui, Vec2};
 /// Size of one day cell.
 pub const CELL: Vec2 = Vec2::new(26.0, 18.0);
 
-/// Width of the month and year between the arrows, so the arrows do not move as the
-/// name of the month changes.
-const TITLE_WIDTH: f32 = 104.0;
+/// Smallest width of the month and year between the arrows. The title is as wide as the
+/// longest month of the language, so the arrows do not move from month to month.
+const TITLE_WIDTH: f32 = 124.0;
+
+/// Size of the month and year title.
+const TITLE_SIZE: f32 = 11.5;
 
 /// The month a calendar shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,16 +97,29 @@ pub fn show(
         if arrow(ui, "‹", t(lang, "cal_prev_month")) {
             *month = month.shifted(-1);
         }
-        let name = t(lang, "cal_months")
+        let names = t(lang, "cal_months");
+        let name = names.split('|').nth(month.month as usize - 1).unwrap_or("");
+        // Measured on the longest name with a four-digit year; egui caches the layout.
+        let longest = names
             .split('|')
-            .nth(month.month as usize - 1)
+            .max_by_key(|n| n.chars().count())
             .unwrap_or("");
+        let width = ui
+            .painter()
+            .layout_no_wrap(
+                format!("{longest} 9999"),
+                FontId::monospace(TITLE_SIZE),
+                accent,
+            )
+            .size()
+            .x
+            + 8.0;
         ui.add_sized(
-            [TITLE_WIDTH, CELL.y],
+            [width.max(TITLE_WIDTH), CELL.y],
             egui::Label::new(
                 RichText::new(format!("{name} {}", month.year))
                     .monospace()
-                    .size(11.5)
+                    .size(TITLE_SIZE)
                     .color(accent),
             ),
         );
