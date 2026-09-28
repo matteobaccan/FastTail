@@ -105,9 +105,9 @@ static RE_HEADINGS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 /// Converts HTML strings to Markdown formatted text
 pub fn html_to_markdown(html: &str) -> String {
-    // Sanitize pre-existing placeholder delimiters from untrusted input to prevent collision
-    let html_clean = html.replace('\u{E000}', "").replace('\u{E001}', "");
-    let mut out = html_clean;
+    // The placeholder delimiters used below are dropped from the input first, so a page
+    // that contains them cannot collide with (and swap in) a protected block.
+    let mut out = html.replace(['\u{E000}', '\u{E001}'], "");
 
     // 1. Remove comments <!-- ... -->
     out = RE_COMMENT.replace_all(&out, "").into_owned();
