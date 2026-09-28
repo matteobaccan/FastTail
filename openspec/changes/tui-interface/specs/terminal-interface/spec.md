@@ -115,6 +115,21 @@ Each stream window SHALL have a cursor row, drawn reversed, that the keys move: 
 - **WHEN** the cursor is on row 120 of a growing file and the user presses `G`
 - **THEN** the cursor is on the last row, follow is on, and appended lines keep the cursor on the new last row.
 
+### Requirement: Terminal Key Conventions
+The terminal interface SHALL accept less / vim style keys next to FastTail's own: `e` / `E` SHALL move the cursor to the next / previous line of level ERROR or above visible under the active filters, and `w` / `W` to the next / previous WARN line, wrapping around with a status message; a count typed before `j`, `k`, `n`, `N`, `e`, `E`, `w` or `W` SHALL repeat the move that many times (at most 99,999). `?` and `F1` SHALL open the key help even when no stream is open. `:` SHALL open the command palette over the action registry shared with the graphical interface, listing the same actions with the terminal's keys; a number typed in it followed by `Enter` SHALL go to that line. Key bindings SHALL be taken from that registry, so a binding changed for an action applies to both interfaces where the terminal can deliver the key. When the terminal supports the Kitty keyboard protocol, it SHALL be enabled at start and restored at exit.
+
+#### Scenario: Error jumps with a count
+- **WHEN** the focused stream shows ERROR lines at rows 10, 50 and 90, the cursor is on row 1, and the user types `2e`
+- **THEN** the cursor moves to row 50.
+
+#### Scenario: Palette line jump
+- **WHEN** the user presses `:`, types `1200` and presses `Enter`
+- **THEN** the cursor moves to line 1200, or to the next line visible under the active filters.
+
+#### Scenario: Help with no file
+- **WHEN** the terminal interface is started with no file and the user presses `?`
+- **THEN** the key help is shown.
+
 ### Requirement: Search, Filters, Level and Collapse
 `/` SHALL open a search dialog; `n` / `N` and `F3` / `Shift+F3` SHALL move to the next and previous hit with wrap-around, moving the cursor to it; hit rows SHALL carry `>` in the gutter, the matched text SHALL be painted and the current hit's line number reversed. `i` and `x` SHALL edit the include and exclude terms, `l` SHALL cycle the minimum level (off, DEBUG, INFO, WARN, ERROR), `c` SHALL cycle collapse (off, exact, numbers, collapsed groups showing a `[Nx]` badge), `f` SHALL switch the global filter on and off, and `t` SHALL open the time-range dialog. All of them SHALL use the engine's own filter, search and collapse, running on its worker threads above 16 MB with the progress in the bottom border. `Esc` SHALL clear the search and the selection.
 
@@ -127,7 +142,7 @@ Each stream window SHALL have a cursor row, drawn reversed, that the keys move: 
 - **THEN** the cursor moves to the first hit and the bottom border reads `1/4`.
 
 ### Requirement: Bookmarks, Notes, Show in Context and Go To
-`b` and `Ctrl+F2` SHALL toggle a bookmark on the cursor row, drawn as `*` in the gutter (an automatic bookmark as `o`); `]` / `F2` and `[` / `Shift+F2` SHALL move the cursor to the next and previous bookmark visible under the active filters, wrapping around. `m` SHALL open a note dialog for the cursor row's bookmark, creating the bookmark when needed; the first 40 characters of the note SHALL be shown in the status bar when the cursor is on the row. `Ctrl+K` on a filtered stream SHALL enter the engine's context view on the cursor row, with a banner line saying the filters are suspended, and `Ctrl+K` or `Esc` SHALL return to the filtered view exactly as before, following the Show In Context requirement of `search-and-navigation`. `Ctrl+G` and `:` SHALL open a go-to dialog accepting `N`, `+N`, `-N` or a time such as `14:02`, with the GUI's parsing and the same "next visible line" resolution.
+`b` and `Ctrl+F2` SHALL toggle a bookmark on the cursor row, drawn as `*` in the gutter (an automatic bookmark as `o`); `]` / `F2` and `[` / `Shift+F2` SHALL move the cursor to the next and previous bookmark visible under the active filters, wrapping around. `m` SHALL open a note dialog for the cursor row's bookmark, creating the bookmark when needed; the first 40 characters of the note SHALL be shown in the status bar when the cursor is on the row. `Ctrl+K` on a filtered stream SHALL enter the engine's context view on the cursor row, with a banner line saying the filters are suspended, and `Ctrl+K` or `Esc` SHALL return to the filtered view exactly as before, following the Show In Context requirement of `search-and-navigation`. `Ctrl+G` SHALL open a go-to dialog accepting `N`, `+N`, `-N` or a time such as `14:02`, with the GUI's parsing and the same "next visible line" resolution.
 
 #### Scenario: Bookmark and walk
 - **WHEN** the user presses `b` on lines 120 and 900 and then `[` with the cursor on line 950
@@ -191,7 +206,7 @@ Dialogs SHALL open centred over the windows, clear what is under them, take the 
 - **THEN** the field is marked as unreadable, `[ OK ]` does nothing, and the stream's range is unchanged.
 
 ### Requirement: Terminal Settings Dialog
-`,` SHALL open a Settings dialog with the settings that apply to a terminal: the interface choice; theme; language (with "follow the system"); line numbers, level colours, time delta and its gap; `poll_interval_ms`, `size_check_interval_ms`, `spool_dir`, `compressed_max_gb` and `stdin_spool_max_mb`; the defaults applied to new streams and `auto_bookmark_max`; `size_unit`; `sound_enabled`; the PIN lock (set, change or remove the PIN, `lock_enabled`, idle lock on or off and its minutes, stored as `screensaver_enabled` and `screensaver_timeout_mins`, with the statement that the lock is a deterrent); and the external tools page. Every field SHALL be validated with the same ranges and rules as the GUI Settings, showing the range of a rejected value. `[ OK ]` SHALL apply the values to the running interface and save `fasttail.ini`; `[ Cancel ]` SHALL discard them. The dialog SHALL NOT show the renderer, frame-rate, mouse throttle, zoom, font, always-on-top, borderless, window or Markdown settings, and SHALL leave their keys unchanged.
+`,` SHALL open a Settings dialog with the settings that apply to a terminal: the interface choice; theme; language (with "follow the system"); line numbers, level colours, time delta and its gap; `poll_interval_ms`, `size_check_interval_ms`, `spool_dir`, `compressed_max_gb` and `stdin_spool_max_mb`; the defaults applied to new streams and `auto_bookmark_max`; `size_unit`; `sound_enabled`; the PIN lock (set, change or remove the PIN, `lock_enabled`, which also turns the idle lock on, and the idle minutes, stored as `screensaver_timeout_mins`, with the statement that the lock is a deterrent; `screensaver_enabled` SHALL be kept as read); and the external tools page. Every field SHALL be validated with the same ranges and rules as the GUI Settings, showing the range of a rejected value. `[ OK ]` SHALL apply the values to the running interface and save `fasttail.ini`; `[ Cancel ]` SHALL discard them. The dialog SHALL NOT show the renderer, frame-rate, mouse throttle, zoom, font, always-on-top, borderless, window or Markdown settings, and SHALL leave their keys unchanged.
 
 #### Scenario: Language changed from the terminal
 - **WHEN** the user opens Settings, picks Deutsch and presses `[ OK ]`
@@ -225,10 +240,10 @@ Dialogs SHALL open centred over the windows, clear what is under them, take the 
 - **THEN** within 300 ms of the last key no stream shows lines containing `healthcheck`, and `[global_filter]` in `fasttail.ini` holds the term.
 
 ### Requirement: Terminal External Tools
-The external tools editor in the terminal Settings SHALL edit the same tools as the GUI (name, command, arguments with the placeholders `{line}`, `{file}`, `{dir}`, `{lineno}`, `{selection}` and `{match}`, the optional regex, the shortcut, the shell flag and the rule binding, and show the dropped-run count). `e` SHALL open a menu of the tools to run on the cursor row or the selection, and a tool's shortcut SHALL run it when the terminal delivers that key combination. Arguments SHALL be expanded exactly as in the GUI, one argument per placeholder without a shell unless the shell flag is set. Every child process started by the terminal interface SHALL get null standard input, output and error. Rule-bound tools SHALL run when their rule matches an appended line, at most once per second per tool and with at most 10 concurrent children.
+The external tools editor in the terminal Settings SHALL edit the same tools as the GUI (name, command, arguments with the placeholders `{line}`, `{file}`, `{dir}`, `{lineno}`, `{selection}` and `{match}`, the optional regex, the shortcut, the shell flag and the rule binding, and show the dropped-run count). `!` SHALL open a menu of the tools to run on the cursor row or the selection, and a tool's shortcut SHALL run it when the terminal delivers that key combination. Arguments SHALL be expanded exactly as in the GUI, one argument per placeholder without a shell unless the shell flag is set. Every child process started by the terminal interface SHALL get null standard input, output and error. Rule-bound tools SHALL run when their rule matches an appended line, at most once per second per tool and with at most 10 concurrent children.
 
 #### Scenario: Opening the editor on the cursor row
-- **WHEN** a tool `code -g {file}:{lineno}` is defined and the user presses `e` on row 120 of `app.log` and picks it
+- **WHEN** a tool `code -g {file}:{lineno}` is defined and the user presses `!` on row 120 of `app.log` and picks it
 - **THEN** the editor is launched with `app.log:120` as one argument, and nothing it prints appears in the terminal.
 
 #### Scenario: Rule-bound tool while in the terminal
@@ -236,7 +251,7 @@ The external tools editor in the terminal Settings SHALL edit the same tools as 
 - **THEN** the tool runs once and the tool's row in the editor shows two dropped runs.
 
 ### Requirement: Terminal Lock Screen
-The terminal interface SHALL honour the PIN lock with the same stored PIN, the same arming rule and the same attempt counter as the GUI. `Ctrl+L` SHALL lock when a PIN is set and do nothing otherwise. With `lock_enabled`, a PIN set and `screensaver_enabled`, `screensaver_timeout_mins` minutes without a key or mouse event SHALL lock it, without showing a screensaver. While locked, the screen SHALL show only a full-screen bordered PIN dialog on a blank background, with no log line, file name, count, filter or status text; every key except the PIN field's editing keys and `Enter` SHALL be dropped, `Esc`, `q` and `Ctrl+C` included, and the mouse SHALL do nothing. Three wrong PINs in a row SHALL replace the field with a 60 s countdown, again every three further failures; a correct PIN or the maintenance phrase SHALL unlock and clear the count, which SHALL live in memory only. Streams SHALL keep tailing while locked, and unlocking SHALL restore the exact prior state, open dialog included.
+The terminal interface SHALL honour the PIN lock with the same stored PIN, the same arming rule and the same attempt counter as the GUI. `Ctrl+L` SHALL lock when a PIN is set and do nothing otherwise. With `lock_enabled` and a PIN set, `screensaver_timeout_mins` minutes without a key or mouse event SHALL lock it, whatever the value of `screensaver_enabled`, without showing a screensaver. While locked, the screen SHALL show only a full-screen bordered PIN dialog on a blank background, with no log line, file name, count, filter or status text; every key except the PIN field's editing keys and `Enter` SHALL be dropped, `Esc`, `q` and `Ctrl+C` included, and the mouse SHALL do nothing. Three wrong PINs in a row SHALL replace the field with a 60 s countdown, again every three further failures; a correct PIN or the maintenance phrase SHALL unlock and clear the count, which SHALL live in memory only. Streams SHALL keep tailing while locked, and unlocking SHALL restore the exact prior state, open dialog included.
 
 #### Scenario: Locking on demand
 - **WHEN** a PIN is set and the user presses `Ctrl+L` with `app.log` open
@@ -247,7 +262,7 @@ The terminal interface SHALL honour the PIN lock with the same stored PIN, the s
 - **THEN** nothing happens and the streams stay visible.
 
 #### Scenario: Idle lock
-- **WHEN** `lock_enabled=true`, a PIN is set, `screensaver_enabled=true`, `screensaver_timeout_mins=5`, and no key or mouse event arrives for 5 minutes
+- **WHEN** `lock_enabled=true`, a PIN is set, `screensaver_enabled=false`, `screensaver_timeout_mins=5`, and no key or mouse event arrives for 5 minutes
 - **THEN** the terminal interface shows the lock dialog without any screensaver.
 
 #### Scenario: Quit keys do not bypass the lock

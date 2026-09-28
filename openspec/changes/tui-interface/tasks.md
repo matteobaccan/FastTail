@@ -16,7 +16,7 @@
 
 ## 2. Configuration shared and written by both interfaces
 
-- [ ] 2.1 Own-change saves: each instance keeps the bytes it last loaded or wrote and writes only when its serialised state differs from them; applied to the GUI's 2 s save too; test that two instances with different state do not rewrite the file while idle
+- [ ] 2.1 Own-change saves: the GUI part ships early as a separate bugfix PR in 0.13.0; here the terminal applies the same rule (keeps the bytes it last loaded or wrote, writes only when its serialised state differs); test that a GUI and a terminal with different state do not rewrite the file while idle
 - [ ] 2.2 GUI restore reconciles a dock layout whose tabs differ from `open_files` (drop closed files, add new ones to the main area); test with a layout written before the terminal changed the open files
 - [ ] 2.3 Terminal load and save through `FastTailConfig` with the user-directory fallback; 2 s save when changed, on dialog confirmation, on session operations, on exit; standard-input streams not saved; GUI-only keys carried through unchanged (test: dock layout, `font_size`, `max_fps`, `renderer`, `zoom_factor` byte-identical after a terminal save)
 - [ ] 2.4 `interface=gui|tui` in `[general]` (load, save, default `gui`)
@@ -35,11 +35,12 @@
 
 ## 4. Terminal interface: settings, editors, tools, lock
 
-- [ ] 4.1 Settings dialog (`,`): interface, appearance, performance and refresh, new-stream defaults, `auto_bookmark_max`, `size_unit`, sound, PIN lock (set / change / remove, `lock_enabled`, idle lock and minutes, deterrent statement), validation from `settings_model`, `[ OK ]` applies and saves
+- [ ] 4.1 Settings dialog (`,`): interface, appearance, performance and refresh, new-stream defaults, `auto_bookmark_max`, `size_unit`, sound, PIN lock (set / change / remove, `lock_enabled` (arms the idle lock), idle minutes, deterrent statement), validation from `settings_model`, `[ OK ]` applies and saves
 - [ ] 4.2 Highlight-rule editor (`r`): all rule fields, add / edit / delete / reorder, colour swatches and `#RRGGBB` with depth preview, quick labels listed and removable
 - [ ] 4.3 Filter presets (`p`): apply, save current as, rename, delete
 - [ ] 4.4 Global filter editor (`F`) and on / off (`f`), 300 ms debounce
-- [ ] 4.5 External tools: editor page in Settings, `e` menu on the cursor row or selection, shortcuts, rule-bound runs with the 1 per second and 10 children limits, null standard handles for every child
+- [ ] 4.5 External tools: editor page in Settings, `!` menu on the cursor row or selection, shortcuts, rule-bound runs with the 1 per second and 10 children limits, null standard handles for every child
+- [ ] 4.5b Key conventions: `e`/`E`, `w`/`W` level jumps, counts, `?` with no file, `:` palette over `src/actions.rs` (line jump), bindings from the registry, Kitty keyboard protocol on / off
 - [ ] 4.6 Lock screen: `Ctrl+L`, idle lock from the shared idle clock, full-screen bordered PIN dialog with nothing else drawn, key and mouse filtering (`q`, `Esc`, `Ctrl+C` dropped), shared attempts and cooldown, maintenance phrase, tailing continues, exact restore
 - [ ] 4.7 Theme cycle (`T`) and close stream (`w`)
 

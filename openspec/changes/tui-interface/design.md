@@ -201,7 +201,9 @@ disk differs. Today `save_dock_layout` calls `save` every 2 s and `write_if_chan
 compares with the disk, so two instances with different state overwrite each other
 every 2 s for as long as both run. With the fix, a GUI and a terminal open on the same
 file write only when their user changes something; whoever changes something last (or
-exits last with changes) defines the file. Neither instance reloads the file while
+exits last with changes) defines the file. The fix ships **early, as a separate GUI
+bugfix in 0.13.0** (maintainer's answer, 2026-09-29): two GUI instances already suffer
+from it today; this change only relies on it and applies the same rule to the terminal. Neither instance reloads the file while
 running. The README documents this.
 
 *Rejected:* reload and merge before each save. It needs a three-way merge of some 40
@@ -244,13 +246,22 @@ next / previous hit, `i` `x` include / exclude, `l` level, `c` collapse, `s` spl
 `Tab` next window or stream, `Alt+1..9` stream, `y` or `Ctrl+C` copy, `b` or `Ctrl+F2`
 bookmark, `]` `[` or `F2` `Shift+F2` next / previous bookmark, `m` note, `Ctrl+K` show
 in context, `Ctrl+G` or `:` go to, `h` HEX view, `a` ANSI mode, `t` time range, `f`
-global filter on / off, `F` global filter editor, `p` presets, `r` rule editor, `e`
+global filter on / off, `F` global filter editor, `p` presets, `r` rule editor, `!`
 external tools menu, `,` Settings, `Ctrl+L` lock, `T` next theme (saved like a theme
-change in the GUI), `o` open file, `O` open session, `S` save session as, `w` close
-stream, `q` quit. Where the GUI has a shortcut, the terminal accepts it too; every
+change in the GUI), `o` open file, `O` open session, `S` save session as, `Ctrl+W` close
+stream, `q` quit. From the competitor analysis after 0.12.0 (section 7): `e` / `E` and
+`w` / `W` jump to the next / previous error and warning (lnav); movement keys take a
+count (`10j`, `3n`, less / vim); `?` and `F1` work even with no file open; `:` opens the
+command palette over the shared action registry of `command-palette` (0.13.0), where a
+number jumps to that line, so the go-to dialog keeps `Ctrl+G`; the default bindings come
+from that registry, so `remappable-shortcuts` (0.15.0) rebinds both interfaces; the
+Kitty keyboard protocol is enabled when the terminal supports it, so `Ctrl+Shift`
+combinations are told apart. The status bar keeps the key hints on screen, idle drawing
+stays event-driven (toolong #17 burned a core polling), and pipes work as
+`cmd | fasttail-tui -` next to `fasttail --print` (`headless-print`, 0.13.0). Where the GUI has a shortcut, the terminal accepts it too; every
 action also has a plain key, because multiplexers and terminals swallow some modifier
 combinations (`Ctrl+B` in tmux, `Ctrl+Shift` letters in conhost). Tool shortcuts the
-terminal cannot deliver are still reachable from the `e` menu.
+terminal cannot deliver are still reachable from the `!` menu.
 
 ### 8. HEX view
 
@@ -269,10 +280,11 @@ apply (the bytes of the file, as in the GUI). No new memory per file.
 ### 9. Lock screen
 
 Arming follows the GUI rule through the shared `lock` module: `Ctrl+L` locks when a PIN
-is set (nothing happens otherwise); with `lock_enabled`, a PIN set and
-`screensaver_enabled`, `screensaver_timeout_mins` minutes without a key or mouse event
-lock the terminal (the GUI shows the screensaver first and locks when it ends; the
-terminal goes straight to the lock). While locked, the whole screen is one bordered PIN
+is set (nothing happens otherwise); with `lock_enabled` and a PIN set,
+`screensaver_timeout_mins` minutes without a key or mouse event lock the terminal,
+whatever `screensaver_enabled` says: that switch only decides whether the GUI shows the
+Matrix screensaver before locking, and the terminal has no screensaver (maintainer's
+answer, 2026-09-29). While locked, the whole screen is one bordered PIN
 dialog on a blank background: no log line, file name, count or status text is drawn,
 and every key except the PIN field's editing keys and `Enter` is dropped, `Esc`, `q` and
 `Ctrl+C` included. Three wrong PINs start the 60 s cooldown (countdown instead of the
@@ -290,8 +302,9 @@ check box, radio list, list with reorder, colour field), and all validation come
   (`poll_interval_ms`, `size_check_interval_ms`, `spool_dir`, `compressed_max_gb`,
   `stdin_spool_max_mb`); New streams and bookmarks (the defaults the GUI applies to new
   streams, `auto_bookmark_max`, `size_unit`); Sound (`sound_enabled`); PIN lock (set /
-  change / remove PIN, `lock_enabled`, idle lock on / off and minutes, which are
-  `screensaver_enabled` and `screensaver_timeout_mins`, with the deterrent statement).
+  change / remove PIN, `lock_enabled`, which also arms the idle lock, and the idle
+  minutes, `screensaver_timeout_mins`; `screensaver_enabled` is kept as read; with the
+  deterrent statement).
   `[ OK ]` validates, applies and saves; `[ Cancel ]` discards.
 - **Rule editor** (`r`): the ordered list of highlight rules (pattern, regex and case
   flags, capture-only, fg and bg colour, bold, italic, auto-bookmark, sound alert, bound
@@ -373,12 +386,10 @@ About **8–10 weeks** in all, against 4–6 weeks estimated for the smaller sco
   message and exit code 1.
 - [Size grows with the dialogs] → budget table, sizes printed by every build job.
 
-## Open Questions
+## Resolved Questions (2026-09-29)
 
-1. **Idle lock condition.** The GUI locks on idle only when the screensaver is enabled
-   (it arms when the screensaver ends). The terminal mirrors that: `lock_enabled`, a PIN
-   and `screensaver_enabled`, after `screensaver_timeout_mins`. Should the terminal
-   instead lock on idle whenever `lock_enabled` is on, even with the screensaver
-   switched off in the GUI?
-2. **Own-change saves in the GUI.** The fix in decision 5 changes how two GUI instances
-   behave (no more rewrites every 2 s). Confirm it may ship in the same change.
+1. **Idle lock condition** → the terminal locks on idle whenever `lock_enabled` is on and
+   a PIN is set, after `screensaver_timeout_mins`; `screensaver_enabled` only concerns the
+   GUI's screensaver (decision 9).
+2. **Own-change saves in the GUI** → yes, shipped early as a separate bugfix in 0.13.0
+   (decision 5).

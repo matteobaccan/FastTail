@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Arming the lock
-With a PIN set, the application SHALL lock on demand — a button in the settings and the `Ctrl+L` shortcut — and, when the master switch is on, SHALL lock when the Matrix screensaver ends. Without a PIN set, no action SHALL ever lock the window. The terminal interface SHALL arm the same lock from the same stored PIN: `Ctrl+L` and a "Lock now" entry in its Settings when a PIN is set, and, when the master switch is on and `screensaver_enabled` is true, after `screensaver_timeout_mins` minutes without a key or mouse event, going straight to its lock screen without a screensaver. The PIN check, the attempt counter and the cooldown SHALL be the same code in both interfaces.
+With a PIN set, the application SHALL lock on demand — a button in the settings and the `Ctrl+L` shortcut — and, when the master switch is on, SHALL lock when the Matrix screensaver ends. Without a PIN set, no action SHALL ever lock the window. The terminal interface SHALL arm the same lock from the same stored PIN: `Ctrl+L` and a "Lock now" entry in its Settings when a PIN is set, and, when the master switch is on, after `screensaver_timeout_mins` minutes without a key or mouse event, going straight to its lock screen without a screensaver. The PIN check, the attempt counter and the cooldown SHALL be the same code in both interfaces.
 
 #### Scenario: Returning from the screensaver
 - **WHEN** the lock is armed, the screensaver is running, and the user moves the mouse or presses a key

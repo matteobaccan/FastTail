@@ -106,8 +106,8 @@ with the GUI for everything in scope below.
 - `src/lib.rs`: `ui` and `renderer` behind `gui`; new `color`, `workspace`, `lock`,
   `settings_model` and `tui` modules; `src/bin/fasttail-tui.rs`.
 - `src/theme.rs`, `src/tail_engine.rs`, `src/external_tools.rs`, `src/config.rs`,
-  `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/time_range.rs`: decoupling; `config.rs`
-  and `ui/app.rs`: write only on own change.
+  `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/time_range.rs`: decoupling; the "write only on own
+  change" fix in `config.rs` / `ui/app.rs` ships earlier as a separate 0.13.0 bugfix.
 - `src/main.rs`, `src/cli.rs`: `--tui`, `--gui`, hand-offs, Unix terminal checks.
 - `src/i18n.rs`: terminal strings and the Settings entry in all 16 languages.
 - `.github/workflows/build.yml`: GUI-free check, packaging, Linux terminal-only build.
