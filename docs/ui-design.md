@@ -1,6 +1,6 @@
 # FastTail — Graphical Interface Design Document
 
-Describes the desktop UI of FastTail as of the 0.12.0 development cycle: v0.11.0 plus the global filter (#118), show in context (#122), more archive formats (#126), bookmark notes and triggers (#127) and the collapse of repeated lines (#128). Everything here comes from the source code; each section names the files it describes. Keep this document in step with the UI when it changes.
+Describes the desktop UI of FastTail as of v0.12.0 (global filter, show in context, more archive formats, bookmark notes and triggers, collapse of repeated lines, the time range popup and per-stream line numbers / Δt). Everything here comes from the source code; each section names the files it describes. Keep this document in step with the UI when it changes.
 
 Stack: Rust, `eframe` / `egui` 0.36, `egui_dock` 0.21 (with `serde`), `egui_commonmark` 0.25 for the Markdown view, and `rfd` for the native file dialogs.
 
@@ -180,7 +180,7 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
-│ (F) FASTTAIL v0.11.0 by Matteo Baccan · proj*  ░drag░  🖥 CPU: 7% ▬ │ RAM: 5.1 GB/32 GB ▬ │
+│ (F) FASTTAIL v0.12.0 by Matteo Baccan · proj*  ░drag░  🖥 CPU: 7% ▬ │ RAM: 5.1 GB/32 GB ▬ │
 │                                                         🔍 100%  📌  🌐 │ —  🗖  ✕       │ ← title_panel (always)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ [📁 Open File][🕒][📂*][🗂][⚡ Color Filters (3)][▶ Play][⏸ Pause][⚙ Settings]  [ℹ About][❓ Help] │ ← toolbar_panel

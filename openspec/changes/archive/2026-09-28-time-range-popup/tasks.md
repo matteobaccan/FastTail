@@ -25,5 +25,5 @@
 ## 5. Verification
 
 - [x] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test`, green Linux and Windows CI
-- [ ] 5.2 Preview exe for the maintainer (with the 0.12.0 preview round)
-- [ ] 5.3 Archive the change before the 0.12.0 release
+- [x] 5.2 Preview exe for the maintainer (with the 0.12.0 preview round)
+- [x] 5.3 Archive the change before the 0.12.0 release
