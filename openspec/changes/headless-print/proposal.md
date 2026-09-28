@@ -50,7 +50,7 @@ Target release: **0.13.0** (basics and quick wins), per the release plan in
 
 ### Non-goals
 
-- Zip and tar archives (their entries need the picker); a clear message says so.
+- Zip, tar and 7z archives (their entries need the picker); a clear message says so.
 - The `journald://` and `docker://` sources of the `system-sources` change: in a shell,
   `journalctl` and `docker logs` can already be piped into `fasttail --print -`.
 - Output formats other than lines (JSON, CSV) and field projections: the

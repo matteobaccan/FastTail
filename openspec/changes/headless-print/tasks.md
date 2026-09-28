@@ -5,7 +5,7 @@
 
 ## 2. Pipeline
 
-- [x] 2.1 `src/print_mode.rs` (no `ui` / `egui` / `eframe` import): input opening (plain, pattern newest match, single-file compressed via `open_decoder`, standard input), refusal of zip / tar with a message, encoding sniff, line splitting with the 1 MB long-line cap
+- [x] 2.1 `src/print_mode.rs` (no `ui` / `egui` / `eframe` import): input opening (plain, pattern newest match, single-file compressed via `open_decoder`, standard input), refusal of zip / tar / 7z with a message, encoding sniff, line splitting with the 1 MB long-line cap
 - [x] 2.2 Line evaluation: ANSI strip for matching, `FilterSpec::visible_in_sequence`, level stage, time window with inherited timestamps and the popup's bare-time rule; context ring buffer with `--` separators
 - [x] 2.3 Writer: plain, and colour with theme level styles, rules (captures-only spans), the line's own ANSI below them; truecolor or 256 colours; file prefix and line numbers; 64 KB buffer; quiet exit on broken pipe
 - [x] 2.4 Follow loop: offsets and head fingerprints, `notify` plus 250 ms size check, truncation / rewrite notice and restart (held partial line flushed first, notice only once the file is open), pattern rescan every 2 s, `CTRL + C` ends with the exit code earned so far, standard input end, compressed input not followed

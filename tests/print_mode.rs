@@ -164,17 +164,21 @@ fn several_terms_exclude_and_exit_codes() {
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("USAGE"), "{}", stderr(&out));
 
-    // A missing input and a zip archive: code 3, the readable input still printed.
+    // A missing input, a zip and a 7z archive: code 3, the readable input still printed.
     fx.write(
         "bundle.zip",
         b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
     );
+    let mut seven = vec![0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0, 4];
+    seven.resize(64, 0);
+    fx.write("bundle.7z", &seven);
     let out = fx.run(&[
         "--print",
         "--filter",
         "refused",
         "missing.log",
         "bundle.zip",
+        "bundle.7z",
         "app.log",
     ]);
     assert_eq!(out.status.code(), Some(3));
@@ -188,6 +192,7 @@ fn several_terms_exclude_and_exit_codes() {
         err.contains("zip") && err.contains("not supported in print mode"),
         "{err}"
     );
+    assert!(err.contains("bundle.7z is a 7z archive"), "{err}");
 }
 
 #[test]

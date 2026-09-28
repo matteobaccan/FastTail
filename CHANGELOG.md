@@ -48,7 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Building from source needs Rust 1.93.** `sevenz-rust2` 0.23, used to read `.7z`
   logs, requires it; the release binaries are unaffected.
-- `--filter` and `--exclude` can be repeated (the window keeps using the first term);
+- `--filter` and `--exclude` can be repeated with `--print` (the window keeps using the last one, as before);
   `--level`, `--context`, `--color`, `--line-numbers`, `--no-prefix`, `--regex` and
   `--case-sensitive` without `--print` are usage errors. `--help`, `--version` and usage
   errors now go to a redirected standard output or error as they are.

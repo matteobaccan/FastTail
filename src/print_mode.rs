@@ -334,6 +334,11 @@ impl Input {
                     "{name} is a tar archive: its entries cannot be printed (not supported in print mode)"
                 ))
             }
+            Some(ArchiveKind::SevenZ) => {
+                return Err(format!(
+                    "{name} is a 7z archive: its entries cannot be printed (not supported in print mode)"
+                ))
+            }
             None => {}
         }
         let file = crate::file_source::open_file_shared(&file_path)
