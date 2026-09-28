@@ -83,6 +83,7 @@ pub fn run(cli: &CliArgs) -> i32 {
             .collect(),
         truecolor,
         levels: config.level_colors,
+        tokens: config.auto_tokens(),
     });
     let matcher = Matcher::from_cli(cli);
     let options = PrinterOptions {
@@ -844,6 +845,9 @@ struct Palette {
     rules: Vec<CompiledHighlight>,
     /// Level colours on (`level_colors` in `fasttail.ini`).
     levels: bool,
+    /// Automatic token highlighting as in the window (`auto_highlight` and
+    /// `auto_highlight_kinds`), `NONE` while it is off.
+    tokens: crate::auto_highlight::TokenKinds,
     /// 24-bit colour; otherwise the nearest of the 256 xterm colours.
     truecolor: bool,
 }
@@ -1034,7 +1038,7 @@ impl<W: Write> Printer<W> {
         let Some(palette) = self.palette.as_ref() else {
             return self.out.write_all(text.as_bytes());
         };
-        let highlight = highlight_spans(&palette.rules, &[], text, runs);
+        let highlight = highlight_spans(&palette.rules, &[], text, runs, palette.tokens);
         let base = match (
             &highlight.rest,
             palette
@@ -1061,6 +1065,10 @@ impl<W: Write> Printer<W> {
                 SpanStyle::Rule(rule) => Sgr::of_rule(&rule),
                 SpanStyle::Ansi(ansi) => Sgr::of_ansi(&ansi, &base, palette.theme),
                 SpanStyle::Label(_) => base,
+                SpanStyle::Token(kind) => Sgr {
+                    fg: Some(rgb!(palette.theme.token_color(kind))),
+                    ..base
+                },
             };
             pieces.push((span.start, span.end, style));
             pos = span.end;
@@ -1556,6 +1564,7 @@ mod tests {
             )],
             truecolor: true,
             levels: true,
+            tokens: crate::auto_highlight::TokenKinds::NONE,
         };
         let mut printer = Printer::new(Vec::new(), Some(palette), PrinterOptions::default());
         let source = Source { name: "t", id: 0 };
@@ -1590,6 +1599,36 @@ mod tests {
             )
         );
         assert_eq!(lines[3], "plain");
+    }
+
+    #[test]
+    fn automatic_tokens_are_coloured_below_the_rules() {
+        use crate::auto_highlight::{TokenKind, TokenKinds};
+        let palette = Palette {
+            theme: CyberTheme::Tron,
+            rules: vec![CompiledHighlight::compile(
+                &crate::tail_engine::HighlightRule::new("refused", [255, 0, 0], [0, 0, 0], false),
+            )],
+            truecolor: true,
+            levels: false,
+            tokens: TokenKinds::ALL,
+        };
+        let mut printer = Printer::new(Vec::new(), Some(palette), PrinterOptions::default());
+        let source = Source { name: "t", id: 0 };
+        printer.line(&source, 1, "from 10.0.0.1 ok", false).unwrap();
+        printer.line(&source, 2, "10.0.0.1 refused", false).unwrap();
+        let out = String::from_utf8(printer.out).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        let ip = rgb!(CyberTheme::Tron.token_color(TokenKind::Ip));
+        assert_eq!(
+            lines[0],
+            format!(
+                "from [0;38;2;{};{};{}m10.0.0.1[0m ok",
+                ip[0], ip[1], ip[2]
+            )
+        );
+        // A whole-row rule wins over the token.
+        assert_eq!(lines[1], "[0;38;2;255;0;0;48;2;0;0;0m10.0.0.1 refused[0m");
     }
 
     #[test]

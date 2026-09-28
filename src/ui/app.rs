@@ -2585,6 +2585,11 @@ impl FastTailApp {
         }
 
         // 7. Render Central Modular Docking Area
+        // Automatic highlighting follows the settings (Settings page or palette toggle).
+        let auto_tokens = self.config.auto_tokens();
+        for eng in &mut self.engines {
+            eng.set_auto_tokens(auto_tokens);
+        }
         let prev_borderless = self.config.borderless;
         let prev_theme = self.config.theme;
         let prev_lang = self.config.language;
@@ -2931,6 +2936,8 @@ impl FastTailApp {
             show_line_numbers: &mut self.config.show_line_numbers,
             font_size: &mut self.config.font_size,
             level_colors: &mut self.config.level_colors,
+            auto_highlight: &mut self.config.auto_highlight,
+            auto_highlight_kinds: &mut self.config.auto_highlight_kinds,
             size_unit: &mut self.config.size_unit,
             search_history: &mut self.config.search_history,
             tab_closed: &mut tab_closed,
@@ -3361,6 +3368,8 @@ impl FastTailApp {
                             &mut self.config.show_line_numbers,
                             &mut self.config.font_size,
                             &mut self.config.level_colors,
+                            &mut self.config.auto_highlight,
+                            &mut self.config.auto_highlight_kinds,
                             &mut self.config.external_tools,
                             &self.config.highlight_rules,
                             &mut self.tool_runner,

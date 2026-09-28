@@ -1,5 +1,6 @@
 use crate::ansi::{AnsiMode, AnsiStyle, StyleRun};
 use crate::audio::SoundAlertPreset;
+use crate::auto_highlight::{TokenKind, TokenKinds};
 use crate::collapse::{badge_text, CollapseMode, CollapseState, CollapsedRow, Detector};
 use crate::context_lines::{
     ContextRanges, VisibleView, BACKGROUND_REBUILD_MATCHES, MAX_CONTEXT_LINES,
@@ -129,13 +130,14 @@ pub enum TimeDelta {
 }
 
 /// Style of a painted span: a captures-only rule's style, preset colour `1..=9` of a
-/// quick label, or the SGR attributes of an ANSI-coloured run (both resolved by the theme
-/// in the renderer).
+/// quick label, the SGR attributes of an ANSI-coloured run, or the kind of an automatic
+/// token (the last three resolved by the theme in the renderer).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SpanStyle {
     Rule(HighlightStyle),
     Label(u8),
     Ansi(AnsiStyle),
+    Token(TokenKind),
 }
 
 /// A byte range `[start, end)` of a row painted with its own style.
@@ -887,14 +889,16 @@ fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: S
     spans.len() >= MAX_ROW_SPANS
 }
 
-/// Span evaluation of a row with `rules` (in priority order) and quick `labels` (each
-/// with its lower-case text): see `TailEngine::match_highlight_spans_with`. Shared with
-/// print mode, which has rules but no labels.
+/// Span evaluation of a row with `rules` (in priority order), quick `labels` (each
+/// with its lower-case text) and the automatic `tokens`: see
+/// `TailEngine::match_highlight_spans_with`. Shared with print mode, which has rules and
+/// tokens but no labels.
 pub fn highlight_spans(
     rules: &[CompiledHighlight],
     labels: &[(QuickLabel, String)],
     line: &str,
     ansi: &[StyleRun],
+    tokens: TokenKinds,
 ) -> SpanHighlight {
     let mut out = SpanHighlight::default();
     let mut full = false;
@@ -963,9 +967,15 @@ pub fn highlight_spans(
                 run.end,
                 SpanStyle::Ansi(run.style),
             ) {
+                full = true;
                 break;
             }
         }
+    }
+    if !full {
+        crate::auto_highlight::scan(line, tokens, |s, e, kind| {
+            !claim_span(&mut out.spans, s, e, SpanStyle::Token(kind))
+        });
     }
     out.spans.sort_by_key(|s| s.start);
     out
@@ -1283,6 +1293,8 @@ pub struct TailEngine {
     /// Quick labels (see `QuickLabel`) with their lower-cased text, evaluated after the
     /// user rules by `match_highlight_spans`.
     quick_labels: Vec<(QuickLabel, String)>,
+    /// Kinds of the automatic highlighting, `NONE` while it is off (`set_auto_tokens`).
+    auto_tokens: TokenKinds,
     pub expanded_json_lines: HashSet<usize>,
     pub requested_scroll_x: Option<f32>,
     pub requested_scroll_y: Option<f32>,
@@ -1855,6 +1867,7 @@ impl TailEngine {
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
             quick_labels: Vec::new(),
+            auto_tokens: TokenKinds::NONE,
             expanded_json_lines: HashSet::new(),
             requested_scroll_x: None,
             requested_scroll_y: None,
@@ -3267,10 +3280,22 @@ impl TailEngine {
         self.quick_labels.iter().map(|(l, _)| l.clone()).collect()
     }
 
-    /// True when rows need the span path: an enabled captures-only regex rule or a quick
-    /// label exists. Otherwise the renderer keeps the whole-row `match_highlight`.
+    /// Token kinds of the automatic highlighting (`TokenKinds::NONE` while it is off),
+    /// pushed by the app from the settings.
+    pub fn set_auto_tokens(&mut self, kinds: TokenKinds) {
+        self.auto_tokens = kinds;
+    }
+
+    pub fn auto_tokens(&self) -> TokenKinds {
+        self.auto_tokens
+    }
+
+    /// True when rows need the span path: an enabled captures-only regex rule, a quick
+    /// label or the automatic highlighting exists. Otherwise the renderer keeps the
+    /// whole-row `match_highlight`.
     pub fn has_span_rules(&self) -> bool {
         !self.quick_labels.is_empty()
+            || !self.auto_tokens.is_empty()
             || self
                 .compiled_highlights
                 .iter()
@@ -3292,11 +3317,18 @@ impl TailEngine {
         self.match_highlight_spans_with(&row.line, &row.ansi)
     }
 
-    /// `match_highlight_spans` with the ANSI style runs of the line ranked last: user
-    /// rules, then quick labels, then the ANSI colours claim the bytes left, all within
-    /// the budget of `MAX_ROW_SPANS`. A whole-row rule leaves nothing to the ANSI colours.
+    /// `match_highlight_spans` with the ANSI style runs of the line and the automatic
+    /// tokens ranked last: user rules, then quick labels, then the ANSI colours, then the
+    /// automatic tokens claim the bytes left, all within the budget of `MAX_ROW_SPANS`. A
+    /// whole-row rule leaves nothing to the ANSI colours and the tokens.
     pub fn match_highlight_spans_with(&self, line: &str, ansi: &[StyleRun]) -> SpanHighlight {
-        highlight_spans(&self.compiled_highlights, &self.quick_labels, line, ansi)
+        highlight_spans(
+            &self.compiled_highlights,
+            &self.quick_labels,
+            line,
+            ansi,
+            self.auto_tokens,
+        )
     }
 
     pub fn is_json_line(line: &str) -> bool {

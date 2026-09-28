@@ -1,4 +1,5 @@
 use crate::actions::ActionId;
+use crate::auto_highlight::{TokenKind, TokenKinds};
 use crate::collapse::CollapsedRow;
 use crate::config::push_search_history;
 use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
@@ -68,6 +69,9 @@ pub struct DockContext<'a> {
     pub font_size: &'a mut f32,
     /// Colour rows by detected log level when no highlight rule matches (Settings).
     pub level_colors: &'a mut bool,
+    /// Automatic token highlighting and its kinds (Settings).
+    pub auto_highlight: &'a mut bool,
+    pub auto_highlight_kinds: &'a mut TokenKinds,
     pub size_unit: &'a mut crate::tail_engine::SizeUnit,
     pub search_history: &'a mut Vec<String>,
     pub tab_closed: &'a mut bool,
@@ -526,6 +530,8 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.show_line_numbers,
                     self.ctx.font_size,
                     self.ctx.level_colors,
+                    self.ctx.auto_highlight,
+                    self.ctx.auto_highlight_kinds,
                     self.ctx.external_tools,
                     self.ctx.global_rules,
                     self.ctx.tool_runner,
@@ -3635,6 +3641,13 @@ fn span_layout_job(
                 let fg = if plain { base.color } else { fg };
                 (fg, bg, s.italic || base.italics, s.underline)
             }
+            // Automatic tokens change the foreground only.
+            SpanStyle::Token(kind) => (
+                theme.token_color(kind),
+                base.background,
+                base.italics,
+                false,
+            ),
         };
         job.append(
             &text[start..end],
@@ -5488,6 +5501,8 @@ pub fn render_settings_content(
     show_line_numbers: &mut bool,
     font_size: &mut f32,
     level_colors: &mut bool,
+    auto_highlight: &mut bool,
+    auto_kinds: &mut TokenKinds,
     external_tools: &mut Vec<ExternalTool>,
     rules: &[HighlightRule],
     tool_runner: &mut ToolRunner,
@@ -5653,6 +5668,22 @@ pub fn render_settings_content(
         .on_hover_text(t(*lang, "default_columns_tip"));
     ui.checkbox(level_colors, t(*lang, "level_colors"))
         .on_hover_text(t(*lang, "level_colors_tip"));
+    ui.checkbox(auto_highlight, t(*lang, "auto_highlight"))
+        .on_hover_text(t(*lang, "auto_highlight_tip"));
+    if *auto_highlight {
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(18.0);
+            for kind in TokenKind::ALL {
+                let mut on = auto_kinds.contains(kind);
+                let label = RichText::new(t(*lang, kind.name_key()))
+                    .monospace()
+                    .color(theme.token_color(kind));
+                if ui.checkbox(&mut on, label).changed() {
+                    auto_kinds.set(kind, on);
+                }
+            }
+        });
+    }
     ui.checkbox(overview_strip, t(*lang, "overview_strip"))
         .on_hover_text(t(*lang, "overview_strip_tip"));
     ui.checkbox(&mut time_delta.show, t(*lang, "default_time_delta"))

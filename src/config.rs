@@ -1,3 +1,4 @@
+use crate::auto_highlight::TokenKinds;
 use crate::i18n::Language;
 use crate::session::{Session, StreamEntry, MAX_RECENT_SESSIONS};
 use crate::tail_engine::{HighlightRule, SizeUnit};
@@ -82,6 +83,12 @@ pub struct FastTailConfig {
     /// Colour rows by their detected log level when no highlight rule matches them.
     #[serde(default = "default_true")]
     pub level_colors: bool,
+    /// Automatic highlighting of IP addresses, UUIDs, URLs, durations and file paths
+    /// (Settings; off by default), and the kinds it paints (`auto_highlight_kinds`).
+    #[serde(default)]
+    pub auto_highlight: bool,
+    #[serde(default = "default_auto_highlight_kinds")]
+    pub auto_highlight_kinds: TokenKinds,
     /// Search results pane under the rows of a stream with an active query, and its
     /// height; one preference for every stream.
     #[serde(default)]
@@ -231,6 +238,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_auto_highlight_kinds() -> TokenKinds {
+    TokenKinds::ALL
+}
+
 /// Font size the zoom is measured against: `font_size == DEFAULT_FONT_SIZE` is 100%.
 pub const DEFAULT_FONT_SIZE: f32 = 13.0;
 /// Range the zoom shortcuts and the settings clamp the font size to.
@@ -329,6 +340,8 @@ impl Default for FastTailConfig {
             always_on_top: false,
             flash_on_alert: false,
             level_colors: true,
+            auto_highlight: false,
+            auto_highlight_kinds: TokenKinds::ALL,
             search_pane: false,
             search_pane_height: default_search_pane_height(),
             overview_strip: true,
@@ -601,6 +614,15 @@ impl FastTailConfig {
             .find(|(p, _, _)| crate::paths::paths_equal(p, path))
     }
 
+    /// The token kinds the automatic highlighting paints: none while it is off.
+    pub fn auto_tokens(&self) -> TokenKinds {
+        if self.auto_highlight {
+            self.auto_highlight_kinds
+        } else {
+            TokenKinds::NONE
+        }
+    }
+
     /// Where decompressed logs are spooled and how far one extraction may go.
     pub fn compressed_settings(&self) -> crate::compressed::Settings {
         crate::compressed::Settings::from_config(self.spool_dir.as_deref(), self.compressed_max_gb)
@@ -638,6 +660,11 @@ impl FastTailConfig {
             .set("always_on_top", self.always_on_top.to_string())
             .set("flash_on_alert", self.flash_on_alert.to_string())
             .set("level_colors", self.level_colors.to_string())
+            .set("auto_highlight", self.auto_highlight.to_string())
+            .set(
+                "auto_highlight_kinds",
+                self.auto_highlight_kinds.to_config(),
+            )
             .set("search_pane", self.search_pane.to_string())
             .set(
                 "search_pane_height",
@@ -901,6 +928,15 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.level_colors = v;
+            }
+            if let Some(v) = general
+                .get("auto_highlight")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.auto_highlight = v;
+            }
+            if let Some(s) = general.get("auto_highlight_kinds") {
+                cfg.auto_highlight_kinds = TokenKinds::from_config(s);
             }
             if let Some(v) = general
                 .get("search_pane")

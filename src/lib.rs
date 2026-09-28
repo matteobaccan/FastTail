@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod ansi;
 pub mod audio;
+pub mod auto_highlight;
 pub mod baretail_bridge;
 pub mod cli;
 pub mod collapse;
