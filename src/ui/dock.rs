@@ -2102,12 +2102,23 @@ fn render_log_stream(
 
     // Quick Filter Row directly above log buffer
     ui.horizontal(|ui| {
-        ui.label(
+        // In the context view the filters are suspended: their fields are drawn dimmed
+        // (editing one still ends the context view and applies the new filter).
+        let context_line = engine.context_line();
+        if context_line.is_some() {
+            ui.multiply_opacity(0.45);
+        }
+        let include_label = ui.label(
             RichText::new(format!("⚡ {}:", t(lang, "filter_include")))
                 .monospace()
                 .size(11.0)
                 .color(theme.accent_color()),
         );
+        if let Some(line) = context_line {
+            include_label.on_hover_text(
+                t(lang, "context_banner").replace("{line}", &(line + 1).to_string()),
+            );
+        }
         let mut inc = engine.include_filter().to_string();
         if ui
             .add(
