@@ -315,22 +315,11 @@ mod legacy_compat {
 }
 
 /// GUI-subsystem executables have no console; attach the parent's so `--help` and
-/// `--version` are visible when launched from a terminal.
-#[cfg(windows)]
+/// `--version` are visible when launched from a terminal. Output already redirected to a
+/// file or a pipe stays there.
 fn attach_parent_console() {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn AttachConsole(process_id: u32) -> i32;
-    }
-    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
-    // SAFETY: plain Win32 call; failure (no parent console) is harmless.
-    unsafe {
-        AttachConsole(ATTACH_PARENT_PROCESS);
-    }
+    fasttail::print_mode::console::attach_if_missing();
 }
-
-#[cfg(not(windows))]
-fn attach_parent_console() {}
 
 /// Parses the command line; prints help/version or a usage error and exits when asked to.
 fn parse_command_line() -> CliArgs {
@@ -352,16 +341,20 @@ fn parse_command_line() -> CliArgs {
         }
         std::process::exit(0);
     }
+    if let Some(cfg) = &cli.config {
+        // The config loader reads FASTTAIL_CONFIG first; set it before anything loads it.
+        std::env::set_var("FASTTAIL_CONFIG", cfg);
+    }
+    if cli.print {
+        // Headless: no window, no workspace, no spool; the configuration is only read.
+        std::process::exit(fasttail::print_mode::run(&cli));
+    }
     if cli.stdin && fasttail::stdin_source::classify() != fasttail::stdin_source::StdinKind::Piped {
         // Reported now, while the parent console can still be attached; the rest of the
         // startup goes on, as for a missing file.
         attach_parent_console();
         eprintln!("fasttail: standard input is not a pipe; nothing to read");
         cli.stdin = false;
-    }
-    if let Some(cfg) = &cli.config {
-        // The config loader reads FASTTAIL_CONFIG first; set it before anything loads it.
-        std::env::set_var("FASTTAIL_CONFIG", cfg);
     }
     cli
 }

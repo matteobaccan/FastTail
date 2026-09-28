@@ -794,6 +794,30 @@ pub struct CompiledHighlight {
 }
 
 impl CompiledHighlight {
+    /// Compiles `rule`: its regex (a pattern that does not compile has none, and the rule
+    /// then matches as plain text) and its lower-case pattern.
+    pub fn compile(r: &HighlightRule) -> Self {
+        let regex = if r.is_regex {
+            regex::RegexBuilder::new(&r.pattern)
+                .case_insensitive(!r.case_sensitive)
+                .build()
+                .ok()
+        } else {
+            None
+        };
+        CompiledHighlight {
+            regex,
+            pattern_lower: r.pattern.to_lowercase(),
+            style: r.style(),
+            enabled: r.enabled,
+            captures_only: r.captures_only,
+            case_sensitive: r.case_sensitive,
+            pattern: r.pattern.clone(),
+            sound_alert: r.sound_alert,
+            auto_bookmark: r.auto_bookmark,
+        }
+    }
+
     /// Whether the rule matches `line`: its regex, else the pattern as plain text, case
     /// sensitive or not. The enabled flag is the caller's business.
     pub fn is_match(&self, line: &str) -> bool {
@@ -858,6 +882,90 @@ fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: S
         });
     }
     spans.len() >= MAX_ROW_SPANS
+}
+
+/// Span evaluation of a row with `rules` (in priority order) and quick `labels` (each
+/// with its lower-case text): see `TailEngine::match_highlight_spans_with`. Shared with
+/// print mode, which has rules but no labels.
+pub fn highlight_spans(
+    rules: &[CompiledHighlight],
+    labels: &[(QuickLabel, String)],
+    line: &str,
+    ansi: &[StyleRun],
+) -> SpanHighlight {
+    let mut out = SpanHighlight::default();
+    let mut full = false;
+    for ch in rules {
+        if !ch.enabled {
+            continue;
+        }
+        if ch.captures_only {
+            let Some(re) = &ch.regex else {
+                continue;
+            };
+            let style = SpanStyle::Rule(ch.style);
+            for caps in re.captures_iter(line) {
+                let groups = if caps.len() > 1 { 1..caps.len() } else { 0..1 };
+                for g in groups {
+                    if let Some(m) = caps.get(g) {
+                        if m.start() < m.end() {
+                            full = claim_span(&mut out.spans, m.start(), m.end(), style);
+                        }
+                    }
+                    if full {
+                        break;
+                    }
+                }
+                if full {
+                    break;
+                }
+            }
+        } else {
+            let is_match = if let Some(re) = &ch.regex {
+                re.is_match(line)
+            } else if ch.case_sensitive {
+                line.contains(&ch.pattern)
+            } else {
+                contains_case_insensitive(line, &ch.pattern_lower)
+            };
+            if is_match {
+                out.rest = Some(ch.style);
+                full = true;
+            }
+        }
+        if full {
+            break;
+        }
+    }
+    if !full {
+        for (label, lower) in labels {
+            find_case_insensitive_cb(line, lower, |s, e| {
+                if claim_span(&mut out.spans, s, e, SpanStyle::Label(label.color)) {
+                    full = true;
+                    false
+                } else {
+                    true
+                }
+            });
+            if full {
+                break;
+            }
+        }
+    }
+    if !full {
+        for run in ansi {
+            if claim_span(
+                &mut out.spans,
+                run.start,
+                run.end,
+                SpanStyle::Ansi(run.style),
+            ) {
+                break;
+            }
+        }
+    }
+    out.spans.sort_by_key(|s| s.start);
+    out
 }
 
 /// The bookmark note being edited: the line, the text typed so far, and whether the
@@ -1516,7 +1624,7 @@ impl TailEngine {
 
     /// Encoding detection on the first bytes of a file: BOMs, UTF-16 without BOM, and a
     /// NUL byte marking a binary file (shown in HEX).
-    fn detect_encoding(sample: &[u8]) -> (FileEncoding, bool) {
+    pub fn detect_encoding(sample: &[u8]) -> (FileEncoding, bool) {
         if sample.is_empty() {
             return (FileEncoding::Utf8, false);
         }
@@ -1779,32 +1887,7 @@ impl TailEngine {
     }
 
     pub fn set_highlight_rules(&mut self, rules: Vec<HighlightRule>) {
-        self.compiled_highlights = rules
-            .iter()
-            .map(|r| {
-                let regex = if r.is_regex {
-                    regex::RegexBuilder::new(&r.pattern)
-                        .case_insensitive(!r.case_sensitive)
-                        .build()
-                        .ok()
-                } else {
-                    None
-                };
-                let pattern_lower = r.pattern.to_lowercase();
-                let style = r.style();
-                CompiledHighlight {
-                    regex,
-                    pattern_lower,
-                    style,
-                    enabled: r.enabled,
-                    captures_only: r.captures_only,
-                    case_sensitive: r.case_sensitive,
-                    pattern: r.pattern.clone(),
-                    sound_alert: r.sound_alert,
-                    auto_bookmark: r.auto_bookmark,
-                }
-            })
-            .collect();
+        self.compiled_highlights = rules.iter().map(CompiledHighlight::compile).collect();
         self.highlight_rules = rules;
         self.recompute_filtered_lines();
         // Only a change of what bookmarks lines recomputes them (and forgets dismissals):
@@ -3168,79 +3251,7 @@ impl TailEngine {
     /// rules, then quick labels, then the ANSI colours claim the bytes left, all within
     /// the budget of `MAX_ROW_SPANS`. A whole-row rule leaves nothing to the ANSI colours.
     pub fn match_highlight_spans_with(&self, line: &str, ansi: &[StyleRun]) -> SpanHighlight {
-        let mut out = SpanHighlight::default();
-        let mut full = false;
-        for ch in &self.compiled_highlights {
-            if !ch.enabled {
-                continue;
-            }
-            if ch.captures_only {
-                let Some(re) = &ch.regex else {
-                    continue;
-                };
-                let style = SpanStyle::Rule(ch.style);
-                for caps in re.captures_iter(line) {
-                    let groups = if caps.len() > 1 { 1..caps.len() } else { 0..1 };
-                    for g in groups {
-                        if let Some(m) = caps.get(g) {
-                            if m.start() < m.end() {
-                                full = claim_span(&mut out.spans, m.start(), m.end(), style);
-                            }
-                        }
-                        if full {
-                            break;
-                        }
-                    }
-                    if full {
-                        break;
-                    }
-                }
-            } else {
-                let is_match = if let Some(re) = &ch.regex {
-                    re.is_match(line)
-                } else if ch.case_sensitive {
-                    line.contains(&ch.pattern)
-                } else {
-                    contains_case_insensitive(line, &ch.pattern_lower)
-                };
-                if is_match {
-                    out.rest = Some(ch.style);
-                    full = true;
-                }
-            }
-            if full {
-                break;
-            }
-        }
-        if !full {
-            for (label, lower) in &self.quick_labels {
-                find_case_insensitive_cb(line, lower, |s, e| {
-                    if claim_span(&mut out.spans, s, e, SpanStyle::Label(label.color)) {
-                        full = true;
-                        false
-                    } else {
-                        true
-                    }
-                });
-                if full {
-                    break;
-                }
-            }
-        }
-        if !full {
-            for run in ansi {
-                if claim_span(
-                    &mut out.spans,
-                    run.start,
-                    run.end,
-                    SpanStyle::Ansi(run.style),
-                ) {
-                    break;
-                }
-            }
-        }
-        out.spans.sort_by_key(|s| s.start);
-        out
+        highlight_spans(&self.compiled_highlights, &self.quick_labels, line, ansi)
     }
 
     pub fn is_json_line(line: &str) -> bool {

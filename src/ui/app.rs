@@ -1231,15 +1231,16 @@ impl FastTailApp {
                 .iter_mut()
                 .find(|e| e.path == *path || paths_equal(&e.path, path))
             {
-                if let Some(f) = &cli.filter {
+                if let Some(f) = cli.filter.first() {
                     engine.set_include_filter(f);
                 }
-                if let Some(x) = &cli.exclude {
+                if let Some(x) = cli.exclude.first() {
                     engine.set_exclude_filter(x);
                 }
                 if let Some(follow) = cli.follow {
                     engine.follow_tail = follow && !engine.is_compressed();
                 }
+                apply_cli_time_window(engine, cli.since.as_deref(), cli.until.as_deref());
             }
         }
     }
@@ -1317,6 +1318,11 @@ impl FastTailApp {
         if let Some(follow) = options.follow {
             engine.follow_tail = follow;
         }
+        apply_cli_time_window(
+            &mut engine,
+            options.since.as_deref(),
+            options.until.as_deref(),
+        );
         let path = engine.path.clone();
         self.engines.push(engine);
         crate::audio::play_sound(
@@ -4770,16 +4776,41 @@ pub struct StdinOptions {
     pub filter: Option<String>,
     pub exclude: Option<String>,
     pub follow: Option<bool>,
+    pub since: Option<String>,
+    pub until: Option<String>,
 }
 
 impl StdinOptions {
     pub fn from_cli(cli: &crate::cli::CliArgs) -> Self {
         Self {
-            filter: cli.filter.clone(),
-            exclude: cli.exclude.clone(),
+            filter: cli.filter.first().cloned(),
+            exclude: cli.exclude.first().cloned(),
             follow: cli.follow,
+            since: cli.since.clone(),
+            until: cli.until.clone(),
         }
     }
+}
+
+/// Applies `--since` / `--until` to a stream opened from the command line, as if typed in
+/// the time range popup. A relative time (`-3h`) is turned into the instant it names now,
+/// written as a full timestamp: the window stays where it was put, it does not slide.
+fn apply_cli_time_window(engine: &mut TailEngine, since: Option<&str>, until: Option<&str>) {
+    if since.is_none() && until.is_none() {
+        return;
+    }
+    let now = crate::timestamp::local_now_millis();
+    let text = |value: Option<&str>| -> String {
+        let Some(value) = value else {
+            return String::new();
+        };
+        match crate::cli::relative_time_millis(value) {
+            Some(back) => crate::timestamp::format_millis(now - back),
+            None => value.to_string(),
+        }
+    };
+    let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
+    engine.time_range_error = !from_ok || !to_ok;
 }
 
 /// The session entry describing `engine` as it is now. The line-number and time delta
