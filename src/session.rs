@@ -1,8 +1,8 @@
 //! Named sessions: the workspace (open files and patterns, dock layout, per-stream
-//! filters, search query, wrap, encoding, ANSI mode and bookmarks) saved to and loaded from a
-//! `*.fasttail-session.ini` file. Global preferences stay in `fasttail.ini`, which embeds
-//! the default session with the same sections so the behaviour of users who never name a
-//! session is unchanged.
+//! filters, search query, wrap, encoding, ANSI and collapse modes and bookmarks) saved to
+//! and loaded from a `*.fasttail-session.ini` file. Global preferences stay in
+//! `fasttail.ini`, which embeds the default session with the same sections so the
+//! behaviour of users who never name a session is unchanged.
 //!
 //! Paths are stored absolute and, when the file lies under the session's directory, also
 //! relative to it, so a session saved next to a log bundle still opens after the bundle
@@ -45,6 +45,9 @@ pub struct StreamEntry {
     /// The timeline histogram is shown above the stream (`timeline=true`, written only
     /// when set).
     pub timeline: bool,
+    /// Collapse of repeated lines as `CollapseMode::name()` (`exact`, `numbers`), written
+    /// as `collapse=` only when not off; `None` is off, and old files read as off.
+    pub collapse: Option<String>,
     /// Bookmarked line indices, sorted.
     pub bookmarks: Vec<usize>,
     /// Notes of some of the bookmarks, stored as `bookmark_note.<line>` next to
@@ -148,6 +151,9 @@ impl Session {
             if s.timeline {
                 sec.set("timeline", "true");
             }
+            if let Some(collapse) = &s.collapse {
+                sec.set("collapse", collapse);
+            }
             sec.set(
                 "bookmarks",
                 s.bookmarks
@@ -250,6 +256,11 @@ impl Session {
                     .get("timeline")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(false),
+                collapse: sec
+                    .get("collapse")
+                    .and_then(crate::collapse::CollapseMode::from_name)
+                    .filter(|m| m.is_on())
+                    .map(|m| m.name().to_string()),
                 bookmarks,
                 bookmark_notes,
                 archive_entry,

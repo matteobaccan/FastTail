@@ -14,6 +14,7 @@ use std::thread;
 use regex::Regex;
 
 use crate::ansi::AnsiMode;
+use crate::collapse::{CollapseMode, Detector, Group};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::tail_engine::{
@@ -37,6 +38,8 @@ pub enum ScanKind {
     /// Finds the lines matched by the rules that bookmark them (the engine's automatic
     /// bookmarks).
     AutoBookmarks,
+    /// Detects the runs of repeated entries among the visible lines (collapse mode).
+    Collapse,
 }
 
 /// Most include terms, and most exclude terms, a stream can hold.
@@ -240,6 +243,15 @@ pub enum JobSpec {
         rules: Vec<CompiledHighlight>,
         limit: usize,
     },
+    /// Emit the groups of repeated entries among the visible lines (see `collapse`), with
+    /// the same `Detector` as the engine's synchronous path: `visible` is the sorted list
+    /// of visible lines when a filter is active, `None` when every line is visible. The
+    /// detection state at the end is sent last, for appends to resume from.
+    Collapse {
+        mode: CollapseMode,
+        hint: FormatHint,
+        visible: Option<Arc<[usize]>>,
+    },
 }
 
 /// Messages from the worker, always tagged with the job generation.
@@ -266,6 +278,10 @@ pub enum ScanBatch {
         offsets: Vec<u64>,
         max_line_bytes: usize,
     },
+    /// Completed groups of repeated entries, in file order.
+    Groups(Vec<Group>),
+    /// The collapse detection state at the end of the range, sent before `Done`.
+    CollapseCursor(Box<Detector>),
     /// Fraction of the byte range scanned so far.
     Progress(f32),
     /// The range was scanned completely (`lines` = line count covered).
@@ -309,6 +325,7 @@ impl ScanJob {
             JobSpec::Levels => ScanKind::Levels,
             JobSpec::Timestamps { .. } => ScanKind::Timestamps,
             JobSpec::AutoBookmarks { .. } => ScanKind::AutoBookmarks,
+            JobSpec::Collapse { .. } => ScanKind::Collapse,
         };
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -475,6 +492,18 @@ fn run(
         hint,
     };
 
+    // A `Collapse` job: the detector, and the next entry of the visible list to meet.
+    let mut collapse = match &spec {
+        JobSpec::Collapse { mode, hint, .. } => Some(Detector::new(*mode, *hint)),
+        _ => None,
+    };
+    let mut visible_at = match &spec {
+        JobSpec::Collapse {
+            visible: Some(v), ..
+        } => v.partition_point(|&l| l < range.start_line),
+        _ => 0,
+    };
+
     if matches!(spec, JobSpec::Index) && range.start_offset < range.end_offset {
         offsets.push(range.start_offset);
     }
@@ -489,10 +518,28 @@ fn run(
                     hits: &mut Vec<usize>,
                     levels: &mut Vec<u8>,
                     timing: &mut Timing,
-                    tally: &mut Tally|
+                    tally: &mut Tally,
+                    collapse: &mut Option<Detector>|
      -> bool {
         match &spec {
             JobSpec::Index => true,
+            JobSpec::Collapse { visible, .. } => {
+                let pos = match visible {
+                    Some(v) if v.get(visible_at) == Some(&idx) => {
+                        visible_at += 1;
+                        Some(visible_at - 1)
+                    }
+                    Some(_) => None,
+                    None => Some(idx),
+                };
+                if let Some(detector) = collapse.as_mut() {
+                    line_passes(bytes, range.encoding, strip, |s| {
+                        detector.feed(idx, s, pos);
+                        true
+                    });
+                }
+                true
+            }
             JobSpec::Levels => {
                 line_passes(bytes, range.encoding, strip, |s| {
                     levels.push(detect_level(s) as u8);
@@ -612,6 +659,7 @@ fn run(
                     &mut levels,
                     &mut timing,
                     &mut tally,
+                    &mut collapse,
                 ) {
                     limit_reached = true;
                     break 'outer;
@@ -663,6 +711,12 @@ fn run(
             if !hits.is_empty() && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
                 return;
             }
+        } else if let Some(detector) = collapse.as_mut() {
+            if !detector.groups.is_empty()
+                && !send(ScanBatch::Groups(std::mem::take(&mut detector.groups)))
+            {
+                return;
+            }
         } else if tally.counted > 0 {
             // Past the limit: the last listed hits, then the count, in that order.
             if !hits.is_empty() && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
@@ -698,6 +752,7 @@ fn run(
             &mut levels,
             &mut timing,
             &mut tally,
+            &mut collapse,
         );
         line_idx += 1;
     }
@@ -711,6 +766,14 @@ fn run(
                 max_line_bytes,
             })
         {
+            return;
+        }
+    } else if let Some(mut detector) = collapse.take() {
+        let groups = std::mem::take(&mut detector.groups);
+        if !groups.is_empty() && !send(ScanBatch::Groups(groups)) {
+            return;
+        }
+        if !send(ScanBatch::CollapseCursor(Box::new(detector))) {
             return;
         }
     } else {

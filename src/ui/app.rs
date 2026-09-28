@@ -3061,6 +3061,7 @@ impl FastTailApp {
                 eng.bookmarks_dirty = false;
                 eng.wrap_dirty = false;
                 eng.ansi_dirty = false;
+                eng.collapse_mode_dirty = false;
             }
             if eng.bookmarks_dirty {
                 eng.bookmarks_dirty = false;
@@ -3074,11 +3075,12 @@ impl FastTailApp {
                 self.config.set_wrap(&eng.path, eng.wrap_lines);
                 bookmarks_changed = true;
             }
-            if eng.ansi_dirty || eng.timeline_dirty {
-                // The ANSI mode and the timeline flag live in the stream entry, as in
-                // `save_dock_layout`.
+            if eng.ansi_dirty || eng.timeline_dirty || eng.collapse_mode_dirty {
+                // The ANSI mode, the timeline flag and the collapse mode live in the
+                // stream entry, as in `save_dock_layout`.
                 eng.ansi_dirty = false;
                 eng.timeline_dirty = false;
+                eng.collapse_mode_dirty = false;
                 let mut entry = stream_entry_of(eng);
                 entry.wrap = false;
                 entry.bookmarks.clear();
@@ -4059,6 +4061,14 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
+                                        RichText::new("CTRL + SHIFT + D").monospace().strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_collapse")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
                                         RichText::new("F3  /  SHIFT + F3").monospace().strong(),
                                     );
                                     ui.label(
@@ -4767,6 +4777,10 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         encoding: Some(engine.encoding.name().to_string()),
         ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),
         timeline: engine.timeline_open,
+        collapse: engine
+            .collapse_mode()
+            .is_on()
+            .then(|| engine.collapse_mode().name().to_string()),
         bookmarks,
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
@@ -4822,6 +4836,15 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     if !entry.search_query.is_empty() {
         engine.search_query = entry.search_query.clone();
         engine.update_search(&entry.search_query);
+    }
+    // Last, so the groups are detected once, over the filtered lines.
+    if let Some(mode) = entry
+        .collapse
+        .as_deref()
+        .and_then(crate::collapse::CollapseMode::from_name)
+    {
+        engine.set_collapse_mode(mode);
+        engine.collapse_mode_dirty = false;
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::collapse::CollapsedRow;
 use crate::config::push_search_history;
 use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
 use crate::filter_preset::{FilterPreset, FilterState, PresetLabel};
@@ -584,8 +585,17 @@ impl BookmarkMark {
         }
     }
 
-    fn is_set(self) -> bool {
-        self != BookmarkMark::None
+    /// The mark of row `row`, whose first line is `line`: the line's own, else, on a
+    /// collapsed group's row, that of a line the group hides (a manual one first).
+    fn of_row(engine: &TailEngine, row: usize, line: usize) -> Self {
+        match Self::of(engine, line) {
+            BookmarkMark::None => match engine.hidden_bookmark(row) {
+                Some((hidden, true)) => Self::of(engine, hidden),
+                Some((_, false)) => BookmarkMark::Auto,
+                None => BookmarkMark::None,
+            },
+            own => own,
+        }
     }
 }
 
@@ -895,6 +905,34 @@ fn render_ansi_mode_selector(ui: &mut Ui, engine: &mut TailEngine, lang: Languag
         .on_hover_text(t(lang, "tip_ansi"));
 }
 
+/// Toolbar selector of the stream's collapse of repeated lines (also cycled with
+/// CTRL + SHIFT + D): picking a mode detects the groups again.
+fn render_collapse_selector(ui: &mut Ui, engine: &mut TailEngine, lang: Language) {
+    use crate::collapse::CollapseMode;
+    let mode_name = |mode: CollapseMode| match mode {
+        CollapseMode::Off => t(lang, "collapse_off"),
+        CollapseMode::Exact => t(lang, "collapse_exact"),
+        CollapseMode::Numbers => t(lang, "collapse_numbers"),
+    };
+    let mut current = engine.collapse_mode();
+    let selected = format!("× {}: {}", t(lang, "collapse_label"), mode_name(current));
+    egui::ComboBox::from_id_salt(format!("collapse_sel_{}", engine.path.display()))
+        .selected_text(RichText::new(selected).monospace().size(11.0))
+        .show_ui(ui, |ui| {
+            for mode in CollapseMode::ALL {
+                if ui
+                    .selectable_value(&mut current, mode, mode_name(mode))
+                    .clicked()
+                {
+                    engine.set_collapse_mode(mode);
+                    ui.ctx().request_repaint();
+                }
+            }
+        })
+        .response
+        .on_hover_text(t(lang, "tip_collapse"));
+}
+
 /// Stream bar part of a compressed stream: `decompressing N%` with a cancel button while
 /// the job runs, then why the content is partial if it stopped early, and a button that
 /// extracts the archive again.
@@ -1049,6 +1087,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Levels => "scan_levels",
         crate::scan_job::ScanKind::Timestamps => "scan_timestamps",
         crate::scan_job::ScanKind::AutoBookmarks => "scan_auto_bookmarks",
+        crate::scan_job::ScanKind::Collapse => "scan_collapsing",
     }
 }
 
@@ -1382,6 +1421,9 @@ fn render_log_stream(
                     }
                 });
             render_ansi_mode_selector(ui, engine, lang);
+            if engine.view_mode != crate::tail_engine::ViewMode::Markdown {
+                render_collapse_selector(ui, engine, lang);
+            }
         }
 
         // Hex column count selector (multiples of 8: 8, 16, 24, 32...)
@@ -1422,16 +1464,25 @@ fn render_log_stream(
         // Lines count stat (shows filtered count vs total when filtering is active)
         let lines_stat = match engine.view_mode {
             crate::tail_engine::ViewMode::Text | crate::tail_engine::ViewMode::Filtered => {
-                if engine.rows_filtered() {
+                let mut stat = if engine.rows_filtered() {
                     format!(
                         "{}: {} / {}",
                         t(lang, "lines"),
-                        engine.visible_line_count(),
+                        engine.visible_lines(),
                         engine.total_lines()
                     )
                 } else {
                     format!("{}: {}", t(lang, "lines"), engine.total_lines())
+                };
+                // Repeated entries collapsed: the rows they leave.
+                let rows = engine.visible_line_count();
+                if rows != engine.visible_lines() {
+                    stat.push_str(&format!(
+                        " · {}",
+                        t(lang, "collapse_rows").replace("{rows}", &group_thousands(rows))
+                    ));
                 }
+                stat
             }
             crate::tail_engine::ViewMode::Hex => {
                 format!(
@@ -1892,6 +1943,8 @@ fn render_log_stream(
                     } else {
                         None
                     };
+                    // The exact line: a collapsed group hiding it is expanded.
+                    engine.reveal_line(target.line);
                     scroll_to_target(engine, target.line);
                     engine.select_row(target.line);
                     if !target.hidden {
@@ -2088,6 +2141,20 @@ fn render_log_stream(
                 if let Some(text) = engine.copy_selection_text() {
                     ui.ctx().copy_text(text);
                 }
+            }
+            // CTRL + SHIFT + D cycles the collapse of repeated lines (text view only; a
+            // text field with the keyboard keeps its keys, see `keyboard_free`).
+            let ctrl_shift_d = egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::D,
+            );
+            let text_view = !matches!(
+                engine.view_mode,
+                crate::tail_engine::ViewMode::Hex | crate::tail_engine::ViewMode::Markdown
+            );
+            if text_view && ui.input_mut(|i| i.consume_shortcut(&ctrl_shift_d)) {
+                engine.set_collapse_mode(engine.collapse_mode().next());
+                ui.ctx().request_repaint();
             }
             // Bookmarks: Ctrl+F2 toggles on the current row, F2 / Shift+F2 navigate.
             let ctrl_f2 = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::F2);
@@ -2477,6 +2544,15 @@ fn render_log_stream(
         }
     }
 
+    // Groups arrived or changed under the view: back to the line that was at the top.
+    if let Some(row) = engine.pending_top_row.take() {
+        if wrap_view(engine) {
+            engine.wrap_anchor = WrapAnchor { row, within: 0.0 };
+        } else {
+            engine.requested_scroll_y = Some(row as f32 * row_height);
+        }
+    }
+
     let visible_lines = engine.visible_line_count();
     if visible_lines == 0 {
         // While the index or the filter is still being built on the worker, "empty" and
@@ -2504,7 +2580,6 @@ fn render_log_stream(
     }
 
     let has_search = !engine.last_searched_query.is_empty();
-    let active_search_line = engine.current_search_line();
     // The marker column appears when there is anything to mark: search hits or bookmarks.
     let show_markers = has_search || engine.has_bookmarks() || engine.context_line().is_some();
     let time_delta = time_delta_column(ui, engine, *time_delta);
@@ -2540,11 +2615,12 @@ fn render_log_stream(
                 show_markers,
                 level_colors,
                 has_search,
-                active_search_line,
                 external_tools,
             )
         })
         .inner;
+    // The line at the top, which a change of the groups keeps in place.
+    engine.view_top_line = engine.get_actual_line_idx(top_row(engine));
 
     if let Some(marks) = strip_marks {
         let strip_rect =
@@ -2658,7 +2734,6 @@ fn render_rows(
     show_markers: bool,
     level_colors: bool,
     has_search: bool,
-    active_search_line: Option<usize>,
     external_tools: &[ExternalTool],
 ) -> RowInteractions {
     if engine.wrap_lines {
@@ -2674,7 +2749,6 @@ fn render_rows(
             show_markers,
             level_colors,
             has_search,
-            active_search_line,
             external_tools,
         )
     } else {
@@ -2690,7 +2764,6 @@ fn render_rows(
             show_markers,
             level_colors,
             has_search,
-            active_search_line,
             external_tools,
         )
     }
@@ -2847,13 +2920,13 @@ fn render_extended_rows(
     show_markers: bool,
     level_colors: bool,
     has_search: bool,
-    active_search_line: Option<usize>,
     external_tools: &[ExternalTool],
 ) -> RowInteractions {
     let mut toggle_json = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
+    let mut badge_toggle: Option<usize> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
@@ -2888,12 +2961,11 @@ fn render_extended_rows(
                 let raw_line: &str = &row.line;
                 let is_json = TailEngine::is_json_line(raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
-                let matches_search = has_search
-                    && engine
-                        .search_matches
-                        .binary_search(&actual_line_idx)
-                        .is_ok();
-                let is_active_search = active_search_line == Some(actual_line_idx);
+                // A collapsed row is marked for the lines it hides too.
+                let (matches_search, is_active_search, is_bookmarked) =
+                    engine.row_marks(row_idx, actual_line_idx, has_search);
+                let collapsed = engine.collapsed_row(row_idx);
+                let mut badge_rect: Option<egui::Rect> = None;
                 // User rules first; the level palette only colours rows no rule matched.
                 // Span rules (captures-only, quick labels, ANSI colours) only run when one
                 // exists, and never on search hits, which keep their own colours.
@@ -2913,8 +2985,8 @@ fn render_extended_rows(
                 // Raw mode draws ESC as ␛, with the spans moved past the wider glyphs.
                 let (shown, spans) = row.display(spans);
                 let is_selected = engine.is_selected(actual_line_idx);
-                let bookmark = BookmarkMark::of(engine, actual_line_idx);
-                let is_bookmarked = bookmark.is_set();
+                // The row's own bookmark, else one of the lines its closed group hides.
+                let bookmark = BookmarkMark::of_row(engine, row_idx, actual_line_idx);
                 let mut marker_rect = egui::Rect::NOTHING;
 
                 // Background painted after layout, behind the row (see SearchRowMark)
@@ -2972,6 +3044,13 @@ fn render_extended_rows(
                                     color,
                                 );
                             }
+                        }
+
+                        // `×N` badge of a group's first row (its click target is
+                        // registered after the row's, so it wins the click).
+                        if let Some(c) = collapsed {
+                            badge_rect =
+                                Some(ui.label(collapse_badge_text(c, theme, font_size)).rect);
                         }
 
                         // JSON toggle button
@@ -3067,10 +3146,22 @@ fn render_extended_rows(
                     external_tools,
                     &mut tool_run,
                     engine.is_filter_active(),
-                    is_bookmarked,
+                    engine.is_bookmarked(actual_line_idx),
                     &mut picks,
                 );
                 note_tooltip(ui, engine, actual_line_idx, marker_rect, click);
+                if let (Some(rect), Some(c)) = (badge_rect, collapsed) {
+                    let badge = ui
+                        .interact(
+                            rect,
+                            ui.id().with(("collapse_badge", actual_line_idx)),
+                            egui::Sense::click(),
+                        )
+                        .on_hover_text(collapse_badge_tip(engine, c, lang));
+                    if badge.clicked() {
+                        badge_toggle = Some(row_idx);
+                    }
+                }
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
                     row_resp.scroll_to_me(Some(egui::Align::Center));
@@ -3107,7 +3198,10 @@ fn render_extended_rows(
     if clear_scroll_to_line {
         engine.scroll_to_line = None;
     }
-    picks.apply(engine);
+    if let Some(row) = badge_toggle {
+        engine.toggle_collapsed_row(row);
+    }
+    picks.apply(ui, engine);
     if max_row_natural_width > engine.max_detected_width {
         engine.max_detected_width = max_row_natural_width;
     }
@@ -3135,10 +3229,12 @@ struct RowMenuPicks {
     /// Line whose bookmark note to edit, and line whose bookmark to remove.
     note: Option<usize>,
     remove_bookmark: Option<usize>,
+    /// Line whose row asked for a copy, and whether as shown.
+    copy: Option<(usize, bool)>,
 }
 
 impl RowMenuPicks {
-    fn apply(self, engine: &mut TailEngine) {
+    fn apply(self, ui: &Ui, engine: &mut TailEngine) {
         if let Some(line) = self.anchor {
             engine.toggle_time_anchor(line);
         }
@@ -3151,13 +3247,76 @@ impl RowMenuPicks {
         if let Some(line) = self.remove_bookmark {
             engine.remove_bookmark(line);
         }
+        apply_copy_pick(ui, engine, self.copy);
     }
 }
 
-/// Row context menu: the bookmark note and removal, the line in context on a filtered
-/// stream, the time anchor entries while the time delta column is shown (`anchor` is
-/// `Some(current anchor)` then), recorded in `picks`, and the external tools, recorded
-/// in `tool_run`.
+/// The `×N` badge of a group's first row: accented while collapsed, dimmed once expanded.
+fn collapse_badge_text(c: CollapsedRow, theme: &CyberTheme, font_size: f32) -> RichText {
+    let color = if c.open {
+        theme.text_dim()
+    } else {
+        theme.warn_color()
+    };
+    RichText::new(format!("{} ", crate::collapse::badge_text(c.count)))
+        .monospace()
+        .strong()
+        .size(font_size)
+        .color(color)
+}
+
+/// Tooltip of a group's badge: the repetitions, the lines they span, their first and
+/// last timestamp once the stream is timed, and what a click does.
+fn collapse_badge_tip(engine: &TailEngine, c: CollapsedRow, lang: Language) -> String {
+    let mut tip = t(lang, "collapse_badge_tip")
+        .replace("{n}", &group_thousands(c.count as usize))
+        .replace("{first}", &group_thousands(c.first_line + 1))
+        .replace("{last}", &group_thousands(c.last_line + 1));
+    if let (Some(from), Some(to)) = (
+        engine.line_timestamp(c.first_line),
+        engine.line_timestamp(c.last_line),
+    ) {
+        tip.push_str(&format!(
+            "\n🕘 {} → {}",
+            crate::timestamp::format_millis(from),
+            crate::timestamp::format_millis(to)
+        ));
+    }
+    tip.push('\n');
+    tip.push_str(t(
+        lang,
+        if c.open {
+            "collapse_badge_fold"
+        } else {
+            "collapse_badge_expand"
+        },
+    ));
+    tip
+}
+
+/// Copies what the row context menu asked for, `(line, as shown)`: the selection when
+/// the clicked row is part of it, else the clicked row alone.
+fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>) {
+    let Some((line, as_shown)) = pick else {
+        return;
+    };
+    if !engine.is_selected(line) {
+        engine.select_row(line);
+    }
+    let text = if as_shown {
+        engine.copy_selection_as_shown()
+    } else {
+        engine.copy_selection_text()
+    };
+    if let Some(text) = text {
+        ui.ctx().copy_text(text);
+    }
+}
+
+/// Row context menu: the two copies (every underlying line, or as shown), the bookmark
+/// note and removal, the line in context on a filtered stream, the time anchor entries
+/// while the time delta column is shown (`anchor` is `Some(current anchor)` then), all
+/// recorded in `picks`, and the external tools, recorded in `tool_run`.
 #[allow(clippy::too_many_arguments)]
 fn row_context_menu(
     click: &egui::Response,
@@ -3172,6 +3331,21 @@ fn row_context_menu(
 ) {
     click.context_menu(|ui| {
         ui.set_min_width(160.0);
+        if ui
+            .button(RichText::new(format!("{}  (CTRL + C)", t(lang, "copy_rows"))).monospace())
+            .clicked()
+        {
+            picks.copy = Some((line, false));
+            ui.close();
+        }
+        if ui
+            .button(RichText::new(t(lang, "copy_as_shown")).monospace())
+            .clicked()
+        {
+            picks.copy = Some((line, true));
+            ui.close();
+        }
+        ui.separator();
         if ui
             .button(RichText::new(format!("✏ {}", t(lang, "bookmark_note_menu"))).monospace())
             .clicked()
@@ -3362,6 +3536,9 @@ struct WrappedRow {
     is_json: bool,
     expanded: bool,
     highlight: Option<HighlightStyle>,
+    /// The group this row heads, and the width of its `×N` badge before the text.
+    collapsed: Option<CollapsedRow>,
+    badge_w: f32,
 }
 
 /// Text view in wrap mode: rows soft-wrap at the viewport width and have their own
@@ -3383,7 +3560,6 @@ fn render_wrapped_rows(
     show_markers: bool,
     level_colors: bool,
     has_search: bool,
-    active_search_line: Option<usize>,
     external_tools: &[ExternalTool],
 ) -> RowInteractions {
     use std::collections::HashMap;
@@ -3410,6 +3586,7 @@ fn render_wrapped_rows(
     let mut toggle_json: Option<(usize, bool)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
+    let mut badge_toggle: Option<usize> = None;
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -3448,8 +3625,12 @@ fn render_wrapped_rows(
             let expanded = is_json && eng.expanded_json_lines.contains(&line);
             // Search hits keep their own colours; other rows take the span path only when
             // a captures-only rule, a quick label or ANSI colours exist.
-            let is_hit = active_search_line == Some(line)
-                || (has_search && eng.search_matches.binary_search(&line).is_ok());
+            let (hit, active, _) = eng.row_marks(row, line, has_search);
+            let is_hit = hit || active;
+            let collapsed = eng.collapsed_row(row);
+            let badge_w = collapsed.map_or(0.0, |c| {
+                char_w * (crate::collapse::badge_text(c.count).chars().count() + 1) as f32
+            });
             let spans = if (span_rules || !row_text.ansi.is_empty()) && !is_hit {
                 Some(eng.match_row_spans(&row_text))
             } else {
@@ -3474,7 +3655,8 @@ fn render_wrapped_rows(
                     egui::text::LayoutJob::single_section(layout_slice(&shown).to_owned(), format)
                 }
             };
-            job.wrap.max_width = if is_json { text_w - json_w } else { text_w }.max(20.0);
+            job.wrap.max_width =
+                (if is_json { text_w - json_w } else { text_w } - badge_w).max(20.0);
             let galley = ctx.fonts_mut(|f| f.layout_job(job));
             let mut height = galley.size().y.max(font_row_h) + pad;
             let pretty = if expanded {
@@ -3506,6 +3688,8 @@ fn render_wrapped_rows(
                     is_json,
                     expanded,
                     highlight,
+                    collapsed,
+                    badge_w,
                 },
             );
             height
@@ -3534,13 +3718,9 @@ fn render_wrapped_rows(
                 },
                 WrapScroll::Pages(n) => walk_anchor(anchor, n as f32 * vh, rows, &mut measure),
                 WrapScroll::CenterLine(line) => {
-                    // A line hidden by the filters resolves to the next visible row.
-                    let row = if eng.rows_filtered() {
-                        eng.filtered_lines.partition_point(|&l| l < line)
-                    } else {
-                        line
-                    };
-                    anchor_center(row, rows, vh, &mut measure)
+                    // A line hidden by the filters resolves to the next visible row, one
+                    // hidden in a collapsed group to the group's row.
+                    anchor_center(eng.row_of_line_or_next(line), rows, vh, &mut measure)
                 }
             };
         }
@@ -3611,11 +3791,10 @@ fn render_wrapped_rows(
                 egui::pos2(origin.x, y),
                 egui::pos2(origin.x + content_w, y + r.height),
             );
-            let matches_search = has_search && eng.search_matches.binary_search(&line).is_ok();
-            let is_active = active_search_line == Some(line);
+            // A collapsed row is marked for the lines it hides too.
+            let (matches_search, is_active, is_bookmarked) = eng.row_marks(row, line, has_search);
             let is_selected = eng.is_selected(line);
-            let bookmark = BookmarkMark::of(eng, line);
-            let is_bookmarked = bookmark.is_set();
+            let bookmark = BookmarkMark::of_row(eng, row, line);
             if let Some(fill) =
                 row_tint(theme, matches_search, is_active, is_selected, is_bookmarked)
             {
@@ -3672,7 +3851,24 @@ fn render_wrapped_rows(
             } else {
                 (theme.text_primary(), None)
             };
-            let text_pos = egui::pos2(text_x + if r.is_json { json_w } else { 0.0 }, text_top);
+            if let Some(c) = r.collapsed {
+                let badge = collapse_badge_text(c, theme, font_size);
+                painter.text(
+                    egui::pos2(text_x, text_top),
+                    egui::Align2::LEFT_TOP,
+                    badge.text(),
+                    font_id.clone(),
+                    if c.open {
+                        theme.text_dim()
+                    } else {
+                        theme.warn_color()
+                    },
+                );
+            }
+            let text_pos = egui::pos2(
+                text_x + r.badge_w + if r.is_json { json_w } else { 0.0 },
+                text_top,
+            );
             if let Some(bg) = text_bg {
                 painter.rect_filled(
                     egui::Rect::from_min_size(text_pos, r.galley.size()),
@@ -3717,7 +3913,7 @@ fn render_wrapped_rows(
                 external_tools,
                 &mut tool_run,
                 eng.is_filter_active(),
-                is_bookmarked,
+                eng.is_bookmarked(line),
                 &mut picks,
             );
             let marker_rect = egui::Rect::from_min_size(
@@ -3725,10 +3921,26 @@ fn render_wrapped_rows(
                 egui::vec2(marker_w, font_row_h),
             );
             note_tooltip(ui, eng, line, marker_rect, click);
-            // JSON toggle, registered after the row so it wins the click
+            // Badge and JSON toggle, registered after the row so they win the click
+            if let Some(c) = r.collapsed {
+                let badge_rect = egui::Rect::from_min_size(
+                    egui::pos2(text_x, text_top),
+                    egui::vec2(r.badge_w - char_w, font_row_h),
+                );
+                let badge = ui
+                    .interact(
+                        badge_rect,
+                        ui.id().with(("collapse_badge", line)),
+                        egui::Sense::click(),
+                    )
+                    .on_hover_text(collapse_badge_tip(eng, c, lang));
+                if badge.clicked() {
+                    badge_toggle = Some(row);
+                }
+            }
             if r.is_json {
                 let btn_rect = egui::Rect::from_min_size(
-                    egui::pos2(text_x, text_top),
+                    egui::pos2(text_x + r.badge_w, text_top),
                     egui::vec2(json_w - char_w, font_row_h),
                 );
                 let tooltip = if r.expanded {
@@ -3774,7 +3986,10 @@ fn render_wrapped_rows(
     engine.wrap_scroll_abs = ended;
     engine.current_scroll_x = 0.0;
     engine.current_scroll_y = ended;
-    picks.apply(engine);
+    if let Some(row) = badge_toggle {
+        engine.toggle_collapsed_row(row);
+    }
+    picks.apply(ui, engine);
     (row_click, toggle_json, tool_run)
 }
 

@@ -29,9 +29,41 @@ pub enum FormatHint {
 /// Milliseconds since the Unix epoch for the timestamp at the start of `line`, if any.
 pub fn detect_timestamp(line: &str, hint: FormatHint) -> Option<(i64, FormatHint)> {
     let head = &line.as_bytes()[..line.len().min(SCAN_BYTES)];
-    // The hinted format first: on a log that does not change format this is the only
-    // parser that ever runs.
-    let order = match hint {
+    for format in format_order(hint) {
+        if let Some((millis, _)) = parse_format(format, head) {
+            return Some((millis, format));
+        }
+    }
+    None
+}
+
+/// Byte length of the timestamp at the start of `line`, zone and closing bracket
+/// included, with the same parsers and hint as `detect_timestamp`. The collapse of
+/// repeated lines drops it, so lines that differ only by their time compare equal. An
+/// Apache timestamp counts only when its bracket opens the line (in a combined-log line
+/// it follows the client fields, which are not a prefix to drop), and a bare clock
+/// (`14:02:05.123`), which is no point in time for `detect_timestamp`, is a prefix too.
+pub fn leading_span(line: &str, hint: FormatHint) -> Option<usize> {
+    let head = &line.as_bytes()[..line.len().min(SCAN_BYTES)];
+    for format in format_order(hint) {
+        if format == FormatHint::Apache && head.first() != Some(&b'[') {
+            continue;
+        }
+        if let Some((_, end)) = parse_format(format, head) {
+            return Some(end);
+        }
+    }
+    let start = skip_leading_bracket(head);
+    let b = head.get(start..)?;
+    let (_, after_time) = parse_clock(b, 0)?;
+    let (_, after_frac) = parse_fraction(b, after_time);
+    Some(close_bracket(head, start, start + after_frac))
+}
+
+/// The four formats, the hinted one first: on a log that does not change format this is
+/// the only parser that ever runs.
+fn format_order(hint: FormatHint) -> [FormatHint; 4] {
+    match hint {
         FormatHint::Iso8601 => [
             FormatHint::Iso8601,
             FormatHint::Apache,
@@ -62,26 +94,51 @@ pub fn detect_timestamp(line: &str, hint: FormatHint) -> Option<(i64, FormatHint
             FormatHint::Syslog,
             FormatHint::Epoch,
         ],
-    };
-    for format in order {
-        let parsed = match format {
-            FormatHint::Iso8601 => parse_iso8601(head),
-            FormatHint::Syslog => parse_syslog(head),
-            FormatHint::Apache => parse_apache(head),
-            FormatHint::Epoch => parse_epoch(head),
-            FormatHint::Unknown => None,
-        };
-        if let Some(millis) = parsed {
-            return Some((millis, format));
-        }
     }
-    None
+}
+
+/// Milliseconds and end offset in `head` of the timestamp in `format` at its start.
+fn parse_format(format: FormatHint, head: &[u8]) -> Option<(i64, usize)> {
+    match format {
+        FormatHint::Iso8601 => parse_iso8601(head),
+        FormatHint::Syslog => parse_syslog(head),
+        FormatHint::Apache => parse_apache(head),
+        FormatHint::Epoch => parse_epoch(head),
+        FormatHint::Unknown => None,
+    }
+}
+
+/// Past the bracket closing a timestamp that opened with one (`start` > 0).
+fn close_bracket(head: &[u8], start: usize, end: usize) -> usize {
+    if start > 0 && matches!(head.get(end), Some(b']') | Some(b')')) {
+        end + 1
+    } else {
+        end
+    }
+}
+
+/// Past a zone suffix at `at`: `Z`, `+02:00`, `+0200`, `-03`.
+fn skip_zone(b: &[u8], at: usize) -> usize {
+    match b.get(at) {
+        Some(b'Z') | Some(b'z') => at + 1,
+        Some(b'+') | Some(b'-') if number(b, at + 1, 2).is_some() => {
+            let end = at + 3;
+            if b.get(end) == Some(&b':') && number(b, end + 1, 2).is_some() {
+                end + 3
+            } else if number(b, end, 2).is_some() {
+                end + 2
+            } else {
+                end
+            }
+        }
+        _ => at,
+    }
 }
 
 /// `2026-09-18T14:02:05.123Z`, `2026-09-18 14:02:05,123`, `2026-09-18 14:02:05+02:00`.
 /// The date and the time are required; the fraction and the zone are optional, and the
 /// zone is skipped rather than applied (see the module comment).
-fn parse_iso8601(head: &[u8]) -> Option<i64> {
+fn parse_iso8601(head: &[u8]) -> Option<(i64, usize)> {
     let start = skip_leading_bracket(head);
     let b = head.get(start..)?;
     if b.len() < 19 {
@@ -100,14 +157,15 @@ fn parse_iso8601(head: &[u8]) -> Option<i64> {
         return None;
     }
     let (time_millis, after_time) = parse_clock(b, 11)?;
-    let (frac, _) = parse_fraction(b, after_time);
+    let (frac, after_frac) = parse_fraction(b, after_time);
     let days = days_from_civil(year, month, day)?;
-    Some(days * 86_400_000 + time_millis + frac)
+    let end = close_bracket(head, start, start + skip_zone(b, after_frac));
+    Some((days * 86_400_000 + time_millis + frac, end))
 }
 
 /// Syslog: `Sep 18 14:02:05` — no year, so the current one is assumed, which is what every
 /// other syslog reader does.
-fn parse_syslog(head: &[u8]) -> Option<i64> {
+fn parse_syslog(head: &[u8]) -> Option<(i64, usize)> {
     let start = skip_leading_bracket(head);
     let b = head.get(start..)?;
     if b.len() < 15 {
@@ -127,13 +185,14 @@ fn parse_syslog(head: &[u8]) -> Option<i64> {
         return None;
     }
     let (time_millis, after_time) = parse_clock(b, time_at)?;
-    let (frac, _) = parse_fraction(b, after_time);
+    let (frac, after_frac) = parse_fraction(b, after_time);
     let days = days_from_civil(current_year(), month, day)?;
-    Some(days * 86_400_000 + time_millis + frac)
+    let end = close_bracket(head, start, start + after_frac);
+    Some((days * 86_400_000 + time_millis + frac, end))
 }
 
 /// Apache and nginx: `[18/Sep/2026:14:02:05 +0200]`, the zone skipped as in ISO 8601.
-fn parse_apache(head: &[u8]) -> Option<i64> {
+fn parse_apache(head: &[u8]) -> Option<(i64, usize)> {
     let start = head.iter().position(|b| *b == b'[').map(|i| i + 1)?;
     // The bracket has to be at the very start of the line, or right after the client and
     // user fields of a combined-log line, which is still inside the scan window.
@@ -153,14 +212,20 @@ fn parse_apache(head: &[u8]) -> Option<i64> {
     if b[11] != b':' {
         return None;
     }
-    let (time_millis, _) = parse_clock(b, 12)?;
+    let (time_millis, after_time) = parse_clock(b, 12)?;
     let days = days_from_civil(year, month, day)?;
-    Some(days * 86_400_000 + time_millis)
+    // The zone (` +0200`) and the closing bracket belong to the timestamp.
+    let end = b[after_time..]
+        .iter()
+        .take(8)
+        .position(|&c| c == b']')
+        .map_or(after_time, |i| after_time + i + 1);
+    Some((days * 86_400_000 + time_millis, start + end))
 }
 
 /// Bare epoch seconds (10 digits) or milliseconds (13 digits), the way container runtimes
 /// and some JSON loggers write them. Shorter runs of digits are line numbers, not times.
-fn parse_epoch(head: &[u8]) -> Option<i64> {
+fn parse_epoch(head: &[u8]) -> Option<(i64, usize)> {
     let digits = head.iter().take_while(|b| b.is_ascii_digit()).count();
     // A longer digit run is an id, not a time; a following digit would make it one.
     let next = head.get(digits);
@@ -170,11 +235,14 @@ fn parse_epoch(head: &[u8]) -> Option<i64> {
     ) {
         return None;
     }
-    match digits {
-        10 => Some(number_i64(head, 0, 10)? * 1000),
-        13 => number_i64(head, 0, 13),
-        _ => None,
-    }
+    let millis = match digits {
+        10 => number_i64(head, 0, 10)? * 1000,
+        13 => number_i64(head, 0, 13)?,
+        _ => return None,
+    };
+    // A fraction of a second (`1789480925.123`) is part of the timestamp too.
+    let (_, end) = parse_fraction(head, digits);
+    Some((millis, end))
 }
 
 /// `HH:MM:SS` at `at`, returning the milliseconds into the day and the index after it.
@@ -646,6 +714,68 @@ mod tests {
         assert_eq!(end_of_typed_time("2026-09-18 14:05:30", 1_000), 1_999);
         // "to 2026-09-18" means through 23:59:59.999 of that day.
         assert_eq!(end_of_typed_time("2026-09-18", 1_000), 86_400_999);
+    }
+
+    #[test]
+    fn leading_span_covers_each_format_with_its_zone_and_bracket() {
+        fn span(line: &str) -> Option<&str> {
+            leading_span(line, FormatHint::Unknown).map(|n| &line[..n])
+        }
+        assert_eq!(
+            span("2026-09-18T14:02:05.123Z ERROR boom"),
+            Some("2026-09-18T14:02:05.123Z")
+        );
+        assert_eq!(
+            span("2026-09-18 14:02:05,123 INFO x"),
+            Some("2026-09-18 14:02:05,123")
+        );
+        assert_eq!(
+            span("2026-09-18T14:02:05+02:00 zoned"),
+            Some("2026-09-18T14:02:05+02:00")
+        );
+        assert_eq!(
+            span("2026-09-18T14:02:05.123-0300 zoned"),
+            Some("2026-09-18T14:02:05.123-0300")
+        );
+        assert_eq!(
+            span("[2026-09-18 14:02:05.123] bracketed"),
+            Some("[2026-09-18 14:02:05.123]")
+        );
+        assert_eq!(
+            span("Sep 18 14:02:05 host app[1]: started"),
+            Some("Sep 18 14:02:05")
+        );
+        assert_eq!(
+            span("[18/Sep/2026:14:02:05 +0200] \"GET /\""),
+            Some("[18/Sep/2026:14:02:05 +0200]")
+        );
+        assert_eq!(span("1789480925 epoch seconds"), Some("1789480925"));
+        assert_eq!(span("1789480925.250 fractional"), Some("1789480925.250"));
+        assert_eq!(span("1789480925123 epoch millis"), Some("1789480925123"));
+        // A bare clock is a prefix to drop, though not a point in time.
+        assert_eq!(span("12:00:01.250 WARN retrying"), Some("12:00:01.250"));
+        assert_eq!(span("[12:00:01] WARN retrying"), Some("[12:00:01]"));
+        assert_eq!(detect("12:00:01.250 WARN retrying"), None);
+        // The hint changes the order, not the answer.
+        assert_eq!(
+            leading_span("2026-09-18T14:02:05Z x", FormatHint::Epoch),
+            Some("2026-09-18T14:02:05Z".len())
+        );
+    }
+
+    #[test]
+    fn leading_span_ignores_timestamps_that_do_not_open_the_line() {
+        let none = |line: &str| leading_span(line, FormatHint::Unknown);
+        assert_eq!(none("ERROR something went wrong"), None);
+        assert_eq!(none("    at Foo.bar(Foo.java:10)"), None);
+        assert_eq!(none(""), None);
+        // The Apache bracket after the client fields of a combined-log line.
+        assert_eq!(
+            none("127.0.0.1 - - [18/Sep/2026:14:02:05 +0000] \"GET / HTTP/1.1\" 200"),
+            None
+        );
+        assert_eq!(none("12345 short"), None);
+        assert_eq!(none("25:61:00 not a clock"), None);
     }
 
     #[test]
