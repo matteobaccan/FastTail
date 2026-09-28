@@ -375,11 +375,12 @@ pub fn refusal_text(lang: Language, refusal: &EntryRefusal) -> String {
 }
 
 /// An error opening or listing an archive, in the UI language when FastTail itself
-/// refused it (a 7z whose header is encrypted or too large).
+/// refused it (a 7z whose header is encrypted or too large, or declares too many entries).
 pub fn io_error_text(lang: Language, err: &std::io::Error) -> String {
     match crate::compressed::sevenz_refusal(err) {
         Some(SevenZRefusal::EncryptedHeader) => t(lang, "sevenz_header_encrypted").to_string(),
         Some(SevenZRefusal::HeaderTooLarge) => t(lang, "sevenz_header_too_large").to_string(),
+        Some(SevenZRefusal::TooManyEntries) => t(lang, "sevenz_too_many_entries").to_string(),
         None => err.to_string(),
     }
 }

@@ -26,9 +26,16 @@ coders listed in the proposal. *Alternative:* shelling out to `7z` — rejected:
 installed on most machines, and a process per entry breaks progress and cancel.
 
 ### D2. Listing like zip
-The header is read at open time, as for zip (`list_7z_entries`). The encoded header is
-decoded into memory with a 64 MB bound and 100 000 entries at most; beyond, the list is
-partial with a notice. Refusals reuse `EntryRefusal`: `Encrypted` (entry in an AES
+The header is read at open time, as for zip (`list_7z_entries`). The 32-byte start
+header must pass its CRC: a damaged or zeroed one is reported as damage, and the header
+is never guessed from the end of the file. The header (stored or encoded) is at most
+64 MB: FastTail decodes an encoded header itself (LZMA, LZMA2 or copy, its CRC checked)
+within that bound, and a larger one refuses the archive, never a partial list. The
+decoded header is walked before the 7z reader parses it: more than 250 000 files, blocks
+or streams declared refuse the archive (the reader would allocate a record for each
+first). At most 100 000 entries are listed; beyond, the list is partial with a notice.
+The parsed header is kept for the last 4 archives (path, size, date), so the listing
+and the extraction of an entry read it once. Refusals reuse `EntryRefusal`: `Encrypted` (entry in an AES
 folder; an encrypted header refuses the whole archive), `Method(name)` for other coders,
 `UnsafeName`, `DuplicateName`. Directories, anti-items and empty-stream entries are not
 listed as files.
@@ -42,8 +49,9 @@ common case is one or two entries. *Alternative:* one job writing several spools
 deferred, see open questions.
 
 ### D4. Limits reused
-The dictionary check reuses `MAX_DECODER_WINDOW` (256 MiB) on every LZMA, LZMA2 and PPMd
-coder of the entry's folder before any allocation. The space guard uses the entry size
+The dictionary check reuses `MAX_DECODER_WINDOW` (256 MiB) on the sum of the LZMA, LZMA2
+and PPMd dictionaries of the entry's folder (each coder of a chain holds its own) before
+any allocation; the same sum bounds the coders of an encoded header. The space guard uses the entry size
 from the header, as for zip.
 
 ### D5. Nested codec entries
@@ -55,8 +63,9 @@ unpacked.
 
 - [Decoding a large solid block to reach its last entry is slow] → progress over the
   block and cancel; the picker tooltip shows the size of the entry's block.
-- [A crafted header claims huge sizes or counts] → 64 MB and 100 000 entry bounds, space
-  guard before extraction.
+- [A crafted header claims huge sizes or counts] → 64 MB header bound and 250 000 declared
+  files / blocks / streams (both refuse the archive), 100 000 listed entries, space guard
+  before extraction.
 - [The new dependency's MSRV is above 1.88] → pin a compatible version or raise
   `rust-version` in the same PR.
 

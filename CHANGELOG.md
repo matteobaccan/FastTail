@@ -18,8 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   one are dropped without being written, and the progress runs over the block (the
   picker shows its size when hovering the entry). Encrypted entries, other coders
   (zstd, brotli, lz4...), unsafe or duplicate names and a dictionary above 256 MiB are
-  listed disabled with the reason; a 7z whose header is encrypted, or larger than 64 MB,
-  is refused with a message, and no password is asked. The picker lists at most 100 000
+  listed disabled with the reason; a 7z whose header is encrypted, larger than 64 MB or
+  declaring more than 250,000 files, blocks or streams is refused with a message, and no
+  password is asked; a 7z whose start header fails its CRC is reported as damaged. The picker lists at most 100 000
   entries and says when the list is partial. Space guard, output cap, re-extract,
   nested `.gz` entries, workspace, sessions (`entry=`), recent files and bookmarks work
   as for zip entries. Pure-Rust decoder (`sevenz-rust2`); all 16 languages updated.

@@ -824,6 +824,7 @@ fn test_i18n_exhaustive_coverage() {
         "sevenz_entry_dictionary",
         "sevenz_header_encrypted",
         "sevenz_header_too_large",
+        "sevenz_too_many_entries",
         "sevenz_list_partial",
         "sevenz_block_size",
         "compressed_open_failed",
