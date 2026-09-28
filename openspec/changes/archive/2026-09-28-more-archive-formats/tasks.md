@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add `tar` (0.4, `default-features = false`), `bzip2` (0.6, `libbz2-rs-sys` backend, no `bzip2-sys`), `lzma-rust2` and `ruzstd` to `Cargo.toml`, with a comment per crate as for `flate2`; check `cargo tree` has no `*-sys` C build for them and that `rust-version` still builds
 - [x] 1.2 Confirm `lzma-rust2` reads concatenated xz streams and exposes the dictionary size before allocating; if not, switch to `lzma-rs` with a `Write`→spool adapter (design D1)
-- [ ] 1.3 Record the release binary size before / after (Windows x86_64) in the PR; target under 1 MB added
+- [ ] 1.3 Record the release binary size before / after (Windows x86_64) in the PR; target under 1 MB added — not measured: no release build from before #126 was kept; to be recorded with the 0.12.0 release
 
 ## 2. Codec layer and sniffing
 
@@ -37,5 +37,5 @@
 ## 6. Wrap-up
 
 - [x] 6.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green (release workflow dispatch to confirm the ARM64 and macOS builds link)
-- [ ] 6.2 Manual check with a real `sosreport`-style `.tar.xz` and a `journalctl`-rotated `.zst`; note throughput of a 1 GB xz and zst in the PR
-- [ ] 6.3 After the 0.12.0 release, archive the change so `stream-engine` gains the updated requirements
+- [ ] 6.2 Manual check with a real `sosreport`-style `.tar.xz` and a `journalctl`-rotated `.zst`; note throughput of a 1 GB xz and zst in the PR — deferred to the 0.12.0 preview round (the maintainer tries real archives with the preview exe)
+- [x] 6.3 After the 0.12.0 release, archive the change so `stream-engine` gains the updated requirements
