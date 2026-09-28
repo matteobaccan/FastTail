@@ -2316,6 +2316,8 @@ impl FastTailApp {
                                     has_session,
                                     egui::Button::new(t(lang, "session_save")),
                                 )
+                                .on_hover_text(t(lang, "session_tip"))
+                                .on_disabled_hover_text(t(lang, "session_tip"))
                                 .clicked()
                             {
                                 session_action = Some(SessionAction::Save);

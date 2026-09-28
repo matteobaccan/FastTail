@@ -4479,6 +4479,7 @@ fn render_preset_save_dialog(
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui
                 .add_enabled(!name.is_empty(), egui::Button::new(save_label))
+                .on_disabled_hover_text(t(lang, "preset_name"))
                 .clicked()
                 || (enter && !name.is_empty() && !taken)
             {
@@ -5171,6 +5172,7 @@ fn render_lock_settings(
                 !lock_pin.is_empty(),
                 egui::Button::new(t(lang, "lock_clear_pin")),
             )
+            .on_disabled_hover_text(t(lang, "lock_needs_pin"))
             .clicked()
         {
             lock_pin.clear();
