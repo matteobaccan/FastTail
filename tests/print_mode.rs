@@ -32,14 +32,40 @@ fn without_print_since_and_until_set_the_window_of_the_streams_opened() {
     // WARN 14:03:00 and DEBUG 14:04:59, both containing an "o".
     assert_eq!(engine.visible_line_count(), 2);
 
-    // A relative time is fixed to the instant it names at start.
     let cli = CliArgs::parse(["--since", "-1h", "app.log"], fx.dir.path()).unwrap();
     let mut app = FastTailApp::from_config(FastTailConfig::default());
     app.apply_cli(&cli);
     let engine = &app.engines[0];
-    assert_eq!(engine.time_from_text.len(), "2026-09-18 14:02:10".len());
+    // A relative time is fixed to the instant it names at start, with its milliseconds.
+    assert_eq!(engine.time_from_text.len(), "2026-09-18 14:02:10.123".len());
     assert!(!engine.time_range_error);
     assert_eq!(engine.visible_line_count(), 0);
+
+    // Repeated terms: the last one counts, as before print mode, and past 8 is fine.
+    let mut args: Vec<String> = Vec::new();
+    for term in [
+        "zzz1", "zzz2", "zzz3", "zzz4", "zzz5", "zzz6", "zzz7", "zzz8",
+    ] {
+        args.extend(["--filter".to_string(), term.to_string()]);
+    }
+    args.extend(
+        [
+            "--filter",
+            "payment",
+            "--exclude",
+            "zzz",
+            "--exclude",
+            "refused",
+            "app.log",
+        ]
+        .map(String::from),
+    );
+    let cli = CliArgs::parse(args.iter(), fx.dir.path()).unwrap();
+    let mut app = FastTailApp::from_config(FastTailConfig::default());
+    app.apply_cli(&cli);
+    let engine = &app.engines[0];
+    assert_eq!(engine.include_filter(), "payment");
+    assert_eq!(engine.exclude_filter(), "refused");
 }
 
 const LOG: &str = "\

@@ -158,9 +158,11 @@ fasttail --print [OPTIONS] [PATH...]
   --fresh            start with an empty workspace instead of the saved one
   --gui              accepted and ignored (FastTail is GUI-only; kept for old shortcuts)
   --filter <TEXT>    include filter for the files opened from the command line
+                     (given more than once, the last one counts)
   --exclude <TEXT>   exclude filter for those files
   --since <TIME>     start of the time window of those files: 14:02, 2026-09-28 14:02,
-                     a timestamp copied from a line, or -15m / -3h / -2d (back from now)
+                     a timestamp copied from a line, or now / -15m / -1h30m / -2d / -1w
+                     (units s, m, h, d, w, back from now)
   --until <TIME>     end of that time window, in the same forms
   --follow / --no-follow
                      follow mode for those files (ignored for compressed files)
@@ -174,7 +176,7 @@ fasttail --print [OPTIONS] [PATH...]
 
 Example: `fasttail --fresh --filter ERROR app.log err.log`.
 
-Without `--print`, `--since` and `--until` fill the time range of the streams opened from the command line (the stdin stream included) as if typed in the popup; a relative time is turned into the instant it names at start (`-3h` becomes that timestamp; the window does not slide). A time FastTail cannot read is a usage error (exit code 2).
+Without `--print`, `--since` and `--until` fill the time range of the streams opened from the command line (the stdin stream included) as if typed in the popup; a relative time is turned into the instant it names at start, to the millisecond and exact on both sides (`-3h` becomes that timestamp; the window does not slide yet). A time FastTail cannot read is a usage error (exit code 2).
 
 ### Print mode (no window)
 `fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme and the highlight rules). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.
@@ -186,9 +188,11 @@ Without `--print`, `--since` and `--until` fill the time range of the streams op
   --case-sensitive   the terms match case-sensitively
   --level <LEVEL>    minimum level: trace, debug, info, warn, error, fatal
   --since / --until  time window, as above (a bare 14:02 is on the day of the first
-                     timestamp of each input; lines before it are skipped)
+                     timestamp of each input, whatever the filters; lines before it
+                     are skipped)
   --context <N>      N lines (0-100) before and after each match, `--` between groups
-  --follow           then keep printing appended lines until Ctrl+C
+  --follow           then keep printing appended lines until Ctrl+C (which exits
+                     with the code earned so far)
   --color <WHEN>     auto (default: on a terminal, unless NO_COLOR is set), always, never
   --line-numbers     prefix each line with its line number and `:`
   --no-prefix        no `file:` prefix when several inputs are given

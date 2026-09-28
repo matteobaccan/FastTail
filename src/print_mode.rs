@@ -195,6 +195,7 @@ fn follow_inputs(
     next_id: &mut u64,
 ) -> io::Result<()> {
     use notify::{RecursiveMode, Watcher};
+    interrupt::install();
     let (tx, rx) = channel::<notify::Result<notify::Event>>();
     let mut watcher = notify::RecommendedWatcher::new(tx, notify::Config::default()).ok();
     if let Some(watcher) = watcher.as_mut() {
@@ -206,6 +207,10 @@ fn follow_inputs(
     }
     loop {
         let _ = rx.recv_timeout(SIZE_CHECK_INTERVAL);
+        if interrupt::requested() {
+            // Ctrl+C: end with the exit code earned so far.
+            return printer.flush();
+        }
         while rx.try_recv().is_ok() {}
         for input in inputs.iter_mut() {
             match input.poll(matcher, printer, next_id) {
@@ -460,12 +465,12 @@ impl Input {
             },
         };
         if let Some((pattern, newest)) = switch {
+            self.restart(newest.clone(), matcher, printer, next_id)?;
             eprintln!(
                 "fasttail: {}: switching to {}",
                 display_name(&pattern),
                 display_name(&newest)
             );
-            self.restart(newest, next_id)?;
             return self.pump(matcher, printer, false);
         }
         let Some(follow) = self.follow.as_ref() else {
@@ -477,9 +482,10 @@ impl Input {
         };
         let len = meta.len();
         if len < follow.offset || !follow.head_unchanged() {
-            eprintln!("fasttail: {} truncated, reading from the start", self.name);
             let path = follow.path.clone();
-            self.restart(path, next_id)?;
+            let name = self.name.clone();
+            self.restart(path, matcher, printer, next_id)?;
+            eprintln!("fasttail: {name} truncated, reading from the start");
         } else if len == follow.offset {
             return Ok(());
         }
@@ -487,9 +493,27 @@ impl Input {
     }
 
     /// Reads `path` again from its first byte, as a new input (line numbers, timestamps
-    /// and filter state start over).
-    fn restart(&mut self, path: PathBuf, next_id: &mut u64) -> Result<(), Stop> {
+    /// and filter state start over). The last line of the old content, held until its
+    /// newline, is complete as it is and goes through the filters first. When `path`
+    /// cannot be opened nothing changes, and the next check tries again.
+    fn restart(
+        &mut self,
+        path: PathBuf,
+        matcher: &Matcher,
+        printer: &mut Printer<impl Write>,
+        next_id: &mut u64,
+    ) -> Result<(), Stop> {
         let file = crate::file_source::open_file_shared(&path).map_err(Stop::Input)?;
+        let source = Source {
+            name: self.name.as_str(),
+            id: self.id,
+        };
+        let pipeline = &mut self.pipeline;
+        self.splitter
+            .finish(|bytes, encoding, truncated| {
+                pipeline.process(matcher, printer, &source, bytes, encoding, truncated)
+            })
+            .map_err(Stop::Output)?;
         self.reader = Box::new(file);
         self.splitter = Splitter::default();
         self.pipeline = Pipeline::default();
@@ -787,6 +811,11 @@ impl Pipeline {
         if let Some((millis, format)) = detect_timestamp(&text, self.hint) {
             self.hint = format;
             self.inherited = millis;
+            if self.window.is_none() && matcher.has_window() {
+                // As in the window: a bare time belongs to the day of the stream's first
+                // timestamp, whether or not that line passes the filters.
+                self.window = Some(matcher.window(millis));
+            }
         }
         let (visible, next) = matcher
             .filter
@@ -799,9 +828,8 @@ impl Pipeline {
             // Before the first timed line: cannot be placed in time, hidden as in the window.
             return false;
         }
-        let inherited = self.inherited;
-        let (from, to) = *self.window.get_or_insert_with(|| matcher.window(inherited));
-        time_window_contains(Some(inherited), from, to)
+        let (from, to) = self.window.unwrap_or((None, None));
+        time_window_contains(Some(self.inherited), from, to)
     }
 }
 
@@ -1051,6 +1079,68 @@ impl<W: Write> Printer<W> {
     }
 }
 
+/// Ctrl+C while following: a flag the follow loop checks, so the program ends with the
+/// exit code earned so far instead of being killed.
+mod interrupt {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    pub fn requested() -> bool {
+        REQUESTED.load(Ordering::Relaxed)
+    }
+
+    /// What the handler does, for the tests.
+    #[cfg(test)]
+    pub fn request() {
+        REQUESTED.store(true, Ordering::Relaxed);
+    }
+
+    #[cfg(windows)]
+    pub fn install() {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn SetConsoleCtrlHandler(
+                handler: Option<unsafe extern "system" fn(u32) -> i32>,
+                add: i32,
+            ) -> i32;
+        }
+        const CTRL_C_EVENT: u32 = 0;
+        const CTRL_BREAK_EVENT: u32 = 1;
+        unsafe extern "system" fn on_ctrl(kind: u32) -> i32 {
+            if kind == CTRL_C_EVENT || kind == CTRL_BREAK_EVENT {
+                REQUESTED.store(true, Ordering::Relaxed);
+                1
+            } else {
+                0
+            }
+        }
+        // SAFETY: registers a handler that only stores to an atomic.
+        unsafe {
+            SetConsoleCtrlHandler(Some(on_ctrl), 1);
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn install() {
+        use std::os::raw::c_int;
+        extern "C" {
+            fn signal(signum: c_int, handler: usize) -> usize;
+        }
+        const SIGINT: c_int = 2;
+        extern "C" fn on_sigint(_: c_int) {
+            REQUESTED.store(true, Ordering::Relaxed);
+        }
+        // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
+        unsafe {
+            signal(SIGINT, on_sigint as extern "C" fn(c_int) as usize);
+        }
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    pub fn install() {}
+}
+
 /// The console of a GUI-subsystem executable on Windows (nothing to do elsewhere).
 pub mod console {
     /// Makes standard output and standard error usable from a terminal: a handle that is
@@ -1248,6 +1338,138 @@ mod tests {
         // Relative: this log is years old, so nothing is in the last hour.
         let (out, _) = print_text(&["--since", "-1h"], LOG.as_bytes(), 64);
         assert_eq!(out, "");
+    }
+
+    #[test]
+    fn a_bare_time_is_on_the_day_of_the_first_timestamp_whatever_the_filter() {
+        // Day one has no ERROR; the first ERROR is on day two. `--since 23:55` means 23:55
+        // of day one (the first timestamp of the log), as in the window: both ERROR lines
+        // are after it.
+        let text = "\
+2026-09-18 23:50:00 INFO day one
+2026-09-18 23:56:00 INFO late
+2026-09-19 00:10:00 ERROR day two
+2026-09-19 23:58:00 ERROR late on day two
+";
+        let (out, _) = print_text(
+            &["--filter", "ERROR", "--since", "23:55"],
+            text.as_bytes(),
+            64,
+        );
+        assert_eq!(
+            out,
+            "2026-09-19 00:10:00 ERROR day two\n2026-09-19 23:58:00 ERROR late on day two\n"
+        );
+        // The first ERROR just after midnight is after 23:55 of the day before.
+        let text = "\
+2026-09-18 23:50:00 INFO before
+2026-09-19 00:05:00 ERROR after midnight
+2026-09-19 00:10:00 INFO later
+";
+        let (out, n) = print_text(
+            &["--filter", "ERROR", "--since", "23:55"],
+            text.as_bytes(),
+            5,
+        );
+        assert_eq!(out, "2026-09-19 00:05:00 ERROR after midnight\n");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn a_relative_until_is_exact_to_the_millisecond() {
+        // `--until now` must not reach past the current instant, and `-1h30m` is read.
+        let cli = cli(&["--since", "-1h30m", "--until", "now"]);
+        let matcher = Matcher::from_cli(&cli);
+        let (from, to) = matcher.window(0);
+        assert_eq!(to, Some(matcher.now));
+        assert_eq!(from, Some(matcher.now - 90 * 60_000));
+    }
+
+    fn follow_input(path: &Path) -> (Input, u64) {
+        let mut next_id = 0;
+        let input = Input::open(InputSpec::Path(path.to_path_buf()), true, &mut next_id)
+            .unwrap_or_else(|e| panic!("{e}"));
+        (input, next_id)
+    }
+
+    fn plain_printer() -> Printer<Vec<u8>> {
+        let options = PrinterOptions {
+            prefix: false,
+            line_numbers: false,
+            separators: false,
+        };
+        Printer::new(Vec::new(), None, options)
+    }
+
+    #[test]
+    fn a_truncation_first_prints_the_held_last_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "one ERROR\ntwo ERROR without newline").unwrap();
+        let matcher = Matcher::from_cli(&cli(&["--filter", "ERROR"]));
+        let mut printer = plain_printer();
+        let (mut input, mut next_id) = follow_input(&path);
+        input.pump(&matcher, &mut printer, false).ok().unwrap();
+        assert_eq!(String::from_utf8_lossy(&printer.out), "one ERROR\n");
+        std::fs::write(&path, "new ERROR\n").unwrap();
+        input
+            .poll(&matcher, &mut printer, &mut next_id)
+            .ok()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&printer.out),
+            "one ERROR\ntwo ERROR without newline\nnew ERROR\n"
+        );
+    }
+
+    #[test]
+    fn a_restart_on_a_file_that_cannot_be_opened_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "one\ntwo held").unwrap();
+        let matcher = Matcher::from_cli(&cli(&[]));
+        let mut printer = plain_printer();
+        let (mut input, mut next_id) = follow_input(&path);
+        input.pump(&matcher, &mut printer, false).ok().unwrap();
+        let (name, id) = (input.name.clone(), input.id);
+        let missing = dir.path().join("app-2.log");
+        assert!(matches!(
+            input.restart(missing, &matcher, &mut printer, &mut next_id),
+            Err(Stop::Input(_))
+        ));
+        // Same file, same stream, the partial line still held for its newline.
+        assert_eq!((input.name.as_str(), input.id), (name.as_str(), id));
+        assert_eq!(input.follow.as_ref().unwrap().path, path);
+        assert_eq!(String::from_utf8_lossy(&printer.out), "one\n");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b" done\n")
+            .unwrap();
+        input
+            .poll(&matcher, &mut printer, &mut next_id)
+            .ok()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&printer.out),
+            "one\ntwo held done\n"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_ends_the_follow_loop_with_the_output_flushed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "one\n").unwrap();
+        let matcher = Matcher::from_cli(&cli(&[]));
+        let mut printer = plain_printer();
+        let (input, mut next_id) = follow_input(&path);
+        let mut inputs = vec![input];
+        interrupt::request();
+        let started = Instant::now();
+        follow_inputs(&mut inputs, &matcher, &mut printer, &mut next_id).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

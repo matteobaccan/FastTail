@@ -29,7 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   filters to standard output and exits, without a window and without touching the
   workspace or `fasttail.ini`. The matching is the window's: `--filter` and `--exclude`
   (each up to 8 times), `--regex`, `--case-sensitive`, `--level`, `--since` / `--until`
-  (everything the time range popup reads, plus `-15m`, `-3h`, `-2d`), with stack-trace
+  (everything the time range popup reads, plus `now`, `-15m`, `-1h30m`, `-2d`, `-1w`), with stack-trace
   lines following their entry; `--context N` adds lines around each match with `--`
   between groups, `--line-numbers` and the `file:` prefix (several inputs, `--no-prefix`
   to drop it) label them, `--color auto|always|never` paints the theme's level colours,
@@ -41,7 +41,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   when there is none. Command-line output stays in English, like `--help`.
 
 - **`--since` / `--until` in the window.** Without `--print` they set the time range of
-  the streams opened from the command line (a relative time is fixed at start).
+  the streams opened from the command line (a relative time is fixed at start, to the
+  millisecond); repeated `--filter` / `--exclude` still mean the last one.
 
 ### Changed
 

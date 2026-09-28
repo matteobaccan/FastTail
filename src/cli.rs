@@ -26,10 +26,12 @@ OPTIONS:
     --gui                Accepted and ignored: FastTail is GUI-only (kept for old shortcuts)
     --fresh              Start with an empty workspace instead of the saved one
     --filter <TEXT>      Include filter applied to the files opened from the command line
+                         (given twice, the last one counts)
     --exclude <TEXT>     Exclude filter applied to the files opened from the command line
     --since <TIME>       Start of the time window of the files opened from the command line:
                          14:02, 2026-09-28 14:02, a timestamp copied from a line, or a
-                         relative time -15m, -3h, -2d (counted back from now)
+                         relative time: now, -15m, -3h, -1h30m, -2d, -1w (units s, m, h,
+                         d, w, counted back from now; fixed at start in the window)
     --until <TIME>       End of that time window, in the same forms
     --follow             Enable follow mode on the files opened from the command line
     --no-follow          Disable follow mode on those files
@@ -83,37 +85,19 @@ impl ColorChoice {
 /// Most lines of context `--context` accepts, as in the window.
 pub const MAX_CONTEXT_LINES: usize = 100;
 
-/// Milliseconds a relative time `-<N>m`, `-<N>h` or `-<N>d` counts back from now, `None`
-/// for anything else.
-pub fn relative_time_millis(input: &str) -> Option<i64> {
-    let rest = input.trim().strip_prefix('-')?;
-    let unit = rest.chars().last()?;
-    let digits = &rest[..rest.len() - unit.len_utf8()];
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n: i64 = digits.parse().ok()?;
-    let per = match unit {
-        'm' => 60_000,
-        'h' => 3_600_000,
-        'd' => 86_400_000,
-        _ => return None,
-    };
-    n.checked_mul(per)
-}
-
-/// Whether `input` is a time `--since` / `--until` accept: a relative time, or anything
-/// the time range popup reads.
+/// Whether `input` is a time `--since` / `--until` accept: a relative time (see
+/// `timestamp::parse_relative`), or anything the time range popup reads.
 pub fn is_valid_time_arg(input: &str) -> bool {
-    relative_time_millis(input).is_some() || crate::timestamp::parse_user_time(input, 0).is_some()
+    crate::timestamp::parse_relative(input, 0).is_some()
+        || crate::timestamp::parse_user_time(input, 0).is_some()
 }
 
 /// The instant `input` names, `reference` being the day a bare time belongs to and `now`
 /// the local time relative times count back from. On the "to" side (`until`) a typed time
-/// covers the whole unit it names, as in the popup.
+/// covers the whole unit it names, as in the popup; a relative time is the exact instant.
 pub fn resolve_time_arg(input: &str, reference: i64, now: i64, until: bool) -> Option<i64> {
-    if let Some(back) = relative_time_millis(input) {
-        return Some(now - back);
+    if let Some(millis) = crate::timestamp::parse_relative(input, now) {
+        return Some(millis);
     }
     let millis = crate::timestamp::parse_user_time(input, reference)?;
     Some(if until {
@@ -132,9 +116,10 @@ pub struct CliArgs {
     /// Where `-` stood among the paths (print mode reads the inputs in order).
     pub stdin_at: usize,
     pub fresh: bool,
-    /// Include terms, at most `MAX_FILTER_TERMS`; the window uses the first.
+    /// Include terms in the order given: print mode uses them all (at most
+    /// `MAX_FILTER_TERMS`), the window the last one (`window_filter`).
     pub filter: Vec<String>,
-    /// Exclude terms, at most `MAX_FILTER_TERMS`; the window uses the first.
+    /// Exclude terms, as `filter` (`window_exclude`).
     pub exclude: Vec<String>,
     /// Start and end of the time window, as typed (validated at parse time).
     pub since: Option<String>,
@@ -300,12 +285,23 @@ impl CliArgs {
         Ok(out)
     }
 
-    /// Checks what the options mean together: at most `MAX_FILTER_TERMS` terms per side,
-    /// and the print-only options only with `--print`.
+    /// The include term the window applies: the last `--filter` given, as before print
+    /// mode made the option repeatable.
+    pub fn window_filter(&self) -> Option<&String> {
+        self.filter.last()
+    }
+
+    /// The exclude term the window applies: the last `--exclude` given.
+    pub fn window_exclude(&self) -> Option<&String> {
+        self.exclude.last()
+    }
+
+    /// Checks what the options mean together: with `--print`, at most `MAX_FILTER_TERMS`
+    /// terms per side; without it, no print-only option.
     fn validate(&self) -> Result<(), CliError> {
         use crate::scan_job::MAX_FILTER_TERMS;
         for (name, terms) in [("--filter", &self.filter), ("--exclude", &self.exclude)] {
-            if terms.len() > MAX_FILTER_TERMS {
+            if self.print && terms.len() > MAX_FILTER_TERMS {
                 return Err(CliError::Usage(format!(
                     "'{name}' given {} times (at most {MAX_FILTER_TERMS})",
                     terms.len()
@@ -567,7 +563,7 @@ mod tests {
             let m = usage_error(&args);
             assert!(m.contains(opt[0]) && m.contains("--print"), "{m}");
         }
-        // The window takes the time window and repeated terms (it uses the first).
+        // The window takes the time window and repeated terms (it uses the last).
         let a = CliArgs::parse(
             [
                 "--since", "14:02", "--until", "-1h", "--filter", "a", "--filter", "b",
@@ -594,18 +590,18 @@ mod tests {
 
     #[test]
     fn relative_times() {
-        assert_eq!(relative_time_millis("-15m"), Some(15 * 60_000));
-        assert_eq!(relative_time_millis("-3h"), Some(3 * 3_600_000));
-        assert_eq!(relative_time_millis(" -2d "), Some(2 * 86_400_000));
-        for bad in ["15m", "-m", "-1.5h", "-3w", "-", "", "-1hh"] {
-            assert_eq!(relative_time_millis(bad), None, "{bad}");
-        }
         let now = 1_000_000_000_000;
         assert_eq!(
             resolve_time_arg("-1h", 0, now, false),
             Some(now - 3_600_000)
         );
+        // A relative "to" is the exact instant, not widened to the end of a unit.
         assert_eq!(resolve_time_arg("-1h", 0, now, true), Some(now - 3_600_000));
+        assert_eq!(resolve_time_arg("now", 0, now, true), Some(now));
+        assert_eq!(
+            resolve_time_arg("-1h30m", 0, now, false),
+            Some(now - 90 * 60_000)
+        );
         // A bare time on the reference day; the "to" side covers the whole minute.
         let day = 20_000 * 86_400_000;
         assert_eq!(
@@ -616,8 +612,32 @@ mod tests {
             resolve_time_arg("14:02", day + 5_000, now, true),
             Some(day + (14 * 60 + 2) * 60_000 + 59_999)
         );
-        assert!(is_valid_time_arg("2026-09-28 14:02"));
-        assert!(is_valid_time_arg("2026-09-28T14:02:03.120Z"));
+        for ok in [
+            "2026-09-28 14:02",
+            "2026-09-28T14:02:03.120Z",
+            "now",
+            "-2w",
+            "-45s",
+        ] {
+            assert!(is_valid_time_arg(ok), "{ok}");
+        }
         assert!(!is_valid_time_arg("noon"));
+        assert!(!is_valid_time_arg("-3x"));
+    }
+
+    #[test]
+    fn without_print_the_last_filter_counts_and_there_is_no_term_limit() {
+        let mut args = Vec::new();
+        for i in 0..10 {
+            args.push("--filter".to_string());
+            args.push(format!("f{i}"));
+            args.push("--exclude".to_string());
+            args.push(format!("x{i}"));
+        }
+        let a = CliArgs::parse(args.iter(), &cwd()).unwrap();
+        assert_eq!(a.window_filter().map(String::as_str), Some("f9"));
+        assert_eq!(a.window_exclude().map(String::as_str), Some("x9"));
+        let a = CliArgs::parse(["app.log"], &cwd()).unwrap();
+        assert!(a.window_filter().is_none() && a.window_exclude().is_none());
     }
 }

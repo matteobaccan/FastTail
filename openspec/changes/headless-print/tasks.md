@@ -1,14 +1,14 @@
 ## 1. Command line
 
-- [x] 1.1 `CliArgs`: `print`, repeatable `filter` / `exclude` (up to 8 each; the GUI keeps using the first), `regex`, `case_sensitive`, `level`, `since`, `until`, `context`, `color`, `line_numbers`, `no_prefix`; print-only options without `--print` are usage errors (not `--since` / `--until`, which set the window's time range per `relative-time-windows`); `USAGE` updated
-- [x] 1.2 Parser tests: every option, `--opt=value` forms, repeated terms past 8, invalid level / colour / context, relative times (`-15m`, `-3h`, `-2d`), `-` with and without FILEs
+- [x] 1.1 `CliArgs`: `print`, repeatable `filter` / `exclude` (up to 8 each with `--print`; without it no limit and the window uses the last one, as before), `regex`, `case_sensitive`, `level`, `since`, `until`, `context`, `color`, `line_numbers`, `no_prefix`; print-only options without `--print` are usage errors (not `--since` / `--until`, which set the window's time range per `relative-time-windows`); `USAGE` updated
+- [x] 1.2 Parser tests: every option, `--opt=value` forms, repeated terms past 8, invalid level / colour / context, relative times through the shared `timestamp::parse_relative` (`now`, `-45s`, `-15m`, `-1h30m`, `-2d`, `-1w`; exact "to" side), `-` with and without FILEs
 
 ## 2. Pipeline
 
 - [x] 2.1 `src/print_mode.rs` (no `ui` / `egui` / `eframe` import): input opening (plain, pattern newest match, single-file compressed via `open_decoder`, standard input), refusal of zip / tar with a message, encoding sniff, line splitting with the 1 MB long-line cap
 - [x] 2.2 Line evaluation: ANSI strip for matching, `FilterSpec::visible_in_sequence`, level stage, time window with inherited timestamps and the popup's bare-time rule; context ring buffer with `--` separators
 - [x] 2.3 Writer: plain, and colour with theme level styles, rules (captures-only spans), the line's own ANSI below them; truecolor or 256 colours; file prefix and line numbers; 64 KB buffer; quiet exit on broken pipe
-- [x] 2.4 Follow loop: offsets and head fingerprints, `notify` plus 250 ms size check, truncation / rewrite notice and restart, pattern rescan every 2 s, standard input end, compressed input not followed
+- [x] 2.4 Follow loop: offsets and head fingerprints, `notify` plus 250 ms size check, truncation / rewrite notice and restart (held partial line flushed first, notice only once the file is open), pattern rescan every 2 s, `CTRL + C` ends with the exit code earned so far, standard input end, compressed input not followed
 - [x] 2.5 Exit codes 0 / 1 / 2 / 3
 
 ## 3. Platform
