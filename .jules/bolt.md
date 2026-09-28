@@ -17,3 +17,7 @@
 ## 2026-04-18 - Single-pass CSI sequence validation & single-byte SIMD search
 **Learning:** Re-iterating over ANSI parameter slices after finding the sequence termination byte adds unnecessary overhead on every escape sequence. Validating SGR parameter flags in a single pass during byte scanning avoids double iteration over parameters. Furthermore, single-byte ASCII searches (`needle.len() == 1`) in case-insensitive routines can call `memchr::memchr` / `memchr::memchr2` / `memchr_iter` directly without slice length loops or `eq_ignore_ascii_case` overhead.
 **Action:** Track SGR parameter validity inline during single-pass CSI parsing, and branch `needle.len() == 1` directly to SIMD `memchr` / `memchr2` routines.
+
+## 2026-04-18 - Length-branched dispatch for static token tables
+**Learning:** Iterating over static slice tables with `eq_ignore_ascii_case` in log level and token parsing hot paths adds multi-pass iteration and unnecessary case-folding loops. Branching on `word.len()` and `word[0]` combined with direct byte slice comparisons (`== b"INFO"` or `== b"info"`) bypasses case-folding iterations for standard log tokens.
+**Action:** When parsing fixed string token sets, branch on word length and first byte, providing direct byte string comparison fast paths before falling back to case-insensitive matching.

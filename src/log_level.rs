@@ -81,28 +81,105 @@ impl LogLevel {
 }
 
 /// Level of a token (a whole word already isolated), or `None` if it is not a level word.
-fn token_level(word: &[u8]) -> Option<LogLevel> {
-    // Every token is 4 to 8 ASCII letters: reject the rest before comparing.
-    if !(4..=8).contains(&word.len()) {
-        return None;
+///
+/// Optimized using length branching and first-byte matching to avoid iterating over candidate tables
+/// and performing unnecessary case-folding comparisons on non-level tokens.
+pub(crate) fn token_level(word: &[u8]) -> Option<LogLevel> {
+    match word.len() {
+        4 => match word[0] {
+            b'I' | b'i' => {
+                if word == b"INFO" || word == b"info" || word.eq_ignore_ascii_case(b"INFO") {
+                    Some(LogLevel::Info)
+                } else {
+                    None
+                }
+            }
+            b'W' | b'w' => {
+                if word == b"WARN" || word == b"warn" || word.eq_ignore_ascii_case(b"WARN") {
+                    Some(LogLevel::Warn)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        5 => match word[0] {
+            b'E' | b'e' => {
+                if word == b"ERROR" || word == b"error" || word.eq_ignore_ascii_case(b"ERROR") {
+                    Some(LogLevel::Error)
+                } else {
+                    None
+                }
+            }
+            b'D' | b'd' => {
+                if word == b"DEBUG" || word == b"debug" || word.eq_ignore_ascii_case(b"DEBUG") {
+                    Some(LogLevel::Debug)
+                } else {
+                    None
+                }
+            }
+            b'T' | b't' => {
+                if word == b"TRACE" || word == b"trace" || word.eq_ignore_ascii_case(b"TRACE") {
+                    Some(LogLevel::Trace)
+                } else {
+                    None
+                }
+            }
+            b'F' | b'f' => {
+                if word == b"FATAL" || word == b"fatal" || word.eq_ignore_ascii_case(b"FATAL") {
+                    Some(LogLevel::Fatal)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        6 => match word[0] {
+            b'N' | b'n' => {
+                if word == b"NOTICE" || word == b"notice" || word.eq_ignore_ascii_case(b"NOTICE") {
+                    Some(LogLevel::Info)
+                } else {
+                    None
+                }
+            }
+            b'S' | b's' => {
+                if word == b"SEVERE" || word == b"severe" || word.eq_ignore_ascii_case(b"SEVERE") {
+                    Some(LogLevel::Error)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        7 => match word[0] {
+            b'W' | b'w' => {
+                if word == b"WARNING" || word == b"warning" || word.eq_ignore_ascii_case(b"WARNING") {
+                    Some(LogLevel::Warn)
+                } else {
+                    None
+                }
+            }
+            b'V' | b'v' => {
+                if word == b"VERBOSE" || word == b"verbose" || word.eq_ignore_ascii_case(b"VERBOSE") {
+                    Some(LogLevel::Trace)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        8 => match word[0] {
+            b'C' | b'c' => {
+                if word == b"CRITICAL" || word == b"critical" || word.eq_ignore_ascii_case(b"CRITICAL") {
+                    Some(LogLevel::Fatal)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        _ => None,
     }
-    const TABLE: [(&[u8], LogLevel); 11] = [
-        (b"FATAL", LogLevel::Fatal),
-        (b"CRITICAL", LogLevel::Fatal),
-        (b"ERROR", LogLevel::Error),
-        (b"SEVERE", LogLevel::Error),
-        (b"WARN", LogLevel::Warn),
-        (b"WARNING", LogLevel::Warn),
-        (b"INFO", LogLevel::Info),
-        (b"NOTICE", LogLevel::Info),
-        (b"DEBUG", LogLevel::Debug),
-        (b"TRACE", LogLevel::Trace),
-        (b"VERBOSE", LogLevel::Trace),
-    ];
-    TABLE
-        .iter()
-        .find(|(token, _)| word.eq_ignore_ascii_case(token))
-        .map(|(_, level)| *level)
 }
 
 /// Word characters: a level token must not be glued to letters, digits, `_` or non-ASCII
