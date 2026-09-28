@@ -62,6 +62,7 @@ pub struct DockContext<'a> {
     pub telemetry_enabled: &'a mut bool,
     pub sound_enabled: &'a mut bool,
     pub borderless: &'a mut bool,
+    /// Line-number column of new streams (Settings); each stream keeps its own switch.
     pub show_line_numbers: &'a mut bool,
     pub font_size: &'a mut f32,
     /// Colour rows by detected log level when no highlight rule matches (Settings).
@@ -88,7 +89,7 @@ pub struct DockContext<'a> {
     pub focused_stream: Option<PathBuf>,
     /// Search results pane and overview strip preferences, shared by every stream.
     pub search_view: &'a mut SearchViewPrefs,
-    /// Time delta column switch and gap threshold, shared by every stream.
+    /// Time delta column of new streams and the gap threshold, shared by every stream.
     pub time_delta: &'a mut TimeDeltaPrefs,
     /// Search across every open stream, shown by the Find results tab.
     pub find_all: &'a mut crate::find_all::FindAllSession,
@@ -132,8 +133,10 @@ impl Default for SearchViewPrefs {
     }
 }
 
-/// Time delta column (stream toolbar `Δt`, Settings): shown or not, and the gap from
-/// which a delta is drawn in the accent colour. Global preferences in `fasttail.ini`.
+/// Time delta column preferences in `fasttail.ini` (Settings): whether a new stream
+/// starts with the column shown (each stream then keeps its own `Δt` switch, see
+/// `TailEngine::show_time_delta`), and the gap from which a delta is drawn in the accent
+/// colour, shared by every stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeDeltaPrefs {
     pub show: bool,
@@ -399,7 +402,6 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         &mut search_query,
                         self.ctx.search_history,
                         *self.ctx.sound_enabled,
-                        self.ctx.show_line_numbers,
                         *self.ctx.font_size,
                         *self.ctx.level_colors,
                         &mut new_size_unit,
@@ -409,7 +411,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         self.ctx.external_tools,
                         self.ctx.tool_runner,
                         self.ctx.search_view,
-                        self.ctx.time_delta,
+                        self.ctx.time_delta.gap_ms,
                         self.ctx.filter_presets,
                         self.ctx.preset_events,
                     );
@@ -1006,7 +1008,6 @@ fn render_log_stream(
     search_query: &mut String,
     search_history: &mut Vec<String>,
     sound_enabled: bool,
-    show_line_numbers: &mut bool,
     font_size: f32,
     level_colors: bool,
     new_size_unit: &mut Option<crate::tail_engine::SizeUnit>,
@@ -1016,7 +1017,7 @@ fn render_log_stream(
     external_tools: &[ExternalTool],
     tool_runner: &mut ToolRunner,
     search_view: &mut SearchViewPrefs,
-    time_delta: &mut TimeDeltaPrefs,
+    time_delta_gap_ms: u64,
     filter_presets: &mut Vec<FilterPreset>,
     preset_events: &mut PresetEvents,
 ) {
@@ -1261,34 +1262,30 @@ fn render_log_stream(
         if engine.view_mode != crate::tail_engine::ViewMode::Hex {
             ui.separator();
 
-            // Line numbers toggle
-            let lines_label = if *show_line_numbers { "# 123" } else { "# ---" };
-            if toggle_button(
-                ui,
-                theme,
-                lines_label,
-                *show_line_numbers,
-                theme.accent_color(),
-            )
-            .on_hover_text(t(lang, "show_lines"))
-            .clicked()
+            // Line numbers toggle, for this stream only
+            let show_lines = engine.show_line_numbers;
+            let lines_label = if show_lines { "# 123" } else { "# ---" };
+            if toggle_button(ui, theme, lines_label, show_lines, theme.accent_color())
+                .on_hover_text(t(lang, "show_lines"))
+                .clicked()
             {
-                *show_line_numbers = !*show_line_numbers;
+                engine.set_show_line_numbers(!show_lines);
                 ui.ctx().request_repaint();
             }
 
-            // Time delta column toggle (global, like the line numbers). A stream whose
-            // timestamps we cannot read keeps the column hidden and says why.
+            // Time delta column toggle, for this stream only. A stream whose timestamps
+            // we cannot read keeps the column hidden and says why.
             let delta_tip = if timestamps_unreadable(engine) {
                 t(lang, "time_delta_unusable")
             } else {
                 t(lang, "tip_time_delta")
             };
-            if toggle_button(ui, theme, "Δt", time_delta.show, theme.accent_color())
+            let show_delta = engine.show_time_delta;
+            if toggle_button(ui, theme, "Δt", show_delta, theme.accent_color())
                 .on_hover_text(delta_tip)
                 .clicked()
             {
-                time_delta.show = !time_delta.show;
+                engine.set_show_time_delta(!show_delta);
                 ui.ctx().request_repaint();
             }
 
@@ -2474,7 +2471,7 @@ fn render_log_stream(
     let has_search = !engine.last_searched_query.is_empty();
     // The marker column appears when there is anything to mark: search hits or bookmarks.
     let show_markers = has_search || engine.has_bookmarks() || engine.context_line().is_some();
-    let time_delta = time_delta_column(ui, engine, *time_delta);
+    let time_delta = time_delta_column(ui, engine, time_delta_gap_ms);
 
     // Overview strip beside the scroll bar: the right edge of the rows area, when the
     // setting is on and there is anything to mark.
@@ -2502,7 +2499,7 @@ fn render_log_stream(
                 lang,
                 font_size,
                 row_height,
-                *show_line_numbers,
+                engine.show_line_numbers,
                 time_delta,
                 show_markers,
                 level_colors,
@@ -2562,20 +2559,18 @@ fn render_log_stream(
     }
 }
 
-/// The time delta column for this frame: `Some(gap_ms)` when it is shown. While the
-/// column or a selection's elapsed time needs the stream timed, asks for it - never on the
-/// UI thread for a large file, which a background scan times - and repaints until done.
-fn time_delta_column(ui: &Ui, engine: &mut TailEngine, prefs: TimeDeltaPrefs) -> Option<u64> {
+/// The time delta column for this frame: `Some(gap_ms)` when the stream shows it. While
+/// the column or a selection's elapsed time needs the stream timed, asks for it - never on
+/// the UI thread for a large file, which a background scan times - and repaints until done.
+fn time_delta_column(ui: &Ui, engine: &mut TailEngine, gap_ms: u64) -> Option<u64> {
+    let show = engine.show_time_delta;
     let multi_select = engine.selection_all || engine.selection.len() >= 2;
-    if (prefs.show || multi_select)
-        && !engine.timestamps_complete()
-        && !timestamps_unreadable(engine)
-    {
+    if (show || multi_select) && !engine.timestamps_complete() && !timestamps_unreadable(engine) {
         engine.want_timestamps();
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
     }
-    (prefs.show && engine.timestamps_usable()).then_some(prefs.gap_ms)
+    (show && engine.timestamps_usable()).then_some(gap_ms)
 }
 
 /// Whether enough of the stream has been timed to tell that we cannot read its times:
@@ -5370,13 +5365,14 @@ pub fn render_settings_content(
     ui.checkbox(telemetry_enabled, t(*lang, "telemetry"));
     ui.checkbox(sound_enabled, t(*lang, "sound_fx"));
     ui.checkbox(borderless, t(*lang, "borderless"));
-    ui.checkbox(show_line_numbers, t(*lang, "show_lines"));
+    ui.checkbox(show_line_numbers, t(*lang, "default_line_numbers"))
+        .on_hover_text(t(*lang, "default_columns_tip"));
     ui.checkbox(level_colors, t(*lang, "level_colors"))
         .on_hover_text(t(*lang, "level_colors_tip"));
     ui.checkbox(overview_strip, t(*lang, "overview_strip"))
         .on_hover_text(t(*lang, "overview_strip_tip"));
-    ui.checkbox(&mut time_delta.show, t(*lang, "show_time_delta"))
-        .on_hover_text(t(*lang, "tip_time_delta"));
+    ui.checkbox(&mut time_delta.show, t(*lang, "default_time_delta"))
+        .on_hover_text(t(*lang, "default_columns_tip"));
     ui.horizontal(|ui| {
         ui.label(t(*lang, "time_delta_gap"));
         ui.add(

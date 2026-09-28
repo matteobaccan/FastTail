@@ -638,6 +638,7 @@ impl FastTailApp {
                     engine.auto_bookmark_max = app.config.auto_bookmark_max;
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
+                    apply_view_defaults(&mut engine, &app.config);
                     engine.wrap_lines = app.config.wrap_for(&path);
                     restore_bookmarks(&mut engine, &app.config, &path);
                     apply_stream_state(&mut engine, &app.config);
@@ -1305,6 +1306,7 @@ impl FastTailApp {
         engine.set_highlight_rules(self.config.highlight_rules.clone());
         engine.set_quick_labels(&self.quick_labels);
         engine.size_unit = self.config.size_unit;
+        apply_view_defaults(&mut engine, &self.config);
         let options = self.stdin_options.clone();
         if let Some(f) = &options.filter {
             engine.set_include_filter(f);
@@ -1549,6 +1551,7 @@ impl FastTailApp {
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
+            apply_view_defaults(&mut engine, &self.config);
             restore_bookmarks(&mut engine, &self.config, &path);
             engine.wrap_lines = self.config.wrap_for(&path);
             apply_stream_state(&mut engine, &self.config);
@@ -2884,6 +2887,7 @@ impl FastTailApp {
             gap_ms: self.config.time_delta_gap_ms,
         };
         let time_delta_before = time_delta;
+        let line_numbers_before = self.config.show_line_numbers;
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -3062,6 +3066,7 @@ impl FastTailApp {
                 eng.wrap_dirty = false;
                 eng.ansi_dirty = false;
                 eng.collapse_mode_dirty = false;
+                eng.view_columns_dirty = false;
             }
             if eng.bookmarks_dirty {
                 eng.bookmarks_dirty = false;
@@ -3075,12 +3080,18 @@ impl FastTailApp {
                 self.config.set_wrap(&eng.path, eng.wrap_lines);
                 bookmarks_changed = true;
             }
-            if eng.ansi_dirty || eng.timeline_dirty || eng.collapse_mode_dirty {
-                // The ANSI mode, the timeline flag and the collapse mode live in the
-                // stream entry, as in `save_dock_layout`.
+            if eng.ansi_dirty
+                || eng.timeline_dirty
+                || eng.collapse_mode_dirty
+                || eng.view_columns_dirty
+            {
+                // The ANSI mode, the timeline flag, the collapse mode and the line-number
+                // and time delta columns live in the stream entry, as in
+                // `save_dock_layout`.
                 eng.ansi_dirty = false;
                 eng.timeline_dirty = false;
                 eng.collapse_mode_dirty = false;
+                eng.view_columns_dirty = false;
                 let mut entry = stream_entry_of(eng);
                 entry.wrap = false;
                 entry.bookmarks.clear();
@@ -3109,8 +3120,9 @@ impl FastTailApp {
                 let _ = self.config.save();
             }
         }
-        // Time delta column switch and gap threshold: saved as soon as they change.
-        if time_delta != time_delta_before {
+        // Defaults for new streams and the gap threshold (Settings tab): saved as soon as
+        // they change.
+        if time_delta != time_delta_before || self.config.show_line_numbers != line_numbers_before {
             self.config.show_time_delta = time_delta.show;
             self.config.time_delta_gap_ms = time_delta.gap_ms;
             let _ = self.config.save();
@@ -3258,6 +3270,7 @@ impl FastTailApp {
         // 9. Render Settings Dialog if open (Popup modal)
         if self.config.settings_open {
             let mut is_open = true;
+            let line_numbers_before = self.config.show_line_numbers;
             let theme = self.config.theme;
             let prev_borderless = self.config.borderless;
             let prev_theme = self.config.theme;
@@ -3646,6 +3659,7 @@ impl FastTailApp {
             }
             if (time_delta.show, time_delta.gap_ms)
                 != (self.config.show_time_delta, self.config.time_delta_gap_ms)
+                || self.config.show_line_numbers != line_numbers_before
             {
                 self.config.show_time_delta = time_delta.show;
                 self.config.time_delta_gap_ms = time_delta.gap_ms;
@@ -4755,7 +4769,8 @@ impl StdinOptions {
     }
 }
 
-/// The session entry describing `engine` as it is now.
+/// The session entry describing `engine` as it is now. The line-number and time delta
+/// switches are always recorded, so a saved stream never depends on the defaults.
 fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
     let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
     let mut bookmark_notes = engine.bookmark_notes.clone();
@@ -4781,10 +4796,19 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
             .collapse_mode()
             .is_on()
             .then(|| engine.collapse_mode().name().to_string()),
+        line_numbers: Some(engine.show_line_numbers),
+        time_delta: Some(engine.show_time_delta),
         bookmarks,
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
     }
+}
+
+/// Starts a stream's line-number and time delta columns from the `[general]` defaults;
+/// `apply_stream_state` then applies what the stream saved.
+fn apply_view_defaults(engine: &mut TailEngine, cfg: &FastTailConfig) {
+    engine.show_line_numbers = cfg.show_line_numbers;
+    engine.show_time_delta = cfg.show_time_delta;
 }
 
 /// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
@@ -4807,6 +4831,8 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
         return;
     };
     engine.timeline_open = entry.timeline;
+    engine.show_line_numbers = entry.line_numbers.unwrap_or(cfg.show_line_numbers);
+    engine.show_time_delta = entry.time_delta.unwrap_or(cfg.show_time_delta);
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);

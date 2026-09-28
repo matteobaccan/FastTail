@@ -1172,6 +1172,12 @@ pub struct TailEngine {
     /// persistence (it is kept per stream, like the ANSI mode).
     pub timeline_open: bool,
     pub timeline_dirty: bool,
+    /// The line-number and time delta columns of this stream (stream bar `# 123` and
+    /// `Δt`). A new stream starts from the `[general]` defaults, which the app applies;
+    /// the dirty flag asks it to save the stream's own values.
+    pub show_line_numbers: bool,
+    pub show_time_delta: bool,
+    pub view_columns_dirty: bool,
     ansi_detected: bool,
     pub ansi_switched_at: Option<Instant>,
     /// Auto-detection samples the head of what the stream held when it was read from the
@@ -1722,6 +1728,9 @@ impl TailEngine {
             ansi_dirty: false,
             timeline_open: false,
             timeline_dirty: false,
+            show_line_numbers: true,
+            show_time_delta: false,
+            view_columns_dirty: false,
             ansi_detected: false,
             ansi_switched_at: None,
             ansi_head_end: 0,
@@ -4768,6 +4777,22 @@ impl TailEngine {
         };
     }
 
+    /// Shows or hides this stream's line-number column; other streams keep theirs.
+    pub fn set_show_line_numbers(&mut self, show: bool) {
+        if self.show_line_numbers != show {
+            self.show_line_numbers = show;
+            self.view_columns_dirty = true;
+        }
+    }
+
+    /// Shows or hides this stream's time delta column; other streams keep theirs.
+    pub fn set_show_time_delta(&mut self, show: bool) {
+        if self.show_time_delta != show {
+            self.show_time_delta = show;
+            self.view_columns_dirty = true;
+        }
+    }
+
     pub fn set_view_mode(&mut self, mode: ViewMode) {
         if mode == ViewMode::Markdown && self.markdown_too_large() {
             // Rendered Markdown needs the whole text in memory: stay in the current view.
@@ -6262,6 +6287,28 @@ mod tests {
         // [0, 200) subtracted by 10 existing spans will create 11 pieces, more than the 8 kept on the stack
         assert!(!claim_span(&mut many_spans, 0, 200, style_b));
         assert_eq!(many_spans.len(), 21);
+    }
+
+    #[test]
+    fn view_column_switches_belong_to_the_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cols.log");
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        let mut a = super::TailEngine::open(&path).unwrap();
+        let b = super::TailEngine::open(&path).unwrap();
+        assert!(a.show_line_numbers && !a.show_time_delta);
+        assert!(!a.view_columns_dirty);
+
+        // Setting the current value is not a change to save.
+        a.set_show_line_numbers(true);
+        a.set_show_time_delta(false);
+        assert!(!a.view_columns_dirty);
+
+        a.set_show_line_numbers(false);
+        a.set_show_time_delta(true);
+        assert!(a.view_columns_dirty);
+        assert!(!a.show_line_numbers && a.show_time_delta);
+        assert!(b.show_line_numbers && !b.show_time_delta && !b.view_columns_dirty);
     }
 
     mod bookmarks {
