@@ -10856,6 +10856,45 @@ mod collapse_repeated {
     }
 
     #[test]
+    fn appends_far_past_the_last_match_read_only_the_new_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lines = vec!["ERROR boom".to_string(); 3];
+        lines.extend((0..2_000).map(|i| format!("INFO tick {i}")));
+        let path = write(dir.path(), "far.log", &lines);
+        // The lines after the last match weigh more than the job threshold: a rewind to
+        // that match would take a background scan on every append.
+        let mut engine = TailEngine::open_with_thresholds(&path, 8 * 1024, u64::MAX).unwrap();
+        engine.size_check_interval = Duration::ZERO;
+        engine.set_include_filter("ERROR");
+        engine.set_collapse_mode(CollapseMode::Exact);
+        wait_for_jobs(&mut engine);
+        assert_eq!(groups(&engine), vec![(0, 3)]);
+        let mut total = engine.total_lines();
+        for round in 0..5 {
+            let fed = engine.collapse_lines_fed().expect("detected");
+            append(&path, "INFO tick more\nINFO tick more\n");
+            let start = Instant::now();
+            while engine.total_lines() < total + 2 {
+                assert!(start.elapsed() < Duration::from_secs(10), "append not seen");
+                engine.poll_updates();
+                assert!(engine.scan_progress().is_none(), "round {round}: no scan");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            total = engine.total_lines();
+            let read = engine.collapse_lines_fed().unwrap() - fed;
+            // The two new lines, and the last old one read again (it may have been
+            // partial).
+            assert!(read <= 3, "round {round}: {read} lines read");
+            assert_eq!(groups(&engine), vec![(0, 3)], "round {round}");
+        }
+        // A match appended far below joins the run of the visible lines.
+        append(&path, "ERROR boom\n");
+        poll_until(&mut engine, "match", |e| e.total_lines() == total + 1);
+        assert_eq!(groups(&engine), vec![(0, 4)]);
+        assert_eq!(rows(&engine), vec![0]);
+    }
+
+    #[test]
     fn a_rewrite_detects_again_and_expands_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "app.log", &retry_log());
@@ -10986,6 +11025,32 @@ mod collapse_repeated {
         // A manual bookmark wins over the automatic one for the row's mark.
         engine.toggle_bookmark(400);
         assert_eq!(engine.hidden_bookmark(1), Some((400, true)));
+    }
+
+    #[test]
+    fn bookmarks_the_filter_hides_leave_the_group_row_unmarked() {
+        let dir = tempfile::tempdir().unwrap();
+        // Every other line is a DEBUG line a rule bookmarks and the filter hides: the
+        // group's file span holds far more bookmarks than visible lines.
+        let mut lines = Vec::new();
+        for _ in 0..2_000 {
+            lines.push("WARN retry".to_string());
+            lines.push("DEBUG probe".to_string());
+        }
+        let mut engine = TailEngine::open(write(dir.path(), "debug.log", &lines)).unwrap();
+        let mut rule =
+            fasttail::tail_engine::HighlightRule::new("DEBUG", [255, 255, 255], [0, 0, 0], false);
+        rule.auto_bookmark = true;
+        engine.set_highlight_rules(vec![rule]);
+        wait_for_jobs(&mut engine);
+        engine.set_exclude_filter("DEBUG");
+        engine.set_collapse_mode(CollapseMode::Exact);
+        assert_eq!(groups(&engine), vec![(0, 2_000)]);
+        assert_eq!(engine.hidden_bookmark(0), None);
+        assert_eq!(engine.row_marks(0, 0, false), (false, false, false));
+        // A visible line bookmarked by hand is found, and the cached answer follows.
+        engine.toggle_bookmark(3_000);
+        assert_eq!(engine.hidden_bookmark(0), Some((3_000, true)));
     }
 
     #[test]

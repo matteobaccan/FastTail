@@ -14,7 +14,7 @@ use std::thread;
 use regex::Regex;
 
 use crate::ansi::AnsiMode;
-use crate::collapse::{CollapseMode, Detector, Group};
+use crate::collapse::{Detector, Group};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::tail_engine::{
@@ -243,13 +243,14 @@ pub enum JobSpec {
         rules: Vec<CompiledHighlight>,
         limit: usize,
     },
-    /// Emit the groups of repeated entries among the visible lines (see `collapse`), with
-    /// the same `Detector` as the engine's synchronous path: `visible` is the sorted list
-    /// of visible lines when a filter is active, `None` when every line is visible. The
-    /// detection state at the end is sent last, for appends to resume from.
+    /// Emit the groups of repeated entries among the visible lines (see `collapse`), fed
+    /// to `detector` exactly as the engine's synchronous path feeds it: a new one for a
+    /// detection from scratch, the engine's end state for an append (the range then
+    /// starts where it resumes). `visible` is the sorted list of visible lines when a
+    /// filter is active, `None` when every line is visible. The detection state at the
+    /// end is sent last, for later appends to resume from.
     Collapse {
-        mode: CollapseMode,
-        hint: FormatHint,
+        detector: Box<Detector>,
         visible: Option<Arc<[usize]>>,
     },
 }
@@ -494,7 +495,7 @@ fn run(
 
     // A `Collapse` job: the detector, and the next entry of the visible list to meet.
     let mut collapse = match &spec {
-        JobSpec::Collapse { mode, hint, .. } => Some(Detector::new(*mode, *hint)),
+        JobSpec::Collapse { detector, .. } => Some(Detector::clone(detector)),
         _ => None,
     };
     let mut visible_at = match &spec {

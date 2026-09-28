@@ -243,6 +243,8 @@ pub struct Detector {
     pub groups: Vec<Group>,
     /// A spare text buffer, swapped with the run's so no entry allocates.
     spare: Vec<u8>,
+    /// Lines fed since the detector was created, for the tests of the incremental path.
+    lines_fed: u64,
 }
 
 impl Detector {
@@ -256,17 +258,29 @@ impl Detector {
             next_line: 0,
             groups: Vec::new(),
             spare: Vec::new(),
+            lines_fed: 0,
         }
+    }
+
+    /// Lines fed so far, over every pass (resumed ones included).
+    pub fn lines_fed(&self) -> u64 {
+        self.lines_fed
     }
 
     /// Feeds line `line` with its text and, when it is visible, its visible position.
     pub fn feed(&mut self, line: usize, text: &str, pos: Option<usize>) {
         self.next_line = line + 1;
+        self.lines_fed += 1;
         let continuation = TailEngine::is_stacktrace_continuation(text);
         if !continuation {
             self.header_visible = pos.is_some();
         }
         let Some(pos) = pos else {
+            if !continuation {
+                // A later entry began, hidden or not: the open one can gain no more
+                // lines, so it is closed now and an append never rewinds to it.
+                self.finish_entry();
+            }
             return;
         };
         let joins = continuation && self.header_visible && self.cur.is_some();
@@ -364,7 +378,10 @@ impl Detector {
 
     /// Makes the detector ready to go on after an append whose lines from `from` must be
     /// read (again): it drops the entry in progress, which the new lines may complete,
-    /// and returns the line to feed from, its first line (or `from` without one).
+    /// and returns the line to feed from, its first line (or `from` without one). An
+    /// entry stays in progress only up to the next non-continuation line, visible or
+    /// hidden (see `feed`), so this never rewinds past the last entry of the file: an
+    /// append is read from about where it starts, whatever the filter hides before it.
     pub fn resume(&mut self, from: usize) -> usize {
         match self.cur.take() {
             Some(entry) => {
@@ -406,6 +423,10 @@ pub struct CollapseState {
 impl CollapseState {
     pub fn groups(&self) -> &[Group] {
         &self.groups
+    }
+
+    pub fn detector(&self) -> Option<&Detector> {
+        self.detector.as_deref()
     }
 
     pub fn detector_mut(&mut self) -> Option<&mut Detector> {
@@ -799,6 +820,23 @@ mod tests {
             .collect();
         assert_eq!(resumed, detect(&all, CollapseMode::Exact));
         assert_eq!(resumed, vec![(1, 1, 2), (3, 3, 2)]);
+    }
+
+    #[test]
+    fn a_hidden_entry_closes_the_open_one_so_resume_never_rewinds_to_it() {
+        let mut det = Detector::new(CollapseMode::Exact, FormatHint::Unknown);
+        det.feed(0, "ERROR a", Some(0));
+        det.feed(1, "ERROR a", Some(1));
+        // A million hidden lines later, the last line of the file.
+        det.feed(2, "INFO hidden", None);
+        det.feed(1_000_000, "INFO hidden", None);
+        assert_eq!(det.tail_groups(), vec![Group::new(0, 1, 2)]);
+        assert_eq!(det.resume(1_000_000), 1_000_000, "no rewind to line 1");
+        // A hidden continuation line keeps the entry open: it may still gain lines.
+        let mut det = Detector::new(CollapseMode::Exact, FormatHint::Unknown);
+        det.feed(0, "ERROR a", Some(0));
+        det.feed(1, "  at hidden", None);
+        assert_eq!(det.resume(1), 0);
     }
 
     fn state_with(groups: &[(usize, usize, u32)]) -> CollapseState {

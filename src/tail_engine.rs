@@ -14,7 +14,8 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
@@ -869,6 +870,13 @@ pub struct NoteEditor {
     pub focus: bool,
 }
 
+/// Filter and group generation, bookmark generation and the sizes of the manual,
+/// automatic and dismissed bookmark sets, with the hidden bookmark found per group row.
+type HiddenBookmarkCache = (
+    (u64, u64, usize, usize, usize),
+    HashMap<usize, Option<(usize, bool)>>,
+);
+
 /// State of "Show in context" (`TailEngine::enter_context`): the line shown and what
 /// the filtered view looked like, restored by `leave_context`.
 #[derive(Debug, Clone)]
@@ -998,6 +1006,8 @@ pub struct TailEngine {
     /// which that scan does not cover.
     collapse_dirty: Option<usize>,
     collapse_after_job: Option<usize>,
+    /// `hidden_bookmark` per group row, and the state it was computed for.
+    hidden_bookmark_cache: RefCell<HiddenBookmarkCache>,
     /// Line at the top of the view, set by the viewer every frame, and the row it moved
     /// to when the groups changed under it: the viewer scrolls there, so the content under
     /// the user stays put while a background detection streams groups in.
@@ -1654,6 +1664,7 @@ impl TailEngine {
             collapse_mode_dirty: false,
             collapse_dirty: None,
             collapse_after_job: None,
+            hidden_bookmark_cache: RefCell::default(),
             view_top_line: None,
             pending_top_row: None,
             job: None,
@@ -3561,6 +3572,13 @@ impl TailEngine {
         self.collapse_rows().then_some(&self.collapse)
     }
 
+    /// Lines the collapse detection has read since it last started from scratch (`None`
+    /// before a detection completes), for the tests of the incremental path.
+    #[doc(hidden)]
+    pub fn collapse_lines_fed(&self) -> Option<u64> {
+        self.collapse.detector().map(Detector::lines_fed)
+    }
+
     /// Whether a detection is under way: groups may still change or arrive.
     pub fn collapse_pending(&self) -> bool {
         self.collapse_dirty.is_some()
@@ -3633,24 +3651,9 @@ impl TailEngine {
                 .copied()
                 .unwrap_or(self.source.len())
         };
-        if self.source.len().saturating_sub(start_offset) > self.job_threshold_bytes {
-            self.collapse.clear_groups();
-            self.collapse_after_job = None;
-            self.collapse_dirty = Some(0);
-            let visible = self
-                .is_filter_active()
-                .then(|| Arc::from(self.filtered_lines.as_slice()));
-            let spec = JobSpec::Collapse {
-                mode: self.collapse.mode,
-                hint: self.timestamp_hint,
-                visible,
-            };
-            self.start_job(spec, 0);
-            self.filter_generation = self.filter_generation.wrapping_add(1);
-            return;
-        }
-        self.collapse_dirty = None;
-        let detector = match self.collapse.take_detector().filter(|_| start > 0) {
+        // An append goes on from the detector's end state (the groups before it stay);
+        // anything else starts over.
+        let mut detector = match self.collapse.take_detector().filter(|_| start > 0) {
             Some(detector) => {
                 self.collapse.drop_tail();
                 detector
@@ -3660,7 +3663,19 @@ impl TailEngine {
                 Box::new(Detector::new(self.collapse.mode, self.timestamp_hint))
             }
         };
-        let mut detector = detector;
+        if self.source.len().saturating_sub(start_offset) > self.job_threshold_bytes {
+            // Kept until the scan ends: a scan that is displaced before it hands the
+            // detector back is run again from scratch.
+            self.collapse_after_job = None;
+            self.collapse_dirty = Some(start);
+            let visible = self
+                .is_filter_active()
+                .then(|| Arc::from(self.filtered_lines.as_slice()));
+            self.start_job(JobSpec::Collapse { detector, visible }, start);
+            self.filter_generation = self.filter_generation.wrapping_add(1);
+            return;
+        }
+        self.collapse_dirty = None;
         let filtered = self.is_filter_active();
         let visible = &self.filtered_lines;
         let mut at = visible.partition_point(|&l| l < start);
@@ -3811,17 +3826,59 @@ impl TailEngine {
 
     /// A bookmarked line the closed group of row `row` hides, and whether it is a manual
     /// bookmark (preferred) rather than an automatic one: the group row carries its mark.
+    /// Called for every drawn group row, so the answer is cached per row until the
+    /// groups, the filter or the bookmarks change.
     pub fn hidden_bookmark(&self, row: usize) -> Option<(usize, bool)> {
-        let (first, last) = self.collapsed_row(row)?.hidden?;
-        let visible = |l: &&usize| self.pos_of_line(**l).is_some();
-        if let Some(&line) = self.bookmarks.range(first..=last).find(visible) {
+        let key = (
+            self.filter_generation,
+            self.bookmarks_generation,
+            self.bookmarks.len(),
+            self.auto_bookmarks.len(),
+            self.dismissed_auto.len(),
+        );
+        let mut cache = self.hidden_bookmark_cache.borrow_mut();
+        if cache.0 != key {
+            *cache = (key, HashMap::new());
+        }
+        *cache
+            .1
+            .entry(row)
+            .or_insert_with(|| self.find_hidden_bookmark(row))
+    }
+
+    /// `hidden_bookmark` without the cache. The bookmarks in the group's file span can
+    /// far outnumber its visible lines (a rule bookmarking the lines a filter hides): the
+    /// span's bookmarks are walked only while they are fewer than the hidden visible
+    /// lines, which are walked instead past that.
+    fn find_hidden_bookmark(&self, row: usize) -> Option<(usize, bool)> {
+        let group = self
+            .collapse_rows()
+            .then(|| self.collapse.group_heading_row(row))
+            .flatten()
+            .filter(|g| !g.open)?;
+        let hidden = group.pos + group.entry_len as usize..group.end();
+        let first = self.line_at(hidden.start)?;
+        let last = self.line_at(hidden.end - 1)?;
+        let budget = hidden.len();
+        let first_visible = |set: &BTreeSet<usize>, live: &dyn Fn(usize) -> bool| {
+            let mut in_span = set.range(first..=last).filter(|&&l| live(l));
+            for _ in 0..budget {
+                match in_span.next() {
+                    Some(&line) if self.pos_of_line(line).is_some() => return Some(line),
+                    Some(_) => {}
+                    None => return None,
+                }
+            }
+            hidden
+                .clone()
+                .filter_map(|p| self.line_at(p))
+                .find(|l| set.contains(l) && live(*l))
+        };
+        if let Some(line) = first_visible(&self.bookmarks, &|_| true) {
             return Some((line, true));
         }
-        self.auto_bookmarks
-            .range(first..=last)
-            .filter(|l| !self.dismissed_auto.contains(l))
-            .find(visible)
-            .map(|&line| (line, false))
+        first_visible(&self.auto_bookmarks, &|l| !self.dismissed_auto.contains(&l))
+            .map(|line| (line, false))
     }
 
     /// The hit to go to after hit `next - 1` (on `from_line`): past the hits hidden in a
