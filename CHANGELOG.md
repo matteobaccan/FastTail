@@ -30,6 +30,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   new filter. The Find results tab offers it too, also for lines the stream's filter hides.
   Help dialog and all 16 languages updated.
 
+- **Bookmark notes.** Right-click a row and pick **Bookmark note…** to attach a one-line
+  note (at most 200 characters) in a field that opens in the stream bar: the row is
+  bookmarked, its marker becomes `✏`, and the note shows when hovering the marker or the
+  bookmark's mark in the overview strip. An empty note keeps the bookmark; **Remove
+  bookmark** drops both. Notes are saved with the bookmarks, per file in `fasttail.ini`
+  (`note_<i>_<line>` beside `lines_<i>`) and in sessions (`bookmark_note.<line>`). Older
+  versions still read the bookmarks, and drop the notes when they save the settings.
+
+- **Rules that bookmark matching lines.** A highlight rule's new **Bookmark matching
+  lines** option bookmarks every line it matches, whatever the filters and the colours a
+  higher rule paints: the lines in the file and every line appended later. These automatic
+  bookmarks show `☆`, `F2` / `SHIFT + F2` visit them, the overview strip draws them dimmer,
+  and `CTRL + F2` dismisses one until the next reload or rules change. They are recomputed
+  from the rules, never saved, and capped per stream by the new `auto_bookmark_max`
+  setting (Settings → Performance & refresh, default 10,000, 100 to 100,000; the stream
+  bar says when it is reached). Files above 16 MB are matched in the background with
+  progress in the stream bar. Saved as `bookmark=true` in the rule's section. All 16
+  languages updated.
+
 ### Fixed
 
 - **`Space` no longer toggles Follow while you type.** A space typed in a filter, search or

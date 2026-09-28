@@ -100,7 +100,9 @@ below the largest saved index are discarded with their notes (existing rule).
 - Row context menu always opens on a Text-view row: "Bookmark note…" (opens a one-line
   text field, 200-char limit, `Enter` saves, `ESC` cancels) and "Remove bookmark" on a
   bookmarked row. The existing tool/anchor items follow a separator.
-- Marker column: `✎` replaces `★` when a note exists; hovering the marker shows the note.
+- Marker column: `✏` replaces `★` when a note exists; hovering the marker shows the note.
+  (The first draft said `✎`, which none of egui's default fonts carries; `✏` is drawn
+  from the same emoji font as `★` and `☆`.)
   Search match `▶` keeps priority as today.
 - Overview strip: auto marks in the bookmark colour at 50 % alpha; hovering a manual mark
   with a note shows the note.

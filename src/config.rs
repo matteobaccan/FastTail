@@ -4,6 +4,7 @@ use crate::tail_engine::{HighlightRule, SizeUnit};
 use crate::theme::CyberTheme;
 use ini::Ini;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -128,6 +129,9 @@ pub struct FastTailConfig {
     /// Maximum file size in megabytes for Markdown rendering (1..=100 MB, default 1).
     #[serde(default = "default_markdown_max_mb")]
     pub markdown_max_mb: u32,
+    /// Automatic bookmarks kept per stream (see `TailEngine::auto_bookmark_max`).
+    #[serde(default = "default_auto_bookmark_max")]
+    pub auto_bookmark_max: usize,
     /// Folder the decompressed logs are spooled under (in its `fasttail-spool`
     /// subfolder); `None` (or empty in the ini) = the system temporary folder. See
     /// `spool`.
@@ -147,9 +151,10 @@ pub struct FastTailConfig {
     pub recent_files: Vec<PathBuf>,
     #[serde(default)]
     pub search_history: Vec<String>,
-    /// Bookmarked lines per file (most recently used first), see `set_bookmarks`.
+    /// Bookmarked lines per file (most recently used first) with the notes of some of
+    /// them, see `set_bookmarks_with_notes`.
     #[serde(default)]
-    pub bookmarks: Vec<(PathBuf, Vec<usize>)>,
+    pub bookmarks: Vec<(PathBuf, Vec<usize>, BTreeMap<usize, String>)>,
     /// Files whose stream has line wrap on (most recently toggled first), see `set_wrap`.
     #[serde(default)]
     pub wrapped_files: Vec<PathBuf>,
@@ -288,6 +293,10 @@ fn default_mouse_throttle_ms() -> u64 {
     100
 }
 
+fn default_auto_bookmark_max() -> usize {
+    crate::tail_engine::DEFAULT_AUTO_BOOKMARK_MAX
+}
+
 fn default_markdown_max_mb() -> u32 {
     1
 }
@@ -332,6 +341,7 @@ impl Default for FastTailConfig {
             max_fps_software: default_max_fps_software(),
             mouse_throttle_ms: default_mouse_throttle_ms(),
             markdown_max_mb: default_markdown_max_mb(),
+            auto_bookmark_max: default_auto_bookmark_max(),
             spool_dir: None,
             compressed_max_gb: default_compressed_max_gb(),
             stdin_spool_max_mb: default_stdin_spool_max_mb(),
@@ -479,13 +489,31 @@ impl FastTailConfig {
     /// Records the bookmarks of `path` (most recently used first), dropping the entry when
     /// `lines` is empty and enforcing the per-file and file-count caps.
     pub fn set_bookmarks(&mut self, path: &Path, lines: &[usize]) {
+        self.set_bookmarks_with_notes(path, lines, &BTreeMap::new());
+    }
+
+    /// `set_bookmarks` with the notes of the bookmarks; notes of lines left out (not
+    /// bookmarked, or past the per-file cap) are dropped.
+    pub fn set_bookmarks_with_notes(
+        &mut self,
+        path: &Path,
+        lines: &[usize],
+        notes: &BTreeMap<usize, String>,
+    ) {
         self.bookmarks
-            .retain(|(p, _)| !crate::paths::paths_equal(p, path));
+            .retain(|(p, _, _)| !crate::paths::paths_equal(p, path));
         if !lines.is_empty() {
             let mut kept: Vec<usize> = lines.to_vec();
             kept.sort_unstable();
+            kept.dedup();
             kept.truncate(MAX_BOOKMARKS_PER_FILE);
-            self.bookmarks.insert(0, (path.to_path_buf(), kept));
+            let kept_notes = notes
+                .iter()
+                .filter(|(l, text)| !text.is_empty() && kept.binary_search(l).is_ok())
+                .map(|(l, text)| (*l, text.clone()))
+                .collect();
+            self.bookmarks
+                .insert(0, (path.to_path_buf(), kept, kept_notes));
             self.bookmarks.truncate(MAX_BOOKMARK_FILES);
         }
     }
@@ -539,16 +567,33 @@ impl FastTailConfig {
     /// Saved bookmarks of `path` that still fit in a file of `total_lines` lines. Returns
     /// `None` when there are none or the file shrank below the largest saved index.
     pub fn bookmarks_for(&self, path: &Path, total_lines: usize) -> Option<Vec<usize>> {
-        let (_, lines) = self
-            .bookmarks
-            .iter()
-            .find(|(p, _)| crate::paths::paths_equal(p, path))?;
+        self.bookmarks_with_notes_for(path, total_lines)
+            .map(|(lines, _)| lines)
+    }
+
+    /// `bookmarks_for` with the notes of the bookmarks.
+    pub fn bookmarks_with_notes_for(
+        &self,
+        path: &Path,
+        total_lines: usize,
+    ) -> Option<(Vec<usize>, BTreeMap<usize, String>)> {
+        let (_, lines, notes) = self.saved_bookmarks(path)?;
         let max = *lines.iter().max()?;
         if max < total_lines {
-            Some(lines.clone())
+            Some((lines.clone(), notes.clone()))
         } else {
             None
         }
+    }
+
+    /// The saved bookmarks and notes of `path`, whatever the size of the file.
+    pub fn saved_bookmarks(
+        &self,
+        path: &Path,
+    ) -> Option<&(PathBuf, Vec<usize>, BTreeMap<usize, String>)> {
+        self.bookmarks
+            .iter()
+            .find(|(p, _, _)| crate::paths::paths_equal(p, path))
     }
 
     /// Where decompressed logs are spooled and how far one extraction may go.
@@ -622,6 +667,7 @@ impl FastTailConfig {
             .set("max_fps_software", self.max_fps_software.to_string())
             .set("mouse_throttle_ms", self.mouse_throttle_ms.to_string())
             .set("markdown_max_mb", self.markdown_max_mb.to_string())
+            .set("auto_bookmark_max", self.auto_bookmark_max.to_string())
             .set(
                 "spool_dir",
                 self.spool_dir
@@ -654,7 +700,7 @@ impl FastTailConfig {
 
         if !self.bookmarks.is_empty() {
             let mut sec = conf.with_section(Some("bookmarks"));
-            for (i, (path, lines)) in self.bookmarks.iter().enumerate() {
+            for (i, (path, lines, notes)) in self.bookmarks.iter().enumerate() {
                 sec.set(format!("file_{}", i), path.to_string_lossy().to_string());
                 let joined = lines
                     .iter()
@@ -662,6 +708,13 @@ impl FastTailConfig {
                     .collect::<Vec<_>>()
                     .join(",");
                 sec.set(format!("lines_{}", i), joined);
+                // One key per note, so a note that does not read back loses only itself.
+                for (line, text) in notes {
+                    sec.set(
+                        format!("note_{}_{}", i, line),
+                        crate::filter_preset::ini_value(text),
+                    );
+                }
             }
         }
 
@@ -771,6 +824,7 @@ impl FastTailConfig {
             sec.set("sound_alert", rule.sound_alert.name());
             sec.set("enabled", rule.enabled.to_string());
             sec.set("captures_only", rule.captures_only.to_string());
+            sec.set("bookmark", rule.auto_bookmark.to_string());
         }
 
         for (i, tool) in self.external_tools.iter().enumerate() {
@@ -957,6 +1011,15 @@ impl FastTailConfig {
                     cfg.markdown_max_mb = v.clamp(1, 100);
                 }
             }
+            if let Some(v) = general
+                .get("auto_bookmark_max")
+                .and_then(|s| s.trim().parse::<usize>().ok())
+            {
+                cfg.auto_bookmark_max = v.clamp(
+                    crate::tail_engine::MIN_AUTO_BOOKMARK_MAX,
+                    crate::tail_engine::MAX_AUTO_BOOKMARK_MAX,
+                );
+            }
             if let Some(s) = general.get("spool_dir") {
                 let s = s.trim();
                 cfg.spool_dir = (!s.is_empty()).then(|| PathBuf::from(s));
@@ -1042,7 +1105,8 @@ impl FastTailConfig {
                     .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
                     .unwrap_or_default();
                 if !lines.is_empty() && cfg.bookmarks.len() < MAX_BOOKMARK_FILES {
-                    cfg.bookmarks.push((PathBuf::from(path), lines));
+                    let notes = read_notes(sec, &format!("note_{}_", i), &lines);
+                    cfg.bookmarks.push((PathBuf::from(path), lines, notes));
                 }
                 i += 1;
             }
@@ -1091,6 +1155,7 @@ impl FastTailConfig {
             .map(|mut s| {
                 s.wrap = false;
                 s.bookmarks.clear();
+                s.bookmark_notes.clear();
                 s
             })
             .collect();
@@ -1215,6 +1280,10 @@ impl FastTailConfig {
                     .get("captures_only")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(false);
+                let auto_bookmark = sec
+                    .get("bookmark")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false);
 
                 rules.push(HighlightRule {
                     pattern,
@@ -1227,6 +1296,7 @@ impl FastTailConfig {
                     sound_alert,
                     enabled,
                     captures_only,
+                    auto_bookmark,
                 });
             }
             idx += 1;
@@ -1400,6 +1470,17 @@ pub fn is_test_binary(exe: &Path) -> bool {
     }
     let name = exe.file_stem().and_then(|n| n.to_str()).unwrap_or("");
     name.starts_with("fasttail-") || name.starts_with("integration_tests-")
+}
+
+/// Bookmark notes stored as `<prefix><line>=<text>` in `sec`, for the lines among
+/// `lines` only (a note of an unsaved line is ignored).
+pub fn read_notes(sec: &ini::Properties, prefix: &str, lines: &[usize]) -> BTreeMap<usize, String> {
+    sec.iter()
+        .filter_map(|(key, text)| {
+            let line: usize = key.strip_prefix(prefix)?.parse().ok()?;
+            (lines.contains(&line) && !text.is_empty()).then(|| (line, text.to_string()))
+        })
+        .collect()
 }
 
 fn parse_rgb(s: &str) -> Option<[u8; 3]> {

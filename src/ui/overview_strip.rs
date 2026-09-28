@@ -1,6 +1,7 @@
 //! Overview strip: a narrow column beside the main view's scroll bar marking where the
-//! search hits, the bookmarks and the ERROR / FATAL lines sit among the visible rows,
-//! with the viewport drawn as a box. A click or a drag scrolls the main view there.
+//! search hits, the bookmarks (automatic ones dimmer) and the ERROR / FATAL lines sit
+//! among the visible rows, with the viewport drawn as a box. A click or a drag scrolls
+//! the main view there; hovering a bookmark with a note shows the note.
 //!
 //! The marks are computed into one byte of flags per pixel and cached; the cache is
 //! rebuilt only when an input changes (strip height, rows, hits, bookmarks, level cache,
@@ -33,6 +34,7 @@ const REBUILD_INTERVAL: Duration = Duration::from_millis(250);
 pub const MARK_HIT: u8 = 1;
 pub const MARK_BOOKMARK: u8 = 2;
 pub const MARK_ERROR: u8 = 4;
+pub const MARK_AUTO_BOOKMARK: u8 = 8;
 
 /// Pixel row of visible row `row` among `rows`, on a strip `height` pixels tall.
 pub fn pixel_of_row(row: usize, rows: usize, height: usize) -> usize {
@@ -60,6 +62,10 @@ pub struct MarkInputs<'a> {
     /// Search hits (line indices, visible lines only).
     pub hits: &'a [usize],
     pub bookmarks: &'a BTreeSet<usize>,
+    /// Automatic bookmarks and the dismissed ones among them (see
+    /// `TailEngine::auto_bookmarks`).
+    pub auto_bookmarks: &'a BTreeSet<usize>,
+    pub dismissed_auto: &'a BTreeSet<usize>,
     /// Cached levels (`LogLevel as u8`) of the first lines, and their per-block ERROR /
     /// FATAL counts (`ERROR_BLOCK_LINES` lines per block).
     pub levels: &'a [u8],
@@ -108,6 +114,14 @@ pub fn compute_marks(height: usize, input: &MarkInputs) -> Marks {
     for &line in input.bookmarks {
         if let Some(row) = input.row_of(line) {
             marks.pixels[px(row)] |= MARK_BOOKMARK;
+        }
+    }
+    for &line in input.auto_bookmarks {
+        if input.dismissed_auto.contains(&line) || input.bookmarks.contains(&line) {
+            continue;
+        }
+        if let Some(row) = input.row_of(line) {
+            marks.pixels[px(row)] |= MARK_AUTO_BOOKMARK;
         }
     }
 
@@ -219,6 +233,8 @@ impl StripCache {
                 .then_some(engine.filtered_lines.as_slice()),
             hits: &engine.search_matches,
             bookmarks: &engine.bookmarks,
+            auto_bookmarks: engine.auto_bookmarks(),
+            dismissed_auto: engine.dismissed_auto_bookmarks(),
             levels: engine.cached_levels(),
             error_blocks: engine.error_block_counts(),
         };
@@ -268,9 +284,17 @@ pub fn paint(
     let hit = theme.warn_color();
     let bookmark = theme.secondary_accent();
     let w = rect.width();
-    let lanes: [(u8, f32, f32, Color32); 3] = [
+    // Automatic bookmarks at half strength, under the manual ones, so these stay visible
+    // among a rule's many marks.
+    let lanes: [(u8, f32, f32, Color32); 4] = [
         (MARK_ERROR, 1.0, w * 0.45, error),
         (MARK_HIT, w * 0.4, w, hit),
+        (
+            MARK_AUTO_BOOKMARK,
+            1.0,
+            w * 0.35,
+            bookmark.gamma_multiply(0.5),
+        ),
         (MARK_BOOKMARK, 1.0, w * 0.35, bookmark),
     ];
     for (flag, x0, x1, color) in lanes {
@@ -332,6 +356,25 @@ pub fn paint(
     if let Some(row) = pointer_row.filter(|_| response.hovered() && rows > 0) {
         let line = engine.get_actual_line_idx(row).unwrap_or(row);
         let mut tip = format!("{} {}", t(lang, "overview_line"), line + 1);
+        // Notes of the bookmarks drawn within a couple of pixels of the pointer.
+        if let Some(pos) = response.hover_pos() {
+            let y = pos.y - rect.top();
+            let first = row_at(y - 2.0, rect.height(), rows);
+            let last = row_at(y + 2.0, rect.height(), rows);
+            if let (Some(from), Some(to)) = (
+                engine.get_actual_line_idx(first),
+                engine.get_actual_line_idx(last),
+            ) {
+                for (note_line, note) in engine
+                    .bookmark_notes
+                    .range(from..=to)
+                    .filter(|(l, _)| engine.get_visible_row_of_line(**l).is_some())
+                    .take(5)
+                {
+                    tip.push_str(&format!("\n✏ {}: {note}", note_line + 1));
+                }
+            }
+        }
         if marks.errors_sampled {
             tip.push('\n');
             tip.push_str(t(lang, "overview_sampled"));
@@ -389,6 +432,8 @@ mod tests {
             filtered: None,
             hits: &[25_000],
             bookmarks: &bookmarks,
+            auto_bookmarks: &BTreeSet::new(),
+            dismissed_auto: &BTreeSet::new(),
             levels: &levels,
             error_blocks: &blocks,
         };
@@ -419,6 +464,27 @@ mod tests {
     }
 
     #[test]
+    fn automatic_bookmarks_have_their_own_mark_unless_manual_or_dismissed() {
+        let bookmarks: BTreeSet<usize> = [30].into_iter().collect();
+        let auto: BTreeSet<usize> = [10, 20, 30].into_iter().collect();
+        let dismissed: BTreeSet<usize> = [20].into_iter().collect();
+        let input = MarkInputs {
+            rows: 100,
+            filtered: None,
+            hits: &[],
+            bookmarks: &bookmarks,
+            auto_bookmarks: &auto,
+            dismissed_auto: &dismissed,
+            levels: &[],
+            error_blocks: &[],
+        };
+        let marks = compute_marks(100, &input);
+        assert_eq!(marks.pixels[10], MARK_AUTO_BOOKMARK);
+        assert_eq!(marks.pixels[20], 0, "dismissed");
+        assert_eq!(marks.pixels[30], MARK_BOOKMARK, "manual wins");
+    }
+
+    #[test]
     fn uncached_levels_carry_no_error_mark() {
         let (levels, blocks) = levels_with_errors(1000, &[900]);
         let input = MarkInputs {
@@ -426,6 +492,8 @@ mod tests {
             filtered: None,
             hits: &[],
             bookmarks: &BTreeSet::new(),
+            auto_bookmarks: &BTreeSet::new(),
+            dismissed_auto: &BTreeSet::new(),
             levels: &levels[..500],
             error_blocks: &blocks,
         };
@@ -444,6 +512,8 @@ mod tests {
             filtered: Some(&filtered),
             hits: &[100],
             bookmarks: &bookmarks,
+            auto_bookmarks: &BTreeSet::new(),
+            dismissed_auto: &BTreeSet::new(),
             levels: &levels,
             error_blocks: &blocks,
         };
@@ -473,6 +543,8 @@ mod tests {
             filtered: Some(&filtered),
             hits: &[],
             bookmarks: &BTreeSet::new(),
+            auto_bookmarks: &BTreeSet::new(),
+            dismissed_auto: &BTreeSet::new(),
             levels: &levels,
             error_blocks: &[],
         };

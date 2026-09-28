@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Line Bookmarks
-Each stream SHALL keep a set of manual bookmarked line indices and a set of automatic bookmarks (see Automatic Bookmarks from Rules). `CTRL + F2` SHALL toggle a manual bookmark on the current row; on a row that carries only an automatic bookmark it SHALL dismiss that automatic bookmark instead. `F2` / `SHIFT + F2` SHALL jump to the next / previous bookmark, manual or automatic, visible under the active filters with wrap-around, and the stream menu SHALL offer "Clear bookmarks", which removes every manual bookmark with its note and dismisses every current automatic bookmark. Manual bookmarked rows SHALL show `★` in the marker column (`✎` when the bookmark has a note) and automatic-only rows `☆`, unless the row is a search match, and every bookmarked row SHALL be tinted across its width. Bookmarks, notes, automatic bookmarks and dismissals SHALL be dropped when the file is truncated or rewritten.
+Each stream SHALL keep a set of manual bookmarked line indices and a set of automatic bookmarks (see Automatic Bookmarks from Rules). `CTRL + F2` SHALL toggle a manual bookmark on the current row; on a row that carries only an automatic bookmark it SHALL dismiss that automatic bookmark instead. `F2` / `SHIFT + F2` SHALL jump to the next / previous bookmark, manual or automatic, visible under the active filters with wrap-around, and the stream menu SHALL offer "Clear bookmarks", which removes every manual bookmark with its note and dismisses every current automatic bookmark. Manual bookmarked rows SHALL show `★` in the marker column (`✏` when the bookmark has a note) and automatic-only rows `☆`, unless the row is a search match, and every bookmarked row SHALL be tinted across its width. Bookmarks, notes, automatic bookmarks and dismissals SHALL be dropped when the file is truncated or rewritten.
 
 #### Scenario: Navigating bookmarks with a filter active
 - **WHEN** rows 5, 60 and 900 are bookmarked, an include filter hides row 60, and the user presses `F2` from row 5
@@ -45,7 +45,7 @@ A manual bookmark SHALL be able to carry one note: a single line of at most 200 
 
 #### Scenario: Adding a note
 - **WHEN** the user right-clicks row 1,204, picks "Bookmark note…", types `retry storm starts here` and presses `Enter`
-- **THEN** row 1,204 is bookmarked, its marker shows `✎`, and hovering the marker shows `retry storm starts here`.
+- **THEN** row 1,204 is bookmarked, its marker shows `✏`, and hovering the marker shows `retry storm starts here`.
 
 #### Scenario: Note too long
 - **WHEN** the user pastes 350 characters into the note editor
