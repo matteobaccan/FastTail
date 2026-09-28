@@ -413,7 +413,14 @@ fn main() -> eframe::Result<()> {
         .with_title(app_title.clone())
         .with_min_inner_size([800.0, 500.0])
         .with_decorations(!config.borderless)
-        .with_drag_and_drop(true);
+        .with_drag_and_drop(true)
+        // The title-bar badge as the window and taskbar icon: raw 128 × 128 RGBA
+        // (generated from `assets/icon.png`), so no image decoder is linked for it.
+        .with_icon(egui::IconData {
+            rgba: include_bytes!("../assets/icon-128.rgba").to_vec(),
+            width: 128,
+            height: 128,
+        });
 
     if let (Some(w), Some(h)) = (config.window_width, config.window_height) {
         viewport = viewport.with_inner_size([w, h]);
@@ -463,8 +470,9 @@ fn main() -> eframe::Result<()> {
             // Drivers (including NVIDIA on Windows among them) busy-wait inside presentation
             // while waiting for the vertical blank, which costs a whole core whenever egui
             // repaints continuously (e.g. during mouse moves). egui only repaints on demand,
-            // so disabling vsync on both the OpenGL and wgpu paths trades tearing on a UI that
-            // hardly animates for a drastically lower CPU cost.
+            // so disabling vsync on the OpenGL path trades tearing on a UI that hardly
+            // animates for a drastically lower CPU cost; the frame cap (`max_fps`) bounds
+            // the rate. wgpu keeps `AutoVsync` on a GPU (see `present_mode` above).
             glow_options: eframe::egui_glow::GlowConfiguration {
                 vsync: false,
                 ..Default::default()

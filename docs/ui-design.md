@@ -70,7 +70,7 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 4. While locked, drops every input event the workspace could act on (`allowed_while_locked`) before anything reads input.
 5. Reads the input once:
    - It tracks the viewport geometry, maximized and minimized state, and user activity (for the screensaver).
-   - It handles `Space`, `F1`, `CTRL + SHIFT + T` and `Esc`, dropped files and folders, and `CTRL + wheel` zoom.
+   - It handles `F1`, `CTRL + SHIFT + T` and `Esc` (which closes the topmost of Settings, Filters, About and Help), dropped files and folders, and `CTRL + wheel` zoom.
 6. Every 2 s, calls `save_dock_layout()`, which also saves the config.
 7. At most once per second, checks whether the named session has unsaved changes, and updates the OS window title.
 8. Polls the pending stdin stream, then calls `poll_updates()` on every engine, then runs the tools bound to highlight rules, then polls `find_all`.
@@ -131,7 +131,7 @@ The UI is immediate mode and never blocks on file I/O it can avoid:
 
 - **Frame pacing** (`FastTailApp::ui`):
   - A frame caused only by pointer movement sleeps until `mouse_throttle_interval_us` has passed. That is `mouse_throttle_ms` (default 100 ms) on a GPU, and `min(200 ms, mouse_throttle_ms)` on a software renderer (`SOFTWARE_MOUSE_FPS = 5`).
-  - On a software renderer every other frame is capped at `max_fps_software` (default 30).
+  - Every other frame is capped at `max_fps` (default 60) on a GPU and at `max_fps_software` (default 30) on a software renderer.
 
 ### 1.6 Persistence of session and layout
 
@@ -167,7 +167,7 @@ Sources: `src/main.rs`, `src/ui/app.rs`
 | Maximized / minimized | Restored from `[window]`. Maximize is set on the builder and again on the first frame; minimize only on the first frame, so the saved geometry is laid out first. On Windows `ShowWindow` is also called. |
 | Decorations | `with_decorations(!borderless)`, switched live with `ViewportCommand::Decorations` |
 | Drag and drop | Enabled (`with_drag_and_drop(true)`) |
-| Icon | **None set in code.** The `ViewportBuilder` has no `with_icon`, and `build.rs` embeds no Windows resource icon, so the platform or eframe default is used. The only "logo" is the painted `F` badge in the in-app title bar. |
+| Icon | The title-bar badge (dark disc, cyan ring, cyan "F"), embedded as raw 128 × 128 RGBA (`assets/icon-128.rgba`, drawn from `assets/icon.png`) and set with `with_icon`. The executable file itself carries no resource icon. |
 | Always on top | `ViewportCommand::WindowLevel(AlwaysOnTop)` when `always_on_top` is set |
 | Subsystem | `#![windows_subsystem = "windows"]`. `--help` and `--version` attach to the parent console. |
 
@@ -232,7 +232,7 @@ Fill is `panel_bg`, with a 1 px stroke of accent at 25 % and inner margin 10/6. 
 | `⚙ {Settings}` | dim text, 1 px dim stroke | Toggles the Settings window |
 | *(right-aligned)* `ℹ About`, `❓ Help` | dim | Toggle About and Help (Help is also `F1`) |
 
-`▶ Play`, `⏸ Pause`, `❓ Help` and `ℹ About` are hard-coded English labels. Their tooltips are localized.
+The labels of `▶ Play`, `⏸ Pause`, `❓ Help` and `ℹ About` and their tooltips are localized.
 
 ### 2.5 Software-renderer banner
 
@@ -947,7 +947,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 |---|---|---|
 | `F1` | global | Toggle the Help window |
 | `Esc` | global | Close Help, Settings, Filters and About (all four) and end text input. Also closes the pattern prompt, session dialogs, notices and the preset modal; leaves the search box, the go-to box and hit lists; leaves the context view when the rows have the keyboard (0.12.0, in progress) |
-| `Space` | global | Toggle Follow on **every** non-compressed stream (§10.3) |
+| `Space` | focused stream | Toggle Follow (not on a compressed stream, not while a text field has the keyboard) |
 | `CTRL + SHIFT + T` | global | Toggle always-on-top |
 | `CTRL + L` | global | Lock behind the PIN (needs a PIN) |
 | `CTRL + SHIFT + H` | global | Show or hide the global filter bar |
@@ -981,7 +981,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `Enter` | Find results query box | Run the search and move focus to the results |
 | `Enter` / `Esc` | pattern prompt, preset modal, lock | Submit / cancel (the lock accepts only `Enter`) |
 
-The Help window lists a subset of these. It does not list `CTRL + L`, `ALT + 1..9`, `CTRL + HOME` / `CTRL + END`, or the arrow keys, Page Up / Page Down and Home / End navigation.
+The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL + END`, or the arrow keys, Page Up / Page Down and Home / End navigation.
 
 ### 7.3 Mouse interaction
 
@@ -1064,7 +1064,6 @@ Numbers are grouped with `,` by `group_thousands` in every language. Times come 
 - The language picker is a combo rather than a row of buttons, so it stays on one line whatever the number of languages.
 - CJK scripts rely on the Windows font fallbacks (§6.7).
 - Some strings stay hard-coded English:
-  - `▶ Play`, `⏸ Pause`, `❓ Help`, `ℹ About`;
   - the BareTail dialog counts;
   - `FG:`, `BG:`, `Regex`, `B`, `I`;
   - the theme names Tron, Matrix and Blade;
@@ -1111,7 +1110,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `zoom_factor` | 1.00 | interface zoom (0.5–3.0) |
 | `poll_interval_ms` | 250 | repaint and poll cadence on a GPU (50–5000) |
 | `size_check_interval_ms` | 500 | fallback size check (50–10000) |
-| `max_fps` | 60 | editable in Settings, **not read by the frame loop** (§10.3) |
+| `max_fps` | 60 | frame cap on a GPU renderer |
 | `max_fps_software` | 30 | frame cap on software rendering |
 | `mouse_throttle_ms` | 100 | pointer-move frame throttle (0–1000) |
 | `markdown_max_mb` | 1 | MD view size limit |
@@ -1218,20 +1217,13 @@ Branch `feat/show-in-context`, WIP commit `f123c6b` plus uncommitted changes to 
 
 ### 10.3 Known limitations and oddities (from the code)
 
-- **No window icon** is set (§2.1).
 - **Double title bar in decorated mode.** The in-app title bar is always drawn, so with OS decorations on there are two title strips.
-- **`Space` is global.** It is read with `key_pressed(Space)` in the app's input pass without a focus check. It toggles Follow on *every* non-compressed stream. It is not gated on text-field focus either, so typing a space in a text box may also toggle Follow. This has not been verified at runtime.
-- **`Esc` closes all four main dialogs at once,** not only the topmost one.
 - **`ALT + 1..9`** follows engine order (the `[#N]` numbers), not the visual order of tabs in the dock.
-- **`max_fps` (GPU)** is stored, editable and overridable by an environment variable, but nothing in the render loop reads it. Only `max_fps_software` paces frames.
-- **Stale renderer descriptions.**
-  - The `renderer_auto` label reads "Auto (OpenGL, then wgpu)" and the `FastTailConfig::renderer` doc comment says the same, but the code tries **wgpu first**, then OpenGL.
-  - `main.rs` says vsync is disabled on both paths, but wgpu on a GPU uses `AutoVsync`.
 - **Legacy tab kinds.** `FastTailTab::Filters`, `Highlights` and `Settings` are still rendered by the viewer but are never created.
 - **Wide stream bar.** It is a single non-wrapping row and can overflow narrow windows.
 - **Approximate scroll thumb in wrap mode.** The height is estimated from the average row height.
-- **Borderless close** calls `std::process::exit(0)` right after saving, bypassing eframe's normal shutdown. `on_exit` spool cleanup may not run on that path; the next start's `spool::sweep` removes leftovers.
-- **Silent failures.** Export and session save or load failures go to stderr only (a GUI-subsystem binary usually has no console). A failed session load shows as a "missing" entry.
+- **Borderless close** calls `std::process::exit(0)` right after saving and deleting its spools, bypassing eframe's normal shutdown.
+- **Failures.** A failed export shows in the stream bar and a failed session save in the notice window; a failed session load shows as a "missing" entry.
 - **Hard-coded English strings** remain (§8.5).
-- **Help omissions.** The Help window does not list every shortcut (§7.2).
+- **Help omissions.** The Help window does not list the plain navigation keys (§7.2).
 - **The lock is a deterrent.** The FNV-scrambled PIN and the `joshua` backdoor are documented as such.

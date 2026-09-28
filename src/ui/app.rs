@@ -105,8 +105,10 @@ pub struct FastTailApp {
     /// (and tab) is created, and the command line options to apply to it then.
     pub pending_stdin: Option<crate::stdin_source::StdinStream>,
     pub stdin_options: StdinOptions,
-    /// Streams a session save left out (standard input), shown once after the save.
+    /// Streams a session save left out (standard input), or why the save failed, shown
+    /// once after the save under the title `save_notice_title` (an i18n key).
     pub save_notice: Option<String>,
+    pub save_notice_title: &'static str,
     /// Window title last sent to the OS, to send it again only when it changes.
     pub title_applied: String,
     /// Timestamp of last live frame render for frame pacing.
@@ -593,6 +595,7 @@ impl FastTailApp {
             pending_stdin: None,
             stdin_options: StdinOptions::default(),
             save_notice: None,
+            save_notice_title: "stdin_not_saved_title",
             title_applied: String::new(),
             last_frame_render: Instant::now(),
             last_mouse_render: Instant::now(),
@@ -771,11 +774,53 @@ impl FastTailApp {
         }
     }
 
+    /// `Esc`: closes the open dialog drawn on top (Settings, Filters, About, Help), not all
+    /// of them at once.
+    fn close_topmost_dialog(&mut self, ctx: &egui::Context) {
+        let open = [
+            ("fasttail_settings_popup", self.config.settings_open),
+            ("fasttail_filters_popup", self.config.filters_open),
+            ("fasttail_about_popup", self.config.about_open),
+            ("fasttail_help_popup", self.config.help_open),
+        ];
+        let open_ids: Vec<(&str, egui::Id)> = open
+            .iter()
+            .filter(|(_, is_open)| *is_open)
+            .map(|(name, _)| (*name, egui::Id::new(*name)))
+            .collect();
+        if open_ids.is_empty() {
+            return;
+        }
+        // Layers come bottom to top; a dialog not drawn yet counts as the lowest.
+        let top = ctx.memory(|m| {
+            m.layer_ids()
+                .filter_map(|layer| open_ids.iter().find(|(_, id)| *id == layer.id))
+                .last()
+                .map(|(name, _)| *name)
+        });
+        match top.unwrap_or(open_ids[open_ids.len() - 1].0) {
+            "fasttail_settings_popup" => self.config.settings_open = false,
+            "fasttail_filters_popup" => self.config.filters_open = false,
+            "fasttail_about_popup" => self.config.about_open = false,
+            _ => self.config.help_open = false,
+        }
+        let _ = self.config.save();
+    }
+
+    /// A failed session save is shown in the notice window: a GUI build has no console
+    /// for stderr.
+    fn session_save_failed(&mut self, detail: String) {
+        eprintln!("fasttail: cannot save session: {detail}");
+        self.save_notice_title = "session_save_failed";
+        self.save_notice = Some(detail);
+    }
+
     /// Saves the live workspace to `file` and makes it the current session.
     pub fn save_session_as(&mut self, file: PathBuf) -> std::io::Result<()> {
         let session = self.capture_session();
         session.save_to(&file)?;
         if self.engines.iter().any(|e| e.is_stdin()) {
+            self.save_notice_title = "stdin_not_saved_title";
             self.save_notice = Some(format!(
                 "{}\n  {}",
                 t(self.config.language, "stdin_not_saved"),
@@ -1572,14 +1617,6 @@ impl FastTailApp {
                 self.screensaver.on_user_input();
             }
 
-            // Keyboard shortcut: Space = toggle follow tail on active stream
-            if i.key_pressed(Key::Space) {
-                // A compressed stream is a static snapshot: follow stays off.
-                for eng in self.engines.iter_mut().filter(|e| !e.is_compressed()) {
-                    eng.follow_tail = !eng.follow_tail;
-                }
-            }
-
             // Zoom: `Ctrl +`, `Ctrl -` and `Ctrl 0` are applied by egui itself (it calls
             // `gui_zoom::zoom_with_keyboard` every frame), so handling them here as well
             // would zoom twice — once the whole UI, once the log font — which is exactly
@@ -1601,14 +1638,9 @@ impl FastTailApp {
                 let _ = self.config.save();
             }
 
-            // Keyboard shortcut: Escape (Close any open popup)
+            // Keyboard shortcut: Escape closes the topmost dialog (below).
             if i.key_pressed(Key::Escape) {
                 escape_pressed = true;
-                self.config.help_open = false;
-                self.config.settings_open = false;
-                self.config.filters_open = false;
-                self.config.about_open = false;
-                let _ = self.config.save();
             }
 
             // Drag & drop file support (single or multiple)
@@ -1627,6 +1659,7 @@ impl FastTailApp {
 
         if escape_pressed {
             ctx.memory_mut(|m| m.stop_text_input());
+            self.close_topmost_dialog(&ctx);
         }
 
         // Save dock layout periodically every 2 seconds if changed
@@ -1817,6 +1850,12 @@ impl FastTailApp {
                             {
                                 self.save_dock_layout();
                                 let _ = self.config.save();
+                                // `exit` skips `on_exit`: stop the decompression jobs
+                                // and delete this process's spools here.
+                                self.engines.clear();
+                                crate::spool::remove_own(
+                                    &self.config.compressed_settings().spool_dir,
+                                );
                                 ctx.send_viewport_cmd(ViewportCommand::Close);
                                 std::process::exit(0);
                             }
@@ -2278,7 +2317,7 @@ impl FastTailApp {
                         Color32::from_rgb(10, 24, 18)
                     };
                     let play_btn = egui::Button::new(
-                        RichText::new("▶ Play")
+                        RichText::new(format!("▶ {}", t(self.config.language, "toolbar_play")))
                             .monospace()
                             .strong()
                             .color(play_color),
@@ -2308,7 +2347,7 @@ impl FastTailApp {
                         Color32::from_rgb(26, 12, 16)
                     };
                     let pause_btn = egui::Button::new(
-                        RichText::new("⏸ Pause")
+                        RichText::new(format!("⏸ {}", t(self.config.language, "toolbar_pause")))
                             .monospace()
                             .strong()
                             .color(pause_color),
@@ -2353,12 +2392,18 @@ impl FastTailApp {
                     // Right-aligned toolbar badges: Help & About with uniform height
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Help (F1)
-                        let help_btn =
-                            egui::Button::new(RichText::new("❓ Help").monospace().color(text_dim))
-                                .fill(self.config.theme.button_bg())
-                                .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                                .corner_radius(CornerRadius::same(6))
-                                .min_size(egui::vec2(0.0, 26.0));
+                        let help_btn = egui::Button::new(
+                            RichText::new(format!(
+                                "❓ {}",
+                                t(self.config.language, "toolbar_help")
+                            ))
+                            .monospace()
+                            .color(text_dim),
+                        )
+                        .fill(self.config.theme.button_bg())
+                        .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(0.0, 26.0));
 
                         if ui
                             .add(help_btn)
@@ -2370,12 +2415,18 @@ impl FastTailApp {
                         }
 
                         // About
-                        let about_btn =
-                            egui::Button::new(RichText::new("ℹ About").monospace().color(text_dim))
-                                .fill(self.config.theme.button_bg())
-                                .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                                .corner_radius(CornerRadius::same(6))
-                                .min_size(egui::vec2(0.0, 26.0));
+                        let about_btn = egui::Button::new(
+                            RichText::new(format!(
+                                "ℹ {}",
+                                t(self.config.language, "toolbar_about")
+                            ))
+                            .monospace()
+                            .color(text_dim),
+                        )
+                        .fill(self.config.theme.button_bg())
+                        .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(0.0, 26.0));
 
                         if ui
                             .add(about_btn)
@@ -3933,6 +3984,10 @@ impl FastTailApp {
                                     ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
                                     ui.end_row();
 
+                                    ui.label(RichText::new("ALT + 1..9").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_tabs")).monospace());
+                                    ui.end_row();
+
                                     ui.label(
                                         RichText::new("☰ ↑ ↓ PgUp PgDn Enter Esc")
                                             .monospace()
@@ -3963,6 +4018,10 @@ impl FastTailApp {
                                         RichText::new("CTRL + SHIFT + T").monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "pin_tip")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("CTRL + L").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_lock")).monospace());
                                     ui.end_row();
 
                                     ui.label(
@@ -4272,7 +4331,7 @@ impl FastTailApp {
             let mut is_open = true;
             let mut close = false;
             egui::Window::new(
-                RichText::new(format!("💾 {}", t(lang, "stdin_not_saved_title")))
+                RichText::new(format!("💾 {}", t(lang, self.save_notice_title)))
                     .monospace()
                     .color(theme.warn_color()),
             )
@@ -4459,8 +4518,15 @@ impl eframe::App for FastTailApp {
                 std::thread::sleep(throttle - elapsed);
             }
             self.last_mouse_render = Instant::now();
-        } else if self.renderer.is_software() {
-            let target_fps = self.config.max_fps_software.max(1);
+        } else {
+            // Frame cap: vsync is off on glow, so without it a stream of input events
+            // (scrolling, a growing file) could render far above the display rate.
+            let target_fps = if self.renderer.is_software() {
+                self.config.max_fps_software
+            } else {
+                self.config.max_fps
+            }
+            .max(1);
             let min_interval = std::time::Duration::from_micros(1_000_000 / target_fps as u64);
             let elapsed = self.last_frame_render.elapsed();
             if elapsed < min_interval {
@@ -4504,13 +4570,13 @@ impl FastTailApp {
                 if let Some(file) = dialog.save_file() {
                     let file = Session::with_suffix(&file);
                     if let Err(err) = self.save_session_as(file.clone()) {
-                        eprintln!("fasttail: cannot save session {}: {err}", file.display());
+                        self.session_save_failed(format!("{}\n{err}", file.display()));
                     }
                 }
             }
             SessionAction::Save => {
                 if let Err(err) = self.save_session() {
-                    eprintln!("fasttail: cannot save session: {err}");
+                    self.session_save_failed(err.to_string());
                 }
             }
             SessionAction::Load => {

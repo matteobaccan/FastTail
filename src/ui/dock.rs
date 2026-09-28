@@ -1879,7 +1879,7 @@ fn render_log_stream(
         // Export menu: visible lines, or the search matches, to a text file
         ui.menu_button("💾", |ui| {
             ui.set_max_width(260.0);
-            let export = |engine: &TailEngine, title: &str, matches_only: bool| {
+            let export = |engine: &mut TailEngine, title: &str, matches_only: bool| {
                 let suggested = format!(
                     "{}-{}.txt",
                     if engine.is_stdin() {
@@ -1905,7 +1905,13 @@ fn render_log_stream(
                         }
                     });
                     if let Err(err) = result {
+                        // Shown in the stream bar: a GUI build has no console for stderr.
                         eprintln!("fasttail: export to {} failed: {err}", target.display());
+                        engine.view_notice = Some(format!(
+                            "{} ({}): {err}",
+                            t(lang, "export_failed"),
+                            target.display()
+                        ));
                     }
                 }
             };
@@ -2020,6 +2026,13 @@ fn render_log_stream(
         // Main-view navigation keys: not while the results pane (or an input) has them.
         if is_focused && keyboard_free {
             ui.input(|i| {
+                // Space toggles follow on this stream only, and never while a text field
+                // has the keyboard (a space typed in a filter used to toggle every stream).
+                // A compressed stream is a static snapshot: follow stays off.
+                if i.key_pressed(egui::Key::Space) && !i.modifiers.any() && !engine.is_compressed()
+                {
+                    engine.follow_tail = !engine.follow_tail;
+                }
                 // Ctrl + Home: Jump to top
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
                     scroll_top(engine);
