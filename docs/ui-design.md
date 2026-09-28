@@ -37,6 +37,8 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 | `src/ui/global_filter_bar.rs` | The global filter bar shown under the toolbar. |
 | `src/ui/hit_list.rs` | Virtualized hit lists: `HitList` (a stream's results pane) and `GroupedHitList` (Find results). |
 | `src/ui/overview_strip.rs` | The 10 px minimap beside the rows' scroll bar. |
+| `src/ui/palette.rs` | The command palette (`CommandPalette`, §4.16): the floating box, its fuzzy scorer and ranking, the value step of enumerated settings. |
+| `src/actions.rs` | Not UI code: the action registry the palette lists (ids, i18n names, categories, scopes, enabled conditions, shortcut labels), and the boolean and enumerated settings it turns into commands. |
 | `src/ui/time_range.rs` | The time range control of the stream bar (the visible time span) and its popup: the draft, the calendar and spinner rules, the shortcuts and OK / Cancel. |
 | `src/ui/timeline_strip.rs` | The 56 px timeline histogram above the rows. |
 | `src/ui/zip_picker.rs` | `ArchivePicker`, the entry picker for a zip that holds several files and for any tar archive (plain or compressed). |
@@ -58,6 +60,7 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
   - `quick_labels`: memory only.
   - `pattern_prompt`, `archive_picker`, `open_notice`, `save_notice`, `pending_session_load`, `session_missing`: one-shot dialogs.
   - `find_all`: the cross-stream search session.
+  - `palette`: the command palette (open flag, query, selection, value step, target stream), and `palette_action`, the stream action it picked, handed to the dock for this frame.
   - `global_spec`, `global_edit_at`, `global_key`: the compiled global filter and its debounce state.
   - `renderer: ActiveRenderer`, `applied_visuals`, and the frame-pacing timestamps.
   - `floating_window_rects`: rectangles of undocked dock windows, captured for persistence.
@@ -70,7 +73,7 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 1. Paints the theme background over the whole canvas. `clear_color()` also returns `theme.bg_color()`.
 2. Applies the always-on-top level when the config and the viewport disagree.
 3. On the first frame, re-applies maximized or minimized.
-4. While locked, drops every input event the workspace could act on (`allowed_while_locked`) before anything reads input.
+4. While locked, drops every input event the workspace could act on (`allowed_while_locked`) before anything reads input. Otherwise handles `CTRL + SHIFT + P` and, while the command palette is open, draws it (`render_palette`, §4.16): it consumes its keys, every other key event of the frame is then dropped, and what it picked runs at once (a stream action when its stream is drawn in step 13).
 5. Reads the input once:
    - It tracks the viewport geometry, maximized and minimized state, and user activity (for the screensaver).
    - It handles `F1`, `CTRL + SHIFT + T` and `Esc` (which closes the topmost of Settings, Filters, About and Help), dropped files and folders, and `CTRL + wheel` zoom.
@@ -214,11 +217,12 @@ This is a custom title bar, drawn in **both** decorated and borderless mode. In 
   - The label `FASTTAIL v… by Matteo Baccan · session*`, 13 pt monospace, strong, accent. It is click-and-drag: dragging it moves the window (`ViewportCommand::StartDrag`) and the cursor becomes Move.
 - **Right side** (right-to-left layout). Listed here from the right edge inward:
   1. Borderless only: **✕** Close (warn colour; saves layout and config, then `std::process::exit(0)`), **🗖/🗗** Maximize/Restore, **—** Minimize, then a separator.
-  2. **🌐** Global filter bar toggle: accent while the global filter applies, dim otherwise.
-  3. **📌** Always-on-top toggle: accent when on.
-  4. **`🔍 {zoom}%`**, 10.5 pt: dim at 100 %, accent otherwise. A click resets the zoom to 100 %.
-  5. Separator. When `telemetry_enabled` is on: RAM meter (44×6 bar, fill `secondary_accent`) with `RAM: x.x GB/y GB`, then the CPU meter (bar in the accent colour) with `🖥 CPU: n%`.
-  6. The remaining width is a **drag region**. Dragging moves the window, a double-click toggles maximize, and the cursor is Move.
+  2. **⌨** Command palette toggle (tooltip *Command palette…  (CTRL + SHIFT + P)*): accent while the palette is open, dim otherwise.
+  3. **🌐** Global filter bar toggle: accent while the global filter applies, dim otherwise.
+  4. **📌** Always-on-top toggle: accent when on.
+  5. **`🔍 {zoom}%`**, 10.5 pt: dim at 100 %, accent otherwise. A click resets the zoom to 100 %.
+  6. Separator. When `telemetry_enabled` is on: RAM meter (44×6 bar, fill `secondary_accent`) with `RAM: x.x GB/y GB`, then the CPU meter (bar in the accent colour) with `🖥 CPU: n%`.
+  7. The remaining width is a **drag region**. Dragging moves the window, a double-click toggles maximize, and the cursor is Move.
 
 ### 2.4 Toolbar (`toolbar_panel`)
 
@@ -533,7 +537,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
 - **Window:** id `fasttail_help_popup`, default **580 × 500**, geometry persisted.
 - **Contents:** a `⚡ FASTTAIL` header, then three `ui.group`s with warn-coloured titles:
   1. **🔍 ZOOM & FONT SIZE**: `CTRL +  /  CTRL =`, `CTRL -`, `CTRL 0`, `CTRL + Wheel`.
-  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `± N`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F1`, `Esc`, Drag & Drop.
+  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + P`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `± N`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F1`, `Esc`, Drag & Drop.
   3. **⚡ COLOR FILTERS & VISIBILITY**: six bullet paragraphs (evaluation order, reordering, bold and italic, visibility filters, log levels, recent files).
 - Keys are written in capitals joined with ` + ` (house style). The exception is `CTRL F`, which lacks the `+`.
 
@@ -669,7 +673,17 @@ Everything edits a **draft** (`TimeRangeDraft`: the two texts and the month of e
 
 `OK`, or `Enter` in a field while both sides can be read, writes the draft into the stream through `apply_time_range_text` (the window is applied, or held while the stream is timed, exactly as typed text) and closes the popup. `Cancel`, `Esc` (consumed by the popup) or a click outside drop the draft and leave the window as it was. Nothing of the popup is saved.
 
-### 4.16 Things that do not exist
+### 4.16 Command palette
+
+- **Opened by** `CTRL + SHIFT + P` (which also closes it) or the title bar `⌨` button; never while the window is locked. The stream focused at that moment is its **target**.
+- **Layout:** an `egui::Area` in the foreground layer, centred horizontally 64 px below the top of the window, `min(window width − 32, 620)` px wide (at least 240), in a popup frame filled with `panel_bg` and a 1.5 px accent stroke. In the value step a `‹ Theme` style title (strong, accent) comes first. Then a monospace single-line box with the hint *Type a command…*, which keeps the focus, and a vertical scroll area of at most 360 px of 22 px rows (*No matching command* in dim italics when nothing matches).
+- **Rows:** a `☑` / `☐` check box for on / off commands (setting toggles, always on top, results pane, global filter bar) or `●` on the current value in the value step, then the name in 12.5 pt monospace, elided with `…`; on the right, in 11 pt, the reason it is disabled (warn at 85 %), the category (dim) and the shortcut (accent). A disabled row has a dim name and its reason as tooltip. The selected row has an accent fill at 22 % and a 1 px accent stroke; a hovered one an accent fill at 10 %.
+- **Keys:** `↑` / `↓` one row, `PgUp` / `PgDown` ten rows, `Enter` runs the selected command (nothing on a disabled one), `Esc` closes, `Backspace` in an empty box of the value step goes back to the commands. A click on a row runs it; a click outside closes the palette. Every key event of the frame is dropped after the palette has drawn, so no stream or window shortcut sees what is typed.
+- **Commands:** the registry of `src/actions.rs` (window, stream, view, search, bookmark and session actions, the row, stream and presets menu entries), one *Toggle …* per boolean setting and one *Name…* per enumerated setting (theme, language, renderer, size unit), which opens the **value step** listing the values with the current one selected and marked.
+- **Ranking:** with an empty box the last 8 commands run from the palette (`palette_recent`) come first, then the registry order. Typing ranks the matches of a subsequence scorer on the localized and the English name (case and Latin accents folded, CJK compared by characters, spaces ignored): consecutive characters, word starts and the start of the name score more, gaps cost; a recent command gets a bonus.
+- **Running:** window and setting commands run at once in `FastTailApp::run_action`; stream commands are handed through `DockContext::palette_action` to `render_log_stream` of the target stream, where they take the same path as their button, menu item or key.
+
+### 4.17 Things that do not exist
 
 There is no separate goto-line dialog (it is inline in the stream bar), no bookmarks list window and no note dialog (the note editor is inline in the stream bar). Bookmarks are the `★` / `✏` / `☆` markers, the note tooltips, the overview strip marks, `F2` navigation and "Clear bookmarks". There are no toast notifications. Transient information is shown as `ⓘ` labels in the stream bar or in the small centred notice windows above.
 
@@ -691,6 +705,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 |---|---|
 | `F` (painted badge) | app logo, title bar |
 | `✕` `🗖` `🗗` `—` | borderless window buttons |
+| `⌨` | command palette (title bar button) |
 | `🌐` | global filter (title bar button, stream badge, bar title, Filters window) |
 | `📌` | always on top |
 | `🔍` | zoom level; search field label; timeline search-lane toggle; Filters heading; archive picker filter |
@@ -1010,6 +1025,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `Space` | focused stream | Toggle Follow (not on a compressed stream, not while a text field has the keyboard) |
 | `CTRL + SHIFT + T` | global | Toggle always-on-top |
 | `CTRL + L` | global | Lock behind the PIN (needs a PIN) |
+| `CTRL + SHIFT + P` | global | Open or close the command palette (§4.16); while it is open it owns the keyboard |
 | `CTRL + SHIFT + H` | global | Show or hide the global filter bar |
 | `CTRL + SHIFT + F` | global (prefill from the focused stream) | Open or focus Find results with the stream's query; the box takes focus, and `Enter` runs it |
 | `ALT + 1..9` | global | Activate the tab of engine #1..9 (the `[#N]` in the tab title; engine order, not dock order) |
@@ -1183,6 +1199,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `auto_bookmark_max` | 10000 | automatic bookmarks kept per stream (clamped to 100–100 000); the `ⓘ auto-bookmarks capped at N` notice |
 | `spool_dir`, `compressed_max_gb`, `stdin_spool_max_mb` | temp, 20, 2048 | compressed and stdin spools |
 | `size_unit` | `Bytes` | Bytes, MB, GB or Hex for the 📦 size |
+| `palette_recent` | empty | ids of the last 8 commands run from the command palette, comma separated, listed first |
 | `baretail_import`, `baretail_prompt_shown` | false, false | BareTail dialog |
 | `session_file` | — | current named session (title suffix) |
 
