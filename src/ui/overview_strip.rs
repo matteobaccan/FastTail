@@ -215,7 +215,7 @@ impl StripCache {
         let input = MarkInputs {
             rows: key.rows,
             filtered: engine
-                .is_filter_active()
+                .rows_filtered()
                 .then_some(engine.filtered_lines.as_slice()),
             hits: &engine.search_matches,
             bookmarks: &engine.bookmarks,

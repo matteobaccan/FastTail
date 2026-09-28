@@ -245,6 +245,7 @@ pub fn render_find_results(
         return;
     }
     let output = GroupedHitList::new(results_list_id(), &groups, &session.query)
+        .context_label(format!("◆ {}  (CTRL + K)", t(lang, "context_show")))
         .font_size(font_size)
         .level_colors(level_colors)
         .show(ui, theme);
@@ -259,6 +260,9 @@ pub fn render_find_results(
     // walking the results.
     if let Some((g, hit)) = output.committed {
         session.commit(g, hit);
+    }
+    if let Some((g, hit)) = output.in_context {
+        session.commit_in_context(g, hit);
     }
 }
 
@@ -307,10 +311,15 @@ pub fn apply_find_jump(
     let Some((path, line)) = session.jump.take() else {
         return false;
     };
+    let in_context = std::mem::take(&mut session.jump_in_context);
     let Some(engine) = engines.iter_mut().find(|e| e.path == path) else {
         return false;
     };
-    engine.request_jump(line, lang);
+    // "Show in context" shows the exact line even when the stream's filter hides it; a
+    // stream without a filter has nothing to suspend and takes a plain jump.
+    if !(in_context && engine.enter_context(line)) {
+        engine.request_jump(line, lang);
+    }
     if let Some(tab) = dock.find_tab(&FastTailTab::LogStream(engine.path.clone())) {
         let _ = dock.set_active_tab(tab);
     }

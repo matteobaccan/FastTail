@@ -3886,6 +3886,12 @@ impl FastTailApp {
                                     );
                                     ui.end_row();
 
+                                    ui.label(RichText::new("CTRL + K").monospace().strong());
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_context")).monospace(),
+                                    );
+                                    ui.end_row();
+
                                     ui.label(
                                         RichText::new("CTRL + SHIFT + H").monospace().strong(),
                                     );

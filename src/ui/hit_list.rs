@@ -426,6 +426,8 @@ pub struct GroupedOutput {
     pub committed: Option<(usize, usize)>,
     /// Group whose header was clicked or got `Enter`: collapse or expand it.
     pub toggled: Option<usize>,
+    /// Hit `(group, hit)` for "Show in context": its context menu, or `CTRL + K` on it.
+    pub in_context: Option<(usize, usize)>,
     pub has_focus: bool,
 }
 
@@ -438,6 +440,8 @@ pub struct GroupedHitList<'a> {
     query_lower: String,
     font_size: f32,
     level_colors: bool,
+    /// Label of the hits' "Show in context" menu entry; no menu without it.
+    context_label: Option<String>,
 }
 
 impl<'a> GroupedHitList<'a> {
@@ -448,7 +452,15 @@ impl<'a> GroupedHitList<'a> {
             query_lower: query.trim().to_lowercase(),
             font_size: 13.0,
             level_colors: true,
+            context_label: None,
         }
+    }
+
+    /// Offers "Show in context" on each hit: its context menu, and `CTRL + K` on the
+    /// selected hit while the list has the keyboard.
+    pub fn context_label(mut self, label: String) -> Self {
+        self.context_label = Some(label);
+        self
     }
 
     pub fn font_size(mut self, font_size: f32) -> Self {
@@ -528,6 +540,12 @@ impl<'a> GroupedHitList<'a> {
             if len > 0 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
                 activate(state.selected, &mut out);
             }
+            let ctrl_k = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K);
+            if self.context_label.is_some() && ui.input_mut(|i| i.consume_shortcut(&ctrl_k)) {
+                if let Some(GroupRow::Hit { group, hit }) = layout.row(state.selected) {
+                    out.in_context = Some((group, hit));
+                }
+            }
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 ui.memory_mut(|m| m.surrender_focus(id));
             }
@@ -552,6 +570,7 @@ impl<'a> GroupedHitList<'a> {
         let num_w = char_w * 9.0;
         let marker_w = char_w * 2.0;
         let mut clicked = None;
+        let mut in_context = None;
         let selected = state.selected;
         let groups = self.groups;
         let style = LineStyle {
@@ -645,8 +664,17 @@ impl<'a> GroupedHitList<'a> {
                         egui::StrokeKind::Inside,
                     );
                 }
-                if ui.interact(rect, row_id, egui::Sense::click()).clicked() {
+                let click = ui.interact(rect, row_id, egui::Sense::click());
+                if click.clicked() {
                     clicked = Some(row);
+                }
+                if let (Some(label), GroupRow::Hit { group, hit }) = (&self.context_label, kind) {
+                    click.context_menu(|ui| {
+                        if ui.button(egui::RichText::new(label).monospace()).clicked() {
+                            in_context = Some((group, hit));
+                            ui.close();
+                        }
+                    });
                 }
             }
         });
@@ -657,6 +685,9 @@ impl<'a> GroupedHitList<'a> {
             state.selected = row;
             activate(row, &mut out);
             ui.memory_mut(|m| m.request_focus(id));
+        }
+        if in_context.is_some() {
+            out.in_context = in_context;
         }
         out.has_focus = ui.memory(|m| m.has_focus(id));
         if out.has_focus {

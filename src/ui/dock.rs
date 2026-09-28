@@ -546,8 +546,9 @@ fn search_marker_label(
     matches: bool,
     is_active: bool,
     bookmarked: bool,
+    context: bool,
 ) {
-    let (glyph, color) = marker_glyph(theme, matches, is_active, bookmarked);
+    let (glyph, color) = marker_glyph(theme, matches, is_active, bookmarked, context);
     ui.label(
         RichText::new(format!("{glyph} "))
             .monospace()
@@ -586,14 +587,18 @@ fn row_tint(
     ))
 }
 
-/// Marker glyph and colour of a row: ▶ current hit, ● other hits, ★ bookmark, blank otherwise.
+/// Marker glyph and colour of a row: ◆ the line shown in context, ▶ current hit, ● other
+/// hits, ★ bookmark, blank otherwise.
 fn marker_glyph(
     theme: &CyberTheme,
     matches: bool,
     is_active: bool,
     bookmarked: bool,
+    context: bool,
 ) -> (&'static str, Color32) {
-    if is_active {
+    if context {
+        ("◆", theme.warn_color())
+    } else if is_active {
         ("▶", theme.accent_color())
     } else if matches {
         ("●", theme.warn_color())
@@ -1363,7 +1368,7 @@ fn render_log_stream(
         // Lines count stat (shows filtered count vs total when filtering is active)
         let lines_stat = match engine.view_mode {
             crate::tail_engine::ViewMode::Text | crate::tail_engine::ViewMode::Filtered => {
-                if engine.is_filter_active() {
+                if engine.rows_filtered() {
                     format!(
                         "{}: {} / {}",
                         t(lang, "lines"),
@@ -1760,6 +1765,19 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
+        // Show in context (CTRL + K): the selected line in the full log, or back.
+        let ctrl_k = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K);
+        if is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_k)) {
+            if engine.context_line().is_some() {
+                engine.leave_context();
+            } else if let Some(line) = engine
+                .selection_anchor
+                .or_else(|| engine.selection.iter().next().copied())
+            {
+                engine.enter_context(line);
+            }
+        }
+
         // Go to line (Ctrl+G): inline box, Enter jumps, Esc closes
         let ctrl_g = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::G);
         let goto_id = egui::Id::new("goto_line_input").with(&engine.path);
@@ -2084,12 +2102,23 @@ fn render_log_stream(
 
     // Quick Filter Row directly above log buffer
     ui.horizontal(|ui| {
-        ui.label(
+        // In the context view the filters are suspended: their fields are drawn dimmed
+        // (editing one still ends the context view and applies the new filter).
+        let context_line = engine.context_line();
+        if context_line.is_some() {
+            ui.multiply_opacity(0.45);
+        }
+        let include_label = ui.label(
             RichText::new(format!("⚡ {}:", t(lang, "filter_include")))
                 .monospace()
                 .size(11.0)
                 .color(theme.accent_color()),
         );
+        if let Some(line) = context_line {
+            include_label.on_hover_text(
+                t(lang, "context_banner").replace("{line}", &(line + 1).to_string()),
+            );
+        }
         let mut inc = engine.include_filter().to_string();
         if ui
             .add(
@@ -2281,6 +2310,35 @@ fn render_log_stream(
         ui.separator();
     }
 
+    // Show in context: the banner that says the filters are suspended, and the way back
+    // (its button, Esc while the rows have the keyboard, or CTRL + K).
+    if let Some(line) = engine.context_line() {
+        let mut back = false;
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "◆ {}",
+                    t(lang, "context_banner").replace("{line}", &(line + 1).to_string())
+                ))
+                .monospace()
+                .color(theme.warn_color()),
+            );
+            back = ui
+                .button(RichText::new(t(lang, "context_back")).monospace())
+                .on_hover_text(t(lang, "context_back_tip"))
+                .clicked();
+        });
+        if is_focused
+            && ui.memory(|m| m.focused().is_none())
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            back = true;
+        }
+        if back {
+            engine.leave_context();
+        }
+    }
+
     if engine.timeline_open {
         render_timeline(ui, engine, theme, lang, search_view);
     }
@@ -2334,7 +2392,7 @@ fn render_log_stream(
     let has_search = !engine.last_searched_query.is_empty();
     let active_search_line = engine.current_search_line();
     // The marker column appears when there is anything to mark: search hits or bookmarks.
-    let show_markers = has_search || engine.has_bookmarks();
+    let show_markers = has_search || engine.has_bookmarks() || engine.context_line().is_some();
     let time_delta = time_delta_column(ui, engine, *time_delta);
 
     // Overview strip beside the scroll bar: the right edge of the rows area, when the
@@ -2682,6 +2740,7 @@ fn render_extended_rows(
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
     let mut anchor_pick: Option<usize> = None;
+    let mut context_pick: Option<usize> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
@@ -2760,6 +2819,7 @@ fn render_extended_rows(
                                 matches_search,
                                 is_active_search,
                                 is_bookmarked,
+                                engine.context_line() == Some(actual_line_idx),
                             );
                         }
 
@@ -2892,6 +2952,8 @@ fn render_extended_rows(
                     external_tools,
                     &mut tool_run,
                     &mut anchor_pick,
+                    engine.is_filter_active(),
+                    &mut context_pick,
                 );
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
@@ -2932,6 +2994,9 @@ fn render_extended_rows(
     if let Some(line) = anchor_pick {
         engine.toggle_time_anchor(line);
     }
+    if let Some(line) = context_pick {
+        engine.enter_context(line);
+    }
     if max_row_natural_width > engine.max_detected_width {
         engine.max_detected_width = max_row_natural_width;
     }
@@ -2961,12 +3026,29 @@ fn row_context_menu(
     tools: &[ExternalTool],
     tool_run: &mut Option<(usize, usize)>,
     anchor_pick: &mut Option<usize>,
+    filtered: bool,
+    context_pick: &mut Option<usize>,
 ) {
-    if tools.is_empty() && anchor.is_none() {
+    if tools.is_empty() && anchor.is_none() && !filtered {
         return;
     }
     click.context_menu(|ui| {
         ui.set_min_width(160.0);
+        // On a filtered stream: the same line in the full log (CTRL + K).
+        if filtered {
+            if ui
+                .button(
+                    RichText::new(format!("◆ {}  (CTRL + K)", t(lang, "context_show"))).monospace(),
+                )
+                .clicked()
+            {
+                *context_pick = Some(line);
+                ui.close();
+            }
+            if anchor.is_some() || !tools.is_empty() {
+                ui.separator();
+            }
+        }
         if let Some(current) = anchor {
             if current != Some(line)
                 && ui
@@ -3169,6 +3251,7 @@ fn render_wrapped_rows(
     let mut toggle_json: Option<(usize, bool)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
     let mut anchor_pick: Option<usize> = None;
+    let mut context_pick: Option<usize> = None;
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -3294,7 +3377,7 @@ fn render_wrapped_rows(
                 WrapScroll::Pages(n) => walk_anchor(anchor, n as f32 * vh, rows, &mut measure),
                 WrapScroll::CenterLine(line) => {
                     // A line hidden by the filters resolves to the next visible row.
-                    let row = if eng.is_filter_active() {
+                    let row = if eng.rows_filtered() {
                         eng.filtered_lines.partition_point(|&l| l < line)
                     } else {
                         line
@@ -3381,7 +3464,13 @@ fn render_wrapped_rows(
             }
             let text_top = y + pad / 2.0;
             if show_markers {
-                let (glyph, color) = marker_glyph(theme, matches_search, is_active, is_bookmarked);
+                let (glyph, color) = marker_glyph(
+                    theme,
+                    matches_search,
+                    is_active,
+                    is_bookmarked,
+                    eng.context_line() == Some(line),
+                );
                 painter.text(
                     egui::pos2(origin.x + left_pad, text_top),
                     egui::Align2::LEFT_TOP,
@@ -3469,6 +3558,8 @@ fn render_wrapped_rows(
                 external_tools,
                 &mut tool_run,
                 &mut anchor_pick,
+                eng.is_filter_active(),
+                &mut context_pick,
             );
             // JSON toggle, registered after the row so it wins the click
             if r.is_json {
@@ -3521,6 +3612,9 @@ fn render_wrapped_rows(
     engine.current_scroll_y = ended;
     if let Some(line) = anchor_pick {
         engine.toggle_time_anchor(line);
+    }
+    if let Some(line) = context_pick {
+        engine.enter_context(line);
     }
     (row_click, toggle_json, tool_run)
 }
@@ -3588,7 +3682,7 @@ fn render_hex_stream(
             ui.horizontal(|ui| {
                 if has_search {
                     // Keep the header aligned with the marker column of the rows
-                    search_marker_label(ui, theme, font_size, false, false, false);
+                    search_marker_label(ui, theme, font_size, false, false, false, false);
                 }
                 ui.label(
                     RichText::new(offset_header)
@@ -3658,6 +3752,7 @@ fn render_hex_stream(
                             font_size,
                             matches_search,
                             is_active_search,
+                            false,
                             false,
                         );
                     }

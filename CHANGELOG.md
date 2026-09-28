@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `fasttail.ini` as `[global_filter]`; not in sessions or presets. Help dialog and all 16
   languages updated.
 
+- **Show in context.** With a filter active, the row menu item **Show in context** or
+  `CTRL + K` shows the selected line in the full, unfiltered log (centred, marked `◆`,
+  follow paused) under a banner; **Back to filtered view**, `Esc` or `CTRL + K` returns to
+  the filtered view with the same top row, selection and follow state, without
+  recomputing anything. The filter fields are dimmed meanwhile, and editing one applies the
+  new filter. The Find results tab offers it too, also for lines the stream's filter hides.
+  Help dialog and all 16 languages updated.
+
 ## [0.11.0] - 2026-09-27
 
 ### Added

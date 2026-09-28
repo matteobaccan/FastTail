@@ -771,6 +771,18 @@ fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: S
     spans.len() >= MAX_ROW_SPANS
 }
 
+/// State of "Show in context" (`TailEngine::enter_context`): the line shown and what
+/// the filtered view looked like, restored by `leave_context`.
+#[derive(Debug, Clone)]
+struct ContextView {
+    line: usize,
+    saved_scroll_y: f32,
+    saved_follow: bool,
+    saved_selection: BTreeSet<usize>,
+    saved_selection_all: bool,
+    saved_anchor: Option<usize>,
+}
+
 pub struct TailEngine {
     pub path: PathBuf,
     /// On-demand access to the file: a shared handle plus a small block cache. No copy of
@@ -876,6 +888,8 @@ pub struct TailEngine {
     filter: FilterSpec,
     /// The global filter shared by every stream (see `set_global_filter`).
     global_filter: Option<Arc<FilterSpec>>,
+    /// "Show in context": the filters suspended around one line (see `enter_context`).
+    context: Option<ContextView>,
     /// Running background scan, if any (one at a time per stream).
     job: Option<ScanJob>,
     job_generation: u64,
@@ -1481,6 +1495,7 @@ impl TailEngine {
             histogram_generation: 0,
             filter: FilterSpec::default(),
             global_filter: None,
+            context: None,
             job: None,
             job_generation: 0,
             pending_refresh_from: None,
@@ -1614,8 +1629,78 @@ impl TailEngine {
     }
 
     pub fn refresh_filters(&mut self) {
+        // A filter change ends the context view: the new filter applies, and the line
+        // shown in context stays centred when it is still visible.
+        let anchor = self.context.take().map(|c| c.line);
         self.filter = self.build_filter();
         self.recompute_filtered_lines();
+        if let Some(line) = anchor {
+            if self.get_visible_row_of_line(line).is_some() {
+                self.pending_jump = Some(line);
+            }
+        }
+    }
+
+    /// Whether the rows are the filtered ones: a filter is active and no line is being
+    /// shown in context. Filter maintenance keeps using `is_filter_active`, so
+    /// `filtered_lines` stays exact (and keeps growing) while the context view lasts.
+    pub fn rows_filtered(&self) -> bool {
+        self.is_filter_active() && self.context.is_none()
+    }
+
+    /// The line shown in context, while the context view lasts.
+    pub fn context_line(&self) -> Option<usize> {
+        self.context.as_ref().map(|c| c.line)
+    }
+
+    /// "Show in context": suspends the stream's filters (its own and the global one)
+    /// and shows every line with `line` centred and selected, follow paused. Nothing is
+    /// recomputed: `leave_context` returns to the filtered view exactly as it was. From
+    /// the context view itself it only moves to `line`. Returns false without a filter,
+    /// or while the line index is still being built.
+    pub fn enter_context(&mut self, line: usize) -> bool {
+        if !self.is_filter_active() || self.index_pending || line >= self.total_lines() {
+            return false;
+        }
+        if self.context.is_none() {
+            self.context = Some(ContextView {
+                line,
+                saved_scroll_y: self.current_scroll_y,
+                saved_follow: self.follow_tail,
+                saved_selection: std::mem::take(&mut self.selection),
+                saved_selection_all: self.selection_all,
+                saved_anchor: self.selection_anchor,
+            });
+            self.filter_generation = self.filter_generation.wrapping_add(1);
+        } else if let Some(c) = self.context.as_mut() {
+            c.line = line;
+        }
+        self.follow_tail = false;
+        self.select_row(line);
+        self.pending_jump = Some(line);
+        self.view_notice = None;
+        true
+    }
+
+    /// Back to the filtered view: the selection, follow state and scroll position of
+    /// the moment the context view was entered.
+    pub fn leave_context(&mut self) {
+        let Some(c) = self.context.take() else {
+            return;
+        };
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+        self.selection = c.saved_selection;
+        self.selection_all = c.saved_selection_all;
+        self.selection_anchor = c.saved_anchor;
+        self.follow_tail = c.saved_follow;
+        self.pending_jump = None;
+        if !c.saved_follow {
+            if self.wrap_lines {
+                self.wrap_request = Some(WrapScroll::CenterLine(c.line));
+            } else {
+                self.requested_scroll_y = Some(c.saved_scroll_y);
+            }
+        }
     }
 
     fn build_filter(&self) -> FilterSpec {
@@ -2072,7 +2157,9 @@ impl TailEngine {
     }
 
     pub fn rebuild_line_index(&mut self) {
-        // The file was truncated, rewritten or re-decoded: row indices no longer mean the same.
+        // The file was truncated, rewritten or re-decoded: row indices no longer mean the same,
+        // and a context view has nothing to return to.
+        self.context = None;
         self.reload_generation = self.reload_generation.wrapping_add(1);
         self.job = None;
         self.index_pending = false;
@@ -3178,7 +3265,7 @@ impl TailEngine {
     }
 
     pub fn visible_line_count(&self) -> usize {
-        if self.is_filter_active() {
+        if self.rows_filtered() {
             self.filtered_lines.len()
         } else {
             self.total_lines()
@@ -3186,7 +3273,7 @@ impl TailEngine {
     }
 
     pub fn get_actual_line_idx(&self, visible_row: usize) -> Option<usize> {
-        if self.is_filter_active() {
+        if self.rows_filtered() {
             self.filtered_lines.get(visible_row).copied()
         } else if visible_row < self.total_lines() {
             Some(visible_row)
@@ -3196,7 +3283,7 @@ impl TailEngine {
     }
 
     pub fn get_visible_row_of_line(&self, line_idx: usize) -> Option<usize> {
-        if self.is_filter_active() {
+        if self.rows_filtered() {
             // The visible lines are in file order.
             self.filtered_lines.binary_search(&line_idx).ok()
         } else if line_idx < self.total_lines() {
@@ -3494,7 +3581,7 @@ impl TailEngine {
     pub fn visible_time_span(&self) -> Option<(i64, i64)> {
         let count = self.visible_line_count();
         let nth = |i: usize| -> usize {
-            if self.is_filter_active() {
+            if self.rows_filtered() {
                 self.filtered_lines[i]
             } else {
                 i
@@ -3971,6 +4058,9 @@ impl TailEngine {
         if mode == ViewMode::Markdown && self.markdown_too_large() {
             // Rendered Markdown needs the whole text in memory: stay in the current view.
             return;
+        }
+        if matches!(mode, ViewMode::Hex | ViewMode::Markdown) {
+            self.leave_context();
         }
         self.view_notice = None;
         // The current hit of the text view, carried to the same file bytes in HEX.
@@ -4688,7 +4778,7 @@ impl TailEngine {
     /// visible one when a filter hides it.
     pub fn goto_target_for(&self, line: usize, total: usize) -> GotoTarget {
         let clamped = line.min(total.saturating_sub(1));
-        if !self.is_filter_active() {
+        if !self.rows_filtered() {
             return GotoTarget {
                 requested: clamped,
                 line: clamped,
