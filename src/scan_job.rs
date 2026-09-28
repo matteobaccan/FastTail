@@ -16,7 +16,9 @@ use regex::Regex;
 use crate::ansi::AnsiMode;
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
-use crate::tail_engine::{contains_case_insensitive, decode_line_ansi, FileEncoding, NO_TIMESTAMP};
+use crate::tail_engine::{
+    contains_case_insensitive, decode_line_ansi, CompiledHighlight, FileEncoding, NO_TIMESTAMP,
+};
 use crate::timestamp::{detect_timestamp, FormatHint};
 
 const CHUNK: usize = 1024 * 1024;
@@ -32,6 +34,9 @@ pub enum ScanKind {
     Levels,
     /// Detects the timestamp of every line (fills the engine's per-line timestamp cache).
     Timestamps,
+    /// Finds the lines matched by the rules that bookmark them (the engine's automatic
+    /// bookmarks).
+    AutoBookmarks,
 }
 
 /// Most include terms, and most exclude terms, a stream can hold.
@@ -229,6 +234,12 @@ pub enum JobSpec {
         limit: usize,
         count_past_limit: bool,
     },
+    /// Emit the indices of the lines any of `rules` matches (the enabled rules with
+    /// "Bookmark matching lines"), whatever the filters; the scan stops after `limit`.
+    AutoBookmarks {
+        rules: Vec<CompiledHighlight>,
+        limit: usize,
+    },
 }
 
 /// Messages from the worker, always tagged with the job generation.
@@ -297,6 +308,7 @@ impl ScanJob {
             JobSpec::Search { .. } => ScanKind::Search,
             JobSpec::Levels => ScanKind::Levels,
             JobSpec::Timestamps { .. } => ScanKind::Timestamps,
+            JobSpec::AutoBookmarks { .. } => ScanKind::AutoBookmarks,
         };
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -541,6 +553,18 @@ fn run(
                 }
                 true
             }
+            JobSpec::AutoBookmarks { rules, limit } => {
+                if line_passes(bytes, range.encoding, strip, |s| {
+                    rules.iter().any(|r| r.is_match(s))
+                }) {
+                    hits.push(idx);
+                    tally.listed += 1;
+                    if tally.listed >= *limit {
+                        return false;
+                    }
+                }
+                true
+            }
         }
     };
 
@@ -633,6 +657,11 @@ fn run(
                 if !send(batch) {
                     return;
                 }
+            }
+        } else if matches!(spec, JobSpec::AutoBookmarks { .. }) {
+            // Few hits as a rule: every chunk's, so the marks appear as the scan goes.
+            if !hits.is_empty() && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
+                return;
             }
         } else if tally.counted > 0 {
             // Past the limit: the last listed hits, then the count, in that order.

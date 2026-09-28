@@ -635,6 +635,7 @@ impl FastTailApp {
                         std::time::Duration::from_millis(app.config.size_check_interval_ms as u64);
                     engine
                         .set_markdown_max_bytes((app.config.markdown_max_mb as u64) * 1024 * 1024);
+                    engine.auto_bookmark_max = app.config.auto_bookmark_max;
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
                     engine.wrap_lines = app.config.wrap_for(&path);
@@ -891,7 +892,11 @@ impl FastTailApp {
         for entry in &loaded.session.streams {
             self.config.set_stream_state(entry.clone());
             self.config.set_wrap(&entry.path, entry.wrap);
-            self.config.set_bookmarks(&entry.path, &entry.bookmarks);
+            self.config.set_bookmarks_with_notes(
+                &entry.path,
+                &entry.bookmarks,
+                &entry.bookmark_notes,
+            );
             self.open_log_file(entry.path.clone());
         }
         if let Some(layout) = &loaded.session.dock_layout {
@@ -1175,6 +1180,7 @@ impl FastTailApp {
             let mut entry = stream_entry_of(eng);
             entry.wrap = false;
             entry.bookmarks.clear();
+            entry.bookmark_notes.clear();
             self.config.set_stream_state(entry);
         }
         let open = self.config.open_files.clone();
@@ -1295,6 +1301,7 @@ impl FastTailApp {
         engine.size_check_interval =
             std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
         engine.set_markdown_max_bytes((self.config.markdown_max_mb as u64) * 1024 * 1024);
+        engine.auto_bookmark_max = self.config.auto_bookmark_max;
         engine.set_highlight_rules(self.config.highlight_rules.clone());
         engine.set_quick_labels(&self.quick_labels);
         engine.size_unit = self.config.size_unit;
@@ -1467,6 +1474,7 @@ impl FastTailApp {
             engine.size_check_interval =
                 std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
             engine.set_markdown_max_bytes((self.config.markdown_max_mb as u64) * 1024 * 1024);
+            engine.auto_bookmark_max = self.config.auto_bookmark_max;
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
@@ -2986,7 +2994,8 @@ impl FastTailApp {
             if eng.bookmarks_dirty {
                 eng.bookmarks_dirty = false;
                 let lines: Vec<usize> = eng.bookmarks.iter().copied().collect();
-                self.config.set_bookmarks(&eng.path, &lines);
+                self.config
+                    .set_bookmarks_with_notes(&eng.path, &lines, &eng.bookmark_notes);
                 bookmarks_changed = true;
             }
             if eng.wrap_dirty {
@@ -3002,6 +3011,7 @@ impl FastTailApp {
                 let mut entry = stream_entry_of(eng);
                 entry.wrap = false;
                 entry.bookmarks.clear();
+                entry.bookmark_notes.clear();
                 self.config.set_stream_state(entry);
                 bookmarks_changed = true;
             }
@@ -3441,6 +3451,31 @@ impl FastTailApp {
                                     engine.set_markdown_max_bytes(
                                         (self.config.markdown_max_mb as u64) * 1024 * 1024,
                                     );
+                                }
+                                let _ = self.config.save();
+                            }
+                        });
+
+                        // Automatic bookmarks kept per stream; the open streams recompute
+                        // theirs under the new cap once the drag is over.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "auto_bookmark_max")))
+                                    .monospace(),
+                            );
+                            let resp = ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.auto_bookmark_max)
+                                        .range(
+                                            crate::tail_engine::MIN_AUTO_BOOKMARK_MAX
+                                                ..=crate::tail_engine::MAX_AUTO_BOOKMARK_MAX,
+                                        )
+                                        .speed(100.0),
+                                )
+                                .on_hover_text(t(lang, "auto_bookmark_max_tip"));
+                            if (resp.changed() && !resp.dragged()) || resp.drag_stopped() {
+                                for engine in &mut self.engines {
+                                    engine.set_auto_bookmark_max(self.config.auto_bookmark_max);
                                 }
                                 let _ = self.config.save();
                             }
@@ -4650,10 +4685,12 @@ impl StdinOptions {
 /// The session entry describing `engine` as it is now.
 fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
     let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
+    let mut bookmark_notes = engine.bookmark_notes.clone();
     if let Some(c) = engine.compressed.as_ref() {
         // A restored compressed stream still waiting for its index to reach them.
         if bookmarks.is_empty() {
             bookmarks = c.pending_bookmarks.clone();
+            bookmark_notes = c.pending_bookmark_notes.clone();
         }
     }
     StreamEntry {
@@ -4668,6 +4705,7 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),
         timeline: engine.timeline_open,
         bookmarks,
+        bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
     }
 }
@@ -4676,11 +4714,12 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
 /// its bookmarks wait until the index covers them (see `TailEngine::poll_compressed`).
 fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
     if let Some(c) = engine.compressed.as_mut() {
-        if let Some((_, lines)) = cfg.bookmarks.iter().find(|(p, _)| paths_equal(p, path)) {
+        if let Some((_, lines, notes)) = cfg.saved_bookmarks(path) {
             c.pending_bookmarks = lines.clone();
+            c.pending_bookmark_notes = notes.clone();
         }
-    } else if let Some(lines) = cfg.bookmarks_for(path, engine.total_lines()) {
-        engine.set_bookmarks(lines);
+    } else if let Some((lines, notes)) = cfg.bookmarks_with_notes_for(path, engine.total_lines()) {
+        engine.set_bookmarks_with_notes(lines, notes);
     }
 }
 
@@ -4700,9 +4739,10 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
         if enc != engine.encoding {
             // Re-decoding rebuilds the index and drops bookmarks: restore them after.
             let bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
+            let notes = engine.bookmark_notes.clone();
             engine.set_encoding(enc);
             if !bookmarks.is_empty() && bookmarks.iter().all(|&l| l < engine.total_lines()) {
-                engine.set_bookmarks(bookmarks);
+                engine.set_bookmarks_with_notes(bookmarks, notes);
             }
         }
     }

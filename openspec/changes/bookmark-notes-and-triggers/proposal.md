@@ -11,7 +11,7 @@ it is the gap found by the post-0.11.0 competitor scan.
 
 - **Bookmark notes**: a bookmark can carry a single-line note of at most 200 characters,
   added or edited from the row context menu ("Bookmark note…"), shown as the tooltip of the
-  row's `★` marker and of the bookmark mark in the overview strip, and marked with `✎` in
+  row's `★` marker and of the bookmark mark in the overview strip, and marked with `✏` in
   the marker column. Writing a note on a row without a bookmark bookmarks it; clearing the
   note keeps the bookmark; removing the bookmark removes the note.
 - Notes are **persisted with the bookmarks**: in `fasttail.ini` section `[bookmarks]` new

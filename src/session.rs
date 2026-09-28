@@ -14,6 +14,7 @@ use crate::filter_preset::ini_value;
 use crate::scan_job::MAX_FILTER_TERMS;
 use crate::wildcard::{is_pattern_path, split_pattern};
 use ini::Ini;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// File name suffix of a session file (`incident.fasttail-session.ini`).
@@ -46,6 +47,9 @@ pub struct StreamEntry {
     pub timeline: bool,
     /// Bookmarked line indices, sorted.
     pub bookmarks: Vec<usize>,
+    /// Notes of some of the bookmarks, stored as `bookmark_note.<line>` next to
+    /// `bookmarks`: an older build ignores them and keeps the bookmarks.
+    pub bookmark_notes: BTreeMap<usize, String>,
     /// Entry name when the stream is a zip entry: `path` is then `archive/entry` (see
     /// `compressed::entry_path`), and the file stores the archive path and the entry.
     pub archive_entry: Option<String>,
@@ -152,6 +156,11 @@ impl Session {
                     .collect::<Vec<_>>()
                     .join(","),
             );
+            for (line, text) in &s.bookmark_notes {
+                if s.bookmarks.binary_search(line).is_ok() {
+                    sec.set(format!("bookmark_note.{line}"), ini_value(text));
+                }
+            }
         }
     }
 
@@ -216,6 +225,7 @@ impl Session {
                 .get("bookmarks")
                 .map(|s| s.split(',').filter_map(|n| n.trim().parse().ok()).collect())
                 .unwrap_or_default();
+            let bookmark_notes = crate::config::read_notes(sec, "bookmark_note.", &bookmarks);
             out.session.streams.push(StreamEntry {
                 path: resolved,
                 include_filter: sec.get("include").unwrap_or("").to_string(),
@@ -241,6 +251,7 @@ impl Session {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(false),
                 bookmarks,
+                bookmark_notes,
                 archive_entry,
             });
         }
@@ -289,11 +300,9 @@ impl Session {
                     entry.archive_entry = crate::compressed::split_entry_path(p).map(|(_, e)| e);
                 }
                 entry.wrap = cfg.wrap_for(p);
-                entry.bookmarks = cfg
-                    .bookmarks
-                    .iter()
-                    .find(|(bp, _)| crate::paths::paths_equal(bp, p))
-                    .map(|(_, lines)| lines.clone())
+                (entry.bookmarks, entry.bookmark_notes) = cfg
+                    .saved_bookmarks(p)
+                    .map(|(_, lines, notes)| (lines.clone(), notes.clone()))
                     .unwrap_or_default();
                 entry
             })
@@ -312,7 +321,7 @@ impl Session {
         for s in &self.streams {
             cfg.set_stream_state(s.clone());
             cfg.set_wrap(&s.path, s.wrap);
-            cfg.set_bookmarks(&s.path, &s.bookmarks);
+            cfg.set_bookmarks_with_notes(&s.path, &s.bookmarks, &s.bookmark_notes);
         }
     }
 }

@@ -664,8 +664,10 @@ pub struct CompressedStream {
     job: DecompressJob,
     spool: SpoolFile,
     wake: Option<WakeFn>,
-    /// Bookmarks to restore once the index covers them (a restored stream starts empty).
+    /// Bookmarks to restore once the index covers them (a restored stream starts empty),
+    /// with their notes.
     pub pending_bookmarks: Vec<usize>,
+    pub pending_bookmark_notes: std::collections::BTreeMap<usize, String>,
     /// The end of the job has been seen by the engine: final size indexed, encoding
     /// detection settled, pending bookmarks applied.
     finalized: bool,
@@ -691,6 +693,7 @@ impl CompressedStream {
             spool,
             wake,
             pending_bookmarks: Vec::new(),
+            pending_bookmark_notes: std::collections::BTreeMap::new(),
             finalized: false,
         };
         stream.job = stream.new_job(out);
@@ -896,12 +899,14 @@ impl TailEngine {
     /// Re-extracts a compressed stream from the start, keeping its bookmarks.
     pub fn reload_compressed(&mut self) -> std::io::Result<()> {
         let bookmarks: Vec<usize> = self.bookmarks.iter().copied().collect();
+        let notes = self.bookmark_notes.clone();
         let Some(c) = self.compressed.as_mut() else {
             return Ok(());
         };
         c.restart()?;
         if !bookmarks.is_empty() {
             c.pending_bookmarks = bookmarks;
+            c.pending_bookmark_notes = notes;
         }
         Ok(())
     }
@@ -940,12 +945,17 @@ impl TailEngine {
             .is_some_and(|&max| max < total);
         if settled && (fits || finished) && !c.pending_bookmarks.is_empty() {
             let bookmarks = std::mem::take(&mut c.pending_bookmarks);
+            let notes = std::mem::take(&mut c.pending_bookmark_notes);
             if fits {
-                self.set_bookmarks(bookmarks);
+                self.set_bookmarks_with_notes(bookmarks, notes);
                 // A reload rebuilt the index and saved the bookmarks as gone: save
                 // them again.
                 self.bookmarks_dirty = true;
             }
+        }
+        if finished {
+            // The automatic bookmarks waited for the whole entry.
+            self.run_auto_scan_if_due();
         }
     }
 }
@@ -1489,6 +1499,29 @@ mod tests {
             engine.bookmarks.iter().copied().collect::<Vec<_>>(),
             [5, 2999]
         );
+    }
+
+    #[test]
+    fn restored_notes_and_automatic_bookmarks_wait_for_the_extraction() {
+        let dir = tempfile::tempdir().unwrap();
+        let gz = dir.path().join("app.gz");
+        std::fs::write(&gz, gzip(&log_text(3000))).unwrap();
+        let mut engine = open_engine(&gz, None, &test_settings(dir.path()), None).unwrap();
+        let mut rule = crate::tail_engine::HighlightRule::new("line 2", [0; 3], [0; 3], false);
+        rule.auto_bookmark = true;
+        engine.set_highlight_rules(vec![rule]);
+        let c = engine.compressed.as_mut().unwrap();
+        c.pending_bookmarks = vec![5, 2999];
+        c.pending_bookmark_notes = [(2999, "last one".to_string())].into_iter().collect();
+        settle(&mut engine);
+        assert_eq!(engine.bookmark_note(2999), Some("last one"));
+        // "line 2", "line 20".."line 29", "line 200".."line 299", "line 2000".."line 2999".
+        assert_eq!(engine.auto_bookmarks().len(), 1 + 10 + 100 + 1000);
+
+        engine.reload_compressed().unwrap();
+        settle(&mut engine);
+        assert_eq!(engine.bookmark_note(2999), Some("last one"));
+        assert_eq!(engine.auto_bookmarks().len(), 1111);
     }
 
     #[test]

@@ -545,17 +545,64 @@ fn search_marker_label(
     font_size: f32,
     matches: bool,
     is_active: bool,
-    bookmarked: bool,
+    bookmark: BookmarkMark,
     context: bool,
-) {
-    let (glyph, color) = marker_glyph(theme, matches, is_active, bookmarked, context);
+) -> egui::Rect {
+    let (glyph, color) = marker_glyph(theme, matches, is_active, bookmark, context);
     ui.label(
         RichText::new(format!("{glyph} "))
             .monospace()
             .strong()
             .size(font_size)
             .color(color),
-    );
+    )
+    .rect
+}
+
+/// How a row is bookmarked, for its marker: manually (`★`, `✏` with a note), only
+/// automatically by a rule (`☆`), or not at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BookmarkMark {
+    None,
+    Manual,
+    Note,
+    Auto,
+}
+
+impl BookmarkMark {
+    fn of(engine: &TailEngine, line: usize) -> Self {
+        if engine.bookmarks.contains(&line) {
+            if engine.bookmark_note(line).is_some() {
+                BookmarkMark::Note
+            } else {
+                BookmarkMark::Manual
+            }
+        } else if engine.is_auto_bookmark(line) {
+            BookmarkMark::Auto
+        } else {
+            BookmarkMark::None
+        }
+    }
+
+    fn is_set(self) -> bool {
+        self != BookmarkMark::None
+    }
+}
+
+/// Shows the note of a bookmarked row while the pointer is over its marker; the row's
+/// click target lies on top, so its response carries the tooltip.
+fn note_tooltip(
+    ui: &Ui,
+    engine: &TailEngine,
+    line: usize,
+    marker: egui::Rect,
+    row: egui::Response,
+) {
+    if let Some(note) = engine.bookmark_note(line) {
+        if row.hovered() && ui.rect_contains_pointer(marker) {
+            row.on_hover_text(note);
+        }
+    }
 }
 
 /// Row tint for search hits, the selection and bookmarks; search tints win over the
@@ -588,12 +635,12 @@ fn row_tint(
 }
 
 /// Marker glyph and colour of a row: ◆ the line shown in context, ▶ current hit, ● other
-/// hits, ★ bookmark, blank otherwise.
+/// hits, ★ bookmark (✏ with a note, ☆ automatic), blank otherwise.
 fn marker_glyph(
     theme: &CyberTheme,
     matches: bool,
     is_active: bool,
-    bookmarked: bool,
+    bookmark: BookmarkMark,
     context: bool,
 ) -> (&'static str, Color32) {
     if context {
@@ -602,10 +649,13 @@ fn marker_glyph(
         ("▶", theme.accent_color())
     } else if matches {
         ("●", theme.warn_color())
-    } else if bookmarked {
-        ("★", theme.secondary_accent())
     } else {
-        ("\u{2007}", theme.text_dim()) // figure space: same advance as a digit
+        match bookmark {
+            BookmarkMark::Manual => ("★", theme.secondary_accent()),
+            BookmarkMark::Note => ("✏", theme.secondary_accent()),
+            BookmarkMark::Auto => ("☆", theme.secondary_accent()),
+            BookmarkMark::None => ("\u{2007}", theme.text_dim()), // figure space: a digit's advance
+        }
     }
 }
 
@@ -995,6 +1045,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Search => "scan_searching",
         crate::scan_job::ScanKind::Levels => "scan_levels",
         crate::scan_job::ScanKind::Timestamps => "scan_timestamps",
+        crate::scan_job::ScanKind::AutoBookmarks => "scan_auto_bookmarks",
     }
 }
 
@@ -1474,6 +1525,16 @@ fn render_log_stream(
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
+        if engine.auto_bookmarks_capped() {
+            let text = t(lang, "auto_bookmarks_capped")
+                .replace("{n}", &engine.auto_bookmark_max.to_string());
+            ui.label(
+                RichText::new(format!("ⓘ {text}"))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .on_hover_text(t(lang, "auto_bookmarks_capped_tip"));
+        }
         if let Some(notice) = &engine.view_notice {
             ui.label(
                 RichText::new(format!("ⓘ {notice}"))
@@ -1873,6 +1934,43 @@ fn render_log_stream(
                         .size(11.0)
                         .color(theme.warn_color()),
                 );
+            }
+        }
+
+        // Bookmark note (row context menu): one line, Enter saves, Esc cancels.
+        if let Some(mut editor) = engine.note_editor.take() {
+            ui.separator();
+            ui.label(
+                RichText::new(format!(
+                    "✏ {} {}:",
+                    t(lang, "bookmark_note_label"),
+                    editor.line + 1
+                ))
+                .monospace()
+                .size(11.0)
+                .color(theme.accent_color()),
+            );
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut editor.text)
+                    .hint_text(t(lang, "bookmark_note_hint"))
+                    .char_limit(crate::tail_engine::MAX_NOTE_CHARS)
+                    .desired_width(260.0)
+                    .id(egui::Id::new("bookmark_note_input").with(&engine.path)),
+            );
+            if editor.focus {
+                // Opened from the context menu last frame, before the field existed.
+                resp.request_focus();
+                editor.focus = false;
+            }
+            // A single-line field gives the focus up on Enter and on Esc.
+            let active = resp.has_focus() || resp.lost_focus();
+            let enter = active && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let esc = active && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if enter {
+                engine.set_bookmark_note(editor.line, &editor.text);
+                ui.ctx().request_repaint();
+            } else if !esc {
+                engine.note_editor = Some(editor);
             }
         }
 
@@ -2752,8 +2850,7 @@ fn render_extended_rows(
     let mut toggle_json = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
-    let mut anchor_pick: Option<usize> = None;
-    let mut context_pick: Option<usize> = None;
+    let mut picks = RowMenuPicks::default();
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
@@ -2813,7 +2910,9 @@ fn render_extended_rows(
                 // Raw mode draws ESC as ␛, with the spans moved past the wider glyphs.
                 let (shown, spans) = row.display(spans);
                 let is_selected = engine.is_selected(actual_line_idx);
-                let is_bookmarked = engine.is_bookmarked(actual_line_idx);
+                let bookmark = BookmarkMark::of(engine, actual_line_idx);
+                let is_bookmarked = bookmark.is_set();
+                let mut marker_rect = egui::Rect::NOTHING;
 
                 // Background painted after layout, behind the row (see SearchRowMark)
                 let row_bg = ui.painter().add(egui::Shape::Noop);
@@ -2825,13 +2924,13 @@ fn render_extended_rows(
 
                         // Search marker column: ▶ current hit, ● other hits, blank otherwise
                         if show_markers {
-                            search_marker_label(
+                            marker_rect = search_marker_label(
                                 ui,
                                 theme,
                                 font_size,
                                 matches_search,
                                 is_active_search,
-                                is_bookmarked,
+                                bookmark,
                                 engine.context_line() == Some(actual_line_idx),
                             );
                         }
@@ -2964,10 +3063,11 @@ fn render_extended_rows(
                     time_delta.map(|_| engine.time_anchor()),
                     external_tools,
                     &mut tool_run,
-                    &mut anchor_pick,
                     engine.is_filter_active(),
-                    &mut context_pick,
+                    is_bookmarked,
+                    &mut picks,
                 );
+                note_tooltip(ui, engine, actual_line_idx, marker_rect, click);
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
                     row_resp.scroll_to_me(Some(egui::Align::Center));
@@ -3004,12 +3104,7 @@ fn render_extended_rows(
     if clear_scroll_to_line {
         engine.scroll_to_line = None;
     }
-    if let Some(line) = anchor_pick {
-        engine.toggle_time_anchor(line);
-    }
-    if let Some(line) = context_pick {
-        engine.enter_context(line);
-    }
+    picks.apply(engine);
     if max_row_natural_width > engine.max_detected_width {
         engine.max_detected_width = max_row_natural_width;
     }
@@ -3027,9 +3122,39 @@ type RowInteractions = (
     Option<(usize, usize)>,
 );
 
-/// Row context menu: the time anchor entries while the time delta column is shown
-/// (`anchor` is `Some(current anchor)` then), recorded in `anchor_pick` as the line to
-/// toggle, and the external tools, recorded in `tool_run`.
+/// Lines picked in a row context menu this frame, applied once the rows are drawn.
+#[derive(Debug, Default)]
+struct RowMenuPicks {
+    /// Time anchor to toggle.
+    anchor: Option<usize>,
+    /// Line to show in context.
+    context: Option<usize>,
+    /// Line whose bookmark note to edit, and line whose bookmark to remove.
+    note: Option<usize>,
+    remove_bookmark: Option<usize>,
+}
+
+impl RowMenuPicks {
+    fn apply(self, engine: &mut TailEngine) {
+        if let Some(line) = self.anchor {
+            engine.toggle_time_anchor(line);
+        }
+        if let Some(line) = self.context {
+            engine.enter_context(line);
+        }
+        if let Some(line) = self.note {
+            engine.open_note_editor(line);
+        }
+        if let Some(line) = self.remove_bookmark {
+            engine.remove_bookmark(line);
+        }
+    }
+}
+
+/// Row context menu: the bookmark note and removal, the line in context on a filtered
+/// stream, the time anchor entries while the time delta column is shown (`anchor` is
+/// `Some(current anchor)` then), recorded in `picks`, and the external tools, recorded
+/// in `tool_run`.
 #[allow(clippy::too_many_arguments)]
 fn row_context_menu(
     click: &egui::Response,
@@ -3038,15 +3163,33 @@ fn row_context_menu(
     anchor: Option<Option<usize>>,
     tools: &[ExternalTool],
     tool_run: &mut Option<(usize, usize)>,
-    anchor_pick: &mut Option<usize>,
     filtered: bool,
-    context_pick: &mut Option<usize>,
+    bookmarked: bool,
+    picks: &mut RowMenuPicks,
 ) {
-    if tools.is_empty() && anchor.is_none() && !filtered {
-        return;
-    }
     click.context_menu(|ui| {
         ui.set_min_width(160.0);
+        if ui
+            .button(RichText::new(format!("✏ {}", t(lang, "bookmark_note_menu"))).monospace())
+            .clicked()
+        {
+            picks.note = Some(line);
+            ui.close();
+        }
+        if bookmarked
+            && ui
+                .button(
+                    RichText::new(format!("☆ {}  (CTRL + F2)", t(lang, "bookmark_remove")))
+                        .monospace(),
+                )
+                .clicked()
+        {
+            picks.remove_bookmark = Some(line);
+            ui.close();
+        }
+        if filtered || anchor.is_some() || !tools.is_empty() {
+            ui.separator();
+        }
         // On a filtered stream: the same line in the full log (CTRL + K).
         if filtered {
             if ui
@@ -3055,7 +3198,7 @@ fn row_context_menu(
                 )
                 .clicked()
             {
-                *context_pick = Some(line);
+                picks.context = Some(line);
                 ui.close();
             }
             if anchor.is_some() || !tools.is_empty() {
@@ -3068,7 +3211,7 @@ fn row_context_menu(
                     .button(RichText::new(format!("⚓ {}", t(lang, "time_anchor_set"))).monospace())
                     .clicked()
             {
-                *anchor_pick = Some(line);
+                picks.anchor = Some(line);
                 ui.close();
             }
             if let Some(current) = current {
@@ -3077,7 +3220,7 @@ fn row_context_menu(
                     .clicked()
                 {
                     // Toggling the anchor line clears it.
-                    *anchor_pick = Some(current);
+                    picks.anchor = Some(current);
                     ui.close();
                 }
             }
@@ -3263,8 +3406,7 @@ fn render_wrapped_rows(
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut toggle_json: Option<(usize, bool)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
-    let mut anchor_pick: Option<usize> = None;
-    let mut context_pick: Option<usize> = None;
+    let mut picks = RowMenuPicks::default();
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -3469,7 +3611,8 @@ fn render_wrapped_rows(
             let matches_search = has_search && eng.search_matches.binary_search(&line).is_ok();
             let is_active = active_search_line == Some(line);
             let is_selected = eng.is_selected(line);
-            let is_bookmarked = eng.is_bookmarked(line);
+            let bookmark = BookmarkMark::of(eng, line);
+            let is_bookmarked = bookmark.is_set();
             if let Some(fill) =
                 row_tint(theme, matches_search, is_active, is_selected, is_bookmarked)
             {
@@ -3481,7 +3624,7 @@ fn render_wrapped_rows(
                     theme,
                     matches_search,
                     is_active,
-                    is_bookmarked,
+                    bookmark,
                     eng.context_line() == Some(line),
                 );
                 painter.text(
@@ -3570,10 +3713,15 @@ fn render_wrapped_rows(
                 time_delta.map(|_| eng.time_anchor()),
                 external_tools,
                 &mut tool_run,
-                &mut anchor_pick,
                 eng.is_filter_active(),
-                &mut context_pick,
+                is_bookmarked,
+                &mut picks,
             );
+            let marker_rect = egui::Rect::from_min_size(
+                egui::pos2(origin.x + left_pad, text_top),
+                egui::vec2(marker_w, font_row_h),
+            );
+            note_tooltip(ui, eng, line, marker_rect, click);
             // JSON toggle, registered after the row so it wins the click
             if r.is_json {
                 let btn_rect = egui::Rect::from_min_size(
@@ -3623,12 +3771,7 @@ fn render_wrapped_rows(
     engine.wrap_scroll_abs = ended;
     engine.current_scroll_x = 0.0;
     engine.current_scroll_y = ended;
-    if let Some(line) = anchor_pick {
-        engine.toggle_time_anchor(line);
-    }
-    if let Some(line) = context_pick {
-        engine.enter_context(line);
-    }
+    picks.apply(engine);
     (row_click, toggle_json, tool_run)
 }
 
@@ -3695,7 +3838,15 @@ fn render_hex_stream(
             ui.horizontal(|ui| {
                 if has_search {
                     // Keep the header aligned with the marker column of the rows
-                    search_marker_label(ui, theme, font_size, false, false, false, false);
+                    search_marker_label(
+                        ui,
+                        theme,
+                        font_size,
+                        false,
+                        false,
+                        BookmarkMark::None,
+                        false,
+                    );
                 }
                 ui.label(
                     RichText::new(offset_header)
@@ -3765,7 +3916,7 @@ fn render_hex_stream(
                             font_size,
                             matches_search,
                             is_active_search,
-                            false,
+                            BookmarkMark::None,
                             false,
                         );
                     }
@@ -4787,6 +4938,14 @@ pub fn render_highlights_content(
                             .clicked()
                     {
                         rule.sound_alert.play();
+                    }
+
+                    if ui
+                        .checkbox(&mut rule.auto_bookmark, t(lang, "rule_auto_bookmark"))
+                        .on_hover_text(t(lang, "rule_auto_bookmark_tip"))
+                        .changed()
+                    {
+                        rules_changed = true;
                     }
 
                     ui.label(RichText::new("FG:").monospace().size(11.0));

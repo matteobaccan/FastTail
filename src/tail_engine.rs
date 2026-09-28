@@ -13,7 +13,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
@@ -221,6 +221,30 @@ impl QuickLabel {
 /// Cap on queued external-tool hits per stream (see `TailEngine::collect_tool_hits`).
 pub const MAX_PENDING_TOOL_HITS: usize = 256;
 
+/// Longest bookmark note, in characters (see `normalize_note`).
+pub const MAX_NOTE_CHARS: usize = 200;
+/// Default and bounds of the `auto_bookmark_max` setting: automatic bookmarks kept per
+/// stream. 16 bytes per entry plus the tree nodes: about 0.4 MB at the default.
+pub const DEFAULT_AUTO_BOOKMARK_MAX: usize = 10_000;
+pub const MIN_AUTO_BOOKMARK_MAX: usize = 100;
+pub const MAX_AUTO_BOOKMARK_MAX: usize = 100_000;
+
+/// A bookmark note as it is kept: line breaks and tabs become spaces, the ends are
+/// trimmed, and at most `MAX_NOTE_CHARS` characters are kept.
+pub fn normalize_note(text: &str) -> String {
+    let flat: String = text
+        .chars()
+        .map(|c| {
+            if matches!(c, '\n' | '\r' | '\t') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    flat.trim().chars().take(MAX_NOTE_CHARS).collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HighlightRule {
     pub pattern: String,
@@ -241,6 +265,10 @@ pub struct HighlightRule {
     /// instead of the whole row.
     #[serde(default)]
     pub captures_only: bool,
+    /// "Bookmark matching lines": every line the rule matches carries an automatic
+    /// bookmark, whatever the rule's colours (see `TailEngine::is_auto_bookmark`).
+    #[serde(default)]
+    pub auto_bookmark: bool,
 }
 
 impl HighlightRule {
@@ -256,6 +284,7 @@ impl HighlightRule {
             sound_alert: SoundAlertPreset::None,
             enabled: true,
             captures_only: false,
+            auto_bookmark: false,
         }
     }
 
@@ -294,6 +323,7 @@ impl HighlightRule {
             sound_alert: SoundAlertPreset::None,
             enabled: true,
             captures_only: false,
+            auto_bookmark: false,
         }
     }
 
@@ -315,6 +345,7 @@ impl HighlightRule {
             sound_alert,
             enabled: true,
             captures_only: false,
+            auto_bookmark: false,
         }
     }
 }
@@ -757,6 +788,27 @@ pub struct CompiledHighlight {
     pub case_sensitive: bool,
     pub pattern: String,
     pub sound_alert: SoundAlertPreset,
+    pub auto_bookmark: bool,
+}
+
+impl CompiledHighlight {
+    /// Whether the rule matches `line`: its regex, else the pattern as plain text, case
+    /// sensitive or not. The enabled flag is the caller's business.
+    pub fn is_match(&self, line: &str) -> bool {
+        if let Some(re) = &self.regex {
+            re.is_match(line)
+        } else if self.case_sensitive {
+            line.contains(&self.pattern)
+        } else {
+            contains_case_insensitive(line, &self.pattern_lower)
+        }
+    }
+
+    /// An enabled rule with "Bookmark matching lines" and a pattern: an empty one, as a
+    /// rule just added in the editor has, would bookmark every line.
+    fn bookmarks_lines(&self) -> bool {
+        self.enabled && self.auto_bookmark && !self.pattern.is_empty()
+    }
 }
 
 /// Pieces of a span still unclaimed, kept on the stack: a row rarely splits one into more
@@ -804,6 +856,16 @@ fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: S
         });
     }
     spans.len() >= MAX_ROW_SPANS
+}
+
+/// The bookmark note being edited: the line, the text typed so far, and whether the
+/// field still has to take the keyboard focus (it opens from a context menu, a frame
+/// before the field exists).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteEditor {
+    pub line: usize,
+    pub text: String,
+    pub focus: bool,
 }
 
 /// State of "Show in context" (`TailEngine::enter_context`): the line shown and what
@@ -970,6 +1032,27 @@ pub struct TailEngine {
     pub bookmarks_dirty: bool,
     /// Bumped whenever the bookmark set changes (keys the overview strip).
     pub bookmarks_generation: u64,
+    /// Notes of manual bookmarks: every key is in `bookmarks` (see `set_bookmark_note`).
+    pub bookmark_notes: BTreeMap<usize, String>,
+    /// Automatic bookmarks: lines matched by a rule with "Bookmark matching lines",
+    /// derived from the rules and never saved; the ones dismissed with CTRL + F2 until
+    /// the next reload or rules change; and whether the cap left matches out.
+    auto_bookmarks: BTreeSet<usize>,
+    dismissed_auto: BTreeSet<usize>,
+    auto_bookmarks_capped: bool,
+    /// Most automatic bookmarks kept (the `auto_bookmark_max` setting): the first ones
+    /// in file order.
+    pub auto_bookmark_max: usize,
+    /// What the flagged rules match on (pattern, regex, case), to tell a change that
+    /// moves automatic bookmarks from one that only restyles a rule.
+    auto_rules_signature: Vec<(String, bool, bool)>,
+    /// A full automatic-bookmark scan is owed (see `run_auto_scan_if_due`), and the lines
+    /// the running `AutoBookmarks` job covers: appended lines past it are matched as
+    /// they arrive.
+    auto_scan_pending: bool,
+    auto_scan_end: usize,
+    /// The stream bar's bookmark note editor, while it is open.
+    pub note_editor: Option<NoteEditor>,
     /// Soft-wrap rows at the viewport width (per stream, persisted in the workspace) and a
     /// dirty flag for persistence.
     pub wrap_lines: bool,
@@ -1482,6 +1565,15 @@ impl TailEngine {
             bookmark_cursor: None,
             bookmarks_dirty: false,
             bookmarks_generation: 0,
+            bookmark_notes: BTreeMap::new(),
+            auto_bookmarks: BTreeSet::new(),
+            dismissed_auto: BTreeSet::new(),
+            auto_bookmarks_capped: false,
+            auto_bookmark_max: DEFAULT_AUTO_BOOKMARK_MAX,
+            auto_rules_signature: Vec::new(),
+            auto_scan_pending: false,
+            auto_scan_end: 0,
+            note_editor: None,
             wrap_lines: false,
             wrap_dirty: false,
             wrap_anchor: WrapAnchor::TOP,
@@ -1656,11 +1748,20 @@ impl TailEngine {
                     case_sensitive: r.case_sensitive,
                     pattern: r.pattern.clone(),
                     sound_alert: r.sound_alert,
+                    auto_bookmark: r.auto_bookmark,
                 }
             })
             .collect();
         self.highlight_rules = rules;
         self.recompute_filtered_lines();
+        // Only a change of what bookmarks lines recomputes them (and forgets dismissals):
+        // colours, styles and sounds leave them alone.
+        let signature = self.auto_rule_signature();
+        if signature != self.auto_rules_signature {
+            self.auto_rules_signature = signature;
+            self.dismissed_auto.clear();
+            self.recompute_auto_bookmarks();
+        }
     }
 
     pub fn refresh_filters(&mut self) {
@@ -2200,9 +2301,11 @@ impl TailEngine {
         self.index_pending = false;
         self.pending_refresh_from = None;
         self.clear_selection();
-        self.clear_bookmarks();
+        self.reset_bookmarks();
         self.time_anchor = None;
         self.rebuild_line_index_from(0);
+        // Automatic bookmarks follow the new content.
+        self.recompute_auto_bookmarks();
     }
 
     /// Rebuilds the line offsets and refreshes the derived state (filter visibility,
@@ -2227,6 +2330,13 @@ impl TailEngine {
             self.pending_refresh_from = None;
             self.markdown_text_cache = None;
             self.ansi_switched_at = Some(Instant::now());
+            // The rules now see every line without its escapes: match them all again.
+            if self.has_auto_rules() {
+                self.auto_bookmarks.clear();
+                self.auto_bookmarks_capped = false;
+                self.auto_scan_pending = true;
+                self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
+            }
             0
         } else {
             unchanged_lines
@@ -2557,6 +2667,8 @@ impl TailEngine {
 
     pub fn poll_updates(&mut self) {
         self.drain_job();
+        // An automatic-bookmark scan displaced by another job, or waiting for the index.
+        self.run_auto_scan_if_due();
         if !self.is_watching {
             return;
         }
@@ -2703,6 +2815,8 @@ impl TailEngine {
             self.update_tail_fingerprint();
             self.check_sound_alerts(prev_lines_count);
             self.collect_tool_hits(prev_lines_count);
+            // The previously last line may have been partial: it is matched again.
+            self.collect_auto_bookmarks(prev_lines_count.saturating_sub(1));
             self.note_unseen(prev_lines_count);
             return;
         }
@@ -2820,19 +2934,11 @@ impl TailEngine {
         for idx in start_idx..total {
             if let Some(line) = self.get_line(idx) {
                 for ch in &self.compiled_highlights {
-                    if ch.enabled && ch.sound_alert != SoundAlertPreset::None {
-                        let is_match = if let Some(re) = &ch.regex {
-                            re.is_match(&line)
-                        } else if ch.case_sensitive {
-                            line.contains(&ch.pattern)
-                        } else {
-                            contains_case_insensitive(&line, &ch.pattern_lower)
-                        };
-                        if is_match {
-                            ch.sound_alert.play();
-                            self.last_sound_alert_time = Instant::now();
-                            return;
-                        }
+                    if ch.enabled && ch.sound_alert != SoundAlertPreset::None && ch.is_match(&line)
+                    {
+                        ch.sound_alert.play();
+                        self.last_sound_alert_time = Instant::now();
+                        return;
                     }
                 }
             }
@@ -2859,14 +2965,7 @@ impl TailEngine {
                 if !ch.enabled || !self.tool_bound_rules.contains(&ch.pattern) {
                     continue;
                 }
-                let is_match = if let Some(re) = &ch.regex {
-                    re.is_match(&line)
-                } else if ch.case_sensitive {
-                    line.contains(&ch.pattern)
-                } else {
-                    contains_case_insensitive(&line, &ch.pattern_lower)
-                };
-                if is_match {
+                if ch.is_match(&line) {
                     hits.push((ch.pattern.clone(), idx));
                 }
             }
@@ -2967,15 +3066,7 @@ impl TailEngine {
             if !ch.enabled || ch.captures_only {
                 continue;
             }
-            let is_match = if let Some(re) = &ch.regex {
-                re.is_match(line)
-            } else if ch.case_sensitive {
-                line.contains(&ch.pattern)
-            } else {
-                contains_case_insensitive(line, &ch.pattern_lower)
-            };
-
-            if is_match {
+            if ch.is_match(line) {
                 return Some(ch.style);
             }
         }
@@ -4330,6 +4421,11 @@ impl TailEngine {
 
     /// Spawns a job over `[start_line, end of file)` and makes it the running one.
     fn start_job(&mut self, spec: JobSpec, start_line: usize) {
+        if self.auto_scan_running() && !matches!(spec, JobSpec::AutoBookmarks { .. }) {
+            // Another scan takes over: the automatic bookmarks start again once it ends
+            // (what was found so far stays, and is found again).
+            self.auto_scan_pending = true;
+        }
         self.job_generation = self.job_generation.wrapping_add(1);
         let start_offset = if start_line == 0 {
             self.bom_len()
@@ -4365,6 +4461,11 @@ impl TailEngine {
         let mut finished: Option<Result<usize, ()>> = None;
         while let Some(batch) = job.try_recv() {
             match batch {
+                ScanBatch::Lines(lines) if job.kind == ScanKind::AutoBookmarks => {
+                    // Matched on the raw lines, whatever the filters and time window.
+                    self.add_auto_bookmarks(lines);
+                    job.hits = self.auto_bookmarks.len();
+                }
                 ScanBatch::Lines(mut lines) => {
                     // The job evaluates text and level only; the time window is applied
                     // here, by index, over the complete timestamp cache.
@@ -4395,7 +4496,10 @@ impl TailEngine {
                                 self.current_match_idx = Some(0);
                             }
                         }
-                        ScanKind::Index | ScanKind::Levels | ScanKind::Timestamps => {}
+                        ScanKind::Index
+                        | ScanKind::Levels
+                        | ScanKind::Timestamps
+                        | ScanKind::AutoBookmarks => {}
                     }
                 }
                 ScanBatch::Counted { hits, last_line } => {
@@ -4539,6 +4643,7 @@ impl TailEngine {
                     self.refresh_derived_state_from(from);
                 }
             }
+            ScanKind::AutoBookmarks => self.after_auto_scan(),
             ScanKind::Timestamps => {
                 // Appends cancel the scan, so it normally ends with every line timed; if
                 // not, the deferred work stays for the scan that finishes the job.
@@ -4568,6 +4673,9 @@ impl TailEngine {
         if self.job.is_none() && self.timestamps_wanted {
             self.request_timestamps();
         }
+        // An automatic-bookmark scan waiting for the index or displaced by another job;
+        // then the levels, which it may itself displace.
+        self.run_auto_scan_if_due();
         // Lines appended while a scan ran, or a level scan displaced by another job.
         self.ensure_levels();
     }
@@ -4625,51 +4733,361 @@ impl TailEngine {
 
     // ----- Bookmarks -----
 
+    /// CTRL + F2 on a row: removes its manual bookmark (and note), dismisses an automatic
+    /// bookmark the row carries alone, else adds a manual bookmark.
     pub fn toggle_bookmark(&mut self, idx: usize) {
         if idx >= self.total_lines() {
             return;
         }
-        if !self.bookmarks.remove(&idx) {
+        if self.bookmarks.remove(&idx) {
+            self.bookmark_notes.remove(&idx);
+        } else if self.is_auto_bookmark(idx) {
+            self.dismissed_auto.insert(idx);
+        } else {
             self.bookmarks.insert(idx);
         }
         self.bookmark_cursor = Some(idx);
-        self.bookmarks_dirty = true;
-        self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
+        self.bookmark_changed();
     }
 
+    /// "Remove bookmark" of the row context menu: what CTRL + F2 does on a bookmarked row.
+    pub fn remove_bookmark(&mut self, idx: usize) {
+        if self.is_bookmarked(idx) {
+            self.toggle_bookmark(idx);
+        }
+    }
+
+    /// Removes every manual bookmark with its note and dismisses every current automatic
+    /// bookmark; lines appended later can still be bookmarked automatically.
     pub fn clear_bookmarks(&mut self) {
         if !self.bookmarks.is_empty() {
             self.bookmarks_dirty = true;
         }
         self.bookmarks.clear();
+        self.bookmark_notes.clear();
+        self.dismissed_auto
+            .extend(self.auto_bookmarks.iter().copied());
         self.bookmark_cursor = None;
+        self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
+    }
+
+    /// Drops every bookmark, note, automatic bookmark and dismissal: the line indices no
+    /// longer mean the same lines. The automatic ones are recomputed by the caller.
+    fn reset_bookmarks(&mut self) {
+        self.clear_bookmarks();
+        self.cancel_auto_job();
+        self.auto_bookmarks.clear();
+        self.dismissed_auto.clear();
+        self.auto_bookmarks_capped = false;
+        self.auto_scan_pending = false;
+    }
+
+    /// Marks a manual bookmark change for the overview strip and for persistence.
+    fn bookmark_changed(&mut self) {
+        self.bookmarks_dirty = true;
         self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
     }
 
     /// Replaces the bookmarks (used when restoring them from the configuration).
     pub fn set_bookmarks<I: IntoIterator<Item = usize>>(&mut self, lines: I) {
+        self.set_bookmarks_with_notes(lines, BTreeMap::new());
+    }
+
+    /// Replaces the bookmarks and their notes; a note of a line that is not among the
+    /// bookmarks (or past the end of the stream) is dropped.
+    pub fn set_bookmarks_with_notes<I: IntoIterator<Item = usize>>(
+        &mut self,
+        lines: I,
+        notes: BTreeMap<usize, String>,
+    ) {
         let total = self.total_lines();
         self.bookmarks = lines.into_iter().filter(|&l| l < total).collect();
+        self.bookmark_notes = notes
+            .into_iter()
+            .filter(|(l, _)| self.bookmarks.contains(l))
+            .map(|(l, text)| (l, normalize_note(&text)))
+            .filter(|(_, text)| !text.is_empty())
+            .collect();
         self.bookmark_cursor = None;
         self.bookmarks_dirty = false;
         self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
     }
 
+    /// The note of a manual bookmark, if it has one.
+    pub fn bookmark_note(&self, idx: usize) -> Option<&str> {
+        self.bookmark_notes.get(&idx).map(String::as_str)
+    }
+
+    /// Saves the note of line `idx` (see `normalize_note`). A note bookmarks the line
+    /// (an automatic bookmark becomes a manual one, which is saved); an empty note
+    /// removes the note and keeps the bookmark.
+    pub fn set_bookmark_note(&mut self, idx: usize, text: &str) {
+        if idx >= self.total_lines() {
+            return;
+        }
+        let note = normalize_note(text);
+        if note.is_empty() {
+            if self.bookmark_notes.remove(&idx).is_none() {
+                return;
+            }
+        } else {
+            self.bookmarks.insert(idx);
+            self.dismissed_auto.remove(&idx);
+            self.bookmark_notes.insert(idx, note);
+        }
+        self.bookmark_changed();
+    }
+
+    /// Opens the stream bar's note editor on line `idx`, with its current note.
+    pub fn open_note_editor(&mut self, idx: usize) {
+        self.note_editor = Some(NoteEditor {
+            line: idx,
+            text: self.bookmark_note(idx).unwrap_or_default().to_string(),
+            focus: true,
+        });
+    }
+
+    /// Whether any row is bookmarked, manually or automatically.
     pub fn has_bookmarks(&self) -> bool {
         !self.bookmarks.is_empty()
+            || self
+                .auto_bookmarks
+                .iter()
+                .any(|l| !self.dismissed_auto.contains(l))
     }
 
+    /// Whether line `idx` carries a manual bookmark or an automatic one not dismissed.
     pub fn is_bookmarked(&self, idx: usize) -> bool {
-        self.bookmarks.contains(&idx)
+        self.bookmarks.contains(&idx) || self.is_live_auto(idx)
     }
 
-    /// Bookmarks that pass the active filters, in file order.
+    /// Whether line `idx` carries only an automatic bookmark (drawn `☆`).
+    pub fn is_auto_bookmark(&self, idx: usize) -> bool {
+        !self.bookmarks.contains(&idx) && self.is_live_auto(idx)
+    }
+
+    fn is_live_auto(&self, idx: usize) -> bool {
+        self.auto_bookmarks.contains(&idx) && !self.dismissed_auto.contains(&idx)
+    }
+
+    /// Automatic bookmarks found so far and the dismissed ones (the overview strip draws
+    /// the difference).
+    pub fn auto_bookmarks(&self) -> &BTreeSet<usize> {
+        &self.auto_bookmarks
+    }
+
+    pub fn dismissed_auto_bookmarks(&self) -> &BTreeSet<usize> {
+        &self.dismissed_auto
+    }
+
+    /// Whether matches were left out because the stream holds `auto_bookmark_max`
+    /// automatic bookmarks.
+    pub fn auto_bookmarks_capped(&self) -> bool {
+        self.auto_bookmarks_capped
+    }
+
+    /// Bookmarks, manual or automatic, that pass the active filters, in file order.
     fn visible_bookmarks(&self) -> Vec<usize> {
-        self.bookmarks
+        let mut all: Vec<usize> = self
+            .bookmarks
             .iter()
             .copied()
+            .chain(
+                self.auto_bookmarks
+                    .iter()
+                    .copied()
+                    .filter(|l| !self.dismissed_auto.contains(l)),
+            )
             .filter(|&l| self.is_line_visible(l))
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        all
+    }
+
+    // ----- Automatic bookmarks -----
+
+    /// Enabled rules with "Bookmark matching lines" and a pattern.
+    fn auto_rules(&self) -> Vec<CompiledHighlight> {
+        self.compiled_highlights
+            .iter()
+            .filter(|c| c.bookmarks_lines())
+            .cloned()
             .collect()
+    }
+
+    fn has_auto_rules(&self) -> bool {
+        self.compiled_highlights.iter().any(|c| c.bookmarks_lines())
+    }
+
+    fn auto_rule_signature(&self) -> Vec<(String, bool, bool)> {
+        self.compiled_highlights
+            .iter()
+            .filter(|c| c.bookmarks_lines())
+            .map(|c| (c.pattern.clone(), c.regex.is_some(), c.case_sensitive))
+            .collect()
+    }
+
+    /// Changes the `auto_bookmark_max` setting (clamped to its bounds) and recomputes the
+    /// automatic bookmarks under the new cap. Dismissals stay.
+    pub fn set_auto_bookmark_max(&mut self, max: usize) {
+        let max = max.clamp(MIN_AUTO_BOOKMARK_MAX, MAX_AUTO_BOOKMARK_MAX);
+        if max != self.auto_bookmark_max {
+            self.auto_bookmark_max = max;
+            self.recompute_auto_bookmarks();
+        }
+    }
+
+    /// Matches every line of the stream against the flagged rules again: at once for a
+    /// file up to the job threshold, on a worker thread above it (see
+    /// `run_auto_scan_if_due`). Dismissals are the caller's business.
+    fn recompute_auto_bookmarks(&mut self) {
+        self.cancel_auto_job();
+        if !self.auto_bookmarks.is_empty() || self.auto_bookmarks_capped {
+            self.auto_bookmarks.clear();
+            self.auto_bookmarks_capped = false;
+            self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
+        }
+        self.auto_scan_pending = self.has_auto_rules();
+        self.run_auto_scan_if_due();
+    }
+
+    fn auto_scan_running(&self) -> bool {
+        self.job
+            .as_ref()
+            .is_some_and(|j| j.kind == ScanKind::AutoBookmarks)
+    }
+
+    /// Stops a running automatic-bookmark job, whose batches would be stale, and runs the
+    /// refresh the appends deferred while it ran.
+    fn cancel_auto_job(&mut self) {
+        if self.auto_scan_running() {
+            self.job = None;
+            self.after_auto_scan();
+        }
+    }
+
+    /// What `finish_job` runs after an automatic-bookmark scan: the refreshes deferred
+    /// while it held the job slot.
+    fn after_auto_scan(&mut self) {
+        if std::mem::take(&mut self.pending_filter) {
+            self.recompute_filtered_lines_from(0);
+        } else if let Some(from) = self.pending_refresh_from.take() {
+            self.refresh_derived_state_from(from);
+        }
+        if std::mem::take(&mut self.pending_search) {
+            self.refresh_search_from(0);
+        }
+    }
+
+    /// Runs the owed full scan once it can: not while the index is being built or a
+    /// compressed stream is still being extracted. Up to the job threshold it runs here;
+    /// above it a worker covers the lines indexed now (preempting a level scan, waiting
+    /// for any other), and later appends are matched as they arrive.
+    pub(crate) fn run_auto_scan_if_due(&mut self) {
+        if !self.auto_scan_pending || self.index_pending {
+            return;
+        }
+        if self.compressed.as_ref().is_some_and(|c| !c.is_finalized()) {
+            return;
+        }
+        let rules = self.auto_rules();
+        if rules.is_empty() {
+            self.auto_scan_pending = false;
+            return;
+        }
+        let total = self.total_lines();
+        if self.source.len() > self.job_threshold_bytes {
+            if self
+                .job
+                .as_ref()
+                .is_some_and(|j| j.kind != ScanKind::Levels)
+            {
+                return;
+            }
+            self.auto_scan_pending = false;
+            self.auto_scan_end = total;
+            // One match past the cap tells the engine that the cap left some out.
+            let limit = self.auto_bookmark_max.saturating_add(1);
+            self.start_job(JobSpec::AutoBookmarks { rules, limit }, 0);
+            return;
+        }
+        self.auto_scan_pending = false;
+        let found = self.match_auto_rules(&rules, 0, total);
+        self.add_auto_bookmarks(found);
+    }
+
+    /// Lines of `[start, end)` matching any of `rules`, at most one past the room left
+    /// under the cap.
+    fn match_auto_rules(
+        &self,
+        rules: &[CompiledHighlight],
+        start: usize,
+        end: usize,
+    ) -> Vec<usize> {
+        let room = self
+            .auto_bookmark_max
+            .saturating_sub(self.auto_bookmarks.len())
+            .saturating_add(1);
+        let mut found = Vec::new();
+        self.scan_lines(start, end, |idx, text| {
+            if rules.iter().any(|r| r.is_match(text)) {
+                found.push(idx);
+            }
+            found.len() < room
+        });
+        found
+    }
+
+    /// Adds automatic bookmarks in file order up to `auto_bookmark_max`; a match refused
+    /// by the cap sets the capped flag.
+    fn add_auto_bookmarks(&mut self, lines: Vec<usize>) {
+        let mut changed = false;
+        for line in lines {
+            if self.auto_bookmarks.contains(&line) {
+                continue;
+            }
+            if self.auto_bookmarks.len() >= self.auto_bookmark_max {
+                self.auto_bookmarks_capped = true;
+                break;
+            }
+            self.auto_bookmarks.insert(line);
+            changed = true;
+        }
+        if changed {
+            self.bookmarks_generation = self.bookmarks_generation.wrapping_add(1);
+        }
+    }
+
+    /// Matches the lines appended from `start_idx` against the flagged rules, every one
+    /// of them (no throttle). While a full scan is owed it covers them instead; while its
+    /// job runs, only the lines past the job's range are matched here, so each line is
+    /// matched once. A compressed stream still being extracted waits for the full scan.
+    pub fn collect_auto_bookmarks(&mut self, start_idx: usize) {
+        if !self.has_auto_rules() || self.auto_bookmarks_capped {
+            return;
+        }
+        if self.compressed.as_ref().is_some_and(|c| !c.is_finalized()) {
+            self.auto_scan_pending = true;
+            return;
+        }
+        if self.auto_scan_pending {
+            self.run_auto_scan_if_due();
+            return;
+        }
+        let start = if self.auto_scan_running() {
+            // The job's last line may have been partial: it is matched here again.
+            start_idx.max(self.auto_scan_end.saturating_sub(1))
+        } else {
+            start_idx
+        };
+        let total = self.total_lines();
+        if start >= total {
+            return;
+        }
+        let rules = self.auto_rules();
+        let found = self.match_auto_rules(&rules, start, total);
+        self.add_auto_bookmarks(found);
     }
 
     /// Jumps to the next visible bookmark after the cursor (or after `from` when there is no
@@ -4731,14 +5149,7 @@ impl TailEngine {
                     if !ch.enabled {
                         continue;
                     }
-                    let is_match = if let Some(re) = &ch.regex {
-                        re.is_match(&line)
-                    } else if ch.case_sensitive {
-                        line.contains(&ch.pattern)
-                    } else {
-                        contains_case_insensitive(&line, &ch.pattern_lower)
-                    };
-                    if is_match {
+                    if ch.is_match(&line) {
                         let sev = if ch.sound_alert != SoundAlertPreset::None {
                             2
                         } else {
@@ -5104,5 +5515,233 @@ mod tests {
         // [0, 200) subtracted by 10 existing spans will create 11 pieces, more than the 8 kept on the stack
         assert!(!claim_span(&mut many_spans, 0, 200, style_b));
         assert_eq!(many_spans.len(), 21);
+    }
+
+    mod bookmarks {
+        use super::super::{
+            normalize_note, HighlightRule, TailEngine, DEFAULT_AUTO_BOOKMARK_MAX, MAX_NOTE_CHARS,
+        };
+        use std::collections::BTreeSet;
+        use std::io::Write;
+        use std::time::{Duration, Instant};
+
+        /// A log whose line `i` reads `line i` and, on every `every`-th line, `OOM`.
+        fn log_with_oom(dir: &std::path::Path, lines: usize, every: usize) -> std::path::PathBuf {
+            let path = dir.join("app.log");
+            let mut text = String::new();
+            for i in 0..lines {
+                if i % every == 0 {
+                    text.push_str(&format!("line {i} OutOfMemoryError\n"));
+                } else {
+                    text.push_str(&format!("line {i} fine\n"));
+                }
+            }
+            std::fs::write(&path, text).unwrap();
+            path
+        }
+
+        fn bookmarking(pattern: &str) -> HighlightRule {
+            let mut rule = HighlightRule::new(pattern, [255, 255, 255], [0, 0, 0], false);
+            rule.auto_bookmark = true;
+            rule
+        }
+
+        fn auto(engine: &TailEngine) -> Vec<usize> {
+            engine.auto_bookmarks().iter().copied().collect()
+        }
+
+        fn settle(engine: &mut TailEngine) {
+            let start = Instant::now();
+            loop {
+                engine.poll_updates();
+                if engine.scan_progress().is_none() && !engine.index_pending {
+                    return;
+                }
+                assert!(start.elapsed() < Duration::from_secs(30), "scan hangs");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        fn append(path: &std::path::Path, text: &str) {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(path)
+                .unwrap()
+                .write_all(text.as_bytes())
+                .unwrap();
+        }
+
+        #[test]
+        fn notes_are_one_trimmed_line_of_at_most_200_characters() {
+            assert_eq!(
+                normalize_note("  retry\tstorm\r\nstarts  "),
+                "retry storm  starts"
+            );
+            let long: String = "é".repeat(350);
+            let kept = normalize_note(&long);
+            assert_eq!(kept.chars().count(), MAX_NOTE_CHARS);
+            assert_eq!(normalize_note(" \n\t "), "");
+        }
+
+        #[test]
+        fn a_note_bookmarks_the_row_and_an_empty_note_keeps_the_bookmark() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = log_with_oom(dir.path(), 10, 100);
+            let mut engine = TailEngine::open(&path).unwrap();
+            engine.set_bookmark_note(4, "first OOM");
+            assert!(engine.bookmarks.contains(&4) && engine.bookmarks_dirty);
+            assert_eq!(engine.bookmark_note(4), Some("first OOM"));
+            engine.bookmarks_dirty = false;
+            engine.set_bookmark_note(4, "   ");
+            assert!(engine.bookmarks.contains(&4) && engine.bookmark_note(4).is_none());
+            assert!(engine.bookmarks_dirty);
+            engine.set_bookmark_note(4, "again");
+            engine.toggle_bookmark(4);
+            assert!(!engine.is_bookmarked(4) && engine.bookmark_notes.is_empty());
+            // An empty note on a row without a bookmark changes nothing.
+            engine.set_bookmark_note(5, "");
+            assert!(!engine.is_bookmarked(5));
+        }
+
+        #[test]
+        fn a_rule_bookmarks_existing_and_appended_lines_even_under_a_higher_rule() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = log_with_oom(dir.path(), 30, 10);
+            let mut engine = TailEngine::open(&path).unwrap();
+            engine.size_check_interval = Duration::ZERO;
+            // The first rule paints every OOM line; the second bookmarks them.
+            engine.set_highlight_rules(vec![
+                HighlightRule::new("line", [255, 0, 0], [0, 0, 0], false),
+                bookmarking("outofmemory"),
+            ]);
+            assert_eq!(auto(&engine), vec![0, 10, 20]);
+            assert!(engine.is_auto_bookmark(10) && engine.is_bookmarked(10));
+            assert!(engine.bookmarks.is_empty(), "never manual");
+            append(&path, "late OutOfMemoryError\nquiet\nOutOfMemory");
+            engine.poll_updates();
+            // The unterminated last line counts once it matches, and again only once.
+            append(&path, "Error again\n");
+            engine.poll_updates();
+            assert_eq!(auto(&engine), vec![0, 10, 20, 30, 32]);
+            assert_eq!(engine.bookmark_next(0), Some(0));
+            assert_eq!(engine.bookmark_next(0), Some(10));
+        }
+
+        #[test]
+        fn dismissal_and_notes_on_automatic_rows() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = log_with_oom(dir.path(), 50, 10);
+            let mut engine = TailEngine::open(&path).unwrap();
+            engine.set_highlight_rules(vec![bookmarking("OutOfMemory")]);
+            // CTRL + F2 on an automatic-only row dismisses it; F2 skips it.
+            engine.toggle_bookmark(20);
+            assert!(!engine.is_bookmarked(20));
+            engine.bookmark_cursor = None;
+            assert_eq!(engine.bookmark_next(11), Some(30));
+            assert!(
+                engine.bookmarks.is_empty(),
+                "a dismissal is not a manual bookmark"
+            );
+            // A note turns an automatic bookmark into a manual one.
+            engine.set_bookmark_note(40, "check this");
+            assert!(engine.bookmarks.contains(&40) && !engine.is_auto_bookmark(40));
+            // CTRL + F2 on a row both manual and automatic drops the manual one.
+            engine.toggle_bookmark(40);
+            assert!(engine.is_auto_bookmark(40) && engine.bookmark_note(40).is_none());
+            // A rules change forgets the dismissals.
+            engine.set_highlight_rules(vec![bookmarking("OutOfMemoryError")]);
+            assert!(engine.is_bookmarked(20));
+            // Clear bookmarks dismisses every current automatic one; later lines still count.
+            engine.set_bookmark_note(3, "manual");
+            engine.clear_bookmarks();
+            assert!(!engine.has_bookmarks() && engine.bookmark_notes.is_empty());
+            // Turning the option off removes them.
+            engine.set_highlight_rules(vec![HighlightRule::new(
+                "OutOfMemory",
+                [255, 255, 255],
+                [0, 0, 0],
+                false,
+            )]);
+            assert!(engine.auto_bookmarks().is_empty());
+        }
+
+        #[test]
+        fn the_cap_keeps_the_first_matches_and_says_so() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = log_with_oom(dir.path(), DEFAULT_AUTO_BOOKMARK_MAX + 500, 1);
+            let mut engine = TailEngine::open(&path).unwrap();
+            engine.size_check_interval = Duration::ZERO;
+            engine.set_highlight_rules(vec![bookmarking("OutOfMemory")]);
+            assert_eq!(engine.auto_bookmarks().len(), DEFAULT_AUTO_BOOKMARK_MAX);
+            assert_eq!(
+                engine.auto_bookmarks().last(),
+                Some(&(DEFAULT_AUTO_BOOKMARK_MAX - 1))
+            );
+            assert!(engine.auto_bookmarks_capped());
+            append(&path, "OutOfMemoryError late\n");
+            engine.poll_updates();
+            assert_eq!(engine.auto_bookmarks().len(), DEFAULT_AUTO_BOOKMARK_MAX);
+
+            // A custom cap (clamped to its bounds) recomputes at once.
+            engine.set_auto_bookmark_max(150);
+            assert_eq!(engine.auto_bookmarks().len(), 150);
+            engine.set_auto_bookmark_max(1);
+            assert_eq!(engine.auto_bookmarks().len(), 100, "at least 100");
+            engine.set_auto_bookmark_max(20_000);
+            assert_eq!(
+                engine.auto_bookmarks().len(),
+                DEFAULT_AUTO_BOOKMARK_MAX + 501
+            );
+            assert!(!engine.auto_bookmarks_capped());
+        }
+
+        #[test]
+        fn the_background_scan_finds_what_the_synchronous_one_does() {
+            let dir = tempfile::tempdir().unwrap();
+            // 12,000 matches: past the default cap, so both stop at the same line.
+            let path = log_with_oom(dir.path(), 60_000, 5);
+            let mut sync = TailEngine::open(&path).unwrap();
+            sync.set_highlight_rules(vec![bookmarking("OutOfMemory")]);
+            let mut background = TailEngine::open_with_thresholds(&path, 0, 0).unwrap();
+            background.set_highlight_rules(vec![bookmarking("OutOfMemory")]);
+            settle(&mut background);
+            assert_eq!(background.auto_bookmarks(), sync.auto_bookmarks());
+            assert!(background.auto_bookmarks_capped() && sync.auto_bookmarks_capped());
+        }
+
+        #[test]
+        fn lines_appended_while_the_scan_runs_are_bookmarked() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = log_with_oom(dir.path(), 5_000, 50);
+            let mut engine = TailEngine::open_with_thresholds(&path, 0, 0).unwrap();
+            engine.size_check_interval = Duration::ZERO;
+            settle(&mut engine);
+            engine.set_highlight_rules(vec![bookmarking("OutOfMemory")]);
+            assert!(
+                engine.auto_scan_running(),
+                "a worker covers the lines on file"
+            );
+            append(&path, "OutOfMemoryError one\nfine\nOutOfMemoryError two\n");
+            engine.poll_updates();
+            settle(&mut engine);
+            let expected: BTreeSet<usize> = (0..5_000).step_by(50).chain([5_000, 5_002]).collect();
+            assert_eq!(engine.auto_bookmarks(), &expected);
+        }
+
+        #[test]
+        fn truncation_drops_bookmarks_notes_and_dismissals_and_matches_again() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = log_with_oom(dir.path(), 30, 10);
+            let mut engine = TailEngine::open(&path).unwrap();
+            engine.size_check_interval = Duration::ZERO;
+            engine.set_highlight_rules(vec![bookmarking("OutOfMemory")]);
+            engine.set_bookmark_note(5, "note");
+            engine.toggle_bookmark(10);
+            std::fs::write(&path, "fine\nOutOfMemoryError\n").unwrap();
+            engine.poll_updates();
+            assert!(engine.bookmarks.is_empty() && engine.bookmark_notes.is_empty());
+            assert!(engine.dismissed_auto_bookmarks().is_empty());
+            assert_eq!(auto(&engine), vec![1]);
+        }
     }
 }
