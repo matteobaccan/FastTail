@@ -65,9 +65,9 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 
 | Feature | FastTail | BareTail (Free/Pro) | Tailviewer | SnakeTail | `tail -f` / CLI |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Engine / Architecture** | **Rust** | Win32 C++ (2006) | .NET / C# | C# / WPF | POSIX C |
+| **Engine / Architecture** | **Rust** | Win32 C++ (2006) | .NET / C# | C# / .NET (WinForms) | POSIX C |
 | **Binary Size** | **~8 MB download, ~20 MB executable (single binary)** | ~220 KB | ~45 MB | ~1.5 MB | ~50 KB |
-| **Runtime Dependencies** | **Zero (standalone native)** | Zero (Win32 native) | .NET Runtime required | .NET Framework / WPF | POSIX coreutils |
+| **Runtime Dependencies** | **Zero (standalone native)** | Zero (Win32 native) | .NET Runtime required | .NET Framework 2.0 | POSIX coreutils |
 | **Large Files (>50 GB)** | **Instant** | Good | Slow / High RAM | Moderate | Fast |
 | **Cross-Platform** | **Windows, Linux, macOS** | Windows only | Windows only | Windows only | Linux/macOS |
 | **User Interface** | **Cyberpunk UI (GPU)** | Win32 Classic | Modern Windows | Classic Windows | Terminal CLI |
@@ -95,6 +95,10 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 | **JSON Formatter** | **Inline pretty-print** | No | Plugin required | No | `jq` pipe |
 | **Screensaver Mode** | **Matrix digital rain** | No | No | No | No |
 | **Open Source & License** | **MIT License** | Proprietary | MIT | GPL | Open Source |
+
+A wider comparison — LogExpert, klogg, LogViewPlus, LogFusion, lnav, hl, tailspin, Seq and
+others, with what each has that FastTail does not yet — is kept in the
+**[competitor analysis](docs/competitor-analysis.md)**, refreshed after every release.
 
 ---
 
