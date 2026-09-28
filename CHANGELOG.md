@@ -64,6 +64,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refused. Pure-Rust decoders only (`tar`, `bzip2` on `libbz2-rs-sys`, `lzma-rust2`,
   `ruzstd`). All 16 languages updated.
 
+- **Collapse repeated lines.** The `× Collapse` selector in the stream bar, or
+  `CTRL + SHIFT + D`, shows runs of consecutive equal entries (a line plus its stack-trace
+  frames) as one row with a `×N` badge: **exact** compares the text after the leading
+  timestamp, **numbers** also masks numbers, `0x` values, hex ids and UUIDs. Groups are
+  formed over the lines the filters leave visible; a click on the badge expands or
+  collapses a group, and its tooltip gives the line range and time span. Copy and export
+  still write every line, and the row menu gains **Copy** and **Copy as shown**
+  (`retry 1 ×3`); search counts every hit, `F3` steps over a group once, and going to a
+  line, a bookmark or a hit of the results pane expands the group that hides it. The time
+  delta after a group starts from its last line, the overview strip follows the collapsed
+  rows, and Show in context stays the full, uncollapsed log. A repetition appended while
+  following raises the last count instead of adding a row; files above 16 MB are grouped in
+  the background with progress in the stream bar. Only the groups are kept (24 bytes each).
+  Saved per stream in the workspace and in sessions as `collapse=exact|numbers`. Help
+  dialog and all 16 languages updated.
+
 ### Fixed
 
 - **`Space` no longer toggles Follow while you type.** A space typed in a filter, search or

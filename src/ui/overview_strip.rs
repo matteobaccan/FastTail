@@ -16,6 +16,7 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
+use crate::collapse::CollapseState;
 use crate::i18n::{t, Language};
 use crate::log_level::LogLevel;
 use crate::tail_engine::{is_error_level, TailEngine, ERROR_BLOCK_LINES};
@@ -70,15 +71,29 @@ pub struct MarkInputs<'a> {
     /// FATAL counts (`ERROR_BLOCK_LINES` lines per block).
     pub levels: &'a [u8],
     pub error_blocks: &'a [u32],
+    /// The collapsed groups when repeated entries are collapsed, and the visible lines
+    /// they are formed over: rows are then fewer than lines, and a line a group hides is
+    /// marked at the group's row.
+    pub collapse: Option<(&'a CollapseState, usize)>,
 }
 
 impl MarkInputs<'_> {
     /// Visible row of `line`, `None` when a filter hides it.
     fn row_of(&self, line: usize) -> Option<usize> {
-        match self.filtered {
-            Some(f) => f.binary_search(&line).ok(),
-            None => (line < self.rows).then_some(line),
-        }
+        let lines = self.collapse.map_or(self.rows, |(_, lines)| lines);
+        let pos = match self.filtered {
+            Some(f) => f.binary_search(&line).ok()?,
+            None => (line < lines).then_some(line)?,
+        };
+        Some(match self.collapse {
+            Some((state, _)) => state.row_of_pos(pos).0,
+            None => pos,
+        })
+    }
+
+    /// The line at visible position `pos`.
+    fn line_at(&self, pos: usize) -> usize {
+        self.filtered.map_or(pos, |f| f[pos])
     }
 }
 
@@ -126,6 +141,34 @@ pub fn compute_marks(height: usize, input: &MarkInputs) -> Marks {
     }
 
     let level_is_error = |line: usize| input.levels.get(line).is_some_and(|&v| is_error_level(v));
+    if let Some((state, lines)) = input.collapse {
+        // Collapsed rows: exact up to `EXACT_FILTERED_ROWS` visible lines, each at its
+        // row; above that each pixel samples its rows.
+        if lines <= EXACT_FILTERED_ROWS {
+            for pos in 0..lines {
+                if level_is_error(input.line_at(pos)) {
+                    marks.pixels[px(state.row_of_pos(pos).0)] |= MARK_ERROR;
+                }
+            }
+        } else {
+            marks.errors_sampled = true;
+            for (p, flags) in marks.pixels.iter_mut().enumerate() {
+                let from = (p * rows).div_ceil(height);
+                let to = ((p + 1) * rows).div_ceil(height).min(rows);
+                if from >= to {
+                    continue;
+                }
+                let step = (to - from).div_ceil(SAMPLES_PER_PIXEL).max(1);
+                if (from..to)
+                    .step_by(step)
+                    .any(|row| level_is_error(input.line_at(state.pos_of_row(row))))
+                {
+                    *flags |= MARK_ERROR;
+                }
+            }
+        }
+        return marks;
+    }
     match input.filtered {
         None => {
             // Rows are lines. A block with errors that lands on a single pixel marks it;
@@ -237,6 +280,9 @@ impl StripCache {
             dismissed_auto: engine.dismissed_auto_bookmarks(),
             levels: engine.cached_levels(),
             error_blocks: engine.error_block_counts(),
+            collapse: engine
+                .collapse_rows_state()
+                .map(|state| (state, engine.visible_lines())),
         };
         self.marks = compute_marks(height, &input);
         self.key = Some(key);
@@ -436,6 +482,7 @@ mod tests {
             dismissed_auto: &BTreeSet::new(),
             levels: &levels,
             error_blocks: &blocks,
+            collapse: None,
         };
         // 1000 px: 100 rows per pixel, so every block spans many pixels.
         let marks = compute_marks(1000, &input);
@@ -477,6 +524,7 @@ mod tests {
             dismissed_auto: &dismissed,
             levels: &[],
             error_blocks: &[],
+            collapse: None,
         };
         let marks = compute_marks(100, &input);
         assert_eq!(marks.pixels[10], MARK_AUTO_BOOKMARK);
@@ -496,6 +544,7 @@ mod tests {
             dismissed_auto: &BTreeSet::new(),
             levels: &levels[..500],
             error_blocks: &blocks,
+            collapse: None,
         };
         assert!(compute_marks(100, &input).is_empty());
     }
@@ -516,6 +565,7 @@ mod tests {
             dismissed_auto: &BTreeSet::new(),
             levels: &levels,
             error_blocks: &blocks,
+            collapse: None,
         };
         let marks = compute_marks(500, &input);
         assert!(!marks.errors_sampled);
@@ -527,6 +577,47 @@ mod tests {
             3,
             "hidden bookmark and hidden error leave no mark"
         );
+    }
+
+    #[test]
+    fn collapsed_rows_carry_the_marks_of_their_hidden_lines() {
+        use crate::collapse::{CollapseMode, Group};
+        // 100 lines; lines 10..60 are one group of 50 shown as row 10.
+        let mut state = CollapseState::default();
+        state.mode = CollapseMode::Exact;
+        let group = Group {
+            pos: 10,
+            row: 0,
+            count: 50,
+            entry_len: 1,
+            open: false,
+        };
+        state.push_final(vec![group], Some);
+        let rows = state.row_count(100);
+        assert_eq!(rows, 51);
+        let (levels, blocks) = levels_with_errors(100, &[45, 90]);
+        let bookmarks: BTreeSet<usize> = [80].into_iter().collect();
+        let input = MarkInputs {
+            rows,
+            filtered: None,
+            hits: &[30],
+            bookmarks: &bookmarks,
+            // An automatic bookmark the group hides is drawn at the group's row.
+            auto_bookmarks: &[20].into_iter().collect(),
+            dismissed_auto: &BTreeSet::new(),
+            levels: &levels,
+            error_blocks: &blocks,
+            collapse: Some((&state, 100)),
+        };
+        let marks = compute_marks(rows, &input);
+        assert_eq!(
+            marks.pixels[10],
+            MARK_HIT | MARK_ERROR | MARK_AUTO_BOOKMARK,
+            "hidden hit, error and automatic bookmark"
+        );
+        assert_eq!(marks.pixels[31], MARK_BOOKMARK, "line 80 is row 31");
+        assert_eq!(marks.pixels[41], MARK_ERROR, "line 90 is row 41");
+        assert_eq!(marks.pixels.iter().filter(|&&p| p != 0).count(), 3);
     }
 
     #[test]
@@ -547,6 +638,7 @@ mod tests {
             dismissed_auto: &BTreeSet::new(),
             levels: &levels,
             error_blocks: &[],
+            collapse: None,
         };
         let marks = compute_marks(100, &input);
         assert!(marks.errors_sampled);

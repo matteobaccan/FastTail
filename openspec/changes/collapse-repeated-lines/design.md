@@ -121,3 +121,24 @@ the key. Rollback: remove the option; saved keys are ignored.
   **"Copy as shown"**: one line per selected row, a collapsed row written as its first
   entry followed by ` ×N`.
 - The mode is set both from the toolbar selector and with `CTRL + SHIFT + D`.
+
+## Implementation notes
+
+- **Show in context.** The context view (`enter_context`) is "the full log around one
+  line", so it shows every line, uncollapsed: the row mapping goes through the groups only
+  while no line is shown in context (`collapse_rows`). The groups stay computed over the
+  filtered lines meanwhile (appends keep them up to date) and apply again, unchanged, on
+  `leave_context`.
+- **Group layout.** `Group { pos, row, count: u32, entry_len: u16, open: bool }` keeps the
+  24 bytes: the entry cap of 256 lines fits a `u16`, which leaves room for the expanded
+  flag next to the count. `open` of `CollapseState` stays the source of truth across a
+  regrouping.
+- **Tail groups.** The groups the last run would form if the stream ended are kept apart
+  from the final ones (`final_len`): an append drops them and resumes the detection from
+  the first line of the last entry, which the new lines may complete.
+- **Row span.** The last row a closed group shows stands for the entries it hides
+  (`row_span`), so the time delta of the next row starts from the group's last line even
+  when the entry is a stack trace; a click on the group's first row still selects every
+  line of the group.
+- **Bare clocks.** `leading_span` also drops a bare `HH:MM:SS[.fff]` prefix, which is no
+  point in time for `detect_timestamp` but is the prefix of the retry-loop scenario.

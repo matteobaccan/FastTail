@@ -1,5 +1,6 @@
 use crate::ansi::{AnsiMode, AnsiStyle, StyleRun};
 use crate::audio::SoundAlertPreset;
+use crate::collapse::{badge_text, CollapseMode, CollapseState, CollapsedRow, Detector};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{
@@ -13,7 +14,8 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
@@ -868,6 +870,13 @@ pub struct NoteEditor {
     pub focus: bool,
 }
 
+/// Filter and group generation, bookmark generation and the sizes of the manual,
+/// automatic and dismissed bookmark sets, with the hidden bookmark found per group row.
+type HiddenBookmarkCache = (
+    (u64, u64, usize, usize, usize),
+    HashMap<usize, Option<(usize, bool)>>,
+);
+
 /// State of "Show in context" (`TailEngine::enter_context`): the line shown and what
 /// the filtered view looked like, restored by `leave_context`.
 #[derive(Debug, Clone)]
@@ -987,6 +996,23 @@ pub struct TailEngine {
     global_filter: Option<Arc<FilterSpec>>,
     /// "Show in context": the filters suspended around one line (see `enter_context`).
     context: Option<ContextView>,
+    /// Collapse of repeated lines (see `collapse`): mode, groups and the row mapping over
+    /// them. The groups are formed over the lines the filters leave visible.
+    collapse: CollapseState,
+    /// The collapse mode changed since it was last persisted.
+    pub collapse_mode_dirty: bool,
+    /// Line from which the groups must be detected again once the filter result is final
+    /// (`Some(0)`: from scratch), and the first line appended while a `Collapse` scan ran,
+    /// which that scan does not cover.
+    collapse_dirty: Option<usize>,
+    collapse_after_job: Option<usize>,
+    /// `hidden_bookmark` per group row, and the state it was computed for.
+    hidden_bookmark_cache: RefCell<HiddenBookmarkCache>,
+    /// Line at the top of the view, set by the viewer every frame, and the row it moved
+    /// to when the groups changed under it: the viewer scrolls there, so the content under
+    /// the user stays put while a background detection streams groups in.
+    pub view_top_line: Option<usize>,
+    pub pending_top_row: Option<usize>,
     /// Running background scan, if any (one at a time per stream).
     job: Option<ScanJob>,
     job_generation: u64,
@@ -1634,6 +1660,13 @@ impl TailEngine {
             filter: FilterSpec::default(),
             global_filter: None,
             context: None,
+            collapse: CollapseState::default(),
+            collapse_mode_dirty: false,
+            collapse_dirty: None,
+            collapse_after_job: None,
+            hidden_bookmark_cache: RefCell::default(),
+            view_top_line: None,
+            pending_top_row: None,
             job: None,
             job_generation: 0,
             pending_refresh_from: None,
@@ -2310,6 +2343,10 @@ impl TailEngine {
         self.context = None;
         self.reload_generation = self.reload_generation.wrapping_add(1);
         self.job = None;
+        // New content: groups and expanded groups start over, detected once filtered.
+        self.collapse.reset();
+        self.collapse_after_job = None;
+        self.collapse_dirty = self.collapse.mode.is_on().then_some(0);
         self.index_pending = false;
         self.pending_refresh_from = None;
         self.clear_selection();
@@ -2367,6 +2404,7 @@ impl TailEngine {
         }
         if unchanged_lines == 0 && total_len > self.index_job_threshold_bytes {
             // Large file: index on a worker thread; the view shows lines as they arrive.
+            self.mark_collapse_dirty(0);
             self.line_offsets = Vec::new();
             self.filtered_lines = Vec::new();
             self.filter_generation = self.filter_generation.wrapping_add(1);
@@ -3231,6 +3269,7 @@ impl TailEngine {
     fn refresh_derived_state_from(&mut self, unchanged_lines: usize) {
         self.recompute_filtered_lines_from(unchanged_lines);
         self.refresh_search_from(unchanged_lines);
+        self.update_collapse();
     }
 
     /// Postpones a filter refresh from `start` until the running scan ends.
@@ -3256,6 +3295,8 @@ impl TailEngine {
 
     fn recompute_filtered_lines_from(&mut self, start: usize) {
         self.filter_generation = self.filter_generation.wrapping_add(1);
+        // The groups stand on the visible lines: from `start` they are formed again.
+        self.mark_collapse_dirty(start);
         if !self.is_filter_active() {
             self.filtered_lines = Vec::new();
             return;
@@ -3398,7 +3439,55 @@ impl TailEngine {
         }
     }
 
+    /// Rows of the text view: the visible lines, less those hidden by collapsed groups.
     pub fn visible_line_count(&self) -> usize {
+        let lines = self.visible_lines();
+        if self.collapse_rows() {
+            self.collapse.row_count(lines)
+        } else {
+            lines
+        }
+    }
+
+    /// First line of row `visible_row` (the line shown on it).
+    pub fn get_actual_line_idx(&self, visible_row: usize) -> Option<usize> {
+        if self.collapse_rows() {
+            if visible_row >= self.visible_line_count() {
+                return None;
+            }
+            self.line_at(self.collapse.pos_of_row(visible_row))
+        } else {
+            self.line_at(visible_row)
+        }
+    }
+
+    /// Row showing `line_idx`: for a line hidden in a collapsed group, the group's row.
+    /// `None` when the filters hide the line.
+    pub fn get_visible_row_of_line(&self, line_idx: usize) -> Option<usize> {
+        let pos = self.pos_of_line(line_idx)?;
+        if self.collapse_rows() {
+            Some(self.collapse.row_of_pos(pos).0)
+        } else {
+            Some(pos)
+        }
+    }
+
+    /// Row of `line`, or of the first visible line after it when the filters hide it
+    /// (the row count past the last one).
+    pub fn row_of_line_or_next(&self, line: usize) -> usize {
+        let pos = if self.rows_filtered() {
+            self.filtered_lines.partition_point(|&l| l < line)
+        } else {
+            line.min(self.total_lines())
+        };
+        if !self.collapse_rows() || pos >= self.visible_lines() {
+            return pos.min(self.visible_line_count());
+        }
+        self.collapse.row_of_pos(pos).0
+    }
+
+    /// Lines the filters leave visible, before any collapse.
+    pub fn visible_lines(&self) -> usize {
         if self.rows_filtered() {
             self.filtered_lines.len()
         } else {
@@ -3406,25 +3495,494 @@ impl TailEngine {
         }
     }
 
-    pub fn get_actual_line_idx(&self, visible_row: usize) -> Option<usize> {
+    /// The line at visible position `pos` (its index among the visible lines).
+    fn line_at(&self, pos: usize) -> Option<usize> {
         if self.rows_filtered() {
-            self.filtered_lines.get(visible_row).copied()
-        } else if visible_row < self.total_lines() {
-            Some(visible_row)
+            self.filtered_lines.get(pos).copied()
         } else {
-            None
+            (pos < self.total_lines()).then_some(pos)
         }
     }
 
-    pub fn get_visible_row_of_line(&self, line_idx: usize) -> Option<usize> {
+    /// Visible position of `line`, `None` when the filters hide it.
+    fn pos_of_line(&self, line: usize) -> Option<usize> {
         if self.rows_filtered() {
             // The visible lines are in file order.
-            self.filtered_lines.binary_search(&line_idx).ok()
-        } else if line_idx < self.total_lines() {
-            Some(line_idx)
+            self.filtered_lines.binary_search(&line).ok()
         } else {
-            None
+            (line < self.total_lines()).then_some(line)
         }
+    }
+
+    /// First and last line of row `row`: the same line, except on the last row a closed
+    /// group shows, which also stands for the entries the group hides.
+    pub fn row_span(&self, row: usize) -> Option<(usize, usize)> {
+        let first = self.get_actual_line_idx(row)?;
+        if !self.collapse_rows() {
+            return Some((first, first));
+        }
+        let next = if row + 1 < self.visible_line_count() {
+            self.collapse.pos_of_row(row + 1)
+        } else {
+            self.visible_lines()
+        };
+        Some((first, self.line_at(next - 1)?))
+    }
+
+    // ----- Collapse of repeated lines -----
+
+    pub fn collapse_mode(&self) -> CollapseMode {
+        self.collapse.mode
+    }
+
+    /// Chooses how repeated entries are collapsed. The groups are detected again from
+    /// scratch, in the background on a large file, and no group stays expanded.
+    pub fn set_collapse_mode(&mut self, mode: CollapseMode) {
+        if self.collapse.mode == mode {
+            return;
+        }
+        let top = self.view_top_line;
+        self.collapse.mode = mode;
+        self.collapse_mode_dirty = true;
+        self.collapse.reset();
+        self.collapse_after_job = None;
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|j| j.kind == ScanKind::Collapse)
+        {
+            self.job = None;
+        }
+        self.collapse_dirty = mode.is_on().then_some(0);
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+        self.update_collapse();
+        self.keep_top_line(top);
+        // A level scan displaced by a cancelled detection resumes.
+        self.ensure_levels();
+    }
+
+    /// Whether the rows go through the groups: a mode is on and no line is shown in
+    /// context, since the context view is the full log around one line, every line of it.
+    fn collapse_rows(&self) -> bool {
+        self.collapse.mode.is_on() && self.context.is_none()
+    }
+
+    /// The groups the rows go through, when they do (for the overview strip).
+    pub fn collapse_rows_state(&self) -> Option<&CollapseState> {
+        self.collapse_rows().then_some(&self.collapse)
+    }
+
+    /// Lines the collapse detection has read since it last started from scratch (`None`
+    /// before a detection completes), for the tests of the incremental path.
+    #[doc(hidden)]
+    pub fn collapse_lines_fed(&self) -> Option<u64> {
+        self.collapse.detector().map(Detector::lines_fed)
+    }
+
+    /// Whether a detection is under way: groups may still change or arrive.
+    pub fn collapse_pending(&self) -> bool {
+        self.collapse_dirty.is_some()
+    }
+
+    /// The visible lines changed from line `from` on: the groups over them are formed
+    /// again once the filter result is final (`update_collapse`).
+    fn mark_collapse_dirty(&mut self, from: usize) {
+        if !self.collapse.mode.is_on() {
+            return;
+        }
+        let collapse_job = self
+            .job
+            .as_ref()
+            .is_some_and(|j| j.kind == ScanKind::Collapse);
+        if collapse_job && from > 0 {
+            // The running scan covers the lines it started with; the rest comes after.
+            self.collapse_after_job = Some(self.collapse_after_job.map_or(from, |f| f.min(from)));
+            return;
+        }
+        let from = if self.collapse.detector_mut().is_none() {
+            0
+        } else {
+            from
+        };
+        self.collapse_dirty = Some(self.collapse_dirty.map_or(from, |f| f.min(from)));
+        if from == 0 {
+            if collapse_job {
+                self.job = None;
+            }
+            self.collapse_after_job = None;
+            self.collapse.clear_groups();
+        } else {
+            self.collapse.drop_tail();
+        }
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+    }
+
+    /// Detects the groups the visible lines need, once the filter result is final: on
+    /// this thread up to `job_threshold_bytes` of lines to read, else as a `Collapse`
+    /// scan after the running one. An append resumes from the last entry.
+    fn update_collapse(&mut self) {
+        let Some(from) = self.collapse_dirty else {
+            return;
+        };
+        if !self.collapse.mode.is_on() {
+            self.collapse_dirty = None;
+            return;
+        }
+        if self.index_pending || self.pending_filter || self.pending_refresh_from.is_some() {
+            return;
+        }
+        match self.job.as_ref().map(|j| j.kind) {
+            None => {}
+            // The lowest priority: it resumes once the detection is done.
+            Some(ScanKind::Levels) => self.job = None,
+            Some(_) => return,
+        }
+        let resumed = if from == 0 {
+            None
+        } else {
+            self.collapse.detector_mut().map(|d| d.resume(from))
+        };
+        let start = resumed.unwrap_or(0);
+        let start_offset = if start == 0 {
+            self.bom_len()
+        } else {
+            self.line_offsets
+                .get(start)
+                .copied()
+                .unwrap_or(self.source.len())
+        };
+        // An append goes on from the detector's end state (the groups before it stay);
+        // anything else starts over.
+        let mut detector = match self.collapse.take_detector().filter(|_| start > 0) {
+            Some(detector) => {
+                self.collapse.drop_tail();
+                detector
+            }
+            None => {
+                self.collapse.clear_groups();
+                Box::new(Detector::new(self.collapse.mode, self.timestamp_hint))
+            }
+        };
+        if self.source.len().saturating_sub(start_offset) > self.job_threshold_bytes {
+            // Kept until the scan ends: a scan that is displaced before it hands the
+            // detector back is run again from scratch.
+            self.collapse_after_job = None;
+            self.collapse_dirty = Some(start);
+            let visible = self
+                .is_filter_active()
+                .then(|| Arc::from(self.filtered_lines.as_slice()));
+            self.start_job(JobSpec::Collapse { detector, visible }, start);
+            self.filter_generation = self.filter_generation.wrapping_add(1);
+            return;
+        }
+        self.collapse_dirty = None;
+        let filtered = self.is_filter_active();
+        let visible = &self.filtered_lines;
+        let mut at = visible.partition_point(|&l| l < start);
+        self.scan_lines(start, self.total_lines(), |idx, text| {
+            let pos = if !filtered {
+                Some(idx)
+            } else if visible.get(at) == Some(&idx) {
+                at += 1;
+                Some(at - 1)
+            } else {
+                None
+            };
+            detector.feed(idx, text, pos);
+            true
+        });
+        self.apply_detection(detector, start == 0);
+    }
+
+    /// Takes the groups a detection completed and its end state: the tail groups are
+    /// recomputed from it, and after a detection from scratch only the expanded groups
+    /// that still exist stay expanded.
+    fn apply_detection(&mut self, mut detector: Box<Detector>, from_scratch: bool) {
+        let groups = std::mem::take(&mut detector.groups);
+        let tail = detector.tail_groups();
+        let filtered = self.is_filter_active();
+        let visible = &self.filtered_lines;
+        let total = self.total_lines();
+        let line_of = |pos: usize| {
+            if filtered {
+                visible.get(pos).copied()
+            } else {
+                (pos < total).then_some(pos)
+            }
+        };
+        self.collapse.push_final(groups, line_of);
+        self.collapse.set_tail(tail, line_of);
+        if from_scratch {
+            self.collapse.prune_open(line_of);
+        }
+        self.collapse.set_detector(detector);
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+    }
+
+    /// After the rows changed under the view: the row the top line moved to, for the
+    /// viewer to scroll back to it. Follow mode stays at the bottom instead.
+    fn keep_top_line(&mut self, top: Option<usize>) {
+        if self.follow_tail {
+            return;
+        }
+        if let Some(line) = top {
+            self.pending_top_row = Some(self.row_of_line_or_next(line));
+        }
+    }
+
+    /// The group whose first row is `row`, as the view shows it.
+    pub fn collapsed_row(&self, row: usize) -> Option<CollapsedRow> {
+        if !self.collapse_rows() {
+            return None;
+        }
+        let group = self.collapse.group_heading_row(row)?;
+        let first_line = self.line_at(group.pos)?;
+        let last_line = self.line_at(group.end() - 1)?;
+        let hidden = if group.open {
+            None
+        } else {
+            Some((
+                self.line_at(group.pos + group.entry_len as usize)?,
+                last_line,
+            ))
+        };
+        Some(CollapsedRow {
+            count: group.count,
+            open: group.open,
+            first_line,
+            last_line,
+            hidden,
+        })
+    }
+
+    /// Expands or collapses the group whose first row is `row` (a click on its badge).
+    pub fn toggle_collapsed_row(&mut self, row: usize) -> bool {
+        let Some(group) = self
+            .collapse_rows()
+            .then(|| self.collapse.group_heading_row(row))
+            .flatten()
+        else {
+            return false;
+        };
+        let Some(line) = self.line_at(group.pos) else {
+            return false;
+        };
+        self.collapse.set_open(group.pos, line, !group.open);
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+        true
+    }
+
+    /// Expands the group that hides `line`, so a jump to that exact line can show it.
+    pub fn reveal_line(&mut self, line: usize) {
+        if !self.collapse_rows() {
+            return;
+        }
+        let Some(pos) = self.pos_of_line(line) else {
+            return;
+        };
+        let Some(group) = self.collapse.group_of_pos(pos) else {
+            return;
+        };
+        if group.open || pos < group.pos + group.entry_len as usize {
+            return;
+        }
+        if let Some(head) = self.line_at(group.pos) {
+            self.collapse.set_open(group.pos, head, true);
+            self.filter_generation = self.filter_generation.wrapping_add(1);
+        }
+    }
+
+    /// Lines a click on the row of `line` selects: the whole group when `line` is the
+    /// first line of a closed group, the line alone otherwise.
+    fn row_selection(&self, line: usize) -> Vec<usize> {
+        let group = self
+            .collapse_rows()
+            .then(|| self.pos_of_line(line))
+            .flatten()
+            .and_then(|pos| self.collapse.group_of_pos(pos).filter(|g| g.pos == pos));
+        match group {
+            Some(g) if !g.open => (g.pos..g.end()).filter_map(|p| self.line_at(p)).collect(),
+            _ => vec![line],
+        }
+    }
+
+    /// Search and bookmark marks of row `row`, whose first line is `line`: whether it, or
+    /// a line its closed group hides, is a search hit, the current hit, bookmarked.
+    pub fn row_marks(&self, row: usize, line: usize, has_search: bool) -> (bool, bool, bool) {
+        let current = self.current_search_line();
+        let mut hit = has_search && self.search_matches.binary_search(&line).is_ok();
+        let mut active = current == Some(line);
+        let mut bookmarked = self.is_bookmarked(line);
+        if let Some((first, last)) = self.collapsed_row(row).and_then(|c| c.hidden) {
+            if has_search && !hit {
+                let i = self.search_matches.partition_point(|&l| l < first);
+                hit = self.search_matches.get(i).is_some_and(|&l| l <= last);
+            }
+            active |= current.is_some_and(|c| (first..=last).contains(&c));
+        }
+        bookmarked |= self.hidden_bookmark(row).is_some();
+        (hit, active, bookmarked)
+    }
+
+    /// A bookmarked line the closed group of row `row` hides, and whether it is a manual
+    /// bookmark (preferred) rather than an automatic one: the group row carries its mark.
+    /// Called for every drawn group row, so the answer is cached per row until the
+    /// groups, the filter or the bookmarks change.
+    pub fn hidden_bookmark(&self, row: usize) -> Option<(usize, bool)> {
+        let key = (
+            self.filter_generation,
+            self.bookmarks_generation,
+            self.bookmarks.len(),
+            self.auto_bookmarks.len(),
+            self.dismissed_auto.len(),
+        );
+        let mut cache = self.hidden_bookmark_cache.borrow_mut();
+        if cache.0 != key {
+            *cache = (key, HashMap::new());
+        }
+        *cache
+            .1
+            .entry(row)
+            .or_insert_with(|| self.find_hidden_bookmark(row))
+    }
+
+    /// `hidden_bookmark` without the cache. The bookmarks in the group's file span can
+    /// far outnumber its visible lines (a rule bookmarking the lines a filter hides): the
+    /// span's bookmarks are walked only while they are fewer than the hidden visible
+    /// lines, which are walked instead past that.
+    fn find_hidden_bookmark(&self, row: usize) -> Option<(usize, bool)> {
+        let group = self
+            .collapse_rows()
+            .then(|| self.collapse.group_heading_row(row))
+            .flatten()
+            .filter(|g| !g.open)?;
+        let hidden = group.pos + group.entry_len as usize..group.end();
+        let first = self.line_at(hidden.start)?;
+        let last = self.line_at(hidden.end - 1)?;
+        let budget = hidden.len();
+        let first_visible = |set: &BTreeSet<usize>, live: &dyn Fn(usize) -> bool| {
+            let mut in_span = set.range(first..=last).filter(|&&l| live(l));
+            for _ in 0..budget {
+                match in_span.next() {
+                    Some(&line) if self.pos_of_line(line).is_some() => return Some(line),
+                    Some(_) => {}
+                    None => return None,
+                }
+            }
+            hidden
+                .clone()
+                .filter_map(|p| self.line_at(p))
+                .find(|l| set.contains(l) && live(*l))
+        };
+        if let Some(line) = first_visible(&self.bookmarks, &|_| true) {
+            return Some((line, true));
+        }
+        first_visible(&self.auto_bookmarks, &|l| !self.dismissed_auto.contains(&l))
+            .map(|line| (line, false))
+    }
+
+    /// The hit to go to after hit `next - 1` (on `from_line`): past the hits hidden in a
+    /// closed group whose row is at or above the one of `from_line`, which F3 already
+    /// landed on.
+    fn skip_hidden_hits_forward(&self, mut next: usize, from_line: usize) -> usize {
+        let Some(from_row) = self.get_visible_row_of_line(from_line) else {
+            return next;
+        };
+        while let Some(&line) = self.search_matches.get(next) {
+            let Some(pos) = self.pos_of_line(line) else {
+                break;
+            };
+            let (row, hidden) = self.collapse.row_of_pos(pos);
+            if !hidden || row > from_row {
+                break;
+            }
+            let Some(last) = self
+                .collapse
+                .group_of_pos(pos)
+                .and_then(|g| self.line_at(g.end() - 1))
+            else {
+                break;
+            };
+            next = self.search_matches.partition_point(|&l| l <= last);
+        }
+        next
+    }
+
+    /// The hit to go to before `from_line` (SHIFT + F3), from candidate `prev`: past the
+    /// other hits of the row of `from_line`, and onto the first hit of a closed group's
+    /// row, the one F3 lands on. `None` when that passes the first hit.
+    fn skip_hidden_hits_backward(
+        &self,
+        mut prev: usize,
+        from_line: Option<usize>,
+    ) -> Option<usize> {
+        let from_row = from_line.and_then(|l| self.get_visible_row_of_line(l));
+        loop {
+            let row = self.get_visible_row_of_line(self.search_matches[prev]);
+            if row.is_none() || row != from_row {
+                break;
+            }
+            let head = self.get_actual_line_idx(row?)?;
+            prev = self
+                .search_matches
+                .partition_point(|&l| l < head)
+                .checked_sub(1)?;
+        }
+        let line = self.search_matches[prev];
+        let pos = self.pos_of_line(line)?;
+        let (row, hidden) = self.collapse.row_of_pos(pos);
+        if !hidden {
+            return Some(prev);
+        }
+        let head = self.get_actual_line_idx(row)?;
+        let first = self.search_matches.partition_point(|&l| l < head);
+        if self.search_matches.get(first) == Some(&head) {
+            return Some(first);
+        }
+        let group = self.collapse.group_of_pos(pos)?;
+        let first_hidden = self.line_at(group.pos + group.entry_len as usize)?;
+        Some(self.search_matches.partition_point(|&l| l < first_hidden))
+    }
+
+    /// Clipboard text of the selection as the view shows it: one line per row, a closed
+    /// group's row followed by its `×N` badge.
+    pub fn copy_selection_as_shown(&self) -> Option<String> {
+        let lines = if self.has_selection() {
+            self.selected_lines()
+        } else {
+            self.current_search_line().into_iter().collect()
+        };
+        if lines.is_empty() {
+            return None;
+        }
+        // A group's hidden lines come after the rows of its first entry: rows are
+        // remembered, not compared with the previous one.
+        let mut rows_seen = BTreeSet::new();
+        let mut out = String::new();
+        let mut written = 0usize;
+        for line in lines {
+            let row = self.get_visible_row_of_line(line);
+            let first = match row {
+                Some(row) if !rows_seen.insert(row) => continue,
+                Some(row) => self.get_actual_line_idx(row).unwrap_or(line),
+                None => line,
+            };
+            if written > 0 {
+                out.push('\n');
+            }
+            written += 1;
+            if let Some(text) = self.get_line(first) {
+                out.push_str(&text);
+            }
+            if let Some(group) = row
+                .and_then(|r| self.collapsed_row(r))
+                .filter(|c| !c.open && c.first_line == first)
+            {
+                out.push(' ');
+                out.push_str(&badge_text(group.count));
+            }
+        }
+        Some(out)
     }
 
     pub fn is_line_visible(&self, idx: usize) -> bool {
@@ -3666,6 +4224,7 @@ impl TailEngine {
                 // The jump the user asked for a while ago: like any jump, it stops follow.
                 self.scroll_to_line = Some(target.line);
                 self.follow_tail = false;
+                self.reveal_line(target.line);
             }
             self.goto_time_result = Some(result);
         }
@@ -3713,7 +4272,7 @@ impl TailEngine {
     /// only once the cache is built) is scanned instead, bounded so a filter over millions
     /// of rows stays cheap.
     pub fn visible_time_span(&self) -> Option<(i64, i64)> {
-        let count = self.visible_line_count();
+        let count = self.visible_lines();
         let nth = |i: usize| -> usize {
             if self.rows_filtered() {
                 self.filtered_lines[i]
@@ -3808,9 +4367,10 @@ impl TailEngine {
             Some(anchor) if anchor >= self.timestamps.len() => return TimeDelta::Pending,
             Some(anchor) => anchor,
             None if row == 0 => return TimeDelta::Blank,
-            // The previous visible row precedes this line, so it is timed too.
-            None => match self.get_actual_line_idx(row - 1) {
-                Some(prev) => prev,
+            // The last line of the previous row precedes this line, so it is timed too:
+            // after a collapsed group, the last line the group hides.
+            None => match self.row_span(row - 1) {
+                Some((_, prev)) => prev,
                 None => return TimeDelta::Blank,
             },
         };
@@ -3829,9 +4389,10 @@ impl TailEngine {
             return None;
         }
         let (first, last, rows) = if self.selection_all {
-            let rows = self.visible_line_count();
-            let last = self.get_actual_line_idx(rows.checked_sub(1)?)?;
-            (self.get_actual_line_idx(0)?, last, rows)
+            // Every visible line, those a collapsed group hides included.
+            let rows = self.visible_lines();
+            let last = self.line_at(rows.checked_sub(1)?)?;
+            (self.line_at(0)?, last, rows)
         } else {
             let first = *self.selection.first()?;
             let last = *self.selection.last()?;
@@ -4508,8 +5069,32 @@ impl TailEngine {
                         ScanKind::Index
                         | ScanKind::Levels
                         | ScanKind::Timestamps
-                        | ScanKind::AutoBookmarks => {}
+                        | ScanKind::AutoBookmarks
+                        | ScanKind::Collapse => {}
                     }
+                }
+                ScanBatch::Groups(groups) => {
+                    // Rows before the first line not scanned yet collapse as the groups
+                    // arrive; the line at the top of the view stays there.
+                    job.hits += groups.len();
+                    let top = self.view_top_line;
+                    let filtered = self.is_filter_active();
+                    let visible = &self.filtered_lines;
+                    let total = self.total_lines();
+                    self.collapse.push_final(groups, |pos| {
+                        if filtered {
+                            visible.get(pos).copied()
+                        } else {
+                            (pos < total).then_some(pos)
+                        }
+                    });
+                    self.filter_generation = self.filter_generation.wrapping_add(1);
+                    self.keep_top_line(top);
+                }
+                ScanBatch::CollapseCursor(detector) => {
+                    let top = self.view_top_line;
+                    self.apply_detection(detector, true);
+                    self.keep_top_line(top);
                 }
                 ScanBatch::Counted { hits, last_line } => {
                     // Search hits past the cap: counted by the worker, never listed.
@@ -4676,6 +5261,17 @@ impl TailEngine {
                     }
                 }
             }
+            ScanKind::Collapse => {
+                // Lines appended while the scan ran are read now, from its end state.
+                self.collapse_dirty = self.collapse_after_job.take();
+                if let Some(from) = self.pending_refresh_from.take() {
+                    self.refresh_derived_state_from(from);
+                }
+            }
+        }
+        // Groups waiting for the filter result, or for this scan to end.
+        if self.job.is_none() {
+            self.update_collapse();
         }
         // A timestamp scan queued behind this one, or displaced by it, resumes from the
         // first untimed line; then the levels, the lowest priority.
@@ -4695,11 +5291,22 @@ impl TailEngine {
         if len == 0 {
             return None;
         }
-        let (next_idx, wrapped) = match self.current_match_idx {
+        let (mut next_idx, mut wrapped) = match self.current_match_idx {
             Some(curr) if curr + 1 < len => (curr + 1, false),
             Some(_) => (0, true),
             None => (0, false),
         };
+        // The hits a collapsed group hides share its row: one step lands on the row,
+        // the next moves past all of them.
+        if let Some(curr) = self
+            .current_match_idx
+            .filter(|_| !wrapped && self.view_mode != ViewMode::Hex && self.collapse_rows())
+        {
+            next_idx = self.skip_hidden_hits_forward(next_idx, self.search_matches[curr]);
+            if next_idx >= len {
+                (next_idx, wrapped) = (0, true);
+            }
+        }
         Some(self.jump_to_match(next_idx, wrapped && sound_enabled))
     }
 
@@ -4709,18 +5316,40 @@ impl TailEngine {
         if len == 0 {
             return None;
         }
-        let (prev_idx, wrapped) = match self.current_match_idx {
+        let (mut prev_idx, mut wrapped) = match self.current_match_idx {
             Some(curr) if curr > 0 => (curr - 1, false),
             Some(_) => (len - 1, true),
             None => (len - 1, false),
         };
+        if self.view_mode != ViewMode::Hex && self.collapse_rows() {
+            let from = self
+                .current_match_idx
+                .filter(|_| !wrapped)
+                .map(|i| self.search_matches[i]);
+            match self.skip_hidden_hits_backward(prev_idx, from) {
+                Some(idx) => prev_idx = idx,
+                None => {
+                    wrapped = true;
+                    prev_idx = self
+                        .skip_hidden_hits_backward(len - 1, None)
+                        .unwrap_or(len - 1);
+                }
+            }
+        }
         Some(self.jump_to_match(prev_idx, wrapped && sound_enabled))
     }
 
     /// Makes hit `idx` of the navigated list the current match (a click in the search
-    /// results pane) and returns its target like `search_next`; `None` out of range.
+    /// results pane) and returns its target like `search_next`; `None` out of range. The
+    /// exact line is shown: a collapsed group hiding it is expanded.
     pub fn select_match(&mut self, idx: usize) -> Option<usize> {
-        (idx < self.active_match_count()).then(|| self.jump_to_match(idx, false))
+        if idx >= self.active_match_count() {
+            return None;
+        }
+        if self.view_mode != ViewMode::Hex {
+            self.reveal_line(self.search_matches[idx]);
+        }
+        Some(self.jump_to_match(idx, false))
     }
 
     fn jump_to_match(&mut self, idx: usize, beep: bool) -> usize {
@@ -5192,6 +5821,7 @@ impl TailEngine {
         .unwrap_or(visible[0]);
         self.bookmark_cursor = Some(target);
         self.scroll_to_line = Some(target);
+        self.reveal_line(target);
         Some(target)
     }
 
@@ -5209,6 +5839,7 @@ impl TailEngine {
         .unwrap_or(*visible.last().unwrap());
         self.bookmark_cursor = Some(target);
         self.scroll_to_line = Some(target);
+        self.reveal_line(target);
         Some(target)
     }
 
@@ -5349,6 +5980,7 @@ impl TailEngine {
     pub fn request_jump(&mut self, line: usize, lang: crate::i18n::Language) -> GotoTarget {
         let target = self.goto_target_for(line, self.total_lines());
         self.follow_tail = false;
+        self.reveal_line(target.line);
         self.pending_jump = Some(target.line);
         self.select_row(target.line);
         self.view_notice = target.hidden.then(|| {
@@ -5364,25 +5996,31 @@ impl TailEngine {
 
     // ----- Row selection, clipboard text and export -----
 
-    /// Selects only `idx` and makes it the anchor for Shift+click ranges.
+    /// Selects only the row of `idx` and makes it the anchor for Shift+click ranges. The
+    /// row of a collapsed group selects every line of the group.
     pub fn select_row(&mut self, idx: usize) {
         self.selection.clear();
         self.selection_all = false;
-        self.selection.insert(idx);
+        self.selection.extend(self.row_selection(idx));
         self.selection_anchor = Some(idx);
     }
 
-    /// Adds or removes `idx` (Ctrl+click) and makes it the anchor.
+    /// Adds or removes the row of `idx` (Ctrl+click) and makes it the anchor.
     pub fn toggle_row(&mut self, idx: usize) {
         if self.selection_all {
             // Materialise "all visible" before removing one row from it.
-            self.selection = (0..self.visible_line_count())
-                .filter_map(|r| self.get_actual_line_idx(r))
+            self.selection = (0..self.visible_lines())
+                .filter_map(|p| self.line_at(p))
                 .collect();
             self.selection_all = false;
         }
-        if !self.selection.remove(&idx) {
-            self.selection.insert(idx);
+        let lines = self.row_selection(idx);
+        if self.selection.contains(&idx) {
+            for line in lines {
+                self.selection.remove(&line);
+            }
+        } else {
+            self.selection.extend(lines);
         }
         self.selection_anchor = Some(idx);
     }
@@ -5400,7 +6038,8 @@ impl TailEngine {
                 self.selection_all = false;
                 for row in lo..=hi {
                     if let Some(line) = self.get_actual_line_idx(row) {
-                        self.selection.insert(line);
+                        let lines = self.row_selection(line);
+                        self.selection.extend(lines);
                     }
                 }
             }
@@ -5433,11 +6072,12 @@ impl TailEngine {
         }
     }
 
-    /// Selected line indices in file order.
+    /// Selected line indices in file order (with CTRL + A, every visible line, those a
+    /// collapsed group hides included).
     pub fn selected_lines(&self) -> Vec<usize> {
         if self.selection_all {
-            (0..self.visible_line_count())
-                .filter_map(|r| self.get_actual_line_idx(r))
+            (0..self.visible_lines())
+                .filter_map(|p| self.line_at(p))
                 .collect()
         } else {
             self.selection.iter().copied().collect()
@@ -5485,10 +6125,11 @@ impl TailEngine {
         Ok(count)
     }
 
-    /// Exports the rows that pass the active filters (all rows without filters).
+    /// Exports the lines that pass the active filters (all lines without filters), those
+    /// a collapsed group hides included: the collapse never changes what is exported.
     pub fn export_visible<W: Write>(&self, sink: &mut W) -> std::io::Result<usize> {
-        let rows = (0..self.visible_line_count()).filter_map(|r| self.get_actual_line_idx(r));
-        self.export_lines(rows, sink)
+        let lines = (0..self.visible_lines()).filter_map(|p| self.line_at(p));
+        self.export_lines(lines, sink)
     }
 
     /// Exports the lines matching the current search query.

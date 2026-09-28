@@ -2,6 +2,7 @@ pub mod ansi;
 pub mod audio;
 pub mod baretail_bridge;
 pub mod cli;
+pub mod collapse;
 pub mod compressed;
 pub mod config;
 pub mod crash_handler;
