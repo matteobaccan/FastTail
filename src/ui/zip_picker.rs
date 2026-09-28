@@ -1,13 +1,14 @@
-//! Entry picker shown when a zip archive holds more than one file entry, or for any tar
-//! archive: a filter box, a list sortable by name or size, multi-select, and the entries
-//! that cannot be opened listed disabled with the reason. Each chosen entry opens as its
-//! own stream.
+//! Entry picker shown when a zip or 7z archive holds more than one file entry, or for
+//! any tar archive: a filter box, a list sortable by name or size, multi-select, and the
+//! entries that cannot be opened listed disabled with the reason. Each chosen entry opens
+//! as its own stream.
 //!
-//! A zip arrives with its whole list (its central directory). A tar has no directory:
-//! the picker opens at once on a `TarScan` and pulls the rows the scan found at every
-//! frame, showing its progress with a stop button; entries can be opened while it runs.
+//! A zip arrives with its whole list (its central directory), a 7z with its header. A
+//! tar has no directory: the picker opens at once on a `TarScan` and pulls the rows the
+//! scan found at every frame, showing its progress with a stop button; entries can be
+//! opened while it runs.
 
-use crate::compressed::{ArchiveEntryInfo, EntryRefusal, ScanState, TarScan};
+use crate::compressed::{ArchiveEntryInfo, EntryRefusal, ScanState, SevenZRefusal, TarScan};
 use crate::i18n::{t, Language};
 use crate::theme::CyberTheme;
 use egui::RichText;
@@ -25,8 +26,11 @@ pub enum SortBy {
 pub struct ArchivePicker {
     pub archive: PathBuf,
     pub entries: Vec<ArchiveEntryInfo>,
-    /// The header walk feeding `entries` (a tar); `None` for a zip.
+    /// The header walk feeding `entries` (a tar); `None` for a zip or a 7z.
     pub scan: Option<TarScan>,
+    /// The complete list was too long (a 7z past `MAX_7Z_ENTRIES`): only its start is
+    /// listed, and the picker says so.
+    pub partial: bool,
     /// The end of the scan has been seen (and acted on) by `sync`.
     scan_seen_over: bool,
     /// Entries were opened from the picker while the scan ran: the scan ending with a
@@ -52,12 +56,13 @@ pub enum PickerOutcome {
 }
 
 impl ArchivePicker {
-    /// A picker on a complete list (a zip).
+    /// A picker on a list read at once (a zip, a 7z).
     pub fn new(archive: PathBuf, entries: Vec<ArchiveEntryInfo>) -> Self {
         Self {
             archive,
             entries,
             scan: None,
+            partial: false,
             scan_seen_over: false,
             opened_any: false,
             filter: String::new(),
@@ -181,6 +186,12 @@ impl ArchivePicker {
     /// The scan line above the list: progress and stop while it runs, then why the list
     /// may be incomplete or empty.
     fn scan_status(&mut self, ui: &mut egui::Ui, lang: Language, theme: CyberTheme) {
+        if self.partial {
+            ui.label(
+                RichText::new(format!("⚠ {}", t(lang, "sevenz_list_partial")))
+                    .color(theme.warn_color()),
+            );
+        }
         let Some(scan) = self.scan.as_ref() else {
             return;
         };
@@ -289,10 +300,17 @@ impl ArchivePicker {
                         ui.horizontal(|ui| match &entry.refusal {
                             None => {
                                 let mut checked = self.selected.contains(&i);
-                                if ui
-                                    .checkbox(&mut checked, RichText::new(&entry.name).monospace())
-                                    .changed()
-                                {
+                                let mut row = ui
+                                    .checkbox(&mut checked, RichText::new(&entry.name).monospace());
+                                if let Some(block) = entry.block_size {
+                                    // The entries before it in its solid block are decoded
+                                    // too: say how much.
+                                    row = row.on_hover_text(
+                                        t(lang, "sevenz_block_size")
+                                            .replace("{size}", &human_size(block)),
+                                    );
+                                }
+                                if row.changed() {
                                     if checked {
                                         self.selected.insert(i);
                                     } else {
@@ -352,6 +370,17 @@ pub fn refusal_text(lang: Language, refusal: &EntryRefusal) -> String {
         EntryRefusal::DuplicateName => t(lang, "zip_entry_duplicate").to_string(),
         EntryRefusal::LinkOrSpecial => t(lang, "tar_entry_link").to_string(),
         EntryRefusal::Sparse => t(lang, "tar_entry_sparse").to_string(),
+        EntryRefusal::DictionaryTooLarge => t(lang, "sevenz_entry_dictionary").to_string(),
+    }
+}
+
+/// An error opening or listing an archive, in the UI language when FastTail itself
+/// refused it (a 7z whose header is encrypted or too large).
+pub fn io_error_text(lang: Language, err: &std::io::Error) -> String {
+    match crate::compressed::sevenz_refusal(err) {
+        Some(SevenZRefusal::EncryptedHeader) => t(lang, "sevenz_header_encrypted").to_string(),
+        Some(SevenZRefusal::HeaderTooLarge) => t(lang, "sevenz_header_too_large").to_string(),
+        None => err.to_string(),
     }
 }
 
@@ -380,6 +409,7 @@ mod tests {
             name: name.to_string(),
             size,
             compressed_size: size / 2,
+            block_size: None,
             offset: None,
             refusal,
         }

@@ -821,6 +821,11 @@ fn test_i18n_exhaustive_coverage() {
         "tar_entry_sparse",
         "compressed_no_such_entry",
         "compressed_window_too_large",
+        "sevenz_entry_dictionary",
+        "sevenz_header_encrypted",
+        "sevenz_header_too_large",
+        "sevenz_list_partial",
+        "sevenz_block_size",
         "compressed_open_failed",
         "compressed_no_space",
         "compressed_follow_tip",
@@ -3691,6 +3696,73 @@ fn test_compressed_files_open_as_streams_and_zip_bundles_offer_their_entries() {
     assert!(app.open_notice.is_some());
 }
 
+/// Writes a 7z holding `files`, one LZMA2 block each.
+fn write_7z(path: &std::path::Path, files: &[(&str, &[u8])]) {
+    use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
+    let mut writer = ArchiveWriter::new(std::fs::File::create(path).unwrap()).unwrap();
+    for (name, data) in files {
+        writer
+            .push_archive_entry(ArchiveEntry::new_file(name), Some(*data))
+            .unwrap();
+    }
+    writer.finish().unwrap();
+}
+
+#[test]
+fn test_7z_archives_offer_their_entries_like_zip_bundles() {
+    use fasttail::ui::FastTailApp;
+    let dir = tempfile::tempdir().unwrap();
+    let config = FastTailConfig {
+        spool_dir: Some(dir.path().join("spool")),
+        ..FastTailConfig::default()
+    };
+    let mut app = FastTailApp::from_config(config);
+
+    // Two logs: the picker lists both, each chosen entry is its own titled stream.
+    let logs = dir.path().join("logs.7z");
+    write_7z(
+        &logs,
+        &[("server.log", b"started\n"), ("worker.log", b"started\n")],
+    );
+    app.open_log_file(logs.clone());
+    assert!(app.engines.is_empty(), "nothing opens before a choice");
+    let picker = app
+        .archive_picker
+        .take()
+        .expect("the entry picker is shown");
+    let names: Vec<&str> = picker.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["server.log", "worker.log"]);
+    assert!(!picker.partial);
+    for name in names {
+        app.open_log_file(fasttail::compressed::entry_path(&logs, name));
+    }
+    assert_eq!(app.engines.len(), 2);
+    let titles: Vec<String> = app
+        .engines
+        .iter()
+        .map(|e| e.compressed.as_ref().unwrap().title())
+        .collect();
+    assert_eq!(titles, ["logs.7z › server.log", "logs.7z › worker.log"]);
+
+    // A single log opens directly, whatever the extension.
+    let single = dir.path().join("single.bin");
+    write_7z(&single, &[("app.log", b"one\ntwo\n")]);
+    app.open_log_file(single.clone());
+    assert!(app.archive_picker.is_none());
+    assert_eq!(app.engines.len(), 3);
+    assert_eq!(
+        app.engines[2].path,
+        fasttail::compressed::entry_path(&single, "app.log")
+    );
+
+    // A damaged 7z says why instead of opening as text.
+    let damaged = dir.path().join("damaged.7z");
+    std::fs::write(&damaged, [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0, 4]).unwrap();
+    app.open_log_file(damaged);
+    assert_eq!(app.engines.len(), 3);
+    assert!(app.open_notice.is_some());
+}
+
 fn write_lines(path: &std::path::Path, lines: &[&str]) {
     use std::io::Write;
     let mut f = std::fs::File::create(path).unwrap();
@@ -5614,6 +5686,48 @@ mod named_sessions {
         assert!(FastTailConfig::from_ini(&cfg.to_ini())
             .open_files
             .is_empty());
+    }
+
+    #[test]
+    fn a_7z_entry_survives_a_session_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs.7z");
+        super::write_7z(
+            &logs,
+            &[("server.log", b"started\n"), ("logs/worker.log", b"w\n")],
+        );
+        let settings = fasttail::compressed::Settings {
+            spool_dir: dir.path().join("spool"),
+            limits: fasttail::compressed::Limits::default(),
+        };
+        let engine =
+            fasttail::compressed::open_engine(&logs, Some("logs/worker.log"), &settings, None)
+                .unwrap();
+        let mut stream = entry(engine.path.clone());
+        stream.archive_entry = engine.compressed.as_ref().unwrap().entry.clone();
+        let session = Session {
+            streams: vec![stream],
+            dock_layout: None,
+        };
+        let file = dir.path().join(format!("logs{SESSION_SUFFIX}"));
+        session.save_to(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("entry=logs/worker.log"), "{text}");
+        assert!(text.contains("rel=logs.7z"), "{text}");
+        let loaded = Session::load_from(&file).unwrap();
+        assert!(loaded.missing.is_empty(), "{:?}", loaded.missing);
+        assert_eq!(loaded.session, session);
+        // The default session (fasttail.ini) keeps it too.
+        let mut cfg = FastTailConfig::default();
+        cfg.open_files = vec![engine.path.clone()];
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.open_files, vec![engine.path.clone()]);
+        assert_eq!(
+            Session::from_config(&loaded).streams[0]
+                .archive_entry
+                .as_deref(),
+            Some("logs/worker.log")
+        );
     }
 
     #[test]

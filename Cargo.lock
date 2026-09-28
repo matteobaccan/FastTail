@@ -1000,6 +1000,7 @@ dependencies = [
  "ruzstd",
  "serde",
  "serde_json",
+ "sevenz-rust2",
  "smallvec",
  "sysinfo",
  "tar",
@@ -2711,6 +2712,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppmd-rust"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "196a7c80b9a7652aba7cc070827516c2abe4ccdf53d128e1944003cf5726cff1"
+
+[[package]]
 name = "presser"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3162,6 +3169,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "sevenz-rust2"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a4f883677093690e91fef8ae81fad8bce9e2c3a079b61054f05ce0d3ecf681e"
+dependencies = [
+ "bzip2",
+ "crc32fast",
+ "flate2",
+ "js-sys",
+ "lzma-rust2",
+ "ppmd-rust",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -1403,13 +1403,16 @@ impl FastTailApp {
                 &settings,
                 Some(wake),
             )),
-            Target::ZipArchive | Target::EmptyZip | Target::TarArchive(_) => None,
+            Target::ZipArchive
+            | Target::EmptyZip
+            | Target::TarArchive(_)
+            | Target::SevenZArchive => None,
         }
     }
 
     /// An archive was opened (`open_engine` gave `None` for `target`): an empty zip is
-    /// reported, a zip goes through `open_zip_archive`, and a tar opens the entry picker at
-    /// once while its headers are scanned in the background.
+    /// reported, a zip or a 7z goes through `open_listed_archive`, and a tar opens the
+    /// entry picker at once while its headers are scanned in the background.
     fn open_archive(&mut self, archive: PathBuf, target: crate::compressed::Target) {
         use crate::compressed::Target;
         match target {
@@ -1430,7 +1433,17 @@ impl FastTailApp {
                     archive, scan,
                 ));
             }
-            _ => self.open_zip_archive(archive),
+            Target::SevenZArchive => match crate::compressed::list_7z_entries(&archive) {
+                Ok(listing) => self.open_listed_archive(archive, listing.entries, listing.partial),
+                Err(err) => {
+                    let reason = crate::ui::zip_picker::io_error_text(self.config.language, &err);
+                    self.open_notice = Some(format!("{}: {reason}", archive.display()));
+                }
+            },
+            _ => match crate::compressed::list_zip_entries(&archive) {
+                Ok(entries) => self.open_listed_archive(archive, entries, false),
+                Err(err) => self.open_notice = Some(format!("{}: {err}", archive.display())),
+            },
         }
     }
 
@@ -1465,28 +1478,28 @@ impl FastTailApp {
         }
     }
 
-    /// A zip archive was opened: one file entry opens directly, several open the entry
-    /// picker, none is reported.
-    fn open_zip_archive(&mut self, archive: PathBuf) {
+    /// A zip or 7z archive was listed: one file entry opens directly, several open the
+    /// entry picker, none is reported. A `partial` list always goes to the picker, which
+    /// says so.
+    fn open_listed_archive(
+        &mut self,
+        archive: PathBuf,
+        entries: Vec<crate::compressed::ArchiveEntryInfo>,
+        partial: bool,
+    ) {
         let lang = self.config.language;
-        let entries = match crate::compressed::list_zip_entries(&archive) {
-            Ok(entries) => entries,
-            Err(err) => {
-                self.open_notice = Some(format!("{}: {err}", archive.display()));
-                return;
-            }
-        };
         match entries.as_slice() {
-            [] => {
+            [] if !partial => {
                 self.open_notice = Some(format!("{}: {}", archive.display(), t(lang, "zip_empty")));
             }
-            [only] if only.refusal.is_none() => {
+            [only] if only.refusal.is_none() && !partial => {
                 let path = crate::compressed::entry_path(&archive, &only.name);
                 self.open_log_file(path);
             }
             _ => {
-                self.archive_picker =
-                    Some(crate::ui::zip_picker::ArchivePicker::new(archive, entries));
+                let mut picker = crate::ui::zip_picker::ArchivePicker::new(archive, entries);
+                picker.partial = partial;
+                self.archive_picker = Some(picker);
             }
         }
     }
@@ -1496,7 +1509,7 @@ impl FastTailApp {
         use crate::compressed::OpenError;
         let lang = self.config.language;
         let reason = match err {
-            OpenError::Io(e) => e.to_string(),
+            OpenError::Io(e) => crate::ui::zip_picker::io_error_text(lang, e),
             OpenError::NotEnoughSpace { volume, needed } => t(lang, "compressed_no_space")
                 .replace("{volume}", volume)
                 .replace("{size}", &crate::ui::zip_picker::human_size(*needed)),
