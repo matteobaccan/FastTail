@@ -1,6 +1,6 @@
 ## Why
 
-FastTail has about forty shortcuts, a stream menu, a row context menu, a title-bar menu,
+FastTail has about forty shortcuts, a stream menu, a row context menu, title-bar buttons,
 a Settings page with dozens of switches and a help dialog that lists keys. Finding "where
 is the collapse toggle" or "what was the key for the time delta" means opening menus one
 by one or reading `F1`. Editors (VS Code, JetBrains, Sublime) solved this with a command
@@ -10,7 +10,7 @@ is what `remappable-shortcuts` needs, so building it once serves both.
 
 ## What Changes
 
-- **CTRL + SHIFT + P** (and a title-bar menu item "Command palette…") opens a floating
+- **CTRL + SHIFT + P** (and a title-bar button ⌨ with the tooltip "Command palette…") opens a floating
   palette over the window: a text box and a list of commands, filtered as the user types.
 - **Every action is listed**: window and stream actions (follow, wrap, collapse, search
   all, go to line, export, bookmark, next / previous match, open file, sessions…), every
@@ -67,7 +67,7 @@ convention of every editor).
   `search.next`, `settings.level_colors.toggle`), `ActionMeta` (i18n key, category, scope,
   shortcut label), `enabled(&state)`, a deferred `run` queue.
 - `src/ui/palette.rs` (new): popup, fuzzy scorer (no new crate), value step.
-- `src/ui/app.rs`: CTRL + SHIFT + P, title-bar menu item, draining the action queue,
+- `src/ui/app.rs`: CTRL + SHIFT + P, title-bar button ⌨, draining the action queue,
   window actions; `src/ui/dock.rs`: stream actions exposed as functions callable from the
   registry instead of only from menu closures and key handlers.
 - `src/config.rs`: `palette_recent`.

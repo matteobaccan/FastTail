@@ -241,7 +241,6 @@ pub fn create_export_file(target: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-/// Runs a tool on a row from a user gesture; a spawn failure becomes a stream notice.
 /// "Export visible lines…" / "Export search matches…" of the stream menu (and of the
 /// command palette): asks for a file and writes the lines to it; a failure is shown in
 /// the stream bar, a GUI build having no console for stderr.
@@ -289,6 +288,7 @@ pub fn export_stream_lines(engine: &mut TailEngine, lang: Language, matches_only
     }
 }
 
+/// Runs a tool on a row from a user gesture; a spawn failure becomes a stream notice.
 pub fn run_tool_on_row(
     engine: &mut TailEngine,
     tool: &ExternalTool,

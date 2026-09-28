@@ -131,8 +131,9 @@ pub struct FastTailApp {
     /// Command palette (CTRL + SHIFT + P).
     pub palette: crate::ui::palette::CommandPalette,
     /// Stream action picked in the palette, handed to its stream when the dock is drawn
-    /// this frame (see `DockContext::palette_action`).
-    palette_action: Option<(PathBuf, crate::actions::ActionId)>,
+    /// this frame (see `DockContext::palette_action`); kept for a few frames when that
+    /// stream is not drawn, with the frames left.
+    palette_action: Option<crate::actions::PendingAction>,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -2948,9 +2949,10 @@ impl FastTailApp {
             find_all: &mut self.find_all,
             filter_presets: &mut self.config.filter_presets,
             preset_events: &mut preset_events,
-            palette_action: self.palette_action.take(),
+            palette_action: self.palette_action.as_ref().map(|p| (p.path.clone(), p.id)),
         };
 
+        let mut palette_taken = false;
         if self.dock_state.iter_all_tabs().count() == 0 {
             egui::Frame::new()
                 .fill(self.config.theme.panel_bg())
@@ -3035,6 +3037,19 @@ impl FastTailApp {
             DockArea::new(&mut self.dock_state)
                 .style(dock_style)
                 .show_inside(ui, &mut tab_viewer);
+            palette_taken = tab_viewer.ctx.palette_action.is_none();
+        }
+        // A palette action its stream did not take (the tab was not drawn this frame)
+        // waits a few frames, then is dropped with its stream gone or still hidden.
+        self.palette_action = self.palette_action.take().and_then(|pending| {
+            let open = self
+                .engines
+                .iter()
+                .any(|e| paths_equal(&e.path, &pending.path));
+            pending.after_frame(palette_taken, open)
+        });
+        if self.palette_action.is_some() {
+            ctx.request_repaint();
         }
 
         // Requests of the Find results tab and the stream bars, applied now that the dock
@@ -4881,7 +4896,15 @@ impl FastTailApp {
         use crate::actions::{ActionId as A, Scope};
         if action.scope == Scope::Stream {
             if let Some(path) = target {
-                self.palette_action = Some((path, action.id));
+                // Bring the stream to the front: another tab may have become active
+                // meanwhile (a file dropped while the palette was open).
+                if let Some(locator) = self
+                    .dock_state
+                    .find_tab(&FastTailTab::LogStream(path.clone()))
+                {
+                    let _ = self.dock_state.set_active_tab(locator);
+                }
+                self.palette_action = Some(crate::actions::PendingAction::new(path, action.id));
             }
             return;
         }

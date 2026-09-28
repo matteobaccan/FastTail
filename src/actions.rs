@@ -146,6 +146,11 @@ pub enum Need {
     Followable,
     /// An active search.
     Search,
+    /// Text in the search box (what the stream menu's "Export search matches" and the
+    /// clear button look at).
+    Query,
+    /// A current row (`TailEngine::current_row`): the stream has lines.
+    Row,
     /// At least one bookmark.
     Bookmarks,
     /// The current row is bookmarked.
@@ -180,6 +185,8 @@ pub struct StreamState {
     pub markdown: bool,
     pub compressed: bool,
     pub has_search: bool,
+    pub has_query: bool,
+    pub has_row: bool,
     pub has_bookmarks: bool,
     pub row_bookmarked: bool,
     pub has_selection: bool,
@@ -198,6 +205,8 @@ impl StreamState {
             compressed: engine.is_compressed(),
             has_search: !engine.search_query.trim().is_empty()
                 || !engine.last_searched_query.is_empty(),
+            has_query: !engine.search_query.trim().is_empty(),
+            has_row: row.is_some(),
             has_bookmarks: engine.has_bookmarks(),
             row_bookmarked: row.is_some_and(|r| engine.is_bookmarked(r)),
             has_selection: !engine.selection.is_empty() || engine.selection_anchor.is_some(),
@@ -224,6 +233,8 @@ impl Need {
             Need::LineView => !stream.hex && !stream.markdown,
             Need::Followable => !stream.compressed,
             Need::Search => stream.has_search,
+            Need::Query => stream.has_query,
+            Need::Row => stream.has_row,
             Need::Bookmarks => stream.has_bookmarks,
             Need::RowBookmarked => stream.row_bookmarked,
             Need::ContextToggle => stream.in_context || (stream.filtered && stream.has_selection),
@@ -238,7 +249,8 @@ impl Need {
             Need::NotHex => "palette_not_hex",
             Need::LineView => "palette_text_only",
             Need::Followable => "compressed_follow_tip",
-            Need::Search => "palette_no_search",
+            Need::Search | Need::Query => "palette_no_search",
+            Need::Row => "palette_no_row",
             Need::Bookmarks => "palette_no_bookmarks",
             Need::RowBookmarked => "palette_row_not_bookmarked",
             Need::ContextToggle if !stream.filtered => "palette_no_filter",
@@ -318,9 +330,9 @@ pub const ACTIONS: &[Action] = &[
     action(A::GoToLine, "stream.goto", "act_goto", C::Stream, S::Stream, Some("CTRL + G"), &[]),
     action(A::SelectAll, "stream.select_all", "act_select_all", C::Stream, S::Stream, Some("CTRL + A"), &[]),
     action(A::Copy, "stream.copy", "copy_rows", C::Stream, S::Stream, Some("CTRL + C"), &[]),
-    action(A::CopyAsShown, "stream.copy_as_shown", "copy_as_shown", C::Stream, S::Stream, None, &[]),
+    action(A::CopyAsShown, "stream.copy_as_shown", "copy_as_shown", C::Stream, S::Stream, None, &[N::Row]),
     action(A::ExportVisible, "stream.export.visible", "export_visible", C::Stream, S::Stream, None, &[]),
-    action(A::ExportMatches, "stream.export.matches", "export_matches", C::Stream, S::Stream, None, &[N::Search]),
+    action(A::ExportMatches, "stream.export.matches", "export_matches", C::Stream, S::Stream, None, &[N::Query]),
     action(A::PresetSave, "stream.preset.save", "preset_save_current", C::Stream, S::Stream, None, &[]),
     action(A::PresetManage, "stream.preset.manage", "preset_manage", C::Stream, S::Stream, None, &[]),
     // View
@@ -333,13 +345,13 @@ pub const ACTIONS: &[Action] = &[
     action(A::Collapse, "view.collapse.cycle", "act_collapse", C::View, S::Stream, Some("CTRL + SHIFT + D"), &[N::LineView]),
     action(A::Timeline, "view.timeline.toggle", "act_timeline", C::View, S::Stream, None, &[N::LineView]),
     action(A::SearchPane, "view.search_pane.toggle", "act_search_pane", C::View, S::Window, None, &[]),
-    action(A::TimeAnchorSet, "view.time_anchor.set", "time_anchor_set", C::View, S::Stream, None, &[N::TimeDeltaShown]),
+    action(A::TimeAnchorSet, "view.time_anchor.set", "time_anchor_set", C::View, S::Stream, None, &[N::TimeDeltaShown, N::Row]),
     action(A::TimeAnchorClear, "view.time_anchor.clear", "time_anchor_clear", C::View, S::Stream, None, &[N::TimeAnchor]),
     // Search
     action(A::SearchFocus, "search.focus", "act_search", C::Search, S::Stream, Some("CTRL + F"), &[]),
     action(A::SearchNext, "search.next", "act_search_next", C::Search, S::Stream, Some("F3"), &[N::Search]),
     action(A::SearchPrev, "search.prev", "act_search_prev", C::Search, S::Stream, Some("SHIFT + F3"), &[N::Search]),
-    action(A::SearchClear, "search.clear", "clear_search", C::Search, S::Stream, None, &[N::Search]),
+    action(A::SearchClear, "search.clear", "clear_search", C::Search, S::Stream, None, &[N::Query]),
     action(A::FindAll, "search.find_all", "act_find_all", C::Search, S::Window, Some("CTRL + SHIFT + F"), &[]),
     action(A::GlobalFilterBar, "search.global_filter.toggle", "act_global_filter", C::Search, S::Window, Some("CTRL + SHIFT + H"), &[]),
     action(A::ShowContext, "search.context.toggle", "context_show", C::Search, S::Stream, Some("CTRL + K"), &[N::ContextToggle]),
@@ -348,7 +360,7 @@ pub const ACTIONS: &[Action] = &[
     action(A::BookmarkToggle, "bookmark.toggle", "act_bookmark_toggle", C::Bookmarks, S::Stream, Some("CTRL + F2"), &[]),
     action(A::BookmarkNext, "bookmark.next", "act_bookmark_next", C::Bookmarks, S::Stream, Some("F2"), &[N::Bookmarks]),
     action(A::BookmarkPrev, "bookmark.prev", "act_bookmark_prev", C::Bookmarks, S::Stream, Some("SHIFT + F2"), &[N::Bookmarks]),
-    action(A::BookmarkNote, "bookmark.note", "bookmark_note_menu", C::Bookmarks, S::Stream, None, &[]),
+    action(A::BookmarkNote, "bookmark.note", "bookmark_note_menu", C::Bookmarks, S::Stream, None, &[N::Row]),
     action(A::BookmarkRemove, "bookmark.remove", "bookmark_remove", C::Bookmarks, S::Stream, None, &[N::RowBookmarked]),
     action(A::BookmarkClear, "bookmark.clear", "clear_bookmarks", C::Bookmarks, S::Stream, None, &[N::Bookmarks]),
     // Window
@@ -623,6 +635,41 @@ pub fn get(id: ActionId) -> Action {
         .expect("every ActionId is registered")
 }
 
+/// Frames a stream action picked in the palette waits for its stream to be drawn.
+pub const PENDING_FRAMES: u8 = 3;
+
+/// A stream action picked in the palette, waiting for its stream to be drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAction {
+    pub path: std::path::PathBuf,
+    pub id: ActionId,
+    /// Frames left before it is dropped.
+    pub frames_left: u8,
+}
+
+impl PendingAction {
+    pub fn new(path: std::path::PathBuf, id: ActionId) -> Self {
+        Self {
+            path,
+            id,
+            frames_left: PENDING_FRAMES,
+        }
+    }
+
+    /// After a frame: gone once its stream took it; otherwise (the tab was not drawn,
+    /// e.g. a file dropped while the palette was open made another tab active) it waits
+    /// for the next frames, unless its stream is closed or its frames are spent.
+    pub fn after_frame(self, taken: bool, stream_open: bool) -> Option<Self> {
+        if taken || !stream_open || self.frames_left == 0 {
+            return None;
+        }
+        Some(Self {
+            frames_left: self.frames_left - 1,
+            ..self
+        })
+    }
+}
+
 /// Records `key` as the most recent palette command (at most `MAX_RECENT` kept).
 pub fn push_recent(recent: &mut Vec<String>, key: &str) {
     recent.retain(|k| k != key);
@@ -736,6 +783,7 @@ mod tests {
             "palette_not_hex",
             "palette_text_only",
             "palette_no_search",
+            "palette_no_row",
             "palette_no_bookmarks",
             "palette_row_not_bookmarked",
             "palette_no_selection",
@@ -821,6 +869,65 @@ mod tests {
             ..Default::default()
         });
         assert!(get(ActionId::SearchNext).enabled(&searching));
+        // A search already run but its box emptied: nothing to export or clear.
+        for id in [ActionId::ExportMatches, ActionId::SearchClear] {
+            assert_eq!(
+                get(id).disabled_reason(&searching),
+                Some("palette_no_search")
+            );
+        }
+        let typed = with_stream(StreamState {
+            has_search: true,
+            has_query: true,
+            ..Default::default()
+        });
+        assert!(get(ActionId::ExportMatches).enabled(&typed));
+        assert!(get(ActionId::SearchClear).enabled(&typed));
+    }
+
+    #[test]
+    fn pending_action_waits_for_its_stream() {
+        let path = std::path::PathBuf::from("a.log");
+        let fresh = PendingAction::new(path.clone(), ActionId::BookmarkToggle);
+        // Taken by its stream: gone.
+        assert_eq!(fresh.clone().after_frame(true, true), None);
+        // Stream closed meanwhile: dropped.
+        assert_eq!(fresh.clone().after_frame(false, false), None);
+        // Tab not drawn this frame: kept, for PENDING_FRAMES frames at most.
+        let mut pending = Some(fresh);
+        for _ in 0..PENDING_FRAMES {
+            pending = pending.and_then(|p| p.after_frame(false, true));
+            assert!(pending.is_some());
+        }
+        assert_eq!(pending.and_then(|p| p.after_frame(false, true)), None);
+    }
+
+    #[test]
+    fn row_actions_need_a_row() {
+        let rows = [
+            ActionId::BookmarkNote,
+            ActionId::CopyAsShown,
+            ActionId::TimeAnchorSet,
+        ];
+        let empty = with_stream(StreamState {
+            time_delta: true,
+            ..Default::default()
+        });
+        for id in rows {
+            assert_eq!(
+                get(id).disabled_reason(&empty),
+                Some("palette_no_row"),
+                "{id:?}"
+            );
+        }
+        let lines = with_stream(StreamState {
+            time_delta: true,
+            has_row: true,
+            ..Default::default()
+        });
+        for id in rows {
+            assert!(get(id).enabled(&lines), "{id:?}");
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@
 - [x] 2.1 `src/ui/palette.rs`: popup, text box, rows with name, category, shortcut and disabled reason
 - [x] 2.2 Fuzzy scorer on localized and English names with case and accent folding; ranking tests
 - [x] 2.3 Keys (arrows, pages, Enter, Esc, CTRL + SHIFT + P toggle), value step, no opening while locked
-- [x] 2.4 Recent commands and `palette_recent` in `[general]`; title-bar menu item
+- [x] 2.4 Recent commands and `palette_recent` in `[general]`; title-bar button ⌨ (tooltip "Command palette…")
 
 ## 3. Texts and documentation
 

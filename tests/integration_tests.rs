@@ -998,6 +998,7 @@ fn test_i18n_exhaustive_coverage() {
         "palette_not_hex",
         "palette_text_only",
         "palette_no_search",
+        "palette_no_row",
         "palette_no_bookmarks",
         "palette_row_not_bookmarked",
         "palette_no_selection",
@@ -8733,6 +8734,41 @@ mod search_all_streams {
                 .is_ok_and(|leaf| leaf.active == path.tab)
         }
 
+        /// One frame with a palette stream action for stream `idx`; returns whether a
+        /// drawn stream took it.
+        fn frame_with_palette_action(
+            &mut self,
+            idx: usize,
+            action: fasttail::actions::ActionId,
+        ) -> bool {
+            for e in &mut self.engines {
+                e.poll_updates();
+            }
+            let target = self.engines[idx].path.clone();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let mut taken = false;
+            let mut out = self.ctx.run_ui(input, |ui| {
+                let mut dock_ctx = dock_context(
+                    &mut self.engines,
+                    &mut self.open_files,
+                    &mut self.session,
+                    None,
+                );
+                dock_ctx.palette_action = Some((target.clone(), action));
+                let mut viewer = fasttail::ui::dock::FastTailTabViewer { ctx: dock_ctx };
+                egui_dock::DockArea::new(&mut self.dock).show_inside(ui, &mut viewer);
+                taken = viewer.ctx.palette_action.is_none();
+            });
+            out.textures_delta.clear();
+            taken
+        }
+
         fn active_is_stream(&mut self, idx: usize) -> bool {
             let path = self.engines[idx].path.clone();
             matches!(
@@ -8740,6 +8776,53 @@ mod search_all_streams {
                 Some((_, FastTailTab::LogStream(p))) if *p == path
             )
         }
+    }
+
+    /// A palette action for a stream whose tab is hidden stays pending (the app keeps it
+    /// and brings the tab to front); once the tab is drawn the stream takes and runs it.
+    #[test]
+    fn palette_action_waits_for_a_hidden_stream() {
+        use fasttail::actions::{ActionId, PendingAction};
+        let mut h = Harness::new(&[
+            (
+                "a.log",
+                "a1
+a2
+"
+                .to_string(),
+            ),
+            (
+                "b.log",
+                "b1
+b2
+"
+                .to_string(),
+            ),
+        ]);
+        h.frame(Vec::new(), false);
+        assert!(h.stream_shown(0) && !h.stream_shown(1));
+
+        let mut pending = Some(PendingAction::new(
+            h.engines[1].path.clone(),
+            ActionId::BookmarkToggle,
+        ));
+        let taken = h.frame_with_palette_action(1, ActionId::BookmarkToggle);
+        assert!(!taken, "a hidden tab cannot take the action");
+        pending = pending.and_then(|p| p.after_frame(taken, true));
+        assert!(pending.is_some(), "the action waits for its stream");
+        assert!(!h.engines[1].has_bookmarks());
+
+        // What `run_action` does: bring the target tab to front.
+        let tab = FastTailTab::LogStream(h.engines[1].path.clone());
+        let locator = h.dock.find_tab(&tab).expect("tab");
+        let _ = h.dock.set_active_tab(locator);
+        let pending = pending.expect("pending");
+        assert!(
+            h.frame_with_palette_action(1, pending.id),
+            "the stream takes it"
+        );
+        assert!(h.engines[1].has_bookmarks(), "and runs it");
+        assert!(!h.engines[0].has_bookmarks());
     }
 
     fn ctrl_shift_f() -> egui::Event {

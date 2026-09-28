@@ -355,6 +355,14 @@ impl CommandPalette {
         let pos = egui::pos2(screen.center().x - width / 2.0, screen.top() + 64.0);
         let mut clicked: Option<usize> = None;
 
+        // An invisible backdrop over the whole window, just under the palette: a click
+        // outside the palette lands on it (egui hit-tests the topmost layer) instead of
+        // reaching the widget beneath, so it only closes the palette.
+        let backdrop = egui::Area::new(egui::Id::new("command_palette_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| ui.allocate_rect(screen, egui::Sense::click()));
+
         let area = egui::Area::new(egui::Id::new("command_palette"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
@@ -432,13 +440,18 @@ impl CommandPalette {
                     });
             });
 
-        // A click outside the palette closes it.
-        let outside = ctx.input(|i| {
-            i.pointer.any_click()
-                && i.pointer
-                    .interact_pos()
-                    .is_some_and(|p| !area.response.rect.contains(p))
-        });
+        // The palette stays above its backdrop, which a click may have raised.
+        ctx.move_to_top(area.response.layer_id);
+
+        // A click outside the palette closes it; the backdrop took it, so nothing beneath
+        // reacts to it as well.
+        let outside = backdrop.inner.clicked()
+            || ctx.input(|i| {
+                i.pointer.any_click()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| !area.response.rect.contains(p))
+            });
         if outside {
             self.close();
             self.closed_by_click = Some(ctx.cumulative_pass_nr());
