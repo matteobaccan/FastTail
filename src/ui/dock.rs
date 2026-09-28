@@ -1,3 +1,4 @@
+use crate::actions::ActionId;
 use crate::collapse::CollapsedRow;
 use crate::config::push_search_history;
 use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
@@ -97,6 +98,9 @@ pub struct DockContext<'a> {
     /// them this frame.
     pub filter_presets: &'a mut Vec<FilterPreset>,
     pub preset_events: &'a mut PresetEvents,
+    /// A stream action run from the command palette and the stream it targets (the one
+    /// focused when the palette opened); taken by that stream when it is drawn.
+    pub palette_action: Option<(PathBuf, ActionId)>,
 }
 
 /// Requests from the presets menus and the term buttons, handled by the app after the
@@ -235,6 +239,53 @@ pub fn create_export_file(target: &Path) -> std::io::Result<std::fs::File> {
     }
     file.set_len(0)?;
     Ok(file)
+}
+
+/// "Export visible lines…" / "Export search matches…" of the stream menu (and of the
+/// command palette): asks for a file and writes the lines to it; a failure is shown in
+/// the stream bar, a GUI build having no console for stderr.
+pub fn export_stream_lines(engine: &mut TailEngine, lang: Language, matches_only: bool) {
+    let title = t(
+        lang,
+        if matches_only {
+            "export_matches"
+        } else {
+            "export_visible"
+        },
+    );
+    let suggested = format!(
+        "{}-{}.txt",
+        if engine.is_stdin() {
+            Some(crate::stdin_source::STDIN_TITLE)
+        } else {
+            engine.path.file_stem().and_then(|s| s.to_str())
+        }
+        .unwrap_or("fasttail"),
+        if matches_only { "matches" } else { "export" }
+    );
+    if let Some(target) = rfd::FileDialog::new()
+        .set_title(title)
+        .set_file_name(suggested)
+        .add_filter("Text (*.txt, *.log)", &["txt", "log"])
+        .save_file()
+    {
+        let result = create_export_file(&target).and_then(|f| {
+            let mut w = std::io::BufWriter::new(f);
+            if matches_only {
+                engine.export_search_matches(&mut w)
+            } else {
+                engine.export_visible(&mut w)
+            }
+        });
+        if let Err(err) = result {
+            eprintln!("fasttail: export to {} failed: {err}", target.display());
+            engine.view_notice = Some(format!(
+                "{} ({}): {err}",
+                t(lang, "export_failed"),
+                target.display()
+            ));
+        }
+    }
 }
 
 /// Runs a tool on a row from a user gesture; a spawn failure becomes a stream notice.
@@ -392,6 +443,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     // Mark new data as viewed/cleared; the tab is on screen this frame
                     engine.has_new_data = false;
                     engine.mark_seen();
+                    let palette_action = match &self.ctx.palette_action {
+                        Some((target, id)) if paths_equal_fast(target, path) => {
+                            let id = *id;
+                            self.ctx.palette_action = None;
+                            Some(id)
+                        }
+                        _ => None,
+                    };
                     // Each engine owns its own search query so the find box is per-tab
                     let mut search_query = std::mem::take(&mut engine.search_query);
                     render_log_stream(
@@ -414,6 +473,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         self.ctx.time_delta.gap_ms,
                         self.ctx.filter_presets,
                         self.ctx.preset_events,
+                        palette_action,
                     );
                     engine.search_query = search_query;
                 } else {
@@ -1054,7 +1114,11 @@ fn render_log_stream(
     time_delta_gap_ms: u64,
     filter_presets: &mut Vec<FilterPreset>,
     preset_events: &mut PresetEvents,
+    palette_action: Option<ActionId>,
 ) {
+    // A command palette action runs through the same code as its button, menu item or
+    // key, so both have exactly the same effect.
+    let act = |id: ActionId| palette_action == Some(id);
     let font_id = egui::FontId::monospace(font_size);
     let hex_row_height = ui.ctx().fonts_mut(|f| f.row_height(&font_id));
     let row_height = (hex_row_height * 1.25).max(18.0).ceil();
@@ -1180,8 +1244,8 @@ fn render_log_stream(
 
     // F3 and Shift+F3 shortcuts: only the stream in the focused dock leaf reacts
     let f3_pressed = is_focused && ui.input(|i| i.key_pressed(egui::Key::F3));
-    let shift_f3 = f3_pressed && ui.input(|i| i.modifiers.shift);
-    let next_f3 = f3_pressed && !ui.input(|i| i.modifiers.shift);
+    let shift_f3 = (f3_pressed && ui.input(|i| i.modifiers.shift)) || act(ActionId::SearchPrev);
+    let next_f3 = (f3_pressed && !ui.input(|i| i.modifiers.shift)) || act(ActionId::SearchNext);
 
     if next_f3 {
         if let Some(target) = engine.search_next(sound_enabled) {
@@ -1220,6 +1284,7 @@ fn render_log_stream(
         )
         .on_hover_text(t(lang, "tip_follow_tail"))
         .clicked()
+            || act(ActionId::Follow)
         {
             engine.follow_tail = !engine.follow_tail;
             ui.ctx().request_repaint();
@@ -1242,6 +1307,7 @@ fn render_log_stream(
         )
         .on_hover_text(t(lang, "tip_monitor"))
         .clicked()
+            || act(ActionId::Monitor)
         {
             engine.is_watching = !engine.is_watching;
             ui.ctx().request_repaint();
@@ -1259,6 +1325,7 @@ fn render_log_stream(
         if toggle_button(ui, theme, "🔤 TXT", is_txt, theme.accent_color())
             .on_hover_text(t(lang, "tip_mode_txt"))
             .clicked()
+            || act(ActionId::ViewText)
         {
             engine.set_view_mode(crate::tail_engine::ViewMode::Text);
             ui.ctx().request_repaint();
@@ -1267,6 +1334,7 @@ fn render_log_stream(
         if toggle_button(ui, theme, "🔢 HEX", is_hex, theme.secondary_accent())
             .on_hover_text(t(lang, "tip_mode_hex"))
             .clicked()
+            || act(ActionId::ViewHex)
         {
             engine.set_view_mode(crate::tail_engine::ViewMode::Hex);
             ui.ctx().request_repaint();
@@ -1283,6 +1351,7 @@ fn render_log_stream(
         if toggle_button(ui, theme, "📝 MD", is_md, theme.warn_color())
             .on_hover_text(md_tip)
             .clicked()
+            || act(ActionId::ViewMarkdown)
         {
             if md_too_large {
                 engine.view_notice = Some(md_msg);
@@ -1302,6 +1371,7 @@ fn render_log_stream(
             if toggle_button(ui, theme, lines_label, show_lines, theme.accent_color())
                 .on_hover_text(t(lang, "show_lines"))
                 .clicked()
+                || act(ActionId::LineNumbers)
             {
                 engine.set_show_line_numbers(!show_lines);
                 ui.ctx().request_repaint();
@@ -1318,6 +1388,7 @@ fn render_log_stream(
             if toggle_button(ui, theme, "Δt", show_delta, theme.accent_color())
                 .on_hover_text(delta_tip)
                 .clicked()
+                || act(ActionId::TimeDelta)
             {
                 engine.set_show_time_delta(!show_delta);
                 ui.ctx().request_repaint();
@@ -1329,6 +1400,7 @@ fn render_log_stream(
                 toggle_button(ui, theme, "↩ Wrap", engine.wrap_lines, theme.accent_color())
                     .on_hover_text(t(lang, "tip_wrap"))
                     .clicked()
+                    || act(ActionId::Wrap)
                     || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
             if toggled {
                 let row = top_row(engine);
@@ -1614,7 +1686,9 @@ fn render_log_stream(
 
         // Ctrl+F in the focused stream: requests focus on its search input and selects all text
         let ctrl_f = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F);
-        if is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_f)) {
+        if act(ActionId::SearchFocus)
+            || (is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_f)))
+        {
             ui.ctx().memory_mut(|m| m.request_focus(search_id));
             let mut state =
                 egui::text_edit::TextEditState::load(ui.ctx(), search_id).unwrap_or_default();
@@ -1793,10 +1867,11 @@ fn render_log_stream(
         .on_hover_text(t(lang, "search_history"));
 
         if !search_query.is_empty()
-            && ui
+            && (ui
                 .button("✖")
                 .on_hover_text(t(lang, "clear_search"))
                 .clicked()
+                || act(ActionId::SearchClear))
         {
             search_query.clear();
             engine.update_search(search_query);
@@ -1806,7 +1881,11 @@ fn render_log_stream(
 
         // Show in context (CTRL + K): the selected line in the full log, or back.
         let ctrl_k = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K);
-        if is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_k)) {
+        if act(ActionId::LeaveContext) {
+            engine.leave_context();
+        } else if act(ActionId::ShowContext)
+            || (is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_k)))
+        {
             if engine.context_line().is_some() {
                 engine.leave_context();
             } else if let Some(line) = engine
@@ -1820,7 +1899,8 @@ fn render_log_stream(
         // Go to line (Ctrl+G): inline box, Enter jumps, Esc closes
         let ctrl_g = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::G);
         let goto_id = egui::Id::new("goto_line_input").with(&engine.path);
-        if is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_g)) {
+        if act(ActionId::GoToLine) || (is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_g)))
+        {
             engine.goto_open = true;
             engine.goto_input.clear();
             engine.goto_notice = None;
@@ -1955,49 +2035,19 @@ fn render_log_stream(
         }
 
         // Export menu: visible lines, or the search matches, to a text file
+        if act(ActionId::ExportVisible) {
+            export_stream_lines(engine, lang, false);
+        }
+        if act(ActionId::ExportMatches) {
+            export_stream_lines(engine, lang, true);
+        }
         ui.menu_button("💾", |ui| {
             ui.set_max_width(260.0);
-            let export = |engine: &mut TailEngine, title: &str, matches_only: bool| {
-                let suggested = format!(
-                    "{}-{}.txt",
-                    if engine.is_stdin() {
-                        Some(crate::stdin_source::STDIN_TITLE)
-                    } else {
-                        engine.path.file_stem().and_then(|s| s.to_str())
-                    }
-                    .unwrap_or("fasttail"),
-                    if matches_only { "matches" } else { "export" }
-                );
-                if let Some(target) = rfd::FileDialog::new()
-                    .set_title(title)
-                    .set_file_name(suggested)
-                    .add_filter("Text (*.txt, *.log)", &["txt", "log"])
-                    .save_file()
-                {
-                    let result = create_export_file(&target).and_then(|f| {
-                        let mut w = std::io::BufWriter::new(f);
-                        if matches_only {
-                            engine.export_search_matches(&mut w)
-                        } else {
-                            engine.export_visible(&mut w)
-                        }
-                    });
-                    if let Err(err) = result {
-                        // Shown in the stream bar: a GUI build has no console for stderr.
-                        eprintln!("fasttail: export to {} failed: {err}", target.display());
-                        engine.view_notice = Some(format!(
-                            "{} ({}): {err}",
-                            t(lang, "export_failed"),
-                            target.display()
-                        ));
-                    }
-                }
-            };
             if ui
                 .button(RichText::new(t(lang, "export_visible")).monospace())
                 .clicked()
             {
-                export(engine, t(lang, "export_visible"), false);
+                export_stream_lines(engine, lang, false);
                 ui.close();
             }
             if has_query
@@ -2005,7 +2055,7 @@ fn render_log_stream(
                     .button(RichText::new(t(lang, "export_matches")).monospace())
                     .clicked()
             {
-                export(engine, t(lang, "export_matches"), true);
+                export_stream_lines(engine, lang, true);
                 ui.close();
             }
             if engine.has_bookmarks() {
@@ -2052,16 +2102,20 @@ fn render_log_stream(
         let keyboard_free = !ui.ctx().egui_wants_keyboard_input();
         let pane_focused =
             crate::ui::hit_list::HitList::has_focus(ui.ctx(), search_pane_id(engine));
-        if is_focused && (keyboard_free || pane_focused) {
+        // A palette action counts as the key press, whatever has the keyboard.
+        let keys_ok = is_focused && (keyboard_free || pane_focused);
+        {
             // Ctrl+A selects every visible row, Ctrl+C copies the selection (or the
             // current search hit) as plain text.
             let ctrl_a = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::A);
             let ctrl_c = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::C);
-            if ui.input_mut(|i| i.consume_shortcut(&ctrl_a)) {
+            if act(ActionId::SelectAll)
+                || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_a)))
+            {
                 engine.select_all_visible();
                 ui.ctx().request_repaint();
             }
-            if ui.input_mut(|i| i.consume_shortcut(&ctrl_c)) {
+            if act(ActionId::Copy) || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_c))) {
                 if let Some(text) = engine.copy_selection_text() {
                     ui.ctx().copy_text(text);
                 }
@@ -2076,7 +2130,10 @@ fn render_log_stream(
                 engine.view_mode,
                 crate::tail_engine::ViewMode::Hex | crate::tail_engine::ViewMode::Markdown
             );
-            if text_view && ui.input_mut(|i| i.consume_shortcut(&ctrl_shift_d)) {
+            if text_view
+                && (act(ActionId::Collapse)
+                    || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_shift_d))))
+            {
                 engine.set_collapse_mode(engine.collapse_mode().next());
                 ui.ctx().request_repaint();
             }
@@ -2095,18 +2152,24 @@ fn render_log_stream(
                     .or_else(|| engine.get_actual_line_idx(top))
                     .unwrap_or(0)
             };
-            if ui.input_mut(|i| i.consume_shortcut(&ctrl_f2)) {
+            if act(ActionId::BookmarkToggle)
+                || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_f2)))
+            {
                 let row = current_row();
                 engine.toggle_bookmark(row);
                 ui.ctx().request_repaint();
-            } else if ui.input_mut(|i| i.consume_shortcut(&shift_f2)) {
+            } else if act(ActionId::BookmarkPrev)
+                || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&shift_f2)))
+            {
                 let row = current_row();
                 if let Some(target) = engine.bookmark_prev(row) {
                     scroll_to_target(engine, target);
                     engine.select_row(target);
                     ui.ctx().request_repaint();
                 }
-            } else if ui.input_mut(|i| i.consume_shortcut(&plain_f2)) {
+            } else if act(ActionId::BookmarkNext)
+                || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&plain_f2)))
+            {
                 let row = current_row();
                 if let Some(target) = engine.bookmark_next(row) {
                     scroll_to_target(engine, target);
@@ -2114,6 +2177,11 @@ fn render_log_stream(
                     ui.ctx().request_repaint();
                 }
             }
+        }
+        // Row context menu entries run from the palette on the row a stream-menu action
+        // applies to (`TailEngine::current_row`).
+        if let Some(action) = palette_action {
+            apply_row_action(ui, engine, action, filter_presets, preset_events);
         }
         // Main-view navigation keys: not while the results pane (or an input) has them.
         if is_focused && keyboard_free {
@@ -3245,6 +3313,63 @@ fn collapse_badge_tip(engine: &TailEngine, c: CollapsedRow, lang: Language) -> S
         },
     ));
     tip
+}
+
+/// The row context menu, presets menu and filter row entries run from the command
+/// palette: the row ones apply to `TailEngine::current_row`, the row an external tool
+/// or a stream-menu action applies to. Other actions are ignored here.
+fn apply_row_action(
+    ui: &Ui,
+    engine: &mut TailEngine,
+    action: ActionId,
+    presets: &[FilterPreset],
+    events: &mut PresetEvents,
+) {
+    let row = engine.current_row();
+    match action {
+        ActionId::CopyAsShown => apply_copy_pick(ui, engine, row.map(|r| (r, true))),
+        ActionId::BookmarkNote => {
+            if let Some(row) = row {
+                engine.open_note_editor(row);
+            }
+        }
+        ActionId::BookmarkRemove => {
+            if let Some(row) = row {
+                engine.remove_bookmark(row);
+            }
+        }
+        ActionId::BookmarkClear => engine.clear_bookmarks(),
+        ActionId::TimeAnchorSet => {
+            if let Some(row) = row.filter(|r| engine.time_anchor() != Some(*r)) {
+                engine.toggle_time_anchor(row);
+            }
+        }
+        ActionId::TimeAnchorClear => {
+            // Toggling the anchor line clears it.
+            if let Some(current) = engine.time_anchor() {
+                engine.toggle_time_anchor(current);
+            }
+        }
+        ActionId::Timeline => {
+            engine.timeline_open = !engine.timeline_open;
+            engine.timeline_dirty = true;
+        }
+        ActionId::PresetSave => {
+            let name = match crate::filter_preset::preset_label(presets, engine) {
+                PresetLabel::Matches(name) | PresetLabel::Modified(name) => name.to_string(),
+                PresetLabel::None => String::new(),
+            };
+            let draft = PresetSaveDraft {
+                name,
+                with_time: engine.is_time_filtered(),
+            };
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(preset_save_id(engine), draft));
+        }
+        ActionId::PresetManage => events.open_filters = Some(engine.path.clone()),
+        _ => return,
+    }
+    ui.ctx().request_repaint();
 }
 
 /// Copies what the row context menu asked for, `(line, as shown)`: the selection when

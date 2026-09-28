@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Command Palette
-CTRL + SHIFT + P and the title-bar menu item "Command palette…" SHALL open a palette with a text box and a list of commands. The list SHALL contain every window, stream, search, bookmark, session and view action of the action registry, and one command per boolean or enumerated setting of the Settings page. Each row SHALL show the localized name, the category and the current shortcut when the action has one. `Up`, `Down`, `PgUp` and `PgDown` SHALL move the selection, `Enter` SHALL run the selected command and close the palette, and `Esc` or CTRL + SHIFT + P SHALL close it without running anything. While the palette is open, keys SHALL NOT reach the streams. The palette SHALL NOT open while the window lock is armed.
+CTRL + SHIFT + P and the title-bar button ⌨ (tooltip "Command palette…" with its shortcut) SHALL open a palette with a text box and a list of commands. The list SHALL contain every window, stream, search, bookmark, session and view action of the action registry, and one command per boolean or enumerated setting of the Settings page. Each row SHALL show the localized name, the category and the current shortcut when the action has one. `Up`, `Down`, `PgUp` and `PgDown` SHALL move the selection, `Enter` SHALL run the selected command and close the palette, and `Esc` or CTRL + SHIFT + P SHALL close it without running anything. While the palette is open, keys SHALL NOT reach the streams. The palette SHALL NOT open while the window lock is armed.
 
 #### Scenario: Running a stream action by name
 - **WHEN** a stream is focused, the user presses CTRL + SHIFT + P, types `wrap` and presses Enter

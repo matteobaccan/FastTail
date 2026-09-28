@@ -58,6 +58,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   16 languages updated. `fasttail --print --context N` gives the same
   context in print mode.
 
+- **Command palette.** `CTRL + SHIFT + P`, or `⌨` in the title bar, opens a box over the
+  window listing every command: the window, stream, search, bookmark, session and view
+  actions (follow, wrap, collapse, go to line, export, next match, show in context, open
+  file, sessions...), every stream menu and row menu item, and every on / off or
+  multiple-choice setting of the Settings page ("Toggle …" with its state; theme,
+  language, renderer and size unit open a second step listing the values, the current one
+  marked). Typing filters with a fuzzy, case- and accent-insensitive match on the name in
+  the interface language and in English; each row shows its category and shortcut. `↑` /
+  `↓` / `PgUp` / `PgDown` move, `Enter` runs, `Esc` closes, and while it is open no key
+  reaches the streams. Stream commands act on the stream focused when the palette opened
+  and run the same code as their button, menu item or key; one that cannot run now (no
+  stream, no search, HEX view...) is greyed with the reason. The last 8 commands come first
+  and are saved as `[general] palette_recent` in `fasttail.ini`. The actions live in a new
+  registry (`src/actions.rs`) that later changes extend. Help dialog and all 16 languages
+  updated.
+
 ### Changed
 
 - **Building from source needs Rust 1.93.** `sevenz-rust2` 0.23, used to read `.7z`

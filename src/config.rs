@@ -151,6 +151,10 @@ pub struct FastTailConfig {
     pub recent_files: Vec<PathBuf>,
     #[serde(default)]
     pub search_history: Vec<String>,
+    /// Ids of the last commands run from the command palette, most recent first (at most
+    /// `actions::MAX_RECENT`), `[general] palette_recent` comma separated.
+    #[serde(default)]
+    pub palette_recent: Vec<String>,
     /// Bookmarked lines per file (most recently used first) with the notes of some of
     /// them, see `set_bookmarks_with_notes`.
     #[serde(default)]
@@ -349,6 +353,7 @@ impl Default for FastTailConfig {
             open_files: Vec::new(),
             recent_files: Vec::new(),
             search_history: Vec::new(),
+            palette_recent: Vec::new(),
             bookmarks: Vec::new(),
             wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
@@ -678,6 +683,7 @@ impl FastTailConfig {
             .set("compressed_max_gb", self.compressed_max_gb.to_string())
             .set("stdin_spool_max_mb", self.stdin_spool_max_mb.to_string())
             .set("size_unit", unit_str)
+            .set("palette_recent", self.palette_recent.join(","))
             .set("baretail_import", self.baretail_import.to_string())
             .set(
                 "baretail_prompt_shown",
@@ -1045,6 +1051,9 @@ impl FastTailConfig {
                     "hex" => SizeUnit::Hex,
                     _ => SizeUnit::Bytes,
                 };
+            }
+            if let Some(s) = general.get("palette_recent") {
+                cfg.palette_recent = crate::actions::parse_recent(s);
             }
             if let Some(s) = general.get("baretail_import") {
                 if let Ok(v) = s.parse::<bool>() {
@@ -1579,6 +1588,31 @@ mod tests {
         wild.with_section(Some("general"))
             .set("compressed_max_gb", "99999");
         assert_eq!(FastTailConfig::from_ini(&wild).compressed_max_gb, 1024);
+    }
+
+    #[test]
+    fn test_palette_recent_round_trips_and_defaults_to_empty() {
+        let cfg = FastTailConfig {
+            palette_recent: vec!["view.time_delta.toggle".into(), "search.next".into()],
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.palette_recent, cfg.palette_recent);
+
+        let mut old_style = Ini::new();
+        old_style.with_section(Some("general")).set("theme", "Tron");
+        assert!(FastTailConfig::from_ini(&old_style)
+            .palette_recent
+            .is_empty());
+
+        // Ids of a newer or older build that this one does not know are dropped.
+        let mut ini = FastTailConfig::default().to_ini();
+        ini.with_section(Some("general"))
+            .set("palette_recent", "gone.action,view.wrap.toggle");
+        assert_eq!(
+            FastTailConfig::from_ini(&ini).palette_recent,
+            vec!["view.wrap.toggle".to_string()]
+        );
     }
 
     #[test]
