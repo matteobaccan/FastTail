@@ -45,6 +45,19 @@ notify = "9.0.0-rc.5"
 # the zopfli compressor and the zlib-rs backend, neither needed to read.
 flate2 = "1.1"
 zip = { version = "8.0", default-features = false, features = ["deflate-flate2"] }
+# Tar archives, plain or compressed: the reader walks headers (GNU long names, pax,
+# base-256 sizes); `xattr` (the only default feature) is for unpacking to disk, which
+# FastTail never does.
+tar = { version = "0.4", default-features = false }
+# bzip2 on its default backend, libbz2-rs-sys, a pure-Rust port of libbzip2: no C
+# toolchain on any release target (the C `bzip2-sys` feature stays off).
+bzip2 = "0.6"
+# xz through a pure-Rust LZMA2 decoder; the encoder is a dev-dependency feature only
+# (test fixtures), and the lzip reader is not needed.
+lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz", "optimization"] }
+# zstd through a pure-Rust decoder (the C libzstd would need a cross compiler for
+# Linux ARM64); decompression is bounded by the spool's disk writes, not the codec.
+ruzstd = "0.9"
 
 # Data, Serialization & Parsing
 serde = { version = "1.0", features = ["derive"] }
@@ -73,6 +86,8 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3.17"
+# xz fixtures built inside the tests.
+lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz", "encoder"] }
 
 # On-demand engine benchmark: built only by `cargo bench` (release-derived
 # `bench` profile), never by `cargo test`. See benches/filter_bench.rs.

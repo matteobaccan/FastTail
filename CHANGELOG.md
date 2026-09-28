@@ -49,6 +49,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   progress in the stream bar. Saved as `bookmark=true` in the rule's section. All 16
   languages updated.
 
+- **bzip2, xz, zstd and tar archives.** Before, only gzip and zip opened: a `.tar.gz` was
+  stopped with "tar archives are not supported", a bare `.tar` opened as one binary blob
+  and `.bz2` / `.xz` / `.zst` files opened as they were, in HEX view. Now bzip2, xz and
+  zstd files are recognised by their content and decompressed in the background exactly
+  like gzip (progress, cancel, re-extract, output cap, free-space guard; concatenated
+  streams and frames included), and a tar, plain or inside any of the four codecs
+  (`.tgz`, `.tar.bz2`, `.tar.xz`, `.tar.zst`), opens the entry picker at once: it fills in
+  while a background scan reads the headers (`scanning N%`, ✖ to stop), entries open
+  before the scan ends, and a tarball holding a single file opens it directly. Tar links,
+  devices, FIFOs, sparse files and unsafe names are listed disabled with the reason; an
+  entry that is itself compressed (`bundle.tgz › logs/app.log.1.gz`) is decompressed once
+  more; sessions keep `entry=` for tar entries too. xz and zstd windows over 256 MiB are
+  refused. Pure-Rust decoders only (`tar`, `bzip2` on `libbz2-rs-sys`, `lzma-rust2`,
+  `ruzstd`). All 16 languages updated.
+
 ### Fixed
 
 - **`Space` no longer toggles Follow while you type.** A space typed in a filter, search or
