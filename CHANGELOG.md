@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **7z archives.** A `.7z` (recognised by its signature, whatever its name) opens like a
+  zip: one file opens directly, several show the entry picker, and each chosen entry opens
+  as its own stream titled `logs.7z › server.log`. Copy, LZMA, LZMA2, BZip2, Deflate and
+  PPMd entries are read, with the BCJ / BCJ2 / ARM (and other branch) and delta filters.
+  Solid archives work: the block is decoded from its start, the entries before the chosen
+  one are dropped without being written, and the progress runs over the block (the
+  picker shows its size when hovering the entry). Encrypted entries, other coders
+  (zstd, brotli, lz4...), unsafe or duplicate names and a dictionary above 256 MiB are
+  listed disabled with the reason; a 7z whose header is encrypted, larger than 64 MB or
+  declaring more than 250,000 files, blocks or streams is refused with a message, and no
+  password is asked; a 7z whose start header fails its CRC is reported as damaged. The picker lists at most 100 000
+  entries and says when the list is partial. Space guard, output cap, re-extract,
+  nested `.gz` entries, workspace, sessions (`entry=`), recent files and bookmarks work
+  as for zip entries. Pure-Rust decoder (`sevenz-rust2`); all 16 languages updated.
+
+### Changed
+
+- **Building from source needs Rust 1.93.** `sevenz-rust2` 0.23, used to read `.7z`
+  logs, requires it; the release binaries are unaffected.
+
 ## [0.12.0] - 2026-09-28
 
 ### Added

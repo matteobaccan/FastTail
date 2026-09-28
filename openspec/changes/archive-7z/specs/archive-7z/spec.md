@@ -16,7 +16,7 @@ The engine SHALL recognise a 7z archive by its signature `37 7A BC AF 27 1C` at 
 - **THEN** the entry is extracted again in the background without showing the picker, and both bookmarks appear once their lines are indexed.
 
 ### Requirement: 7z Refusals and Limits
-The picker SHALL show disabled, with the reason, an entry that is encrypted, uses another coder, has an absolute, drive-prefixed or climbing (`../`) name, or has a stream path taken by an earlier entry; an archive whose header is encrypted SHALL be refused as a whole with a message, and no password SHALL be asked. An entry whose LZMA, LZMA2 or PPMd dictionary exceeds 256 MiB SHALL be refused before that memory is allocated. The header SHALL be decoded with at most 64 MB of memory and at most 100 000 entries SHALL be listed; beyond either bound the picker SHALL say that the list is partial. No file SHALL be created at a path taken from the archive.
+The picker SHALL show disabled, with the reason, an entry that is encrypted, uses another coder, has an absolute, drive-prefixed or climbing (`../`) name, or has a stream path taken by an earlier entry; an archive whose header is encrypted SHALL be refused as a whole with a message, and no password SHALL be asked. An entry whose LZMA, LZMA2 and PPMd dictionaries together exceed 256 MiB SHALL be refused before that memory is allocated. An archive whose header is larger than 64 MB (stored or once decoded), or declares more than 250 000 files, blocks or streams, SHALL be refused as a whole with a message, never listed in part. An archive whose start header fails its CRC SHALL be reported as damaged, and its header SHALL NOT be guessed. At most 100 000 entries SHALL be listed; beyond, the picker SHALL say that the list is partial. No file SHALL be created at a path taken from the archive.
 
 #### Scenario: Encrypted entry
 - **WHEN** a 7z archive holds `secret.log` encrypted with AES and `app.log` unencrypted
@@ -25,6 +25,18 @@ The picker SHALL show disabled, with the reason, an entry that is encrypted, use
 #### Scenario: Oversized dictionary
 - **WHEN** an entry was compressed with a 1536 MiB LZMA2 dictionary
 - **THEN** it is refused with a message naming the 256 MiB limit and no spool data is written for it.
+
+#### Scenario: Oversized header
+- **WHEN** the header of a 7z archive decodes to more than 64 MB
+- **THEN** the archive is refused with a message naming the 64 MB limit and no entry is listed.
+
+#### Scenario: Too many declared entries
+- **WHEN** the header of a 7z archive declares 300 000 files
+- **THEN** the archive is refused with a message naming the 250 000 limit before the 7z reader parses the header.
+
+#### Scenario: Damaged start header
+- **WHEN** the start header of a 7z archive is zeroed or fails its CRC
+- **THEN** the archive is reported as damaged, not refused, and no header is looked for near the end of the file.
 
 #### Scenario: Unsafe name
 - **WHEN** a 7z archive holds an entry named `../../evil.log`

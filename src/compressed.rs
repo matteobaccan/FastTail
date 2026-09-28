@@ -1,4 +1,4 @@
-//! Compressed log input: gzip, bzip2, xz and zstd files, zip entries and tar entries
+//! Compressed log input: gzip, bzip2, xz and zstd files, zip and 7z entries and tar entries
 //! (plain or compressed tar) are decompressed on a background thread into a spool file
 //! (see `spool`) that the tail engine opens like any other log, so every feature works on
 //! the result and nothing decompressed is held in memory.
@@ -10,7 +10,8 @@
 //!   decoder reads concatenated members, streams or frames as one stream.
 //! - `list_zip_entries` reads the central directory once, for the entry picker; a tar has
 //!   no directory, so `TarScan` walks its headers on a worker thread while the picker
-//!   shows the rows as they are found.
+//!   shows the rows as they are found. `list_7z_entries` reads a 7z header once too,
+//!   within bounds checked before the 7z reader allocates anything.
 //! - `DecompressJob` inflates into the spool in 1 MB chunks (flushed, so the engine's
 //!   normal poll indexes them as they land), reports progress by compressed bytes
 //!   consumed, stops on cancel, at the output cap, when the spool volume runs low, or on a
@@ -71,9 +72,14 @@ pub enum Format {
     EmptyZip,
     /// A plain (uncompressed) tar archive.
     Tar,
+    /// A 7z archive.
+    SevenZ,
     /// Anything else: opened as a plain file.
     Plain,
 }
+
+/// Signature at the start of every 7z archive.
+const SEVENZ_MAGIC: [u8; 6] = [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C];
 
 /// bzip2 block magic (pi) and end-of-stream magic (sqrt pi), after `BZh1`..`BZh9`.
 const BZIP2_BLOCK: [u8; 6] = [0x31, 0x41, 0x59, 0x26, 0x53, 0x59];
@@ -114,6 +120,8 @@ pub fn sniff_bytes(head: &[u8]) -> Format {
         Format::Zip
     } else if head.starts_with(b"PK\x05\x06") {
         Format::EmptyZip
+    } else if head.starts_with(&SEVENZ_MAGIC) {
+        Format::SevenZ
     } else if is_tar_head(head) {
         Format::Tar
     } else {
@@ -395,15 +403,22 @@ pub enum EntryRefusal {
     LinkOrSpecial,
     /// A GNU sparse tar entry.
     Sparse,
+    /// A 7z entry whose LZMA / LZMA2 dictionary or PPMd model is larger than
+    /// `MAX_DECODER_WINDOW`: refused before that memory is allocated.
+    DictionaryTooLarge,
 }
 
-/// One file entry of a zip or tar archive, as listed by the entry picker.
+/// One file entry of a zip, tar or 7z archive, as listed by the entry picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveEntryInfo {
     pub name: String,
     pub size: u64,
-    /// Compressed size of a zip entry; a tar stores its entries as they are (`size`).
+    /// Compressed size of a zip entry; a tar stores its entries as they are (`size`); a
+    /// 7z entry of a solid block gets its share of the block.
     pub compressed_size: u64,
+    /// 7z only: the unpacked size of the solid block holding the entry when the block
+    /// holds other entries too (they are decoded, and dropped, to reach it).
+    pub block_size: Option<u64>,
     /// Plain tar only: where the headers of this entry start in the archive (the end of
     /// the previous entry, so GNU long-name and pax headers are read again), so its
     /// extraction seeks there instead of reading the archive from the start.
@@ -462,6 +477,7 @@ pub fn list_zip_entries(path: &Path) -> std::io::Result<Vec<ArchiveEntryInfo>> {
             name: entry.name().to_string(),
             size: entry.size(),
             compressed_size: entry.compressed_size(),
+            block_size: None,
             offset: None,
             refusal,
         });
@@ -471,6 +487,763 @@ pub fn list_zip_entries(path: &Path) -> std::io::Result<Vec<ArchiveEntryInfo>> {
 
 fn zip_err(e: zip::result::ZipError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+}
+
+/// Largest 7z header read to list an archive: the header as stored, and the header an
+/// encoded (compressed) header decodes to.
+pub const MAX_7Z_HEADER: u64 = 64 * 1024 * 1024;
+/// Entries a 7z listing shows at most; beyond, the picker says the list is partial.
+pub const MAX_7Z_ENTRIES: usize = 100_000;
+/// Files, blocks, packed streams or block sub-streams a 7z header may declare: the 7z
+/// reader allocates a record for each before any listing bound applies, so a header
+/// declaring more is refused before it is handed over.
+pub const MAX_7Z_ITEMS: u64 = 250_000;
+/// Coders (and streams of one coder) a 7z block may chain.
+const MAX_7Z_CODERS: u64 = 32;
+
+/// Why a whole 7z archive cannot be listed (its entries are never shown).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SevenZRefusal {
+    /// The header is encrypted: without a password not even the names can be read.
+    EncryptedHeader,
+    /// The header is larger than `MAX_7Z_HEADER` (or its decoder would need more than
+    /// `MAX_DECODER_WINDOW`).
+    HeaderTooLarge,
+    /// The header declares more than `MAX_7Z_ITEMS` files, blocks or streams.
+    TooManyEntries,
+}
+
+impl std::fmt::Display for SevenZRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SevenZRefusal::EncryptedHeader => write!(f, "the 7z header is encrypted"),
+            SevenZRefusal::HeaderTooLarge => write!(
+                f,
+                "the 7z header is larger than {} MB",
+                MAX_7Z_HEADER / (1024 * 1024)
+            ),
+            SevenZRefusal::TooManyEntries => {
+                write!(
+                    f,
+                    "the 7z archive declares more than {MAX_7Z_ITEMS} entries"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SevenZRefusal {}
+
+/// The `SevenZRefusal` an error of `list_7z_entries` or `open_engine` carries, if any.
+pub fn sevenz_refusal(e: &std::io::Error) -> Option<&SevenZRefusal> {
+    e.get_ref()?.downcast_ref::<SevenZRefusal>()
+}
+
+fn sevenz_refused(refusal: SevenZRefusal) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, refusal)
+}
+
+/// The entries of a 7z archive, as the picker lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SevenZListing {
+    pub entries: Vec<ArchiveEntryInfo>,
+    /// More than `MAX_7Z_ENTRIES` file entries: only the first ones are listed.
+    pub partial: bool,
+}
+
+/// The coders an entry may use: copy, LZMA, LZMA2, BZip2, Deflate, PPMd, and the BCJ
+/// family (x86, BCJ2, ARM and the other branch filters the reader decodes) and delta
+/// filters.
+fn sevenz_coder_supported(id: &[u8]) -> bool {
+    use sevenz_rust2::EncoderMethod as M;
+    [
+        M::ID_COPY,
+        M::ID_LZMA,
+        M::ID_LZMA2,
+        M::ID_BZIP2,
+        M::ID_DEFLATE,
+        M::ID_PPMD,
+        M::ID_DELTA,
+        M::ID_BCJ_X86,
+        M::ID_BCJ2,
+        M::ID_BCJ_ARM,
+        M::ID_BCJ_ARM64,
+        M::ID_BCJ_ARM_THUMB,
+        M::ID_BCJ_PPC,
+        M::ID_BCJ_IA64,
+        M::ID_BCJ_SPARC,
+        M::ID_BCJ_RISCV,
+    ]
+    .contains(&id)
+}
+
+/// Memory the decoder of a 7z coder allocates for its dictionary (LZMA, LZMA2) or model
+/// (PPMd), read from the coder properties; `None` for any other coder.
+fn sevenz_coder_window(id: &[u8], props: &[u8]) -> Option<u64> {
+    use sevenz_rust2::EncoderMethod as M;
+    let le32 = || {
+        props
+            .get(1..5)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64)
+    };
+    if id == M::ID_LZMA || id == M::ID_PPMD {
+        // A property block too short to hold the size is damage: the reader says so.
+        le32()
+    } else if id == M::ID_LZMA2 {
+        let bits = (*props.first()? & 0x3F) as u64;
+        Some(if bits >= 40 {
+            u32::MAX as u64
+        } else {
+            (2 | (bits & 1)) << (bits / 2 + 11)
+        })
+    } else {
+        None
+    }
+}
+
+/// Why the coders `(id, properties)` of a 7z block keep its entries from opening: an
+/// AES coder (whatever else the block holds), another coder, or dictionaries that
+/// together exceed `MAX_DECODER_WINDOW` (every coder of a chain holds its own).
+fn sevenz_coders_refusal<'c>(
+    coders: impl IntoIterator<Item = (&'c [u8], &'c [u8])>,
+) -> Option<EntryRefusal> {
+    let mut refusal = None;
+    let mut windows = 0u64;
+    for (id, props) in coders {
+        if id == sevenz_rust2::EncoderMethod::ID_AES256_SHA256 {
+            return Some(EntryRefusal::Encrypted);
+        }
+        if !sevenz_coder_supported(id) {
+            let name = sevenz_rust2::EncoderMethod::by_id(id).map_or_else(
+                || id.iter().map(|b| format!("{b:02X}")).collect::<String>(),
+                |m| m.name().to_string(),
+            );
+            refusal.get_or_insert(EntryRefusal::Method(name));
+        } else if let Some(window) = sevenz_coder_window(id, props) {
+            windows = windows.saturating_add(window);
+        }
+    }
+    refusal.or((windows > MAX_DECODER_WINDOW).then_some(EntryRefusal::DictionaryTooLarge))
+}
+
+fn sevenz_block_refusal(block: &sevenz_rust2::Block) -> Option<EntryRefusal> {
+    sevenz_coders_refusal(
+        block
+            .coders
+            .iter()
+            .map(|c| (c.encoder_method_id(), c.properties())),
+    )
+}
+
+/// What stops a 7z header walk: damage, or a bound FastTail refuses to go past.
+#[derive(Debug)]
+enum HeaderIssue {
+    Damaged(&'static str),
+    Refused(SevenZRefusal),
+}
+
+impl From<HeaderIssue> for std::io::Error {
+    fn from(issue: HeaderIssue) -> Self {
+        match issue {
+            HeaderIssue::Damaged(what) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("damaged 7z archive: {what}"),
+            ),
+            HeaderIssue::Refused(refusal) => sevenz_refused(refusal),
+        }
+    }
+}
+
+type Walk<T> = Result<T, HeaderIssue>;
+
+/// `count` when it is within `MAX_7Z_ITEMS`.
+fn bounded_items(count: u64) -> Walk<u64> {
+    if count > MAX_7Z_ITEMS {
+        Err(HeaderIssue::Refused(SevenZRefusal::TooManyEntries))
+    } else {
+        Ok(count)
+    }
+}
+
+/// `count` when it is within `MAX_7Z_CODERS`.
+fn bounded_coders(count: u64) -> Walk<u64> {
+    if count > MAX_7Z_CODERS {
+        Err(HeaderIssue::Damaged("too many coders in a block"))
+    } else {
+        Ok(count)
+    }
+}
+
+/// Reads the bytes of a 7z header: its numbers are 1 to 9 bytes long, the count of
+/// leading one bits of the first byte saying how many bytes follow.
+struct HeaderBytes<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> HeaderBytes<'a> {
+    fn take(&mut self, n: u64) -> Walk<&'a [u8]> {
+        let truncated = HeaderIssue::Damaged("truncated header");
+        let Some(end) = usize::try_from(n)
+            .ok()
+            .and_then(|n| self.pos.checked_add(n))
+        else {
+            return Err(truncated);
+        };
+        let bytes = self.data.get(self.pos..end).ok_or(truncated)?;
+        self.pos = end;
+        Ok(bytes)
+    }
+
+    fn byte(&mut self) -> Walk<u8> {
+        self.take(1).map(|b| b[0])
+    }
+
+    fn number(&mut self) -> Walk<u64> {
+        let first = self.byte()? as u64;
+        let mut mask = 0x80u64;
+        let mut value = 0u64;
+        for i in 0..8 {
+            if first & mask == 0 {
+                return Ok(value | ((first & (mask - 1)) << (8 * i)));
+            }
+            value |= (self.byte()? as u64) << (8 * i);
+            mask >>= 1;
+        }
+        Ok(value)
+    }
+
+    /// A digest list of `count` items (a bounded count): all-defined byte or bit field,
+    /// then the CRCs of the defined ones.
+    fn digests(&mut self, count: u64) -> Walk<Vec<Option<u32>>> {
+        let defined: Vec<bool> = if self.byte()? != 0 {
+            vec![true; count as usize]
+        } else {
+            let bits = self.take(count.div_ceil(8))?;
+            (0..count as usize)
+                .map(|i| bits[i / 8] & (0x80 >> (i % 8)) != 0)
+                .collect()
+        };
+        defined
+            .into_iter()
+            .map(|d| {
+                d.then(|| {
+                    self.take(4)
+                        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                })
+                .transpose()
+            })
+            .collect()
+    }
+}
+
+/// A block ("folder") of a 7z streams info, as far as the walk needs it.
+#[derive(Default)]
+struct SzFolder {
+    coders: Vec<(Vec<u8>, Vec<u8>)>,
+    outputs: u64,
+    unpack_sizes: Vec<u64>,
+    crc: Option<u32>,
+    /// Files (sub-streams) the block holds.
+    streams: u64,
+}
+
+#[derive(Default)]
+struct SzStreams {
+    pack_pos: u64,
+    pack_sizes: Vec<u64>,
+    folders: Vec<SzFolder>,
+}
+
+/// Walks a 7z streams info (the one of the main header, or the one saying how an
+/// encoded header is packed), refusing any count past `MAX_7Z_ITEMS` before the 7z reader
+/// would allocate for it.
+fn walk_streams_info(h: &mut HeaderBytes) -> Walk<SzStreams> {
+    let mut s = SzStreams::default();
+    let mut id = h.byte()?;
+    if id == 0x06 {
+        s.pack_pos = h.number()?;
+        let count = bounded_items(h.number()?)?;
+        loop {
+            match h.byte()? {
+                0x00 => break,
+                0x09 => {
+                    for _ in 0..count {
+                        s.pack_sizes.push(h.number()?);
+                    }
+                }
+                0x0A => {
+                    h.digests(count)?;
+                }
+                _ => return Err(HeaderIssue::Damaged("pack info")),
+            }
+        }
+        id = h.byte()?;
+    }
+    if id == 0x07 {
+        if h.byte()? != 0x0B {
+            return Err(HeaderIssue::Damaged("unpack info"));
+        }
+        let count = bounded_items(h.number()?)?;
+        if h.byte()? != 0 {
+            return Err(HeaderIssue::Damaged("external folders"));
+        }
+        for _ in 0..count {
+            let mut folder = SzFolder {
+                streams: 1,
+                ..SzFolder::default()
+            };
+            let (mut ins, mut outs) = (0u64, 0u64);
+            let coders = bounded_coders(h.number()?)?;
+            if coders == 0 {
+                return Err(HeaderIssue::Damaged("block without coders"));
+            }
+            for _ in 0..coders {
+                let flags = h.byte()?;
+                if flags & 0x80 != 0 {
+                    return Err(HeaderIssue::Damaged("alternative coder methods"));
+                }
+                let coder = h.take((flags & 0x0F) as u64)?.to_vec();
+                let (i, o) = if flags & 0x10 != 0 {
+                    (bounded_coders(h.number()?)?, bounded_coders(h.number()?)?)
+                } else {
+                    (1, 1)
+                };
+                let props = if flags & 0x20 != 0 {
+                    let n = h.number()?;
+                    h.take(n)?.to_vec()
+                } else {
+                    Vec::new()
+                };
+                ins += i;
+                outs += o;
+                folder.coders.push((coder, props));
+            }
+            let binds = outs
+                .checked_sub(1)
+                .ok_or(HeaderIssue::Damaged("block without output"))?;
+            for _ in 0..binds {
+                h.number()?;
+                h.number()?;
+            }
+            let packed = ins
+                .checked_sub(binds)
+                .ok_or(HeaderIssue::Damaged("block streams"))?;
+            if packed > 1 {
+                for _ in 0..packed {
+                    h.number()?;
+                }
+            }
+            folder.outputs = outs;
+            s.folders.push(folder);
+        }
+        if h.byte()? != 0x0C {
+            return Err(HeaderIssue::Damaged("unpack sizes"));
+        }
+        for folder in &mut s.folders {
+            for _ in 0..folder.outputs {
+                folder.unpack_sizes.push(h.number()?);
+            }
+        }
+        loop {
+            match h.byte()? {
+                0x00 => break,
+                0x0A => {
+                    for (folder, crc) in s.folders.iter_mut().zip(h.digests(count)?) {
+                        folder.crc = crc;
+                    }
+                }
+                _ => return Err(HeaderIssue::Damaged("unpack info")),
+            }
+        }
+        id = h.byte()?;
+    }
+    if id == 0x08 {
+        id = h.byte()?;
+        if id == 0x0D {
+            let mut total = 0u64;
+            for folder in &mut s.folders {
+                folder.streams = bounded_items(h.number()?)?;
+                total = bounded_items(total + folder.streams)?;
+            }
+            id = h.byte()?;
+        }
+        if id == 0x09 {
+            for folder in &s.folders {
+                for _ in 1..folder.streams {
+                    h.number()?;
+                }
+            }
+            id = h.byte()?;
+        }
+        while id != 0x00 {
+            if id != 0x0A {
+                return Err(HeaderIssue::Damaged("sub-streams info"));
+            }
+            let count = s
+                .folders
+                .iter()
+                .filter(|f| !(f.streams == 1 && f.crc.is_some()))
+                .map(|f| f.streams)
+                .sum();
+            h.digests(count)?;
+            id = h.byte()?;
+        }
+        id = h.byte()?;
+    }
+    if id != 0x00 {
+        return Err(HeaderIssue::Damaged("streams info"));
+    }
+    Ok(s)
+}
+
+/// Walks a plain 7z header up to its file count, refusing any count past
+/// `MAX_7Z_ITEMS`.
+fn walk_header(data: &[u8]) -> Walk<()> {
+    let mut h = HeaderBytes { data, pos: 0 };
+    if h.byte()? != 0x01 {
+        return Err(HeaderIssue::Damaged("no header"));
+    }
+    let mut id = h.byte()?;
+    if id == 0x02 {
+        // Archive properties: skipped.
+        while h.byte()? != 0x00 {
+            let size = h.number()?;
+            h.take(size)?;
+        }
+        id = h.byte()?;
+    }
+    if id == 0x03 {
+        return Err(HeaderIssue::Damaged("additional streams"));
+    }
+    if id == 0x04 {
+        walk_streams_info(&mut h)?;
+        id = h.byte()?;
+    }
+    if id == 0x05 {
+        bounded_items(h.number()?)?;
+    }
+    Ok(())
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = flate2::Crc::new();
+    crc.update(bytes);
+    crc.sum()
+}
+
+/// Decodes the encoded header described by `info` (the streams info after its `0x17` id)
+/// from `file` (`len` bytes), within `MAX_7Z_HEADER` and `MAX_DECODER_WINDOW`. 7-Zip packs
+/// headers with one LZMA coder (LZMA2 and copy are read too); an AES coder means the
+/// header is encrypted.
+fn decode_encoded_header(
+    file: &mut (impl Read + Seek),
+    len: u64,
+    info: &[u8],
+) -> std::io::Result<Vec<u8>> {
+    use sevenz_rust2::EncoderMethod as M;
+    let streams = walk_streams_info(&mut HeaderBytes { data: info, pos: 0 })?;
+    let [folder] = streams.folders.as_slice() else {
+        return Err(HeaderIssue::Damaged("encoded header blocks").into());
+    };
+    let coders = folder
+        .coders
+        .iter()
+        .map(|(id, props)| (id.as_slice(), props.as_slice()));
+    match sevenz_coders_refusal(coders) {
+        Some(EntryRefusal::Encrypted) => {
+            return Err(sevenz_refused(SevenZRefusal::EncryptedHeader))
+        }
+        Some(EntryRefusal::DictionaryTooLarge) => {
+            return Err(sevenz_refused(SevenZRefusal::HeaderTooLarge))
+        }
+        _ => {}
+    }
+    let size = folder.unpack_sizes.last().copied().unwrap_or(0);
+    if size > MAX_7Z_HEADER {
+        return Err(sevenz_refused(SevenZRefusal::HeaderTooLarge));
+    }
+    let [(id, props)] = folder.coders.as_slice() else {
+        return Err(HeaderIssue::Damaged("encoded header coders").into());
+    };
+    let packed = streams.pack_sizes.first().copied().unwrap_or(0);
+    let at = 32u64
+        .checked_add(streams.pack_pos)
+        .filter(|at| at.saturating_add(packed) <= len)
+        .ok_or(HeaderIssue::Damaged("encoded header past the end"))?;
+    file.seek(SeekFrom::Start(at))?;
+    let input = BufReader::new(file.take(packed));
+    // The dictionary never needs to be larger than what it decodes.
+    let dict = sevenz_coder_window(id, props)
+        .unwrap_or(0)
+        .min(size.max(4096)) as u32;
+    let mut decoder: Box<dyn Read + '_> = if id.as_slice() == M::ID_LZMA {
+        let lc_lp_pb = *props
+            .first()
+            .ok_or(HeaderIssue::Damaged("LZMA properties"))?;
+        Box::new(lzma_rust2::LzmaReader::new_with_props(
+            input, size, lc_lp_pb, dict, None,
+        )?)
+    } else if id.as_slice() == M::ID_LZMA2 {
+        Box::new(lzma_rust2::Lzma2Reader::new(input, dict, None))
+    } else if id.as_slice() == M::ID_COPY {
+        Box::new(input)
+    } else {
+        return Err(HeaderIssue::Damaged("encoded header coder").into());
+    };
+    let mut header = Vec::new();
+    (&mut decoder).take(size).read_to_end(&mut header)?;
+    if header.len() as u64 != size {
+        return Err(HeaderIssue::Damaged("truncated encoded header").into());
+    }
+    if folder.crc.is_some_and(|crc| crc != crc32(&header)) {
+        return Err(HeaderIssue::Damaged("header CRC mismatch").into());
+    }
+    Ok(header)
+}
+
+/// The 7z file as the 7z reader sees it: the start header is rewritten to point at the
+/// plain header FastTail decoded and checked, served after the end of the file, so the
+/// reader never decodes a header itself nor guesses where one is. Packed data is read
+/// from the file at its own offsets.
+struct SevenZView<R> {
+    file: R,
+    len: u64,
+    start: [u8; 32],
+    header: Vec<u8>,
+    pos: u64,
+}
+
+impl<R: Read + Seek> SevenZView<R> {
+    fn new(file: R, len: u64, version: [u8; 2], header: Vec<u8>) -> Self {
+        let mut start = [0u8; 32];
+        start[..6].copy_from_slice(&SEVENZ_MAGIC);
+        start[6..8].copy_from_slice(&version);
+        start[12..20].copy_from_slice(&(len - 32).to_le_bytes());
+        start[20..28].copy_from_slice(&(header.len() as u64).to_le_bytes());
+        start[28..32].copy_from_slice(&crc32(&header).to_le_bytes());
+        let crc = crc32(&start[12..32]);
+        start[8..12].copy_from_slice(&crc.to_le_bytes());
+        Self {
+            file,
+            len,
+            start,
+            header,
+            pos: 0,
+        }
+    }
+}
+
+impl<R: Read + Seek> Read for SevenZView<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = if self.pos < 32 {
+            let from = &self.start[self.pos as usize..];
+            let n = from.len().min(buf.len());
+            buf[..n].copy_from_slice(&from[..n]);
+            n
+        } else if self.pos < self.len {
+            let room = ((self.len - self.pos).min(buf.len() as u64)) as usize;
+            self.file.seek(SeekFrom::Start(self.pos))?;
+            self.file.read(&mut buf[..room])?
+        } else {
+            let from = self
+                .header
+                .get((self.pos - self.len) as usize..)
+                .unwrap_or(&[]);
+            let n = from.len().min(buf.len());
+            buf[..n].copy_from_slice(&from[..n]);
+            n
+        };
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl<R: Read + Seek> Seek for SevenZView<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let end = self.len + self.header.len() as u64;
+        let to = match pos {
+            SeekFrom::Start(n) => Some(n),
+            SeekFrom::End(d) => end.checked_add_signed(d),
+            SeekFrom::Current(d) => self.pos.checked_add_signed(d),
+        };
+        self.pos = to.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        Ok(self.pos)
+    }
+}
+
+fn sevenz_err(e: sevenz_rust2::Error) -> std::io::Error {
+    use sevenz_rust2::Error as E;
+    match e {
+        E::PasswordRequired | E::MaybeBadPassword(_) => {
+            sevenz_refused(SevenZRefusal::EncryptedHeader)
+        }
+        E::Io(e, context) if context.is_empty() => e,
+        E::MaxMemLimited { .. } => sevenz_refused(SevenZRefusal::HeaderTooLarge),
+        e => std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
+    }
+}
+
+/// Reads the header of the 7z archive at `path` within the listing bounds. The start
+/// header must be intact (its CRC is checked): a damaged one is refused, never guessed
+/// from the end of the file. The header (decoded here when it is encoded) is checked and
+/// walked for its counts before the 7z reader parses it.
+fn read_7z_archive(path: &Path) -> std::io::Result<sevenz_rust2::Archive> {
+    let file = crate::file_source::open_file_shared(path)?;
+    let len = file.metadata()?.len();
+    let mut reader = BufReader::new(file);
+    let mut start = [0u8; 32];
+    reader
+        .read_exact(&mut start)
+        .map_err(|_| HeaderIssue::Damaged("shorter than its start header"))?;
+    if start[..6] != SEVENZ_MAGIC || start[6] != 0 {
+        return Err(HeaderIssue::Damaged("unknown signature or version").into());
+    }
+    let field = |at: usize| {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&start[at..at + 8]);
+        u64::from_le_bytes(bytes)
+    };
+    let word =
+        |at: usize| u32::from_le_bytes([start[at], start[at + 1], start[at + 2], start[at + 3]]);
+    if word(8) != crc32(&start[12..32]) {
+        return Err(HeaderIssue::Damaged("start header CRC mismatch").into());
+    }
+    let (offset, size, header_crc) = (field(12), field(20), word(28));
+    if size == 0 {
+        // An archive holding nothing.
+        return Ok(sevenz_rust2::Archive::default());
+    }
+    if size > MAX_7Z_HEADER {
+        return Err(sevenz_refused(SevenZRefusal::HeaderTooLarge));
+    }
+    let at = 32u64
+        .checked_add(offset)
+        .filter(|at| at.saturating_add(size) <= len)
+        .ok_or(HeaderIssue::Damaged("header past the end of the file"))?;
+    reader.seek(SeekFrom::Start(at))?;
+    let mut header = vec![0u8; size as usize];
+    reader.read_exact(&mut header)?;
+    if crc32(&header) != header_crc {
+        return Err(HeaderIssue::Damaged("header CRC mismatch").into());
+    }
+    let header = match header[0] {
+        0x17 => decode_encoded_header(&mut reader, len, &header[1..])?,
+        0x01 => header,
+        _ => return Err(HeaderIssue::Damaged("no header").into()),
+    };
+    walk_header(&header)?;
+    let mut view = SevenZView::new(reader, len, [start[6], start[7]], header);
+    sevenz_rust2::Archive::read(&mut view, &sevenz_rust2::Password::empty()).map_err(sevenz_err)
+}
+
+/// The last 7z archives read, by path, reused while their size and date hold: the
+/// listing, the open and the extraction job of an entry read the header once.
+fn sevenz_cache() -> &'static Mutex<StampedLru<Arc<sevenz_rust2::Archive>>> {
+    static CACHE: OnceLock<Mutex<StampedLru<Arc<sevenz_rust2::Archive>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(StampedLru::new(4)))
+}
+
+/// The parsed header of the 7z archive at `path`, from the cache or read now.
+fn load_7z(path: &Path) -> std::io::Result<Arc<sevenz_rust2::Archive>> {
+    let when = stamp(path);
+    if let Some(when) = when {
+        if let Some(archive) = sevenz_cache()
+            .lock()
+            .ok()
+            .and_then(|mut c| c.get(path, when))
+        {
+            return Ok(archive);
+        }
+    }
+    let archive = Arc::new(read_7z_archive(path)?);
+    if let (Some(when), Ok(mut cache)) = (when, sevenz_cache().lock()) {
+        cache.insert(path, when, archive.clone());
+    }
+    Ok(archive)
+}
+
+/// True for a 7z entry listed as a file: not a directory, not an anti-item (a deletion
+/// marker of an update), and holding data.
+fn is_7z_file(file: &sevenz_rust2::ArchiveEntry) -> bool {
+    !file.is_directory && !file.is_anti_item && file.has_stream
+}
+
+/// The block holding the data of file `index`, if any.
+fn sevenz_block_of(archive: &sevenz_rust2::Archive, index: usize) -> Option<usize> {
+    archive
+        .stream_map
+        .file_block_index
+        .get(index)
+        .copied()
+        .flatten()
+        .filter(|&b| b < archive.blocks.len())
+}
+
+/// The file entries of the 7z archive at `path` (directories, anti-items and empty
+/// entries skipped), in archive order, at most `MAX_7Z_ENTRIES`.
+pub fn list_7z_entries(path: &Path) -> std::io::Result<SevenZListing> {
+    list_7z(path, MAX_7Z_ENTRIES)
+}
+
+fn list_7z(path: &Path, max_entries: usize) -> std::io::Result<SevenZListing> {
+    let archive = load_7z(path)?;
+    let mut per_block = vec![0usize; archive.blocks.len()];
+    for index in 0..archive.files.len() {
+        if let Some(b) = sevenz_block_of(&archive, index) {
+            per_block[b] += 1;
+        }
+    }
+    let first_pack = archive.stream_map.block_first_pack_stream_index();
+    let mut keys = HashSet::new();
+    let mut entries = Vec::new();
+    for (index, file) in archive.files.iter().enumerate() {
+        if !is_7z_file(file) {
+            continue;
+        }
+        if entries.len() >= max_entries {
+            return Ok(SevenZListing {
+                entries,
+                partial: true,
+            });
+        }
+        let block = sevenz_block_of(&archive, index);
+        let (refusal, compressed_size, block_size) = match block {
+            Some(b) => {
+                let unpacked = archive.blocks[b].get_unpack_size();
+                let packed = first_pack
+                    .get(b)
+                    .and_then(|&p| archive.pack_sizes().get(p))
+                    .copied()
+                    .unwrap_or(0);
+                let solid = per_block[b] > 1;
+                let share = if solid && unpacked > 0 {
+                    (packed as u128 * file.size as u128 / unpacked as u128) as u64
+                } else {
+                    packed
+                };
+                (
+                    sevenz_block_refusal(&archive.blocks[b]),
+                    share,
+                    solid.then_some(unpacked),
+                )
+            }
+            None => (None, 0, None),
+        };
+        let refusal = refusal.or_else(|| claim_name(&file.name, &mut keys));
+        entries.push(ArchiveEntryInfo {
+            name: file.name.clone(),
+            size: file.size,
+            compressed_size,
+            block_size,
+            offset: None,
+            refusal,
+        });
+    }
+    Ok(SevenZListing {
+        entries,
+        partial: false,
+    })
 }
 
 /// The parts of a zip entry name: split on `/` and on the `\` some Windows tools write,
@@ -525,13 +1298,15 @@ pub enum ArchiveKind {
     Zip,
     /// A tar, plain (`None`) or inside a codec file.
     Tar(Option<Codec>),
+    SevenZ,
 }
 
-/// The archive kind of the file at `path`: a zip, a plain tar, or a codec file whose
-/// first decompressed bytes are a tar header. `None` for anything else.
+/// The archive kind of the file at `path`: a zip, a 7z, a plain tar, or a codec file
+/// whose first decompressed bytes are a tar header. `None` for anything else.
 pub fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     match sniff(path) {
         Format::Zip => Some(ArchiveKind::Zip),
+        Format::SevenZ => Some(ArchiveKind::SevenZ),
         Format::Tar => Some(ArchiveKind::Tar(None)),
         Format::Compressed(codec) if codec_holds_tar(path, codec) => {
             Some(ArchiveKind::Tar(Some(codec)))
@@ -546,6 +1321,7 @@ pub fn archive_kind(path: &Path) -> Option<ArchiveKind> {
 fn entry_ancestor_kind(path: &Path) -> Option<ArchiveKind> {
     match sniff(path) {
         Format::Zip => Some(ArchiveKind::Zip),
+        Format::SevenZ => Some(ArchiveKind::SevenZ),
         Format::Tar => Some(ArchiveKind::Tar(None)),
         Format::Compressed(codec) => Some(ArchiveKind::Tar(Some(codec))),
         _ => None,
@@ -553,8 +1329,8 @@ fn entry_ancestor_kind(path: &Path) -> Option<ArchiveKind> {
 }
 
 /// Splits an entry path into the archive and the entry name: the nearest ancestor of
-/// `path` that is a regular file must be a zip or a tar (plain or compressed). `None` for
-/// any other path.
+/// `path` that is a regular file must be a zip, a 7z or a tar (plain or compressed).
+/// `None` for any other path.
 pub fn split_entry_path(path: &Path) -> Option<(PathBuf, String)> {
     split_entry_path_kind(path).map(|(archive, entry, _)| (archive, entry))
 }
@@ -594,7 +1370,9 @@ pub enum Target {
     EmptyZip,
     /// A tar archive, plain or compressed: its entries still have to be chosen.
     TarArchive(Option<Codec>),
-    /// One entry of a zip or tar archive.
+    /// A 7z archive: its entries still have to be chosen.
+    SevenZArchive,
+    /// One entry of a zip, tar or 7z archive.
     Entry {
         archive: PathBuf,
         entry: String,
@@ -616,6 +1394,9 @@ pub fn classify(path: &Path) -> Target {
             Format::Zip => Target::Plain,
             Format::EmptyZip => Target::EmptyZip,
             Format::Tar => Target::TarArchive(None),
+            // The signature holds bytes no text starts with: a 7z that does not list is
+            // reported as such, not opened as text.
+            Format::SevenZ => Target::SevenZArchive,
             Format::Plain => Target::Plain,
         };
     }
@@ -745,6 +1526,12 @@ pub enum JobSource {
         codec: Option<Codec>,
         entry: String,
         offset: Option<u64>,
+    },
+    /// An entry of a 7z archive: its block is decoded from the start, the entries before
+    /// it dropped.
+    SevenZEntry {
+        archive: PathBuf,
+        entry: String,
     },
 }
 
@@ -953,6 +1740,7 @@ fn run_job(source: &JobSource, out: File, env: &JobEnv) -> JobState {
             entry,
             offset,
         } => run_tar_entry(archive, *codec, entry, *offset, out, env),
+        JobSource::SevenZEntry { archive, entry } => run_7z_entry(archive, entry, out, env),
         JobSource::ZipEntry { archive, entry } => {
             let file = match crate::file_source::open_file_shared(archive) {
                 Ok(f) => f,
@@ -1325,6 +2113,90 @@ fn walk_to_entry<R: Skip>(
     })
 }
 
+/// Extracts the 7z entry `entry` of `archive`: the first openable entry with that stream
+/// path, as in the picker. Its block is decoded from the start; the entries before it are
+/// decoded and dropped, never written, and the progress is the share of the block
+/// decoded, so it moves while they are skipped.
+fn run_7z_entry(path: &Path, entry: &str, out: File, env: &JobEnv) -> JobState {
+    let shared = env.shared;
+    let opened = load_7z(path).and_then(|archive| {
+        let file = crate::file_source::open_file_shared(path)?;
+        Ok((archive, BufReader::new(file)))
+    });
+    let (archive, mut reader) = match opened {
+        Ok(opened) => opened,
+        Err(e) => {
+            return JobState::Stopped(match sevenz_refusal(&e) {
+                Some(SevenZRefusal::EncryptedHeader) => {
+                    StopReason::Refused(EntryRefusal::Encrypted)
+                }
+                _ => StopReason::Failed(e.to_string()),
+            })
+        }
+    };
+    let key = entry_key(entry);
+    let mut refused = None;
+    let mut found = None;
+    for (index, file) in archive.files.iter().enumerate() {
+        if !is_7z_file(file) || entry_key(&file.name) != key {
+            continue;
+        }
+        let block = sevenz_block_of(&archive, index);
+        let refusal = if is_unsafe_name(&file.name) {
+            Some(EntryRefusal::UnsafeName)
+        } else {
+            block.and_then(|b| sevenz_block_refusal(&archive.blocks[b]))
+        };
+        match refusal {
+            None => {
+                found = Some((index, block));
+                break;
+            }
+            Some(refusal) => {
+                refused.get_or_insert(refusal);
+            }
+        }
+    }
+    let Some((index, block)) = found else {
+        return JobState::Stopped(match refused {
+            Some(refusal) => StopReason::Refused(refusal),
+            None => StopReason::NoSuchEntry,
+        });
+    };
+    let Some(block) = block else {
+        // No data stream: nothing to write.
+        return JobState::Done;
+    };
+    shared.consumed.store(0, Ordering::Relaxed);
+    shared.total.store(
+        archive.blocks[block].get_unpack_size().max(1),
+        Ordering::Relaxed,
+    );
+    let target: *const sevenz_rust2::ArchiveEntry = &archive.files[index];
+    let password = sevenz_rust2::Password::empty();
+    let mut out = Some(out);
+    let mut state = None;
+    // One decoder thread: an LZMA2 block written by several threads would otherwise
+    // decode on as many.
+    let decoded = sevenz_rust2::BlockDecoder::new(1, block, &archive, &password, &mut reader)
+        .for_each_entries(&mut |file, data| {
+            let mut counted = CountingReader::new(data, &shared.consumed, Some(env.cancel));
+            if std::ptr::eq(file, target) {
+                if let Some(out) = out.take() {
+                    state = Some(pump_entry(counted, out, env));
+                }
+                return Ok(false);
+            }
+            std::io::copy(&mut counted, &mut std::io::sink())?;
+            Ok(true)
+        });
+    match (state, decoded) {
+        (Some(state), _) => state,
+        (None, Err(e)) => read_failure(sevenz_err(e), env),
+        (None, Ok(_)) => JobState::Stopped(StopReason::NoSuchEntry),
+    }
+}
+
 /// The state a read error ends a job in: a cancel shows as such, not as a failure.
 fn read_failure(e: std::io::Error, env: &JobEnv) -> JobState {
     JobState::Stopped(if env.cancel.load(Ordering::Relaxed) {
@@ -1337,7 +2209,7 @@ fn read_failure(e: std::io::Error, env: &JobEnv) -> JobState {
 }
 
 /// `reader`, decompressed once more when its first bytes are gzip, bzip2, xz or zstd (a
-/// rotated `app.log.1.gz` inside a bundle). A zip or tar inside is left as it is.
+/// rotated `app.log.1.gz` inside a bundle). A zip, tar or 7z inside is left as it is.
 fn nested<'a, R: Read + 'a>(mut reader: R) -> std::io::Result<Box<dyn Read + 'a>> {
     let mut head = vec![0u8; SNIFF_BYTES];
     let n = read_full(&mut reader, &mut head)?;
@@ -1353,7 +2225,7 @@ fn nested<'a, R: Read + 'a>(mut reader: R) -> std::io::Result<Box<dyn Read + 'a>
     })
 }
 
-/// Extracts an archive entry (zip or tar) into the spool, decompressing a nested codec.
+/// Extracts an archive entry (zip, tar or 7z) into the spool, decompressing a nested codec.
 fn pump_entry(reader: impl Read, out: File, env: &JobEnv) -> JobState {
     match nested(reader) {
         Ok(reader) => pump(reader, out, env, false),
@@ -1644,7 +2516,7 @@ fn check_space(settings: &Settings, size: u64) -> Result<(), OpenError> {
 }
 
 /// Opens a decompressed stream: `entry` is `None` for a single compressed file, the entry
-/// name for a zip or tar (any spelling of its stream path). The engine starts on an empty
+/// name for a zip, tar or 7z (any spelling of its stream path). The engine starts on an empty
 /// spool with follow off; the job fills the spool in the background and the engine's poll
 /// indexes it as it grows.
 pub fn open_engine(
@@ -1667,6 +2539,22 @@ pub fn open_engine(
                 check_space(settings, info.size)?;
                 real_entry = Some(info.name.clone());
                 JobSource::ZipEntry {
+                    archive: archive.to_path_buf(),
+                    entry: info.name.clone(),
+                }
+            }
+            Some(ArchiveKind::SevenZ) => {
+                // Every entry, not only the picker's first `MAX_7Z_ENTRIES`: a restored
+                // stream may name one further down.
+                let listing = list_7z(archive, usize::MAX)?;
+                let info = find_entry(&listing.entries, entry).ok_or(OpenError::NoSuchEntry)?;
+                if let Some(refusal) = &info.refusal {
+                    return Err(OpenError::Refused(refusal.clone()));
+                }
+                // 7z sizes are exact.
+                check_space(settings, info.size)?;
+                real_entry = Some(info.name.clone());
+                JobSource::SevenZEntry {
                     archive: archive.to_path_buf(),
                     entry: info.name.clone(),
                 }
@@ -2001,6 +2889,7 @@ fn list_tar<R: Skip>(
         let info = ArchiveEntryInfo {
             size: member.size,
             compressed_size: member.size,
+            block_size: None,
             offset: seekable.then_some(member.start),
             refusal,
             name: member.name,
@@ -3562,5 +4451,714 @@ mod tests {
         assert_eq!(lru.get(Path::new("c"), (2, None)), None);
         lru.remove_if(Path::new("a"), |v| *v == 1);
         assert_eq!(lru.get(Path::new("a"), when), None);
+    }
+
+    /// Writes a 7z holding `files` (`None` data = a directory) with `method`: one block
+    /// per file, or every file in one solid block.
+    fn write_7z(
+        path: &Path,
+        files: &[(&str, Option<&[u8]>)],
+        method: sevenz_rust2::EncoderMethod,
+        solid: bool,
+    ) {
+        use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
+        let mut writer = ArchiveWriter::new(File::create(path).unwrap()).unwrap();
+        writer.set_content_methods(vec![method.into()]);
+        let mut solid_entries = Vec::new();
+        let mut solid_readers = Vec::new();
+        for (name, data) in files {
+            match data {
+                None => {
+                    writer
+                        .push_archive_entry::<&[u8]>(ArchiveEntry::new_directory(name), None)
+                        .unwrap();
+                }
+                Some(data) if solid => {
+                    solid_entries.push(ArchiveEntry::new_file(name));
+                    solid_readers.push(SourceReader::new(*data));
+                }
+                Some(data) => {
+                    writer
+                        .push_archive_entry(ArchiveEntry::new_file(name), Some(*data))
+                        .unwrap();
+                }
+            }
+        }
+        if !solid_entries.is_empty() {
+            writer
+                .push_archive_entries(solid_entries, solid_readers)
+                .unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    /// A 7z number in its 9-byte form (all length bits set, 8 bytes little-endian).
+    fn sz_number(out: &mut Vec<u8>, value: u64) {
+        out.push(0xFF);
+        out.extend(value.to_le_bytes());
+    }
+
+    /// Rewrites the start-header CRC of the 7z `bytes` after a test patched its fields.
+    fn reseal_start_header(bytes: &mut [u8]) {
+        let crc = crc32(&bytes[12..32]);
+        bytes[8..12].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    /// A 7z with `header` (stored as it is) after `packed`, behind a valid signature
+    /// header.
+    fn sz_container(packed: &[u8], header: &[u8]) -> Vec<u8> {
+        let mut start = Vec::new();
+        start.extend((packed.len() as u64).to_le_bytes());
+        start.extend((header.len() as u64).to_le_bytes());
+        start.extend(crc32(header).to_le_bytes());
+        let mut out = SEVENZ_MAGIC.to_vec();
+        out.extend([0, 4]);
+        out.extend(crc32(&start).to_le_bytes());
+        out.extend(start);
+        out.extend(packed);
+        out.extend(header);
+        out
+    }
+
+    /// One file of `raw_7z`: name, coder id, coder properties, stored data.
+    type RawFile<'a> = (&'a str, &'a [u8], &'a [u8], &'a [u8]);
+
+    /// A hand-built 7z with a plain (not encoded) header: one block per file, each with
+    /// the single coder `(id, properties)` and its data stored as given, so any coder id
+    /// and property can be tried (the copy coder `[0x00]` gives the data back).
+    fn raw_7z(files: &[RawFile]) -> Vec<u8> {
+        let chains: Vec<[(&[u8], &[u8]); 1]> = files
+            .iter()
+            .map(|(_, id, props, _)| [(*id, *props)])
+            .collect();
+        let files: Vec<RawChain> = files
+            .iter()
+            .zip(&chains)
+            .map(|((name, _, _, data), chain)| (*name, chain.as_slice(), *data))
+            .collect();
+        let (packed, header) = raw_7z_parts(&files);
+        sz_container(&packed, &header)
+    }
+
+    /// One file of `raw_7z_parts`: name, chained coders (id, properties), stored data.
+    type RawChain<'a> = (&'a str, &'a [(&'a [u8], &'a [u8])], &'a [u8]);
+
+    /// The packed data and the plain header of a hand-built 7z: one block per file, its
+    /// coders chained in order (each coder's output bound to the input of the one
+    /// before), every coder's unpacked size the size of the stored data.
+    fn raw_7z_parts(files: &[RawChain]) -> (Vec<u8>, Vec<u8>) {
+        let mut packed = Vec::new();
+        // Header, main streams info, pack info.
+        let mut h = vec![0x01, 0x04, 0x06];
+        sz_number(&mut h, 0);
+        sz_number(&mut h, files.len() as u64);
+        h.push(0x09);
+        for (_, _, data) in files {
+            sz_number(&mut h, data.len() as u64);
+            packed.extend(*data);
+        }
+        h.push(0x00);
+        // Unpack info: one folder per file, its coders chained.
+        h.extend([0x07, 0x0B]);
+        sz_number(&mut h, files.len() as u64);
+        h.push(0x00);
+        for (_, coders, _) in files {
+            sz_number(&mut h, coders.len() as u64);
+            for (id, props) in coders.iter() {
+                let attributes = if props.is_empty() { 0 } else { 0x20 };
+                h.push(id.len() as u8 | attributes);
+                h.extend(*id);
+                if !props.is_empty() {
+                    sz_number(&mut h, props.len() as u64);
+                    h.extend(*props);
+                }
+            }
+            for i in 1..coders.len() as u64 {
+                sz_number(&mut h, i - 1);
+                sz_number(&mut h, i);
+            }
+        }
+        h.push(0x0C);
+        for (_, coders, data) in files {
+            for _ in coders.iter() {
+                sz_number(&mut h, data.len() as u64);
+            }
+        }
+        // End of unpack info, empty substreams info, end of streams info.
+        h.extend([0x00, 0x08, 0x00, 0x00]);
+        // Files info: the names.
+        h.push(0x05);
+        sz_number(&mut h, files.len() as u64);
+        let mut names = vec![0x00];
+        for (name, _, _) in files {
+            for unit in name.encode_utf16().chain([0]) {
+                names.extend(unit.to_le_bytes());
+            }
+        }
+        h.push(0x11);
+        sz_number(&mut h, names.len() as u64);
+        h.extend(names);
+        h.extend([0x00, 0x00]);
+        (packed, h)
+    }
+
+    /// A 7z whose encoded header is packed with `coders` (id, properties, unpacked size),
+    /// chained in order; its data is never read.
+    fn encoded_header_7z(coders: &[(&[u8], &[u8], u64)]) -> Vec<u8> {
+        let packed = vec![0u8; 16];
+        let mut h = vec![0x17, 0x06];
+        sz_number(&mut h, 0);
+        sz_number(&mut h, 1);
+        h.push(0x09);
+        sz_number(&mut h, packed.len() as u64);
+        h.extend([0x00, 0x07, 0x0B]);
+        sz_number(&mut h, 1);
+        h.push(0x00);
+        sz_number(&mut h, coders.len() as u64);
+        for (id, props, _) in coders {
+            h.push(id.len() as u8 | 0x20);
+            h.extend(*id);
+            sz_number(&mut h, props.len() as u64);
+            h.extend(*props);
+        }
+        for i in 1..coders.len() as u64 {
+            sz_number(&mut h, i - 1);
+            sz_number(&mut h, i);
+        }
+        h.push(0x0C);
+        for (_, _, size) in coders {
+            sz_number(&mut h, *size);
+        }
+        h.extend([0x00, 0x00]);
+        sz_container(&packed, &h)
+    }
+
+    /// A 7z holding `packed`, its plain `header` LZMA-compressed after it as 7-Zip writes
+    /// it: an encoded header (`0x17`) saying where the packed header is, its coder and
+    /// its CRC.
+    fn lzma_header_7z(packed: &[u8], header: &[u8]) -> Vec<u8> {
+        let options = lzma_rust2::LzmaOptions::with_preset(1);
+        let mut writer = lzma_rust2::LzmaWriter::new(
+            Vec::new(),
+            &options,
+            false,
+            false,
+            Some(header.len() as u64),
+        )
+        .unwrap();
+        writer.write_all(header).unwrap();
+        let lc_lp_pb = writer.props();
+        let compressed = writer.finish().unwrap();
+        let mut props = vec![lc_lp_pb];
+        props.extend(options.dict_size.to_le_bytes());
+        let mut h = vec![0x17, 0x06];
+        sz_number(&mut h, packed.len() as u64);
+        sz_number(&mut h, 1);
+        h.push(0x09);
+        sz_number(&mut h, compressed.len() as u64);
+        h.extend([0x00, 0x07, 0x0B]);
+        sz_number(&mut h, 1);
+        h.push(0x00);
+        sz_number(&mut h, 1);
+        h.push(SZ_LZMA.len() as u8 | 0x20);
+        h.extend(SZ_LZMA);
+        sz_number(&mut h, props.len() as u64);
+        h.extend(props);
+        h.push(0x0C);
+        sz_number(&mut h, header.len() as u64);
+        h.extend([0x0A, 0x01]);
+        h.extend(crc32(header).to_le_bytes());
+        h.extend([0x00, 0x00]);
+        let mut data = packed.to_vec();
+        data.extend(compressed);
+        sz_container(&data, &h)
+    }
+
+    const SZ_COPY: &[u8] = &[0x00];
+    const SZ_LZMA: &[u8] = &[0x03, 0x01, 0x01];
+    const SZ_LZMA2: &[u8] = &[0x21];
+    const SZ_AES: &[u8] = &[0x06, 0xF1, 0x07, 0x01];
+    const SZ_ZSTD: &[u8] = &[0x04, 0xF7, 0x11, 0x01];
+
+    #[test]
+    fn sevenz_entries_are_listed_and_extracted() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs.bin");
+        let server = log_text(300);
+        let worker = b"worker started\nworker done\n".to_vec();
+        write_7z(
+            &logs,
+            &[
+                ("config", None),
+                ("server.log", Some(&server)),
+                ("logs/worker.log", Some(&worker)),
+            ],
+            sevenz_rust2::EncoderMethod::LZMA2,
+            false,
+        );
+        // Told by its signature, whatever the extension.
+        assert_eq!(sniff(&logs), Format::SevenZ);
+        assert_eq!(classify(&logs), Target::SevenZArchive);
+        assert_eq!(archive_kind(&logs), Some(ArchiveKind::SevenZ));
+        let listing = list_7z_entries(&logs).unwrap();
+        assert!(!listing.partial);
+        let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["server.log", "logs/worker.log"]);
+        assert_eq!(listing.entries[0].size, server.len() as u64);
+        assert!(listing.entries[0].compressed_size < listing.entries[0].size);
+        // One block per entry: nothing else is decoded to reach it.
+        assert!(listing
+            .entries
+            .iter()
+            .all(|e| e.refusal.is_none() && e.block_size.is_none()));
+
+        for (entry, data) in [("server.log", &server), ("logs/worker.log", &worker)] {
+            let (state, out, _) = run_to_spool(
+                JobSource::SevenZEntry {
+                    archive: logs.clone(),
+                    entry: entry.to_string(),
+                },
+                Limits::default(),
+                dir.path(),
+            );
+            assert_eq!(state, JobState::Done);
+            assert_eq!(&out, data);
+        }
+
+        // The entry path names the archive and the entry, and opens a titled stream.
+        let path = entry_path(&logs, "logs/worker.log");
+        assert_eq!(
+            classify(&path),
+            Target::Entry {
+                archive: logs.clone(),
+                entry: "logs/worker.log".to_string(),
+                kind: ArchiveKind::SevenZ,
+            }
+        );
+        let mut engine = open_engine(
+            &logs,
+            Some("logs/worker.log"),
+            &test_settings(dir.path()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(engine.path, path);
+        assert_eq!(
+            engine.compressed.as_ref().unwrap().title(),
+            "logs.bin › logs/worker.log"
+        );
+        settle(&mut engine);
+        assert_eq!(engine.total_lines(), 2);
+    }
+
+    #[test]
+    fn a_solid_7z_block_is_decoded_up_to_its_entry() {
+        for method in [
+            sevenz_rust2::EncoderMethod::LZMA2,
+            sevenz_rust2::EncoderMethod::BZIP2,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let solid = dir.path().join("solid.7z");
+            let first = log_text(4000);
+            let second = log_text(2000);
+            let last = b"the last entry\n".to_vec();
+            write_7z(
+                &solid,
+                &[
+                    ("first.log", Some(&first)),
+                    ("second.log", Some(&second)),
+                    ("last.log", Some(&last)),
+                ],
+                method,
+                true,
+            );
+            let listing = list_7z_entries(&solid).unwrap();
+            let block = (first.len() + second.len() + last.len()) as u64;
+            assert!(
+                listing
+                    .entries
+                    .iter()
+                    .all(|e| e.refusal.is_none() && e.block_size == Some(block)),
+                "{method:?}: {listing:?}"
+            );
+            // Only the chosen entry reaches the spool; the progress ran over the block.
+            let (spool, out) = SpoolFile::create(dir.path(), "last.log").unwrap();
+            let mut job = DecompressJob::start(
+                JobSource::SevenZEntry {
+                    archive: solid.clone(),
+                    entry: "last.log".to_string(),
+                },
+                out,
+                dir.path().to_path_buf(),
+                Limits::default(),
+                None,
+            );
+            assert_eq!(wait_job(&job), JobState::Done, "{method:?}");
+            job.wait();
+            assert_eq!(std::fs::read(spool.path()).unwrap(), last);
+            assert_eq!(job.progress(), 1.0);
+            // An entry in the middle stops at its own end.
+            let (state, out, _) = run_to_spool(
+                JobSource::SevenZEntry {
+                    archive: solid,
+                    entry: "second.log".to_string(),
+                },
+                Limits::default(),
+                dir.path(),
+            );
+            assert_eq!(state, JobState::Done);
+            assert_eq!(out, second);
+        }
+    }
+
+    #[test]
+    fn refused_7z_entries_are_listed_with_their_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = test_settings(dir.path());
+        let mixed = dir.path().join("mixed.7z");
+        // LZMA2 property 37: a 1536 MiB dictionary.
+        std::fs::write(
+            &mixed,
+            raw_7z(&[
+                ("secret.log", SZ_AES, &[0x00], b"garbage"),
+                ("app.log", SZ_COPY, &[], b"app started\n"),
+                ("../../evil.log", SZ_COPY, &[], b"evil\n"),
+                ("big.log", SZ_LZMA2, &[37], b"garbage"),
+                ("odd.log", SZ_ZSTD, &[], b"garbage"),
+                ("APP.log", SZ_COPY, &[], b"twin\n"),
+            ]),
+        )
+        .unwrap();
+        let entries = list_7z_entries(&mixed).unwrap().entries;
+        let refusals: Vec<_> = entries.iter().map(|e| e.refusal.clone()).collect();
+        let duplicate = if cfg!(windows) {
+            Some(EntryRefusal::DuplicateName)
+        } else {
+            None
+        };
+        assert_eq!(
+            refusals,
+            [
+                Some(EntryRefusal::Encrypted),
+                None,
+                Some(EntryRefusal::UnsafeName),
+                Some(EntryRefusal::DictionaryTooLarge),
+                Some(EntryRefusal::Method("ZSTD".to_string())),
+                duplicate,
+            ]
+        );
+        for (entry, refusal) in [
+            ("secret.log", EntryRefusal::Encrypted),
+            ("big.log", EntryRefusal::DictionaryTooLarge),
+            ("odd.log", EntryRefusal::Method("ZSTD".to_string())),
+        ] {
+            match open_engine(&mixed, Some(entry), &settings, None) {
+                Err(OpenError::Refused(r)) => assert_eq!(r, refusal),
+                other => panic!("{entry}: {:?}", other.err()),
+            }
+        }
+        // Nothing was spooled for them, and a job asked for one writes nothing.
+        assert_eq!(spooled_files(&settings), 0);
+        let (state, out, _) = run_to_spool(
+            JobSource::SevenZEntry {
+                archive: mixed.clone(),
+                entry: "big.log".to_string(),
+            },
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(
+            state,
+            JobState::Stopped(StopReason::Refused(EntryRefusal::DictionaryTooLarge))
+        );
+        assert!(out.is_empty());
+        let (state, out, _) = run_to_spool(
+            JobSource::SevenZEntry {
+                archive: mixed.clone(),
+                entry: "../../evil.log".to_string(),
+            },
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(
+            state,
+            JobState::Stopped(StopReason::Refused(EntryRefusal::UnsafeName))
+        );
+        assert!(out.is_empty());
+        // The entry beside them opens.
+        let (state, out, _) = run_to_spool(
+            JobSource::SevenZEntry {
+                archive: mixed,
+                entry: "app.log".to_string(),
+            },
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(state, JobState::Done);
+        assert_eq!(out, b"app started\n");
+    }
+
+    #[test]
+    fn a_7z_header_that_is_encrypted_or_too_large_refuses_the_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let refusal = |bytes: Vec<u8>| {
+            let path = dir.path().join("x.7z");
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(classify(&path), Target::SevenZArchive);
+            let err = list_7z_entries(&path).unwrap_err();
+            let refusal = sevenz_refusal(&err).cloned();
+            let opened = open_engine(&path, Some("a.log"), &test_settings(dir.path()), None);
+            assert!(matches!(opened, Err(OpenError::Io(_))));
+            refusal
+        };
+        // AES, then LZMA: the names cannot be read without the password.
+        assert_eq!(
+            refusal(encoded_header_7z(&[
+                (SZ_AES, &[0x00], 64),
+                (SZ_LZMA, &[0x5D, 0, 0, 1, 0], 64),
+            ])),
+            Some(SevenZRefusal::EncryptedHeader)
+        );
+        // A header decoding to 1 GB, or needing a 1536 MiB dictionary.
+        assert_eq!(
+            refusal(encoded_header_7z(&[(
+                SZ_LZMA,
+                &[0x5D, 0, 0, 1, 0],
+                1 << 30
+            )])),
+            Some(SevenZRefusal::HeaderTooLarge)
+        );
+        assert_eq!(
+            refusal(encoded_header_7z(&[(SZ_LZMA2, &[37], 64)])),
+            Some(SevenZRefusal::HeaderTooLarge)
+        );
+        // A stored header larger than 64 MB is refused before it is read.
+        let mut big = raw_7z(&[("a.log", SZ_COPY, &[], b"a\n")]);
+        big[20..28].copy_from_slice(&(MAX_7Z_HEADER + 1).to_le_bytes());
+        reseal_start_header(&mut big);
+        assert_eq!(refusal(big), Some(SevenZRefusal::HeaderTooLarge));
+        // Damage is reported as damage, not as a refusal.
+        let mut broken = raw_7z(&[("a.log", SZ_COPY, &[], b"a\n")]);
+        let len = broken.len();
+        broken.truncate(len - 4);
+        assert_eq!(refusal(broken), None);
+        // Two 192 MiB LZMA2 coders need 384 MiB together: over the decoder bound.
+        assert_eq!(
+            refusal(encoded_header_7z(&[
+                (SZ_LZMA2, &[31], 64),
+                (SZ_LZMA2, &[31], 64)
+            ])),
+            Some(SevenZRefusal::HeaderTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_7z_with_a_damaged_start_header_is_damaged_not_guessed() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = raw_7z(&[("a.log", SZ_COPY, &[], b"a\n")]);
+        // Zeroed (what an interrupted 7-Zip leaves), or one CRC bit flipped: the header
+        // is never looked for near the end of the file.
+        let mut zeroed = good.clone();
+        zeroed[8..32].fill(0);
+        let mut flipped = good.clone();
+        flipped[8] ^= 0x01;
+        for (name, bytes) in [("zeroed.7z", zeroed), ("flipped.7z", flipped)] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let err = list_7z_entries(&path).unwrap_err();
+            assert_eq!(sevenz_refusal(&err), None, "{name}");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{name}");
+            assert!(err.to_string().contains("start header"), "{name}: {err}");
+        }
+        // An intact start header declaring no header: an empty archive.
+        let empty = dir.path().join("empty.7z");
+        std::fs::write(&empty, sz_container(&[], &[])).unwrap();
+        let listing = list_7z_entries(&empty).unwrap();
+        assert!(listing.entries.is_empty());
+        assert!(!listing.partial);
+    }
+
+    #[test]
+    fn a_7z_declaring_too_many_entries_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        // A header declaring 300,000 files, in a few bytes.
+        let mut header = vec![0x01, 0x05];
+        sz_number(&mut header, 300_000);
+        header.extend([0x00, 0x00]);
+        for (name, bytes) in [
+            ("plain.7z", sz_container(&[], &header)),
+            ("encoded.7z", lzma_header_7z(&[], &header)),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let err = list_7z_entries(&path).unwrap_err();
+            assert_eq!(
+                sevenz_refusal(&err),
+                Some(&SevenZRefusal::TooManyEntries),
+                "{name}: {err}"
+            );
+        }
+        // As many blocks declared by the streams info.
+        let mut blocks = vec![0x01, 0x04, 0x07, 0x0B];
+        sz_number(&mut blocks, 300_000);
+        blocks.push(0x00);
+        let path = dir.path().join("blocks.7z");
+        std::fs::write(&path, sz_container(&[], &blocks)).unwrap();
+        let err = list_7z_entries(&path).unwrap_err();
+        assert_eq!(sevenz_refusal(&err), Some(&SevenZRefusal::TooManyEntries));
+    }
+
+    #[test]
+    fn a_7z_with_an_lzma_encoded_header_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let (packed, header) = raw_7z_parts(&[
+            ("a.log", &[(SZ_COPY, &[])], b"first\n"),
+            ("b.log", &[(SZ_COPY, &[])], b"second\n"),
+        ]);
+        let path = dir.path().join("encoded.7z");
+        std::fs::write(&path, lzma_header_7z(&packed, &header)).unwrap();
+        let listing = list_7z_entries(&path).unwrap();
+        let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["a.log", "b.log"]);
+        let (state, out, _) = run_to_spool(
+            JobSource::SevenZEntry {
+                archive: path.clone(),
+                entry: "b.log".to_string(),
+            },
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(state, JobState::Done);
+        assert_eq!(out, b"second\n");
+        // A damaged byte in the packed header fails its CRC: damage, not a refusal.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let at = 32 + packed.len() + 2;
+        bytes[at] ^= 0x40;
+        let broken = dir.path().join("broken.7z");
+        std::fs::write(&broken, bytes).unwrap();
+        let err = list_7z_entries(&broken).unwrap_err();
+        assert_eq!(sevenz_refusal(&err), None, "{err}");
+    }
+
+    #[test]
+    fn a_7z_block_whose_coders_together_need_too_much_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chain.7z");
+        let (packed, header) = raw_7z_parts(&[
+            ("one.log", &[(SZ_LZMA2, &[31])], b"garbage"),
+            (
+                "two.log",
+                &[(SZ_LZMA2, &[31]), (SZ_LZMA2, &[31])],
+                b"garbage",
+            ),
+        ]);
+        std::fs::write(&path, sz_container(&packed, &header)).unwrap();
+        let refusals: Vec<_> = list_7z_entries(&path)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| e.refusal)
+            .collect();
+        // 192 MiB alone fits; two chained need 384 MiB.
+        assert_eq!(refusals, [None, Some(EntryRefusal::DictionaryTooLarge)]);
+    }
+
+    #[test]
+    fn a_long_7z_listing_is_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let many = dir.path().join("many.7z");
+        let files: Vec<(String, &[u8])> = (0..5)
+            .map(|i| (format!("{i}.log"), b"x\n".as_slice()))
+            .collect();
+        let files: Vec<RawFile> = files
+            .iter()
+            .map(|(name, data)| (name.as_str(), SZ_COPY, [].as_slice(), *data))
+            .collect();
+        std::fs::write(&many, raw_7z(&files)).unwrap();
+        let listing = list_7z(&many, 3).unwrap();
+        assert!(listing.partial);
+        assert_eq!(listing.entries.len(), 3);
+        assert!(!list_7z(&many, 5).unwrap().partial);
+        // An entry past the listed ones still opens (a restored stream).
+        let (state, out, _) = run_to_spool(
+            JobSource::SevenZEntry {
+                archive: many,
+                entry: "4.log".to_string(),
+            },
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(state, JobState::Done);
+        assert_eq!(out, b"x\n");
+    }
+
+    #[test]
+    fn a_compressed_7z_entry_is_decompressed_once_more() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle.7z");
+        let data = log_text(500);
+        let gz = gzip(&data);
+        write_7z(
+            &bundle,
+            &[("app.log.1.gz", Some(&gz)), ("notes.txt", Some(b"n\n"))],
+            sevenz_rust2::EncoderMethod::LZMA2,
+            true,
+        );
+        let mut engine = open_engine(
+            &bundle,
+            Some("app.log.1.gz"),
+            &test_settings(dir.path()),
+            None,
+        )
+        .unwrap();
+        // The spool is named without the codec suffix.
+        assert!(engine
+            .compressed
+            .as_ref()
+            .unwrap()
+            .spool_path()
+            .to_string_lossy()
+            .ends_with("app.log.1"));
+        settle(&mut engine);
+        assert_eq!(engine.total_lines(), 500);
+        assert_eq!(
+            engine.get_line(499).as_deref(),
+            std::str::from_utf8(&data).unwrap().lines().nth(499)
+        );
+    }
+
+    #[test]
+    fn a_restored_7z_entry_is_extracted_again_with_its_bookmarks() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs.7z");
+        let server = log_text(3000);
+        write_7z(
+            &logs,
+            &[("server.log", Some(&server)), ("worker.log", Some(b"w\n"))],
+            sevenz_rust2::EncoderMethod::LZMA2,
+            true,
+        );
+        // What a session saves (archive + entry) resolves back to the stream path.
+        let path = entry_path(&logs, "server.log");
+        assert_eq!(
+            split_entry_path(&path),
+            Some((logs.clone(), "server.log".to_string()))
+        );
+        assert!(source_exists(&path));
+        let mut engine =
+            open_engine(&logs, Some("server.log"), &test_settings(dir.path()), None).unwrap();
+        engine.compressed.as_mut().unwrap().pending_bookmarks = vec![5, 2999];
+        settle(&mut engine);
+        assert_eq!(
+            engine.bookmarks.iter().copied().collect::<Vec<_>>(),
+            [5, 2999]
+        );
+        engine.reload_compressed().unwrap();
+        settle(&mut engine);
+        assert_eq!(engine.total_lines(), 3000);
+        assert_eq!(
+            engine.bookmarks.iter().copied().collect::<Vec<_>>(),
+            [5, 2999]
+        );
     }
 }

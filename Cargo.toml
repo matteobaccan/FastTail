@@ -11,8 +11,9 @@ readme = "README.md"
 documentation = "https://github.com/matteobaccan/FastTail#readme"
 keywords = ["log", "tail", "logging", "monitoring", "gui"]
 categories = ["command-line-utilities", "gui", "development-tools::debugging"]
-# The oldest toolchain the dependencies build on (zip 8 needs 1.88); CI builds on stable.
-rust-version = "1.88"
+# The oldest toolchain the dependencies build on (sevenz-rust2 0.23 needs 1.93); CI
+# builds on stable.
+rust-version = "1.93"
 # The published crate carries the code, the licence and the docs a user reads from
 # `cargo install`; everything else in the repository (the spec workspace, the agent
 # skills, the screenshots, the release scaffolding) is repository furniture.
@@ -58,6 +59,11 @@ lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "x
 # zstd through a pure-Rust decoder (the C libzstd would need a cross compiler for
 # Linux ARM64); decompression is bounded by the spool's disk writes, not the codec.
 ruzstd = "0.9"
+# 7z archives: a pure-Rust reader sharing lzma-rust2 with the xz reader. Only the coders
+# FastTail opens are on (bzip2, deflate, PPMd; LZMA / LZMA2 / BCJ / delta are built in);
+# no AES (encrypted entries are refused, never decrypted), no writer, no zstd / brotli /
+# lz4. `deflate` brings flate2's pure-Rust zlib-rs backend.
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
 
 # Data, Serialization & Parsing
 serde = { version = "1.0", features = ["derive"] }
@@ -88,6 +94,8 @@ optional = true
 tempfile = "3.17"
 # xz fixtures built inside the tests.
 lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz", "encoder"] }
+# 7z fixtures built inside the tests (the writer, and bzip2 blocks).
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress", "bzip2"] }
 
 # On-demand engine benchmark: built only by `cargo bench` (release-derived
 # `bench` profile), never by `cargo test`. See benches/filter_bench.rs.
