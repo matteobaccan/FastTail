@@ -351,13 +351,15 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
    - Text only (not MD), right after it: the **context lines** drag value (`render_context_lines_control`), `± N`, 0 to 100, per stream. With `N > 0` and an active filter every match is shown with the `N` file lines before and after it (see *Context rows* in the row anatomy). The tooltip says it works like `grep -C` and that context lines ignore the filters. Without an active filter it is drawn at 45 % opacity and has no effect. Changing it rebuilds the rows without refiltering and keeps the line at the top of the view in place.
 6. HEX only: **`Hex columns: [-8] N [+8]`**, range 8–64.
 7. **`Lines: v / t`** (dim) when rows are filtered, otherwise `Lines: t`. When repeated entries are collapsed and the rows are fewer than the visible lines, ` · R rows shown` follows. In HEX it shows the hex row count.
-8. **`🕘 from → to`**, text views only: the time span of the visible lines, and the **time range control** (`time_range::control`). It is a frameless button in 11 pt monospace, underlined under the pointer, with a pointing-hand cursor; a click opens or closes the time range popup (§4.15). The date is written once when both ends share it (`🕘 2026-09-18 14:02:05 → 16:30:12`); a label over 40 characters drops the seconds (`🕘 2026-09-18 14:02 → 2026-09-19 16:30`). Without a span it reads `🕘 … N%` while the stream is being timed, `🕘 no timestamps` (dim) on a timed stream without usable timestamps, and `🕘 —` when no visible line carries a time. Colours: warn while a side of the window cannot be read (`time_range_error`), accent while a window narrows the view, dim for *no timestamps*, `text_primary` otherwise; ` ⏳` follows while the window waits for the timing. The tooltip gives the full span, the window as typed, the pending or invalid state and *Click to set the time range*.
+8. **`🕘 from → to`**, text views only: the time span of the visible lines, and the **time range control** (`time_range::control`). It is a frameless button in 11 pt monospace, underlined under the pointer, with a pointing-hand cursor; a click opens or closes the time range popup (§4.15). The date is written once when both ends share it (`🕘 2026-09-18 14:02:05 → 16:30:12`); a label over 40 characters drops the seconds (`🕘 2026-09-18 14:02 → 2026-09-19 16:30`). Without a span it reads `🕘 … N%` while the stream is being timed, `🕘 no timestamps` (dim) on a timed stream without usable timestamps, and `🕘 —` when no visible line carries a time. Colours: warn while a side of the window cannot be read (`time_range_error`), accent while a window narrows the view, dim for *no timestamps*, `text_primary` otherwise; ` ⏳` follows while the window waits for the timing. The tooltip gives the full span, the window as typed, the pending or invalid state and *Click to set the time range*; with a time display other than "as written" it adds `🌐 Times on the {zone} clock`, and the span, the popup and the histogram are on that clock.
+   - Right after it, the **time display menu** (`render_time_display_menu`): a `menu_button` labelled `🌐 as written|UTC|local time|UTC+HH:MM` in 11 pt, dim while "as written" and accent otherwise (tooltip: what it does). Inside: *Show the timestamps* (dim small caption) with selectable `as written`, `UTC`, `local time`; a `○/◉ fixed offset [+02:00] ✔` row (64 px field, `✔` disabled until the text reads as an offset within ±14:00, `Enter` applies too); a separator; *Timestamps without a zone are in* (tooltip: what the source zone means, epoch is UTC) with `local time`, `UTC`, the current offset and the offset typed above; a separator and a dim note *Filters, search, copy and export see the text as written*. The choice is per stream and saved with it.
 9. **`Δ +2.357 · 14 rows`**: elapsed time of a multi-row selection, in accent.
 10. **Per-level counters**, most severe first, only for levels seen: `FTL n  ERR n  WRN n  INF n  DBG n  TRC n`, each in its `level_color`.
 11. **`⏳ {indexing|filtering|searching|detecting levels|timing lines|finding auto-bookmarks|collapsing} N% (hits)`** in warn, while a background scan runs.
 12. **`ⓘ notice`** in warn:
     - `ⓘ auto-bookmarks capped at N` while the rules match more lines than `auto_bookmark_max`. The tooltip says that only the first matches in file order are bookmarked, and where the limit is set.
-    - `view_notice` (also export failures and tool-run failures) and "ANSI switched".
+    - `view_notice` (also export failures and tool-run failures) and "ANSI switched". The rule navigation writes here *No highlight rule matches the selected row* and *No shown line matches the rule "…"*.
+    - `⏳ seeking rule "…"…` while an `F4` walk has not found its line within a frame (tooltip: it goes on without blocking the window, `Esc` stops it).
 13. **Compressed status**: `🗜 decompressing N%` with `✖` cancel; then `🗜` (done) or `🗜 partial content (why)`; `⟳` re-extract. The tooltip is the archive path, plus `› entry` for an archive entry. When nothing was written, or the reason is a tar, the text is `🗜 why` without "partial content". The reasons (`StopReason`) are:
     - *stopped by the user*; *output cap of {size} reached*; *less than 512 MB would remain free on {volume}*;
     - *this file holds a tar archive: open it again to choose its entries* (a codec file that turned out to hold a tar);
@@ -428,11 +430,13 @@ Empty states are centred and dim: `⏳ indexing...`, `⏳ filtering...`, *Log fi
 - **Text colouring,** by priority:
   1. Current hit: black text on `#00FFE6`, strong.
   2. Other hits: black on `#FFE600`.
-  3. Span layout, when a captures-only rule, a quick label or ANSI colours apply.
+  3. Span layout, when a captures-only rule, a quick label, ANSI colours or automatic tokens apply (in that order of priority per byte).
   4. The first matching highlight rule (foreground, background, bold, italic).
   5. The level palette (§6.3), when `level_colors` is on.
   6. `text_primary`.
 - **Context rows** (context lines around the filter matches, `TailEngine::is_context_row`): the text is drawn in `text_dim` instead of `text_primary`, and rule, label, ANSI and level colours (foreground and background) at 55 % opacity (`dim_style`, `dim_spans`); search hits keep their colours, and match rows are unchanged. Between two groups of rows that are not adjacent in the file, a 1 px rule in `border_color` at 40 % runs along the top edge of the later group's first row (`context_separator`, text and wrapped views); hovering a 4 px band around it shows `{n} lines hidden`. The rule is painted, not a row.
+- **Selection highlight** (a double-click on a word, `selection_token`): every exact occurrence of the token in the drawn rows gets a 1 px `accent_color` box drawn over the text (`outline_token`, radius 2), in both layouts, split per row where a wrapped occurrence crosses rows; at most 64 per row. It is a shape, not a span, so it never hides a colour. `Esc` on the rows, a double-click on empty space or on the same word, or a reload clears it.
+- **Time display**: with a zone chosen in the `🌐` menu, the leading timestamp of the drawn row is replaced by `YYYY-MM-DD HH:MM:SS[.fff][Z|±HH:MM]` (`display_row_time`); spans after it shift, spans inside it are dropped, and hovering the converted text shows the text as written (tooltip on the row response while the pointer is over the timestamp).
 - **Row tint** behind the whole row width: current hit is accent at α70, other hits warn at α40, selected rows `secondary_accent` at α60, bookmarked rows (manual or automatic, or a closed group hiding a bookmark) `secondary_accent` at α28.
 - **Row height:** `max(font row height × 1.25, 18)`, rounded up.
 
@@ -478,7 +482,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
      - A PIN password field (90 px, 4–12 digits), `Save PIN` and `Clear PIN`.
      - `Lock now`, disabled without a PIN.
      - A small note that the lock is a deterrent.
-  8. Checkboxes: System Telemetry · Cyber Audio SFX · Borderless Window · Line numbers in new streams · Colour rows by log level · Overview strip beside the scroll bar · Time delta (Δt) column in new streams (both defaults only: open streams keep their own switches). Then `Δt gap highlight (ms, 0 = off)` as a `DragValue` (0–86 400 000).
+  8. Checkboxes: System Telemetry · Cyber Audio SFX · Borderless Window · Line numbers in new streams · Colour rows by log level · **Automatic token highlighting** (when on, an indented `horizontal_wrapped` row of per-kind checkboxes — IP addresses, Identifiers (UUID), Web addresses (URL), Durations, File paths — each label in its `token_color`) · Overview strip beside the scroll bar · Time delta (Δt) column in new streams (both defaults only: open streams keep their own switches). Then `Δt gap highlight (ms, 0 = off)` as a `DragValue` (0–86 400 000).
   9. **🛠 External tools:**
      - The list of placeholders and a link to the cookbook.
      - One grouped card per tool, with Name, Program, Arguments, Shortcut (`Ctrl+Shift+F9`, with an invalid-shortcut warning), Rule (a combo of the highlight-rule patterns, with a "missing rule" warning), Match regex, and a "Run via shell" checkbox with a ⚠ warning.
@@ -520,6 +524,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
      - A `⚡ Color Filters (a/t active)` heading, a description and an order hint.
      - One group per rule: enabled checkbox, `⬆` `⬇`, `#n:`, pattern field, `Regex`, `Captures only` (regex rules only), `Aa`, `B`, `I`, sound combo (None, Beep, Chime, Warning, Critical) with `▶` test, a **`Bookmark matching lines`** checkbox, `FG:` and `BG:` sRGB colour buttons, a live ` Preview ` chip, and `🗑`.
      - An "Add rule" button, which creates a rule with white text on `#0064C8`.
+     - **Rule sets** (`render_rule_set_controls`): `⬇ Export rules…` (disabled without rules; native save dialog, `highlights.fasttail-rules.ini`) and `⬆ Import rules…` (native open dialog). An import shows a group with `{file}: {n} rules` in accent, the first 5 patterns as chips in their own colours (`…` beyond), and `Append` · `Replace` · `Cancel`; `Replace` turns the row into a warn `Replace the {n} current rules?` with `Replace` · `Cancel`. The outcome (`{n} rules exported to {file}`, `{added} rules added, {skipped} skipped (already present)`, `Rules replaced: {n} imported`) or a refusal (*not a FastTail rule set*, *written by a newer FastTail*, *cannot read*) is shown under the buttons in 11 pt, accent or warn. The pending import and the message live in egui temp memory.
      - **Automatic bookmarks.** Every line an enabled rule with "Bookmark matching lines" matches carries an automatic bookmark (`☆`), lines appended later included, whatever the rule's colours. The tooltip says so. On a large file the matching runs as a background scan (`⏳ finding auto-bookmarks N%`). At most `auto_bookmark_max` are kept per stream, the first in file order; past that the stream bar shows `ⓘ auto-bookmarks capped at N`. `F2` / `SHIFT + F2` visit them with the manual ones, and `CTRL + F2` or "Remove bookmark" dismisses one. A dismissal lasts until the set of bookmarking rules changes (a pattern, its regex or case flag, the rule's enabled box or the option itself): colours, styles and sounds leave the automatic bookmarks alone.
 
 ### 4.3 About — `ℹ About FastTail`
@@ -537,7 +542,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
 - **Window:** id `fasttail_help_popup`, default **580 × 500**, geometry persisted.
 - **Contents:** a `⚡ FASTTAIL` header, then three `ui.group`s with warn-coloured titles:
   1. **🔍 ZOOM & FONT SIZE**: `CTRL +  /  CTRL =`, `CTRL -`, `CTRL 0`, `CTRL + Wheel`.
-  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + P`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `± N`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F1`, `Esc`, Drag & Drop.
+  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + P`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `± N`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F4  /  SHIFT + F4`, Double-click, `F1`, `Esc`, Drag & Drop.
   3. **⚡ COLOR FILTERS & VISIBILITY**: six bullet paragraphs (evaluation order, reordering, bold and italic, visibility filters, log levels, recent files).
 - Keys are written in capitals joined with ` + ` (house style). The exception is `CTRL F`, which lacks the `+`.
 
@@ -638,6 +643,7 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
 - **Row context menu** (`row_context_menu`, text and wrapped views). It is **always available** on a row. Minimum width 160. The picks are applied after the rows are drawn (`RowMenuPicks`). Groups are separated by separators:
   1. `Copy  (CTRL + C)`: the selection when the clicked row is part of it, else the clicked row alone (it becomes the selection); every underlying line, those a collapsed group hides included.
   2. `Copy as shown`: the same, one line per row as the view shows it, with ` ×N` after a closed group's row.
+  - Then, after a separator when either applies: `▣ Highlight "token"` (or `▢ Clear the highlight of "token"` when it is the outlined one) on the word under the pointer where the menu was opened (kept in egui temp memory at the right click), and `⇣ Next line of rule  (F4)` ▸, a submenu listing the enabled rules matching the row (`#n pattern`, `▶` on the stream's navigation rule); picking one makes it the navigation rule and walks to its next line.
   3. `✏ Bookmark note…`: opens the note editor in the stream bar (§3.3) on that line.
   4. `☆ Remove bookmark  (CTRL + F2)`, only when the row's own line is bookmarked: what `CTRL + F2` does there (removes a manual bookmark and its note, or dismisses an automatic one).
   5. `◆ Show in context  (CTRL + K)`, on a filtered stream.
@@ -651,6 +657,7 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
 - "Open Log Files": multi-select, filter `*.log, *.txt, *.*`.
 - Session save and load: `FastTail session` (*.ini). The default name is `session.fasttail-session.ini`.
 - Export save: `Text (*.txt, *.log)`, named `<stem>-export.txt` or `<stem>-matches.txt`.
+- Rule sets: `FastTail rules (*.ini)`, save named `highlights.fasttail-rules.ini`, and open.
 - The spool folder picker.
 
 An export failure is shown as an `ⓘ` notice in the stream bar (`view_notice`).
@@ -763,7 +770,8 @@ On Windows the CJK fallback fonts are appended (§6.6). Emoji rendering relies o
 - **Highlight spans** (`span_layout_job`), non-overlapping and sorted:
   - `Rule` (the rule's foreground and background, italic);
   - `Label(n)` (the theme's preset colour, §6.5);
-  - `Ansi` (the theme's ANSI palette with bold→bright, dim, inverse and underline).
+  - `Ansi` (the theme's ANSI palette with bold→bright, dim, inverse and underline);
+  - `Token(kind)` (automatic highlighting: `token_color(kind)` as foreground only, over the row's background).
   - Search hits skip spans and keep the search colours.
 - **Level counters and the level combo:** `level_color` per level.
 
@@ -952,6 +960,18 @@ The nine presets run red, orange, yellow, green, cyan, blue, violet, magenta, gr
 - **Light:** `#181C24 #B91C2A #167830 #875A00 #1950C8 #91289B #007382 #585E69` / bright `#555E6E #CD2837 #1A7C36 #7D5F00 #2D5FD7 #A537AF #007886 #3C414C`.
 
 A unit test checks contrast against `bg_color`: WCAG AA (4.5) everywhere, except 3.0 for the two dark greys on the dark themes. A background with no foreground gets black or white text, whichever has the higher contrast.
+
+**Automatic token colours** (`token_color(kind)`), foreground only:
+
+| Kind | Tron | Matrix | Blade | Light |
+|---|---|---|---|---|
+| IP | `#00D2FF` | `#78FF78` | `#FFB000` | `#0046A0` |
+| UUID | `#BE8CFF` | `#00C88C` | `#FF5FC8` | `#5F28A0` |
+| URL | `#6EAAFF` | `#BEFF5A` | `#FF82AA` | `#005AC8` |
+| Duration | `#78FFDC` | `#FFBF00` | `#FFD778` | `#006E64` |
+| Path | `#AACDEB` | `#A0E1AF` | `#D7A5FF` | `#3C466E` |
+
+A unit test checks every colour at 4.5:1 or better against both `bg_color` and `panel_bg`, and that the five kinds of a theme differ.
 
 ### 6.6 Applying the theme to egui
 

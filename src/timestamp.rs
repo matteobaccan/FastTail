@@ -537,11 +537,67 @@ pub fn local_now_millis() -> i64 {
     now + local_offset_millis(now)
 }
 
-/// Offset of the local time zone from UTC, daylight saving included, from the operating
-/// system (no time zone database is shipped); 0 where it cannot be read. Windows gives
-/// the offset in force now, whatever `utc_millis` says, which is all "today" needs.
+/// Offset of the local time zone from UTC at `utc_millis`, daylight saving included,
+/// from the operating system (no time zone database is shipped): the instant converted
+/// by `SystemTimeToTzSpecificLocalTime`, which applies the zone's daylight saving rules
+/// to that date. Falls back to the offset in force now for an instant Windows cannot
+/// convert (before 1601), and to 0 where nothing can be read.
 #[cfg(windows)]
-pub fn local_offset_millis(_utc_millis: i64) -> i64 {
+pub fn local_offset_millis(utc_millis: i64) -> i64 {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct SystemTime {
+        fields: [u16; 8],
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+    extern "system" {
+        fn FileTimeToSystemTime(file_time: *const FileTime, system_time: *mut SystemTime) -> i32;
+        fn SystemTimeToTzSpecificLocalTime(
+            zone: *const std::ffi::c_void,
+            universal: *const SystemTime,
+            local: *mut SystemTime,
+        ) -> i32;
+        fn SystemTimeToFileTime(system_time: *const SystemTime, file_time: *mut FileTime) -> i32;
+    }
+    // 100 ns ticks since 1601-01-01.
+    const EPOCH_1601_MS: i64 = 11_644_473_600_000;
+    let ticks = utc_millis
+        .checked_add(EPOCH_1601_MS)
+        .filter(|ms| *ms >= 0)
+        .and_then(|ms| ms.checked_mul(10_000));
+    if let Some(ticks) = ticks {
+        let ticks = ticks as u64;
+        let file = FileTime {
+            low: ticks as u32,
+            high: (ticks >> 32) as u32,
+        };
+        let mut utc = SystemTime { fields: [0; 8] };
+        let mut local = SystemTime { fields: [0; 8] };
+        let mut back = FileTime { low: 0, high: 0 };
+        // SAFETY: plain C structs of the documented layouts, living for the calls; a null
+        // zone means the current time zone.
+        let ok = unsafe {
+            FileTimeToSystemTime(&file, &mut utc) != 0
+                && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0
+                && SystemTimeToFileTime(&local, &mut back) != 0
+        };
+        if ok {
+            let local_ticks = (u64::from(back.high) << 32 | u64::from(back.low)) as i64;
+            // Whole milliseconds: the input had no sub-millisecond part.
+            return (local_ticks - ticks as i64) / 10_000;
+        }
+    }
+    local_offset_now_millis()
+}
+
+/// Offset of the local time zone from UTC in force now (`GetTimeZoneInformation`).
+#[cfg(windows)]
+fn local_offset_now_millis() -> i64 {
     #[repr(C)]
     struct SystemTime {
         fields: [u16; 8],
@@ -685,6 +741,344 @@ fn is_date_minute(text: &str) -> bool {
         && b[7] == b'-'
         && matches!(b[10], b' ' | b'T')
         && b[13] == b':'
+}
+
+/// The leading timestamp of a line as `detect_timestamp_zoned` reads it: milliseconds on
+/// the printed clock (as `detect_timestamp`), the zone the line states, and where the
+/// timestamp text sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZonedStamp {
+    pub millis: i64,
+    /// Offset from UTC in minutes the line states: `Z` is 0, `+02:00` is 120, and an
+    /// epoch value is 0; `None` when the line names no zone.
+    pub zone_minutes: Option<i32>,
+    /// Byte range of the timestamp text, zone included, brackets excluded.
+    pub start: usize,
+    pub end: usize,
+    /// Digits of the fraction of a second the log printed (0 for none).
+    pub frac_digits: u8,
+    pub format: FormatHint,
+}
+
+/// `detect_timestamp` with the zone offset and the span of the timestamp text.
+pub fn detect_timestamp_zoned(line: &str, hint: FormatHint) -> Option<ZonedStamp> {
+    let head = &line.as_bytes()[..line.len().min(SCAN_BYTES)];
+    for format in format_order(hint) {
+        if let Some((mut millis, _)) = parse_format(format, head) {
+            // Epoch seconds keep their fraction here, which the time cache has no use for.
+            if format == FormatHint::Epoch
+                && head.iter().take_while(|b| b.is_ascii_digit()).count() == 10
+            {
+                millis += parse_fraction(head, 10).0;
+            }
+            return zoned_parts(format, head).map(|(zone_minutes, start, end, frac_digits)| {
+                ZonedStamp {
+                    millis,
+                    zone_minutes,
+                    start,
+                    end,
+                    frac_digits,
+                    format,
+                }
+            });
+        }
+    }
+    None
+}
+
+/// Zone, start, end and fraction digits of a timestamp `format` already parsed at the
+/// start of `head`.
+fn zoned_parts(format: FormatHint, head: &[u8]) -> Option<(Option<i32>, usize, usize, u8)> {
+    let digits_of = |b: &[u8], at: usize| -> (usize, u8) {
+        let (_, after) = parse_fraction(b, at);
+        let digits = if after > at { after - at - 1 } else { 0 };
+        (after, digits.min(u8::MAX as usize) as u8)
+    };
+    match format {
+        FormatHint::Iso8601 => {
+            let start = skip_leading_bracket(head);
+            let b = &head[start..];
+            let (after_frac, digits) = digits_of(b, 19);
+            let (zone, end) = parse_zone(b, after_frac);
+            Some((zone, start, start + end, digits))
+        }
+        FormatHint::Syslog => {
+            let start = skip_leading_bracket(head);
+            let b = &head[start..];
+            let (after_frac, digits) = digits_of(b, 15);
+            Some((None, start, start + after_frac, digits))
+        }
+        FormatHint::Apache => {
+            let start = head.iter().position(|b| *b == b'[')? + 1;
+            let b = &head[start..];
+            let mut end = 20;
+            while b.get(end) == Some(&b' ') {
+                end += 1;
+            }
+            let (zone, zone_end) = parse_zone(b, end);
+            let end = if zone.is_some() { zone_end } else { 20 };
+            Some((zone, start, start + end, 0))
+        }
+        FormatHint::Epoch => {
+            let digits = head.iter().take_while(|b| b.is_ascii_digit()).count();
+            let (after, frac) = digits_of(head, digits);
+            // Milliseconds carry their three digits of fraction in the number itself.
+            let frac = if digits == 13 { 3 } else { frac };
+            Some((Some(0), 0, after, frac))
+        }
+        FormatHint::Unknown => None,
+    }
+}
+
+/// The zone suffix at `at` as minutes east of UTC and the index after it: `Z`, `+02:00`,
+/// `+0200`, `-03`; `(None, at)` when there is none.
+fn parse_zone(b: &[u8], at: usize) -> (Option<i32>, usize) {
+    match b.get(at) {
+        Some(b'Z') | Some(b'z') => (Some(0), at + 1),
+        Some(sign @ (b'+' | b'-')) => {
+            let Some(hours) = number(b, at + 1, 2) else {
+                return (None, at);
+            };
+            let (minutes, end) = if b.get(at + 3) == Some(&b':') {
+                match number(b, at + 4, 2) {
+                    Some(m) => (m, at + 6),
+                    None => (0, at + 3),
+                }
+            } else if let Some(m) = number(b, at + 3, 2) {
+                (m, at + 5)
+            } else {
+                (0, at + 3)
+            };
+            // Real zones run from -12:00 to +14:00: `+99:00` is no zone.
+            if hours > 14 || minutes > 59 {
+                return (None, at);
+            }
+            let total = (hours * 60 + minutes) as i32;
+            (Some(if *sign == b'-' { -total } else { total }), end)
+        }
+        _ => (None, at),
+    }
+}
+
+/// Largest fixed offset a time display or a source zone accepts, in minutes (14:00).
+pub const MAX_OFFSET_MINUTES: i32 = 14 * 60;
+
+/// How a stream shows the leading timestamp of its rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeDisplay {
+    /// As the log printed it (no conversion).
+    #[default]
+    Written,
+    Utc,
+    /// The local time zone, with the offset in force at each instant.
+    Local,
+    /// A fixed offset from UTC, in minutes.
+    Offset(i32),
+}
+
+/// What a timestamp without a zone suffix means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceZone {
+    #[default]
+    Local,
+    Utc,
+    Offset(i32),
+}
+
+/// `+02:00`, `-03:30`, `+00:00`.
+pub fn format_offset(minutes: i32) -> String {
+    let sign = if minutes < 0 { '-' } else { '+' };
+    let m = minutes.unsigned_abs();
+    format!("{sign}{:02}:{:02}", m / 60, m % 60)
+}
+
+/// `+02:00`, `+0200`, `-3`, `+5:30`, `UTC+2` read as minutes east of UTC, within
+/// `MAX_OFFSET_MINUTES`.
+pub fn parse_offset(text: &str) -> Option<i32> {
+    let text = text.trim();
+    let text = text
+        .strip_prefix("UTC")
+        .or_else(|| text.strip_prefix("utc"))
+        .or_else(|| text.strip_prefix("GMT"))
+        .unwrap_or(text);
+    let (sign, rest) = match text.as_bytes().first()? {
+        b'+' => (1, &text[1..]),
+        b'-' => (-1, &text[1..]),
+        _ => return None,
+    };
+    let (hours, minutes) = match rest.split_once(':') {
+        Some((h, m)) => (h, m),
+        None if rest.len() == 4 => rest.split_at(2),
+        None => (rest, "0"),
+    };
+    if hours.is_empty() || hours.len() > 2 || minutes.len() > 2 {
+        return None;
+    }
+    let hours: i32 = hours.parse().ok()?;
+    let minutes: i32 = minutes.parse().ok()?;
+    if minutes > 59 {
+        return None;
+    }
+    let total = sign * (hours * 60 + minutes);
+    (total.abs() <= MAX_OFFSET_MINUTES).then_some(total)
+}
+
+impl TimeDisplay {
+    /// `written`, `utc`, `local` or `+HH:MM`, as saved in the workspace and sessions.
+    pub fn to_config(self) -> String {
+        match self {
+            TimeDisplay::Written => "written".into(),
+            TimeDisplay::Utc => "utc".into(),
+            TimeDisplay::Local => "local".into(),
+            TimeDisplay::Offset(m) => format_offset(m),
+        }
+    }
+
+    pub fn from_config(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "written" => Some(TimeDisplay::Written),
+            "utc" | "z" => Some(TimeDisplay::Utc),
+            "local" => Some(TimeDisplay::Local),
+            other => parse_offset(other).map(TimeDisplay::Offset),
+        }
+    }
+}
+
+impl SourceZone {
+    /// `local`, `utc` or `+HH:MM`, as saved in the workspace and sessions.
+    pub fn to_config(self) -> String {
+        match self {
+            SourceZone::Local => "local".into(),
+            SourceZone::Utc => "utc".into(),
+            SourceZone::Offset(m) => format_offset(m),
+        }
+    }
+
+    pub fn from_config(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "local" => Some(SourceZone::Local),
+            "utc" | "z" => Some(SourceZone::Utc),
+            other => parse_offset(other).map(SourceZone::Offset),
+        }
+    }
+}
+
+/// The UTC instant of a reading on the local clock: the offset in force at that instant
+/// (`local` gives it for a UTC instant, see `local_offset_millis`).
+pub fn local_clock_to_utc(clock: i64, local: &dyn Fn(i64) -> i64) -> i64 {
+    let guess = clock - local(clock);
+    clock - local(guess)
+}
+
+/// The UTC instant of a printed timestamp: its own zone when the line states one (epoch
+/// values are UTC), else the stream's source zone.
+pub fn stamp_to_utc(
+    printed: i64,
+    zone_minutes: Option<i32>,
+    source: SourceZone,
+    local: &dyn Fn(i64) -> i64,
+) -> i64 {
+    match (zone_minutes, source) {
+        (Some(z), _) => printed - i64::from(z) * 60_000,
+        (None, SourceZone::Utc) => printed,
+        (None, SourceZone::Offset(m)) => printed - i64::from(m) * 60_000,
+        (None, SourceZone::Local) => local_clock_to_utc(printed, local),
+    }
+}
+
+/// The inverse of `stamp_to_utc`: the printed clock of a UTC instant.
+pub fn utc_to_stamp(
+    utc: i64,
+    zone_minutes: Option<i32>,
+    source: SourceZone,
+    local: &dyn Fn(i64) -> i64,
+) -> i64 {
+    match (zone_minutes, source) {
+        (Some(z), _) => utc + i64::from(z) * 60_000,
+        (None, SourceZone::Utc) => utc,
+        (None, SourceZone::Offset(m)) => utc + i64::from(m) * 60_000,
+        (None, SourceZone::Local) => utc + local(utc),
+    }
+}
+
+/// The clock of a UTC instant in `display` (`Written` shows UTC: it is never converted).
+pub fn utc_to_display(utc: i64, display: TimeDisplay, local: &dyn Fn(i64) -> i64) -> i64 {
+    match display {
+        TimeDisplay::Written | TimeDisplay::Utc => utc,
+        TimeDisplay::Local => utc + local(utc),
+        TimeDisplay::Offset(m) => utc + i64::from(m) * 60_000,
+    }
+}
+
+/// The UTC instant of a reading on the `display` clock (a time typed by the user).
+pub fn display_to_utc(shown: i64, display: TimeDisplay, local: &dyn Fn(i64) -> i64) -> i64 {
+    match display {
+        TimeDisplay::Written | TimeDisplay::Utc => shown,
+        TimeDisplay::Local => local_clock_to_utc(shown, local),
+        TimeDisplay::Offset(m) => shown - i64::from(m) * 60_000,
+    }
+}
+
+/// `YYYY-MM-DD HH:MM:SS`, the fraction to `frac_digits` digits (at most 3), and `Z` for
+/// UTC or the offset for a fixed one.
+pub fn format_in_zone(shown: i64, frac_digits: u8, display: TimeDisplay) -> String {
+    let mut out = format_millis(shown);
+    let digits = frac_digits.min(3) as usize;
+    if digits > 0 {
+        let ms = format!("{:03}", shown.rem_euclid(1000));
+        out.push('.');
+        out.push_str(&ms[..digits]);
+    }
+    match display {
+        TimeDisplay::Utc => out.push('Z'),
+        TimeDisplay::Offset(m) => out.push_str(&format_offset(m)),
+        TimeDisplay::Written | TimeDisplay::Local => {}
+    }
+    out
+}
+
+/// The leading timestamp of `line` as the `display` shows it: the byte range to replace
+/// and its text. `None` when the display is "as written" or the line has no timestamp.
+pub fn display_timestamp(
+    line: &str,
+    hint: FormatHint,
+    source: SourceZone,
+    display: TimeDisplay,
+    local: &dyn Fn(i64) -> i64,
+) -> Option<(usize, usize, String)> {
+    display_timestamp_with(line, hint, true, source, display, local)
+}
+
+/// Epoch values converted to dates: 2000-01-01 to 2100-01-01, so a count such as
+/// `1234567890 rows` far outside it stays a number.
+const EPOCH_DISPLAY_RANGE: std::ops::Range<i64> = 946_684_800_000..4_102_444_800_000;
+
+/// `display_timestamp`, converting a bare epoch value only when `epoch` says the stream
+/// is an epoch-stamped one (a leading number in an ISO log is a count, not a time), and
+/// only within `EPOCH_DISPLAY_RANGE`.
+pub fn display_timestamp_with(
+    line: &str,
+    hint: FormatHint,
+    epoch: bool,
+    source: SourceZone,
+    display: TimeDisplay,
+    local: &dyn Fn(i64) -> i64,
+) -> Option<(usize, usize, String)> {
+    if display == TimeDisplay::Written {
+        return None;
+    }
+    let stamp = detect_timestamp_zoned(line, hint)?;
+    if stamp.format == FormatHint::Epoch && (!epoch || !EPOCH_DISPLAY_RANGE.contains(&stamp.millis))
+    {
+        return None;
+    }
+    let utc = stamp_to_utc(stamp.millis, stamp.zone_minutes, source, local);
+    let shown = utc_to_display(utc, display, local);
+    Some((
+        stamp.start,
+        stamp.end,
+        format_in_zone(shown, stamp.frac_digits, display),
+    ))
 }
 
 #[cfg(test)]
@@ -1033,5 +1427,307 @@ mod tests {
             assert_eq!(parse_relative(bad, now), None, "{bad}");
         }
         assert_eq!(parse_relative("-99999999999999999w", now), None);
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+
+    const H: i64 = 3_600_000;
+
+    /// Central European time: +01:00, +02:00 from 2026-03-29 01:00 UTC to 2026-10-25
+    /// 01:00 UTC (the EU rule), for tests that must not depend on the machine's zone.
+    fn cet(utc: i64) -> i64 {
+        let spring = parse_user_time("2026-03-29 01:00:00", 0).unwrap();
+        let autumn = parse_user_time("2026-10-25 01:00:00", 0).unwrap();
+        if (spring..autumn).contains(&utc) {
+            2 * H
+        } else {
+            H
+        }
+    }
+
+    fn at(text: &str) -> i64 {
+        parse_user_time(text, 0).unwrap()
+    }
+
+    fn zoned(line: &str) -> ZonedStamp {
+        detect_timestamp_zoned(line, FormatHint::Unknown).unwrap()
+    }
+
+    #[test]
+    fn zones_and_spans_of_each_format() {
+        let z = zoned("2026-09-28T14:02:05.123Z INFO x");
+        assert_eq!(z.millis, at("2026-09-28 14:02:05") + 123);
+        assert_eq!(
+            (z.zone_minutes, z.start, z.end, z.frac_digits),
+            (Some(0), 0, 24, 3)
+        );
+        let z = zoned("[2026-09-28 14:02:05,5+02:00] x");
+        assert_eq!(
+            (z.zone_minutes, z.start, z.end, z.frac_digits),
+            (Some(120), 1, 28, 1)
+        );
+        let z = zoned("2026-09-28 14:02:05-0330 x");
+        assert_eq!((z.zone_minutes, z.end), (Some(-210), 24));
+        let z = zoned("2026-09-28 14:02:05 x");
+        assert_eq!((z.zone_minutes, z.end, z.frac_digits), (None, 19, 0));
+        let z = zoned("Sep 28 14:02:05 host x");
+        assert_eq!(
+            (z.zone_minutes, z.start, z.end, z.format),
+            (None, 0, 15, FormatHint::Syslog)
+        );
+        let line = "10.0.0.1 - - [28/Sep/2026:14:02:05 +0200] \"GET /\"";
+        let z = zoned(line);
+        assert_eq!(z.zone_minutes, Some(120));
+        assert_eq!(&line[z.start..z.end], "28/Sep/2026:14:02:05 +0200");
+        let z = zoned("1790604125123 x");
+        assert_eq!(
+            (z.millis, z.zone_minutes, z.end, z.frac_digits),
+            (1_790_604_125_123, Some(0), 13, 3)
+        );
+        let z = zoned("1790604125.25 x");
+        assert_eq!((z.millis, z.end, z.frac_digits), (1_790_604_125_250, 13, 2));
+        let z = zoned("1790604125 x");
+        assert_eq!((z.millis, z.frac_digits), (1_790_604_125_000, 0));
+        assert!(detect_timestamp_zoned("no time here", FormatHint::Unknown).is_none());
+    }
+
+    #[test]
+    fn utc_log_read_in_local_time() {
+        let line = "2026-09-28T14:02:05.123Z INFO x";
+        let (s, e, text) = display_timestamp(
+            line,
+            FormatHint::Unknown,
+            SourceZone::Local,
+            TimeDisplay::Local,
+            &cet,
+        )
+        .unwrap();
+        assert_eq!(&line[s..e], "2026-09-28T14:02:05.123Z");
+        assert_eq!(text, "2026-09-28 16:02:05.123");
+        let utc = display_timestamp(
+            line,
+            FormatHint::Unknown,
+            SourceZone::Local,
+            TimeDisplay::Utc,
+            &cet,
+        );
+        assert_eq!(utc.unwrap().2, "2026-09-28 14:02:05.123Z");
+        let fixed = display_timestamp(
+            line,
+            FormatHint::Unknown,
+            SourceZone::Local,
+            TimeDisplay::Offset(-300),
+            &cet,
+        );
+        assert_eq!(fixed.unwrap().2, "2026-09-28 09:02:05.123-05:00");
+        // As written: nothing to replace.
+        assert!(display_timestamp(
+            line,
+            FormatHint::Unknown,
+            SourceZone::Local,
+            TimeDisplay::Written,
+            &cet
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn epoch_milliseconds_as_a_date() {
+        let (s, e, text) = display_timestamp(
+            "1790604125123 payload",
+            FormatHint::Unknown,
+            SourceZone::Local,
+            TimeDisplay::Utc,
+            &cet,
+        )
+        .unwrap();
+        assert_eq!((s, e), (0, 13));
+        assert_eq!(text, "2026-09-28 14:02:05.123Z");
+    }
+
+    #[test]
+    fn source_zone_for_timestamps_without_one() {
+        let line = "2026-09-28 14:02:05 x";
+        let show = |source| {
+            display_timestamp(line, FormatHint::Unknown, source, TimeDisplay::Utc, &cet)
+                .unwrap()
+                .2
+        };
+        assert_eq!(show(SourceZone::Utc), "2026-09-28 14:02:05Z");
+        assert_eq!(show(SourceZone::Local), "2026-09-28 12:02:05Z");
+        assert_eq!(show(SourceZone::Offset(330)), "2026-09-28 08:32:05Z");
+        // A zone in the line wins over the source zone.
+        let own = display_timestamp(
+            "2026-09-28 14:02:05+01:00 x",
+            FormatHint::Unknown,
+            SourceZone::Offset(330),
+            TimeDisplay::Utc,
+            &cet,
+        );
+        assert_eq!(own.unwrap().2, "2026-09-28 13:02:05Z");
+        // Syslog and Apache.
+        let sys = display_timestamp(
+            "Sep 28 14:02:05 h",
+            FormatHint::Unknown,
+            SourceZone::Utc,
+            TimeDisplay::Offset(60),
+            &cet,
+        );
+        assert!(sys.unwrap().2.ends_with("15:02:05+01:00"));
+        let apache = display_timestamp(
+            "[28/Sep/2026:14:02:05 +0200] x",
+            FormatHint::Unknown,
+            SourceZone::Local,
+            TimeDisplay::Utc,
+            &cet,
+        );
+        assert_eq!(apache.unwrap(), (1, 27, "2026-09-28 12:02:05Z".to_string()));
+    }
+
+    #[test]
+    fn daylight_saving_boundaries_in_local_time() {
+        // Each instant gets the offset in force at that instant.
+        let show = |utc_text: &str| {
+            let line = format!("{utc_text}Z x");
+            display_timestamp(
+                &line,
+                FormatHint::Unknown,
+                SourceZone::Utc,
+                TimeDisplay::Local,
+                &cet,
+            )
+            .unwrap()
+            .2
+        };
+        assert_eq!(show("2026-03-29T00:59:59"), "2026-03-29 01:59:59");
+        assert_eq!(show("2026-03-29T01:00:00"), "2026-03-29 03:00:00");
+        assert_eq!(show("2026-10-25T00:59:59"), "2026-10-25 02:59:59");
+        assert_eq!(show("2026-10-25T01:00:00"), "2026-10-25 02:00:00");
+        // Local readings back to UTC on each side of a change.
+        assert_eq!(
+            local_clock_to_utc(at("2026-03-29 03:30:00"), &cet),
+            at("2026-03-29 01:30:00")
+        );
+        assert_eq!(
+            local_clock_to_utc(at("2026-03-29 00:30:00"), &cet),
+            at("2026-03-28 23:30:00")
+        );
+        assert_eq!(
+            local_clock_to_utc(at("2026-07-01 12:00:00"), &cet),
+            at("2026-07-01 10:00:00")
+        );
+        assert_eq!(
+            local_clock_to_utc(at("2026-12-01 12:00:00"), &cet),
+            at("2026-12-01 11:00:00")
+        );
+    }
+
+    #[test]
+    fn conversions_round_trip() {
+        for display in [
+            TimeDisplay::Utc,
+            TimeDisplay::Local,
+            TimeDisplay::Offset(-570),
+        ] {
+            for (zone, source) in [
+                (Some(0), SourceZone::Local),
+                (None, SourceZone::Utc),
+                (None, SourceZone::Local),
+                (None, SourceZone::Offset(345)),
+            ] {
+                let printed = at("2026-07-14 09:15:00");
+                let utc = stamp_to_utc(printed, zone, source, &cet);
+                let shown = utc_to_display(utc, display, &cet);
+                let back = utc_to_stamp(display_to_utc(shown, display, &cet), zone, source, &cet);
+                assert_eq!(back, printed, "{display:?} {zone:?} {source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn epoch_only_on_epoch_streams_and_in_range_and_sane_zones() {
+        let show = |line: &str, epoch: bool| {
+            display_timestamp_with(
+                line,
+                FormatHint::Unknown,
+                epoch,
+                SourceZone::Utc,
+                TimeDisplay::Utc,
+                &cet,
+            )
+            .map(|t| t.2)
+        };
+        assert_eq!(show("1234567890 rows", false), None);
+        assert!(show("1790604125123 x", true).is_some());
+        // Out of 2000..2100: a number, not a date.
+        assert_eq!(show("0000000001 x", true), None);
+        assert_eq!(show("9999999999999 x", true), None);
+        // A zone out of range is no zone: the line reads in the source zone.
+        let z = zoned("2026-09-28 14:02:05+99:00 x");
+        assert_eq!((z.zone_minutes, z.end), (None, 19));
+        let z = zoned("2026-09-28 14:02:05+05:75 x");
+        assert_eq!(z.zone_minutes, None);
+        assert_eq!(zoned("2026-09-28 14:02:05+14:00 x").zone_minutes, Some(840));
+    }
+
+    #[test]
+    fn offsets_and_config_names() {
+        assert_eq!(format_offset(120), "+02:00");
+        assert_eq!(format_offset(-210), "-03:30");
+        assert_eq!(format_offset(0), "+00:00");
+        assert_eq!(parse_offset("+02:00"), Some(120));
+        assert_eq!(parse_offset("+0530"), Some(330));
+        assert_eq!(parse_offset("-3"), Some(-180));
+        assert_eq!(parse_offset("UTC+14"), Some(840));
+        assert_eq!(parse_offset("+14:30"), None);
+        assert_eq!(parse_offset("+05:60"), None);
+        assert_eq!(parse_offset("02:00"), None);
+        assert_eq!(parse_offset(""), None);
+        for d in [
+            TimeDisplay::Written,
+            TimeDisplay::Utc,
+            TimeDisplay::Local,
+            TimeDisplay::Offset(-720),
+        ] {
+            assert_eq!(TimeDisplay::from_config(&d.to_config()), Some(d));
+        }
+        for z in [SourceZone::Local, SourceZone::Utc, SourceZone::Offset(90)] {
+            assert_eq!(SourceZone::from_config(&z.to_config()), Some(z));
+        }
+        assert_eq!(TimeDisplay::from_config("sideways"), None);
+        assert_eq!(SourceZone::from_config("written"), None);
+    }
+
+    #[test]
+    fn fraction_digits_as_printed() {
+        let ms = at("2026-01-02 03:04:05") + 670;
+        assert_eq!(
+            format_in_zone(ms, 0, TimeDisplay::Local),
+            "2026-01-02 03:04:05"
+        );
+        assert_eq!(
+            format_in_zone(ms, 1, TimeDisplay::Utc),
+            "2026-01-02 03:04:05.6Z"
+        );
+        assert_eq!(
+            format_in_zone(ms, 6, TimeDisplay::Offset(60)),
+            "2026-01-02 03:04:05.670+01:00"
+        );
+    }
+
+    #[test]
+    fn local_offset_is_plausible_and_follows_the_instant() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        for utc in [now, at("2026-01-15 12:00:00"), at("2026-07-15 12:00:00")] {
+            let off = local_offset_millis(utc);
+            assert!(off.abs() <= 14 * H, "{off}");
+            assert_eq!(off % (15 * 60_000), 0, "{off}");
+        }
     }
 }

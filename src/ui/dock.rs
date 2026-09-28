@@ -1,4 +1,5 @@
 use crate::actions::ActionId;
+use crate::auto_highlight::{TokenKind, TokenKinds};
 use crate::collapse::CollapsedRow;
 use crate::config::push_search_history;
 use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
@@ -68,6 +69,9 @@ pub struct DockContext<'a> {
     pub font_size: &'a mut f32,
     /// Colour rows by detected log level when no highlight rule matches (Settings).
     pub level_colors: &'a mut bool,
+    /// Automatic token highlighting and its kinds (Settings).
+    pub auto_highlight: &'a mut bool,
+    pub auto_highlight_kinds: &'a mut TokenKinds,
     pub size_unit: &'a mut crate::tail_engine::SizeUnit,
     pub search_history: &'a mut Vec<String>,
     pub tab_closed: &'a mut bool,
@@ -526,6 +530,8 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     self.ctx.show_line_numbers,
                     self.ctx.font_size,
                     self.ctx.level_colors,
+                    self.ctx.auto_highlight,
+                    self.ctx.auto_highlight_kinds,
                     self.ctx.external_tools,
                     self.ctx.global_rules,
                     self.ctx.tool_runner,
@@ -1229,6 +1235,23 @@ fn render_log_stream(
         }
     };
 
+    // F4 / SHIFT + F4 walk to the next line of a rule, at most `RULE_SEEK_BUDGET` per
+    // frame; a match is shown through `request_jump`, handled right below.
+    let sought = engine.rule_seek_pattern().map(str::to_owned);
+    match engine.step_rule_seek(crate::tail_engine::RULE_SEEK_BUDGET, lang) {
+        Some(crate::tail_engine::RuleSeekStep::Found { wrapped, .. }) => {
+            if wrapped && sound_enabled {
+                crate::audio::SoundAlertPreset::Beep.play();
+            }
+        }
+        Some(crate::tail_engine::RuleSeekStep::Pending) => ui.ctx().request_repaint(),
+        Some(crate::tail_engine::RuleSeekStep::NotFound) => {
+            engine.view_notice =
+                Some(t(lang, "rule_nav_none").replace("{rule}", sought.as_deref().unwrap_or("")));
+        }
+        None => {}
+    }
+
     // A result of the search across streams asked for this line (`request_jump`).
     if let Some(line) = engine.pending_jump.take() {
         let target = if engine.view_mode == crate::tail_engine::ViewMode::Hex {
@@ -1520,6 +1543,22 @@ fn render_log_stream(
         ) {
             ui.separator();
             crate::ui::time_range::control(ui, engine, theme, lang);
+            for (id, display) in [
+                (
+                    ActionId::TimeDisplayWritten,
+                    crate::timestamp::TimeDisplay::Written,
+                ),
+                (ActionId::TimeDisplayUtc, crate::timestamp::TimeDisplay::Utc),
+                (
+                    ActionId::TimeDisplayLocal,
+                    crate::timestamp::TimeDisplay::Local,
+                ),
+            ] {
+                if act(id) {
+                    engine.set_time_display(display);
+                }
+            }
+            render_time_display_menu(ui, engine, theme, lang);
         }
 
         // Elapsed time of a selection of two or more timed rows.
@@ -1591,6 +1630,18 @@ fn render_log_stream(
                     .monospace()
                     .color(theme.warn_color()),
             );
+        }
+        // A rule walk that did not find its line within one frame.
+        if let Some(rule) = engine.rule_seek_pattern() {
+            ui.label(
+                RichText::new(format!(
+                    "⏳ {}",
+                    t(lang, "rule_nav_seeking").replace("{rule}", rule)
+                ))
+                .monospace()
+                .color(theme.warn_color()),
+            )
+            .on_hover_text(t(lang, "rule_nav_seeking_tip"));
         }
         if engine.ansi_switch_notice() {
             ui.label(
@@ -2177,6 +2228,41 @@ fn render_log_stream(
                     ui.ctx().request_repaint();
                 }
             }
+            // F4 / SHIFT + F4: next / previous line of the navigation rule, from the
+            // selected row or the top row (the walk itself runs at the top of the frame).
+            let shift_f4 = egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::F4);
+            let plain_f4 = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F4);
+            let line_view = !matches!(
+                engine.view_mode,
+                crate::tail_engine::ViewMode::Hex | crate::tail_engine::ViewMode::Markdown
+            );
+            let rule_prev = act(ActionId::RulePrev)
+                || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&shift_f4)));
+            let rule_next = !rule_prev
+                && (act(ActionId::RuleNext)
+                    || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&plain_f4))));
+            if rule_prev || rule_next {
+                let from = engine
+                    .selection_anchor
+                    .or_else(|| engine.selection.iter().next().copied())
+                    .or_else(|| engine.get_actual_line_idx(top_row(engine)))
+                    .unwrap_or(0);
+                if let Err(crate::tail_engine::RuleNavError::NoRuleOnRow) =
+                    engine.start_rule_seek(None, rule_next, from)
+                {
+                    engine.view_notice = Some(t(lang, "rule_nav_no_rule").to_string());
+                }
+                ui.ctx().request_repaint();
+            }
+            // Esc on the rows: stops a rule walk, else clears the outlined token (before
+            // it leaves the context view, below).
+            if keys_ok
+                && (engine.rule_seek_pattern().is_some() || engine.selection_token().is_some())
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                && !engine.cancel_rule_seek()
+            {
+                engine.clear_selection_token();
+            }
         }
         // Row context menu entries run from the palette on the row a stream-menu action
         // applies to (`TailEngine::current_row`).
@@ -2662,6 +2748,139 @@ fn render_log_stream(
     }
 }
 
+/// Label of a time display in the stream bar and its menu.
+fn time_display_label(lang: Language, display: crate::timestamp::TimeDisplay) -> String {
+    use crate::timestamp::TimeDisplay;
+    match display {
+        TimeDisplay::Written => t(lang, "time_display_written").to_string(),
+        TimeDisplay::Utc => "UTC".to_string(),
+        TimeDisplay::Local => t(lang, "time_display_local").to_string(),
+        TimeDisplay::Offset(m) => format!("UTC{}", crate::timestamp::format_offset(m)),
+    }
+}
+
+/// The time display menu of the stream bar: the leading timestamp of each row as
+/// written, in UTC, in local time or at a fixed offset, and what a timestamp without a
+/// zone means (the source zone).
+fn render_time_display_menu(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    use crate::timestamp::{format_offset, parse_offset, SourceZone, TimeDisplay};
+    engine.refresh_time_zone_sample();
+    let display = engine.time_display();
+    let source = engine.time_source_zone();
+    let color = if display == TimeDisplay::Written {
+        theme.text_dim()
+    } else {
+        theme.accent_color()
+    };
+    let draft_id = egui::Id::new("time_display_offset").with(&engine.path);
+    ui.menu_button(
+        RichText::new(format!("🌐 {}", time_display_label(lang, display)))
+            .monospace()
+            .size(11.0)
+            .color(color),
+        |ui| {
+            ui.set_min_width(220.0);
+            ui.label(
+                RichText::new(t(lang, "time_display_title"))
+                    .monospace()
+                    .small()
+                    .color(theme.text_dim()),
+            );
+            for choice in [TimeDisplay::Written, TimeDisplay::Utc, TimeDisplay::Local] {
+                if ui
+                    .selectable_label(display == choice, time_display_label(lang, choice))
+                    .clicked()
+                {
+                    engine.set_time_display(choice);
+                    ui.close();
+                }
+            }
+            // A fixed offset, typed as +02:00.
+            let mut draft: String =
+                ui.data(|d| d.get_temp(draft_id))
+                    .unwrap_or_else(|| match display {
+                        TimeDisplay::Offset(m) => format_offset(m),
+                        _ => String::new(),
+                    });
+            ui.horizontal(|ui| {
+                let fixed = matches!(display, TimeDisplay::Offset(_));
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        if fixed { "◉" } else { "○" },
+                        t(lang, "time_display_offset")
+                    ))
+                    .monospace(),
+                );
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut draft)
+                        .hint_text("+02:00")
+                        .desired_width(64.0),
+                );
+                let valid = parse_offset(&draft);
+                let apply = ui
+                    .add_enabled(valid.is_some(), egui::Button::new("✔"))
+                    .on_disabled_hover_text(t(lang, "time_display_offset_tip"));
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if let Some(m) = valid.filter(|_| apply.clicked() || enter) {
+                    engine.set_time_display(TimeDisplay::Offset(m));
+                    ui.close();
+                }
+            });
+            ui.data_mut(|d| d.insert_temp(draft_id, draft));
+            ui.separator();
+            ui.label(
+                RichText::new(t(lang, "time_source_title"))
+                    .monospace()
+                    .small()
+                    .color(theme.text_dim()),
+            )
+            .on_hover_text(t(lang, "time_source_tip"));
+            let mut source_choice = |ui: &mut Ui, zone: SourceZone, label: String| {
+                if ui.selectable_label(source == zone, label).clicked() {
+                    engine.set_time_source_zone(zone);
+                    ui.close();
+                }
+            };
+            source_choice(
+                ui,
+                SourceZone::Local,
+                t(lang, "time_display_local").to_string(),
+            );
+            source_choice(ui, SourceZone::Utc, "UTC".to_string());
+            if let SourceZone::Offset(m) = source {
+                source_choice(ui, source, format!("UTC{}", format_offset(m)));
+            }
+            if let Some(m) = parse_offset(
+                &ui.data(|d| d.get_temp::<String>(draft_id))
+                    .unwrap_or_default(),
+            ) {
+                if source != SourceZone::Offset(m) {
+                    source_choice(
+                        ui,
+                        SourceZone::Offset(m),
+                        format!("UTC{}", format_offset(m)),
+                    );
+                }
+            }
+            ui.separator();
+            ui.label(
+                RichText::new(t(lang, "time_display_note"))
+                    .monospace()
+                    .small()
+                    .color(theme.text_dim()),
+            );
+        },
+    )
+    .response
+    .on_hover_text(t(lang, "time_display_tip"));
+}
+
 /// The time delta column for this frame: `Some(gap_ms)` when the stream shows it. While
 /// the column or a selection's elapsed time needs the stream timed, asks for it - never on
 /// the UI thread for a large file, which a background scan times - and repaints until done.
@@ -2917,6 +3136,7 @@ fn render_extended_rows(
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
     let mut badge_toggle: Option<usize> = None;
+    let mut token_pick: Option<Option<String>> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
@@ -2977,6 +3197,9 @@ fn render_extended_rows(
                 let highlight = highlight.map(|h| if dim_row { dim_style(h) } else { h });
                 // Raw mode draws ESC as ␛, with the spans moved past the wider glyphs.
                 let (shown, spans) = row.display(spans);
+                // The leading timestamp in the stream's time display (the tooltip keeps
+                // the text as written).
+                let (shown, spans, time_original) = display_row_time(engine, shown, spans);
                 let is_selected = engine.is_selected(actual_line_idx);
                 // The row's own bookmark, else one of the lines its closed group hides.
                 let bookmark = BookmarkMark::of_row(engine, row_idx, actual_line_idx);
@@ -2984,6 +3207,14 @@ fn render_extended_rows(
 
                 // Background painted after layout, behind the row (see SearchRowMark)
                 let row_bg = ui.painter().add(egui::Shape::Noop);
+                // The row's text and where it was drawn: its galley is laid out again
+                // (from egui's cache) only to outline a token or to pick one.
+                let mut label: Option<(WidgetText, egui::Pos2)> = None;
+                // Kept only when it will be used: an outlined token, a converted
+                // timestamp (its tooltip), or a click this frame (a token pick).
+                let keep_label = engine.selection_token().is_some()
+                    || time_original.is_some()
+                    || ui.input(|i| i.pointer.any_click());
                 let row_resp = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -3092,7 +3323,13 @@ fn render_extended_rows(
                             if dim_row {
                                 dim_spans(&mut job, &base);
                             }
-                            ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend));
+                            let text = WidgetText::from(job);
+                            let kept = keep_label.then(|| text.clone());
+                            let at = ui
+                                .add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend))
+                                .rect
+                                .min;
+                            label = kept.map(|text| (text, at));
                             return;
                         }
                         let mut text = RichText::new(&*shown).monospace().size(font_size);
@@ -3116,7 +3353,13 @@ fn render_extended_rows(
                         } else {
                             text = text.color(theme.text_primary());
                         }
-                        ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
+                        let text = WidgetText::from(text);
+                        let kept = keep_label.then(|| text.clone());
+                        let at = ui
+                            .add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend))
+                            .rect
+                            .min;
+                        label = kept.map(|text| (text, at));
                     })
                     .response;
                 max_row_natural_width = max_row_natural_width.max(row_resp.rect.width());
@@ -3147,8 +3390,34 @@ fn render_extended_rows(
                 if click.clicked() {
                     row_click = Some((actual_line_idx, ui.input(|i| i.modifiers)));
                 }
+                let row_galley = |label: Option<(WidgetText, egui::Pos2)>| {
+                    label.map(|(text, at)| {
+                        let galley = text.into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Extend),
+                            f32::INFINITY,
+                            egui::FontSelection::Default,
+                        );
+                        (galley, at)
+                    })
+                };
+                if let Some(token) = engine.selection_token() {
+                    if memchr::memmem::find(shown.as_bytes(), token.as_bytes()).is_some() {
+                        if let Some((galley, at)) = row_galley(label.clone()) {
+                            outline_token(ui.painter(), &galley, at, token, theme.accent_color());
+                        }
+                    }
+                }
+                row_token_clicks(
+                    ui,
+                    engine,
+                    &click,
+                    || row_galley(label.clone()),
+                    &mut token_pick,
+                );
                 row_context_menu(
                     &click,
+                    engine,
                     actual_line_idx,
                     lang,
                     time_delta.map(|_| engine.time_anchor()),
@@ -3158,6 +3427,16 @@ fn render_extended_rows(
                     engine.is_bookmarked(actual_line_idx),
                     &mut picks,
                 );
+                if let Some((start, end, original)) = &time_original {
+                    if click.hovered() {
+                        if let Some((galley, at)) = row_galley(label.clone()) {
+                            let rect = text_range_rect(&galley, at, *start, *end);
+                            if ui.rect_contains_pointer(rect) {
+                                click.clone().on_hover_text(original);
+                            }
+                        }
+                    }
+                }
                 note_tooltip(ui, engine, actual_line_idx, marker_rect, click);
                 if let (Some(rect), Some(c)) = (badge_rect, collapsed) {
                     let badge = ui
@@ -3219,6 +3498,9 @@ fn render_extended_rows(
     if clear_scroll_to_line {
         engine.scroll_to_line = None;
     }
+    if let Some(token) = token_pick {
+        engine.toggle_selection_token(token.as_deref());
+    }
     if let Some(row) = badge_toggle {
         engine.toggle_collapsed_row(row);
     }
@@ -3252,6 +3534,10 @@ struct RowMenuPicks {
     remove_bookmark: Option<usize>,
     /// Line whose row asked for a copy, and whether as shown.
     copy: Option<(usize, bool)>,
+    /// Token to outline (or to clear when it is the outlined one).
+    token: Option<String>,
+    /// Rule picked in "Next line of rule" and the row it was picked on.
+    rule: Option<(usize, usize)>,
 }
 
 impl RowMenuPicks {
@@ -3267,6 +3553,14 @@ impl RowMenuPicks {
         }
         if let Some(line) = self.remove_bookmark {
             engine.remove_bookmark(line);
+        }
+        if let Some(token) = self.token {
+            engine.toggle_selection_token(Some(&token));
+        }
+        if let Some((rule, line)) = self.rule {
+            // The walk starts at once and runs at the top of the next frame.
+            let _ = engine.start_rule_seek(Some(rule), true, line);
+            ui.ctx().request_repaint();
         }
         apply_copy_pick(ui, engine, self.copy);
     }
@@ -3299,8 +3593,8 @@ fn collapse_badge_tip(engine: &TailEngine, c: CollapsedRow, lang: Language) -> S
     ) {
         tip.push_str(&format!(
             "\n🕘 {} → {}",
-            crate::timestamp::format_millis(from),
-            crate::timestamp::format_millis(to)
+            crate::timestamp::format_millis(engine.to_display_clock(from)),
+            crate::timestamp::format_millis(engine.to_display_clock(to))
         ));
     }
     tip.push('\n');
@@ -3391,6 +3685,178 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
     }
 }
 
+/// A row's text and spans after the time display, and the replaced timestamp range
+/// with its text as written.
+type TimedRow<'a> = (
+    std::borrow::Cow<'a, str>,
+    Option<crate::tail_engine::SpanHighlight>,
+    Option<(usize, usize, String)>,
+);
+
+/// A drawn row's text with its leading timestamp in the stream's time display, the
+/// spans moved to match, and the replaced range with the text as written (for its
+/// tooltip). Unchanged "as written" or without a timestamp.
+fn display_row_time<'a>(
+    engine: &TailEngine,
+    shown: std::borrow::Cow<'a, str>,
+    spans: Option<crate::tail_engine::SpanHighlight>,
+) -> TimedRow<'a> {
+    match engine.display_time(&shown) {
+        None => (shown, spans, None),
+        Some((start, end, with)) => {
+            let original = shown[start..end].to_string();
+            let (text, spans) =
+                crate::tail_engine::replace_with_spans(&shown, spans, start, end, &with);
+            (
+                std::borrow::Cow::Owned(text),
+                spans,
+                Some((start, start + with.len(), original)),
+            )
+        }
+    }
+}
+
+/// Screen rectangle of the bytes `start..end` of a galley drawn at `pos` (on its first
+/// row).
+fn text_range_rect(galley: &egui::Galley, pos: egui::Pos2, start: usize, end: usize) -> egui::Rect {
+    use egui::text::CCursor;
+    let text = galley.text();
+    let (start, end) = (start.min(text.len()), end.min(text.len()));
+    if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return egui::Rect::NOTHING;
+    }
+    let first = text[..start].chars().count();
+    let last = first + text[start..end].chars().count();
+    let a = galley.pos_from_cursor(CCursor::new(first));
+    let b = galley.pos_from_cursor(CCursor::new(last));
+    let right = if (a.min.y - b.min.y).abs() < 0.5 {
+        b.min.x
+    } else {
+        galley.size().x
+    };
+    egui::Rect::from_min_max(a.min, egui::pos2(right, a.max.y)).translate(pos.to_vec2())
+}
+
+/// Where the token under the pointer is kept while a row's context menu is open.
+fn menu_token_id(engine: &TailEngine) -> egui::Id {
+    egui::Id::new("row_menu_token").with(&engine.path)
+}
+
+/// Byte offset of character `idx` of `text` (its length past the end).
+fn char_to_byte(text: &str, idx: usize) -> usize {
+    text.char_indices().nth(idx).map_or(text.len(), |(i, _)| i)
+}
+
+/// The selection highlight token under `pointer` in a row's galley drawn at `pos` (see
+/// `tail_engine::token_at`), `None` over empty space or a character no token has.
+fn token_under(galley: &egui::Galley, pos: egui::Pos2, pointer: egui::Pos2) -> Option<String> {
+    let local = pointer - pos;
+    let size = galley.size();
+    if local.x < 0.0 || local.y < 0.0 || local.x > size.x || local.y > size.y {
+        return None;
+    }
+    let text = galley.text();
+    let cursor = galley.cursor_from_pos(local);
+    // The cursor is the nearest character boundary: past the middle of a character it
+    // is the boundary after it.
+    let mut idx = cursor.index.0;
+    if idx > 0 && local.x < galley.pos_from_cursor(cursor).min.x {
+        idx -= 1;
+    }
+    let (start, end) = crate::tail_engine::token_at(text, char_to_byte(text, idx))?;
+    Some(text[start..end].to_string())
+}
+
+/// A double-click or a right click on a row's text: the double-click toggles the
+/// outlined token (empty space clears it), the right click keeps the token under the
+/// pointer for the row menu. `galley` is laid out on demand (only on such a click).
+fn row_token_clicks(
+    ui: &Ui,
+    engine: &TailEngine,
+    click: &egui::Response,
+    galley: impl FnOnce() -> Option<(std::sync::Arc<egui::Galley>, egui::Pos2)>,
+    token_pick: &mut Option<Option<String>>,
+) {
+    let double = click.double_clicked();
+    let secondary = click.secondary_clicked();
+    if !double && !secondary {
+        return;
+    }
+    let token = click.interact_pointer_pos().and_then(|pointer| {
+        let (galley, pos) = galley()?;
+        token_under(&galley, pos, pointer)
+    });
+    if double {
+        *token_pick = Some(token);
+    } else {
+        let id = menu_token_id(engine);
+        ui.ctx().data_mut(|d| {
+            d.remove::<String>(id);
+            if let Some(token) = token {
+                d.insert_temp(id, token);
+            }
+        });
+    }
+}
+
+/// Outlines every occurrence of `token` in a row's galley drawn at `pos`: a 1 px box
+/// drawn over the text, which leaves the row's colours and spans alone.
+fn outline_token(
+    painter: &egui::Painter,
+    galley: &egui::Galley,
+    pos: egui::Pos2,
+    token: &str,
+    color: Color32,
+) {
+    use egui::text::CCursor;
+    let text = galley.text();
+    let stroke = Stroke::new(1.0, color);
+    let draw = |rect: egui::Rect| {
+        painter.rect_stroke(
+            rect.translate(pos.to_vec2()).expand2(egui::vec2(1.0, 0.0)),
+            2.0,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+    };
+    for (start, end) in crate::tail_engine::token_occurrences(text, token) {
+        let first = text[..start].chars().count();
+        let last = first + text[start..end].chars().count();
+        let a = galley.pos_from_cursor(CCursor::new(first));
+        let b = galley.pos_from_cursor(CCursor::new(last));
+        if (a.min.y - b.min.y).abs() < 0.5 {
+            draw(egui::Rect::from_min_max(
+                a.min,
+                egui::pos2(b.min.x, a.max.y),
+            ));
+            continue;
+        }
+        // Wrapped over two rows or more: the part on each row.
+        for row in &galley.rows {
+            let r = row.rect();
+            if r.max.y <= a.min.y + 0.5 || r.min.y >= b.max.y - 0.5 {
+                continue;
+            }
+            let left = if (r.min.y - a.min.y).abs() < 0.5 {
+                a.min.x
+            } else {
+                r.min.x
+            };
+            let right = if (r.min.y - b.min.y).abs() < 0.5 {
+                b.min.x
+            } else {
+                r.max.x
+            };
+            if right > left {
+                draw(egui::Rect::from_min_max(
+                    egui::pos2(left, r.min.y),
+                    egui::pos2(right, r.max.y),
+                ));
+            }
+        }
+    }
+}
+
 /// Row context menu: the two copies (every underlying line, or as shown), the bookmark
 /// note and removal, the line in context on a filtered stream, the time anchor entries
 /// while the time delta column is shown (`anchor` is `Some(current anchor)` then), all
@@ -3398,6 +3864,7 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
 #[allow(clippy::too_many_arguments)]
 fn row_context_menu(
     click: &egui::Response,
+    engine: &TailEngine,
     line: usize,
     lang: Language,
     anchor: Option<Option<usize>>,
@@ -3422,6 +3889,44 @@ fn row_context_menu(
         {
             picks.copy = Some((line, true));
             ui.close();
+        }
+        // The token under the pointer (where the menu was opened) and the rules the row
+        // matches: the same as a double-click and as F4.
+        let token: Option<String> = ui.ctx().data(|d| d.get_temp(menu_token_id(engine)));
+        let rules = engine
+            .get_line(line)
+            .map(|text| engine.rules_matching(&text))
+            .unwrap_or_default();
+        if token.is_some() || !rules.is_empty() {
+            ui.separator();
+        }
+        if let Some(token) = token {
+            let (key, icon) = if engine.selection_token() == Some(token.as_str()) {
+                ("selection_hl_clear", "▢")
+            } else {
+                ("selection_hl_menu", "▣")
+            };
+            let label = format!("{icon} {}", t(lang, key).replace("{token}", &token));
+            if ui.button(RichText::new(label).monospace()).clicked() {
+                picks.token = Some(token);
+                ui.close();
+            }
+        }
+        if !rules.is_empty() {
+            ui.menu_button(
+                RichText::new(format!("⇣ {}  (F4)", t(lang, "rule_next_menu"))).monospace(),
+                |ui| {
+                    for (index, pattern) in rules {
+                        let current = engine.rule_cursor() == Some(index);
+                        let mark = if current { "▶" } else { " " };
+                        let text = format!("{mark} #{} {pattern}", index + 1);
+                        if ui.button(RichText::new(text).monospace()).clicked() {
+                            picks.rule = Some((index, line));
+                            ui.close();
+                        }
+                    }
+                },
+            );
         }
         ui.separator();
         if ui
@@ -3635,6 +4140,13 @@ fn span_layout_job(
                 let fg = if plain { base.color } else { fg };
                 (fg, bg, s.italic || base.italics, s.underline)
             }
+            // Automatic tokens change the foreground only.
+            SpanStyle::Token(kind) => (
+                theme.token_color(kind),
+                base.background,
+                base.italics,
+                false,
+            ),
         };
         job.append(
             &text[start..end],
@@ -3678,6 +4190,8 @@ struct WrappedRow {
     highlight: Option<HighlightStyle>,
     /// A context line around the filter matches, drawn dimmed.
     dimmed: bool,
+    /// The timestamp shown in the time display: its byte range and the text as written.
+    time_original: Option<(usize, usize, String)>,
     /// The group this row heads, and the width of its `×N` badge before the text.
     collapsed: Option<CollapsedRow>,
     badge_w: f32,
@@ -3729,6 +4243,7 @@ fn render_wrapped_rows(
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
     let mut badge_toggle: Option<usize> = None;
+    let mut token_pick: Option<Option<String>> = None;
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -3788,6 +4303,7 @@ fn render_wrapped_rows(
             let dimmed = eng.is_context_row(line);
             let highlight = highlight.map(|h| if dimmed { dim_style(h) } else { h });
             let (shown, spans) = row_text.display(spans);
+            let (shown, spans, time_original) = display_row_time(eng, shown, spans);
             let format = egui::TextFormat {
                 font_id: font_id.clone(),
                 color: Color32::PLACEHOLDER,
@@ -3846,6 +4362,7 @@ fn render_wrapped_rows(
                     expanded,
                     highlight,
                     dimmed,
+                    time_original,
                     collapsed,
                     badge_w,
                 },
@@ -4037,6 +4554,9 @@ fn render_wrapped_rows(
                 );
             }
             painter.galley(text_pos, r.galley.clone(), color);
+            if let Some(token) = eng.selection_token() {
+                outline_token(&painter, &r.galley, text_pos, token, theme.accent_color());
+            }
             if let Some(pretty) = &r.pretty {
                 let frame = egui::Rect::from_min_size(
                     egui::pos2(text_x, text_top + r.galley.size().y + 4.0),
@@ -4065,8 +4585,16 @@ fn render_wrapped_rows(
             if click.clicked() {
                 row_click = Some((line, ui.input(|i| i.modifiers)));
             }
+            row_token_clicks(
+                ui,
+                eng,
+                &click,
+                || Some((r.galley.clone(), text_pos)),
+                &mut token_pick,
+            );
             row_context_menu(
                 &click,
+                eng,
                 line,
                 lang,
                 time_delta.map(|_| eng.time_anchor()),
@@ -4080,6 +4608,12 @@ fn render_wrapped_rows(
                 egui::pos2(origin.x + left_pad, text_top),
                 egui::vec2(marker_w, font_row_h),
             );
+            if let Some((start, end, original)) = &r.time_original {
+                let rect = text_range_rect(&r.galley, text_pos, *start, *end);
+                if click.hovered() && ui.rect_contains_pointer(rect) {
+                    click.clone().on_hover_text(original);
+                }
+            }
             note_tooltip(ui, eng, line, marker_rect, click);
             if let Some(gap) = eng.context_gap_above_row(row) {
                 context_separator(
@@ -4157,6 +4691,9 @@ fn render_wrapped_rows(
     engine.wrap_scroll_abs = ended;
     engine.current_scroll_x = 0.0;
     engine.current_scroll_y = ended;
+    if let Some(token) = token_pick {
+        engine.toggle_selection_token(token.as_deref());
+    }
     if let Some(row) = badge_toggle {
         engine.toggle_collapsed_row(row);
     }
@@ -5403,11 +5940,242 @@ pub fn render_highlights_content(
         rules_changed = true;
     }
 
+    if render_rule_set_controls(ui, global_rules, theme, lang) {
+        rules_changed = true;
+    }
+
     if rules_changed {
         for engine in engines {
             engine.set_highlight_rules(global_rules.clone());
         }
     }
+}
+
+/// A rule set read from a file, waiting in the Highlights dialog for Append or Replace
+/// (`confirm` once Replace asked for its confirmation).
+#[derive(Debug, Clone, Default)]
+struct RuleImport {
+    file: String,
+    rules: Vec<HighlightRule>,
+    confirm: bool,
+}
+
+/// Outcome of the last rule set export or import, shown under its buttons (text, error).
+type RuleSetNotice = (String, bool);
+
+/// The text of a refused rule set import.
+fn rule_set_error_text(lang: Language, file: &str, err: &crate::config::RuleSetError) -> String {
+    use crate::config::RuleSetError;
+    match err {
+        RuleSetError::NotARuleSet => t(lang, "rules_not_a_set").replace("{file}", file),
+        RuleSetError::NewerVersion(v) => t(lang, "rules_newer_version")
+            .replace("{file}", file)
+            .replace("{version}", &v.to_string()),
+        RuleSetError::Io(error) => t(lang, "rules_read_failed")
+            .replace("{file}", file)
+            .replace("{error}", error),
+    }
+}
+
+/// "Export rules…" and "Import rules…" of the Highlights dialog: the export writes every
+/// rule to a `*.fasttail-rules.ini` file; the import previews the file's rules, then
+/// appends them (skipping duplicates) or replaces every rule after a confirmation.
+/// Returns `true` when the rules changed.
+fn render_rule_set_controls(
+    ui: &mut Ui,
+    rules: &mut Vec<HighlightRule>,
+    theme: &CyberTheme,
+    lang: Language,
+) -> bool {
+    let import_id = egui::Id::new("rule_set_import");
+    let notice_id = egui::Id::new("rule_set_notice");
+    // Moved out of temp memory and put back at the end: no copy of the rules per frame.
+    let mut import: Option<RuleImport> = ui.data_mut(|d| d.remove_temp(import_id));
+    let mut notice: Option<RuleSetNotice> = ui.data_mut(|d| d.remove_temp(notice_id));
+    let mut changed = false;
+
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                !rules.is_empty(),
+                egui::Button::new(
+                    RichText::new(format!("⬇ {}", t(lang, "rules_export"))).monospace(),
+                ),
+            )
+            .on_hover_text(t(lang, "rules_export_tip"))
+            .clicked()
+        {
+            if let Some(target) = rfd::FileDialog::new()
+                .set_title(t(lang, "rules_export"))
+                .set_file_name(format!("highlights{}", crate::config::RULE_SET_SUFFIX))
+                .add_filter("FastTail rules (*.ini)", &["ini"])
+                .save_file()
+            {
+                let file = target.display().to_string();
+                notice = Some(match crate::config::write_rule_set(&target, rules) {
+                    Ok(()) => (
+                        t(lang, "rules_exported")
+                            .replace("{n}", &rules.len().to_string())
+                            .replace("{file}", &file),
+                        false,
+                    ),
+                    Err(err) => (
+                        format!("{} ({file}): {err}", t(lang, "export_failed")),
+                        true,
+                    ),
+                });
+            }
+        }
+        if ui
+            .button(RichText::new(format!("⬆ {}", t(lang, "rules_import"))).monospace())
+            .on_hover_text(t(lang, "rules_import_tip"))
+            .clicked()
+        {
+            if let Some(source) = rfd::FileDialog::new()
+                .set_title(t(lang, "rules_import"))
+                .add_filter("FastTail rules (*.ini)", &["ini"])
+                .pick_file()
+            {
+                let file = source
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| source.display().to_string());
+                match crate::config::read_rule_set(&source) {
+                    Ok(incoming) => {
+                        import = Some(RuleImport {
+                            file,
+                            rules: incoming,
+                            confirm: false,
+                        });
+                        notice = None;
+                    }
+                    Err(err) => {
+                        import = None;
+                        notice = Some((rule_set_error_text(lang, &file, &err), true));
+                    }
+                }
+            }
+        }
+    });
+
+    if let Some(pending) = import.as_mut() {
+        let mut close = false;
+        ui.group(|ui| {
+            ui.label(
+                RichText::new(
+                    t(lang, "rules_import_preview")
+                        .replace("{file}", &pending.file)
+                        .replace("{n}", &pending.rules.len().to_string()),
+                )
+                .monospace()
+                .color(theme.accent_color()),
+            );
+            const PREVIEW: usize = 5;
+            for rule in pending.rules.iter().take(PREVIEW) {
+                let fg = Color32::from_rgb(rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]);
+                let bg = Color32::from_rgb(rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]);
+                ui.label(
+                    RichText::new(format!(" {} ", rule.pattern))
+                        .monospace()
+                        .size(11.0)
+                        .color(fg)
+                        .background_color(bg),
+                );
+            }
+            if pending.rules.len() > PREVIEW {
+                ui.label(RichText::new("…").monospace().color(theme.text_dim()));
+            }
+            let any = !pending.rules.is_empty();
+            ui.horizontal(|ui| {
+                if pending.confirm {
+                    ui.label(
+                        RichText::new(
+                            t(lang, "rules_replace_confirm")
+                                .replace("{n}", &rules.len().to_string()),
+                        )
+                        .monospace()
+                        .color(theme.warn_color()),
+                    );
+                    if ui
+                        .button(RichText::new(t(lang, "rules_import_replace")).monospace())
+                        .clicked()
+                    {
+                        *rules = std::mem::take(&mut pending.rules);
+                        notice = Some((
+                            t(lang, "rules_replaced").replace("{n}", &rules.len().to_string()),
+                            false,
+                        ));
+                        changed = true;
+                        close = true;
+                    }
+                } else {
+                    if ui
+                        .add_enabled(
+                            any,
+                            egui::Button::new(
+                                RichText::new(t(lang, "rules_import_append")).monospace(),
+                            ),
+                        )
+                        .on_hover_text(t(lang, "rules_import_append_tip"))
+                        .clicked()
+                    {
+                        let incoming = std::mem::take(&mut pending.rules);
+                        let total = incoming.len();
+                        let skipped = crate::config::append_rules(rules, incoming);
+                        notice = Some((
+                            t(lang, "rules_appended")
+                                .replace("{added}", &(total - skipped).to_string())
+                                .replace("{skipped}", &skipped.to_string()),
+                            false,
+                        ));
+                        changed = total > skipped;
+                        close = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            any,
+                            egui::Button::new(
+                                RichText::new(t(lang, "rules_import_replace")).monospace(),
+                            ),
+                        )
+                        .on_hover_text(t(lang, "rules_import_replace_tip"))
+                        .clicked()
+                    {
+                        pending.confirm = true;
+                    }
+                }
+                if ui
+                    .button(RichText::new(t(lang, "rules_import_cancel")).monospace())
+                    .clicked()
+                {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            import = None;
+        }
+    }
+
+    if let Some((text, error)) = &notice {
+        ui.label(RichText::new(text).monospace().size(11.0).color(if *error {
+            theme.warn_color()
+        } else {
+            theme.accent_color()
+        }));
+    }
+
+    ui.data_mut(|d| {
+        d.remove::<RuleImport>(import_id);
+        d.remove::<RuleSetNotice>(notice_id);
+        if let Some(pending) = import {
+            d.insert_temp(import_id, pending);
+        }
+        if let Some(n) = notice {
+            d.insert_temp(notice_id, n);
+        }
+    });
+    changed
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5488,6 +6256,8 @@ pub fn render_settings_content(
     show_line_numbers: &mut bool,
     font_size: &mut f32,
     level_colors: &mut bool,
+    auto_highlight: &mut bool,
+    auto_kinds: &mut TokenKinds,
     external_tools: &mut Vec<ExternalTool>,
     rules: &[HighlightRule],
     tool_runner: &mut ToolRunner,
@@ -5653,6 +6423,22 @@ pub fn render_settings_content(
         .on_hover_text(t(*lang, "default_columns_tip"));
     ui.checkbox(level_colors, t(*lang, "level_colors"))
         .on_hover_text(t(*lang, "level_colors_tip"));
+    ui.checkbox(auto_highlight, t(*lang, "auto_highlight"))
+        .on_hover_text(t(*lang, "auto_highlight_tip"));
+    if *auto_highlight {
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(18.0);
+            for kind in TokenKind::ALL {
+                let mut on = auto_kinds.contains(kind);
+                let label = RichText::new(t(*lang, kind.name_key()))
+                    .monospace()
+                    .color(theme.token_color(kind));
+                if ui.checkbox(&mut on, label).changed() {
+                    auto_kinds.set(kind, on);
+                }
+            }
+        });
+    }
     ui.checkbox(overview_strip, t(*lang, "overview_strip"))
         .on_hover_text(t(*lang, "overview_strip_tip"));
     ui.checkbox(&mut time_delta.show, t(*lang, "default_time_delta"))

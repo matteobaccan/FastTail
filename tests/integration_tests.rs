@@ -1031,6 +1031,55 @@ fn test_i18n_exhaustive_coverage() {
         "act_bookmark_next",
         "act_bookmark_prev",
         "act_size_unit",
+        "auto_highlight",
+        "auto_highlight_tip",
+        "auto_hl_ip",
+        "auto_hl_uuid",
+        "auto_hl_url",
+        "auto_hl_duration",
+        "auto_hl_path",
+        "rules_export",
+        "rules_export_tip",
+        "rules_import",
+        "rules_import_tip",
+        "rules_import_preview",
+        "rules_import_append",
+        "rules_import_append_tip",
+        "rules_import_replace",
+        "rules_import_replace_tip",
+        "rules_replace_confirm",
+        "rules_import_cancel",
+        "rules_exported",
+        "rules_appended",
+        "rules_replaced",
+        "rules_not_a_set",
+        "rules_newer_version",
+        "rules_read_failed",
+        "selection_hl_menu",
+        "selection_hl_clear",
+        "rule_next_menu",
+        "act_rule_next",
+        "act_rule_prev",
+        "rule_nav_no_rule",
+        "rule_nav_none",
+        "rule_nav_seeking",
+        "rule_nav_seeking_tip",
+        "help_desc_rule_nav",
+        "help_key_double_click",
+        "help_desc_token_hl",
+        "time_display_written",
+        "time_display_local",
+        "time_display_title",
+        "time_display_offset",
+        "time_display_offset_tip",
+        "time_source_title",
+        "time_source_tip",
+        "time_display_note",
+        "time_display_tip",
+        "time_range_zone",
+        "act_time_written",
+        "act_time_utc",
+        "act_time_local",
     ];
 
     for lang in Language::ALL {
@@ -2541,6 +2590,8 @@ fn test_ctrl_f_focus_and_search() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -2592,6 +2643,8 @@ fn test_ctrl_f_focus_and_search() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -2633,6 +2686,8 @@ fn test_ctrl_f_focus_and_search() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -2675,6 +2730,8 @@ fn test_ctrl_f_focus_and_search() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -2727,6 +2784,8 @@ fn test_ctrl_f_focus_and_search() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -2772,6 +2831,8 @@ fn test_ctrl_f_focus_and_search() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -2870,6 +2931,8 @@ fn test_search_query_is_per_tab() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -3356,6 +3419,8 @@ fn test_tab_lookup_tolerates_path_case_differences() {
             show_line_numbers: &mut show_line_numbers,
             font_size: &mut font_size,
             level_colors: &mut level_colors,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
             size_unit: &mut size_unit,
             search_history: &mut search_history,
             tab_closed: &mut tab_closed,
@@ -3468,6 +3533,8 @@ fn test_f3_only_advances_the_focused_tab() {
                 show_line_numbers: &mut show_line_numbers,
                 font_size: &mut font_size,
                 level_colors: &mut level_colors,
+                auto_highlight: &mut false,
+                auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
                 size_unit: &mut size_unit,
                 search_history: &mut search_history,
                 tab_closed: &mut tab_closed,
@@ -5572,6 +5639,8 @@ mod named_sessions {
             context_lines: 4,
             line_numbers: Some(false),
             time_delta: Some(true),
+            time_display: Some("+02:00".to_string()),
+            time_source_zone: Some("utc".to_string()),
             bookmarks: vec![3, 7, 42],
             bookmark_notes: [(7, "deploy start".to_string())].into_iter().collect(),
             archive_entry: None,
@@ -7116,6 +7185,7 @@ mod ansi_escape_codes {
                     SpanStyle::Rule(_) => "rule",
                     SpanStyle::Label(_) => "label",
                     SpanStyle::Ansi(_) => "ansi",
+                    SpanStyle::Token(_) => "token",
                 };
                 (&text[s.start..s.end], kind)
             })
@@ -7592,6 +7662,8 @@ mod search_results_pane {
                     show_line_numbers: &mut true,
                     font_size: &mut 13.0,
                     level_colors: &mut true,
+                    auto_highlight: &mut false,
+                    auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
                     size_unit: &mut fasttail::tail_engine::SizeUnit::Bytes,
                     search_history: &mut Vec::new(),
                     tab_closed: &mut false,
@@ -8429,6 +8501,8 @@ mod time_delta {
                 show_line_numbers: &mut true,
                 font_size: &mut 13.0,
                 level_colors: &mut true,
+                auto_highlight: &mut false,
+                auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
                 size_unit: &mut fasttail::tail_engine::SizeUnit::Bytes,
                 search_history: &mut Vec::new(),
                 tab_closed: &mut false,
@@ -8580,6 +8654,8 @@ mod search_all_streams {
             show_line_numbers: leak(true),
             font_size: leak(13.0),
             level_colors: leak(true),
+            auto_highlight: leak(false),
+            auto_highlight_kinds: leak(fasttail::auto_highlight::TokenKinds::NONE),
             size_unit: leak(fasttail::tail_engine::SizeUnit::Bytes),
             search_history: leak(Vec::new()),
             tab_closed: leak(false),
@@ -11536,6 +11612,8 @@ mod time_range_popup {
                     show_line_numbers: &mut true,
                     font_size: &mut 13.0,
                     level_colors: &mut true,
+                    auto_highlight: &mut false,
+                    auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
                     size_unit: &mut fasttail::tail_engine::SizeUnit::Bytes,
                     search_history: &mut Vec::new(),
                     tab_closed: &mut false,
@@ -11992,6 +12070,8 @@ mod per_stream_columns {
                     show_line_numbers: &mut true,
                     font_size: &mut 13.0,
                     level_colors: &mut true,
+                    auto_highlight: &mut false,
+                    auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
                     size_unit: &mut fasttail::tail_engine::SizeUnit::Bytes,
                     search_history: &mut Vec::new(),
                     tab_closed: &mut false,
@@ -12901,5 +12981,767 @@ mod context_lines_around_matches {
         assert_eq!(n_of(&other), Some(0));
         let engine = restored.engines.iter().find(|e| e.path == path).unwrap();
         assert_eq!(rows(engine), grep_c(4, &[10, 30], 40));
+    }
+}
+
+mod automatic_highlighting {
+    use fasttail::ansi::{AnsiStyle, StyleRun};
+    use fasttail::auto_highlight::{TokenKind, TokenKinds};
+    use fasttail::config::FastTailConfig;
+    use fasttail::tail_engine::{HighlightRule, QuickLabel, SpanStyle, TailEngine, MAX_ROW_SPANS};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn engine() -> (NamedTempFile, TailEngine) {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(
+            tmp,
+            "10.0.4.17 GET https://api.example.com/v1/orders 503 in 1.25s"
+        )
+        .unwrap();
+        tmp.flush().unwrap();
+        let e = TailEngine::open(tmp.path()).unwrap();
+        (tmp, e)
+    }
+
+    fn tokens(
+        spans: &[fasttail::tail_engine::HighlightSpan],
+        line: &str,
+    ) -> Vec<(String, TokenKind)> {
+        spans
+            .iter()
+            .filter_map(|s| match s.style {
+                SpanStyle::Token(k) => Some((line[s.start..s.end].to_string(), k)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn off_by_default_and_on_paints_the_access_log() {
+        let (_tmp, mut e) = engine();
+        let line = "10.0.4.17 GET https://api.example.com/v1/orders 503 in 1.25s";
+        assert!(!e.has_span_rules());
+        assert!(e.match_highlight_spans(line).spans.is_empty());
+        e.set_auto_tokens(TokenKinds::ALL);
+        assert!(e.has_span_rules());
+        let hl = e.match_highlight_spans(line);
+        assert_eq!(
+            tokens(&hl.spans, line),
+            vec![
+                ("10.0.4.17".to_string(), TokenKind::Ip),
+                (
+                    "https://api.example.com/v1/orders".to_string(),
+                    TokenKind::Url
+                ),
+                ("1.25s".to_string(), TokenKind::Duration),
+            ]
+        );
+    }
+
+    #[test]
+    fn rules_labels_and_ansi_win_over_tokens() {
+        let (_tmp, mut e) = engine();
+        e.set_auto_tokens(TokenKinds::ALL);
+        let uuid_line = "id 550e8400-e29b-41d4-a716-446655440000 failed";
+        // A whole-row rule keeps the UUID in its colour.
+        e.set_highlight_rules(vec![HighlightRule::new(
+            "failed",
+            [255, 0, 0],
+            [0, 0, 0],
+            false,
+        )]);
+        let hl = e.match_highlight_spans(uuid_line);
+        assert!(hl.rest.is_some());
+        assert!(tokens(&hl.spans, uuid_line).is_empty());
+        e.set_highlight_rules(Vec::new());
+        // A quick label over the address wins; the duration still gets its colour.
+        e.set_quick_labels(&[QuickLabel {
+            text: "10.0.0.1".into(),
+            color: 2,
+        }]);
+        let line = "from 10.0.0.1 in 5ms";
+        let hl = e.match_highlight_spans(line);
+        assert_eq!(
+            tokens(&hl.spans, line),
+            vec![("5ms".to_string(), TokenKind::Duration)]
+        );
+        e.set_quick_labels(&[]);
+        // ANSI colours of the log win over a token under them.
+        let run = StyleRun {
+            start: 5,
+            end: 13,
+            style: AnsiStyle::default(),
+        };
+        let hl = e.match_highlight_spans_with(line, &[run]);
+        assert!(matches!(hl.spans[0].style, SpanStyle::Ansi(_)));
+        assert_eq!(
+            tokens(&hl.spans, line),
+            vec![("5ms".to_string(), TokenKind::Duration)]
+        );
+    }
+
+    #[test]
+    fn tokens_share_the_span_budget() {
+        let (_tmp, mut e) = engine();
+        e.set_auto_tokens(TokenKinds::ALL);
+        let line = "1s ".repeat(200);
+        let hl = e.match_highlight_spans(&line);
+        assert_eq!(hl.spans.len(), MAX_ROW_SPANS);
+    }
+
+    #[test]
+    fn settings_round_trip_and_default() {
+        let cfg = FastTailConfig::default();
+        assert!(!cfg.auto_highlight);
+        assert_eq!(cfg.auto_tokens(), TokenKinds::NONE);
+        let ini = cfg.to_ini();
+        let back = FastTailConfig::from_ini(&ini);
+        assert!(!back.auto_highlight);
+        assert_eq!(back.auto_highlight_kinds, TokenKinds::ALL);
+
+        let mut cfg = FastTailConfig::default();
+        cfg.auto_highlight = true;
+        cfg.auto_highlight_kinds.set(TokenKind::Path, false);
+        let back = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(back.auto_highlight);
+        assert!(!back.auto_highlight_kinds.contains(TokenKind::Path));
+        assert!(back.auto_highlight_kinds.contains(TokenKind::Ip));
+        assert_eq!(back.auto_tokens(), back.auto_highlight_kinds);
+
+        // A file without the keys: off, every kind.
+        let mut ini = ini::Ini::new();
+        ini.with_section(Some("general")).set("theme", "Tron");
+        let old = FastTailConfig::from_ini(&ini);
+        assert!(!old.auto_highlight);
+        assert_eq!(old.auto_highlight_kinds, TokenKinds::ALL);
+    }
+}
+
+mod rule_set_files {
+    use fasttail::audio::SoundAlertPreset;
+    use fasttail::config::{
+        append_rules, parse_rule_set, read_rule_set, rule_set_to_ini, write_rule_set,
+        FastTailConfig, RuleSetError, RULE_SET_VERSION,
+    };
+    use fasttail::tail_engine::HighlightRule;
+
+    fn ini_text(ini: &ini::Ini) -> String {
+        let mut buf = Vec::new();
+        ini.write_to(&mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    fn full_rule() -> HighlightRule {
+        let mut rule = HighlightRule::captures(r"duration_ms=(\d{4,})", [250, 200, 10], [5, 6, 7]);
+        rule.bold = true;
+        rule.italic = true;
+        rule.case_sensitive = true;
+        rule.sound_alert = SoundAlertPreset::Critical;
+        rule.auto_bookmark = true;
+        rule.enabled = false;
+        rule
+    }
+
+    #[test]
+    fn round_trip_keeps_every_key() {
+        let rules = vec![
+            full_rule(),
+            HighlightRule::new("ERROR", [255, 0, 0], [0, 0, 0], false),
+            HighlightRule::new("a=b;c # not a comment", [1, 2, 3], [4, 5, 6], false),
+        ];
+        let text = ini_text(&rule_set_to_ini(&rules));
+        assert!(text.contains("[fasttail_rules]"));
+        assert!(text.contains(&format!("version={RULE_SET_VERSION}")));
+        assert_eq!(parse_rule_set(&text).unwrap(), rules);
+    }
+
+    #[test]
+    fn same_keys_as_fasttail_ini() {
+        let mut cfg = FastTailConfig::default();
+        cfg.highlight_rules = vec![full_rule()];
+        let config_ini = cfg.to_ini();
+        let set_ini = rule_set_to_ini(&cfg.highlight_rules);
+        let a = config_ini.section(Some("highlight_0")).unwrap();
+        let b = set_ini.section(Some("highlight_0")).unwrap();
+        let keys = |p: &ini::Properties| {
+            let mut v: Vec<(String, String)> = p
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(keys(a), keys(b));
+        // Tool bindings are not part of a rule set.
+        assert!(set_ini
+            .sections()
+            .all(|s| !s.unwrap_or("").starts_with("tool.")));
+    }
+
+    #[test]
+    fn append_skips_duplicates_and_reports_them() {
+        let exported: Vec<HighlightRule> = (0..20)
+            .map(|i| HighlightRule::new(&format!("rule{i}"), [1, 1, 1], [0, 0, 0], false))
+            .collect();
+        let mut mine = vec![
+            HighlightRule::new("mine1", [9, 9, 9], [0, 0, 0], false),
+            // Same pattern and flags, other colours: a duplicate.
+            HighlightRule::new("rule7", [200, 0, 0], [0, 0, 0], false),
+            // Same pattern, regex: not a duplicate of the plain-text rule.
+            HighlightRule::new("rule8", [9, 9, 9], [0, 0, 0], true),
+        ];
+        let skipped = append_rules(&mut mine, exported);
+        assert_eq!(skipped, 1);
+        assert_eq!(mine.len(), 22);
+        assert_eq!(mine[1].fg_color, [200, 0, 0], "the existing rule is kept");
+        // A case-sensitive twin is a different rule too.
+        let mut twin = HighlightRule::new("mine1", [9, 9, 9], [0, 0, 0], false);
+        twin.case_sensitive = true;
+        assert_eq!(append_rules(&mut mine, vec![twin]), 0);
+        assert_eq!(mine.len(), 23);
+    }
+
+    #[test]
+    fn replace_through_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("team.fasttail-rules.ini");
+        let rules = vec![full_rule()];
+        write_rule_set(&path, &rules).unwrap();
+        assert_eq!(read_rule_set(&path).unwrap(), rules);
+        // Written again over the same file: truncated, not appended.
+        write_rule_set(&path, &[]).unwrap();
+        assert!(read_rule_set(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn refusals() {
+        // fasttail.ini itself has rules but no [fasttail_rules] section.
+        let mut cfg = FastTailConfig::default();
+        cfg.highlight_rules = vec![full_rule()];
+        let config_text = ini_text(&cfg.to_ini());
+        assert_eq!(parse_rule_set(&config_text), Err(RuleSetError::NotARuleSet));
+        assert_eq!(
+            parse_rule_set("just some text"),
+            Err(RuleSetError::NotARuleSet)
+        );
+        assert_eq!(
+            parse_rule_set("[fasttail_rules]\nversion=2\n[highlight_0]\npattern=x\n"),
+            Err(RuleSetError::NewerVersion(2))
+        );
+        assert_eq!(
+            parse_rule_set("[fasttail_rules]\nversion=abc\n"),
+            Err(RuleSetError::NotARuleSet)
+        );
+        assert_eq!(
+            parse_rule_set("[fasttail_rules]\nversion=1\n").unwrap(),
+            Vec::<HighlightRule>::new()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            read_rule_set(&dir.path().join("missing.ini")),
+            Err(RuleSetError::Io(_))
+        ));
+        assert!(matches!(
+            read_rule_set(dir.path()),
+            Err(RuleSetError::Io(_))
+        ));
+        // A huge file is refused without being parsed.
+        let big = dir.path().join("big.fasttail-rules.ini");
+        let mut text = String::from(
+            "[fasttail_rules]
+version=1
+",
+        );
+        while text.len() as u64 <= fasttail::config::MAX_RULE_SET_BYTES {
+            text.push_str(
+                "; padding padding padding padding padding padding padding
+",
+            );
+        }
+        std::fs::write(&big, text).unwrap();
+        assert_eq!(read_rule_set(&big), Err(RuleSetError::NotARuleSet));
+    }
+}
+
+mod selection_highlight {
+    use fasttail::tail_engine::{token_at, token_occurrences, TailEngine, MAX_TOKEN_OUTLINES};
+    use std::io::Write;
+
+    fn pick(text: &str, at: &str) -> Option<String> {
+        let byte = text.find(at).unwrap();
+        token_at(text, byte).map(|(s, e)| text[s..e].to_string())
+    }
+
+    #[test]
+    fn token_around_the_pointer() {
+        let uuid_line = "id=550e8400-e29b-41d4-a716-446655440000 done";
+        // `=` is not a token character: the UUID stands alone.
+        assert_eq!(
+            pick(uuid_line, "a716").as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert_eq!(
+            pick("connecting to 10.0.4.17:8443.", "4.17").as_deref(),
+            Some("10.0.4.17:8443")
+        );
+        assert_eq!(
+            pick("open /var/log/app.log: denied", "log/app").as_deref(),
+            Some("/var/log/app.log")
+        );
+        assert_eq!(
+            pick("user bob@example.com ok", "example").as_deref(),
+            Some("bob@example.com")
+        );
+        assert_eq!(pick("req-7f3a failed", "7f3a").as_deref(), Some("req-7f3a"));
+        assert_eq!(pick("città: Udine", "tà").as_deref(), Some("città"));
+    }
+
+    #[test]
+    fn pointer_just_past_a_word_and_on_blanks() {
+        let text = "alpha  beta";
+        // On the space right after `alpha`: the word before the pointer.
+        assert_eq!(token_at(text, 5), Some((0, 5)));
+        // Between two spaces: nothing.
+        assert_eq!(token_at(text, 6), None);
+        // A single character, a run of punctuation that trims to nothing, too long.
+        assert_eq!(token_at("a b", 0), None);
+        assert_eq!(token_at("x ..:: y", 3), None);
+        let long = "a".repeat(300);
+        assert_eq!(token_at(&long, 10), None);
+        let edge = "b".repeat(256);
+        assert_eq!(token_at(&edge, 0), Some((0, 256)));
+        assert_eq!(token_at("", 0), None);
+        assert_eq!(token_at("abc", 99), Some((0, 3)));
+    }
+
+    #[test]
+    fn occurrences_are_exact_and_case_sensitive() {
+        let row = "req-7f3a start; REQ-7F3A other; req-7f3a end; xreq-7f3ay";
+        let hits = token_occurrences(row, "req-7f3a");
+        assert_eq!(hits.len(), 3);
+        for (s, e) in &hits {
+            assert_eq!(&row[*s..*e], "req-7f3a");
+        }
+        assert!(token_occurrences(row, "").is_empty());
+        let many = "ab ".repeat(500);
+        assert_eq!(token_occurrences(&many, "ab").len(), MAX_TOKEN_OUTLINES);
+    }
+
+    #[test]
+    fn toggling_and_clearing() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "req-7f3a one").unwrap();
+        tmp.flush().unwrap();
+        let mut e = TailEngine::open(tmp.path()).unwrap();
+        assert_eq!(e.selection_token(), None);
+        e.toggle_selection_token(Some("req-7f3a"));
+        assert_eq!(e.selection_token(), Some("req-7f3a"));
+        // Another token replaces it; the same one again clears it.
+        e.toggle_selection_token(Some("one"));
+        assert_eq!(e.selection_token(), Some("one"));
+        e.toggle_selection_token(Some("one"));
+        assert_eq!(e.selection_token(), None);
+        // Empty space clears it.
+        e.toggle_selection_token(Some("one"));
+        e.toggle_selection_token(None);
+        assert_eq!(e.selection_token(), None);
+        // Esc clears it.
+        e.toggle_selection_token(Some("one"));
+        assert!(e.clear_selection_token());
+        assert!(!e.clear_selection_token());
+        // A reload (the file rewritten shorter) clears it.
+        e.toggle_selection_token(Some("one"));
+        std::fs::write(tmp.path(), "x\n").unwrap();
+        e.poll_updates();
+        assert_eq!(e.selection_token(), None);
+    }
+}
+
+mod rule_navigation {
+    use fasttail::i18n::Language;
+    use fasttail::tail_engine::{HighlightRule, RuleNavError, RuleSeekStep, TailEngine};
+    use std::io::Write;
+    use std::time::Duration;
+
+    const LONG: Duration = Duration::from_secs(10);
+
+    fn engine(lines: &[&str]) -> (tempfile::NamedTempFile, TailEngine) {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        for l in lines {
+            writeln!(tmp, "{l}").unwrap();
+        }
+        tmp.flush().unwrap();
+        let mut e = TailEngine::open(tmp.path()).unwrap();
+        e.set_highlight_rules(vec![
+            HighlightRule::new("ERROR", [255, 0, 0], [0, 0, 0], false),
+            HighlightRule::new(r"duration_ms=\d{4,}", [255, 255, 0], [0, 0, 0], true),
+        ]);
+        (tmp, e)
+    }
+
+    fn walk(e: &mut TailEngine) -> RuleSeekStep {
+        e.step_rule_seek(LONG, Language::En).unwrap()
+    }
+
+    const LOG: &[&str] = &[
+        "0 INFO start",
+        "1 query duration_ms=12",
+        "2 query duration_ms=4500",
+        "3 ERROR boom",
+        "4 query duration_ms=9000",
+        "5 INFO idle",
+        "6 query duration_ms=7000",
+    ];
+
+    #[test]
+    fn next_and_previous_line_of_the_picked_rule() {
+        let (_tmp, mut e) = engine(LOG);
+        assert_eq!(
+            e.rules_matching("2 query duration_ms=4500"),
+            vec![(1, r"duration_ms=\d{4,}".to_string())]
+        );
+        // Picked in the row menu on line 2.
+        e.start_rule_seek(Some(1), true, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 4,
+                wrapped: false
+            }
+        );
+        assert_eq!(e.selection_anchor, Some(4));
+        assert!(!e.follow_tail);
+        e.start_rule_seek(None, true, 4).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: false
+            }
+        );
+        // Past the end: wraps once.
+        e.start_rule_seek(None, true, 6).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 2,
+                wrapped: true
+            }
+        );
+        // Backwards.
+        e.start_rule_seek(None, false, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: true
+            }
+        );
+        e.start_rule_seek(None, false, 6).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 4,
+                wrapped: false
+            }
+        );
+    }
+
+    #[test]
+    fn without_a_picked_rule_the_first_matching_rule_is_used() {
+        let (_tmp, mut e) = engine(LOG);
+        assert_eq!(e.rule_cursor(), None);
+        e.start_rule_seek(None, true, 3).unwrap();
+        assert_eq!(e.rule_cursor(), Some(0));
+        // ERROR only on line 3: after a whole walk it is found again, wrapped.
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 3,
+                wrapped: true
+            }
+        );
+        // A row no rule matches, without a navigation rule.
+        let (_tmp2, mut f) = engine(LOG);
+        assert_eq!(
+            f.start_rule_seek(None, true, 0),
+            Err(RuleNavError::NoRuleOnRow)
+        );
+        assert_eq!(f.step_rule_seek(LONG, Language::En), None);
+    }
+
+    #[test]
+    fn filtered_and_collapsed_rows() {
+        let (_tmp, mut e) = engine(LOG);
+        // The filter hides line 4: the walk goes from 2 to 6.
+        e.set_exclude_filter("9000");
+        e.start_rule_seek(Some(1), true, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: false
+            }
+        );
+        // A start the filters hide: the next visible line after it.
+        e.start_rule_seek(None, true, 4).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: false
+            }
+        );
+        e.start_rule_seek(None, false, 4).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 2,
+                wrapped: false
+            }
+        );
+    }
+
+    #[test]
+    fn hidden_in_a_collapsed_group_is_revealed() {
+        let lines = [
+            "a INFO x",
+            "b ERROR same",
+            "b ERROR same",
+            "b ERROR same",
+            "c INFO y",
+        ];
+        let (_tmp, mut e) = engine(&lines);
+        e.set_collapse_mode(fasttail::collapse::CollapseMode::Exact);
+        e.start_rule_seek(Some(0), true, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 3,
+                wrapped: false
+            }
+        );
+        assert_eq!(e.pending_jump, Some(3));
+    }
+
+    #[test]
+    fn walk_resumes_after_the_budget_and_can_be_cancelled() {
+        let mut lines: Vec<String> = (0..50_000).map(|i| format!("{i} INFO filler")).collect();
+        lines.push("50000 ERROR at last".into());
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let (_tmp, mut e) = engine(&refs);
+        e.start_rule_seek(Some(0), true, 0).unwrap();
+        let mut frames = 0;
+        let found = loop {
+            frames += 1;
+            match e.step_rule_seek(Duration::ZERO, Language::En).unwrap() {
+                RuleSeekStep::Pending => {
+                    assert!(e.rule_seek_pattern().is_some());
+                    continue;
+                }
+                other => break other,
+            }
+        };
+        assert!(frames > 1, "a zero budget must take several frames");
+        assert_eq!(
+            found,
+            RuleSeekStep::Found {
+                line: 50_000,
+                wrapped: false
+            }
+        );
+        assert_eq!(e.rule_seek_pattern(), None);
+
+        e.start_rule_seek(None, true, 0).unwrap();
+        assert_eq!(
+            e.step_rule_seek(Duration::ZERO, Language::En),
+            Some(RuleSeekStep::Pending)
+        );
+        assert!(e.cancel_rule_seek());
+        assert_eq!(e.step_rule_seek(LONG, Language::En), None);
+    }
+
+    #[test]
+    fn no_line_matches_and_rules_change() {
+        let (_tmp, mut e) = engine(LOG);
+        e.set_exclude_filter("ERROR");
+        // The rule picked on a row the filter now hides: nothing shown matches it.
+        e.start_rule_seek(Some(0), true, 0).unwrap();
+        assert_eq!(walk(&mut e), RuleSeekStep::NotFound);
+        assert_eq!(e.rule_cursor(), Some(0));
+        // A change of the rules forgets the navigation rule.
+        e.set_highlight_rules(vec![HighlightRule::new(
+            "INFO",
+            [1, 1, 1],
+            [0, 0, 0],
+            false,
+        )]);
+        assert_eq!(e.rule_cursor(), None);
+    }
+}
+
+mod time_display {
+    use fasttail::tail_engine::TailEngine;
+    use fasttail::timestamp::{SourceZone, TimeDisplay};
+    use std::io::Write;
+
+    fn engine(lines: &[&str]) -> (tempfile::NamedTempFile, TailEngine) {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        for l in lines {
+            writeln!(tmp, "{l}").unwrap();
+        }
+        tmp.flush().unwrap();
+        let e = TailEngine::open(tmp.path()).unwrap();
+        (tmp, e)
+    }
+
+    fn visible(e: &TailEngine) -> Vec<usize> {
+        (0..e.visible_line_count())
+            .filter_map(|r| e.get_actual_line_idx(r))
+            .collect()
+    }
+
+    const LOG: &[&str] = &[
+        "2026-09-28T14:01:00.000Z INFO a",
+        "2026-09-28T14:02:05.123Z ERROR b",
+        "2026-09-28T14:03:30.000Z INFO c",
+        "2026-09-28T14:05:00.000Z INFO d",
+    ];
+
+    #[test]
+    fn as_written_by_default() {
+        let (_tmp, e) = engine(LOG);
+        assert_eq!(e.time_display(), TimeDisplay::Written);
+        assert_eq!(e.time_source_zone(), SourceZone::Local);
+        assert_eq!(e.display_time(LOG[1]), None);
+    }
+
+    #[test]
+    fn rows_show_the_display_zone_and_the_text_stays_as_written() {
+        let (_tmp, mut e) = engine(LOG);
+        e.set_time_display(TimeDisplay::Offset(120));
+        assert!(e.view_columns_dirty);
+        let (start, end, text) = e.display_time(LOG[1]).unwrap();
+        assert_eq!(&LOG[1][start..end], "2026-09-28T14:02:05.123Z");
+        assert_eq!(text, "2026-09-28 16:02:05.123+02:00");
+        // Search, copy and export see the text as written.
+        e.update_search("14:02:05");
+        assert_eq!(e.search_matches, vec![1]);
+        assert_eq!(e.get_line(1).as_deref(), Some(LOG[1]));
+        e.select_row(1);
+        assert_eq!(e.copy_selection_text().as_deref(), Some(LOG[1]));
+    }
+
+    #[test]
+    fn time_range_and_go_to_time_in_the_display_zone() {
+        let (_tmp, mut e) = engine(LOG);
+        e.set_time_display(TimeDisplay::Offset(120));
+        e.ensure_timestamps();
+        let (from_ok, to_ok) = e.apply_time_range_text("16:02", "16:03");
+        assert!(from_ok && to_ok);
+        // Through 16:03:59.999 on the display clock: 14:02:05Z and 14:03:30Z.
+        assert_eq!(visible(&e), vec![1, 2]);
+        e.apply_time_range_text("16:02", "16:02");
+        assert_eq!(visible(&e), vec![1]);
+        // The span of what is shown, on the display clock.
+        let (a, b) = e.visible_time_span().unwrap();
+        assert_eq!(
+            fasttail::timestamp::format_millis(e.to_display_clock(a)),
+            "2026-09-28 16:02:05"
+        );
+        assert_eq!(e.from_display_clock(e.to_display_clock(b)), b);
+        e.clear_time_range();
+        let target = e.resolve_goto("16:03", 0).unwrap();
+        assert_eq!(target.line, 2);
+        // A window set from typed text is read again on a new clock: 16:02 in UTC is
+        // not in this log.
+        e.apply_time_range_text("16:02", "16:02");
+        assert_eq!(visible(&e), vec![1]);
+        e.set_time_display(TimeDisplay::Utc);
+        assert!(visible(&e).is_empty());
+        e.set_time_display(TimeDisplay::Offset(120));
+        assert_eq!(visible(&e), vec![1]);
+        e.set_time_source_zone(SourceZone::Offset(60));
+        assert_eq!(visible(&e), vec![1], "the log states its zone: Z wins");
+        e.clear_time_range();
+        // Changing the display does not re-time the stream: the cache keeps the clock
+        // the log printed.
+        let before = e.line_timestamp(2);
+        e.set_time_display(TimeDisplay::Utc);
+        assert_eq!(e.line_timestamp(2), before);
+        assert_eq!(e.resolve_goto("14:03", 0).unwrap().line, 2);
+    }
+
+    #[test]
+    fn source_zone_for_lines_without_one() {
+        let (_tmp, mut e) = engine(&[
+            "2026-09-28 14:02:05 INFO plain",
+            "2026-09-28 14:04:00 INFO x",
+        ]);
+        e.set_time_source_zone(SourceZone::Offset(-300));
+        e.set_time_display(TimeDisplay::Utc);
+        let (_, _, text) = e.display_time("2026-09-28 14:02:05 INFO plain").unwrap();
+        assert_eq!(text, "2026-09-28 19:02:05Z");
+        e.ensure_timestamps();
+        e.apply_time_range_text("19:02", "19:02");
+        assert_eq!(visible(&e), vec![0]);
+    }
+
+    #[test]
+    fn a_leading_count_in_an_iso_log_is_not_a_date() {
+        let (_tmp, mut e) = engine(&[LOG[0], LOG[1], "1234567890 rows copied"]);
+        e.set_time_display(TimeDisplay::Utc);
+        assert_eq!(e.display_time("1234567890 rows copied"), None);
+        assert!(e.display_time(LOG[1]).is_some());
+    }
+
+    #[test]
+    fn epoch_milliseconds_as_a_date() {
+        let (_tmp, mut e) = engine(&["1790604125123 GET /x"]);
+        e.set_time_display(TimeDisplay::Utc);
+        let (start, end, text) = e.display_time("1790604125123 GET /x").unwrap();
+        assert_eq!((start, end), (0, 13));
+        assert_eq!(text, "2026-09-28 14:02:05.123Z");
+    }
+
+    #[test]
+    fn spans_follow_the_substitution() {
+        use fasttail::tail_engine::{replace_with_spans, HighlightSpan, SpanHighlight, SpanStyle};
+        let text = "2026-09-28T14:02:05Z ERROR payment";
+        let style = SpanStyle::Label(1);
+        let spans = SpanHighlight {
+            spans: vec![
+                HighlightSpan {
+                    start: 0,
+                    end: 4,
+                    style,
+                },
+                HighlightSpan {
+                    start: 15,
+                    end: 27,
+                    style,
+                },
+                HighlightSpan {
+                    start: 27,
+                    end: 34,
+                    style,
+                },
+            ],
+            rest: None,
+        };
+        let with = "2026-09-28 16:02:05";
+        let (out, moved) = replace_with_spans(text, Some(spans), 0, 20, with);
+        assert_eq!(out, "2026-09-28 16:02:05 ERROR payment");
+        let moved: Vec<(usize, usize)> = moved
+            .unwrap()
+            .spans
+            .iter()
+            .map(|s| (s.start, s.end))
+            .collect();
+        // Inside the timestamp: dropped; across its end: the part after it; after it:
+        // shifted by the change of length (-1).
+        assert_eq!(moved, vec![(19, 26), (26, 33)]);
+        assert_eq!(&out[19..26], " ERROR ");
     }
 }

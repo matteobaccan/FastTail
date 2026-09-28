@@ -254,6 +254,36 @@ impl CyberTheme {
         }
     }
 
+    /// Foreground of an automatically highlighted token of `kind` (see `auto_highlight`):
+    /// cyans and violet on Tron, greens and amber on Matrix, amber and magenta on Blade,
+    /// dark blues and teal on Light, each at least 4.5:1 against the theme background.
+    pub fn token_color(&self, kind: crate::auto_highlight::TokenKind) -> Color32 {
+        use crate::auto_highlight::TokenKind as K;
+        let [r, g, b] = match (self, kind) {
+            (CyberTheme::Tron, K::Ip) => [0, 210, 255],
+            (CyberTheme::Tron, K::Uuid) => [190, 140, 255],
+            (CyberTheme::Tron, K::Url) => [110, 170, 255],
+            (CyberTheme::Tron, K::Duration) => [120, 255, 220],
+            (CyberTheme::Tron, K::Path) => [170, 205, 235],
+            (CyberTheme::Matrix, K::Ip) => [120, 255, 120],
+            (CyberTheme::Matrix, K::Uuid) => [0, 200, 140],
+            (CyberTheme::Matrix, K::Url) => [190, 255, 90],
+            (CyberTheme::Matrix, K::Duration) => [255, 191, 0],
+            (CyberTheme::Matrix, K::Path) => [160, 225, 175],
+            (CyberTheme::Blade, K::Ip) => [255, 176, 0],
+            (CyberTheme::Blade, K::Uuid) => [255, 95, 200],
+            (CyberTheme::Blade, K::Url) => [255, 130, 170],
+            (CyberTheme::Blade, K::Duration) => [255, 215, 120],
+            (CyberTheme::Blade, K::Path) => [215, 165, 255],
+            (CyberTheme::Light, K::Ip) => [0, 70, 160],
+            (CyberTheme::Light, K::Uuid) => [95, 40, 160],
+            (CyberTheme::Light, K::Url) => [0, 90, 200],
+            (CyberTheme::Light, K::Duration) => [0, 110, 100],
+            (CyberTheme::Light, K::Path) => [60, 70, 110],
+        };
+        Color32::from_rgb(r, g, b)
+    }
+
     /// The 16 base ANSI colours (SGR 30-37 and 90-97, and the first 16 entries of the
     /// 256-colour table) for this theme. The dark themes lift black so it stays visible
     /// on their near-black backgrounds; Light darkens white, yellow and the bright colours
@@ -488,6 +518,38 @@ mod tests {
                 assert!(ratio >= min, "{theme:?} colour {i}: contrast {ratio:.2}");
             }
         }
+    }
+
+    #[test]
+    fn token_colours_read_on_every_theme_and_differ() {
+        use crate::auto_highlight::TokenKind;
+        for theme in [
+            CyberTheme::Tron,
+            CyberTheme::Matrix,
+            CyberTheme::Blade,
+            CyberTheme::Light,
+        ] {
+            let colours: Vec<Color32> = TokenKind::ALL
+                .iter()
+                .map(|k| theme.token_color(*k))
+                .collect();
+            for (kind, c) in TokenKind::ALL.iter().zip(&colours) {
+                for bg in [theme.bg_color(), theme.panel_bg()] {
+                    let ratio = contrast(*c, bg);
+                    assert!(ratio >= 4.5, "{theme:?} {kind:?}: contrast {ratio:.2}");
+                }
+            }
+            for (i, a) in colours.iter().enumerate() {
+                assert!(
+                    !colours[i + 1..].contains(a),
+                    "{theme:?}: two kinds share a colour"
+                );
+            }
+        }
+        assert_ne!(
+            CyberTheme::Tron.token_color(TokenKind::Ip),
+            CyberTheme::Light.token_color(TokenKind::Ip)
+        );
     }
 
     #[test]

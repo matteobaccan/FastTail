@@ -10,6 +10,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Selection highlight.** Double-clicking a word of a row (letters, digits and
+  `_ . : / @ - %`, trailing `.` / `:` dropped, 2 to 256 bytes: an id, an IP with its port,
+  a UUID, a path) outlines every exact, case-sensitive occurrence of it in the rows of that
+  stream, in the normal and wrap layouts, with a 1 px box that leaves rule colours, the
+  search and the filters alone and does not use the 64-span budget. The row menu offers
+  "Highlight "…"" on the word under the pointer; `Esc` on the rows, a double-click on
+  empty space or on the same word, or a reload clears it. Not saved.
+
+- **Next line of a rule (`F4` / `SHIFT + F4`).** The row menu's "Next line of rule" lists
+  the enabled highlight rules matching the row (whatever their priority); picking one goes
+  to its next shown line, and `F4` / `SHIFT + F4` then walk to the next / previous shown
+  line that rule matches, from the selected row (or the top row), wrapping once with the
+  search beep. Without a picked rule `F4` uses the first rule matching the selected row, or
+  says that none does. The walk runs on the UI thread at most 4 ms per frame, showing
+  `⏳ seeking rule "…"` while it takes longer, `Esc` stops it, and a whole walk without a
+  match says so. The jump selects and centres the line, pauses follow and expands a
+  collapsed group hiding it. The rule is forgotten when the rules change. In the command
+  palette too.
+
+- **Highlight rule sets.** "Export rules…" / "Import rules…" in the Highlights dialog write
+  and read a `*.fasttail-rules.ini` file: `[fasttail_rules] version=1`, then
+  `[highlight_N]` sections with the keys of `fasttail.ini` (the two share one reader and
+  writer). External tool bindings are not exported. Import previews the rules, then
+  **Append** (rules with the same pattern, regex and case options as an existing one are
+  skipped and counted) or **Replace** (after a confirmation); a file without the header or
+  with a newer version is refused and nothing changes.
+
+- **Time display.** A `🌐` menu per text stream shows the leading timestamp of each row as
+  written (default), in UTC, in local time (the offset in force at each instant, daylight
+  saving included) or at a fixed offset from `-14:00` to `+14:00`, with a source zone
+  (local, UTC or an offset) for timestamps that carry none; epoch seconds and milliseconds
+  become dates (`1790604125123` → `2026-09-28 14:02:05.123Z`). The fraction keeps the
+  digits printed (at most 3), `Z` or the offset is appended for UTC and fixed offsets, and
+  the tooltip shows the original. Only the display changes: filters, search, rules, copy,
+  export and external tools see the line as written, and the timestamp cache is not
+  recomputed. The time span, the time range popup (shown and typed times), the timeline
+  histogram, go to time and the collapse tooltip use the display zone. Saved per stream in
+  the workspace and sessions as `time_display` / `time_source_zone` when not the default.
+  In the command palette: show timestamps as written, in UTC or in local time. On Windows
+  the local offset of an instant now follows that date's daylight saving rules.
+
+- **Automatic token highlighting.** Settings → "Automatic token highlighting" (off by
+  default, `[general] auto_highlight`) paints IPv4 / IPv6 addresses (with ports), UUIDs,
+  URLs (`http`, `https`, `ftp`, `ws`, `wss`, `file`), durations (`250ms`, `1.5s`, `2m30s`)
+  and file paths with a colour per kind from each theme (4.5:1 contrast or better, checked
+  by a test), each kind switchable (`auto_highlight_kinds`). A hand-written single-pass
+  scanner (no regex, under 2 µs for a 200-byte row in release); the tokens rank after
+  rules, quick labels and ANSI colours, above the level colouring, within the 64-span
+  budget. `--print --color` applies them too. Also a palette toggle. Four-part versions
+  ending in `.0.0` (`Chrome 118.0.0.0`) and hex words around `::` (`dead::beef`) are left
+  as text; long runs of hex digits and colons are skipped in linear time.
+
 - **7z archives.** A `.7z` (recognised by its signature, whatever its name) opens like a
   zip: one file opens directly, several show the entry picker, and each chosen entry opens
   as its own stream titled `logs.7z › server.log`. Copy, LZMA, LZMA2, BZip2, Deflate and

@@ -799,6 +799,8 @@ mod tests {
             (ActionId::BookmarkToggle, M::COMMAND, Key::F2),
             (ActionId::BookmarkNext, M::NONE, Key::F2),
             (ActionId::BookmarkPrev, M::SHIFT, Key::F2),
+            (ActionId::RuleNext, M::NONE, Key::F4),
+            (ActionId::RulePrev, M::SHIFT, Key::F4),
             (ActionId::Help, M::NONE, Key::F1),
             (ActionId::AlwaysOnTop, M::COMMAND.plus(M::SHIFT), Key::T),
             (ActionId::LockNow, M::CTRL, Key::L),

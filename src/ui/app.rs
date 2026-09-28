@@ -2585,6 +2585,11 @@ impl FastTailApp {
         }
 
         // 7. Render Central Modular Docking Area
+        // Automatic highlighting follows the settings (Settings page or palette toggle).
+        let auto_tokens = self.config.auto_tokens();
+        for eng in &mut self.engines {
+            eng.set_auto_tokens(auto_tokens);
+        }
         let prev_borderless = self.config.borderless;
         let prev_theme = self.config.theme;
         let prev_lang = self.config.language;
@@ -2931,6 +2936,8 @@ impl FastTailApp {
             show_line_numbers: &mut self.config.show_line_numbers,
             font_size: &mut self.config.font_size,
             level_colors: &mut self.config.level_colors,
+            auto_highlight: &mut self.config.auto_highlight,
+            auto_highlight_kinds: &mut self.config.auto_highlight_kinds,
             size_unit: &mut self.config.size_unit,
             search_history: &mut self.config.search_history,
             tab_closed: &mut tab_closed,
@@ -3361,6 +3368,8 @@ impl FastTailApp {
                             &mut self.config.show_line_numbers,
                             &mut self.config.font_size,
                             &mut self.config.level_colors,
+                            &mut self.config.auto_highlight,
+                            &mut self.config.auto_highlight_kinds,
                             &mut self.config.external_tools,
                             &self.config.highlight_rules,
                             &mut self.tool_runner,
@@ -4217,6 +4226,24 @@ impl FastTailApp {
                                     );
                                     ui.end_row();
 
+                                    ui.label(
+                                        RichText::new("F4  /  SHIFT + F4").monospace().strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_rule_nav")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new(t(lang, "help_key_double_click"))
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_token_hl")).monospace(),
+                                    );
+                                    ui.end_row();
+
                                     ui.label(RichText::new("F1").monospace().strong());
                                     ui.label(RichText::new(t(lang, "help_desc_f1")).monospace());
                                     ui.end_row();
@@ -5029,7 +5056,9 @@ fn apply_cli_time_window(engine: &mut TailEngine, since: Option<&str>, until: Op
     if since.is_none() && until.is_none() {
         return;
     }
-    let now = crate::timestamp::local_now_millis();
+    // The texts are read on the stream's display clock (a saved time display included),
+    // so "now" is taken on that clock too.
+    let now = engine.now_on_display_clock();
     let text = |value: Option<&str>| value.map(|v| cli_time_text(v, now)).unwrap_or_default();
     let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
     engine.time_range_error = !from_ok || !to_ok;
@@ -5078,6 +5107,10 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         context_lines: engine.context_lines(),
         line_numbers: Some(engine.show_line_numbers),
         time_delta: Some(engine.show_time_delta),
+        time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
+            .then(|| engine.time_display().to_config()),
+        time_source_zone: (engine.time_source_zone() != crate::timestamp::SourceZone::Local)
+            .then(|| engine.time_source_zone().to_config()),
         bookmarks,
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
@@ -5113,6 +5146,21 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     engine.timeline_open = entry.timeline;
     engine.show_line_numbers = entry.line_numbers.unwrap_or(cfg.show_line_numbers);
     engine.show_time_delta = entry.time_delta.unwrap_or(cfg.show_time_delta);
+    if let Some(zone) = entry
+        .time_source_zone
+        .as_deref()
+        .and_then(crate::timestamp::SourceZone::from_config)
+    {
+        engine.set_time_source_zone(zone);
+    }
+    if let Some(display) = entry
+        .time_display
+        .as_deref()
+        .and_then(crate::timestamp::TimeDisplay::from_config)
+    {
+        engine.set_time_display(display);
+    }
+    engine.view_columns_dirty = false;
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);
@@ -5163,6 +5211,39 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
 mod tests {
     use super::allowed_while_locked;
     use egui::{Event, Key, Modifiers};
+
+    /// A relative `--since` is fixed on the clock the stream's time display reads the
+    /// window on: with the display in UTC, `-1h` keeps the lines of the last UTC hour
+    /// whatever the local zone.
+    #[test]
+    fn cli_relative_time_follows_the_time_display() {
+        use crate::timestamp::{format_millis, TimeDisplay};
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let stamp = |ms: i64| format_millis(ms).replace(' ', "T") + "Z";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("utc.log");
+        std::fs::write(
+            &path,
+            format!(
+                "{} old\n{} recent\n",
+                stamp(now - 3 * 3_600_000),
+                stamp(now - 30 * 60_000)
+            ),
+        )
+        .unwrap();
+        let mut engine = crate::tail_engine::TailEngine::open(&path).unwrap();
+        engine.set_time_display(TimeDisplay::Utc);
+        engine.ensure_timestamps();
+        super::apply_cli_time_window(&mut engine, Some("-1h"), None);
+        assert!(!engine.time_range_error);
+        let visible: Vec<usize> = (0..engine.visible_line_count())
+            .filter_map(|r| engine.get_actual_line_idx(r))
+            .collect();
+        assert_eq!(visible, vec![1]);
+    }
 
     #[test]
     fn a_relative_cli_time_keeps_its_milliseconds_and_is_exact_on_the_to_side() {
