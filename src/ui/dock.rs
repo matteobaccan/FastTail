@@ -845,8 +845,13 @@ fn render_collapse_selector(ui: &mut Ui, engine: &mut TailEngine, lang: Language
 /// Stream bar `±N` drag value: lines of context shown around each filter match (0 to
 /// `MAX_CONTEXT_LINES`, per stream). Drawn dimmed while the stream has no active filter,
 /// when it has no effect.
+/// A drag applies once, when it ends: each step would otherwise rebuild the ranges (a
+/// worker per step on a huge filter), so the value being dragged is kept in egui memory.
 fn render_context_lines_control(ui: &mut Ui, engine: &mut TailEngine, lang: Language) {
-    let mut n = engine.context_lines();
+    let drag_id = egui::Id::new("context_lines_drag").with(&engine.path);
+    let mut n = ui
+        .data(|d| d.get_temp::<u8>(drag_id))
+        .unwrap_or_else(|| engine.context_lines());
     ui.scope(|ui| {
         if !engine.is_filter_active() {
             ui.multiply_opacity(0.45);
@@ -859,9 +864,14 @@ fn render_context_lines_control(ui: &mut Ui, engine: &mut TailEngine, lang: Lang
                     .prefix("± "),
             )
             .on_hover_text(t(lang, "context_lines_tip"));
-        if response.changed() {
-            engine.set_context_lines(n);
-            ui.ctx().request_repaint();
+        if response.dragged() {
+            ui.data_mut(|d| d.insert_temp(drag_id, n));
+        } else {
+            ui.data_mut(|d| d.remove::<u8>(drag_id));
+            if n != engine.context_lines() {
+                engine.set_context_lines(n);
+                ui.ctx().request_repaint();
+            }
         }
     });
 }

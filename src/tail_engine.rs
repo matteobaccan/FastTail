@@ -988,12 +988,23 @@ type HiddenBookmarkCache = (
     HashMap<usize, Option<(usize, bool)>>,
 );
 
-/// Context ranges for a new `N` being built on a worker thread: the result, and how many
-/// matches of `filtered_lines` it covers (the ones found since are added on arrival).
+/// Context ranges for a new `N` being built on a worker thread: the result, the snapshot
+/// of the matches it reads (the first `covered` of `filtered_lines`; the ones found since
+/// are added on arrival, and a newer `N` reuses the snapshot instead of copying the
+/// matches again), and the flag that stops it. Dropping it stops the worker.
 #[derive(Debug)]
 struct ContextRebuild {
-    rx: Receiver<ContextRanges>,
+    rx: Receiver<Option<ContextRanges>>,
+    matches: Arc<[usize]>,
     covered: usize,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for ContextRebuild {
+    fn drop(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// State of "Show in context" (`TailEngine::enter_context`): the line shown and what
@@ -1154,6 +1165,9 @@ pub struct TailEngine {
     /// Ranges for a new `N` built on a worker thread (above `BACKGROUND_REBUILD_MATCHES`
     /// matches); the previous ranges stay in use until they arrive.
     context_rebuild: Option<ContextRebuild>,
+    /// The ranges were rebuilt in the middle of a filter refresh: the rows, groups and
+    /// search follow on the next poll.
+    context_rows_stale: bool,
     /// The context lines setting changed since it was last persisted.
     pub context_lines_dirty: bool,
     /// Matches above which a change of `N` rebuilds the ranges on a worker thread
@@ -1817,6 +1831,7 @@ impl TailEngine {
             context_lines: 0,
             context_ranges: ContextRanges::default(),
             context_rebuild: None,
+            context_rows_stale: false,
             context_lines_dirty: false,
             context_rebuild_threshold: BACKGROUND_REBUILD_MATCHES,
             filter_generation: 0,
@@ -3629,20 +3644,14 @@ impl TailEngine {
         }
         self.context_lines = n;
         self.context_lines_dirty = true;
-        self.context_rebuild = None;
+        // A build for the previous `N` stops (dropping it cancels the worker); its
+        // snapshot is still a prefix of the matches and is reused.
+        let snapshot = self.context_rebuild.take().map(|r| Arc::clone(&r.matches));
         if n > 0 && self.filtered_lines.len() > self.context_rebuild_threshold {
-            let matches = self.filtered_lines.clone();
-            let (tx, rx) = channel();
-            let spawned = std::thread::Builder::new()
-                .name("fasttail-context".into())
-                .spawn(move || {
-                    let _ = tx.send(ContextRanges::build(n as usize, &matches));
-                });
-            if spawned.is_ok() {
-                self.context_rebuild = Some(ContextRebuild {
-                    rx,
-                    covered: self.filtered_lines.len(),
-                });
+            let matches = snapshot
+                .filter(|m| m.len() <= self.filtered_lines.len())
+                .unwrap_or_else(|| Arc::from(self.filtered_lines.as_slice()));
+            if self.spawn_context_rebuild(matches) {
                 return;
             }
         }
@@ -3650,19 +3659,49 @@ impl TailEngine {
         self.context_rows_changed();
     }
 
+    /// Builds the ranges for the current `N` over `matches` (a prefix of `filtered_lines`)
+    /// on a worker thread; the current ranges stay in use until `poll_context_rebuild`
+    /// takes the result. False when the thread could not be started.
+    fn spawn_context_rebuild(&mut self, matches: Arc<[usize]>) -> bool {
+        let n = self.context_lines as usize;
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (tx, rx) = channel();
+        let worker_matches = Arc::clone(&matches);
+        let worker_cancel = Arc::clone(&cancel);
+        let spawned = std::thread::Builder::new()
+            .name("fasttail-context".into())
+            .spawn(move || {
+                let built = ContextRanges::build_cancellable(n, &worker_matches, &worker_cancel);
+                let _ = tx.send(built);
+            });
+        if spawned.is_err() {
+            return false;
+        }
+        self.context_rebuild = Some(ContextRebuild {
+            rx,
+            covered: matches.len(),
+            matches,
+            cancel,
+        });
+        true
+    }
+
     /// Takes the ranges a worker built for a new `N`, once they are ready.
     fn poll_context_rebuild(&mut self) {
+        if std::mem::take(&mut self.context_rows_stale) {
+            self.context_rows_changed();
+        }
         let Some(rebuild) = self.context_rebuild.as_ref() else {
             return;
         };
-        let mut ranges = match rebuild.rx.try_recv() {
-            Ok(ranges) => ranges,
+        let (mut ranges, covered) = match rebuild.rx.try_recv() {
+            Ok(Some(ranges)) => (ranges, rebuild.covered.min(self.filtered_lines.len())),
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                ContextRanges::build(self.context_lines as usize, &self.filtered_lines)
+            // The worker died: build here, from the first match.
+            Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                (ContextRanges::new(self.context_lines as usize), 0)
             }
         };
-        let covered = rebuild.covered.min(self.filtered_lines.len());
         ranges.extend(&self.filtered_lines[covered..]);
         self.context_rebuild = None;
         self.context_ranges = ranges;
@@ -3690,15 +3729,27 @@ impl TailEngine {
         self.context_rebuild = None;
     }
 
-    /// Keeps the first `keep` matches, and the context ranges they make.
+    /// Keeps the first `keep` matches, and the context ranges they make. The ranges in
+    /// use are cut like the matches; a build running for a new `N` goes on when it only
+    /// read kept matches, and starts again on what is left otherwise.
     fn truncate_filtered(&mut self, keep: usize) {
+        if keep >= self.filtered_lines.len() {
+            return;
+        }
         self.filtered_lines.truncate(keep);
-        if self.context_rebuild.take().is_some() {
-            self.context_ranges =
-                ContextRanges::build(self.context_lines as usize, &self.filtered_lines);
-        } else {
-            self.context_ranges
-                .truncate_after(self.filtered_lines.last().copied());
+        self.context_ranges
+            .truncate_after(self.filtered_lines.last().copied());
+        let covered = self.context_rebuild.as_ref().map(|r| r.covered);
+        if covered.is_some_and(|covered| keep < covered) {
+            self.context_rebuild = None;
+            let matches = Arc::from(self.filtered_lines.as_slice());
+            if !self.spawn_context_rebuild(matches) {
+                // No thread: build here, and let the rows follow once the refresh that
+                // is cutting the matches is over.
+                self.context_ranges =
+                    ContextRanges::build(self.context_lines as usize, &self.filtered_lines);
+                self.context_rows_stale = true;
+            }
         }
     }
 
@@ -6818,5 +6869,166 @@ mod tests {
             assert!(engine.dismissed_auto_bookmarks().is_empty());
             assert_eq!(auto(&engine), vec![1]);
         }
+    }
+}
+
+#[cfg(test)]
+mod context_rebuild_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::Sender;
+
+    /// `total` lines with a match on every tenth, filtered on the matches.
+    fn engine(dir: &Path, total: usize) -> (PathBuf, TailEngine) {
+        let path = dir.join("app.log");
+        let text: String = (0..total)
+            .map(|i| {
+                if i % 10 == 0 {
+                    format!("ERROR payment failed {i}\n")
+                } else {
+                    format!("DEBUG step {i}\n")
+                }
+            })
+            .collect();
+        std::fs::write(&path, text).unwrap();
+        let mut engine = TailEngine::open(&path).unwrap();
+        engine.set_include_filter("payment failed");
+        (path, engine)
+    }
+
+    /// A rebuild for the engine's current `N` whose result the test sends by hand.
+    fn held_rebuild(engine: &mut TailEngine) -> Sender<Option<ContextRanges>> {
+        let (tx, rx) = channel();
+        let matches: Arc<[usize]> = Arc::from(engine.filtered_lines.as_slice());
+        engine.context_rebuild = Some(ContextRebuild {
+            rx,
+            covered: matches.len(),
+            matches,
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
+        tx
+    }
+
+    fn rows(engine: &TailEngine) -> Vec<usize> {
+        (0..engine.visible_line_count())
+            .filter_map(|r| engine.get_actual_line_idx(r))
+            .collect()
+    }
+
+    fn grep_c(n: usize, matches: &[usize], total: usize) -> Vec<usize> {
+        (0..total)
+            .filter(|&l| matches.iter().any(|&m| l + n >= m && l <= m + n))
+            .collect()
+    }
+
+    fn wait_rebuild(engine: &mut TailEngine) {
+        let start = Instant::now();
+        while engine.context_rebuild.is_some() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "rebuild not delivered"
+            );
+            engine.poll_updates();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn an_append_leaves_a_pending_rebuild_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut engine) = engine(dir.path(), 100);
+        engine.set_context_lines(1);
+        // N goes to 3 on a worker the test holds back.
+        engine.context_lines = 3;
+        let tx = held_rebuild(&mut engine);
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(b"DEBUG a\nERROR payment failed late\nDEBUG b\n")
+            .unwrap();
+        drop(f);
+        let start = Instant::now();
+        while engine.total_lines() < 103 {
+            assert!(start.elapsed() < Duration::from_secs(10), "append not seen");
+            engine.poll_updates();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Still pending, and the rows are still those of N = 1, the new match included.
+        assert!(
+            engine.context_rebuild.is_some(),
+            "the append took the rebuild"
+        );
+        assert_eq!(engine.context_ranges.n(), 1);
+        let mut matches: Vec<usize> = (0..100).step_by(10).collect();
+        matches.push(101);
+        assert_eq!(rows(&engine), grep_c(1, &matches, 103));
+
+        // The worker's result covers the matches it read; the rest is added on arrival,
+        // and the rows, the search and the groups follow, the top line kept (the view
+        // is scrolled up: following the tail would pin it to the end instead).
+        engine.follow_tail = false;
+        engine.view_top_line = Some(40);
+        let generation = engine.filter_generation;
+        tx.send(Some(ContextRanges::build(3, &matches[..10])))
+            .unwrap();
+        engine.poll_updates();
+        assert!(engine.context_rebuild.is_none());
+        assert_eq!(rows(&engine), grep_c(3, &matches, 103));
+        assert_ne!(engine.filter_generation, generation);
+        assert_eq!(engine.pending_top_row, Some(engine.row_of_line_or_next(40)));
+    }
+
+    #[test]
+    fn cutting_matches_the_worker_read_starts_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, mut engine) = engine(dir.path(), 100);
+        engine.context_rebuild_threshold = 0;
+        engine.set_context_lines(2);
+        let first_cancel = Arc::clone(&engine.context_rebuild.as_ref().unwrap().cancel);
+        engine.truncate_filtered(4);
+        assert!(
+            first_cancel.load(Ordering::Relaxed),
+            "the old build is stopped"
+        );
+        let rebuild = engine.context_rebuild.as_ref().expect("started again");
+        assert_eq!(rebuild.covered, 4);
+        wait_rebuild(&mut engine);
+        assert_eq!(
+            engine.context_ranges,
+            ContextRanges::build(2, &[0, 10, 20, 30])
+        );
+        // Keeping every match the worker read is not a cut: nothing restarts.
+        engine.context_lines = 5;
+        let _tx = held_rebuild(&mut engine);
+        engine.truncate_filtered(4);
+        engine.truncate_filtered(10);
+        assert_eq!(engine.context_rebuild.as_ref().unwrap().covered, 4);
+    }
+
+    #[test]
+    fn a_newer_n_stops_the_previous_build_and_reuses_its_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, mut engine) = engine(dir.path(), 100);
+        engine.context_rebuild_threshold = 0;
+        let mut previous: Option<(Arc<AtomicBool>, Arc<[usize]>)> = None;
+        for n in 1..=20u8 {
+            engine.set_context_lines(n);
+            let rebuild = engine.context_rebuild.as_ref().unwrap();
+            if let Some((cancel, matches)) = previous.take() {
+                assert!(
+                    cancel.load(Ordering::Relaxed),
+                    "N = {n}: superseded build runs on"
+                );
+                assert!(
+                    Arc::ptr_eq(&matches, &rebuild.matches),
+                    "N = {n}: matches copied again"
+                );
+            }
+            previous = Some((Arc::clone(&rebuild.cancel), Arc::clone(&rebuild.matches)));
+        }
+        wait_rebuild(&mut engine);
+        let matches: Vec<usize> = (0..100).step_by(10).collect();
+        assert_eq!(rows(&engine), grep_c(20, &matches, 100));
     }
 }

@@ -57,6 +57,23 @@ impl ContextRanges {
         out
     }
 
+    /// `build` on a worker thread: gives up (`None`) as soon as `cancel` is set, checked
+    /// every 64 Ki matches, so a build a newer `N` superseded stops early.
+    pub fn build_cancellable(
+        n: usize,
+        matches: &[usize],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Option<Self> {
+        let mut out = Self::new(n);
+        for chunk in matches.chunks(1 << 16) {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return None;
+            }
+            out.extend(chunk);
+        }
+        Some(out)
+    }
+
     /// Lines of context per side; 0 means context lines are off.
     pub fn n(&self) -> usize {
         self.n
@@ -390,6 +407,19 @@ mod tests {
             }
             assert_eq!(inc, full, "n = {n}");
         }
+    }
+
+    #[test]
+    fn a_cancelled_build_gives_up() {
+        use std::sync::atomic::AtomicBool;
+        let matches: Vec<usize> = (0..200_000).map(|i| i * 9).collect();
+        let go = AtomicBool::new(false);
+        assert_eq!(
+            ContextRanges::build_cancellable(3, &matches, &go),
+            Some(ContextRanges::build(3, &matches))
+        );
+        let stop = AtomicBool::new(true);
+        assert_eq!(ContextRanges::build_cancellable(3, &matches, &stop), None);
     }
 
     #[test]
