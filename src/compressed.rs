@@ -947,7 +947,8 @@ impl TailEngine {
             let bookmarks = std::mem::take(&mut c.pending_bookmarks);
             let notes = std::mem::take(&mut c.pending_bookmark_notes);
             if fits {
-                self.set_bookmarks_with_notes(bookmarks, notes);
+                // Merged: rows bookmarked (or annotated) during the extraction stay.
+                self.merge_bookmarks_with_notes(bookmarks, notes);
                 // A reload rebuilt the index and saved the bookmarks as gone: save
                 // them again.
                 self.bookmarks_dirty = true;
@@ -1522,6 +1523,40 @@ mod tests {
         settle(&mut engine);
         assert_eq!(engine.bookmark_note(2999), Some("last one"));
         assert_eq!(engine.auto_bookmarks().len(), 1111);
+    }
+
+    #[test]
+    fn bookmarks_added_during_the_extraction_survive_the_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let gz = dir.path().join("app.gz");
+        std::fs::write(&gz, gzip(&log_text(3000))).unwrap();
+        let mut engine = open_engine(&gz, None, &test_settings(dir.path()), None).unwrap();
+        let c = engine.compressed.as_mut().unwrap();
+        c.pending_bookmarks = vec![1, 2999];
+        c.pending_bookmark_notes = [(1, "saved".to_string()), (2999, "last".to_string())]
+            .into_iter()
+            .collect();
+        let start = Instant::now();
+        while engine.total_lines() < 3 {
+            assert!(start.elapsed() < Duration::from_secs(20));
+            engine.poll_updates();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Rows annotated while the rest is still being extracted.
+        engine.set_bookmark_note(0, "mine");
+        engine.set_bookmark_note(1, "newer");
+        settle(&mut engine);
+        assert_eq!(
+            engine.bookmarks.iter().copied().collect::<Vec<_>>(),
+            [0, 1, 2999]
+        );
+        assert_eq!(engine.bookmark_note(0), Some("mine"));
+        assert_eq!(
+            engine.bookmark_note(1),
+            Some("newer"),
+            "the user's note wins"
+        );
+        assert_eq!(engine.bookmark_note(2999), Some("last"));
     }
 
     #[test]
