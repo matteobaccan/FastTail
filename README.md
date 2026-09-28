@@ -340,6 +340,8 @@ Or, without the terminal: try to open it once, let it be blocked, then go to **S
 
 Signing and notarizing the build would remove the prompt for everyone, and needs a paid Apple Developer account — see [distribution channels](docs/distribution-channels.md). Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs. FastTail is not published to crates.io, Scoop or winget: [docs/distribution-channels.md](docs/distribution-channels.md) records what each of those would take, for when it is worth deciding.
 
+How the interface is built — window layout, dock and tabs, every dialog and menu, glyphs, the four themes with their palettes, shortcuts and the `fasttail.ini` keys that shape it — is described in the **[UI design document](docs/ui-design.md)**.
+
 ---
 
 ## ❓ FAQ
