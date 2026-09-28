@@ -17,7 +17,7 @@ from the GitHub API on that day; every other claim links its source.
 5. [What FastTail already covers](#5-what-fasttail-already-covers)
 6. [Gaps, ranked](#6-gaps-ranked)
 7. [Lessons for the terminal interface (0.20.0)](#7-lessons-for-the-terminal-interface-0200)
-8. [Proposals for the next releases](#8-proposals-for-the-next-releases)
+8. [Release plan: closing the gap](#8-release-plan-closing-the-gap)
 9. [Scan history](#9-scan-history)
 
 ## 1. The field in one table
@@ -189,19 +189,68 @@ L > 3 weeks).
 
 These points are to be folded into the `tui-interface` proposal (PR #132) before it is merged.
 
-## 8. Proposals for the next releases
+## 8. Release plan: closing the gap
 
-Picked from section 6 for the release after 0.12.0 (0.13.0), keeping 0.20.0 for the terminal
-interface. The maintainer chooses the scope; each chosen item becomes an OpenSpec change.
+The maintainer asked for an OpenSpec change for every feature the competitors have and
+FastTail lacks, spread over three releases so the whole gap is closed; 0.20.0 stays
+reserved for the terminal interface (PR #132). Each change lives in
+`openspec/changes/<name>/` with proposal, design, tasks and specs; efforts use the scale of
+section 6. The order inside a release follows the dependencies.
 
-| Proposal | Gaps | Why now |
+### 0.13.0 — basics and quick wins
+
+| Change | Gaps | Effort |
 |---|---|---|
-| **Context lines around matches** | 3 | Highest value for its size; builds on show in context |
-| **Structured fields and columns** (JSON, logfmt, regex named groups; column view; field filters) | 1, 4 (field-scoped part) | The top request across the category; the base for statistics and better merges |
-| **Merged timeline view** | 2 | Proposal already written; standard in every growing competitor |
-| **Quick wins bundle**: selection highlight, next / previous line of a rule, rule-set import / export, epoch and time-zone display, automatic highlighting of IPs / UUIDs / URLs | 8, 9, 10, 11 | Small, visible, each a few days |
-| **Headless print mode** | 7 | Small; also the base for the TUI's pipe use |
-| **System and remote sources**: journald and Docker first, SSH next | 5 | Most requested source outside files; larger, may be split |
+| `context-lines` — ±N lines around filter matches | 3 | S–M |
+| `quick-wins-0-13` — selection highlight, next / previous line of a rule, rule-set import / export, epoch and time zones, automatic highlighting | 8, 9, 10, 11 | M (five S items) |
+| `headless-print` — `fasttail --print` to stdout | 7 | S |
+| `search-in-range` — find limited to a line / time range or the selection | klogg | S |
+| `relative-time-windows` — "last 15 min / 1 h / 24 h", `--since -3h` | hl | S |
+| `bookmark-report` — Markdown report of bookmarks and notes | 16 | S |
+| `command-palette` — CTRL + SHIFT + P over every action; creates the action registry | lnav, editors | M |
+| `filter-to-tab` — the filtered view as a new following tab | LogExpert | M |
+| `compare-lines` — diff of two lines or two regions | requested | M |
+| `partial-line-selection` — select part of a line | 19 | M |
+| `scratchpad` — notes tab lines can be sent to | klogg | S |
+| `tray-icon` — minimise to tray, tray menu | SnakeTail | S–M |
+| `archive-7z` — 7z entries like zip / tar | 20 | S |
+
+### 0.14.0 — structured logs and analysis
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `structured-fields` — JSON / logfmt / regex fields, column view, field filters | 1, 4 | L |
+| `custom-log-formats` — user-defined formats (named groups, timestamp, multiline start) | 1 | M |
+| `boolean-filter-expressions` — AND / OR / NOT, field operands | 4 | M |
+| `merged-timeline-view` — several files merged by timestamp | 2 | L |
+| `folder-source` — several patterns, subfolders, "open all" | Tailviewer, LogFusion | M |
+| `pattern-grouping` — Drain patterns, CTRL + SHIFT + G | 6 | M |
+| `field-statistics` — top-N and statistics of a field | 15 | M |
+| `spike-explanation` — what is different in a histogram spike | Loki, Kibana | M |
+| `operation-timeline` — Gantt of operations by an id field | lnav | M |
+| `cross-line-regex` — regex across lines (plus single-line regex search) | 20 | M |
+| `export-formats` — CSV and HTML export | 18 | S |
+
+### 0.15.0 — sources and integrations
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `system-sources` — journald, Docker / Kubernetes | 5 | M–L |
+| `ssh-sources` — SSH / SFTP files | 5 | M |
+| `windows-event-log` — Event Log source | 12 | M |
+| `network-listener` — TCP / UDP / syslog | 13 | M |
+| `otlp-receiver` — OTLP logs on top of the listener | gonzo | S |
+| `debug-output-capture` — Windows OutputDebugString | 20 | S |
+| `rule-notifications` — desktop notification when a rule matches | LogExpert | S |
+| `query-language` — SQL-like queries over fields | LogViewPlus, lnav | L |
+| `remappable-shortcuts` — key bindings on the 0.13.0 action registry | 14 | M |
+| `mcp-server` — read-only MCP server for AI assistants, off by default | 17 | M |
+| `web-ui` — read-only local web view, off by default | Seq, Loki | M |
+| `plugin-api` — out-of-process source plugins, bundled formats | 20 | L |
+
+0.14.0 is the heaviest (two L changes); if it runs long, `operation-timeline` and
+`cross-line-regex` are the first to move to 0.15.0. Open questions are listed in each
+change's design.
 
 ## 9. Scan history
 
@@ -209,4 +258,4 @@ interface. The maintainer chooses the scope; each chosen item becomes an OpenSpe
 |---|---|---|
 | 2026-09-24 | 0.9.x | first scan; led to `timestamp-range-filter` and `merged-timeline-view` |
 | 2026-09-27 | 0.11.0 | led to show in context, bookmark notes and triggers, more archive formats, collapse repeated lines (all shipped in 0.12.0) |
-| 2026-09-28 | 0.12.0 | this document; proposals in section 8 |
+| 2026-09-28 | 0.12.0 | this document; 36 changes over 0.13.0–0.15.0 (section 8) |

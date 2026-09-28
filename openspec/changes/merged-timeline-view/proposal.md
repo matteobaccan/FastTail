@@ -8,6 +8,9 @@ A request crosses several services and several log files. Tailviewer's merged vi
 - The merged view follows all sources live, supports the usual filters, search, highlight rules, bookmarks and export, and lets the user toggle sources on and off.
 - Sources without timestamps cannot be merged and are refused with a hint.
 
+Target release: **0.14.0** (structured logs and analysis), per the release plan in
+`docs/competitor-analysis.md` section 8. Effort: **L**.
+
 ## Capabilities
 
 ### New Capabilities
@@ -20,4 +23,4 @@ A request crosses several services and several log files. Tailviewer's merged vi
 
 - New `src/merged_stream.rs`: `MergedStream { sources: Vec<StreamRef>, order: Vec<(u32 src, usize line)> }` with an incremental k-way merge on append; adapters so the renderer treats it like a `TailEngine` (a `StreamView` trait extracted from the engine's read-side API).
 - `src/ui/dock.rs` / `app.rs`: creation dialog, source chips, tab handling; `src/config.rs`: merged views persisted by source paths.
-- Depends on `timestamp-range-filter` (timestamp cache).
+- Builds on the per-line timestamp cache shipped with `timestamp-range-filter` (archived 2026-09-25). With `structured-fields` (planned for 0.14.0, same release), JSON logs whose time is inside the object can be merged too.
