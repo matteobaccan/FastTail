@@ -5,6 +5,7 @@ pub mod cli;
 pub mod collapse;
 pub mod compressed;
 pub mod config;
+pub mod context_lines;
 pub mod crash_handler;
 pub mod external_tools;
 pub mod file_source;

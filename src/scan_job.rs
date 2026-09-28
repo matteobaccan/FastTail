@@ -15,6 +15,7 @@ use regex::Regex;
 
 use crate::ansi::AnsiMode;
 use crate::collapse::{Detector, Group};
+use crate::context_lines::{Range, RangeCursor};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::tail_engine::{
@@ -233,7 +234,7 @@ pub enum JobSpec {
     /// counting the hits it no longer lists (`ScanBatch::Counted`).
     Search {
         query_lower: String,
-        filter: Option<FilterSpec>,
+        filter: VisibleSet,
         limit: usize,
         count_past_limit: bool,
     },
@@ -246,13 +247,82 @@ pub enum JobSpec {
     /// Emit the groups of repeated entries among the visible lines (see `collapse`), fed
     /// to `detector` exactly as the engine's synchronous path feeds it: a new one for a
     /// detection from scratch, the engine's end state for an append (the range then
-    /// starts where it resumes). `visible` is the sorted list of visible lines when a
-    /// filter is active, `None` when every line is visible. The detection state at the
-    /// end is sent last, for later appends to resume from.
+    /// starts where it resumes). `visible` gives the visible positions: every line, the
+    /// sorted list of visible lines when a filter is active, or the context ranges. The
+    /// detection state at the end is sent last, for later appends to resume from.
     Collapse {
         detector: Box<Detector>,
-        visible: Option<Arc<[usize]>>,
+        visible: VisibleSet,
     },
+}
+
+/// The lines a search or collapse job covers.
+#[derive(Debug, Clone)]
+pub enum VisibleSet {
+    /// Every line.
+    All,
+    /// The lines that pass the filter, evaluated by the worker.
+    Filter(FilterSpec),
+    /// The sorted list of visible lines.
+    Lines(Arc<[usize]>),
+    /// The lines inside the context ranges of a stream showing context lines (see
+    /// `context_lines`), matches and context alike.
+    Ranges(Arc<[Range]>),
+}
+
+/// Walks a `VisibleSet` over increasing line indices: whether each line is visible and
+/// its visible position (the index of the line among the visible ones; `None` for a
+/// `Filter` set, whose positions are not known ahead).
+struct VisibleWalk<'a> {
+    set: &'a VisibleSet,
+    lines_at: usize,
+    ranges: Option<RangeCursor<'a>>,
+    parent_visible: bool,
+}
+
+impl<'a> VisibleWalk<'a> {
+    fn new(set: &'a VisibleSet, start_line: usize, parent_visible: bool) -> Self {
+        Self {
+            set,
+            lines_at: match set {
+                VisibleSet::Lines(v) => v.partition_point(|&l| l < start_line),
+                _ => 0,
+            },
+            ranges: match set {
+                VisibleSet::Ranges(r) => Some(RangeCursor::new(r, start_line)),
+                _ => None,
+            },
+            parent_visible,
+        }
+    }
+
+    /// Visible position of line `idx`, for sets that know it (not `Filter`).
+    fn pos(&mut self, idx: usize) -> Option<usize> {
+        match self.set {
+            VisibleSet::All | VisibleSet::Filter(_) => Some(idx),
+            VisibleSet::Lines(v) => {
+                if v.get(self.lines_at) == Some(&idx) {
+                    self.lines_at += 1;
+                    Some(self.lines_at - 1)
+                } else {
+                    None
+                }
+            }
+            VisibleSet::Ranges(_) => self.ranges.as_mut().and_then(|c| c.pos(idx)),
+        }
+    }
+
+    /// Whether line `idx` with text `s` is visible (lines in increasing order).
+    fn visible(&mut self, idx: usize, s: &str) -> bool {
+        match self.set {
+            VisibleSet::Filter(f) => {
+                let (v, next) = f.visible_in_sequence(s, self.parent_visible);
+                self.parent_visible = next;
+                v
+            }
+            _ => self.pos(idx).is_some(),
+        }
+    }
 }
 
 /// Messages from the worker, always tagged with the job generation.
@@ -498,13 +568,6 @@ fn run(
         JobSpec::Collapse { detector, .. } => Some(Detector::clone(detector)),
         _ => None,
     };
-    let mut visible_at = match &spec {
-        JobSpec::Collapse {
-            visible: Some(v), ..
-        } => v.partition_point(|&l| l < range.start_line),
-        _ => 0,
-    };
-
     if matches!(spec, JobSpec::Index) && range.start_offset < range.end_offset {
         offsets.push(range.start_offset);
     }
@@ -513,6 +576,18 @@ fn run(
     // Visibility of the previous non-continuation line (stack trace continuation lines
     // follow their parent); a job starting after line 0 receives it from the engine.
     let mut parent_visible = range.parent_visible;
+    // The visible lines a search or collapse job covers, walked in file order.
+    let mut walk = match &spec {
+        JobSpec::Collapse { visible, .. }
+        | JobSpec::Search {
+            filter: visible, ..
+        } => Some(VisibleWalk::new(
+            visible,
+            range.start_line,
+            range.parent_visible,
+        )),
+        _ => None,
+    };
     let strip = range.ansi.strips();
     let mut eval = |idx: usize,
                     bytes: &[u8],
@@ -524,15 +599,8 @@ fn run(
      -> bool {
         match &spec {
             JobSpec::Index => true,
-            JobSpec::Collapse { visible, .. } => {
-                let pos = match visible {
-                    Some(v) if v.get(visible_at) == Some(&idx) => {
-                        visible_at += 1;
-                        Some(visible_at - 1)
-                    }
-                    Some(_) => None,
-                    None => Some(idx),
-                };
+            JobSpec::Collapse { .. } => {
+                let pos = walk.as_mut().and_then(|w| w.pos(idx));
                 if let Some(detector) = collapse.as_mut() {
                     line_passes(bytes, range.encoding, strip, |s| {
                         detector.feed(idx, s, pos);
@@ -572,19 +640,12 @@ fn run(
             }
             JobSpec::Search {
                 query_lower,
-                filter,
                 limit,
                 count_past_limit,
+                ..
             } => {
                 let hit = line_passes(bytes, range.encoding, strip, |s| {
-                    let visible = match filter {
-                        Some(f) => {
-                            let (v, next) = f.visible_in_sequence(s, parent_visible);
-                            parent_visible = next;
-                            v
-                        }
-                        None => true,
-                    };
+                    let visible = walk.as_mut().is_none_or(|w| w.visible(idx, s));
                     visible && contains_case_insensitive(s, query_lower)
                 });
                 if hit {

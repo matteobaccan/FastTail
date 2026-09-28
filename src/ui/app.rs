@@ -3085,6 +3085,7 @@ impl FastTailApp {
                 eng.wrap_dirty = false;
                 eng.ansi_dirty = false;
                 eng.collapse_mode_dirty = false;
+                eng.context_lines_dirty = false;
                 eng.view_columns_dirty = false;
             }
             if eng.bookmarks_dirty {
@@ -3102,14 +3103,16 @@ impl FastTailApp {
             if eng.ansi_dirty
                 || eng.timeline_dirty
                 || eng.collapse_mode_dirty
+                || eng.context_lines_dirty
                 || eng.view_columns_dirty
             {
-                // The ANSI mode, the timeline flag, the collapse mode and the line-number
-                // and time delta columns live in the stream entry, as in
-                // `save_dock_layout`.
+                // The ANSI mode, the timeline flag, the collapse mode, the context lines
+                // and the line-number and time delta columns live in the stream entry, as
+                // in `save_dock_layout`.
                 eng.ansi_dirty = false;
                 eng.timeline_dirty = false;
                 eng.collapse_mode_dirty = false;
+                eng.context_lines_dirty = false;
                 eng.view_columns_dirty = false;
                 let mut entry = stream_entry_of(eng);
                 entry.wrap = false;
@@ -4101,6 +4104,13 @@ impl FastTailApp {
                                     );
                                     ui.end_row();
 
+                                    ui.label(RichText::new("± N").monospace().strong());
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_context_lines"))
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+
                                     ui.label(
                                         RichText::new("F3  /  SHIFT + F3").monospace().strong(),
                                     );
@@ -4846,6 +4856,7 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
             .collapse_mode()
             .is_on()
             .then(|| engine.collapse_mode().name().to_string()),
+        context_lines: engine.context_lines(),
         line_numbers: Some(engine.show_line_numbers),
         time_delta: Some(engine.show_time_delta),
         bookmarks,
@@ -4912,6 +4923,11 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     if !entry.search_query.is_empty() {
         engine.search_query = entry.search_query.clone();
         engine.update_search(&entry.search_query);
+    }
+    // Context lines come from the matches: after the filters, before the groups.
+    if entry.context_lines > 0 {
+        engine.set_context_lines(entry.context_lines);
+        engine.context_lines_dirty = false;
     }
     // Last, so the groups are detected once, over the filtered lines.
     if let Some(mode) = entry

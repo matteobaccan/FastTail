@@ -1,10 +1,13 @@
 use crate::ansi::{AnsiMode, AnsiStyle, StyleRun};
 use crate::audio::SoundAlertPreset;
 use crate::collapse::{badge_text, CollapseMode, CollapseState, CollapsedRow, Detector};
+use crate::context_lines::{
+    ContextRanges, VisibleView, BACKGROUND_REBUILD_MATCHES, MAX_CONTEXT_LINES,
+};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{
-    FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange, MAX_FILTER_TERMS,
+    FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange, VisibleSet, MAX_FILTER_TERMS,
 };
 use crate::time_histogram::TimeHistogram;
 use crate::wildcard::{resolve_newest, split_pattern};
@@ -985,6 +988,14 @@ type HiddenBookmarkCache = (
     HashMap<usize, Option<(usize, bool)>>,
 );
 
+/// Context ranges for a new `N` being built on a worker thread: the result, and how many
+/// matches of `filtered_lines` it covers (the ones found since are added on arrival).
+#[derive(Debug)]
+struct ContextRebuild {
+    rx: Receiver<ContextRanges>,
+    covered: usize,
+}
+
 /// State of "Show in context" (`TailEngine::enter_context`): the line shown and what
 /// the filtered view looked like, restored by `leave_context`.
 #[derive(Debug, Clone)]
@@ -1135,6 +1146,19 @@ pub struct TailEngine {
     pub job_threshold_bytes: u64,
     pub index_job_threshold_bytes: u64,
     pub filtered_lines: Vec<usize>,
+    /// Context lines around the matches (the stream bar's `±N`, 0 = off) and the merged
+    /// ranges derived from `filtered_lines` for them (see `context_lines`), kept in step
+    /// with it by `clear_filtered`, `truncate_filtered` and `extend_filtered`.
+    context_lines: u8,
+    context_ranges: ContextRanges,
+    /// Ranges for a new `N` built on a worker thread (above `BACKGROUND_REBUILD_MATCHES`
+    /// matches); the previous ranges stay in use until they arrive.
+    context_rebuild: Option<ContextRebuild>,
+    /// The context lines setting changed since it was last persisted.
+    pub context_lines_dirty: bool,
+    /// Matches above which a change of `N` rebuilds the ranges on a worker thread
+    /// (`BACKGROUND_REBUILD_MATCHES`; lowered by tests).
+    pub context_rebuild_threshold: usize,
     /// Bumped whenever `filtered_lines` or the filter behind it may have changed; keys
     /// the UI caches built over the visible rows.
     pub filter_generation: u64,
@@ -1790,6 +1814,11 @@ impl TailEngine {
             job_threshold_bytes,
             index_job_threshold_bytes,
             filtered_lines: Vec::new(),
+            context_lines: 0,
+            context_ranges: ContextRanges::default(),
+            context_rebuild: None,
+            context_lines_dirty: false,
+            context_rebuild_threshold: BACKGROUND_REBUILD_MATCHES,
             filter_generation: 0,
             search_query: String::new(),
             search_matches: Vec::new(),
@@ -2498,7 +2527,7 @@ impl TailEngine {
             // Large file: index on a worker thread; the view shows lines as they arrive.
             self.mark_collapse_dirty(0);
             self.line_offsets = Vec::new();
-            self.filtered_lines = Vec::new();
+            self.clear_filtered();
             self.filter_generation = self.filter_generation.wrapping_add(1);
             self.clear_search_hits();
             self.search_byte_matches = Vec::new();
@@ -2804,6 +2833,7 @@ impl TailEngine {
     }
 
     pub fn poll_updates(&mut self) {
+        self.poll_context_rebuild();
         self.drain_job();
         // An automatic-bookmark scan displaced by another job, or waiting for the index.
         self.run_auto_scan_if_due();
@@ -3315,10 +3345,11 @@ impl TailEngine {
 
     fn recompute_filtered_lines_from(&mut self, start: usize) {
         self.filter_generation = self.filter_generation.wrapping_add(1);
-        // The groups stand on the visible lines: from `start` they are formed again.
-        self.mark_collapse_dirty(start);
+        // The groups stand on the visible lines: from `start` they are formed again (and
+        // from `N` lines before it with context lines: a new match shows those too).
+        self.mark_collapse_dirty(self.context_start(start));
         if !self.is_filter_active() {
-            self.filtered_lines = Vec::new();
+            self.clear_filtered();
             return;
         }
         if self.index_pending {
@@ -3350,7 +3381,7 @@ impl TailEngine {
             // Full recomputation of a large file: worker thread, results stream in. The
             // job filters text and level; the time window is applied to its batches, by
             // index, when they are drained (see `drain_job`).
-            self.filtered_lines = Vec::new();
+            self.clear_filtered();
             if !self.last_searched_query.is_empty() {
                 self.pending_search = true;
             }
@@ -3358,10 +3389,10 @@ impl TailEngine {
             return;
         }
         if start == 0 {
-            self.filtered_lines = Vec::new();
+            self.clear_filtered();
         } else {
             let keep = self.filtered_lines.partition_point(|&idx| idx < start);
-            self.filtered_lines.truncate(keep);
+            self.truncate_filtered(keep);
         }
         let mut fresh = Vec::new();
         // Continuation lines of a stack trace follow their parent's visibility.
@@ -3376,7 +3407,7 @@ impl TailEngine {
             }
             true
         });
-        self.filtered_lines.extend(fresh);
+        self.extend_filtered(fresh);
     }
 
     /// Streams lines `[start, end)` from the file in 1 MB chunks and calls `f(idx, text)`
@@ -3495,43 +3526,186 @@ impl TailEngine {
     /// Row of `line`, or of the first visible line after it when the filters hide it
     /// (the row count past the last one).
     pub fn row_of_line_or_next(&self, line: usize) -> usize {
-        let pos = if self.rows_filtered() {
-            self.filtered_lines.partition_point(|&l| l < line)
-        } else {
-            line.min(self.total_lines())
-        };
+        let pos = self.rows_view().pos_of_line_or_next(line);
         if !self.collapse_rows() || pos >= self.visible_lines() {
             return pos.min(self.visible_line_count());
         }
         self.collapse.row_of_pos(pos).0
     }
 
-    /// Lines the filters leave visible, before any collapse.
+    /// Lines the filters leave visible (with their context lines), before any collapse.
     pub fn visible_lines(&self) -> usize {
-        if self.rows_filtered() {
-            self.filtered_lines.len()
-        } else {
-            self.total_lines()
-        }
+        self.rows_view().len()
     }
 
     /// The line at visible position `pos` (its index among the visible lines).
     fn line_at(&self, pos: usize) -> Option<usize> {
-        if self.rows_filtered() {
-            self.filtered_lines.get(pos).copied()
-        } else {
-            (pos < self.total_lines()).then_some(pos)
-        }
+        self.rows_view().line_at(pos)
     }
 
     /// Visible position of `line`, `None` when the filters hide it.
     fn pos_of_line(&self, line: usize) -> Option<usize> {
-        if self.rows_filtered() {
-            // The visible lines are in file order.
-            self.filtered_lines.binary_search(&line).ok()
-        } else {
-            (line < self.total_lines()).then_some(line)
+        self.rows_view().pos_of_line(line)
+    }
+
+    /// The lines the rows show: every line, the matches of the filters, or the matches
+    /// with their context lines. "Show in context" shows every line.
+    fn rows_view(&self) -> VisibleView<'_> {
+        VisibleView {
+            filtered: self.rows_filtered(),
+            matches: &self.filtered_lines,
+            context: &self.context_ranges,
+            total: self.total_lines(),
         }
+    }
+
+    /// The lines of the filtered view, also while "Show in context" suspends it: what
+    /// the collapse groups and the search are formed over.
+    fn filtered_view(&self) -> VisibleView<'_> {
+        VisibleView {
+            filtered: self.is_filter_active(),
+            matches: &self.filtered_lines,
+            context: &self.context_ranges,
+            total: self.total_lines(),
+        }
+    }
+
+    // ----- Context lines around the matches -----
+
+    /// Lines of context shown before and after each match (0 = off).
+    pub fn context_lines(&self) -> u8 {
+        self.context_lines
+    }
+
+    /// Whether the filtered view holds context lines: `N > 0` and a filter is active.
+    fn has_context(&self) -> bool {
+        self.context_ranges.is_active() && self.is_filter_active()
+    }
+
+    /// Whether the rows show context lines right now (not in "Show in context").
+    pub fn shows_context_lines(&self) -> bool {
+        self.context_ranges.is_active() && self.rows_filtered()
+    }
+
+    /// The context ranges the rows are mapped through, while they show context lines.
+    pub fn shown_context_ranges(&self) -> Option<&ContextRanges> {
+        self.shows_context_lines().then_some(&self.context_ranges)
+    }
+
+    /// Whether `line`, shown on a row, is a context line rather than a match.
+    pub fn is_context_row(&self, line: usize) -> bool {
+        self.shows_context_lines() && self.filtered_lines.binary_search(&line).is_err()
+    }
+
+    /// Lines hidden between row `row` and the row above it while context lines show
+    /// (the separator the view draws), `None` when there are none.
+    pub fn context_gap_above_row(&self, row: usize) -> Option<usize> {
+        if !self.shows_context_lines() || row == 0 {
+            return None;
+        }
+        let line = self.get_actual_line_idx(row)?;
+        let (_, prev) = self.row_span(row - 1)?;
+        line.checked_sub(prev + 1).filter(|&gap| gap > 0)
+    }
+
+    /// First line whose visible state can change when the matches change from `start`
+    /// on: `N` lines earlier with context lines.
+    fn context_start(&self, start: usize) -> usize {
+        if self.has_context() {
+            start.saturating_sub(self.context_ranges.n())
+        } else {
+            start
+        }
+    }
+
+    /// Shows `n` lines (at most `MAX_CONTEXT_LINES`) before and after every match. The
+    /// filter is not run again: the ranges are derived from the matches in one pass (on
+    /// a worker above `BACKGROUND_REBUILD_MATCHES` matches), the groups and the search
+    /// follow the new rows, and the line at the top of the view stays there.
+    pub fn set_context_lines(&mut self, n: u8) {
+        let n = n.min(MAX_CONTEXT_LINES);
+        if n == self.context_lines {
+            return;
+        }
+        self.context_lines = n;
+        self.context_lines_dirty = true;
+        self.context_rebuild = None;
+        if n > 0 && self.filtered_lines.len() > self.context_rebuild_threshold {
+            let matches = self.filtered_lines.clone();
+            let (tx, rx) = channel();
+            let spawned = std::thread::Builder::new()
+                .name("fasttail-context".into())
+                .spawn(move || {
+                    let _ = tx.send(ContextRanges::build(n as usize, &matches));
+                });
+            if spawned.is_ok() {
+                self.context_rebuild = Some(ContextRebuild {
+                    rx,
+                    covered: self.filtered_lines.len(),
+                });
+                return;
+            }
+        }
+        self.context_ranges = ContextRanges::build(n as usize, &self.filtered_lines);
+        self.context_rows_changed();
+    }
+
+    /// Takes the ranges a worker built for a new `N`, once they are ready.
+    fn poll_context_rebuild(&mut self) {
+        let Some(rebuild) = self.context_rebuild.as_ref() else {
+            return;
+        };
+        let mut ranges = match rebuild.rx.try_recv() {
+            Ok(ranges) => ranges,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                ContextRanges::build(self.context_lines as usize, &self.filtered_lines)
+            }
+        };
+        let covered = rebuild.covered.min(self.filtered_lines.len());
+        ranges.extend(&self.filtered_lines[covered..]);
+        self.context_rebuild = None;
+        self.context_ranges = ranges;
+        self.context_rows_changed();
+    }
+
+    /// The context ranges changed as a whole: the rows, the groups formed over them and
+    /// the search that covers them follow; the filter stays as it is.
+    fn context_rows_changed(&mut self) {
+        if !self.is_filter_active() {
+            return;
+        }
+        let top = self.view_top_line;
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+        self.mark_collapse_dirty(0);
+        self.refresh_search_from(0);
+        self.update_collapse();
+        self.keep_top_line(top);
+    }
+
+    /// No match any more: the context ranges go with them.
+    fn clear_filtered(&mut self) {
+        self.filtered_lines = Vec::new();
+        self.context_ranges = ContextRanges::new(self.context_lines as usize);
+        self.context_rebuild = None;
+    }
+
+    /// Keeps the first `keep` matches, and the context ranges they make.
+    fn truncate_filtered(&mut self, keep: usize) {
+        self.filtered_lines.truncate(keep);
+        if self.context_rebuild.take().is_some() {
+            self.context_ranges =
+                ContextRanges::build(self.context_lines as usize, &self.filtered_lines);
+        } else {
+            self.context_ranges
+                .truncate_after(self.filtered_lines.last().copied());
+        }
+    }
+
+    /// Adds matches found after every match so far; their context comes with them.
+    fn extend_filtered(&mut self, lines: Vec<usize>) {
+        self.context_ranges.extend(&lines);
+        self.filtered_lines.extend(lines);
     }
 
     /// First and last line of row `row`: the same line, except on the last row a closed
@@ -3688,9 +3862,13 @@ impl TailEngine {
             // detector back is run again from scratch.
             self.collapse_after_job = None;
             self.collapse_dirty = Some(start);
-            let visible = self
-                .is_filter_active()
-                .then(|| Arc::from(self.filtered_lines.as_slice()));
+            let visible = if !self.is_filter_active() {
+                VisibleSet::All
+            } else if self.has_context() {
+                VisibleSet::Ranges(Arc::from(self.context_ranges.ranges()))
+            } else {
+                VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+            };
             self.start_job(JobSpec::Collapse { detector, visible }, start);
             self.filter_generation = self.filter_generation.wrapping_add(1);
             return;
@@ -3699,9 +3877,14 @@ impl TailEngine {
         let filtered = self.is_filter_active();
         let visible = &self.filtered_lines;
         let mut at = visible.partition_point(|&l| l < start);
+        let mut ranges = self
+            .has_context()
+            .then(|| crate::context_lines::RangeCursor::new(self.context_ranges.ranges(), start));
         self.scan_lines(start, self.total_lines(), |idx, text| {
             let pos = if !filtered {
                 Some(idx)
+            } else if let Some(cursor) = ranges.as_mut() {
+                cursor.pos(idx)
             } else if visible.get(at) == Some(&idx) {
                 at += 1;
                 Some(at - 1)
@@ -3720,16 +3903,13 @@ impl TailEngine {
     fn apply_detection(&mut self, mut detector: Box<Detector>, from_scratch: bool) {
         let groups = std::mem::take(&mut detector.groups);
         let tail = detector.tail_groups();
-        let filtered = self.is_filter_active();
-        let visible = &self.filtered_lines;
-        let total = self.total_lines();
-        let line_of = |pos: usize| {
-            if filtered {
-                visible.get(pos).copied()
-            } else {
-                (pos < total).then_some(pos)
-            }
+        let view = VisibleView {
+            filtered: self.is_filter_active(),
+            matches: &self.filtered_lines,
+            context: &self.context_ranges,
+            total: self.total_lines(),
         };
+        let line_of = |pos: usize| view.line_at(pos);
         self.collapse.push_final(groups, line_of);
         self.collapse.set_tail(tail, line_of);
         if from_scratch {
@@ -4006,6 +4186,10 @@ impl TailEngine {
     }
 
     pub fn is_line_visible(&self, idx: usize) -> bool {
+        if self.has_context() {
+            // Matches and context lines alike, whatever the filters say about the latter.
+            return self.filtered_view().pos_of_line(idx).is_some();
+        }
         if !self.in_time_range(idx) {
             return false;
         }
@@ -4312,13 +4496,8 @@ impl TailEngine {
     /// of rows stays cheap.
     pub fn visible_time_span(&self) -> Option<(i64, i64)> {
         let count = self.visible_lines();
-        let nth = |i: usize| -> usize {
-            if self.rows_filtered() {
-                self.filtered_lines[i]
-            } else {
-                i
-            }
-        };
+        let view = self.rows_view();
+        let nth = |i: usize| -> usize { view.line_at(i).unwrap_or(i) };
         if self.timestamps_unordered {
             let mut span: Option<(i64, i64)> = None;
             for idx in (0..count).take(MAX_SPAN_SCAN).map(nth) {
@@ -4488,7 +4667,32 @@ impl TailEngine {
         };
         let total = self.total_lines();
 
-        if self.is_filter_active() {
+        if self.has_context() {
+            // The rows shown, context rows included.
+            let view = self.filtered_view();
+            let first = view.pos_of_line_or_next(start);
+            let shown = view.len().saturating_sub(first);
+            if shown * 4 < total.saturating_sub(start) {
+                // Sparse: reading only the shown lines beats scanning the file.
+                for idx in (first..view.len()).filter_map(|p| view.line_at(p)) {
+                    if let Some(line) = self.get_line(idx) {
+                        if check_match(&line) {
+                            record(idx);
+                        }
+                    }
+                }
+            } else {
+                // Dense: one sequential pass, skipping the lines outside the ranges.
+                let mut cursor =
+                    crate::context_lines::RangeCursor::new(self.context_ranges.ranges(), start);
+                self.scan_lines(start, total, |idx, line| {
+                    if cursor.pos(idx).is_some() && check_match(line) {
+                        record(idx);
+                    }
+                    !cursor.done()
+                });
+            }
+        } else if self.is_filter_active() {
             let first = self.filtered_lines.partition_point(|&idx| idx < start);
             let visible = &self.filtered_lines[first..];
             if visible.len() * 4 < total.saturating_sub(start) {
@@ -4566,6 +4770,9 @@ impl TailEngine {
         if self.last_searched_query.is_empty() {
             return;
         }
+        // With context lines a match found from `start` on also shows the `N` lines
+        // before it: they are searched again too.
+        let start = self.context_start(start);
         if self.search_waits() {
             // Search follows the filter: rerun it when the index / filter / timing job ends.
             self.pending_search = true;
@@ -5006,15 +5213,18 @@ impl TailEngine {
         let query = self.last_searched_query.clone();
         self.clear_search_hits();
         self.current_match_idx = None;
-        let filter = if self.filter.is_active() {
-            Some(self.filter.clone())
+        // With context lines the search covers the rows shown, context rows included.
+        let filter = if self.has_context() {
+            VisibleSet::Ranges(Arc::from(self.context_ranges.ranges()))
+        } else if self.filter.is_active() {
+            VisibleSet::Filter(self.filter.clone())
         } else {
-            None
+            VisibleSet::All
         };
         // The time window is applied to the hits as they are drained, so the worker must
         // not stop at the cap counting hits the window will drop; the drain caps and
         // counts instead. Otherwise the worker lists up to the cap and counts past it.
-        let limit = if self.is_time_filtered() {
+        let limit = if self.is_time_filtered() && !self.has_context() {
             usize::MAX
         } else {
             MAX_SEARCH_MATCHES
@@ -5094,13 +5304,16 @@ impl TailEngine {
                 ScanBatch::Lines(mut lines) => {
                     // The job evaluates text and level only; the time window is applied
                     // here, by index, over the complete timestamp cache.
-                    if self.is_time_filtered() {
+                    // A search over context ranges needs none: the ranges come from the
+                    // matches, window applied, and context lines ignore the filters.
+                    let ranged_search = job.kind == ScanKind::Search && self.has_context();
+                    if self.is_time_filtered() && !ranged_search {
                         lines.retain(|&idx| self.in_time_range(idx));
                     }
                     job.hits += lines.len();
                     match job.kind {
                         ScanKind::Filter => {
-                            self.filtered_lines.extend(lines);
+                            self.extend_filtered(lines);
                             self.filter_generation = self.filter_generation.wrapping_add(1);
                         }
                         ScanKind::Search => {
@@ -5133,16 +5346,13 @@ impl TailEngine {
                     // arrive; the line at the top of the view stays there.
                     job.hits += groups.len();
                     let top = self.view_top_line;
-                    let filtered = self.is_filter_active();
-                    let visible = &self.filtered_lines;
-                    let total = self.total_lines();
-                    self.collapse.push_final(groups, |pos| {
-                        if filtered {
-                            visible.get(pos).copied()
-                        } else {
-                            (pos < total).then_some(pos)
-                        }
-                    });
+                    let view = VisibleView {
+                        filtered: self.is_filter_active(),
+                        matches: &self.filtered_lines,
+                        context: &self.context_ranges,
+                        total: self.total_lines(),
+                    };
+                    self.collapse.push_final(groups, |pos| view.line_at(pos));
                     self.filter_generation = self.filter_generation.wrapping_add(1);
                     self.keep_top_line(top);
                 }
@@ -6005,7 +6215,8 @@ impl TailEngine {
                 waiting: false,
             };
         }
-        let Some(&last) = self.filtered_lines.last() else {
+        let view = self.rows_view();
+        let Some(last) = view.len().checked_sub(1).and_then(|p| view.line_at(p)) else {
             // Every line is filtered out: there is nowhere to jump, so stay put.
             return GotoTarget {
                 requested: clamped,
@@ -6014,12 +6225,10 @@ impl TailEngine {
                 waiting: false,
             };
         };
-        let pos = self.filtered_lines.partition_point(|&l| l < clamped);
-        let line = if pos < self.filtered_lines.len() {
-            self.filtered_lines[pos]
-        } else {
-            last
-        };
+        // A context line is a visible row like a match.
+        let line = view
+            .line_at(view.pos_of_line_or_next(clamped))
+            .unwrap_or(last);
         GotoTarget {
             requested: clamped,
             line,

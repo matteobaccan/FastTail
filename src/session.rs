@@ -48,6 +48,9 @@ pub struct StreamEntry {
     /// Collapse of repeated lines as `CollapseMode::name()` (`exact`, `numbers`), written
     /// as `collapse=` only when not off; `None` is off, and old files read as off.
     pub collapse: Option<String>,
+    /// Lines of context shown around each filter match (`context_lines=N`, written only
+    /// when above 0); old files read as 0, off.
+    pub context_lines: u8,
     /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`).
     /// The app always records both; `None`, written as no key, is what a file from an
     /// older version reads as, and follows the `[general]` defaults.
@@ -158,6 +161,9 @@ impl Session {
             }
             if let Some(collapse) = &s.collapse {
                 sec.set("collapse", collapse);
+            }
+            if s.context_lines > 0 {
+                sec.set("context_lines", s.context_lines.to_string());
             }
             if let Some(show) = s.line_numbers {
                 sec.set("line_numbers", show.to_string());
@@ -272,6 +278,11 @@ impl Session {
                     .and_then(crate::collapse::CollapseMode::from_name)
                     .filter(|m| m.is_on())
                     .map(|m| m.name().to_string()),
+                context_lines: sec
+                    .get("context_lines")
+                    .and_then(|v| v.trim().parse::<u8>().ok())
+                    .unwrap_or(0)
+                    .min(crate::context_lines::MAX_CONTEXT_LINES),
                 line_numbers: sec.get("line_numbers").and_then(|v| v.parse().ok()),
                 time_delta: sec.get("time_delta").and_then(|v| v.parse().ok()),
                 bookmarks,
@@ -483,5 +494,49 @@ mod tests {
             Ini::load_from_str(&plain.replace("wrap=", "line_numbers=maybe\nwrap=")).unwrap();
         let read = &Session::read_from(&conf, None).session.streams[0];
         assert_eq!((read.line_numbers, read.time_delta), (None, None));
+    }
+
+    #[test]
+    fn context_lines_are_written_only_above_zero_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("a.log");
+        std::fs::write(&log, "a\n").unwrap();
+        let mut entry = StreamEntry::new(log.clone());
+        let text = |entry: &StreamEntry| {
+            Session {
+                streams: vec![entry.clone()],
+                dock_layout: None,
+            }
+            .serialized(None)
+        };
+        let plain = text(&entry);
+        assert!(!plain.contains("context_lines"), "{plain}");
+
+        entry.context_lines = 4;
+        let written = text(&entry);
+        assert!(written.contains("context_lines=4"), "{written}");
+        let conf = Ini::load_from_str(&written).unwrap();
+        assert_eq!(
+            Session::read_from(&conf, None).session.streams[0].context_lines,
+            4
+        );
+
+        // An old file reads as off; a value out of range is capped, garbage is off.
+        let conf = Ini::load_from_str(&plain).unwrap();
+        assert_eq!(
+            Session::read_from(&conf, None).session.streams[0].context_lines,
+            0
+        );
+        for (value, expected) in [("250", 100), ("-3", 0), ("many", 0)] {
+            let conf = Ini::load_from_str(
+                &plain.replace("wrap=", &format!("context_lines={value}\nwrap=")),
+            )
+            .unwrap();
+            assert_eq!(
+                Session::read_from(&conf, None).session.streams[0].context_lines,
+                expected,
+                "{value}"
+            );
+        }
     }
 }
