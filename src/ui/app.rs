@@ -1572,14 +1572,6 @@ impl FastTailApp {
                 self.screensaver.on_user_input();
             }
 
-            // Keyboard shortcut: Space = toggle follow tail on active stream
-            if i.key_pressed(Key::Space) {
-                // A compressed stream is a static snapshot: follow stays off.
-                for eng in self.engines.iter_mut().filter(|e| !e.is_compressed()) {
-                    eng.follow_tail = !eng.follow_tail;
-                }
-            }
-
             // Zoom: `Ctrl +`, `Ctrl -` and `Ctrl 0` are applied by egui itself (it calls
             // `gui_zoom::zoom_with_keyboard` every frame), so handling them here as well
             // would zoom twice — once the whole UI, once the log font — which is exactly
@@ -2278,7 +2270,7 @@ impl FastTailApp {
                         Color32::from_rgb(10, 24, 18)
                     };
                     let play_btn = egui::Button::new(
-                        RichText::new("▶ Play")
+                        RichText::new(format!("▶ {}", t(self.config.language, "toolbar_play")))
                             .monospace()
                             .strong()
                             .color(play_color),
@@ -2308,7 +2300,7 @@ impl FastTailApp {
                         Color32::from_rgb(26, 12, 16)
                     };
                     let pause_btn = egui::Button::new(
-                        RichText::new("⏸ Pause")
+                        RichText::new(format!("⏸ {}", t(self.config.language, "toolbar_pause")))
                             .monospace()
                             .strong()
                             .color(pause_color),
@@ -2353,12 +2345,18 @@ impl FastTailApp {
                     // Right-aligned toolbar badges: Help & About with uniform height
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Help (F1)
-                        let help_btn =
-                            egui::Button::new(RichText::new("❓ Help").monospace().color(text_dim))
-                                .fill(self.config.theme.button_bg())
-                                .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                                .corner_radius(CornerRadius::same(6))
-                                .min_size(egui::vec2(0.0, 26.0));
+                        let help_btn = egui::Button::new(
+                            RichText::new(format!(
+                                "❓ {}",
+                                t(self.config.language, "toolbar_help")
+                            ))
+                            .monospace()
+                            .color(text_dim),
+                        )
+                        .fill(self.config.theme.button_bg())
+                        .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(0.0, 26.0));
 
                         if ui
                             .add(help_btn)
@@ -2370,12 +2368,18 @@ impl FastTailApp {
                         }
 
                         // About
-                        let about_btn =
-                            egui::Button::new(RichText::new("ℹ About").monospace().color(text_dim))
-                                .fill(self.config.theme.button_bg())
-                                .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
-                                .corner_radius(CornerRadius::same(6))
-                                .min_size(egui::vec2(0.0, 26.0));
+                        let about_btn = egui::Button::new(
+                            RichText::new(format!(
+                                "ℹ {}",
+                                t(self.config.language, "toolbar_about")
+                            ))
+                            .monospace()
+                            .color(text_dim),
+                        )
+                        .fill(self.config.theme.button_bg())
+                        .stroke(Stroke::new(1.0, text_dim.gamma_multiply(0.6)))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(0.0, 26.0));
 
                         if ui
                             .add(about_btn)
@@ -3933,6 +3937,10 @@ impl FastTailApp {
                                     ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
                                     ui.end_row();
 
+                                    ui.label(RichText::new("ALT + 1..9").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_tabs")).monospace());
+                                    ui.end_row();
+
                                     ui.label(
                                         RichText::new("☰ ↑ ↓ PgUp PgDn Enter Esc")
                                             .monospace()
@@ -3963,6 +3971,10 @@ impl FastTailApp {
                                         RichText::new("CTRL + SHIFT + T").monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "pin_tip")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("CTRL + L").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_lock")).monospace());
                                     ui.end_row();
 
                                     ui.label(
@@ -4459,8 +4471,15 @@ impl eframe::App for FastTailApp {
                 std::thread::sleep(throttle - elapsed);
             }
             self.last_mouse_render = Instant::now();
-        } else if self.renderer.is_software() {
-            let target_fps = self.config.max_fps_software.max(1);
+        } else {
+            // Frame cap: vsync is off on glow, so without it a stream of input events
+            // (scrolling, a growing file) could render far above the display rate.
+            let target_fps = if self.renderer.is_software() {
+                self.config.max_fps_software
+            } else {
+                self.config.max_fps
+            }
+            .max(1);
             let min_interval = std::time::Duration::from_micros(1_000_000 / target_fps as u64);
             let elapsed = self.last_frame_render.elapsed();
             if elapsed < min_interval {

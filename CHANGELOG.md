@@ -30,6 +30,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   new filter. The Find results tab offers it too, also for lines the stream's filter hides.
   Help dialog and all 16 languages updated.
 
+### Fixed
+
+- **`Space` no longer toggles Follow while you type.** A space typed in a filter, search or
+  settings field toggled Follow on every open stream; `Space` now acts only on the focused
+  stream, and only when no text field has the keyboard.
+- The **Max UI FPS (GPU)** setting is now applied: frames are capped at it on a GPU as the
+  software setting already did on a CPU renderer.
+- The window and taskbar now show the FastTail icon instead of the platform default.
+- The **Auto** renderer label said "OpenGL, then wgpu"; it tries wgpu first, and says so.
+- The toolbar's **Play**, **Pause**, **Help** and **About** are translated, and the Help
+  dialog lists `CTRL + L` (PIN lock) and `ALT + 1..9` (switch tab).
+
 ## [0.11.0] - 2026-09-27
 
 ### Added

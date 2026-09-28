@@ -68,7 +68,7 @@ pub struct FastTailConfig {
     pub lock_pin: String,
     pub telemetry_enabled: bool,
     pub sound_enabled: bool,
-    /// Rendering backend: auto (OpenGL, then wgpu on failure), glow or wgpu. Applies at start.
+    /// Rendering backend: auto (wgpu, then OpenGL on failure), glow, wgpu or software. Applies at start.
     #[serde(default)]
     pub renderer: crate::renderer::RendererChoice,
     /// Keep the main window above other windows.

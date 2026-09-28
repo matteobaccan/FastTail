@@ -876,6 +876,12 @@ fn test_i18n_exhaustive_coverage() {
         "global_filter_badge_tip",
         "global_filter_close",
         "help_desc_global_filter",
+        "toolbar_play",
+        "toolbar_pause",
+        "toolbar_help",
+        "toolbar_about",
+        "help_desc_tabs",
+        "help_desc_lock",
         "context_show",
         "context_banner",
         "context_back",
@@ -975,6 +981,8 @@ fn test_i18n_exhaustive_coverage() {
         "about_renderer",
         "about_repo",
         "about_website",
+        "toolbar_pause",
+        "toolbar_help",
     ];
     let fallbacks: Vec<String> = Language::ALL
         .iter()

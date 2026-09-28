@@ -98,7 +98,7 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 
 | Shortcut | Description |
 | :--- | :--- |
-| `Space` | Toggle Follow mode (auto-scroll to the latest line) |
+| `Space` | Toggle Follow mode (auto-scroll to the latest line) of the focused stream; ignored while a text field has the keyboard |
 | `Ctrl + F` | Focus the search box of the focused stream |
 | `Ctrl + Shift + F` | Open or focus the Find results tab to search every open stream, prefilled with the focused stream's query (`Enter` runs it) |
 | `Ctrl + Shift + H` | Show or hide the global filter bar (terms applied to every stream) |

@@ -2020,6 +2020,13 @@ fn render_log_stream(
         // Main-view navigation keys: not while the results pane (or an input) has them.
         if is_focused && keyboard_free {
             ui.input(|i| {
+                // Space toggles follow on this stream only, and never while a text field
+                // has the keyboard (a space typed in a filter used to toggle every stream).
+                // A compressed stream is a static snapshot: follow stays off.
+                if i.key_pressed(egui::Key::Space) && !i.modifiers.any() && !engine.is_compressed()
+                {
+                    engine.follow_tail = !engine.follow_tail;
+                }
                 // Ctrl + Home: Jump to top
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
                     scroll_top(engine);
