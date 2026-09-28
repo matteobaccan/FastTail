@@ -82,6 +82,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **The time range moved to the stream bar's time span.** `🕘 2026-09-18 14:02:05 →
+  16:30:12`, the span of the visible lines (the date written once when both ends share
+  it), is now the time range control: it turns to the accent colour while a window
+  narrows the view, to the warning colour while a side cannot be read, ends with `⏳`
+  while the window waits for the timing, and reads `🕘 no timestamps` on a stream without
+  usable ones. A click opens a popup with, for each side, a field wide enough for a full
+  timestamp (every format accepted before still works), a calendar of the month (Monday
+  first; the days the log spans tinted, today outlined, arrows for month and year) and
+  hour / minute / second spinners, plus the shortcuts **Whole log**, **First day**,
+  **Last day** and **Last hour**. Edits are a draft: **OK** or `Enter` applies the window
+  and closes the popup; **Cancel**, `Esc` or a click outside leave it as it was, and OK is
+  disabled while a side cannot be read. Picking a day keeps the side's time, or gives the
+  whole day. The inline time fields and their `✖` left the filter row, where `📊` and
+  `🔍` stay. Windows are saved per stream and in sessions as before; nothing new in
+  `fasttail.ini`. All 16 languages updated.
+
 - Faster ANSI handling and one-byte searches: CSI sequences are parsed in one pass and
   a one-byte query uses `memchr`.
 

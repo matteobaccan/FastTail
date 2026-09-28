@@ -351,7 +351,28 @@ fn days_from_civil(year: u32, month: u32, day: u32) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
-fn days_in_month(year: u32, month: u32) -> u32 {
+/// Days since the Unix epoch of a civil date, for the calendar of the time range popup;
+/// `None` for a date that does not exist or a year outside 1..=9999.
+pub fn date_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
+    if !(1..=9999).contains(&year) {
+        return None;
+    }
+    days_from_civil(year as u32, month, day)
+}
+
+/// Civil date `(year, month, day)` of a day count since the Unix epoch.
+pub fn days_to_date(days: i64) -> (i64, u32, u32) {
+    civil_from_days(days)
+}
+
+/// Day of the week of a day count since the Unix epoch, Monday = 0 (ISO 8601): the epoch
+/// itself was a Thursday.
+pub fn weekday(days: i64) -> u32 {
+    (days + 3).rem_euclid(7) as u32
+}
+
+/// Number of days in a month of a year, 0 for a month that does not exist.
+pub fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -505,6 +526,108 @@ pub fn end_of_typed_time(input: &str, millis: i64) -> i64 {
     }
 }
 
+/// The current instant on the local clock, in milliseconds since the epoch as if the
+/// local time were UTC: what the calendar calls "today", and the same kind of value the
+/// parser gives a log line, which is read on the clock it printed.
+pub fn local_now_millis() -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    now + local_offset_millis(now)
+}
+
+/// Offset of the local time zone from UTC, daylight saving included, from the operating
+/// system (no time zone database is shipped); 0 where it cannot be read. Windows gives
+/// the offset in force now, whatever `utc_millis` says, which is all "today" needs.
+#[cfg(windows)]
+pub fn local_offset_millis(_utc_millis: i64) -> i64 {
+    #[repr(C)]
+    struct SystemTime {
+        fields: [u16; 8],
+    }
+    #[repr(C)]
+    struct TimeZoneInformation {
+        bias: i32,
+        standard_name: [u16; 32],
+        standard_date: SystemTime,
+        standard_bias: i32,
+        daylight_name: [u16; 32],
+        daylight_date: SystemTime,
+        daylight_bias: i32,
+    }
+    extern "system" {
+        fn GetTimeZoneInformation(info: *mut TimeZoneInformation) -> u32;
+    }
+    let mut info = TimeZoneInformation {
+        bias: 0,
+        standard_name: [0; 32],
+        standard_date: SystemTime { fields: [0; 8] },
+        standard_bias: 0,
+        daylight_name: [0; 32],
+        daylight_date: SystemTime { fields: [0; 8] },
+        daylight_bias: 0,
+    };
+    // SAFETY: the struct has the layout of TIME_ZONE_INFORMATION and lives for the call.
+    let kind = unsafe { GetTimeZoneInformation(&mut info) };
+    // The bias is in minutes and counts from local time to UTC.
+    let bias = match kind {
+        0 => info.bias,
+        1 => info.bias + info.standard_bias,
+        2 => info.bias + info.daylight_bias,
+        _ => return 0,
+    };
+    -i64::from(bias) * 60_000
+}
+
+/// Offset of the local time zone from UTC at `utc_millis`, daylight saving included,
+/// from the C library's `localtime_r`; 0 where it cannot be read.
+#[cfg(all(unix, target_pointer_width = "64"))]
+pub fn local_offset_millis(utc_millis: i64) -> i64 {
+    use std::os::raw::{c_char, c_int, c_long};
+    // `struct tm` of glibc, musl and macOS; only the offset is read back.
+    #[allow(dead_code)]
+    #[repr(C)]
+    struct Tm {
+        fields: [c_int; 9],
+        gmtoff: c_long,
+        zone: *const c_char,
+    }
+    extern "C" {
+        fn tzset();
+        fn localtime_r(time: *const i64, tm: *mut Tm) -> *mut Tm;
+    }
+    let secs = utc_millis.div_euclid(1000);
+    let mut tm = Tm {
+        fields: [0; 9],
+        gmtoff: 0,
+        zone: std::ptr::null(),
+    };
+    // SAFETY: `tm` has the layout of `struct tm` on these targets (64-bit `time_t`) and
+    // both pointers live for the call.
+    let ok = unsafe {
+        tzset();
+        !localtime_r(&secs, &mut tm).is_null()
+    };
+    if ok {
+        i64::from(tm.gmtoff) * 1000
+    } else {
+        0
+    }
+}
+
+/// Offset of the local time zone from UTC: unknown on this platform, so UTC.
+#[cfg(not(any(windows, all(unix, target_pointer_width = "64"))))]
+pub fn local_offset_millis(_utc_millis: i64) -> i64 {
+    0
+}
+
+/// Whether the user typed a date alone (`YYYY-MM-DD`), which names a whole day rather
+/// than an instant.
+pub fn is_bare_date(input: &str) -> bool {
+    is_date(input.trim())
+}
+
 /// `YYYY-MM-DD`, nothing after the day.
 fn is_date(text: &str) -> bool {
     let b = text.as_bytes();
@@ -634,6 +757,58 @@ mod tests {
             None,
             "1900 is not a leap year"
         );
+    }
+
+    #[test]
+    fn civil_dates_for_the_calendar() {
+        // The epoch, a Thursday, and the way back.
+        assert_eq!(date_to_days(1970, 1, 1), Some(0));
+        assert_eq!(days_to_date(0), (1970, 1, 1));
+        assert_eq!(weekday(0), 3);
+        // 2026-09-28 is a Monday; 2100-01-01 a Friday.
+        let monday = date_to_days(2026, 9, 28).unwrap();
+        assert_eq!(weekday(monday), 0);
+        assert_eq!(weekday(monday + 6), 6);
+        assert_eq!(weekday(monday - 1), 6);
+        let y2100 = date_to_days(2100, 1, 1).unwrap();
+        assert_eq!(weekday(y2100), 4);
+        assert_eq!(days_to_date(y2100), (2100, 1, 1));
+        // Month ends and leap years.
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2000, 2), 29);
+        assert_eq!(days_in_month(2100, 2), 28);
+        assert_eq!(days_in_month(2026, 4), 30);
+        assert_eq!(days_in_month(2026, 12), 31);
+        assert_eq!(days_in_month(2026, 13), 0);
+        assert_eq!(date_to_days(2026, 2, 29), None);
+        assert_eq!(
+            date_to_days(2024, 2, 29).map(days_to_date),
+            Some((2024, 2, 29))
+        );
+        assert_eq!(
+            date_to_days(2026, 3, 1),
+            date_to_days(2026, 2, 28).map(|d| d + 1)
+        );
+        assert_eq!(date_to_days(0, 1, 1), None);
+        assert_eq!(date_to_days(10_000, 1, 1), None);
+        // A date alone, and what is not one.
+        assert!(is_bare_date(" 2026-09-18 "));
+        assert!(!is_bare_date("2026-09-18 14:02"));
+        assert!(!is_bare_date("14:02"));
+    }
+
+    #[test]
+    fn the_local_offset_is_a_real_time_zone() {
+        // Zones run from UTC-12 to UTC+14, in steps of a quarter of an hour.
+        let offset = local_offset_millis(1_789_740_125_000);
+        assert!(offset.abs() <= 14 * 3_600_000, "{offset}");
+        assert_eq!(offset % (15 * 60_000), 0, "{offset}");
+        let utc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert!((local_now_millis() - utc).abs() <= 14 * 3_600_000 + 60_000);
     }
 
     #[test]

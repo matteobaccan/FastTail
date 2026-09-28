@@ -4080,16 +4080,35 @@ impl TailEngine {
     /// stream, so a log from last week reads the way it is written. Falls back to now for
     /// a stream that has no timestamps at all.
     pub fn time_reference(&self) -> i64 {
+        self.first_timestamp().unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0)
+        })
+    }
+
+    /// First timestamp of the timed lines, `None` while none carries one. Timestamps are
+    /// inherited forward, so the lines without one form a prefix of the cache and the
+    /// first timestamp is found by a binary search, cheap enough for every frame.
+    pub fn first_timestamp(&self) -> Option<i64> {
+        let at = self.timestamps.partition_point(|&ts| ts == NO_TIMESTAMP);
+        self.timestamps.get(at).copied()
+    }
+
+    /// Timestamp of the last timed line (its own or the one it inherits), `None` while
+    /// none carries one: once a line has a timestamp, every line after it has one.
+    pub fn last_timestamp(&self) -> Option<i64> {
         self.timestamps
-            .iter()
-            .find(|&&ts| ts != NO_TIMESTAMP)
+            .last()
             .copied()
-            .unwrap_or_else(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0)
-            })
+            .filter(|&ts| ts != NO_TIMESTAMP)
+    }
+
+    /// Whether a timestamp of the timed lines goes back in time, which makes the first
+    /// and last timestamps something other than the earliest and the latest.
+    pub fn timestamps_unordered(&self) -> bool {
+        self.timestamps_unordered
     }
 
     /// Reads the two time fields: each side's instant (`None` = open or unreadable) and

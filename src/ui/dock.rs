@@ -695,101 +695,15 @@ fn paint_search_row_background(
         .set(slot, egui::Shape::rect_filled(full, 0.0, fill));
 }
 
-#[allow(clippy::too_many_arguments)]
-/// The "from / to" time window of a stream, next to the text filters.
-///
-/// The fields take `14:02`, `14:02:05`, a full date and time, or a timestamp copied out
-/// of the log, or a date alone (the whole day); a bare time belongs to the day of the log,
-/// not to today. A hint says when most lines cannot be placed in time, since a window over
-/// such a log hides them; the fields stay usable, so a window can always be typed, fixed
-/// or cleared. A window typed while the stream is still being timed in the background is
-/// held, with a hint, until timing finishes.
-fn render_time_range(
+/// The timeline histogram toggle of the filter row, and its search lane toggle while it
+/// is shown. The time range itself is set from the stream bar's time span (`time_range`).
+fn render_timeline_toggles(
     ui: &mut Ui,
     engine: &mut TailEngine,
     theme: &CyberTheme,
     lang: Language,
     search_view: &mut SearchViewPrefs,
 ) {
-    let usable = engine.timestamps_usable() || !engine.timestamps_complete();
-    let show_clear = time_range_clear_shown(
-        !engine.time_from_text.trim().is_empty() || !engine.time_to_text.trim().is_empty(),
-        engine.is_time_filtered() || engine.time_range_pending(),
-    );
-    ui.label(
-        RichText::new(format!("🕘 {}:", t(lang, "time_range")))
-            .monospace()
-            .size(11.0)
-            .color(if usable {
-                theme.accent_color()
-            } else {
-                theme.text_dim()
-            }),
-    );
-
-    let mut from = engine.time_from_text.clone();
-    let mut to = engine.time_to_text.clone();
-    let mut changed = false;
-    let field = |ui: &mut Ui, text: &mut String, hint: &str| {
-        ui.add(
-            egui::TextEdit::singleline(text)
-                .hint_text(hint)
-                .desired_width(74.0),
-        )
-    };
-
-    let from_resp = field(ui, &mut from, t(lang, "time_from_hint"));
-    changed |= from_resp.changed();
-    ui.label(RichText::new("→").monospace().color(theme.text_dim()));
-    let to_resp = field(ui, &mut to, t(lang, "time_to_hint"));
-    // A side is judged once the user leaves it: `1` on the way to `14:02` is no error.
-    let typing = from_resp.has_focus() || to_resp.has_focus();
-    changed |= to_resp.changed();
-
-    if changed {
-        let (from_ok, to_ok) = engine.apply_time_range_text(&from, &to);
-        engine.time_range_error = !from_ok || !to_ok;
-    }
-
-    if show_clear
-        && ui
-            .button("✖")
-            .on_hover_text(t(lang, "time_range_clear"))
-            .clicked()
-    {
-        engine.clear_time_range();
-        engine.time_range_error = false;
-    }
-
-    if engine.time_range_error && !typing {
-        ui.label(
-            RichText::new(format!("⚠ {}", t(lang, "time_range_invalid")))
-                .monospace()
-                .size(10.5)
-                .color(theme.warn_color()),
-        );
-    } else if engine.time_range_pending() {
-        // The stream is still being timed in the background (progress in the stream
-        // bar): the window is held and applies by itself once every line is timed.
-        ui.label(
-            RichText::new(format!("⏳ {}", t(lang, "time_range_pending")))
-                .monospace()
-                .size(10.5)
-                .color(theme.warn_color()),
-        );
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(100));
-    } else if !usable {
-        ui.label(
-            RichText::new(format!("ⓘ {}", t(lang, "time_range_unavailable")))
-                .monospace()
-                .size(10.5)
-                .color(theme.text_dim()),
-        )
-        .on_hover_text(t(lang, "time_range_unavailable_tip"));
-    }
-
-    // Timeline histogram toggle, and its search lane toggle while it is shown.
     let accent = theme.accent_color();
     if toggle_button(ui, theme, "📊", engine.timeline_open, accent)
         .on_hover_text(t(lang, "timeline_tip"))
@@ -809,8 +723,8 @@ fn render_time_range(
 
 /// The timeline histogram above the rows (see `timeline_strip`): opening it times the
 /// stream, in the background for a large file; a stream without usable timestamps gets
-/// the time fields' hint instead. A click or drag becomes the time range, written into
-/// the fields and applied like a typed one.
+/// the no-timestamps hint instead. A click or drag becomes the time range, written into
+/// the time range texts and applied like a typed one.
 fn render_timeline(
     ui: &mut Ui,
     engine: &mut TailEngine,
@@ -836,13 +750,6 @@ fn render_timeline(
         engine.time_range_error = !from_ok || !to_ok;
         ui.ctx().request_repaint();
     }
-}
-
-/// Whether the ✖ that clears both time fields and the window is shown: as soon as there
-/// is anything to clear, an unparsable text included, from whether either field holds
-/// text and whether a window is applied or held.
-fn time_range_clear_shown(has_text: bool, windowed: bool) -> bool {
-    has_text || windowed
 }
 
 /// Toolbar toggle (Follow, Monitor, line numbers, Wrap, TXT/HEX/MD): an active one gets
@@ -1501,29 +1408,14 @@ fn render_log_stream(
                 .color(theme.text_dim()),
         );
 
-        // Time span of what is on screen: the answer to "which minutes am I looking at".
-        if let Some((from, to)) = engine.visible_time_span() {
+        // Time span of what is on screen, the answer to "which minutes am I looking at",
+        // and the control that sets the time range: a click opens its popup.
+        if matches!(
+            engine.view_mode,
+            crate::tail_engine::ViewMode::Text | crate::tail_engine::ViewMode::Filtered
+        ) {
             ui.separator();
-            let span = if from == to {
-                crate::timestamp::format_millis(from)
-            } else {
-                format!(
-                    "{} → {}",
-                    crate::timestamp::format_millis(from),
-                    crate::timestamp::format_millis(to)
-                )
-            };
-            ui.label(
-                RichText::new(format!("🕘 {span}"))
-                    .monospace()
-                    .size(11.0)
-                    .color(if engine.is_time_filtered() {
-                        theme.accent_color()
-                    } else {
-                        theme.text_dim()
-                    }),
-            )
-            .on_hover_text(t(lang, "time_span"));
+            crate::ui::time_range::control(ui, engine, theme, lang);
         }
 
         // Elapsed time of a selection of two or more timed rows.
@@ -2352,7 +2244,7 @@ fn render_log_stream(
 
         ui.separator();
 
-        render_time_range(ui, engine, theme, lang, search_view);
+        render_timeline_toggles(ui, engine, theme, lang, search_view);
 
         ui.separator();
 
@@ -5747,17 +5639,4 @@ fn render_markdown_stream(
 
     engine.current_scroll_y = scroll_output.state.offset.y;
     engine.current_scroll_x = scroll_output.state.offset.x;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_clear_button_shows_for_text_or_a_window() {
-        // An unparsable text is not a window, yet there is something to clear.
-        assert!(time_range_clear_shown(true, false));
-        assert!(time_range_clear_shown(false, true));
-        assert!(!time_range_clear_shown(false, false));
-    }
 }
