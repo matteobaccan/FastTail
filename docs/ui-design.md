@@ -1,6 +1,6 @@
 # FastTail — Graphical Interface Design Document
 
-Describes the desktop UI of FastTail as of the 0.12.0 development cycle (v0.11.0 plus the global filter, #118). Everything here comes from the source code; each section names the files it describes. Features still in progress are marked **(0.12.0, in progress)**. Keep this document in step with the UI when it changes.
+Describes the desktop UI of FastTail as of the 0.12.0 development cycle: v0.11.0 plus the global filter (#118), show in context (#122), more archive formats (#126), bookmark notes and triggers (#127) and the collapse of repeated lines (#128). Everything here comes from the source code; each section names the files it describes. Keep this document in step with the UI when it changes.
 
 Stack: Rust, `eframe` / `egui` 0.36, `egui_dock` 0.21 (with `serde`), `egui_commonmark` 0.25 for the Markdown view, and `rfd` for the native file dialogs.
 
@@ -37,7 +37,8 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 | `src/ui/hit_list.rs` | Virtualized hit lists: `HitList` (a stream's results pane) and `GroupedHitList` (Find results). |
 | `src/ui/overview_strip.rs` | The 10 px minimap beside the rows' scroll bar. |
 | `src/ui/timeline_strip.rs` | The 56 px timeline histogram above the rows. |
-| `src/ui/zip_picker.rs` | The entry picker for zip archives that hold several files. |
+| `src/ui/zip_picker.rs` | `ArchivePicker`, the entry picker for a zip that holds several files and for any tar archive (plain or compressed). |
+| `src/collapse.rs` | Not UI code, but it shapes the rows: detection of repeated entries (`CollapseMode`, `CollapseState`) and the row ↔ line mapping of a collapsed text view. |
 | `src/theme.rs` | `CyberTheme`: palettes, level, label and ANSI colours, and `apply()` to egui `Visuals`. |
 | `src/renderer.rs` | Backend choice (`auto`, `glow`, `wgpu`, `software`) and the description of the active backend (`ActiveRenderer`). |
 | `src/screensaver.rs` | The Matrix "digital rain" screensaver, painted over the whole window. |
@@ -53,7 +54,7 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
   - `screensaver`, plus the lock fields `locked`, `lock_entry`, `lock_failed`, `lock_attempts`.
   - `system` (sysinfo), `cpu_usage` and `mem_used_mb` for the telemetry meters.
   - `quick_labels`: memory only.
-  - `pattern_prompt`, `zip_picker`, `open_notice`, `save_notice`, `pending_session_load`, `session_missing`: one-shot dialogs.
+  - `pattern_prompt`, `archive_picker`, `open_notice`, `save_notice`, `pending_session_load`, `session_missing`: one-shot dialogs.
   - `find_all`: the cross-stream search session.
   - `global_spec`, `global_edit_at`, `global_key`: the compiled global filter and its debounce state.
   - `renderer: ActiveRenderer`, `applied_visuals`, and the frame-pacing timestamps.
@@ -83,10 +84,10 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
     - `status_bar` (bottom panel).
     - The global filter bar, if it is open.
     - The dock, or the empty-workspace placeholder.
-14. Applies requests the dock left behind: Find results jumps, `find_all_request` from a stream bar, preset events, closed tabs, changed bookmarks, wrap, ANSI mode and timeline flags, search-view preferences, time-delta preferences, and the OS attention request.
+14. Applies requests the dock left behind: Find results jumps, `find_all_request` from a stream bar, preset events, closed tabs, changed bookmarks and bookmark notes, wrap, ANSI mode, timeline and collapse-mode flags, search-view preferences, time-delta preferences, and the OS attention request.
 15. Draws the free-floating dialogs:
     - BareTail import, Settings, Filters / Color Filters, About, Help.
-    - The Open pattern prompt, the session confirmation and "missing" dialogs, the zip picker, and the compressed-open and session-save notices.
+    - The Open pattern prompt, the session confirmation and "missing" dialogs, the archive picker (which pulls the rows its tar scan found before it draws), and the compressed-open and session-save notices.
 16. Draws the screensaver, then the lock overlay on top of everything.
 17. In borderless mode (not maximized, not locked), adds the resize zones and the 1 px frame with the corner grip.
 
@@ -95,9 +96,9 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 The UI is immediate mode and never blocks on file I/O it can avoid:
 
 - **Reading.** Each frame the UI asks the engine only for what is on screen: `visible_line_count()`, `get_actual_line_idx(row)`, `get_row(line)` / `get_line(line)` (served from the engine's block cache), `get_bytes()` for HEX, `level_of()`, `row_time_delta()` and so on. Rows are virtualized with `ScrollArea::show_rows` in the plain text and HEX views, and with a custom anchored layout in the wrapped view (§3.5).
-- **Writing.** Setters change the engine's view state: `set_include_filter`, `set_filter_terms`, `set_min_level`, `set_view_mode`, `set_encoding`, `set_ansi_mode`, `set_wrap_lines`, `apply_time_range_text`, `toggle_bookmark`, `enter_context` / `leave_context`, `set_global_filter`, `set_highlight_rules`, `set_quick_labels` and similar. Heavy work (indexing, filtering, searching, level and timestamp scans) runs on worker jobs inside the engine. The UI only draws progress from `scan_progress()`.
+- **Writing.** Setters change the engine's view state: `set_include_filter`, `set_filter_terms`, `set_min_level`, `set_view_mode`, `set_encoding`, `set_ansi_mode`, `set_wrap_lines`, `apply_time_range_text`, `toggle_bookmark`, `set_bookmark_note`, `enter_context` / `leave_context`, `set_collapse_mode` / `toggle_collapsed_row`, `set_global_filter`, `set_highlight_rules`, `set_quick_labels` and similar. Heavy work (indexing, filtering, searching, level and timestamp scans, automatic bookmarks, and the collapse detection on a file above 16 MB) runs on worker jobs inside the engine. The UI only draws progress from `scan_progress()`.
 - **Scroll requests.** The UI sets fields such as `requested_scroll_y`, `requested_scroll_x`, `scroll_to_line`, `wrap_request` or `pending_jump`. The next render consumes them.
-- **Dirty flags.** The engine raises `bookmarks_dirty`, `wrap_dirty`, `ansi_dirty` and `timeline_dirty`. The app persists the change and clears the flag after the dock is drawn.
+- **Dirty flags.** The engine raises `bookmarks_dirty`, `wrap_dirty`, `ansi_dirty`, `timeline_dirty` and `collapse_mode_dirty`. The app persists the change and clears the flag after the dock is drawn.
 - **Activity.** Each frame the app resets `engine.displayed` to false, and the tab viewer sets it back for the tabs on screen. Hidden tabs therefore accumulate `unseen_lines` and `unseen_severity`, which drive the tab badge and the taskbar flash.
 - **Waking.** Every engine gets a `WakeFn` (`make_wake`) that calls `ctx.request_repaint()` from its filesystem watcher thread. An idle window repaints only when data actually arrives.
 
@@ -122,7 +123,7 @@ The UI is immediate mode and never blocks on file I/O it can avoid:
   | Screensaver armed and window focused | every 1 s, for the inactivity check |
   | Screensaver running, lock backdrop animating | every 33 ms (`FRAME_INTERVAL`) |
   | Lock cooldown countdown | ≤ 250 ms |
-  | Background scan progress, time range pending, decompression progress, timestamp timing, Find all running | 100 ms |
+  | Background scan progress (including the collapse detection and automatic bookmarks), time range pending, decompression progress, tar scan in the archive picker, timestamp timing, Find all running | 100 ms |
   | Search typing debounce | 150 ms after the last keystroke |
   | Global filter term edits | applied 300 ms (`APPLY_DELAY_MS`) after typing pauses |
   | Overview strip and timeline cache rebuilds while a stream grows | throttled to 250 ms |
@@ -141,7 +142,7 @@ The UI is immediate mode and never blocks on file I/O it can avoid:
   - `save_dock_layout()` runs every 2 s, when a tab is closed or a file opened, on close request and in `on_exit`.
   - `FastTailConfig::save` writes the file only when its bytes changed (`write_if_changed`).
   - Stale floating-window indices are pruned (`prune_floating_window_rects`). A stale index crashed v0.1.0.
-- **Workspace.** `open_files`, and per-stream state (filters, search, encoding, ANSI mode, timeline flag) in `[session]` / `[stream_N]` sections of `fasttail.ini`. Bookmarks go in `[bookmarks]` and wrap flags in `[wrapped_files]`.
+- **Workspace.** `open_files`, and per-stream state (filters, search, encoding, ANSI mode, timeline flag, collapse mode) in `[session]` / `[stream_N]` sections of `fasttail.ini`. Manual bookmarks and their notes go in `[bookmarks]` and wrap flags in `[wrapped_files]`. Automatic bookmarks are not saved: they are recomputed from the rules.
 - **Named sessions.** Saved to `*.fasttail-session.ini` files from the 🗂 menu.
   - The title shows ` · name`, plus `*` when the live workspace differs from the file. The comparison uses a fingerprint that describes the dock by structure, not by geometry (`dock_signature`), and is checked at most once per second.
   - Loading a session over unsaved changes asks for confirmation.
@@ -187,13 +188,14 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ 🌐 Global filter [✓]On Aa .* │ All of: [____][✖][+] │ None of: [____] │ ✖            │ ← global filter bar (CTRL + SHIFT + H / 🌐)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ╭[#1] ▶ app.log ● [12]╮╭[#2] ■ db.log ○╮╭🔎 Find results ⏳╮                          │ ← egui_dock tab bar (26 px)
-│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾] │ Lines: … │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ 💾 │ ← stream bar
-│ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 🕘 Time range: [from]→[to]✖ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row
+│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾] │ Lines: 9,812 · 9,640 rows shown │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
+│ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 🕘 Time range: [from]→[to]✖ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row (45 % opacity in context)
 │ │ 🏷 Labels:  1 timeout ✕  4 req=42 ✕                                                   │ ← quick labels strip (if any)
-│ │ ◆ Filters suspended: line 1234 shown in the full log  [Back to filtered view]         │ ← context banner (0.12.0, in progress)
+│ │ ◆ Filters suspended: line 1234 shown in the full log  [Back to filtered view]         │ ← context banner (only in the context view)
 │ │ ▁▂▅█▃▁▁▂▇▂▁  peak 812                                                                 │ ← timeline strip (📊, 56 px)
-│ │ ◆   1233 │  +0.012  2026-09-27 14:02:01 INFO ...                                   ┃▌│ ← rows + overview strip (10 px)
-│ │ ▶   1234 │  +1.402  2026-09-27 14:02:02 ERROR ...                                  ┃ │
+│ │ ✏   1233 │  +0.012  2026-09-27 14:02:01 INFO ...                                   ┃▌│ ← rows + overview strip (10 px)
+│ │ ▶   1234 │  +1.402  ×57 2026-09-27 14:02:02 ERROR timeout ...                      ┃ │ ← a collapsed group: ×N badge
+│ │ ☆   1291 │  +0.300  2026-09-27 14:02:04 WARN retry ...                             ┃ │ ← automatic bookmark (rule)
 │ │ ☰ Matches for "timeout": 57                                                     ✖  │ ← search results pane (resizable)
 │ │     1234│ ... timeout ...                                                          │
 ├──────────────────────────────────────────────────────────────────────────────────────┤
@@ -339,14 +341,23 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
 5. Text and MD only:
    - **Encoding** combo, 90 px: UTF-8, ASCII, ANSI, Unicode, Unicode BE.
    - **ANSI** combo: `ANSI: auto → render`, `render`, `strip`, `raw`.
+   - Text only (not MD): the **Collapse** combo (`render_collapse_selector`), whose closed text reads `× Collapse: off|exact|numbers` in 11 pt. Its entries are `off`, `exact` (equal text after the leading timestamp, trailing whitespace ignored) and `numbers` (as exact, with numbers, hex values and ids masked). It is per stream, `CTRL + SHIFT + D` cycles it, and the tooltip explains the modes. Picking a mode detects the groups again from scratch and keeps the line at the top of the view in place.
 6. HEX only: **`Hex columns: [-8] N [+8]`**, range 8–64.
-7. **`Lines: v / t`** (dim) when rows are filtered, otherwise `Lines: t`. In HEX it shows the hex row count.
+7. **`Lines: v / t`** (dim) when rows are filtered, otherwise `Lines: t`. When repeated entries are collapsed and the rows are fewer than the visible lines, ` · R rows shown` follows. In HEX it shows the hex row count.
 8. **`🕘 from → to`**: the time span on screen. Accent when a time range is applied.
 9. **`Δ +2.357 · 14 rows`**: elapsed time of a multi-row selection, in accent.
 10. **Per-level counters**, most severe first, only for levels seen: `FTL n  ERR n  WRN n  INF n  DBG n  TRC n`, each in its `level_color`.
-11. **`⏳ {indexing|filtering|searching|detecting levels|timing lines} N% (hits)`** in warn, while a background scan runs.
-12. **`ⓘ notice`** in warn for `view_notice` and "ANSI switched".
-13. **Compressed status**: `🗜 decompressing N%` with `✖` cancel; then `🗜` (done) or `🗜 partial content (why)`; `⟳` re-extract.
+11. **`⏳ {indexing|filtering|searching|detecting levels|timing lines|finding auto-bookmarks|collapsing} N% (hits)`** in warn, while a background scan runs.
+12. **`ⓘ notice`** in warn:
+    - `ⓘ auto-bookmarks capped at N` while the rules match more lines than `auto_bookmark_max`. The tooltip says that only the first matches in file order are bookmarked, and where the limit is set.
+    - `view_notice` (also export failures and tool-run failures) and "ANSI switched".
+13. **Compressed status**: `🗜 decompressing N%` with `✖` cancel; then `🗜` (done) or `🗜 partial content (why)`; `⟳` re-extract. The tooltip is the archive path, plus `› entry` for an archive entry. When nothing was written, or the reason is a tar, the text is `🗜 why` without "partial content". The reasons (`StopReason`) are:
+    - *stopped by the user*; *output cap of {size} reached*; *less than 512 MB would remain free on {volume}*;
+    - *this file holds a tar archive: open it again to choose its entries* (a codec file that turned out to hold a tar);
+    - *the archive no longer holds this entry*;
+    - a tar entry refused when it is extracted: *link or special file, not supported*, *sparse file, not supported* (the picker's refusal texts);
+    - *the decoder window exceeds the 256 MiB limit* (an xz dictionary or zstd window over `MAX_DECODER_WINDOW`);
+    - *decompression failed: {error}*.
 14. **Stdin status**: `⏹ input ended · N lines`, `⚠ cannot read…`, `ⓘ earlier input discarded…`.
 15. **Pattern stream**: `📂* glob ▸ file` (`secondary_accent`), or `▸ waiting…` in warn, followed by `ⓘ switched to name`.
 16. **`📦 size`** button, which cycles Bytes → MB → GB → Hex (`0x…`). The chosen unit applies to every stream.
@@ -356,8 +367,9 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
     - `🔎` (search every stream).
     - `[cur / total]` (accent) or `[0 / 0]` (warn), plus a "first 1,000,000 listed" note when capped.
     - `▲` / `▼`, `☰` (results pane toggle), `🕒` (history menu), `✖` (clear).
-19. **Go to line** (`CTRL + G`): `⇢ Go to line: [____]`, 90 px. The hint is `line, +N, -N, 14:02`. It shows a notice (hidden or invalid) or `⏳ timing lines N%` while a time jump waits.
-20. **`💾`** menu (§4.13).
+19. **Go to line** (`CTRL + G`): `⇢ Go to line: [____]`, 90 px. The hint is `line, +N, -N, 14:02`. It shows a notice (hidden or invalid) or `⏳ timing lines N%` while a time jump waits. A jump to a line hidden inside a collapsed group expands that group (`reveal_line`).
+20. **Bookmark note editor**, only while it is open (row context menu → `✏ Bookmark note…`): a separator, `✏ Bookmark note, line N:` in 11 pt accent, then a 260 px single-line field with the hint *one line, Enter saves, ESC cancels*, limited to 200 characters (`MAX_NOTE_CHARS`). It takes focus on the frame after it opens and is prefilled with the current note. `Enter` saves, `Esc` cancels. Saving a note bookmarks the line (an automatic bookmark becomes a manual one); saving an empty text removes the note and keeps the bookmark. Line breaks and tabs become spaces, and the text is trimmed.
+21. **`💾`** menu (§4.12).
 
 Because it is a single row, the bar can grow wider than the panel on narrow windows. The rows area and the overview strip are clipped to the visible rectangle to compensate.
 
@@ -378,14 +390,14 @@ Shown in the text and wrapped views. Markdown shows it only while a search is ac
 6. **`Presets ▾`**: dim when nothing matches, `name ▾` in accent when the stream equals a preset, `name * ▾` in warn when modified.
 7. **`🌐` badge** when the global filter applies to this stream. The tooltip lists `+term` / `-term`.
 
-**(0.12.0, in progress)** While a stream is in the *show in context* view, the whole row is drawn at 45 % opacity (`multiply_opacity(0.45)`). The Include label's tooltip repeats the banner text. Editing any filter ends the context view.
+While a stream is in the *show in context* view, the filters are suspended and the whole row is drawn dimmed, at 45 % opacity (`multiply_opacity(0.45)`). The fields stay editable. The Include label's tooltip repeats the banner text. Editing any filter ends the context view and applies the new filter.
 
 ### 3.5 Rows area
 
 Below the filter row, in this order:
 
 1. **Quick labels strip** (only when labels exist): `🏷 Labels:` and one chip per label, ` n text `, in the label's preset colours, each with a small `✕`.
-2. **Context banner (0.12.0, in progress):** `◆ Filters suspended: line N shown in the full log` in warn, and a `[Back to filtered view]` button. `Esc` (when no widget has focus) or `CTRL + K` leave the context view as well.
+2. **Context banner**, only while a line is shown in context: `◆ Filters suspended: line N shown in the full log` in warn, and a `[Back to filtered view]` button (tooltip: *Back to the filtered view as it was (Esc or CTRL + K)*). `Esc` (on the focused stream, when no widget has focus) or `CTRL + K` leave the context view as well. The return restores the selection, the follow state and the scroll position of the moment the view was entered.
 3. **Timeline strip** (§5.6) when `📊` is on.
 4. **Search results pane** (§5.5) when `☰` is on and a query is active. It is a bottom `egui::Panel` inside the tab, laid out before the rows so the rows take the remaining space.
 5. **Rows**, and on the right the 10 px **overview strip** (§5.4) when it is enabled and there is something to mark.
@@ -395,13 +407,21 @@ Empty states are centred and dim: `⏳ indexing...`, `⏳ filtering...`, *Log fi
 **Row anatomy (text view):**
 
 ```
-[marker] [line no.] [Δt cell] [[+] JSON] text…
-   ▶       1234 │   +1.402   [+] JSON   {"level":"error", ...}
+[marker] [line no.] [Δt cell] [×N] [[+] JSON] text…
+   ▶       1234 │   +1.402   ×57  [+] JSON   {"level":"error", ...}
 ```
 
-- **Marker column.** Shown when there is a search, a bookmark or a context line. It holds one of: `◆` (the context line, warn; 0.12.0, in progress), `▶` (current hit, accent), `●` (other hit, warn), `★` (bookmark, `secondary_accent`), or a figure space so the columns never shift.
+- **Marker column.** Shown when there is a search, a bookmark (manual or automatic) or a context line. It holds one of, by priority: `◆` (the context line, warn), `▶` (current hit, accent), `●` (other hit, warn), then the bookmark glyphs in `secondary_accent`: `★` (manual bookmark), `✏` (manual bookmark with a note), `☆` (automatic bookmark only, from a rule); otherwise a figure space so the columns never shift.
+  - Hovering the marker of a row whose bookmark has a note shows the note as a tooltip (`note_tooltip`).
+  - On the row of a closed collapsed group, the marks also come from the lines it hides (`row_marks`, `BookmarkMark::of_row`): the row is a hit, or the current hit, when a hidden line is, and without a bookmark of its own it takes the mark of a hidden bookmarked line, a manual one first.
 - **Line number.** `{:>6} │`, dim at 60 % (accent on the current hit), strong.
 - **Δt cell.** Right-aligned in 11 character widths. It shows `…` while pending, `⚓` on the anchor, `+m:ss.mmm`, and switches to the accent colour at or above `time_delta_gap_ms` (previous-row mode only).
+- **`×N` badge** (collapse of repeated lines, text and wrapped views). The first row of each group of two or more equal consecutive entries carries it, strong, at the log font size: in warn while the group is collapsed, dim once it is expanded. N is grouped with `,` (`×1,234`), and above 999,999 it reads `×1.2M`.
+  - An *entry* is a line plus the stack-trace continuation lines that follow it, so a repeated exception collapses as a whole. Entries over 256 lines or 64 KiB are never grouped.
+  - **Tooltip:** `{n} repeated entries, lines {first}–{last}`, then `🕘 first → last` timestamps once the stream is timed, then *Click to show every line* or *Click to collapse again*.
+  - **Click:** expands or collapses that group (`toggle_collapsed_row`). The badge's click target is registered after the row's, so it wins the click.
+  - A click on the row of a closed group selects every line of the group. `CTRL + C`, the "Copy" menu entry and the exports keep every underlying line; "Copy as shown" writes one line per row with ` ×N` after a closed group's row.
+  - Groups are detected over the visible (filtered) lines; appended lines resume the detection from the last entry, and a reload starts again. The context view is never collapsed.
 - **JSON toggle.** `[+] JSON` / `[-] JSON` in `secondary_accent`, at the font size minus 2 (minimum 9). When expanded, pretty JSON appears in an 11 pt frame (`panel_bg` × 1.3, border at 40 %).
 - **Text colouring,** by priority:
   1. Current hit: black text on `#00FFE6`, strong.
@@ -410,12 +430,12 @@ Empty states are centred and dim: `⏳ indexing...`, `⏳ filtering...`, *Log fi
   4. The first matching highlight rule (foreground, background, bold, italic).
   5. The level palette (§6.3), when `level_colors` is on.
   6. `text_primary`.
-- **Row tint** behind the whole row width: current hit is accent at α70, other hits warn at α40, selected rows `secondary_accent` at α60, bookmarked rows `secondary_accent` at α28.
+- **Row tint** behind the whole row width: current hit is accent at α70, other hits warn at α40, selected rows `secondary_accent` at α60, bookmarked rows (manual or automatic, or a closed group hiding a bookmark) `secondary_accent` at α28.
 - **Row height:** `max(font row height × 1.25, 18)`, rounded up.
 
 **Extend (no-wrap) mode** uses `ScrollArea::both().show_rows(...)`, sticks to the bottom while following, and has a virtual horizontal extent of `MAX_LINE_BYTES × 16` px.
 
-**Wrap mode** uses `ScrollArea::vertical().show_viewport(...)`. The viewport is anchored to a row (`WrapAnchor`). Only the rows in view are laid out as galleys. The scroll bar works from an estimated height, so its thumb is approximate. The row gutter, text, tints and JSON are painted directly with the painter.
+**Wrap mode** uses `ScrollArea::vertical().show_viewport(...)`. The viewport is anchored to a row (`WrapAnchor`). Only the rows in view are laid out as galleys. The scroll bar works from an estimated height, so its thumb is approximate. The row gutter, text, tints, the `×N` badge and JSON are painted directly with the painter; the badge's width is taken from the wrap width.
 
 **HEX view** (`render_hex_stream`):
 
@@ -429,7 +449,7 @@ Empty states are centred and dim: `⏳ indexing...`, `⏳ filtering...`, *Log fi
 
 ## 4. Secondary windows, dialogs, popups and context menus
 
-Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/zip_picker.rs`, `src/ui/find_results.rs`, `src/ui/hit_list.rs`
+Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/zip_picker.rs`, `src/ui/find_results.rs`, `src/ui/hit_list.rs`, `src/compressed.rs`
 
 The shared helpers in `app.rs` are:
 
@@ -437,7 +457,7 @@ The shared helpers in `app.rs` are:
 - `capture_dialog_geometry`: writes the rendered rectangle back into the config every frame.
 - `apply_dialog_chrome_cursor`: a Move cursor over the title bar's drag strip, and a pointing hand over its collapse and close buttons.
 
-The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resizable, collapsible (egui default), closable with their ✕ and toggled by their button. **`Esc` closes all four at once** (Help, Settings, Filters, About) and ends text input.
+The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resizable, collapsible (egui default), closable with their ✕ and toggled by their button. **`Esc` closes the topmost open one** of Help, Settings, Filters and About (`close_topmost_dialog`, by egui layer order), not all four at once, and ends text input.
 
 ### 4.1 Settings — `⚙ Settings`
 
@@ -473,6 +493,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
       | Max UI FPS (Software / VM) | 10–120 |
       | Mouse throttle | 0–1000 ms |
       | Max Markdown size | 1–100 MB |
+      | Max auto-bookmarks per stream (`auto_bookmark_max`) | 100–100 000, default 10 000; the open streams recompute theirs when the drag ends |
       | Max decompressed size | GB |
       | Max standard input spool | MB |
 
@@ -494,8 +515,9 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
   2. A separator.
   3. **Color Filters section** (`render_highlights_content`):
      - A `⚡ Color Filters (a/t active)` heading, a description and an order hint.
-     - One group per rule: enabled checkbox, `⬆` `⬇`, `#n:`, pattern field, `Regex`, `Captures only` (regex rules only), `Aa`, `B`, `I`, sound combo (None, Beep, Chime, Warning, Critical) with `▶` test, `FG:` and `BG:` sRGB colour buttons, a live ` Preview ` chip, and `🗑`.
+     - One group per rule: enabled checkbox, `⬆` `⬇`, `#n:`, pattern field, `Regex`, `Captures only` (regex rules only), `Aa`, `B`, `I`, sound combo (None, Beep, Chime, Warning, Critical) with `▶` test, a **`Bookmark matching lines`** checkbox, `FG:` and `BG:` sRGB colour buttons, a live ` Preview ` chip, and `🗑`.
      - An "Add rule" button, which creates a rule with white text on `#0064C8`.
+     - **Automatic bookmarks.** Every line an enabled rule with "Bookmark matching lines" matches carries an automatic bookmark (`☆`), lines appended later included, whatever the rule's colours. The tooltip says so. On a large file the matching runs as a background scan (`⏳ finding auto-bookmarks N%`). At most `auto_bookmark_max` are kept per stream, the first in file order; past that the stream bar shows `ⓘ auto-bookmarks capped at N`. `F2` / `SHIFT + F2` visit them with the manual ones, and `CTRL + F2` or "Remove bookmark" dismisses one. A dismissal lasts until the set of bookmarking rules changes (a pattern, its regex or case flag, the rule's enabled box or the option itself): colours, styles and sounds leave the automatic bookmarks alone.
 
 ### 4.3 About — `ℹ About FastTail`
 
@@ -512,7 +534,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
 - **Window:** id `fasttail_help_popup`, default **580 × 500**, geometry persisted.
 - **Contents:** a `⚡ FASTTAIL` header, then three `ui.group`s with warn-coloured titles:
   1. **🔍 ZOOM & FONT SIZE**: `CTRL +  /  CTRL =`, `CTRL -`, `CTRL 0`, `CTRL + Wheel`.
-  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K` (0.12.0, in progress), `CTRL + SHIFT + H`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F1`, `Esc`, Drag & Drop.
+  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F1`, `Esc`, Drag & Drop.
   3. **⚡ COLOR FILTERS & VISIBILITY**: six bullet paragraphs (evaluation order, reordering, bold and italic, visibility filters, log levels, recent files).
 - Keys are written in capitals joined with ` + ` (house style). The exception is `CTRL F`, which lacks the `+`.
 
@@ -532,20 +554,29 @@ All three are anchored at the centre, not resizable and not collapsible.
 
 ### 4.7 Compressed-open notice — `🗜 Cannot open the compressed file`
 
-`fasttail_open_notice`, anchored at the centre. It shows the path and the reason (empty zip, no space, refused entry, missing entry, I/O error) and an `OK` button.
+`fasttail_open_notice`, anchored at the centre. It shows the path and the reason (empty zip, no space, refused entry, *the archive no longer holds this entry*, I/O error) and an `OK` button.
 
-### 4.8 Zip entry picker — `🗜 Choose entries — archive.zip`
+### 4.8 Archive entry picker — `🗜 Choose entries — archive.zip`
 
-Source: `src/ui/zip_picker.rs`
+Source: `src/ui/zip_picker.rs` (`ArchivePicker`), with the archive detection in `src/compressed.rs`
 
-- **Opened** when a zip archive holds more than one file entry. An archive with a single openable entry opens directly.
-- **Window:** id `fasttail_zip_picker`, resizable, not collapsible, default width **520**. The list scroll area is at most 320 px high.
+Files are recognised by their content, not their name: gzip, bzip2, xz and zstd files are single compressed logs, zip and tar are archives. A gzip, bzip2, xz or zstd file whose decompressed content starts with a tar header is a compressed tar (see §10.3 for how that is decided).
+
+- **Opened**
+  - for a zip that holds more than one file entry; a zip with a single openable entry opens directly, and an empty zip shows the compressed-open notice (*the zip archive holds no file*);
+  - at once for **any tar**, plain or compressed (`ArchivePicker::scanning`). A tar has no central directory, so a background `TarScan` walks its headers and the picker pulls the rows it found every frame (`sync`). When the scan ends with exactly one openable entry, and the user neither opened nor checked anything, that entry opens and the picker closes by itself.
+- **Window:** id `fasttail_zip_picker`, resizable, not collapsible, default width **520**. The list scroll area is at most 320 px high. The title is `🗜 Choose entries — <archive file name>`.
 - **Contents:**
-  - A `🔍` filter field (260 px), `Select all` and `Select none`.
+  - **Scan line** (tar only), above the filter:
+    - while the scan runs, `🗜 scanning N%` in warn and a `✖` button (tooltip: *Stop scanning (the entries found so far stay listed)*); the window repaints every 100 ms;
+    - when it ended early, a `⚠` line in warn: *The list is partial: the scan stopped at 100,000 entries or 1024 GB of data* (a `ScanLimits` bound), *Scan stopped: the list is partial* (the ✖), *Damaged archive, the list ends at the unreadable header: {error}*, or *decompression failed: {error}*;
+    - once the scan is over and no entry can be opened (or there is none), *The archive holds no file that can be opened* in warn.
+  - A `🔍` filter field (260 px), `Select all` (openable visible rows only) and `Select none`.
   - Sortable headers `Name ▲/▼` and `Size ▲/▼`.
-  - A checkbox per entry with its human-readable size (dim). Refused entries (encrypted, unsupported method, unsafe or duplicate name) are shown disabled, with `size · reason` in warn and the reason as tooltip.
-  - `📂 Open (n)`, disabled when n = 0, and `Cancel`. Closing the window with ✕ cancels.
-  - Each chosen entry opens as its own stream.
+  - A checkbox per entry with its human-readable size (dim). Refused entries are shown with a disabled checkbox, `size · reason` in warn and the reason as tooltip. The reasons are: *encrypted entry, not supported*, *compression method {method} not supported*, *unsafe entry name*, *another entry has the same name* (zip), and *link or special file, not supported*, *sparse file, not supported* (tar).
+  - `📂 Open (n)`, disabled when n = 0 (with a tooltip saying why), and `Cancel`. Closing the window with ✕ cancels.
+  - Each chosen entry opens as its own stream. While a tar scan still runs, `Open` keeps the picker open and clears the selection, so more entries can be picked as they are found; otherwise it closes the picker.
+- An entry that is itself compressed (for example a `.gz` inside a tar) is decoded once more when it is extracted.
 
 ### 4.9 BareTail import — `⚡ BARETAIL CONFIGURATION DETECTED`
 
@@ -595,17 +626,21 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
 | Recent files | toolbar `🕒` | `📄 name (path)` × up to 15, separator, `🗑 Clear recent files history` |
 | Sessions | toolbar `🗂` | `Save session as…` (native save dialog, filter `FastTail session` *.ini), `Save session` (disabled without a current session), `Load session…`, `Recent sessions ▸` submenu (`🗂 name`, path as tooltip; `Clear recent sessions`), separator, `Save current as default workspace` |
 | Search history | stream bar `🕒` (max width 280) | the last queries; picking one runs it and centres the first hit |
-| Export / stream actions | stream bar `💾` (max width 260) | `Export visible lines...`, `Export search matches...` (with a query), separator + `Clear bookmarks` (with bookmarks), separator + *Run tool* + `▶ tool` × n (tools run on the current row) |
+| Export / stream actions | stream bar `💾` (max width 260) | `Export visible lines...`, `Export search matches...` (with a query), separator + `Clear bookmarks` (with manual or automatic bookmarks; it removes the manual ones with their notes and dismisses the current automatic ones), separator + *Run tool* + `▶ tool` × n (tools run on the current row) |
 | Presets | filter row `Presets ▾` (min width 240) | each preset (a selectable label, summary as tooltip) + a small `all` button (apply to all streams), separator, `💾 Save current as preset…`, `⟳ Update "name" from this stream` (when modified), `⚙ Manage presets…` |
-| Combos | — | encoding, ANSI mode, minimum level, language, renderer, sound alert, tool rule binding |
+| Combos | — | encoding, ANSI mode, collapse mode, minimum level, language, renderer, sound alert, tool rule binding |
 
 ### 4.13 Context menus (right click)
 
-- **Row context menu** (`row_context_menu`, text and wrapped views). It is shown only when at least one of these applies: a filter is active, the Δt column is visible, or tools are configured. Minimum width 160.
-  1. `◆ Show in context  (CTRL + K)`, on a filtered stream **(0.12.0, in progress)**.
-  2. `⚓ Set time anchor here` and `Clear time anchor`, while Δt is shown.
-  3. `▶ tool name` for each external tool.
-- **Find results hit context menu:** `◆ Show in context  (CTRL + K)` **(0.12.0, in progress)**. It jumps to the hit with the stream's filters suspended.
+- **Row context menu** (`row_context_menu`, text and wrapped views). It is **always available** on a row. Minimum width 160. The picks are applied after the rows are drawn (`RowMenuPicks`). Groups are separated by separators:
+  1. `Copy  (CTRL + C)`: the selection when the clicked row is part of it, else the clicked row alone (it becomes the selection); every underlying line, those a collapsed group hides included.
+  2. `Copy as shown`: the same, one line per row as the view shows it, with ` ×N` after a closed group's row.
+  3. `✏ Bookmark note…`: opens the note editor in the stream bar (§3.3) on that line.
+  4. `☆ Remove bookmark  (CTRL + F2)`, only when the row's own line is bookmarked: what `CTRL + F2` does there (removes a manual bookmark and its note, or dismisses an automatic one).
+  5. `◆ Show in context  (CTRL + K)`, on a filtered stream.
+  6. `⚓ Set time anchor here` (not on the current anchor) and `Clear time anchor` (when one is set), while Δt is shown.
+  7. `▶ tool name` for each external tool.
+- **Find results hit context menu:** `◆ Show in context  (CTRL + K)`. It jumps to the hit with the stream's filters suspended.
 - **Dock tabs:** `egui_dock` defaults only. FastTail does not customize them.
 
 ### 4.14 Native dialogs (rfd)
@@ -615,11 +650,11 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
 - Export save: `Text (*.txt, *.log)`, named `<stem>-export.txt` or `<stem>-matches.txt`.
 - The spool folder picker.
 
-Export failures go to stderr only; there is no in-UI error.
+An export failure is shown as an `ⓘ` notice in the stream bar (`view_notice`).
 
 ### 4.15 Things that do not exist
 
-There is no separate goto-line dialog (it is inline in the stream bar) and no bookmarks list window. Bookmarks are the `★` markers, the overview strip marks, `F2` navigation and "Clear bookmarks". There are no toast notifications. Transient information is shown as `ⓘ` labels in the stream bar or in the small centred notice windows above.
+There is no separate goto-line dialog (it is inline in the stream bar), no bookmarks list window and no note dialog (the note editor is inline in the stream bar). Bookmarks are the `★` / `✏` / `☆` markers, the note tooltips, the overview strip marks, `F2` navigation and "Clear bookmarks". There are no toast notifications. Transient information is shown as `ⓘ` labels in the stream bar or in the small centred notice windows above.
 
 ---
 
@@ -641,11 +676,11 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `✕` `🗖` `🗗` `—` | borderless window buttons |
 | `🌐` | global filter (title bar button, stream badge, bar title, Filters window) |
 | `📌` | always on top |
-| `🔍` | zoom level; search field label; timeline search-lane toggle; Filters heading; zip filter |
+| `🔍` | zoom level; search field label; timeline search-lane toggle; Filters heading; archive picker filter |
 | `🖥` | CPU meter |
 | `📁` | Open File; spool folder picker |
 | `🕒` | recent files; search history |
-| `📂*` / `📂` | open pattern / pattern stream label; empty-state icon; zip "Open" |
+| `📂*` / `📂` | open pattern / pattern stream label; empty-state icon; archive picker "Open" |
 | `🗂` | sessions |
 | `⚡` | Color Filters; Include field; FASTTAIL headers; Performance section |
 | `▶` / `■` | watching / paused (tab title, Follow and Monitor toggles); `▶` also marks the current hit and runs tools |
@@ -654,23 +689,26 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `❓` `ℹ` | Help, About |
 | `⚠` | warnings (software banner, invalid values, wrong PIN) |
 | `●` / `○` | new data / none (tab title); `●` is also the "other hit" marker |
-| `★` | bookmark marker |
-| `◆` | line shown in context **(0.12.0, in progress)** |
+| `★` | manual bookmark marker |
+| `✏` | marker of a manual bookmark with a note; "Bookmark note…" menu entry and note editor label; `✏ line: note` in the overview strip tooltip; also rename (presets) |
+| `☆` | marker of an automatic bookmark (a rule's "Bookmark matching lines"); "Remove bookmark" menu entry |
+| `◆` | line shown in context (marker, banner, "Show in context" menu entries) |
+| `×`, `×N` | collapse selector (`× Collapse: …`); badge of a collapsed group (`×57`, `×1.2M`) |
 | `🔤 TXT` `🔢 HEX` `📝 MD` | view modes |
 | `# 123` / `# ---` | line numbers on / off |
 | `Δt`, `⚓`, `…` | time-delta column toggle, anchor, pending |
 | `↩` | Wrap |
-| `🕘` | time range, visible time span |
+| `🕘` | time range, visible time span, first → last time in a collapse badge tooltip |
 | `📊` | timeline toggle |
 | `⏳` | background work / progress / cooldown |
 | `ⓘ` | informational notice |
-| `🗜` | compressed stream, zip picker, compressed notice |
+| `🗜` | compressed stream status, archive picker (title and `scanning N%`), compressed notice |
 | `⏹` | stdin ended |
 | `📦` | file size |
 | `🔎` | search all streams / Find results tab |
 | `☰` | search results pane |
 | `▲` `▼` | previous / next hit; sort direction; group collapsed / expanded (`▶` / `▼`) in Find results |
-| `✖` / `✕` | clear / remove / close / cancel |
+| `✖` / `✕` | clear / remove / close / cancel (also stops decompression and the tar scan) |
 | `+`, `+N` | add a filter term / extra terms |
 | `🚫` | Exclude field |
 | `Aa`, `.*`, `?`, `≥` | case sensitive, regex, show unknown levels, minimum level |
@@ -678,7 +716,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `💾` | export menu; save preset; session saved |
 | `⟳` | re-extract archive; refresh Find results; update preset |
 | `↺` | reset spool folder |
-| `⬆` `⬇` `✏` `🗑` `✔` `➕` `⭐` `🛠` `🔒` `⇢` `📄` | reorder, rename, delete, confirm, add tool, presets heading, tools heading, lock, go-to, file entry |
+| `⬆` `⬇` `🗑` `✔` `➕` `⭐` `🛠` `🔒` `⇢` `📄` | reorder, delete, confirm, add tool, presets heading, tools heading, lock, go-to, file entry |
 | `[+] JSON` / `[-] JSON` | JSON expander |
 | `␛` | ESC byte in ANSI raw mode |
 | `·` | non-printable byte in the HEX ASCII column |
@@ -687,7 +725,7 @@ On Windows the CJK fallback fonts are appended (§6.6). Emoji rendering relies o
 
 ### 5.3 Markers, highlights and colour-coded levels
 
-- **Marker column**, **row tints**, **search colours** (`#00FFE6` current, `#FFE600` other, black text): see §3.5. The results lists use the same `#FFE600` for the query tint (`QUERY_BG`).
+- **Marker column** (`◆` `▶` `●` `★` `✏` `☆`), **`×N` badge**, **row tints**, **search colours** (`#00FFE6` current, `#FFE600` other, black text): see §3.5. The results lists use the same `#FFE600` for the query tint (`QUERY_BG`).
 - **Level colouring:** see the palette in §6.3. It applies only when no user highlight rule matches the row and `level_colors` is on. INFO and unknown lines keep the primary text colour. FATAL rows get a filled background and bold text.
 - **Highlight spans** (`span_layout_job`), non-overlapping and sorted:
   - `Rule` (the rule's foreground and background, italic);
@@ -702,17 +740,20 @@ Source: `src/ui/overview_strip.rs`
 
 - 10 px wide, on the right edge of the rows area, when `overview_strip` is on and there is at least one mark or a current hit.
 - **Background:** `panel_bg` at 85 %, with a 1 px left line in `border_color` at 40 %.
-- **Three lanes per pixel row:**
+- **Marks per pixel row,** painted in this order:
 
   | Mark | x-extent | Colour |
   |---|---|---|
   | ERROR / FATAL | 1 px to 45 % | `level_color(Error)` |
   | search hits | 40 % to 100 % | warn |
-  | bookmarks | 1 px to 35 % | `secondary_accent` |
+  | automatic bookmarks (not dismissed, not also manual) | 1 px to 35 % | `secondary_accent` at half alpha (`gamma_multiply(0.5)`) |
+  | manual bookmarks | 1 px to 35 % | `secondary_accent` |
 
+  The automatic marks are drawn at half strength and under the manual ones, so the manual bookmarks stay visible among a rule's many marks.
 - The current hit is a 2 px accent line across the strip. The viewport is a box outline in `text_primary` at 70 %.
-- **Tooltip:** `Line N`, plus "Error marks are sampled…" when sampled. A click or drag centres the main view on that row.
-- **Cache:** kept in egui memory per stream. It is rebuilt at once on a height or bookmark change, and otherwise at most every 250 ms. Error marks are sampled only on filtered views larger than 4 000 000 rows.
+- **Collapsed rows.** While repeated entries are collapsed, the strip maps rows, not lines: a line a closed group hides is marked at the group's row (hit, bookmark, automatic bookmark or error). Error marks are exact up to 4 000 000 visible lines and sampled above (at most 256 sampled rows per pixel).
+- **Tooltip:** `Line N`, then the notes of the bookmarks drawn within 2 px of the pointer, as `✏ line: note` (at most five, visible lines only), plus "Error marks are sampled…" when sampled. A click or drag centres the main view on that row.
+- **Cache:** kept in egui memory per stream. It is rebuilt at once on a height or bookmark change, and otherwise at most every 250 ms. Without collapse, error marks are sampled only on filtered views larger than 4 000 000 rows.
 
 ### 5.5 Search results pane and Find results list
 
@@ -760,10 +801,11 @@ Nearly every control has a localized tooltip through `on_hover_text`. Disabled c
 
 There is no toast system. The feedback channels are:
 
-- `ⓘ` / `⚠` / `⏳` labels in the stream bar (`view_notice`, ANSI switched, pattern switched, scans);
+- `ⓘ` / `⚠` / `⏳` labels in the stream bar (`view_notice`, auto-bookmarks capped, ANSI switched, pattern switched, scans, compressed stop reasons);
 - the goto notice;
 - the software banner;
-- the context banner (0.12.0, in progress);
+- the context banner;
+- the `⚠` scan notices and "no openable file" line of the archive picker (§4.8);
 - the small centred notice windows (§4.6, §4.7);
 - sound effects when `sound_enabled` is on (attach blip, error beep, rule alerts);
 - `RequestUserAttention(Informational)`, a taskbar flash for a background error when `flash_on_alert` is on and the window is unfocused.
@@ -772,7 +814,7 @@ There is no toast system. The feedback channels are:
 
 - **Title bar:** CPU % (bar and text), RAM used / total GB (bar and text), zoom %, pin state, global filter state.
 - **Status bar:** the stream path and the renderer chip.
-- **Stream bar:** follow and monitor state, mode, lines (visible / total), visible time span, selection elapsed time, level counts, scan progress, size, throughput, match counter.
+- **Stream bar:** follow and monitor state, mode, collapse mode, lines (visible / total, and rows shown when collapsed), visible time span, selection elapsed time, level counts, scan progress, size, throughput, match counter.
 
 ### 5.10 Matrix screensaver
 
@@ -930,11 +972,11 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 
 - **Focused stream.**
   - It is the `LogStream` of the dock's focused leaf (`find_active_focused`), or else the active tab of the main surface.
-  - **Only** it handles `F3`, `CTRL + F`, `CTRL + G`, `CTRL + K`, `ALT + W`, `CTRL + A`, `CTRL + C`, the `F2` family, the navigation keys, external-tool shortcuts and quick labels. It also provides the prefill for `CTRL + SHIFT + F`.
+  - **Only** it handles `F3`, `CTRL + F`, `CTRL + G`, `CTRL + K`, `CTRL + SHIFT + D`, `ALT + W`, `CTRL + A`, `CTRL + C`, the `F2` family, the navigation keys, external-tool shortcuts and quick labels. It also provides the prefill for `CTRL + SHIFT + F`.
   - When Find results is the focused tab, no stream is focused.
 - **Keyboard ownership inside a stream.**
   - The navigation keys (arrows, Page Up / Page Down, Home / End, `CTRL + HOME` / `CTRL + END`) act only when **no widget wants keyboard input** (`egui_wants_keyboard_input()`).
-  - `CTRL + A`, `CTRL + C` and `F2` also work while the stream's results pane has focus.
+  - `CTRL + A`, `CTRL + C`, `CTRL + SHIFT + D` and `F2` also work while the stream's results pane has focus.
   - Inside the search box, `↑`, `↓`, Page Up, Page Down, `Enter` and `SHIFT + ENTER` are consumed by the box for hit navigation. `Esc` in the box gives up focus.
 - **Hit lists.** When one has focus it locks the arrows and Escape (`set_focus_lock_filter`) so egui's focus navigation does not steal them. `Esc` gives the keyboard back to the stream.
 - **Order of consumption.** App-level shortcuts that could collide with stream shortcuts are **consumed before the dock is drawn**: tool shortcuts, `CTRL + SHIFT + 1..9`, `CTRL + SHIFT + F`, `CTRL + SHIFT + H` and `CTRL + L`. egui matches shortcuts logically, so otherwise `CTRL + F` would also fire on `CTRL + SHIFT + F`.
@@ -946,7 +988,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | Shortcut | Scope | Action |
 |---|---|---|
 | `F1` | global | Toggle the Help window |
-| `Esc` | global | Close Help, Settings, Filters and About (all four) and end text input. Also closes the pattern prompt, session dialogs, notices and the preset modal; leaves the search box, the go-to box and hit lists; leaves the context view when the rows have the keyboard (0.12.0, in progress) |
+| `Esc` | global | Close the topmost of Help, Settings, Filters and About, and end text input. Also closes the pattern prompt, session dialogs, notices and the preset modal; leaves the search box, the go-to box and hit lists; cancels the bookmark note editor; leaves the context view when no widget has the focus |
 | `Space` | focused stream | Toggle Follow (not on a compressed stream, not while a text field has the keyboard) |
 | `CTRL + SHIFT + T` | global | Toggle always-on-top |
 | `CTRL + L` | global | Lock behind the PIN (needs a PIN) |
@@ -963,13 +1005,15 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `↑` / `↓` | search box | Next / previous hit; scrolls one line when there are no hits |
 | `PgUp` / `PgDn` | search box | Scroll one page |
 | `CTRL + G` | focused stream | Open the inline go-to box. It accepts `N`, `+N`, `-N` or a time such as `14:02`. `Enter` jumps and selects; `Esc` closes |
-| `CTRL + K` | focused stream | **(0.12.0, in progress)** Show the selection anchor (or the first selected line) in context with the filters suspended; pressed again, go back |
-| `CTRL + K` | Find results list | **(0.12.0, in progress)** Show the selected hit in context |
+| `CTRL + K` | focused stream | Show the selection anchor (or the first selected line) in context with the filters suspended; pressed again, go back |
+| `CTRL + K` | Find results list | Show the selected hit in context |
+| `CTRL + SHIFT + D` | focused stream, text views | Cycle the collapse of repeated lines: off → exact → numbers → off (per stream, persisted) |
 | `ALT + W` | focused stream | Toggle line wrap (per file, persisted) |
 | `CTRL + A` | focused stream | Select every visible row |
-| `CTRL + C` | focused stream | Copy the selected rows (or the current hit) as plain text |
-| `CTRL + F2` | focused stream | Toggle a bookmark on the current row (the selection, else the current hit, else the top row) |
-| `F2` / `SHIFT + F2` | focused stream | Next / previous bookmark (wraps), select it and centre it |
+| `CTRL + C` | focused stream | Copy the selected rows (or the current hit) as plain text; every line a selected collapsed group hides is included |
+| `CTRL + F2` | focused stream | On the current row (the selection, else the current hit, else the top row): remove a manual bookmark with its note, dismiss an automatic bookmark, or else add a manual bookmark |
+| `F2` / `SHIFT + F2` | focused stream | Next / previous bookmark, manual or automatic, among the visible lines (wraps); select it and centre it |
+| `Enter` / `Esc` | bookmark note editor | Save / cancel the note |
 | `↑` `↓` | rows | Scroll one line (pauses follow) |
 | `←` `→` | rows | Scroll 40 px horizontally; `CTRL` gives 200 px |
 | `PgUp` / `PgDn` | rows | Scroll one page |
@@ -981,26 +1025,28 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `Enter` | Find results query box | Run the search and move focus to the results |
 | `Enter` / `Esc` | pattern prompt, preset modal, lock | Submit / cancel (the lock accepts only `Enter`) |
 
-The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL + END`, or the arrow keys, Page Up / Page Down and Home / End navigation.
+The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL + END`, the arrow keys, Page Up / Page Down and Home / End navigation, or the keys of the note editor.
 
 ### 7.3 Mouse interaction
 
 - **Rows.**
-  - Click selects a row. `SHIFT + click` extends the selection over the visible rows. `CTRL + click` toggles a row.
-  - Right-click opens the row context menu (§4.13).
+  - Click selects a row. `SHIFT + click` extends the selection over the visible rows. `CTRL + click` toggles a row. On a closed collapsed group, the row stands for every line of the group.
+  - Right-click opens the row context menu (§4.13), on any row.
   - Clicking `[+] JSON` expands or collapses the pretty-printed JSON.
+  - Clicking a `×N` badge expands or collapses that group; hovering it shows the repetitions, the line span and the times.
+  - Hovering the `✏` marker shows the bookmark note.
   - The wheel scrolls; in wrap mode, a far scroll-bar drag jumps by estimate.
-- **Overview strip:** click or drag to centre the view there; hover shows the line.
+- **Overview strip:** click or drag to centre the view there; hover shows the line and the notes of nearby bookmarks.
 - **Timeline:** click a column or drag a span to set the time range; hover shows the counts.
 - **Results pane:** drag its top edge to resize (persisted, shared). Click a hit to commit it and focus the list.
-- **Find results:** click a header to collapse or expand it. Click a hit to show it. Right-click a hit for "Show in context" (0.12.0, in progress).
+- **Find results:** click a header to collapse or expand it. Click a hit to show it. Right-click a hit for "Show in context".
 - **Dock:** drag a tab to split, re-dock or float it. Drag the separators to resize. Tab ✕ closes.
 - **Title bar:** drag the title label or the free area to move the window; double-click the free area to maximize or restore; click the zoom % to reset.
 - **Borderless:** edge and corner resize zones with resize cursors.
 - **Dialogs:** a Move cursor on the title strip, a pointing hand on the collapse and close buttons.
 - **Stream bar:** click `📦 size` to cycle units; click the toggles.
 - **Drag and drop:**
-  - Files open as streams. `.gz` and `.zip` files are recognised by content; a multi-entry zip opens the picker.
+  - Files open as streams. gzip, bzip2, xz, zstd, zip and tar files are recognised by content; a multi-entry zip or any tar opens the archive picker (§4.8).
   - A **folder** opens the pattern prompt with `folder\*.log`.
 - **Any input** (key, pointer move, click, wheel, text) resets the screensaver timer. While the screensaver runs, any raw event dismisses it.
 
@@ -1044,7 +1090,7 @@ There are 16 languages. `Language::ALL`, in the order of the settings picker:
 ### 8.3 Lookup: `t(lang, key)`
 
 - `pub fn t(lang: Language, key: &str) -> &'static str` is one large `match (lang, key)`.
-- Localized arms come first, `(Language::It, "open_file") => "Apri File"`. Each language has about 400 arms.
+- Localized arms come first, `(Language::It, "open_file") => "Apri File"`. Each of the 15 languages other than English has 443 arms, one per English key.
 - The English arms come last as wildcards: `(_, "open_file") => "Open File"`. They serve English and act as the fallback for any key a language lacks.
 - An unknown key returns the literal `"Unknown"`.
 - The UI calls `t()` every frame with the current `config.language`, so a language switch applies on the next frame with no restart. The config is saved when the theme or language changes.
@@ -1053,8 +1099,8 @@ There are 16 languages. `Language::ALL`, in the order of the settings picker:
 
 There is no formatting engine. Strings carry `{name}` tokens that the call site fills with `.replace(...)`:
 
-- `{line}`, `{n}`, `{secs}`, `{limit}`, `{size}`, `{volume}`, `{path}`, `{lines}`, `{error}`, `{name}`, `{delta}`, `{hits}`, `{streams}`, `{total}`, `{running}`, `{queued}`, `{age}`, `{method}`.
-- Examples: `context_banner` → "Filters suspended: line {line} shown in the full log"; `lock_cooldown` → "Too many attempts: try again in {secs} s"; `find_all_summary` → "{hits} matches in {streams} of {total} streams".
+- `{line}`, `{n}`, `{secs}`, `{limit}`, `{size}`, `{volume}`, `{path}`, `{lines}`, `{error}`, `{name}`, `{delta}`, `{hits}`, `{streams}`, `{total}`, `{running}`, `{queued}`, `{age}`, `{method}`, `{first}`, `{last}`, `{rows}`.
+- Examples: `context_banner` → "Filters suspended: line {line} shown in the full log"; `lock_cooldown` → "Too many attempts: try again in {secs} s"; `find_all_summary` → "{hits} matches in {streams} of {total} streams"; `collapse_badge_tip` → "{n} repeated entries, lines {first}–{last}"; `collapse_rows` → "{rows} rows shown"; `auto_bookmarks_capped` → "auto-bookmarks capped at {n}".
 
 Numbers are grouped with `,` by `group_thousands` in every language. Times come from `crate::timestamp::format_*`.
 
@@ -1114,6 +1160,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `max_fps_software` | 30 | frame cap on software rendering |
 | `mouse_throttle_ms` | 100 | pointer-move frame throttle (0–1000) |
 | `markdown_max_mb` | 1 | MD view size limit |
+| `auto_bookmark_max` | 10000 | automatic bookmarks kept per stream (clamped to 100–100 000); the `ⓘ auto-bookmarks capped at N` notice |
 | `spool_dir`, `compressed_max_gb`, `stdin_spool_max_mb` | temp, 20, 2048 | compressed and stdin spools |
 | `size_unit` | `Bytes` | Bytes, MB, GB or Hex for the 📦 size |
 | `baretail_import`, `baretail_prompt_shown` | false, false | BareTail dialog |
@@ -1130,10 +1177,10 @@ Environment overrides for support: `FASTTAIL_POLL_INTERVAL_MS`, `FASTTAIL_SIZE_C
 | `[dock]` | `layout` (RON) | dock tree and floating windows |
 | `[open_files]` / `[recent_files]` / `[recent_sessions]` | `file_N` | restored streams, 🕒 menu (15), 🗂 recent menu |
 | `[search_history]` | `query_N` | search 🕒 menu |
-| `[bookmarks]` | `file_N`, `lines_N` | `★` markers (at most 50 files × 1000 lines) |
+| `[bookmarks]` | `file_N`, `lines_N`, `note_<N>_<line>` | manual bookmarks (`★`, `✏`) and their notes, one key per note so a note that does not read back loses only itself (at most 50 files × 1000 lines; a note of a line not kept is dropped). Automatic bookmarks are not stored |
 | `[wrapped_files]` | `file_N` | ↩ Wrap per file (at most 50) |
-| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, … | per-stream state of the default workspace |
-| `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only` | Color Filters |
+| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, … | per-stream state of the default workspace. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
+| `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only`, `bookmark` | Color Filters; `bookmark=true` is "Bookmark matching lines" (default false) |
 | `[tool.N]` | `name`, `program`, `args`, `shortcut`, `rule`, `shell`, `match` | external tools, menus, shortcuts |
 | `[filter_preset.N]` | `name`, `include.n`, `exclude.n`, `case_sensitive`, `regex`, `min_level`, `show_unknown_levels`, `time_from`, `time_to` | Presets ▾ |
 | `[global_filter]` | `enabled`, `bar_open`, `case_sensitive`, `regex`, `include.n`, `exclude.n` | global filter bar |
@@ -1155,9 +1202,9 @@ Command-line options that shape the UI:
 
 1. **Never block the UI thread on the whole file.**
    - Every draw path reads only the visible rows through the engine's block cache (`show_rows`, the anchored wrap layout, virtualized hit lists).
-   - Large-file indexing, filtering, searching, level detection and timestamp timing run as background scan jobs with progress in the stream bar.
+   - Large-file indexing, filtering, searching, level detection, timestamp timing, automatic bookmarks and the collapse detection run as background scan jobs with progress in the stream bar.
    - Find all runs at most four jobs, and others are queued.
-   - Decompression and stdin spooling run on threads.
+   - Decompression, the tar header scan and stdin spooling run on threads. The tar peek of a codec file, done on the UI thread when it is opened, is capped at an 8 MiB decoder window and cached per path, size and modification time.
    - The global filter refilters small files synchronously within a 32 MB-per-frame budget.
 2. **Repaint only when needed.**
    - egui repaints on demand only.
@@ -1172,20 +1219,21 @@ Command-line options that shape the UI:
    - The overview strip and timeline caches live in egui temp memory and are keyed by `search_generation`, `filter_generation`, `buffer_generation`, `bookmarks_generation`, `histogram_generation` and the size.
    - They are rebuilt at most every 250 ms while a stream grows.
    - The global filter's regex validity check is cached by a hash of the terms.
+   - The bookmark a closed collapsed group hides is cached per row, keyed by the filter and bookmark generations (`hidden_bookmark`).
 5. **Layout and state persistence everywhere.**
    - Dock layout, floating windows, window geometry, dialog geometry, zoom, pane height and toggles are persisted.
    - Writes are debounced (2 s layout, save on change) and skipped when nothing changed.
    - Results (Find results) and stdin are deliberately not persisted.
 6. **Deferred mutation.**
    - The dock viewer never mutates the dock while it draws. It leaves requests (`find_all.jump`, `find_all_request`, `preset_events`, `tab_closed`, `labels_changed`, dirty flags) that the app applies after `DockArea::show_inside`.
-   - Menus record an action (`SessionAction`) and run it after they close.
+   - Menus record an action (`SessionAction`, `RowMenuPicks`, the badge toggle) and run it after they close or after the rows are drawn.
 7. **One source of truth per preference.**
    - Zoom is egui's `zoom_factor`, which `CTRL +/-/0`, `CTRL + wheel` and Settings all move. An earlier bug zoomed twice.
    - Line numbers, the Δt column, the overview strip, the results pane and the size unit are global.
-   - Wrap, encoding, ANSI mode, timeline and filters are per stream.
+   - Wrap, encoding, ANSI mode, collapse mode, timeline, filters and bookmarks are per stream. `auto_bookmark_max` is global.
 8. **Keyboard scoping.** Shortcuts act on the focused stream only. Conflicting shortcuts are consumed before the dock. Text boxes and hit lists own the keys while focused.
 9. **Visible state.**
-   - Hidden conditions are surfaced: `🌐` badge, `+N` term badge, `name *` preset, "partial content", "sampled" tooltip, capped-results note, `(Closed)` tab, `⚠ invalid`.
+   - Hidden conditions are surfaced: `🌐` badge, `+N` term badge, `name *` preset, "partial content", "sampled" tooltip, capped-results note, "auto-bookmarks capped", "rows shown", the partial-list notice of the archive picker, `(Closed)` tab, `⚠ invalid`.
    - Toggles use a filled, stroked style so "on" is readable on Light.
 10. **House style.**
     - Monospace text, emoji as icons.
@@ -1193,27 +1241,14 @@ Command-line options that shape the UI:
     - Shortcuts are written as `CTRL + K` in the help.
     - Comments explain *why* a behaviour exists, often with the bug that motivated it.
 
-### 10.2 "Show in context" — 0.12.0, in progress
+### 10.2 "Show in context"
 
-Branch `feat/show-in-context`, WIP commit `f123c6b` plus uncommitted changes to `src/ui/dock.rs`.
+Merged in #122. Sources: `src/tail_engine.rs` (`enter_context`, `leave_context`, `context_line`, `rows_filtered`), `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/hit_list.rs`.
 
-**Done** (per `openspec/changes/show-in-context/tasks.md`):
-
-- Engine support: `enter_context`, `leave_context`, `context_line`, `rows_filtered`.
-- The row context-menu item and `CTRL + K`.
-- The `◆` marker and the banner with `Back to filtered view`, `Esc` and `CTRL + K` to go back.
-- Dimmed filter fields with the banner tooltip. This is the uncommitted diff.
-- Top-row restore on return.
-- Find results integration.
-- i18n in all 16 languages.
-- The Help entry.
-
-**Open:**
-
-- Engine unit tests and integration tests.
-- README and CHANGELOG.
-- fmt, clippy and CI.
-- A preview exe.
+- **Entering.** `CTRL + K` on the focused stream (the selection anchor, or the first selected line), `◆ Show in context  (CTRL + K)` in the row context menu of a filtered stream, or the same entry (and `CTRL + K`) on a Find results hit. It needs an active filter (the stream's own or the global one) and a finished line index.
+- **The view.** The stream's filters and the global filter are suspended and every line is shown, with the line centred and selected and follow paused. Nothing is recomputed: `filtered_lines` stays exact and keeps growing meanwhile. The line carries the `◆` marker, the banner shows under the filter row, and the filter row is dimmed to 45 % opacity with the banner text as the Include label's tooltip. The collapse of repeated lines does not apply in this view: it is the full log. From the context view, the menu entry on another line (or a Find results hit of the same stream) only moves to that line; `CTRL + K` on the stream goes back.
+- **Leaving.** `[Back to filtered view]`, `Esc` (no widget focused) or `CTRL + K` restore the selection, the follow state and the scroll position of the moment the view was entered (in wrap mode, the line is centred). Editing a filter also ends it: the new filter applies, and the line stays centred when it is still visible. Switching to HEX or MD, or a reload of the file (truncated, rewritten, re-decoded), ends it too.
+- **i18n and Help.** Its strings exist in all 16 languages, and the Help window lists `CTRL + K`.
 
 ### 10.3 Known limitations and oddities (from the code)
 
@@ -1225,5 +1260,10 @@ Branch `feat/show-in-context`, WIP commit `f123c6b` plus uncommitted changes to 
 - **Borderless close** calls `std::process::exit(0)` right after saving and deleting its spools, bypassing eframe's normal shutdown.
 - **Failures.** A failed export shows in the stream bar and a failed session save in the notice window; a failed session load shows as a "missing" entry.
 - **Hard-coded English strings** remain (§8.5).
-- **Help omissions.** The Help window does not list the plain navigation keys (§7.2).
+- **Help omissions.** The Help window does not list the plain navigation keys or the note editor keys (§7.2).
+- **Compressed tar with a large window and no tar name.** Whether a gzip, bzip2, xz or zstd file holds a tar is decided on the UI thread when it is opened (`codec_holds_tar`): a tar-like name (`.tar.*`, `.tgz`, `.tbz`, `.tbz2`, `.txz`, `.tzst`) is believed, and any other file is peeked at with the decoder window capped at 8 MiB. An xz (or zstd) tar whose dictionary (window) is larger than 8 MiB and whose name does not say tar is therefore first taken for a single compressed log: its extraction finds the tar header and stops with `🗜 this file holds a tar archive: open it again to choose its entries`, and records the answer, so opening it again shows the entry picker. It costs one extra open.
+- **Tar scan bounds.** The picker lists at most 100 000 entries or 1024 GB of decoded data; past that the list is partial and says so.
+- **Decoder windows.** An xz dictionary or zstd window over 256 MiB is refused (`the decoder window exceeds the 256 MiB limit`).
+- **Automatic bookmarks and dismissals are not saved.** They are recomputed from the rules when a stream opens, so a dismissed automatic bookmark comes back after a restart. A note turns a line into a manual bookmark, which is saved.
+- **Group rows and bookmarks.** A closed collapsed group's row shows the marker of a bookmark it hides, but the note tooltip and the "Remove bookmark" menu entry only look at the row's own (first) line.
 - **The lock is a deterrent.** The FNV-scrambled PIN and the `joshua` backdoor are documented as such.

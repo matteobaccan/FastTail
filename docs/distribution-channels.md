@@ -22,7 +22,8 @@ code. Chocolatey was never automated.
 The registry publishes *sources*: `cargo install fasttail` downloads them and compiles
 with the user's toolchain. `Cargo.toml` is already prepared for it (`readme`, `keywords`,
 `categories`, `rust-version` and an `exclude` list that keeps the crate to the code, the
-licence and the user documentation — 36 files, ~320 KiB, verified with `cargo package`).
+licence and the user documentation — 52 files, ~2.7 MiB before compression at 0.12.0,
+listed with `cargo package --list`).
 
 What is missing is only the decision and a token: crates.io → *Account settings → API
 Tokens*, scopes `publish-new` and `publish-update`, stored as the `CARGO_REGISTRY_TOKEN`

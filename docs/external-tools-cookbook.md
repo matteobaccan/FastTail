@@ -18,7 +18,7 @@ page is the practical half.
 | Placeholder | What it expands to |
 |---|---|
 | `{line}` | the whole text of the row |
-| `{file}` | the file being tailed (for a pattern stream, the file it currently follows; for a compressed `.gz` / `.zip` stream, the archive; for the `stdin` stream, its temporary spool file, deleted when the tab closes) |
+| `{file}` | the file being tailed (for a pattern stream, the file it currently follows; for a compressed stream (`.gz`, `.bz2`, `.xz`, `.zst`, a `.zip` or tar entry), the archive; for the `stdin` stream, its temporary spool file, deleted when the tab closes) |
 | `{dir}` | the directory of that file |
 | `{lineno}` | the 1-based line number |
 | `{selection}` | the selected rows as text, or the row itself when nothing is selected |
@@ -55,7 +55,7 @@ open where you are looking.
 Variants: `notepad++ "{file}" -n{lineno}`, `subl "{file}:{lineno}"`,
 `idea --line {lineno} "{file}"`, `vim +{lineno} "{file}"` (in a terminal).
 
-On a compressed stream (`app.log.1.gz`, a `.zip` entry) `{file}` is the archive while
+On a compressed stream (`app.log.1.gz`, a `.zip` or `.tgz` entry) `{file}` is the archive while
 `{lineno}` counts lines of the decompressed text, so this recipe and recipe 6 open the
 archive rather than the line; extract the log first if you need them there.
 
@@ -231,6 +231,9 @@ The sharp one. Bind it to a *shortcut*, not to a rule, so it never fires on its 
 - **Put the logic in a script.** When a recipe grows past a couple of arguments, write a
   `.cmd` or `.sh` and give it `{match}` — it is easier to read, easier to test, and it
   does not need shell mode.
+- **Pick a shortcut FastTail does not use.** `Ctrl + K`, `Ctrl + Shift + D`, `Ctrl + Shift + F`,
+  `Ctrl + Shift + H`, `Ctrl + Shift + T` and `Ctrl + Shift + 1..9` are built in (see the
+  README table); `Ctrl + Shift + E` or `Ctrl + Shift + F9`–`F12` are free.
 - **Use `{match}` instead of `{line}` when you can.** A captured group is a value; the
   whole line is a sentence. Passing the value keeps the command short and the failure
   modes obvious.
