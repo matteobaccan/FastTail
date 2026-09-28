@@ -85,6 +85,8 @@ pub enum ActionId {
     SearchClear,
     ShowContext,
     LeaveContext,
+    RuleNext,
+    RulePrev,
     // Bookmarks
     BookmarkToggle,
     BookmarkNext,
@@ -356,6 +358,8 @@ pub const ACTIONS: &[Action] = &[
     action(A::GlobalFilterBar, "search.global_filter.toggle", "act_global_filter", C::Search, S::Window, Some("CTRL + SHIFT + H"), &[]),
     action(A::ShowContext, "search.context.toggle", "context_show", C::Search, S::Stream, Some("CTRL + K"), &[N::ContextToggle]),
     action(A::LeaveContext, "search.context.back", "context_back", C::Search, S::Stream, None, &[N::InContext]),
+    action(A::RuleNext, "search.rule.next", "act_rule_next", C::Search, S::Stream, Some("F4"), &[N::LineView, N::Row]),
+    action(A::RulePrev, "search.rule.prev", "act_rule_prev", C::Search, S::Stream, Some("SHIFT + F4"), &[N::LineView, N::Row]),
     // Bookmarks
     action(A::BookmarkToggle, "bookmark.toggle", "act_bookmark_toggle", C::Bookmarks, S::Stream, Some("CTRL + F2"), &[]),
     action(A::BookmarkNext, "bookmark.next", "act_bookmark_next", C::Bookmarks, S::Stream, Some("F2"), &[N::Bookmarks]),
@@ -729,6 +733,9 @@ pub const MENU_KEYS: &[&str] = &[
     "preset_save_current",
     "preset_update",
     "preset_manage",
+    "selection_hl_menu",
+    "selection_hl_clear",
+    "rule_next_menu",
 ];
 
 pub const MENU_KEYS_WITHOUT_ACTION: &[&str] = &[
@@ -744,6 +751,11 @@ pub const MENU_KEYS_WITHOUT_ACTION: &[&str] = &[
     // Toolbar buttons with a palette name of their own.
     "toolbar_play",
     "toolbar_pause",
+    // The token under the pointer, and the rules matching the row (the palette has
+    // "Next / previous line of rule" on F4 / SHIFT + F4).
+    "selection_hl_menu",
+    "selection_hl_clear",
+    "rule_next_menu",
 ];
 
 #[cfg(test)]

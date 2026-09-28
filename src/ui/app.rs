@@ -4226,6 +4226,24 @@ impl FastTailApp {
                                     );
                                     ui.end_row();
 
+                                    ui.label(
+                                        RichText::new("F4  /  SHIFT + F4").monospace().strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_rule_nav")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new(t(lang, "help_key_double_click"))
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_token_hl")).monospace(),
+                                    );
+                                    ui.end_row();
+
                                     ui.label(RichText::new("F1").monospace().strong());
                                     ui.label(RichText::new(t(lang, "help_desc_f1")).monospace());
                                     ui.end_row();

@@ -1055,6 +1055,18 @@ fn test_i18n_exhaustive_coverage() {
         "rules_not_a_set",
         "rules_newer_version",
         "rules_read_failed",
+        "selection_hl_menu",
+        "selection_hl_clear",
+        "rule_next_menu",
+        "act_rule_next",
+        "act_rule_prev",
+        "rule_nav_no_rule",
+        "rule_nav_none",
+        "rule_nav_seeking",
+        "rule_nav_seeking_tip",
+        "help_desc_rule_nav",
+        "help_key_double_click",
+        "help_desc_token_hl",
     ];
 
     for lang in Language::ALL {
@@ -13219,5 +13231,322 @@ mod rule_set_files {
             read_rule_set(dir.path()),
             Err(RuleSetError::Io(_))
         ));
+    }
+}
+
+mod selection_highlight {
+    use fasttail::tail_engine::{token_at, token_occurrences, TailEngine, MAX_TOKEN_OUTLINES};
+    use std::io::Write;
+
+    fn pick(text: &str, at: &str) -> Option<String> {
+        let byte = text.find(at).unwrap();
+        token_at(text, byte).map(|(s, e)| text[s..e].to_string())
+    }
+
+    #[test]
+    fn token_around_the_pointer() {
+        let uuid_line = "id=550e8400-e29b-41d4-a716-446655440000 done";
+        // `=` is not a token character: the UUID stands alone.
+        assert_eq!(
+            pick(uuid_line, "a716").as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert_eq!(
+            pick("connecting to 10.0.4.17:8443.", "4.17").as_deref(),
+            Some("10.0.4.17:8443")
+        );
+        assert_eq!(
+            pick("open /var/log/app.log: denied", "log/app").as_deref(),
+            Some("/var/log/app.log")
+        );
+        assert_eq!(
+            pick("user bob@example.com ok", "example").as_deref(),
+            Some("bob@example.com")
+        );
+        assert_eq!(pick("req-7f3a failed", "7f3a").as_deref(), Some("req-7f3a"));
+        assert_eq!(pick("città: Udine", "tà").as_deref(), Some("città"));
+    }
+
+    #[test]
+    fn pointer_just_past_a_word_and_on_blanks() {
+        let text = "alpha  beta";
+        // On the space right after `alpha`: the word before the pointer.
+        assert_eq!(token_at(text, 5), Some((0, 5)));
+        // Between two spaces: nothing.
+        assert_eq!(token_at(text, 6), None);
+        // A single character, a run of punctuation that trims to nothing, too long.
+        assert_eq!(token_at("a b", 0), None);
+        assert_eq!(token_at("x ..:: y", 3), None);
+        let long = "a".repeat(300);
+        assert_eq!(token_at(&long, 10), None);
+        let edge = "b".repeat(256);
+        assert_eq!(token_at(&edge, 0), Some((0, 256)));
+        assert_eq!(token_at("", 0), None);
+        assert_eq!(token_at("abc", 99), Some((0, 3)));
+    }
+
+    #[test]
+    fn occurrences_are_exact_and_case_sensitive() {
+        let row = "req-7f3a start; REQ-7F3A other; req-7f3a end; xreq-7f3ay";
+        let hits = token_occurrences(row, "req-7f3a");
+        assert_eq!(hits.len(), 3);
+        for (s, e) in &hits {
+            assert_eq!(&row[*s..*e], "req-7f3a");
+        }
+        assert!(token_occurrences(row, "").is_empty());
+        let many = "ab ".repeat(500);
+        assert_eq!(token_occurrences(&many, "ab").len(), MAX_TOKEN_OUTLINES);
+    }
+
+    #[test]
+    fn toggling_and_clearing() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "req-7f3a one").unwrap();
+        tmp.flush().unwrap();
+        let mut e = TailEngine::open(tmp.path()).unwrap();
+        assert_eq!(e.selection_token(), None);
+        e.toggle_selection_token(Some("req-7f3a"));
+        assert_eq!(e.selection_token(), Some("req-7f3a"));
+        // Another token replaces it; the same one again clears it.
+        e.toggle_selection_token(Some("one"));
+        assert_eq!(e.selection_token(), Some("one"));
+        e.toggle_selection_token(Some("one"));
+        assert_eq!(e.selection_token(), None);
+        // Empty space clears it.
+        e.toggle_selection_token(Some("one"));
+        e.toggle_selection_token(None);
+        assert_eq!(e.selection_token(), None);
+        // Esc clears it.
+        e.toggle_selection_token(Some("one"));
+        assert!(e.clear_selection_token());
+        assert!(!e.clear_selection_token());
+        // A reload (the file rewritten shorter) clears it.
+        e.toggle_selection_token(Some("one"));
+        std::fs::write(tmp.path(), "x\n").unwrap();
+        e.poll_updates();
+        assert_eq!(e.selection_token(), None);
+    }
+}
+
+mod rule_navigation {
+    use fasttail::i18n::Language;
+    use fasttail::tail_engine::{HighlightRule, RuleNavError, RuleSeekStep, TailEngine};
+    use std::io::Write;
+    use std::time::Duration;
+
+    const LONG: Duration = Duration::from_secs(10);
+
+    fn engine(lines: &[&str]) -> (tempfile::NamedTempFile, TailEngine) {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        for l in lines {
+            writeln!(tmp, "{l}").unwrap();
+        }
+        tmp.flush().unwrap();
+        let mut e = TailEngine::open(tmp.path()).unwrap();
+        e.set_highlight_rules(vec![
+            HighlightRule::new("ERROR", [255, 0, 0], [0, 0, 0], false),
+            HighlightRule::new(r"duration_ms=\d{4,}", [255, 255, 0], [0, 0, 0], true),
+        ]);
+        (tmp, e)
+    }
+
+    fn walk(e: &mut TailEngine) -> RuleSeekStep {
+        e.step_rule_seek(LONG, Language::En).unwrap()
+    }
+
+    const LOG: &[&str] = &[
+        "0 INFO start",
+        "1 query duration_ms=12",
+        "2 query duration_ms=4500",
+        "3 ERROR boom",
+        "4 query duration_ms=9000",
+        "5 INFO idle",
+        "6 query duration_ms=7000",
+    ];
+
+    #[test]
+    fn next_and_previous_line_of_the_picked_rule() {
+        let (_tmp, mut e) = engine(LOG);
+        assert_eq!(
+            e.rules_matching("2 query duration_ms=4500"),
+            vec![(1, r"duration_ms=\d{4,}".to_string())]
+        );
+        // Picked in the row menu on line 2.
+        e.start_rule_seek(Some(1), true, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 4,
+                wrapped: false
+            }
+        );
+        assert_eq!(e.selection_anchor, Some(4));
+        assert!(!e.follow_tail);
+        e.start_rule_seek(None, true, 4).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: false
+            }
+        );
+        // Past the end: wraps once.
+        e.start_rule_seek(None, true, 6).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 2,
+                wrapped: true
+            }
+        );
+        // Backwards.
+        e.start_rule_seek(None, false, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: true
+            }
+        );
+        e.start_rule_seek(None, false, 6).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 4,
+                wrapped: false
+            }
+        );
+    }
+
+    #[test]
+    fn without_a_picked_rule_the_first_matching_rule_is_used() {
+        let (_tmp, mut e) = engine(LOG);
+        assert_eq!(e.rule_cursor(), None);
+        e.start_rule_seek(None, true, 3).unwrap();
+        assert_eq!(e.rule_cursor(), Some(0));
+        // ERROR only on line 3: after a whole walk it is found again, wrapped.
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 3,
+                wrapped: true
+            }
+        );
+        // A row no rule matches, without a navigation rule.
+        let (_tmp2, mut f) = engine(LOG);
+        assert_eq!(
+            f.start_rule_seek(None, true, 0),
+            Err(RuleNavError::NoRuleOnRow)
+        );
+        assert_eq!(f.step_rule_seek(LONG, Language::En), None);
+    }
+
+    #[test]
+    fn filtered_and_collapsed_rows() {
+        let (_tmp, mut e) = engine(LOG);
+        // The filter hides line 4: the walk goes from 2 to 6.
+        e.set_exclude_filter("9000");
+        e.start_rule_seek(Some(1), true, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: false
+            }
+        );
+        // A start the filters hide: the next visible line after it.
+        e.start_rule_seek(None, true, 4).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 6,
+                wrapped: false
+            }
+        );
+        e.start_rule_seek(None, false, 4).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 2,
+                wrapped: false
+            }
+        );
+    }
+
+    #[test]
+    fn hidden_in_a_collapsed_group_is_revealed() {
+        let lines = [
+            "a INFO x",
+            "b ERROR same",
+            "b ERROR same",
+            "b ERROR same",
+            "c INFO y",
+        ];
+        let (_tmp, mut e) = engine(&lines);
+        e.set_collapse_mode(fasttail::collapse::CollapseMode::Exact);
+        e.start_rule_seek(Some(0), true, 2).unwrap();
+        assert_eq!(
+            walk(&mut e),
+            RuleSeekStep::Found {
+                line: 3,
+                wrapped: false
+            }
+        );
+        assert_eq!(e.pending_jump, Some(3));
+    }
+
+    #[test]
+    fn walk_resumes_after_the_budget_and_can_be_cancelled() {
+        let mut lines: Vec<String> = (0..50_000).map(|i| format!("{i} INFO filler")).collect();
+        lines.push("50000 ERROR at last".into());
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let (_tmp, mut e) = engine(&refs);
+        e.start_rule_seek(Some(0), true, 0).unwrap();
+        let mut frames = 0;
+        let found = loop {
+            frames += 1;
+            match e.step_rule_seek(Duration::ZERO, Language::En).unwrap() {
+                RuleSeekStep::Pending => {
+                    assert!(e.rule_seek_pattern().is_some());
+                    continue;
+                }
+                other => break other,
+            }
+        };
+        assert!(frames > 1, "a zero budget must take several frames");
+        assert_eq!(
+            found,
+            RuleSeekStep::Found {
+                line: 50_000,
+                wrapped: false
+            }
+        );
+        assert_eq!(e.rule_seek_pattern(), None);
+
+        e.start_rule_seek(None, true, 0).unwrap();
+        assert_eq!(
+            e.step_rule_seek(Duration::ZERO, Language::En),
+            Some(RuleSeekStep::Pending)
+        );
+        assert!(e.cancel_rule_seek());
+        assert_eq!(e.step_rule_seek(LONG, Language::En), None);
+    }
+
+    #[test]
+    fn no_line_matches_and_rules_change() {
+        let (_tmp, mut e) = engine(LOG);
+        e.set_exclude_filter("ERROR");
+        // The rule picked on a row the filter now hides: nothing shown matches it.
+        e.start_rule_seek(Some(0), true, 0).unwrap();
+        assert_eq!(walk(&mut e), RuleSeekStep::NotFound);
+        assert_eq!(e.rule_cursor(), Some(0));
+        // A change of the rules forgets the navigation rule.
+        e.set_highlight_rules(vec![HighlightRule::new(
+            "INFO",
+            [1, 1, 1],
+            [0, 0, 0],
+            false,
+        )]);
+        assert_eq!(e.rule_cursor(), None);
     }
 }

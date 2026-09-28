@@ -1235,6 +1235,23 @@ fn render_log_stream(
         }
     };
 
+    // F4 / SHIFT + F4 walk to the next line of a rule, at most `RULE_SEEK_BUDGET` per
+    // frame; a match is shown through `request_jump`, handled right below.
+    let sought = engine.rule_seek_pattern().map(str::to_owned);
+    match engine.step_rule_seek(crate::tail_engine::RULE_SEEK_BUDGET, lang) {
+        Some(crate::tail_engine::RuleSeekStep::Found { wrapped, .. }) => {
+            if wrapped && sound_enabled {
+                crate::audio::SoundAlertPreset::Beep.play();
+            }
+        }
+        Some(crate::tail_engine::RuleSeekStep::Pending) => ui.ctx().request_repaint(),
+        Some(crate::tail_engine::RuleSeekStep::NotFound) => {
+            engine.view_notice =
+                Some(t(lang, "rule_nav_none").replace("{rule}", sought.as_deref().unwrap_or("")));
+        }
+        None => {}
+    }
+
     // A result of the search across streams asked for this line (`request_jump`).
     if let Some(line) = engine.pending_jump.take() {
         let target = if engine.view_mode == crate::tail_engine::ViewMode::Hex {
@@ -1597,6 +1614,18 @@ fn render_log_stream(
                     .monospace()
                     .color(theme.warn_color()),
             );
+        }
+        // A rule walk that did not find its line within one frame.
+        if let Some(rule) = engine.rule_seek_pattern() {
+            ui.label(
+                RichText::new(format!(
+                    "⏳ {}",
+                    t(lang, "rule_nav_seeking").replace("{rule}", rule)
+                ))
+                .monospace()
+                .color(theme.warn_color()),
+            )
+            .on_hover_text(t(lang, "rule_nav_seeking_tip"));
         }
         if engine.ansi_switch_notice() {
             ui.label(
@@ -2182,6 +2211,41 @@ fn render_log_stream(
                     engine.select_row(target);
                     ui.ctx().request_repaint();
                 }
+            }
+            // F4 / SHIFT + F4: next / previous line of the navigation rule, from the
+            // selected row or the top row (the walk itself runs at the top of the frame).
+            let shift_f4 = egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, egui::Key::F4);
+            let plain_f4 = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F4);
+            let line_view = !matches!(
+                engine.view_mode,
+                crate::tail_engine::ViewMode::Hex | crate::tail_engine::ViewMode::Markdown
+            );
+            let rule_prev = act(ActionId::RulePrev)
+                || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&shift_f4)));
+            let rule_next = !rule_prev
+                && (act(ActionId::RuleNext)
+                    || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&plain_f4))));
+            if rule_prev || rule_next {
+                let from = engine
+                    .selection_anchor
+                    .or_else(|| engine.selection.iter().next().copied())
+                    .or_else(|| engine.get_actual_line_idx(top_row(engine)))
+                    .unwrap_or(0);
+                if let Err(crate::tail_engine::RuleNavError::NoRuleOnRow) =
+                    engine.start_rule_seek(None, rule_next, from)
+                {
+                    engine.view_notice = Some(t(lang, "rule_nav_no_rule").to_string());
+                }
+                ui.ctx().request_repaint();
+            }
+            // Esc on the rows: stops a rule walk, else clears the outlined token (before
+            // it leaves the context view, below).
+            if keys_ok
+                && (engine.rule_seek_pattern().is_some() || engine.selection_token().is_some())
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                && !engine.cancel_rule_seek()
+            {
+                engine.clear_selection_token();
             }
         }
         // Row context menu entries run from the palette on the row a stream-menu action
@@ -2923,6 +2987,7 @@ fn render_extended_rows(
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
     let mut badge_toggle: Option<usize> = None;
+    let mut token_pick: Option<Option<String>> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
@@ -2990,6 +3055,9 @@ fn render_extended_rows(
 
                 // Background painted after layout, behind the row (see SearchRowMark)
                 let row_bg = ui.painter().add(egui::Shape::Noop);
+                // The row's text and where it was drawn: its galley is laid out again
+                // (from egui's cache) only to outline a token or to pick one.
+                let mut label: Option<(WidgetText, egui::Pos2)> = None;
                 let row_resp = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -3098,7 +3166,15 @@ fn render_extended_rows(
                             if dim_row {
                                 dim_spans(&mut job, &base);
                             }
-                            ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend));
+                            let text = WidgetText::from(job);
+                            let at = ui
+                                .add(
+                                    egui::Label::new(text.clone())
+                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                )
+                                .rect
+                                .min;
+                            label = Some((text, at));
                             return;
                         }
                         let mut text = RichText::new(&*shown).monospace().size(font_size);
@@ -3122,7 +3198,15 @@ fn render_extended_rows(
                         } else {
                             text = text.color(theme.text_primary());
                         }
-                        ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend));
+                        let text = WidgetText::from(text);
+                        let at = ui
+                            .add(
+                                egui::Label::new(text.clone())
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                            )
+                            .rect
+                            .min;
+                        label = Some((text, at));
                     })
                     .response;
                 max_row_natural_width = max_row_natural_width.max(row_resp.rect.width());
@@ -3153,8 +3237,28 @@ fn render_extended_rows(
                 if click.clicked() {
                     row_click = Some((actual_line_idx, ui.input(|i| i.modifiers)));
                 }
+                let row_galley = |label: Option<(WidgetText, egui::Pos2)>| {
+                    label.map(|(text, at)| {
+                        let galley = text.into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Extend),
+                            f32::INFINITY,
+                            egui::FontSelection::Default,
+                        );
+                        (galley, at)
+                    })
+                };
+                if let Some(token) = engine.selection_token() {
+                    if memchr::memmem::find(shown.as_bytes(), token.as_bytes()).is_some() {
+                        if let Some((galley, at)) = row_galley(label.clone()) {
+                            outline_token(ui.painter(), &galley, at, token, theme.accent_color());
+                        }
+                    }
+                }
+                row_token_clicks(ui, engine, &click, || row_galley(label), &mut token_pick);
                 row_context_menu(
                     &click,
+                    engine,
                     actual_line_idx,
                     lang,
                     time_delta.map(|_| engine.time_anchor()),
@@ -3225,6 +3329,9 @@ fn render_extended_rows(
     if clear_scroll_to_line {
         engine.scroll_to_line = None;
     }
+    if let Some(token) = token_pick {
+        engine.toggle_selection_token(token.as_deref());
+    }
     if let Some(row) = badge_toggle {
         engine.toggle_collapsed_row(row);
     }
@@ -3258,6 +3365,10 @@ struct RowMenuPicks {
     remove_bookmark: Option<usize>,
     /// Line whose row asked for a copy, and whether as shown.
     copy: Option<(usize, bool)>,
+    /// Token to outline (or to clear when it is the outlined one).
+    token: Option<String>,
+    /// Rule picked in "Next line of rule" and the row it was picked on.
+    rule: Option<(usize, usize)>,
 }
 
 impl RowMenuPicks {
@@ -3273,6 +3384,14 @@ impl RowMenuPicks {
         }
         if let Some(line) = self.remove_bookmark {
             engine.remove_bookmark(line);
+        }
+        if let Some(token) = self.token {
+            engine.toggle_selection_token(Some(&token));
+        }
+        if let Some((rule, line)) = self.rule {
+            // The walk starts at once and runs at the top of the next frame.
+            let _ = engine.start_rule_seek(Some(rule), true, line);
+            ui.ctx().request_repaint();
         }
         apply_copy_pick(ui, engine, self.copy);
     }
@@ -3397,6 +3516,126 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
     }
 }
 
+/// Where the token under the pointer is kept while a row's context menu is open.
+fn menu_token_id(engine: &TailEngine) -> egui::Id {
+    egui::Id::new("row_menu_token").with(&engine.path)
+}
+
+/// Byte offset of character `idx` of `text` (its length past the end).
+fn char_to_byte(text: &str, idx: usize) -> usize {
+    text.char_indices().nth(idx).map_or(text.len(), |(i, _)| i)
+}
+
+/// The selection highlight token under `pointer` in a row's galley drawn at `pos` (see
+/// `tail_engine::token_at`), `None` over empty space or a character no token has.
+fn token_under(galley: &egui::Galley, pos: egui::Pos2, pointer: egui::Pos2) -> Option<String> {
+    let local = pointer - pos;
+    let size = galley.size();
+    if local.x < 0.0 || local.y < 0.0 || local.x > size.x || local.y > size.y {
+        return None;
+    }
+    let text = galley.text();
+    let cursor = galley.cursor_from_pos(local);
+    // The cursor is the nearest character boundary: past the middle of a character it
+    // is the boundary after it.
+    let mut idx = cursor.index.0;
+    if idx > 0 && local.x < galley.pos_from_cursor(cursor).min.x {
+        idx -= 1;
+    }
+    let (start, end) = crate::tail_engine::token_at(text, char_to_byte(text, idx))?;
+    Some(text[start..end].to_string())
+}
+
+/// A double-click or a right click on a row's text: the double-click toggles the
+/// outlined token (empty space clears it), the right click keeps the token under the
+/// pointer for the row menu. `galley` is laid out on demand (only on such a click).
+fn row_token_clicks(
+    ui: &Ui,
+    engine: &TailEngine,
+    click: &egui::Response,
+    galley: impl FnOnce() -> Option<(std::sync::Arc<egui::Galley>, egui::Pos2)>,
+    token_pick: &mut Option<Option<String>>,
+) {
+    let double = click.double_clicked();
+    let secondary = click.secondary_clicked();
+    if !double && !secondary {
+        return;
+    }
+    let token = click.interact_pointer_pos().and_then(|pointer| {
+        let (galley, pos) = galley()?;
+        token_under(&galley, pos, pointer)
+    });
+    if double {
+        *token_pick = Some(token);
+    } else {
+        let id = menu_token_id(engine);
+        ui.ctx().data_mut(|d| {
+            d.remove::<String>(id);
+            if let Some(token) = token {
+                d.insert_temp(id, token);
+            }
+        });
+    }
+}
+
+/// Outlines every occurrence of `token` in a row's galley drawn at `pos`: a 1 px box
+/// drawn over the text, which leaves the row's colours and spans alone.
+fn outline_token(
+    painter: &egui::Painter,
+    galley: &egui::Galley,
+    pos: egui::Pos2,
+    token: &str,
+    color: Color32,
+) {
+    use egui::text::CCursor;
+    let text = galley.text();
+    let stroke = Stroke::new(1.0, color);
+    let draw = |rect: egui::Rect| {
+        painter.rect_stroke(
+            rect.translate(pos.to_vec2()).expand2(egui::vec2(1.0, 0.0)),
+            2.0,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+    };
+    for (start, end) in crate::tail_engine::token_occurrences(text, token) {
+        let first = text[..start].chars().count();
+        let last = first + text[start..end].chars().count();
+        let a = galley.pos_from_cursor(CCursor::new(first));
+        let b = galley.pos_from_cursor(CCursor::new(last));
+        if (a.min.y - b.min.y).abs() < 0.5 {
+            draw(egui::Rect::from_min_max(
+                a.min,
+                egui::pos2(b.min.x, a.max.y),
+            ));
+            continue;
+        }
+        // Wrapped over two rows or more: the part on each row.
+        for row in &galley.rows {
+            let r = row.rect();
+            if r.max.y <= a.min.y + 0.5 || r.min.y >= b.max.y - 0.5 {
+                continue;
+            }
+            let left = if (r.min.y - a.min.y).abs() < 0.5 {
+                a.min.x
+            } else {
+                r.min.x
+            };
+            let right = if (r.min.y - b.min.y).abs() < 0.5 {
+                b.min.x
+            } else {
+                r.max.x
+            };
+            if right > left {
+                draw(egui::Rect::from_min_max(
+                    egui::pos2(left, r.min.y),
+                    egui::pos2(right, r.max.y),
+                ));
+            }
+        }
+    }
+}
+
 /// Row context menu: the two copies (every underlying line, or as shown), the bookmark
 /// note and removal, the line in context on a filtered stream, the time anchor entries
 /// while the time delta column is shown (`anchor` is `Some(current anchor)` then), all
@@ -3404,6 +3643,7 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
 #[allow(clippy::too_many_arguments)]
 fn row_context_menu(
     click: &egui::Response,
+    engine: &TailEngine,
     line: usize,
     lang: Language,
     anchor: Option<Option<usize>>,
@@ -3428,6 +3668,44 @@ fn row_context_menu(
         {
             picks.copy = Some((line, true));
             ui.close();
+        }
+        // The token under the pointer (where the menu was opened) and the rules the row
+        // matches: the same as a double-click and as F4.
+        let token: Option<String> = ui.ctx().data(|d| d.get_temp(menu_token_id(engine)));
+        let rules = engine
+            .get_line(line)
+            .map(|text| engine.rules_matching(&text))
+            .unwrap_or_default();
+        if token.is_some() || !rules.is_empty() {
+            ui.separator();
+        }
+        if let Some(token) = token {
+            let (key, icon) = if engine.selection_token() == Some(token.as_str()) {
+                ("selection_hl_clear", "▢")
+            } else {
+                ("selection_hl_menu", "▣")
+            };
+            let label = format!("{icon} {}", t(lang, key).replace("{token}", &token));
+            if ui.button(RichText::new(label).monospace()).clicked() {
+                picks.token = Some(token);
+                ui.close();
+            }
+        }
+        if !rules.is_empty() {
+            ui.menu_button(
+                RichText::new(format!("⇣ {}  (F4)", t(lang, "rule_next_menu"))).monospace(),
+                |ui| {
+                    for (index, pattern) in rules {
+                        let current = engine.rule_cursor() == Some(index);
+                        let mark = if current { "▶" } else { " " };
+                        let text = format!("{mark} #{} {pattern}", index + 1);
+                        if ui.button(RichText::new(text).monospace()).clicked() {
+                            picks.rule = Some((index, line));
+                            ui.close();
+                        }
+                    }
+                },
+            );
         }
         ui.separator();
         if ui
@@ -3742,6 +4020,7 @@ fn render_wrapped_rows(
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
     let mut badge_toggle: Option<usize> = None;
+    let mut token_pick: Option<Option<String>> = None;
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -4050,6 +4329,9 @@ fn render_wrapped_rows(
                 );
             }
             painter.galley(text_pos, r.galley.clone(), color);
+            if let Some(token) = eng.selection_token() {
+                outline_token(&painter, &r.galley, text_pos, token, theme.accent_color());
+            }
             if let Some(pretty) = &r.pretty {
                 let frame = egui::Rect::from_min_size(
                     egui::pos2(text_x, text_top + r.galley.size().y + 4.0),
@@ -4078,8 +4360,16 @@ fn render_wrapped_rows(
             if click.clicked() {
                 row_click = Some((line, ui.input(|i| i.modifiers)));
             }
+            row_token_clicks(
+                ui,
+                eng,
+                &click,
+                || Some((r.galley.clone(), text_pos)),
+                &mut token_pick,
+            );
             row_context_menu(
                 &click,
+                eng,
                 line,
                 lang,
                 time_delta.map(|_| eng.time_anchor()),
@@ -4170,6 +4460,9 @@ fn render_wrapped_rows(
     engine.wrap_scroll_abs = ended;
     engine.current_scroll_x = 0.0;
     engine.current_scroll_y = ended;
+    if let Some(token) = token_pick {
+        engine.toggle_selection_token(token.as_deref());
+    }
     if let Some(row) = badge_toggle {
         engine.toggle_collapsed_row(row);
     }

@@ -225,6 +225,112 @@ impl QuickLabel {
     }
 }
 
+/// Bounds of a selection highlight token, in bytes.
+pub const MIN_TOKEN_BYTES: usize = 2;
+pub const MAX_TOKEN_BYTES: usize = 256;
+/// Outlines drawn per row at most: bounds the painting on a row of repeated tokens.
+pub const MAX_TOKEN_OUTLINES: usize = 64;
+
+/// A character a selection highlight token is made of: letters, digits and `_ . : / @ - %`.
+fn is_token_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '.' | ':' | '/' | '@' | '-' | '%')
+}
+
+/// The token around byte `at` of `text` (a double-click): the longest run of token
+/// characters touching `at` (the character at `at`, or the one before it when the pointer
+/// is just past a word), trailing `.` and `:` removed, `None` unless 2 to 256 bytes long.
+pub fn token_at(text: &str, at: usize) -> Option<(usize, usize)> {
+    let at = at.min(text.len());
+    if !text.is_char_boundary(at) {
+        return None;
+    }
+    let after = text[at..].chars().next().filter(|c| is_token_char(*c));
+    let seed = match after {
+        Some(_) => at,
+        None => {
+            let (i, c) = text[..at].char_indices().next_back()?;
+            if !is_token_char(c) {
+                return None;
+            }
+            i
+        }
+    };
+    let start = text[..seed]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_token_char(*c))
+        .last()
+        .map_or(seed, |(i, _)| i);
+    let mut end = text[seed..]
+        .char_indices()
+        .find(|(_, c)| !is_token_char(*c))
+        .map_or(text.len(), |(i, _)| seed + i);
+    while end > start && matches!(text.as_bytes()[end - 1], b'.' | b':') {
+        end -= 1;
+    }
+    (MIN_TOKEN_BYTES..=MAX_TOKEN_BYTES)
+        .contains(&(end - start))
+        .then_some((start, end))
+}
+
+/// Byte ranges of the exact, case-sensitive, non-overlapping occurrences of `token` in
+/// `text`, at most `MAX_TOKEN_OUTLINES`.
+pub fn token_occurrences(text: &str, token: &str) -> Vec<(usize, usize)> {
+    if token.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let finder = memchr::memmem::Finder::new(token.as_bytes());
+    let mut from = 0;
+    while let Some(pos) = finder.find(&text.as_bytes()[from..]) {
+        let start = from + pos;
+        out.push((start, start + token.len()));
+        if out.len() >= MAX_TOKEN_OUTLINES {
+            break;
+        }
+        from = start + token.len();
+    }
+    out
+}
+
+/// Frame time a rule walk may take before it goes on in the next frame.
+pub const RULE_SEEK_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
+
+/// A walk over the visible lines towards the next (or previous) line a highlight rule
+/// matches, from the row after (before) the start, wrapping once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuleSeek {
+    rule: usize,
+    forward: bool,
+    /// Visible position tested next.
+    next: usize,
+    /// Positions still to test before the whole view has been walked.
+    remaining: usize,
+    /// The walk went past the end (or the start) of the view.
+    wrapped: bool,
+}
+
+/// Why `F4` could not start a walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleNavError {
+    /// No navigation rule, and no enabled rule matches the row the walk starts from.
+    NoRuleOnRow,
+    /// The stream shows no line.
+    Empty,
+}
+
+/// Outcome of a step of a rule walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleSeekStep {
+    /// The line was found (and the view asked to show it); `wrapped` when the walk went
+    /// round the end of the view.
+    Found { line: usize, wrapped: bool },
+    /// Out of time: the walk goes on in the next frame.
+    Pending,
+    /// The whole view was walked: no line matches the rule.
+    NotFound,
+}
+
 /// Cap on queued external-tool hits per stream (see `TailEngine::collect_tool_hits`).
 pub const MAX_PENDING_TOOL_HITS: usize = 256;
 
@@ -1283,6 +1389,14 @@ pub struct TailEngine {
     /// Line a search across streams asked the view to show (see `request_jump`); the
     /// stream viewer centres it on its next frame, when it knows the row geometry.
     pub pending_jump: Option<usize>,
+    /// Token picked by a double-click (selection highlight): every exact occurrence in the
+    /// drawn rows is outlined. Never persisted; cleared by a reload.
+    selection_token: Option<String>,
+    /// Highlight rule `F4` / `SHIFT + F4` walk to (index into the rules), forgotten when
+    /// the rules change.
+    rule_cursor: Option<usize>,
+    /// A rule walk still going on (see `step_rule_seek`).
+    rule_seek: Option<RuleSeek>,
     /// The stream bar's "search all streams" button was pressed: the app opens the Find
     /// results tab with this stream's query after the dock is drawn.
     pub find_all_request: bool,
@@ -1862,6 +1976,9 @@ impl TailEngine {
             buffer_generation: 0,
             reload_generation: 0,
             pending_jump: None,
+            selection_token: None,
+            rule_cursor: None,
+            rule_seek: None,
             find_all_request: false,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
@@ -1944,6 +2061,10 @@ impl TailEngine {
     }
 
     pub fn set_highlight_rules(&mut self, rules: Vec<HighlightRule>) {
+        if rules != self.highlight_rules {
+            self.rule_cursor = None;
+            self.rule_seek = None;
+        }
         self.compiled_highlights = rules.iter().map(CompiledHighlight::compile).collect();
         self.highlight_rules = rules;
         self.recompute_filtered_lines();
@@ -3049,6 +3170,8 @@ impl TailEngine {
         self.last_modified = new_modified;
         self.max_line_bytes = 0;
         self.max_detected_width = 0.0;
+        self.selection_token = None;
+        self.rule_seek = None;
         if self.source.reopen().is_err() {
             self.source.clear();
         }
@@ -5905,6 +6028,183 @@ impl TailEngine {
     }
 
     /// Bookmarks, manual or automatic, that pass the active filters, in file order.
+    // ----- Selection highlight -----
+
+    /// The token outlined in every row (a double-click), if any.
+    pub fn selection_token(&self) -> Option<&str> {
+        self.selection_token.as_deref()
+    }
+
+    /// A double-click (or the row menu) on `token`: it becomes the outlined token, or
+    /// clears it when it is the outlined one already; `None` (empty space) clears it.
+    pub fn toggle_selection_token(&mut self, token: Option<&str>) {
+        self.selection_token = match token {
+            Some(t) if self.selection_token.as_deref() != Some(t) => Some(t.to_string()),
+            _ => None,
+        };
+    }
+
+    /// `Esc` on the rows: clears the outlined token; `false` when there was none.
+    pub fn clear_selection_token(&mut self) -> bool {
+        self.selection_token.take().is_some()
+    }
+
+    // ----- Rule navigation (F4 / SHIFT + F4) -----
+
+    /// The enabled rules whose pattern matches `line`, whatever their priority, as
+    /// `(rule index, pattern)`: the entries of the row menu's "Next line of rule".
+    pub fn rules_matching(&self, line: &str) -> Vec<(usize, String)> {
+        self.compiled_highlights
+            .iter()
+            .enumerate()
+            .filter(|(_, ch)| ch.enabled && !ch.pattern.is_empty() && ch.is_match(line))
+            .map(|(i, ch)| (i, ch.pattern.clone()))
+            .collect()
+    }
+
+    /// The rule `F4` walks to: the one picked in the row menu, if any.
+    pub fn rule_cursor(&self) -> Option<usize> {
+        self.rule_cursor
+    }
+
+    /// The pattern of the rule being sought while a walk goes on over several frames.
+    pub fn rule_seek_pattern(&self) -> Option<&str> {
+        let seek = self.rule_seek.as_ref()?;
+        self.compiled_highlights
+            .get(seek.rule)
+            .map(|ch| ch.pattern.as_str())
+    }
+
+    /// Stops a walk still going on (`Esc`); `false` when there was none.
+    pub fn cancel_rule_seek(&mut self) -> bool {
+        self.rule_seek.take().is_some()
+    }
+
+    /// Starts a walk from line `from` (the selected row, else the top row) to the next
+    /// (`forward`) or previous visible line matching the navigation rule; `rule` picks
+    /// that rule first (the row menu). Without a navigation rule, the first enabled rule
+    /// in priority order matching line `from` is used. Call `step_rule_seek` to walk.
+    pub fn start_rule_seek(
+        &mut self,
+        rule: Option<usize>,
+        forward: bool,
+        from: usize,
+    ) -> Result<(), RuleNavError> {
+        if let Some(rule) = rule.filter(|r| *r < self.compiled_highlights.len()) {
+            self.rule_cursor = Some(rule);
+        }
+        let rule = match self.rule_cursor {
+            Some(rule) => rule,
+            None => {
+                let line = self.get_line(from).ok_or(RuleNavError::NoRuleOnRow)?;
+                let first = self
+                    .compiled_highlights
+                    .iter()
+                    .position(|ch| ch.enabled && !ch.pattern.is_empty() && ch.is_match(&line))
+                    .ok_or(RuleNavError::NoRuleOnRow)?;
+                self.rule_cursor = Some(first);
+                first
+            }
+        };
+        let len = self.visible_lines();
+        if len == 0 {
+            return Err(RuleNavError::Empty);
+        }
+        let view = self.rows_view();
+        let (next, wrapped) = match (view.pos_of_line(from), forward) {
+            (Some(pos), true) if pos + 1 < len => (pos + 1, false),
+            (Some(_), true) => (0, true),
+            (Some(0), false) => (len - 1, true),
+            (Some(pos), false) => (pos - 1, false),
+            // A start the filters hide: the first visible line after it, or before it.
+            (None, true) => {
+                let pos = view.pos_of_line_or_next(from);
+                if pos < len {
+                    (pos, false)
+                } else {
+                    (0, true)
+                }
+            }
+            (None, false) => match view.pos_of_line_or_next(from).checked_sub(1) {
+                Some(pos) => (pos.min(len - 1), false),
+                None => (len - 1, true),
+            },
+        };
+        // Every visible line once; a visible start line is tested last, after the wrap.
+        let remaining = len;
+        self.rule_seek = Some(RuleSeek {
+            rule,
+            forward,
+            next,
+            remaining,
+            wrapped,
+        });
+        Ok(())
+    }
+
+    /// Walks the current rule seek for at most `budget`: on a match, the line is shown
+    /// like a jump (`request_jump`: selected, centred, follow paused, a collapsed group
+    /// hiding it expanded) and the seek ends. `None` when no seek is going on.
+    pub fn step_rule_seek(
+        &mut self,
+        budget: std::time::Duration,
+        lang: crate::i18n::Language,
+    ) -> Option<RuleSeekStep> {
+        let mut seek = self.rule_seek.take()?;
+        let Some(rule) = self.compiled_highlights.get(seek.rule).cloned() else {
+            return Some(RuleSeekStep::NotFound);
+        };
+        let started = std::time::Instant::now();
+        let mut tested = 0usize;
+        loop {
+            let len = self.visible_lines();
+            if seek.remaining == 0 || len == 0 {
+                return Some(RuleSeekStep::NotFound);
+            }
+            if seek.next >= len {
+                // The view shrank under the walk (a filter or a rotation): restart the
+                // side it was walking from.
+                if seek.forward {
+                    seek.next = 0;
+                    seek.wrapped = true;
+                } else {
+                    seek.next = len - 1;
+                }
+            }
+            let line_idx = self.line_at(seek.next);
+            let hit = line_idx
+                .and_then(|idx| self.get_line(idx).map(|text| rule.is_match(&text)))
+                .unwrap_or(false);
+            if hit {
+                let line = line_idx.unwrap_or(0);
+                self.request_jump(line, lang);
+                return Some(RuleSeekStep::Found {
+                    line,
+                    wrapped: seek.wrapped,
+                });
+            }
+            seek.remaining -= 1;
+            if seek.forward {
+                if seek.next + 1 >= len {
+                    seek.next = 0;
+                    seek.wrapped = true;
+                } else {
+                    seek.next += 1;
+                }
+            } else if seek.next == 0 {
+                seek.next = len - 1;
+                seek.wrapped = true;
+            } else {
+                seek.next -= 1;
+            }
+            tested += 1;
+            if tested.is_multiple_of(64) && started.elapsed() >= budget {
+                self.rule_seek = Some(seek);
+                return Some(RuleSeekStep::Pending);
+            }
+        }
+    }
+
     fn visible_bookmarks(&self) -> Vec<usize> {
         let mut all: Vec<usize> = self
             .bookmarks
