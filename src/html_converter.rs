@@ -443,7 +443,8 @@ mod tests {
     #[test]
     fn test_placeholder_collision_prevented() {
         // Attempting to inject the internal placeholder marker in untrusted HTML input
-        let html = "<p>User input with \u{E000}PRE0\u{E001}</p><pre><code>let secret = 42;</code></pre>";
+        let html =
+            "<p>User input with \u{E000}PRE0\u{E001}</p><pre><code>let secret = 42;</code></pre>";
         let md = html_to_markdown(html);
         assert!(!md.contains("\u{E000}"));
         assert!(!md.contains("\u{E001}"));
