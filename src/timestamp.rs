@@ -849,6 +849,10 @@ fn parse_zone(b: &[u8], at: usize) -> (Option<i32>, usize) {
             } else {
                 (0, at + 3)
             };
+            // Real zones run from -12:00 to +14:00: `+99:00` is no zone.
+            if hours > 14 || minutes > 59 {
+                return (None, at);
+            }
             let total = (hours * 60 + minutes) as i32;
             (Some(if *sign == b'-' { -total } else { total }), end)
         }
@@ -1042,10 +1046,32 @@ pub fn display_timestamp(
     display: TimeDisplay,
     local: &dyn Fn(i64) -> i64,
 ) -> Option<(usize, usize, String)> {
+    display_timestamp_with(line, hint, true, source, display, local)
+}
+
+/// Epoch values converted to dates: 2000-01-01 to 2100-01-01, so a count such as
+/// `1234567890 rows` far outside it stays a number.
+const EPOCH_DISPLAY_RANGE: std::ops::Range<i64> = 946_684_800_000..4_102_444_800_000;
+
+/// `display_timestamp`, converting a bare epoch value only when `epoch` says the stream
+/// is an epoch-stamped one (a leading number in an ISO log is a count, not a time), and
+/// only within `EPOCH_DISPLAY_RANGE`.
+pub fn display_timestamp_with(
+    line: &str,
+    hint: FormatHint,
+    epoch: bool,
+    source: SourceZone,
+    display: TimeDisplay,
+    local: &dyn Fn(i64) -> i64,
+) -> Option<(usize, usize, String)> {
     if display == TimeDisplay::Written {
         return None;
     }
     let stamp = detect_timestamp_zoned(line, hint)?;
+    if stamp.format == FormatHint::Epoch && (!epoch || !EPOCH_DISPLAY_RANGE.contains(&stamp.millis))
+    {
+        return None;
+    }
     let utc = stamp_to_utc(stamp.millis, stamp.zone_minutes, source, local);
     let shown = utc_to_display(utc, display, local);
     Some((
@@ -1619,6 +1645,32 @@ mod zone_tests {
                 assert_eq!(back, printed, "{display:?} {zone:?} {source:?}");
             }
         }
+    }
+
+    #[test]
+    fn epoch_only_on_epoch_streams_and_in_range_and_sane_zones() {
+        let show = |line: &str, epoch: bool| {
+            display_timestamp_with(
+                line,
+                FormatHint::Unknown,
+                epoch,
+                SourceZone::Utc,
+                TimeDisplay::Utc,
+                &cet,
+            )
+            .map(|t| t.2)
+        };
+        assert_eq!(show("1234567890 rows", false), None);
+        assert!(show("1790604125123 x", true).is_some());
+        // Out of 2000..2100: a number, not a date.
+        assert_eq!(show("0000000001 x", true), None);
+        assert_eq!(show("9999999999999 x", true), None);
+        // A zone out of range is no zone: the line reads in the source zone.
+        let z = zoned("2026-09-28 14:02:05+99:00 x");
+        assert_eq!((z.zone_minutes, z.end), (None, 19));
+        let z = zoned("2026-09-28 14:02:05+05:75 x");
+        assert_eq!(z.zone_minutes, None);
+        assert_eq!(zoned("2026-09-28 14:02:05+14:00 x").zone_minutes, Some(840));
     }
 
     #[test]

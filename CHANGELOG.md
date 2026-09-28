@@ -58,7 +58,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   by a test), each kind switchable (`auto_highlight_kinds`). A hand-written single-pass
   scanner (no regex, under 2 µs for a 200-byte row in release); the tokens rank after
   rules, quick labels and ANSI colours, above the level colouring, within the 64-span
-  budget. `--print --color` applies them too. Also a palette toggle.
+  budget. `--print --color` applies them too. Also a palette toggle. Four-part versions
+  ending in `.0.0` (`Chrome 118.0.0.0`) and hex words around `::` (`dead::beef`) are left
+  as text; long runs of hex digits and colons are skipped in linear time.
 
 - **7z archives.** A `.7z` (recognised by its signature, whatever its name) opens like a
   zip: one file opens directly, several show the entry picker, and each chosen entry opens

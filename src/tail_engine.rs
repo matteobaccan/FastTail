@@ -1442,7 +1442,7 @@ pub struct TailEngine {
     time_source_zone: crate::timestamp::SourceZone,
     /// Zone the stream's timestamps state (sampled from its first timed lines) and the
     /// reload generation it was read at: what the time controls convert with.
-    time_zone_sample: Option<(u64, Option<i32>)>,
+    time_zone_sample: Option<(u64, Option<i32>, crate::timestamp::FormatHint)>,
     /// The stream bar's "search all streams" button was pressed: the app opens the Find
     /// results tab with this stream's query after the dock is drawn.
     pub find_all_request: bool,
@@ -4611,14 +4611,27 @@ impl TailEngine {
             self.time_display = display;
             self.view_columns_dirty = true;
             self.refresh_time_zone_sample();
+            self.reread_time_window();
         }
     }
 
+    /// Sets what a timestamp without a zone means; a typed time window is read again.
     pub fn set_time_source_zone(&mut self, zone: crate::timestamp::SourceZone) {
         if zone != self.time_source_zone {
             self.time_source_zone = zone;
             self.view_columns_dirty = true;
+            self.reread_time_window();
         }
+    }
+
+    /// A window set from typed text, read again on the current display clock.
+    fn reread_time_window(&mut self) {
+        if self.time_from_text.trim().is_empty() && self.time_to_text.trim().is_empty() {
+            return;
+        }
+        let (from, to) = (self.time_from_text.clone(), self.time_to_text.clone());
+        let (from_ok, to_ok) = self.apply_time_range_text(&from, &to);
+        self.time_range_error = !from_ok || !to_ok;
     }
 
     /// Reads again which zone the stream's timestamps state, from its first timed lines,
@@ -4627,7 +4640,7 @@ impl TailEngine {
         if self.time_display == crate::timestamp::TimeDisplay::Written
             || self
                 .time_zone_sample
-                .is_some_and(|(generation, _)| generation == self.reload_generation)
+                .is_some_and(|(generation, _, _)| generation == self.reload_generation)
         {
             return;
         }
@@ -4640,16 +4653,17 @@ impl TailEngine {
                     crate::timestamp::FormatHint::Unknown,
                 )
             })
-            .map(|stamp| stamp.zone_minutes);
+            .map(|stamp| (stamp.zone_minutes, stamp.format));
         // Nothing timed among the few lines there are yet: sample again once more arrive.
         if zone.is_some() || total >= TIMESTAMP_RATE_SAMPLE {
-            self.time_zone_sample = Some((self.reload_generation, zone.flatten()));
+            let (zone, format) = zone.unwrap_or((None, crate::timestamp::FormatHint::Unknown));
+            self.time_zone_sample = Some((self.reload_generation, zone, format));
         }
     }
 
     /// Zone of the stream's timestamps, as sampled.
     fn sampled_zone(&self) -> Option<i32> {
-        self.time_zone_sample.and_then(|(_, zone)| zone)
+        self.time_zone_sample.and_then(|(_, zone, _)| zone)
     }
 
     /// A timestamp of the cache (the printed clock) on the display clock: the value the
@@ -4697,9 +4711,17 @@ impl TailEngine {
     /// The leading timestamp of a drawn row's `text` as the time display shows it: the
     /// byte range to replace and its text, `None` "as written" or without a timestamp.
     pub fn display_time(&self, text: &str) -> Option<(usize, usize, String)> {
-        crate::timestamp::display_timestamp(
+        use crate::timestamp::FormatHint;
+        // The stream's own format first; bare epoch values only on an epoch stream.
+        let sampled = self.time_zone_sample.map(|(_, _, format)| format);
+        let hint = match self.timestamp_hint {
+            FormatHint::Unknown => sampled.unwrap_or(FormatHint::Unknown),
+            known => known,
+        };
+        crate::timestamp::display_timestamp_with(
             text,
-            crate::timestamp::FormatHint::Unknown,
+            hint,
+            hint == FormatHint::Epoch,
             self.time_source_zone,
             self.time_display,
             &crate::timestamp::local_offset_millis,

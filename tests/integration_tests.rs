@@ -13246,6 +13246,21 @@ mod rule_set_files {
             read_rule_set(dir.path()),
             Err(RuleSetError::Io(_))
         ));
+        // A huge file is refused without being parsed.
+        let big = dir.path().join("big.fasttail-rules.ini");
+        let mut text = String::from(
+            "[fasttail_rules]
+version=1
+",
+        );
+        while text.len() as u64 <= fasttail::config::MAX_RULE_SET_BYTES {
+            text.push_str(
+                "; padding padding padding padding padding padding padding
+",
+            );
+        }
+        std::fs::write(&big, text).unwrap();
+        assert_eq!(read_rule_set(&big), Err(RuleSetError::NotARuleSet));
     }
 }
 
@@ -13639,6 +13654,17 @@ mod time_display {
         e.clear_time_range();
         let target = e.resolve_goto("16:03", 0).unwrap();
         assert_eq!(target.line, 2);
+        // A window set from typed text is read again on a new clock: 16:02 in UTC is
+        // not in this log.
+        e.apply_time_range_text("16:02", "16:02");
+        assert_eq!(visible(&e), vec![1]);
+        e.set_time_display(TimeDisplay::Utc);
+        assert!(visible(&e).is_empty());
+        e.set_time_display(TimeDisplay::Offset(120));
+        assert_eq!(visible(&e), vec![1]);
+        e.set_time_source_zone(SourceZone::Offset(60));
+        assert_eq!(visible(&e), vec![1], "the log states its zone: Z wins");
+        e.clear_time_range();
         // Changing the display does not re-time the stream: the cache keeps the clock
         // the log printed.
         let before = e.line_timestamp(2);
@@ -13660,6 +13686,14 @@ mod time_display {
         e.ensure_timestamps();
         e.apply_time_range_text("19:02", "19:02");
         assert_eq!(visible(&e), vec![0]);
+    }
+
+    #[test]
+    fn a_leading_count_in_an_iso_log_is_not_a_date() {
+        let (_tmp, mut e) = engine(&[LOG[0], LOG[1], "1234567890 rows copied"]);
+        e.set_time_display(TimeDisplay::Utc);
+        assert_eq!(e.display_time("1234567890 rows copied"), None);
+        assert!(e.display_time(LOG[1]).is_some());
     }
 
     #[test]

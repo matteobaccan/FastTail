@@ -126,13 +126,14 @@ pub fn scan(line: &str, kinds: TokenKinds, mut found: impl FnMut(usize, usize, T
             continue;
         }
         match match_at(b, i, kinds) {
-            Some((end, kind)) => {
+            Match::Token(end, kind) => {
                 if !found(i, end, kind) {
                     return;
                 }
                 i = end;
             }
-            None => i += 1,
+            Match::SkipTo(end) => i = end.max(i + 1),
+            Match::None => i += 1,
         }
     }
 }
@@ -157,42 +158,54 @@ fn may_start(c: u8) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, b'/' | b'~' | b'\\' | b'[' | b':')
 }
 
+/// What the matchers found at a token start.
+enum Match {
+    Token(usize, TokenKind),
+    None,
+    /// Nothing starts before this index (a run no token can hide in).
+    SkipTo(usize),
+}
+
 /// The token at `at`, cheapest kinds first.
-fn match_at(b: &[u8], at: usize, kinds: TokenKinds) -> Option<(usize, TokenKind)> {
+fn match_at(b: &[u8], at: usize, kinds: TokenKinds) -> Match {
     let c = b[at];
     if kinds.contains(TokenKind::Url) && c.is_ascii_alphabetic() {
         if let Some(end) = url(b, at) {
-            return Some((end, TokenKind::Url));
+            return Match::Token(end, TokenKind::Url);
         }
     }
     if kinds.contains(TokenKind::Uuid) && c.is_ascii_hexdigit() {
         if let Some(end) = uuid(b, at) {
-            return Some((end, TokenKind::Uuid));
+            return Match::Token(end, TokenKind::Uuid);
         }
     }
     if kinds.contains(TokenKind::Ip) {
         if c.is_ascii_digit() {
             if let Some(end) = ipv4(b, at) {
-                return Some((end, TokenKind::Ip));
+                return Match::Token(end, TokenKind::Ip);
             }
         }
         if c.is_ascii_hexdigit() || c == b':' || c == b'[' {
-            if let Some(end) = ipv6(b, at) {
-                return Some((end, TokenKind::Ip));
+            match ipv6(b, at) {
+                Ipv6::Found(end) => return Match::Token(end, TokenKind::Ip),
+                // A duration or a path cannot start a run of hex digits and colons
+                // longer than an address either (a duration next to a colon is none).
+                Ipv6::LongRun(end) => return Match::SkipTo(end),
+                Ipv6::No => {}
             }
         }
     }
     if kinds.contains(TokenKind::Duration) && c.is_ascii_digit() {
         if let Some(end) = duration(b, at) {
-            return Some((end, TokenKind::Duration));
+            return Match::Token(end, TokenKind::Duration);
         }
     }
     if kinds.contains(TokenKind::Path) {
         if let Some(end) = path(b, at) {
-            return Some((end, TokenKind::Path));
+            return Match::Token(end, TokenKind::Path);
         }
     }
-    None
+    Match::None
 }
 
 /// Whether a token may end before `end`: at the line end, or before a byte that cannot
@@ -271,7 +284,8 @@ fn uuid(b: &[u8], at: usize) -> Option<usize> {
 /// Four octets 0-255 and an optional `:port` (1-65535).
 fn ipv4(b: &[u8], at: usize) -> Option<usize> {
     let mut pos = at;
-    for n in 0..4 {
+    let mut octets = [0u32; 4];
+    for (n, octet) in octets.iter_mut().enumerate() {
         if n > 0 {
             if b.get(pos) != Some(&b'.') {
                 return None;
@@ -286,7 +300,14 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
         if value > 255 {
             return None;
         }
+        *octet = value;
         pos += len;
+    }
+    // `118.0.0.0` (a browser build) or `2.1.0.0` (a version) look like addresses; a
+    // network address ending in `.0.0` is rare enough in logs to leave it as text.
+    // `0.0.0.0`, the "every interface" of a listener, stays an address.
+    if octets[2] == 0 && octets[3] == 0 && octets != [0; 4] {
+        return None;
     }
     if b.get(pos) == Some(&b':') {
         let len = digits(b, pos + 1, 6);
@@ -303,46 +324,74 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
     ends_token(b, pos).then_some(pos)
 }
 
+/// Longest text an IPv6 address can be: 8 groups of 4 hex digits and 7 colons, or 39
+/// bytes, and an embedded `::` form is shorter.
+const MAX_IPV6_BYTES: usize = 39;
+
+/// What `ipv6` found at a position.
+enum Ipv6 {
+    Found(usize),
+    No,
+    /// A run of hex digits and colons too long to be an address, ending at this index:
+    /// nothing inside it is an address either, and the scan skips it whole.
+    LongRun(usize),
+}
+
 /// Hex groups of 1-4 digits: the full form (8 groups, 7 colons) or a compressed one with
-/// a single `::`. A clock (`14:02:05`), a MAC address or `12:34:56:78` has neither.
-/// `[addr]:port` is one token.
-fn ipv6(b: &[u8], at: usize) -> Option<usize> {
+/// a single `::` that has a digit in some group or at least three groups (so `dead::beef`
+/// and `Foo::bar` stay text). A clock (`14:02:05`), a MAC address or `12:34:56:78` has
+/// neither form. `[addr]:port` is one token. At most `MAX_IPV6_BYTES + 2` bytes are read
+/// before giving up, so a long run of `00:01:02:…` costs a constant per position.
+fn ipv6(b: &[u8], at: usize) -> Ipv6 {
+    let is_run = |c: u8| c.is_ascii_hexdigit() || c == b':';
     let bracketed = b[at] == b'[';
     let start = at + usize::from(bracketed);
     let mut end = start;
-    while end < b.len() && (b[end].is_ascii_hexdigit() || b[end] == b':') {
+    while end < b.len() && is_run(b[end]) {
         end += 1;
+        if end - start > MAX_IPV6_BYTES + 1 {
+            while end < b.len() && is_run(b[end]) {
+                end += 1;
+            }
+            return Ipv6::LongRun(end);
+        }
     }
     // A single colon after the address belongs to the text (`addr: ...`).
     if !bracketed && end > start + 1 && b[end - 1] == b':' && b[end - 2] != b':' {
         end -= 1;
     }
     let text = &b[start..end];
-    if text.len() < 2 {
-        return None;
+    if text.len() < 2 || text.len() > MAX_IPV6_BYTES {
+        return Ipv6::No;
     }
     let colons = text.iter().filter(|c| **c == b':').count();
+    if !(2..=7).contains(&colons) {
+        return Ipv6::No;
+    }
     let compressed = text.windows(2).filter(|w| w == b"::").count();
     if compressed > 1 || text.windows(3).any(|w| w == b":::") {
-        return None;
+        return Ipv6::No;
     }
-    let groups: Vec<&[u8]> = text.split(|c| *c == b':').collect();
-    if groups.iter().any(|g| g.len() > 4) {
-        return None;
+    let mut filled = 0;
+    for group in text.split(|c| *c == b':') {
+        if group.len() > 4 {
+            return Ipv6::No;
+        }
+        filled += usize::from(!group.is_empty());
     }
-    let filled = groups.iter().filter(|g| !g.is_empty()).count();
+    let has_digit = text.iter().any(u8::is_ascii_digit);
     let valid = if compressed == 1 {
-        filled <= 7 && colons >= 2
+        filled <= 7 && (has_digit || filled >= 3)
     } else {
         colons == 7 && filled == 8
     };
     // `::` alone, or a lone compressed group of letters (`a::b` in prose), stays text.
     if !valid || filled == 0 || (compressed == 1 && filled == 1 && text.len() < 3) {
-        return None;
+        return Ipv6::No;
     }
     if bracketed {
         if b.get(end) != Some(&b']') {
-            return None;
+            return Ipv6::No;
         }
         end += 1;
         if b.get(end) == Some(&b':') {
@@ -351,9 +400,12 @@ fn ipv6(b: &[u8], at: usize) -> Option<usize> {
                 end += 1 + len;
             }
         }
-        return ends_token(b, end).then_some(end);
     }
-    ends_token(b, end).then_some(end)
+    if ends_token(b, end) {
+        Ipv6::Found(end)
+    } else {
+        Ipv6::No
+    }
 }
 
 /// A number and a unit, or a chain of them (`2m30s`, `1h5m`): `ns`, `µs`, `us`, `ms`,
@@ -506,6 +558,12 @@ mod tests {
         );
         assert_eq!(found("(192.168.1.1)"), vec![("192.168.1.1", TokenKind::Ip)]);
         assert!(found("256.1.1.1").is_empty());
+        // Versions with four parts are not addresses; the bind-all address is.
+        assert!(found("Chrome 118.0.0.0 build 2.1.0.0").is_empty());
+        assert_eq!(
+            found("listening on 0.0.0.0:8080"),
+            vec![("0.0.0.0:8080", TokenKind::Ip)]
+        );
         assert!(found("10.0.0.1abc").is_empty());
     }
 
@@ -528,6 +586,38 @@ mod tests {
             found("host fe80::1: down"),
             vec![("fe80::1", TokenKind::Ip)]
         );
+        // Hex-only words around `::` are text; three groups or a digit make an address.
+        assert!(found("dead::beef abc::def").is_empty());
+        assert_eq!(found("fe::ab::cd").len(), 0);
+        assert_eq!(found("a::b:c ok"), vec![("a::b:c", TokenKind::Ip)]);
+    }
+
+    /// A long run of hex groups and colons (a hex dump, a MAC table) costs a constant
+    /// per byte: every position is a token start, but an address is at most 39 bytes.
+    #[test]
+    fn long_hex_colon_runs_scan_in_linear_time() {
+        let unit = "00:01:02:03:";
+        let line = unit.repeat(1_048_576 / unit.len());
+        let start = std::time::Instant::now();
+        assert!(tokens(&line, TokenKinds::ALL).is_empty());
+        let big = start.elapsed();
+        let small_line = unit.repeat(1_024 / unit.len());
+        let start = std::time::Instant::now();
+        for _ in 0..1024 {
+            assert!(tokens(std::hint::black_box(&small_line), TokenKinds::ALL).is_empty());
+        }
+        let small = start.elapsed();
+        // Linear: 1 MB once costs about what 1 KB costs 1024 times (quadratic would be
+        // ~1000x more); the bound is loose for noisy machines and debug builds.
+        assert!(
+            big < small * 8 + std::time::Duration::from_millis(50),
+            "{big:?} vs {small:?}"
+        );
+        let limit = if cfg!(debug_assertions) { 3_000 } else { 200 };
+        assert!(big < std::time::Duration::from_millis(limit), "{big:?}");
+        // Mixed with spaces the same: each run is skipped whole.
+        let spaced = format!("{} 10.0.0.1", "ab:cd:ef:".repeat(10_000));
+        assert_eq!(tokens(&spaced, TokenKinds::ALL).len(), 1);
     }
 
     #[test]

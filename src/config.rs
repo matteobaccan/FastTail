@@ -1570,10 +1570,22 @@ pub fn write_rule_set(path: &Path, rules: &[HighlightRule]) -> std::io::Result<(
     file.flush()
 }
 
-/// Reads the rule set file `path`.
+/// Largest rule set file read: far above thousands of rules, small enough to parse on
+/// the interface thread.
+pub const MAX_RULE_SET_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Reads the rule set file `path`; a file above `MAX_RULE_SET_BYTES` is not a rule set.
 pub fn read_rule_set(path: &Path) -> Result<Vec<HighlightRule>, RuleSetError> {
+    use std::io::Read;
     ensure_regular_or_absent(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
-    let bytes = fs::read(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
+    let file = fs::File::open(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_RULE_SET_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| RuleSetError::Io(e.to_string()))?;
+    if bytes.len() as u64 > MAX_RULE_SET_BYTES {
+        return Err(RuleSetError::NotARuleSet);
+    }
     let text = String::from_utf8_lossy(&bytes);
     parse_rule_set(text.trim_start_matches('\u{feff}'))
 }

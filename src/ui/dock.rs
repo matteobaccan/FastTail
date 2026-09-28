@@ -3210,6 +3210,11 @@ fn render_extended_rows(
                 // The row's text and where it was drawn: its galley is laid out again
                 // (from egui's cache) only to outline a token or to pick one.
                 let mut label: Option<(WidgetText, egui::Pos2)> = None;
+                // Kept only when it will be used: an outlined token, a converted
+                // timestamp (its tooltip), or a click this frame (a token pick).
+                let keep_label = engine.selection_token().is_some()
+                    || time_original.is_some()
+                    || ui.input(|i| i.pointer.any_click());
                 let row_resp = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -3319,14 +3324,12 @@ fn render_extended_rows(
                                 dim_spans(&mut job, &base);
                             }
                             let text = WidgetText::from(job);
+                            let kept = keep_label.then(|| text.clone());
                             let at = ui
-                                .add(
-                                    egui::Label::new(text.clone())
-                                        .wrap_mode(egui::TextWrapMode::Extend),
-                                )
+                                .add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend))
                                 .rect
                                 .min;
-                            label = Some((text, at));
+                            label = kept.map(|text| (text, at));
                             return;
                         }
                         let mut text = RichText::new(&*shown).monospace().size(font_size);
@@ -3351,14 +3354,12 @@ fn render_extended_rows(
                             text = text.color(theme.text_primary());
                         }
                         let text = WidgetText::from(text);
+                        let kept = keep_label.then(|| text.clone());
                         let at = ui
-                            .add(
-                                egui::Label::new(text.clone())
-                                    .wrap_mode(egui::TextWrapMode::Extend),
-                            )
+                            .add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend))
                             .rect
                             .min;
-                        label = Some((text, at));
+                        label = kept.map(|text| (text, at));
                     })
                     .response;
                 max_row_natural_width = max_row_natural_width.max(row_resp.rect.width());
@@ -5952,7 +5953,7 @@ pub fn render_highlights_content(
 
 /// A rule set read from a file, waiting in the Highlights dialog for Append or Replace
 /// (`confirm` once Replace asked for its confirmation).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct RuleImport {
     file: String,
     rules: Vec<HighlightRule>,
@@ -5988,8 +5989,9 @@ fn render_rule_set_controls(
 ) -> bool {
     let import_id = egui::Id::new("rule_set_import");
     let notice_id = egui::Id::new("rule_set_notice");
-    let mut import: Option<RuleImport> = ui.data(|d| d.get_temp(import_id));
-    let mut notice: Option<RuleSetNotice> = ui.data(|d| d.get_temp(notice_id));
+    // Moved out of temp memory and put back at the end: no copy of the rules per frame.
+    let mut import: Option<RuleImport> = ui.data_mut(|d| d.remove_temp(import_id));
+    let mut notice: Option<RuleSetNotice> = ui.data_mut(|d| d.remove_temp(notice_id));
     let mut changed = false;
 
     ui.horizontal(|ui| {

@@ -5056,7 +5056,9 @@ fn apply_cli_time_window(engine: &mut TailEngine, since: Option<&str>, until: Op
     if since.is_none() && until.is_none() {
         return;
     }
-    let now = crate::timestamp::local_now_millis();
+    // The texts are read on the stream's display clock (a saved time display included),
+    // so "now" is taken on that clock too.
+    let now = engine.now_on_display_clock();
     let text = |value: Option<&str>| value.map(|v| cli_time_text(v, now)).unwrap_or_default();
     let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
     engine.time_range_error = !from_ok || !to_ok;
@@ -5209,6 +5211,39 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
 mod tests {
     use super::allowed_while_locked;
     use egui::{Event, Key, Modifiers};
+
+    /// A relative `--since` is fixed on the clock the stream's time display reads the
+    /// window on: with the display in UTC, `-1h` keeps the lines of the last UTC hour
+    /// whatever the local zone.
+    #[test]
+    fn cli_relative_time_follows_the_time_display() {
+        use crate::timestamp::{format_millis, TimeDisplay};
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let stamp = |ms: i64| format_millis(ms).replace(' ', "T") + "Z";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("utc.log");
+        std::fs::write(
+            &path,
+            format!(
+                "{} old\n{} recent\n",
+                stamp(now - 3 * 3_600_000),
+                stamp(now - 30 * 60_000)
+            ),
+        )
+        .unwrap();
+        let mut engine = crate::tail_engine::TailEngine::open(&path).unwrap();
+        engine.set_time_display(TimeDisplay::Utc);
+        engine.ensure_timestamps();
+        super::apply_cli_time_window(&mut engine, Some("-1h"), None);
+        assert!(!engine.time_range_error);
+        let visible: Vec<usize> = (0..engine.visible_line_count())
+            .filter_map(|r| engine.get_actual_line_idx(r))
+            .collect();
+        assert_eq!(visible, vec![1]);
+    }
 
     #[test]
     fn a_relative_cli_time_keeps_its_milliseconds_and_is_exact_on_the_to_side() {
