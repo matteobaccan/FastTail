@@ -10521,6 +10521,7 @@ mod archive_formats {
             streams: vec![StreamEntry {
                 path: server.clone(),
                 bookmarks: vec![4, 90],
+                bookmark_notes: [(90, "restart here".to_string())].into_iter().collect(),
                 archive_entry: Some("var/log/server.log".to_string()),
                 ..StreamEntry::default()
             }],
@@ -10547,5 +10548,8 @@ mod archive_formats {
             engine.bookmarks.iter().copied().collect::<Vec<_>>(),
             [4, 90]
         );
+        // The note travels with its bookmark through the pending merge.
+        assert_eq!(engine.bookmark_note(90), Some("restart here"));
+        assert_eq!(engine.bookmark_note(4), None);
     }
 }
