@@ -4641,9 +4641,9 @@ impl TailEngine {
                 )
             })
             .map(|stamp| stamp.zone_minutes);
-        // Nothing timed yet: sample again once lines arrive.
-        if let Some(zone) = zone {
-            self.time_zone_sample = Some((self.reload_generation, zone));
+        // Nothing timed among the few lines there are yet: sample again once more arrive.
+        if zone.is_some() || total >= TIMESTAMP_RATE_SAMPLE {
+            self.time_zone_sample = Some((self.reload_generation, zone.flatten()));
         }
     }
 
@@ -6193,7 +6193,6 @@ impl TailEngine {
         self.auto_bookmarks_capped
     }
 
-    /// Bookmarks, manual or automatic, that pass the active filters, in file order.
     // ----- Selection highlight -----
 
     /// The token outlined in every row (a double-click), if any.
@@ -6371,6 +6370,7 @@ impl TailEngine {
         }
     }
 
+    /// Bookmarks, manual or automatic, that pass the active filters, in file order.
     fn visible_bookmarks(&self) -> Vec<usize> {
         let mut all: Vec<usize> = self
             .bookmarks

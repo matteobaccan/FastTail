@@ -3684,6 +3684,14 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
     }
 }
 
+/// A row's text and spans after the time display, and the replaced timestamp range
+/// with its text as written.
+type TimedRow<'a> = (
+    std::borrow::Cow<'a, str>,
+    Option<crate::tail_engine::SpanHighlight>,
+    Option<(usize, usize, String)>,
+);
+
 /// A drawn row's text with its leading timestamp in the stream's time display, the
 /// spans moved to match, and the replaced range with the text as written (for its
 /// tooltip). Unchanged "as written" or without a timestamp.
@@ -3691,11 +3699,7 @@ fn display_row_time<'a>(
     engine: &TailEngine,
     shown: std::borrow::Cow<'a, str>,
     spans: Option<crate::tail_engine::SpanHighlight>,
-) -> (
-    std::borrow::Cow<'a, str>,
-    Option<crate::tail_engine::SpanHighlight>,
-    Option<(usize, usize, String)>,
-) {
+) -> TimedRow<'a> {
     match engine.display_time(&shown) {
         None => (shown, spans, None),
         Some((start, end, with)) => {
