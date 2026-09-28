@@ -131,6 +131,8 @@ pub struct App {
     pub quit: bool,
     /// Mouse capture is on (the help says how to select text natively).
     pub mouse: bool,
+    /// Event-loop wait when nothing runs (the ini's `poll_interval_ms`).
+    pub idle_poll: Duration,
     /// Clickable rectangles of the last frame.
     pub hits: HitMap,
     clipboard: Clipboard,
@@ -158,6 +160,7 @@ impl App {
             show_help: false,
             quit: false,
             mouse: true,
+            idle_poll: Duration::from_millis(250),
             hits: HitMap::default(),
             clipboard: Clipboard::default(),
             last_click: None,
@@ -999,9 +1002,14 @@ pub fn render_row(
                 .bg(palette.level_color(LogLevel::Debug)),
         ));
     }
-    let base = palette.level_style(engine.level_of(line_idx));
     let text = engine.get_row(line_idx).map(|r| r.line).unwrap_or_default();
     let text = text.trim_end_matches(['\r', '\n']);
+    // The first highlight rule that matches colours the row, as in the GUI; the level
+    // palette only applies to rows no rule matched.
+    let base = match engine.match_highlight(text) {
+        Some(rule) => palette.rule_style(&rule),
+        None => palette.level_style(engine.level_of(line_idx)),
+    };
     let hits = if hit && !query.is_empty() {
         view::hit_ranges(text, query)
     } else {
@@ -1043,12 +1051,12 @@ fn group_digits(n: usize) -> String {
 /// Opens `path` the way the GUI does: a single compressed file or an archive entry
 /// (`archive.zip/entry.log`) is decompressed to a spool in the background; a zip with
 /// exactly one entry opens that entry. Other archives need the GUI's entry picker.
-pub fn open_path(path: &Path) -> Result<TailEngine, String> {
+/// `settings` are the ini's spool folder and size cap.
+pub fn open_path(
+    path: &Path,
+    settings: &fasttail::compressed::Settings,
+) -> Result<TailEngine, String> {
     use fasttail::compressed::{self, Target};
-    let settings = compressed::Settings {
-        spool_dir: fasttail::spool::spool_dir(None),
-        limits: compressed::Limits::default(),
-    };
     // `compressed::OpenError` has no `Display`: its debug form is enough for a prototype.
     let err = |e: &dyn std::fmt::Debug| format!("{}: {e:?}", path.display());
     if fasttail::wildcard::is_pattern_path(path) {
@@ -1057,16 +1065,16 @@ pub fn open_path(path: &Path) -> Result<TailEngine, String> {
     match compressed::classify(path) {
         Target::Plain => TailEngine::open(path).map_err(|e| err(&e)),
         Target::Compressed(_) => {
-            compressed::open_engine(path, None, &settings, None).map_err(|e| err(&e))
+            compressed::open_engine(path, None, settings, None).map_err(|e| err(&e))
         }
         Target::Entry { archive, entry, .. } => {
-            compressed::open_engine(&archive, Some(&entry), &settings, None).map_err(|e| err(&e))
+            compressed::open_engine(&archive, Some(&entry), settings, None).map_err(|e| err(&e))
         }
         Target::ZipArchive => {
             let entries = compressed::list_zip_entries(path).map_err(|e| err(&e))?;
             let usable: Vec<_> = entries.iter().filter(|e| e.refusal.is_none()).collect();
             if usable.len() == 1 {
-                compressed::open_engine(path, Some(&usable[0].name), &settings, None)
+                compressed::open_engine(path, Some(&usable[0].name), settings, None)
                     .map_err(|e| err(&e))
             } else {
                 let names: Vec<&str> = usable.iter().take(5).map(|e| e.name.as_str()).collect();
@@ -1089,11 +1097,10 @@ pub fn open_path(path: &Path) -> Result<TailEngine, String> {
 }
 
 /// Standard input as a stream, spooled to disk like the GUI does.
-pub fn open_stdin() -> Result<TailEngine, String> {
+pub fn open_stdin(settings: &fasttail::stdin_source::Settings) -> Result<TailEngine, String> {
     use fasttail::stdin_source as stdin;
     let input = stdin::take_stdin().ok_or("standard input is not available")?;
-    let settings = stdin::Settings::from_config(None, stdin::DEFAULT_MAX_MB);
-    let stream = stdin::StdinStream::start(input, &settings, None)
+    let stream = stdin::StdinStream::start(input, settings, None)
         .map_err(|e| format!("cannot spool standard input: {e}"))?;
     stdin::open_engine(stream, None).map_err(|e| format!("cannot open standard input: {e}"))
 }
@@ -1110,13 +1117,14 @@ pub fn absolute(p: &str) -> PathBuf {
     }
 }
 
-/// Poll timeout of the event loop: shorter while background work runs, so progress
-/// shows smoothly, longer when idle.
-pub fn poll_timeout(busy: bool) -> Duration {
+/// Poll timeout of the event loop: `idle` (the ini's `poll_interval_ms`) when nothing
+/// runs, at most 50 ms while background work runs so progress shows smoothly. Input
+/// ends the wait at once either way.
+pub fn poll_timeout(busy: bool, idle: Duration) -> Duration {
     if busy {
-        Duration::from_millis(50)
+        idle.min(Duration::from_millis(50))
     } else {
-        Duration::from_millis(100)
+        idle
     }
 }
 

@@ -4,6 +4,7 @@
 
 use egui::Color32;
 use fasttail::log_level::LogLevel;
+use fasttail::tail_engine::HighlightStyle;
 use fasttail::theme::CyberTheme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
@@ -180,6 +181,8 @@ pub struct Palette {
     pub theme: CyberTheme,
     pub depth: ColorDepth,
     pub ascii: bool,
+    /// The ini's `level_colors`: rows no rule matched are coloured by their level.
+    pub level_colors: bool,
 }
 
 impl Palette {
@@ -188,7 +191,21 @@ impl Palette {
             theme,
             depth,
             ascii,
+            level_colors: true,
         }
+    }
+
+    /// Whole-row style of a highlight rule: its foreground and background (always
+    /// solid in the ini), bold and italic.
+    pub fn rule_style(&self, rule: &HighlightStyle) -> Style {
+        let mut style = Style::default().fg(self.map(rule.fg)).bg(self.map(rule.bg));
+        if rule.bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        if rule.italic {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
+        style
     }
 
     /// Border characters of a window: double for the focused stream, rounded for a
@@ -218,6 +235,9 @@ impl Palette {
     /// Style of a row of level `level`: the theme's level palette, or the terminal's
     /// default text for INFO and unknown levels.
     pub fn level_style(&self, level: LogLevel) -> Style {
+        if !self.level_colors {
+            return Style::default();
+        }
         match self.theme.level_style(level) {
             Some(ls) => {
                 let mut style = Style::default().fg(self.map(ls.fg));

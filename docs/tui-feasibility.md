@@ -13,11 +13,53 @@ are unchanged. The only visible trace is three new optional dependencies in
 
 ```sh
 cargo build --release --features tui --bin fasttail-tui
-target/release/fasttail-tui app.log other.log.gz
-cargo test --features tui --bin fasttail-tui      # the prototype's 26 unit tests
+target/release/fasttail-tui                        # the GUI's workspace from fasttail.ini
+target/release/fasttail-tui app.log other.log.gz   # just these files
+target/release/fasttail-tui --session incident.fasttail-session.ini
+target/release/fasttail-tui --config D:\other\fasttail.ini
+cargo test --features tui --bin fasttail-tui       # the prototype's 28 unit tests
 ```
 
 ## What works
+
+- **The GUI's settings and workspace, read-only.** The TUI finds `fasttail.ini` as the
+  GUI does (`FastTailConfig::config_path()`): `FASTTAIL_CONFIG`, then the current
+  directory, next to the executable, then the per-user folder. `--config FILE` sets
+  `FASTTAIL_CONFIG` exactly as the GUI's command line does. From the ini it takes:
+  - **the workspace.** With no FILE arguments it opens `open_files` in the GUI's tab
+    order, with each stream's saved state from `[session]` / `[stream_N]`: include and
+    exclude terms, the search query, encoding, ANSI mode, collapse mode, and bookmarks
+    with their notes. The order and the calls are those of the GUI's
+    `apply_stream_state` and `restore_bookmarks`. Pattern entries (`logs\app-*.log`)
+    open on their newest match. Files that no longer exist are skipped, and the status
+    bar names them ("Skipped 1 missing file: old.log").
+  - **FILE arguments.** Only those files open, but each one still gets the state the
+    ini keeps for its path (filters, search, bookmarks), as the GUI does for a file it
+    reopens.
+  - **`--session FILE`.** A named `*.fasttail-session.ini` replaces the workspace,
+    through `Session::load_from`, as in the GUI. Missing entries are reported the same
+    way.
+  - **global settings.** The theme (`--theme` still overrides it) and `level_colors`.
+    The highlight rules go through the engine's `set_highlight_rules`: the first
+    enabled rule that matches colours the row with its fg/bg/bold/italic, mapped like
+    the level colours, and the level palette only applies to rows no rule matched.
+    `bookmark=` rules create the engine's automatic bookmarks (the `*` in the gutter).
+    The global filter (`[global_filter]`, when enabled) goes to every stream.
+    `poll_interval_ms` becomes the idle wait of the event loop (50 ms while a job
+    runs). `size_check_interval_ms`, `auto_bookmark_max`, the spool folder, and the
+    compressed and stdin size caps apply as well.
+  - **not used.** The language: the TUI's few texts (status hints, help, dialog titles)
+    are English and not yet in `i18n`. Wrap, the dock layout, the window geometry, the
+    timeline, quick labels, filter presets and external tools are not used either.
+    The minimum level and the time range are not in the ini: the GUI does not persist
+    them per stream, so there is nothing to restore.
+- **It never writes `fasttail.ini`.** `FastTailConfig::load()` is bypassed on purpose,
+  because it saves the ini when it migrates an old `fasttail.toml`. The TUI parses the
+  file with `FastTailConfig::from_ini` and keeps every change in memory, so it cannot
+  fight a running GUI over the file. A test checks that the file is byte-for-byte
+  unchanged. Saving TUI state later would need a merge-on-save of the TUI's own streams
+  into the file (or a separate `[tui]` section or file). The GUI rewrites the whole ini
+  when it saves, so two writers would overwrite each other's changes.
 
 - **Windows with borders.** Each stream is a bordered window: double lines when it has
   the focus (in the theme's accent colour), single lines otherwise. The top border
@@ -25,8 +67,8 @@ cargo test --features tui --bin fasttail-tui      # the prototype's 26 unit test
   background job on the left, and the filters, level, collapse and search position on
   the right. The status line is a bordered bar. Prompts and help open as centred
   dialogs that clear what is under them, with `[ OK ]` / `[ Cancel ]` buttons.
-- **Several files.** One engine per file on the command line, plus standard input (`-`,
-  or piped input). A title strip appears once there are two files. `Tab` / `Shift+Tab`
+- **Several files.** One engine per stream, plus standard input (`-`, or piped input,
+  which opens next to the workspace and takes the focus, as in the GUI). A title strip appears once there are two files. `Tab` / `Shift+Tab`
   and `Alt+1..9` switch files.
 - **Split.** `s` cycles through one window, two side by side and two stacked. In a
   split, `Tab` moves the focus between the two windows. `--split` starts that way.
@@ -36,8 +78,8 @@ cargo test --features tui --bin fasttail-tui      # the prototype's 26 unit test
   `Left` / `Right` / `0` to scroll sideways.
 - **Level colours.** The theme's level palette (`CyberTheme::level_style`) is mapped from
   `Color32` to 24-bit RGB. If the terminal lacks truecolor, each colour falls back to
-  the nearest of the 16 basic colours. `--theme tron|matrix|blade|light` picks the
-  palette.
+  the nearest of the 16 basic colours. The palette is the ini's theme, or
+  `--theme tron|matrix|blade|light`.
 - **Search.** `/` opens the search dialog. `n` / `N` go to the next and previous hit. Hit
   rows carry a `>` in the gutter, the hits inside the text are painted, and the current
   hit's line number is reversed. `Esc` clears the search and the selection.
@@ -65,8 +107,9 @@ cargo test --features tui --bin fasttail-tui      # the prototype's 26 unit test
 - **ASCII fallback.** `--ascii`, or `FASTTAIL_TUI_ASCII`, draws `+-|` borders (the focused
   window uses `=`). This is picked automatically on a Windows console without
   virtual-terminal support (see [Windows console notes](#windows-console-notes)).
-- **A calm event loop.** Crossterm events are polled with a 100 ms timeout (50 ms while a
-  background job runs). Each tick calls `poll_updates()` on every engine, so hidden
+- **A calm event loop.** Crossterm events are polled with the ini's `poll_interval_ms` as
+  the timeout (250 ms by default, 50 ms while a background job runs). Input ends the
+  wait at once, so keys are never delayed. Each tick calls `poll_updates()` on every engine, so hidden
   files keep tailing and their title gets a `+`. The screen is redrawn only when a
   signature of what it shows changes (line counts, generations, job progress, follow,
   focus) or on input. Only the visible rows are read from the engine.
@@ -137,9 +180,9 @@ The search dialog in ASCII mode (`--ascii`):
 - A cursor row for the keyboard. Selection is mouse-only for now, so the features that
   act on "the current row" have no key yet: show in context (`enter_context` /
   `leave_context`), bookmark navigation, notes and go-to-line. The engine calls exist.
-- No configuration is read. Highlight rules, quick labels, presets, the language and
-  the theme from `fasttail.ini` are not loaded, and there is no session or workspace
-  restore.
+- Captures-only highlight rules (regex groups painted inside the row) are not drawn:
+  only whole-row rules colour rows. `match_highlight_spans` has the spans; merging them
+  with the search-hit segments is the missing piece.
 - ANSI colours in the log (`RowText::ansi`) are stripped, not rendered.
 - Pattern streams (`dir/*.log`) open through `TailEngine::open_pattern` but were not
   exercised.
@@ -150,7 +193,7 @@ The search dialog in ASCII mode (`--ascii`):
 
 ## What the engine gave for free
 
-Almost everything that matters. The prototype is about 2,800 lines, a fifth of them
+Almost everything that matters. The prototype is about 3,200 lines, a fifth of them
 tests, and not one of them touches the engine:
 
 - the line index, built in the background on large files, with progress;
@@ -266,7 +309,8 @@ take the factor as indicative.
 
 **Idle CPU:** with the 1 GB file open, following, and mouse capture on, the process used
 31 ms of CPU in 12 s, which is **0.26 % of one core** (the 100 ms poll plus
-`poll_updates()` on each tick). Memory was about 97 MB working set, almost all of it the
+`poll_updates()` on each tick). That was measured before the ini was read. The idle
+wait is now `poll_interval_ms`, 250 ms by default, so idle CPU can only go down. Memory was about 97 MB working set, almost all of it the
 engine's line index (10M × 8 B offsets) and level cache, which the GUI would hold too.
 
 **Binary size:** `fasttail-tui.exe` is **3.5 MB**, against 21.7 MB for the GUI
@@ -335,8 +379,10 @@ terminal mode should first:
 5. **Share the "open anything" logic.** `open_log_file` / `open_engine_for` /
    `open_archive` in `ui/app.rs` (compressed dispatch, archive pickers, pending stdin,
    recent files, workspace and session restore) are GUI methods today. The TUI
-   re-implemented a small subset. A shared, UI-agnostic workspace layer would serve both
-   front ends.
+   re-implemented a subset (`src/bin/fasttail-tui/workspace.rs` copies the GUI's
+   `apply_stream_state` and `restore_bookmarks`). A shared, UI-agnostic workspace layer
+   would serve both front ends and keep them from drifting apart. The same goes for a
+   read-only `FastTailConfig::read_from(path)`: `load()` can write.
 6. **Audio:** the search wrap-around beep is played from the engine through
    `crate::audio`. That is fine behind its feature, but it should be a callback or an
    event the front end decides on.
@@ -361,7 +407,7 @@ Rough effort for a real `fasttail-tui`, one developer:
 | Step | Effort |
 |---|---|
 | Decoupling steps 1–5 above (colours, markdown cache, shortcut key type, `gui` feature or core crate, shared open/workspace layer) | 3–5 days |
-| Keyboard cursor row, context view, bookmarks and notes navigation, go-to line and time, config and theme loading, highlight rules and ANSI colours | 4–6 days |
+| Keyboard cursor row, context view, bookmarks and notes navigation, go-to line and time, captures-only rules, quick labels and ANSI colours, saving TUI state | 4–6 days |
 | HEX view, overview strip, global filter, find-results pane, archive entry picker | 4–6 days |
 | The form dialogs (settings, rules, presets, time range, external tools) | 1–2 weeks |
 | Timeline histogram, resizable tiling, i18n of the TUI strings, packaging in the release workflow, docs | 1 week |

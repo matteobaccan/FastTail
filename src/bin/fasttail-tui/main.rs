@@ -7,6 +7,7 @@ mod colors;
 mod keys;
 mod mouse;
 mod view;
+mod workspace;
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
@@ -21,21 +22,28 @@ use ratatui::Terminal;
 
 use app::{App, Split, SplitDir, Tab};
 use colors::{Palette, TermInfo};
+use workspace::{Plan, Settings};
 
 const USAGE: &str = "\
 fasttail-tui - FastTail in the terminal (prototype)
 
 USAGE:
-    fasttail-tui [OPTIONS] PATH...
+    fasttail-tui [OPTIONS]              the GUI's workspace from fasttail.ini
+    fasttail-tui [OPTIONS] PATH...      just these files (with their saved state)
     command | fasttail-tui [OPTIONS] -
 
+fasttail.ini is read, never written: theme, highlight rules, global filter, poll
+interval, open files and their filters, search, bookmarks, encoding and collapse.
+
 OPTIONS:
+    --config <FILE>      Use this configuration file (same as FASTTAIL_CONFIG)
+    --session <FILE>     Open a named session (*.fasttail-session.ini)
     --filter <TEXT>      Include filter for every file
     --exclude <TEXT>     Exclude filter for every file
     --no-follow          Start paused instead of following the end
     --split              Start with the first two files side by side
     --search <TEXT>      Search the first file and jump to the first hit
-    --theme <NAME>       tron (default), matrix, blade, light: level colours
+    --theme <NAME>       tron, matrix, blade, light: overrides the ini's theme
     --ascii              Draw borders with +-| instead of box characters
     --no-mouse           Leave the mouse to the terminal (native text selection)
     --stats <FILE>       Write frame timings to FILE on exit
@@ -44,6 +52,7 @@ OPTIONS:
     -h, --help           Print this help
 
 ENVIRONMENT:
+    FASTTAIL_CONFIG      Configuration file, as for the GUI
     FASTTAIL_TUI_COLORS  16 or truecolor: overrides the colour detection
     FASTTAIL_TUI_ASCII   set: same as --ascii
 
@@ -59,6 +68,8 @@ struct Options {
     no_follow: bool,
     split: bool,
     theme: Option<String>,
+    config: Option<String>,
+    session: Option<String>,
     ascii: bool,
     no_mouse: bool,
     stats: Option<String>,
@@ -92,6 +103,8 @@ fn parse_args() -> Result<Options, String> {
             "--no-follow" => o.no_follow = true,
             "--split" => o.split = true,
             "--theme" => o.theme = Some(value(&mut args, &a)?),
+            "--config" => o.config = Some(value(&mut args, &a)?),
+            "--session" => o.session = Some(value(&mut args, &a)?),
             "--ascii" => o.ascii = true,
             "--no-mouse" => o.no_mouse = true,
             "--stats" => o.stats = Some(value(&mut args, &a)?),
@@ -114,12 +127,14 @@ fn parse_args() -> Result<Options, String> {
     Ok(o)
 }
 
-fn theme_of(name: Option<&str>) -> CyberTheme {
+/// `--theme` when given (and known), else the ini's theme.
+fn theme_of(name: Option<&str>, configured: CyberTheme) -> CyberTheme {
     match name.map(|s| s.to_ascii_lowercase()).as_deref() {
+        Some("tron") => CyberTheme::Tron,
         Some("matrix") => CyberTheme::Matrix,
         Some("blade") => CyberTheme::Blade,
         Some("light") => CyberTheme::Light,
-        _ => CyberTheme::Tron,
+        _ => configured,
     }
 }
 
@@ -131,33 +146,73 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if let Some(cfg) = &opts.config {
+        // As the GUI does: the config lookup reads FASTTAIL_CONFIG first.
+        std::env::set_var("FASTTAIL_CONFIG", cfg);
+    }
     let term = TermInfo::from_env();
-    let palette = Palette::new(
-        theme_of(opts.theme.as_deref()),
-        term.depth(),
-        opts.ascii || term.ascii_borders(),
-    );
     if let Some(file) = &opts.bench {
+        let palette = Palette::new(
+            theme_of(opts.theme.as_deref(), CyberTheme::Tron),
+            term.depth(),
+            opts.ascii || term.ascii_borders(),
+        );
         bench(file, palette);
         return;
     }
+    // Read-only: nothing below writes the ini back.
+    let mut settings = Settings::locate();
+    let mut palette = Palette::new(
+        theme_of(opts.theme.as_deref(), settings.config.theme),
+        term.depth(),
+        opts.ascii || term.ascii_borders(),
+    );
+    palette.level_colors = settings.config.level_colors;
 
-    let mut tabs = Vec::new();
-    for p in &opts.paths {
-        match app::open_path(&app::absolute(p)) {
-            Ok(engine) => tabs.push(Tab::new(engine)),
-            Err(e) => eprintln!("fasttail-tui: {e}"),
+    // What to open: a named session, the files named on the command line (with the
+    // state the ini keeps for them), or the GUI's workspace.
+    let plan = if let Some(file) = &opts.session {
+        match workspace::session_plan(&mut settings, &app::absolute(file)) {
+            Ok(plan) => plan,
+            Err(e) => {
+                eprintln!("fasttail-tui: {e}");
+                std::process::exit(2);
+            }
         }
-    }
+    } else if !opts.paths.is_empty() {
+        Plan {
+            paths: opts.paths.iter().map(|p| app::absolute(p)).collect(),
+            missing: Vec::new(),
+        }
+    } else {
+        workspace::workspace_plan(&settings)
+    };
+    let (engines, errors) = workspace::open_plan(&settings, &plan);
+    let mut tabs: Vec<Tab> = engines.into_iter().map(Tab::new).collect();
+    let mut notices: Vec<String> = errors;
+    notices.extend(workspace::missing_notice(&plan.missing));
     let piped = fasttail::stdin_source::classify() == fasttail::stdin_source::StdinKind::Piped;
-    if opts.stdin || (piped && opts.paths.is_empty()) {
-        match app::open_stdin() {
-            Ok(engine) => tabs.push(Tab::new(engine)),
-            Err(e) => eprintln!("fasttail-tui: {e}"),
+    let mut focus = 0;
+    if opts.stdin || piped {
+        match app::open_stdin(&settings.config.stdin_settings()) {
+            Ok(mut engine) => {
+                settings.prepare(&mut engine);
+                focus = tabs.len();
+                tabs.push(Tab::new(engine));
+            }
+            Err(e) => notices.push(e),
         }
     }
     if tabs.is_empty() {
-        eprintln!("fasttail-tui: nothing to open\n\n{USAGE}");
+        for n in &notices {
+            eprintln!("fasttail-tui: {n}");
+        }
+        let origin = if settings.found {
+            format!("the workspace in {}", settings.path.display())
+        } else {
+            format!("no {} found", settings.path.display())
+        };
+        eprintln!("fasttail-tui: nothing to open ({origin})\n\n{USAGE}");
         std::process::exit(2);
     }
     for tab in &mut tabs {
@@ -173,7 +228,12 @@ fn main() {
     }
 
     let mut app = App::new(tabs, palette);
+    app.active = focus;
     app.mouse = !opts.no_mouse;
+    app.idle_poll = settings.poll_interval();
+    if !notices.is_empty() {
+        app.message = Some(notices.join("  |  "));
+    }
     if opts.split && app.tabs.len() > 1 {
         app.split = Some(Split {
             dir: SplitDir::SideBySide,
@@ -319,7 +379,7 @@ where
             break;
         }
         // Waits for input at most one tick; then the engines are polled again.
-        if event::poll(app::poll_timeout(app.busy()))? {
+        if event::poll(app::poll_timeout(app.busy(), app.idle_poll))? {
             // Drain everything that queued up, then draw once.
             loop {
                 match event::read()? {
@@ -413,7 +473,10 @@ impl FrameStats {
 fn bench(file: &str, palette: Palette) {
     let path = app::absolute(file);
     let t = Instant::now();
-    let engine = match app::open_path(&path) {
+    let engine = match app::open_path(
+        &path,
+        &fasttail::config::FastTailConfig::default().compressed_settings(),
+    ) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("fasttail-tui: {e}");
