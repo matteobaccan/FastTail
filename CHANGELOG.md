@@ -44,6 +44,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the streams opened from the command line (a relative time is fixed at start, to the
   millisecond); repeated `--filter` / `--exclude` still mean the last one.
 
+- **Context lines around filter matches.** A `± N` drag value in the stream bar (0 to 100,
+  per stream, next to the collapse selector) shows every line the filters keep together
+  with the `N` file lines before and after it, like `grep -C N`. Context lines ignore every
+  filter (stream terms, level, time range, global filter) and are drawn dimmed; a thin rule
+  marks where lines are hidden between two groups, with the count in its tooltip. Changing
+  `N` never refilters: merged line ranges are derived from the matches in one pass
+  (24 bytes per group), and on files above 16 MB the context appears with the matches as
+  the background scan finds them. Search, `F3`, bookmarks, go to line, selection, copy,
+  export, the Δt column, the overview strip and collapse work on the rows shown, context
+  rows included; the Find results tab keeps listing matches only. Saved per stream in the
+  workspace and in sessions as `context_lines=N` (only when above 0). Help dialog and all
+  16 languages updated. `fasttail --print --context N` gives the same
+  context in print mode.
+
 ### Changed
 
 - **Building from source needs Rust 1.93.** `sevenz-rust2` 0.23, used to read `.7z`
