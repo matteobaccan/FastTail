@@ -128,6 +128,9 @@ pub struct FastTailApp {
     /// Key of `global_spec`: an apply that does not change it keeps the same set, so no
     /// stream refilters.
     global_key: Option<crate::global_filter::AppliedKey>,
+    /// The line-number and time delta defaults (`[general]`) the stream entries were last
+    /// recorded against, see `check_column_defaults`.
+    column_defaults: (bool, bool),
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -604,8 +607,10 @@ impl FastTailApp {
             global_spec: None,
             global_edit_at: None,
             global_key: None,
+            column_defaults: (false, false),
         };
         app.global_key = app.config.global_filter.applied_key();
+        app.column_defaults = (app.config.show_line_numbers, app.config.show_time_delta);
         app.global_spec = app.config.global_filter.compile();
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -638,6 +643,7 @@ impl FastTailApp {
                     engine.auto_bookmark_max = app.config.auto_bookmark_max;
                     engine.set_highlight_rules(app.config.highlight_rules.clone());
                     engine.size_unit = app.config.size_unit;
+                    apply_view_defaults(&mut engine, &app.config);
                     engine.wrap_lines = app.config.wrap_for(&path);
                     restore_bookmarks(&mut engine, &app.config, &path);
                     apply_stream_state(&mut engine, &app.config);
@@ -721,7 +727,7 @@ impl FastTailApp {
                 self.engines
                     .iter()
                     .find(|e| paths_equal(&e.path, p))
-                    .map(stream_entry_of)
+                    .map(|e| stream_entry_of(e, &self.config))
             })
             .collect();
         Session {
@@ -740,6 +746,20 @@ impl FastTailApp {
             &crate::ui::find_results::without_find_results(&self.dock_state),
         ));
         session.serialized(base.as_deref())
+    }
+
+    /// After Settings changed the line-number or time delta default: open streams keep
+    /// their columns, but their entries record only what differs from the defaults, so
+    /// every entry is saved again.
+    fn check_column_defaults(&mut self) {
+        let now = (self.config.show_line_numbers, self.config.show_time_delta);
+        if now == self.column_defaults {
+            return;
+        }
+        self.column_defaults = now;
+        for eng in &mut self.engines {
+            eng.view_columns_dirty = true;
+        }
     }
 
     /// Records the live workspace as the saved state of the current session.
@@ -1177,7 +1197,7 @@ impl FastTailApp {
 
         // Per-stream state of the default session (filters, search, encoding).
         for eng in self.engines.iter().filter(|e| !e.is_stdin()) {
-            let mut entry = stream_entry_of(eng);
+            let mut entry = stream_entry_of(eng, &self.config);
             entry.wrap = false;
             entry.bookmarks.clear();
             entry.bookmark_notes.clear();
@@ -1305,6 +1325,7 @@ impl FastTailApp {
         engine.set_highlight_rules(self.config.highlight_rules.clone());
         engine.set_quick_labels(&self.quick_labels);
         engine.size_unit = self.config.size_unit;
+        apply_view_defaults(&mut engine, &self.config);
         let options = self.stdin_options.clone();
         if let Some(f) = &options.filter {
             engine.set_include_filter(f);
@@ -1549,6 +1570,7 @@ impl FastTailApp {
             engine.set_highlight_rules(self.config.highlight_rules.clone());
             engine.set_quick_labels(&self.quick_labels);
             engine.size_unit = self.config.size_unit;
+            apply_view_defaults(&mut engine, &self.config);
             restore_bookmarks(&mut engine, &self.config, &path);
             engine.wrap_lines = self.config.wrap_for(&path);
             apply_stream_state(&mut engine, &self.config);
@@ -3049,6 +3071,7 @@ impl FastTailApp {
             }
         }
         prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
+        self.check_column_defaults();
 
         // Persist bookmarks and wrap toggles that changed this frame, and flash the window
         // on a background sound-alert match when the option is on and the window is not
@@ -3062,6 +3085,7 @@ impl FastTailApp {
                 eng.wrap_dirty = false;
                 eng.ansi_dirty = false;
                 eng.collapse_mode_dirty = false;
+                eng.view_columns_dirty = false;
             }
             if eng.bookmarks_dirty {
                 eng.bookmarks_dirty = false;
@@ -3075,13 +3099,19 @@ impl FastTailApp {
                 self.config.set_wrap(&eng.path, eng.wrap_lines);
                 bookmarks_changed = true;
             }
-            if eng.ansi_dirty || eng.timeline_dirty || eng.collapse_mode_dirty {
-                // The ANSI mode, the timeline flag and the collapse mode live in the
-                // stream entry, as in `save_dock_layout`.
+            if eng.ansi_dirty
+                || eng.timeline_dirty
+                || eng.collapse_mode_dirty
+                || eng.view_columns_dirty
+            {
+                // The ANSI mode, the timeline flag, the collapse mode and the line-number
+                // and time delta columns live in the stream entry, as in
+                // `save_dock_layout`.
                 eng.ansi_dirty = false;
                 eng.timeline_dirty = false;
                 eng.collapse_mode_dirty = false;
-                let mut entry = stream_entry_of(eng);
+                eng.view_columns_dirty = false;
+                let mut entry = stream_entry_of(eng, &self.config);
                 entry.wrap = false;
                 entry.bookmarks.clear();
                 entry.bookmark_notes.clear();
@@ -4755,8 +4785,9 @@ impl StdinOptions {
     }
 }
 
-/// The session entry describing `engine` as it is now.
-fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
+/// The session entry describing `engine` as it is now. The line-number and time delta
+/// columns are recorded only where they differ from the defaults of `cfg`.
+fn stream_entry_of(engine: &TailEngine, cfg: &FastTailConfig) -> StreamEntry {
     let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
     let mut bookmark_notes = engine.bookmark_notes.clone();
     if let Some(c) = engine.compressed.as_ref() {
@@ -4781,10 +4812,21 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
             .collapse_mode()
             .is_on()
             .then(|| engine.collapse_mode().name().to_string()),
+        line_numbers: (engine.show_line_numbers != cfg.show_line_numbers)
+            .then_some(engine.show_line_numbers),
+        time_delta: (engine.show_time_delta != cfg.show_time_delta)
+            .then_some(engine.show_time_delta),
         bookmarks,
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
     }
+}
+
+/// Starts a stream's line-number and time delta columns from the `[general]` defaults;
+/// `apply_stream_state` then applies what the stream saved.
+fn apply_view_defaults(engine: &mut TailEngine, cfg: &FastTailConfig) {
+    engine.show_line_numbers = cfg.show_line_numbers;
+    engine.show_time_delta = cfg.show_time_delta;
 }
 
 /// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
@@ -4807,6 +4849,8 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
         return;
     };
     engine.timeline_open = entry.timeline;
+    engine.show_line_numbers = entry.line_numbers.unwrap_or(cfg.show_line_numbers);
+    engine.show_time_delta = entry.time_delta.unwrap_or(cfg.show_time_delta);
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);

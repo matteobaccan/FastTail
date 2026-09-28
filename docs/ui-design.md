@@ -337,8 +337,8 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
 2. **`▶ Monitor` / `■ Monitor`**: disk watching on or off.
 3. **View mode**: `🔤 TXT` (accent), `🔢 HEX` (`secondary_accent`), `📝 MD` (warn). MD is refused above `markdown_max_mb` with a notice.
 4. Text views only:
-   - **`# 123` / `# ---`**: line numbers (global).
-   - **`Δt`**: time-delta column (global). The tooltip explains when timestamps are unreadable.
+   - **`# 123` / `# ---`**: line numbers of this stream only (`TailEngine::show_line_numbers`).
+   - **`Δt`**: time-delta column of this stream only (`TailEngine::show_time_delta`); the gap threshold is global. The tooltip explains when timestamps are unreadable. Both start from the `[general]` defaults when the stream opens and are saved with it (`line_numbers=`, `time_delta=`).
    - **`↩ Wrap`**: per stream, `ALT + W`.
 5. Text and MD only:
    - **Encoding** combo, 90 px: UTF-8, ASCII, ANSI, Unicode, Unicode BE.
@@ -472,7 +472,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
      - A PIN password field (90 px, 4–12 digits), `Save PIN` and `Clear PIN`.
      - `Lock now`, disabled without a PIN.
      - A small note that the lock is a deterrent.
-  8. Checkboxes: System Telemetry · Cyber Audio SFX · Borderless Window · Show Line Numbers · Colour rows by log level · Overview strip beside the scroll bar · Time delta (Δt) column. Then `Δt gap highlight (ms, 0 = off)` as a `DragValue` (0–86 400 000).
+  8. Checkboxes: System Telemetry · Cyber Audio SFX · Borderless Window · Line numbers in new streams · Colour rows by log level · Overview strip beside the scroll bar · Time delta (Δt) column in new streams (both defaults only: open streams keep their own switches). Then `Δt gap highlight (ms, 0 = off)` as a `DragValue` (0–86 400 000).
   9. **🛠 External tools:**
      - The list of placeholders and a link to the cookbook.
      - One grouped card per tool, with Name, Program, Arguments, Shortcut (`Ctrl+Shift+F9`, with an invalid-shortcut warning), Rule (a combo of the highlight-rule patterns, with a "missing rule" warning), Match regex, and a "Run via shell" checkbox with a ⚠ warning.
@@ -1168,8 +1168,8 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `telemetry_enabled` | true | CPU and RAM meters in the title bar |
 | `sound_enabled` | false | UI sound effects |
 | `borderless` | false | custom chrome, no OS decorations |
-| `show_line_numbers` | true | `# 123` |
-| `show_time_delta`, `time_delta_gap_ms` | false, 1000 | Δt column and its gap tint |
+| `show_line_numbers` | true | `# 123` default for new streams |
+| `show_time_delta`, `time_delta_gap_ms` | false, 1000 | Δt default for new streams, and the gap tint of every stream |
 | `font_size` | 13 | log font size (8–32) |
 | `zoom_factor` | 1.00 | interface zoom (0.5–3.0) |
 | `poll_interval_ms` | 250 | repaint and poll cadence on a GPU (50–5000) |
@@ -1197,7 +1197,7 @@ Environment overrides for support: `FASTTAIL_POLL_INTERVAL_MS`, `FASTTAIL_SIZE_C
 | `[search_history]` | `query_N` | search 🕒 menu |
 | `[bookmarks]` | `file_N`, `lines_N`, `note_<N>_<line>` | manual bookmarks (`★`, `✏`) and their notes, one key per note so a note that does not read back loses only itself (at most 50 files × 1000 lines; a note of a line not kept is dropped). Automatic bookmarks are not stored |
 | `[wrapped_files]` | `file_N` | ↩ Wrap per file (at most 50) |
-| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, … | per-stream state of the default workspace. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
+| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, `line_numbers`, `time_delta`, … | per-stream state of the default workspace. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. `line_numbers=` and `time_delta=` are written only when the stream's switch differs from the `[general]` default; a missing value takes the default. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
 | `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only`, `bookmark` | Color Filters; `bookmark=true` is "Bookmark matching lines" (default false) |
 | `[tool.N]` | `name`, `program`, `args`, `shortcut`, `rule`, `shell`, `match` | external tools, menus, shortcuts |
 | `[filter_preset.N]` | `name`, `include.n`, `exclude.n`, `case_sensitive`, `regex`, `min_level`, `show_unknown_levels`, `time_from`, `time_to` | Presets ▾ |
@@ -1247,7 +1247,7 @@ Command-line options that shape the UI:
    - Menus record an action (`SessionAction`, `RowMenuPicks`, the badge toggle) and run it after they close or after the rows are drawn.
 7. **One source of truth per preference.**
    - Zoom is egui's `zoom_factor`, which `CTRL +/-/0`, `CTRL + wheel` and Settings all move. An earlier bug zoomed twice.
-   - Line numbers, the Δt column, the overview strip, the results pane and the size unit are global.
+   - The overview strip, the results pane, the Δt gap threshold and the size unit are global; line numbers and the Δt column are per stream, with `[general]` defaults for new streams.
    - Wrap, encoding, ANSI mode, collapse mode, timeline, filters and bookmarks are per stream. `auto_bookmark_max` is global.
 8. **Keyboard scoping.** Shortcuts act on the focused stream only. Conflicting shortcuts are consumed before the dock. Text boxes and hit lists own the keys while focused.
 9. **Visible state.**

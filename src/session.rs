@@ -1,8 +1,8 @@
 //! Named sessions: the workspace (open files and patterns, dock layout, per-stream
-//! filters, search query, wrap, encoding, ANSI and collapse modes and bookmarks) saved to
-//! and loaded from a `*.fasttail-session.ini` file. Global preferences stay in
-//! `fasttail.ini`, which embeds the default session with the same sections so the
-//! behaviour of users who never name a session is unchanged.
+//! filters, search query, wrap, encoding, ANSI and collapse modes, line-number and time
+//! delta columns and bookmarks) saved to and loaded from a `*.fasttail-session.ini` file.
+//! Global preferences stay in `fasttail.ini`, which embeds the default session with the
+//! same sections so the behaviour of users who never name a session is unchanged.
 //!
 //! Paths are stored absolute and, when the file lies under the session's directory, also
 //! relative to it, so a session saved next to a log bundle still opens after the bundle
@@ -48,6 +48,11 @@ pub struct StreamEntry {
     /// Collapse of repeated lines as `CollapseMode::name()` (`exact`, `numbers`), written
     /// as `collapse=` only when not off; `None` is off, and old files read as off.
     pub collapse: Option<String>,
+    /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`),
+    /// written only when they differ from the `[general]` defaults: `None` follows the
+    /// defaults, and old files without the keys read as `None`.
+    pub line_numbers: Option<bool>,
+    pub time_delta: Option<bool>,
     /// Bookmarked line indices, sorted.
     pub bookmarks: Vec<usize>,
     /// Notes of some of the bookmarks, stored as `bookmark_note.<line>` next to
@@ -153,6 +158,12 @@ impl Session {
             }
             if let Some(collapse) = &s.collapse {
                 sec.set("collapse", collapse);
+            }
+            if let Some(show) = s.line_numbers {
+                sec.set("line_numbers", show.to_string());
+            }
+            if let Some(show) = s.time_delta {
+                sec.set("time_delta", show.to_string());
             }
             sec.set(
                 "bookmarks",
@@ -261,6 +272,8 @@ impl Session {
                     .and_then(crate::collapse::CollapseMode::from_name)
                     .filter(|m| m.is_on())
                     .map(|m| m.name().to_string()),
+                line_numbers: sec.get("line_numbers").and_then(|v| v.parse().ok()),
+                time_delta: sec.get("time_delta").and_then(|v| v.parse().ok()),
                 bookmarks,
                 bookmark_notes,
                 archive_entry,
@@ -434,5 +447,41 @@ mod tests {
         };
         assert_eq!(relative_under(&outside, &base), None);
         assert_eq!(relative_under(&base, &base), None);
+    }
+
+    #[test]
+    fn view_columns_are_written_only_when_set_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("a.log");
+        std::fs::write(&log, "a\n").unwrap();
+        let mut entry = StreamEntry::new(log.clone());
+        let text = |entry: &StreamEntry| {
+            Session {
+                streams: vec![entry.clone()],
+                dock_layout: None,
+            }
+            .serialized(None)
+        };
+        let plain = text(&entry);
+        assert!(!plain.contains("line_numbers") && !plain.contains("time_delta"));
+
+        entry.line_numbers = Some(false);
+        entry.time_delta = Some(true);
+        let written = text(&entry);
+        assert!(written.contains("line_numbers=false"), "{written}");
+        assert!(written.contains("time_delta=true"), "{written}");
+        let conf = Ini::load_from_str(&written).unwrap();
+        let read = &Session::read_from(&conf, None).session.streams[0];
+        assert_eq!(
+            (read.line_numbers, read.time_delta),
+            (Some(false), Some(true))
+        );
+
+        // A file from before the keys, or with a value we cannot read, follows the
+        // defaults.
+        let conf =
+            Ini::load_from_str(&plain.replace("wrap=", "line_numbers=maybe\nwrap=")).unwrap();
+        let read = &Session::read_from(&conf, None).session.streams[0];
+        assert_eq!((read.line_numbers, read.time_delta), (None, None));
     }
 }
