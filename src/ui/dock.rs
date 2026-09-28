@@ -952,6 +952,9 @@ fn render_compressed_status(
                     t(lang, "compressed_disk_full").replace("{volume}", volume)
                 }
                 StopReason::Tar => t(lang, "compressed_tar").to_string(),
+                StopReason::NoSuchEntry => t(lang, "compressed_no_such_entry").to_string(),
+                StopReason::Refused(refusal) => crate::ui::zip_picker::refusal_text(lang, refusal),
+                StopReason::WindowTooLarge => t(lang, "compressed_window_too_large").to_string(),
                 StopReason::Failed(err) => format!("{}: {err}", t(lang, "compressed_failed")),
             };
             // Nothing was written for a refused tar: the content is not "partial".

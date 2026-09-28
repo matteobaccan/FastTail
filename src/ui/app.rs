@@ -96,8 +96,8 @@ pub struct FastTailApp {
     pub pending_session_load: Option<PathBuf>,
     /// Streams of the last loaded session that could not be opened, shown once.
     pub session_missing: Option<Vec<PathBuf>>,
-    /// Entry picker of a zip archive holding several files, while it is shown.
-    pub zip_picker: Option<crate::ui::zip_picker::ZipPicker>,
+    /// Entry picker of a zip holding several files or of a tar archive, while it is shown.
+    pub archive_picker: Option<crate::ui::zip_picker::ArchivePicker>,
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
     /// once in a small window.
     pub open_notice: Option<String>,
@@ -590,7 +590,7 @@ impl FastTailApp {
             last_dirty_check: Instant::now(),
             pending_session_load: None,
             session_missing: None,
-            zip_picker: None,
+            archive_picker: None,
             open_notice: None,
             pending_stdin: None,
             stdin_options: StdinOptions::default(),
@@ -1362,30 +1362,104 @@ impl FastTailApp {
         std::sync::Arc::new(move || ctx.request_repaint()) as crate::tail_engine::WakeFn
     }
 
-    /// Opens the engine for `path`: a pattern stream, a decompressed gzip file or zip
-    /// entry, or a plain file. `None` for a zip archive, whose entries are chosen first.
+    /// Opens the engine for `path`: a pattern stream, a decompressed file or archive
+    /// entry, or a plain file. `None` for a zip or tar archive, whose entries are chosen
+    /// first.
     fn open_engine(&self, path: &Path) -> Option<Result<TailEngine, crate::compressed::OpenError>> {
+        let target = if crate::wildcard::is_pattern_path(path) {
+            crate::compressed::Target::Plain
+        } else {
+            crate::compressed::classify(path)
+        };
+        self.open_engine_for(path, &target)
+    }
+
+    /// `open_engine` for a `path` already classified as `target` (the classification may
+    /// peek at decompressed bytes: it is done once per open).
+    fn open_engine_for(
+        &self,
+        path: &Path,
+        target: &crate::compressed::Target,
+    ) -> Option<Result<TailEngine, crate::compressed::OpenError>> {
         use crate::compressed::{OpenError, Target};
         let wake = Self::make_wake(&self.egui_ctx);
         if crate::wildcard::is_pattern_path(path) {
             return Some(TailEngine::open_pattern_with_wake(path, wake).map_err(OpenError::Io));
         }
         let settings = self.config.compressed_settings();
-        match crate::compressed::classify(path) {
+        match target {
             Target::Plain => Some(TailEngine::open_with_wake(path, wake).map_err(OpenError::Io)),
-            Target::Gzip => Some(crate::compressed::open_engine(
+            Target::Compressed(_) => Some(crate::compressed::open_engine(
                 path,
                 None,
                 &settings,
                 Some(wake),
             )),
-            Target::ZipEntry { archive, entry } => Some(crate::compressed::open_engine(
-                &archive,
-                Some(&entry),
+            Target::Entry { archive, entry, .. } => Some(crate::compressed::open_engine(
+                archive,
+                Some(entry),
                 &settings,
                 Some(wake),
             )),
-            Target::ZipArchive | Target::EmptyZip => None,
+            Target::ZipArchive | Target::EmptyZip | Target::TarArchive(_) => None,
+        }
+    }
+
+    /// An archive was opened (`open_engine` gave `None` for `target`): an empty zip is
+    /// reported, a zip goes through `open_zip_archive`, and a tar opens the entry picker at
+    /// once while its headers are scanned in the background.
+    fn open_archive(&mut self, archive: PathBuf, target: crate::compressed::Target) {
+        use crate::compressed::Target;
+        match target {
+            Target::EmptyZip => {
+                self.open_notice = Some(format!(
+                    "{}: {}",
+                    archive.display(),
+                    t(self.config.language, "zip_empty")
+                ));
+            }
+            Target::TarArchive(codec) => {
+                let scan = crate::compressed::TarScan::start(
+                    &archive,
+                    codec,
+                    crate::compressed::ScanLimits::default(),
+                );
+                self.archive_picker = Some(crate::ui::zip_picker::ArchivePicker::scanning(
+                    archive, scan,
+                ));
+            }
+            _ => self.open_zip_archive(archive),
+        }
+    }
+
+    /// Pulls the rows a tar scan found into the picker and acts on its end: a scan that
+    /// ends with a single openable entry opens it and closes the picker. Called every
+    /// frame before the picker is drawn.
+    pub fn poll_archive_picker(&mut self) {
+        let Some(picker) = self.archive_picker.as_mut() else {
+            return;
+        };
+        if let Some(outcome) = picker.sync() {
+            self.apply_picker_outcome(outcome);
+        }
+    }
+
+    /// Opens what the picker chose, closing it when it is done.
+    fn apply_picker_outcome(&mut self, outcome: crate::ui::zip_picker::PickerOutcome) {
+        use crate::ui::zip_picker::PickerOutcome;
+        let Some(archive) = self.archive_picker.as_ref().map(|p| p.archive.clone()) else {
+            return;
+        };
+        match outcome {
+            PickerOutcome::Open { names, close } => {
+                if close {
+                    self.archive_picker = None;
+                }
+                for name in names {
+                    self.open_log_file(crate::compressed::entry_path(&archive, &name));
+                }
+            }
+            PickerOutcome::Cancel => self.archive_picker = None,
         }
     }
 
@@ -1409,7 +1483,8 @@ impl FastTailApp {
                 self.open_log_file(path);
             }
             _ => {
-                self.zip_picker = Some(crate::ui::zip_picker::ZipPicker::new(archive, entries));
+                self.archive_picker =
+                    Some(crate::ui::zip_picker::ArchivePicker::new(archive, entries));
             }
         }
     }
@@ -1424,7 +1499,7 @@ impl FastTailApp {
                 .replace("{volume}", volume)
                 .replace("{size}", &crate::ui::zip_picker::human_size(*needed)),
             OpenError::Refused(refusal) => crate::ui::zip_picker::refusal_text(lang, refusal),
-            OpenError::NoSuchEntry => t(lang, "zip_no_entry").to_string(),
+            OpenError::NoSuchEntry => t(lang, "compressed_no_such_entry").to_string(),
         };
         format!("{}: {reason}", path.display())
     }
@@ -1447,26 +1522,22 @@ impl FastTailApp {
             }
         }
 
-        let opened = match self.open_engine(&path) {
+        let target = if is_pattern {
+            crate::compressed::Target::Plain
+        } else {
+            crate::compressed::classify(&path)
+        };
+        let opened = match self.open_engine_for(&path, &target) {
             Some(opened) => opened,
             None => {
-                if crate::compressed::sniff(&path) == crate::compressed::Format::EmptyZip {
-                    self.open_notice = Some(format!(
-                        "{}: {}",
-                        path.display(),
-                        t(self.config.language, "zip_empty")
-                    ));
-                } else {
-                    self.open_zip_archive(path);
-                }
+                self.open_archive(path, target);
                 return;
             }
         };
         if let Err(err) = &opened {
             // A plain file that fails to open is skipped silently, as it always was; a
             // compressed one says why.
-            if !is_pattern && crate::compressed::classify(&path) != crate::compressed::Target::Plain
-            {
+            if target != crate::compressed::Target::Plain {
                 self.open_notice = Some(self.open_error_text(&path, err));
             }
         }
@@ -4312,19 +4383,11 @@ impl FastTailApp {
             }
         }
 
-        // Zip entry picker: each chosen entry opens as its own stream.
-        if let Some(picker) = self.zip_picker.as_mut() {
+        // Archive entry picker: each chosen entry opens as its own stream.
+        if let Some(picker) = self.archive_picker.as_mut() {
             let outcome = picker.show(&ctx, self.config.language, self.config.theme);
             if let Some(outcome) = outcome {
-                let picker = self.zip_picker.take();
-                if let (crate::ui::zip_picker::PickerOutcome::Open(names), Some(picker)) =
-                    (outcome, picker)
-                {
-                    for name in names {
-                        let path = crate::compressed::entry_path(&picker.archive, &name);
-                        self.open_log_file(path);
-                    }
-                }
+                self.apply_picker_outcome(outcome);
             }
         }
         if let Some(notice) = self.open_notice.clone() {

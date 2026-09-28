@@ -1,8 +1,13 @@
-//! Entry picker shown when a zip archive holds more than one file entry: a filter box,
-//! a list sortable by name or size, multi-select, and the entries that cannot be opened
-//! listed disabled with the reason. Each chosen entry opens as its own stream.
+//! Entry picker shown when a zip archive holds more than one file entry, or for any tar
+//! archive: a filter box, a list sortable by name or size, multi-select, and the entries
+//! that cannot be opened listed disabled with the reason. Each chosen entry opens as its
+//! own stream.
+//!
+//! A zip arrives with its whole list (its central directory). A tar has no directory:
+//! the picker opens at once on a `TarScan` and pulls the rows the scan found at every
+//! frame, showing its progress with a stop button; entries can be opened while it runs.
 
-use crate::compressed::{EntryRefusal, ZipEntryInfo};
+use crate::compressed::{ArchiveEntryInfo, EntryRefusal, ScanState, TarScan};
 use crate::i18n::{t, Language};
 use crate::theme::CyberTheme;
 use egui::RichText;
@@ -17,9 +22,16 @@ pub enum SortBy {
 }
 
 /// State of the picker for one archive.
-pub struct ZipPicker {
+pub struct ArchivePicker {
     pub archive: PathBuf,
-    pub entries: Vec<ZipEntryInfo>,
+    pub entries: Vec<ArchiveEntryInfo>,
+    /// The header walk feeding `entries` (a tar); `None` for a zip.
+    pub scan: Option<TarScan>,
+    /// The end of the scan has been seen (and acted on) by `sync`.
+    scan_seen_over: bool,
+    /// Entries were opened from the picker while the scan ran: the scan ending with a
+    /// single entry then opens nothing by itself.
+    pub opened_any: bool,
     pub filter: String,
     /// Indices into `entries` of the checked rows.
     pub selected: BTreeSet<usize>,
@@ -28,21 +40,77 @@ pub struct ZipPicker {
 }
 
 /// What the user did with the picker this frame.
+#[derive(Debug, PartialEq, Eq)]
 pub enum PickerOutcome {
-    Open(Vec<String>),
+    /// Open these entries; `close`: the picker is done (a scan still running keeps it
+    /// open, so more entries can be picked as they are found).
+    Open {
+        names: Vec<String>,
+        close: bool,
+    },
     Cancel,
 }
 
-impl ZipPicker {
-    pub fn new(archive: PathBuf, entries: Vec<ZipEntryInfo>) -> Self {
+impl ArchivePicker {
+    /// A picker on a complete list (a zip).
+    pub fn new(archive: PathBuf, entries: Vec<ArchiveEntryInfo>) -> Self {
         Self {
             archive,
             entries,
+            scan: None,
+            scan_seen_over: false,
+            opened_any: false,
             filter: String::new(),
             selected: BTreeSet::new(),
             sort_by: SortBy::Name,
             descending: false,
         }
+    }
+
+    /// A picker filled by a tar scan.
+    pub fn scanning(archive: PathBuf, scan: TarScan) -> Self {
+        let mut picker = Self::new(archive, Vec::new());
+        picker.scan = Some(scan);
+        picker
+    }
+
+    /// State of the scan (`Done` for a zip).
+    pub fn scan_state(&self) -> ScanState {
+        self.scan
+            .as_ref()
+            .map_or(ScanState::Done, |scan| scan.state())
+    }
+
+    /// Pulls the rows the scan found since the last call. When the scan has just ended
+    /// with exactly one entry that can be opened, and the user neither opened nor checked
+    /// anything, returns the outcome that opens it and closes the picker.
+    pub fn sync(&mut self) -> Option<PickerOutcome> {
+        let scan = self.scan.as_ref()?;
+        // The state is read before the rows, so rows listed just before the end are
+        // pulled in this same call.
+        let state = scan.state();
+        let rows = scan.entries_from(self.entries.len());
+        self.entries.extend(rows);
+        if !state.is_over() || self.scan_seen_over {
+            return None;
+        }
+        self.scan_seen_over = true;
+        let mut openable = self.entries.iter().filter(|e| e.refusal.is_none());
+        match (openable.next(), openable.next()) {
+            (Some(only), None)
+                if state == ScanState::Done && !self.opened_any && self.selected.is_empty() =>
+            {
+                Some(PickerOutcome::Open {
+                    names: vec![only.name.clone()],
+                    close: true,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn is_scanning(&self) -> bool {
+        !self.scan_state().is_over()
     }
 
     /// Indices of the entries matching the filter (case-insensitive), in display order.
@@ -75,6 +143,18 @@ impl ZipPicker {
             .collect()
     }
 
+    /// The user opens the checked entries: the picker stays while the scan runs (the
+    /// selection is cleared so the next pick starts fresh), and closes otherwise.
+    pub fn open_chosen(&mut self) -> PickerOutcome {
+        let names = self.chosen();
+        let close = !self.is_scanning();
+        if !close {
+            self.selected.clear();
+            self.opened_any = true;
+        }
+        PickerOutcome::Open { names, close }
+    }
+
     fn sort_header(&mut self, ui: &mut egui::Ui, label: &str, column: SortBy) {
         let arrow = match (self.sort_by == column, self.descending) {
             (true, false) => " ▲",
@@ -98,6 +178,52 @@ impl ZipPicker {
         }
     }
 
+    /// The scan line above the list: progress and stop while it runs, then why the list
+    /// may be incomplete or empty.
+    fn scan_status(&mut self, ui: &mut egui::Ui, lang: Language, theme: CyberTheme) {
+        let Some(scan) = self.scan.as_ref() else {
+            return;
+        };
+        let state = scan.state();
+        let notice = match &state {
+            ScanState::Running => {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "🗜 {} {:.0}%",
+                            t(lang, "archive_scanning"),
+                            scan.progress() * 100.0
+                        ))
+                        .monospace()
+                        .color(theme.warn_color()),
+                    );
+                    if ui
+                        .button(RichText::new("✖").monospace())
+                        .on_hover_text(t(lang, "archive_scan_stop"))
+                        .clicked()
+                    {
+                        scan.cancel();
+                    }
+                });
+                // The rows arrive from the scan thread: look again soon.
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+                None
+            }
+            ScanState::Done => None,
+            ScanState::LimitReached => Some(t(lang, "archive_scan_partial").to_string()),
+            ScanState::Cancelled => Some(t(lang, "archive_scan_stopped").to_string()),
+            ScanState::Damaged(err) => Some(format!("{}: {err}", t(lang, "archive_damaged"))),
+            ScanState::Failed(err) => Some(format!("{}: {err}", t(lang, "compressed_failed"))),
+        };
+        if let Some(notice) = notice {
+            ui.label(RichText::new(format!("⚠ {notice}")).color(theme.warn_color()));
+        }
+        if state.is_over() && self.entries.iter().all(|e| e.refusal.is_some()) {
+            ui.label(RichText::new(t(lang, "archive_no_openable")).color(theme.warn_color()));
+        }
+    }
+
     /// Draws the picker; returns what the user chose, if anything.
     pub fn show(
         &mut self,
@@ -105,7 +231,10 @@ impl ZipPicker {
         lang: Language,
         theme: CyberTheme,
     ) -> Option<PickerOutcome> {
-        let mut outcome = None;
+        let mut outcome = self.sync();
+        if outcome.is_some() {
+            return outcome;
+        }
         let archive_name = self
             .archive
             .file_name()
@@ -125,6 +254,7 @@ impl ZipPicker {
         .default_width(520.0)
         .open(&mut open)
         .show(ctx, |ui| {
+            self.scan_status(ui, lang, theme);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("🔍").monospace());
                 ui.add(
@@ -199,7 +329,7 @@ impl ZipPicker {
                     .on_disabled_hover_text(t(lang, "zip_picker_no_selection"))
                     .clicked()
                 {
-                    outcome = Some(PickerOutcome::Open(chosen));
+                    outcome = Some(self.open_chosen());
                 }
                 if ui.button(t(lang, "session_cancel")).clicked() {
                     outcome = Some(PickerOutcome::Cancel);
@@ -220,6 +350,8 @@ pub fn refusal_text(lang: Language, refusal: &EntryRefusal) -> String {
         EntryRefusal::Method(method) => t(lang, "zip_entry_method").replace("{method}", method),
         EntryRefusal::UnsafeName => t(lang, "zip_entry_unsafe").to_string(),
         EntryRefusal::DuplicateName => t(lang, "zip_entry_duplicate").to_string(),
+        EntryRefusal::LinkOrSpecial => t(lang, "tar_entry_link").to_string(),
+        EntryRefusal::Sparse => t(lang, "tar_entry_sparse").to_string(),
     }
 }
 
@@ -243,18 +375,19 @@ pub fn human_size(bytes: u64) -> String {
 mod tests {
     use super::*;
 
-    fn entry(name: &str, size: u64, refusal: Option<EntryRefusal>) -> ZipEntryInfo {
-        ZipEntryInfo {
+    fn entry(name: &str, size: u64, refusal: Option<EntryRefusal>) -> ArchiveEntryInfo {
+        ArchiveEntryInfo {
             name: name.to_string(),
             size,
             compressed_size: size / 2,
+            offset: None,
             refusal,
         }
     }
 
     #[test]
     fn filter_sort_and_selection() {
-        let mut picker = ZipPicker::new(
+        let mut picker = ArchivePicker::new(
             PathBuf::from("bundle.zip"),
             vec![
                 entry("worker.log", 300, None),
@@ -271,6 +404,15 @@ mod tests {
         // A refused entry is never opened, even if it ended up selected.
         picker.selected.extend([0, 2]);
         assert_eq!(picker.chosen(), ["worker.log"]);
+        // A zip has no scan: opening closes the picker.
+        assert_eq!(
+            picker.open_chosen(),
+            PickerOutcome::Open {
+                names: vec!["worker.log".to_string()],
+                close: true
+            }
+        );
+        assert_eq!(picker.sync(), None);
     }
 
     #[test]
