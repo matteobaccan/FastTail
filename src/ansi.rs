@@ -142,32 +142,28 @@ impl<'a> Tokens<'a> {
                 // byte 0x40-0x7E. Anything else ends a malformed sequence and is kept.
                 let mut k = j + 1;
                 let mut intermediates = false;
+                let mut sgr_params = true;
                 while k < len {
                     let c = b[k];
-                    match c {
-                        0x40..=0x7E => {
-                            self.pos = k + 1;
-                            let params = &b[j + 1..k];
-                            let is_sgr = c == b'm'
-                                && !intermediates
-                                && params
-                                    .iter()
-                                    .all(|&p| p.is_ascii_digit() || p == b';' || p == b':');
-                            return if is_sgr {
-                                Token::Sgr(j + 1, k)
-                            } else {
-                                Token::Other
-                            };
+                    if (0x40..=0x7E).contains(&c) {
+                        self.pos = k + 1;
+                        return if c == b'm' && sgr_params {
+                            Token::Sgr(j + 1, k)
+                        } else {
+                            Token::Other
+                        };
+                    } else if (0x30..=0x3F).contains(&c) && !intermediates {
+                        if !c.is_ascii_digit() && c != b';' && c != b':' {
+                            sgr_params = false;
                         }
-                        0x30..=0x3F if !intermediates => k += 1,
-                        0x20..=0x2F => {
-                            intermediates = true;
-                            k += 1;
-                        }
-                        _ => {
-                            self.pos = k;
-                            return Token::Other;
-                        }
+                        k += 1;
+                    } else if (0x20..=0x2F).contains(&c) {
+                        intermediates = true;
+                        sgr_params = false;
+                        k += 1;
+                    } else {
+                        self.pos = k;
+                        return Token::Other;
                     }
                 }
                 // Unterminated (cut at the end of the line): dropped to the end.

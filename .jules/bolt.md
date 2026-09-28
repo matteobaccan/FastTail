@@ -13,3 +13,7 @@
 ## 2026-04-18 - Small stack buffer with dynamic Vec overflow for hot interval deduction
 **Learning:** Using dynamic `Vec` instances in hot row span deduction loops (`claim_span`) causes millions of heap allocations on multi-megabyte logs. Replacing them with `smallvec::SmallVec<[(usize, usize); 8]>` (128 bytes inline, spilling to the heap past 8) eliminates heap allocation churn while guaranteeing zero truncation risk and avoiding large stack frame copying overhead.
 **Action:** Use `SmallVec` (already in the dependency tree) rather than a hand-written inline buffer for interval subtraction and piece tracking in tight text/span layout loops.
+
+## 2026-04-18 - Single-pass CSI sequence validation & single-byte SIMD search
+**Learning:** Re-iterating over ANSI parameter slices after finding the sequence termination byte adds unnecessary overhead on every escape sequence. Validating SGR parameter flags in a single pass during byte scanning avoids double iteration over parameters. Furthermore, single-byte ASCII searches (`needle.len() == 1`) in case-insensitive routines can call `memchr::memchr` / `memchr::memchr2` / `memchr_iter` directly without slice length loops or `eq_ignore_ascii_case` overhead.
+**Action:** Track SGR parameter validity inline during single-pass CSI parsing, and branch `needle.len() == 1` directly to SIMD `memchr` / `memchr2` routines.

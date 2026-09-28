@@ -582,6 +582,32 @@ pub(crate) fn find_case_insensitive_cb(
         // so checking haystack.is_ascii() upfront is unnecessary overhead.
         let first_lower = n[0].to_ascii_lowercase();
         let first_upper = first_lower.to_ascii_uppercase();
+
+        if n_len == 1 {
+            if first_lower == first_upper {
+                for pos in memchr::memchr_iter(first_lower, h) {
+                    if !on_match(pos, pos + 1) {
+                        return;
+                    }
+                }
+            } else {
+                let mut curr = 0;
+                while curr < h.len() {
+                    match memchr::memchr2(first_lower, first_upper, &h[curr..]) {
+                        Some(rel) => {
+                            let pos = curr + rel;
+                            if !on_match(pos, pos + 1) {
+                                return;
+                            }
+                            curr = pos + 1;
+                        }
+                        None => break,
+                    }
+                }
+            }
+            return;
+        }
+
         let max_pos = h.len() - n_len;
         let mut i = 0;
 
@@ -674,6 +700,15 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
 
         let first_lower = n_bytes[0].to_ascii_lowercase();
         let first_upper = first_lower.to_ascii_uppercase();
+
+        if n_len == 1 {
+            return if first_lower == first_upper {
+                memchr::memchr(first_lower, h_bytes).is_some()
+            } else {
+                memchr::memchr2(first_lower, first_upper, h_bytes).is_some()
+            };
+        }
+
         let max_pos = h_bytes.len() - n_len;
         let mut curr = 0;
 
