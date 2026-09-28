@@ -191,6 +191,61 @@ The search dialog in ASCII mode (`--ascii`):
 - Standard input was wired but not tried with a real pipe on Windows. Crossterm reads
   keys from `CONIN$`, so it should work.
 
+## GUI / prototype / 0.20.0 parity
+
+What the graphical interface does, what this prototype does, and where each item lands in
+the `tui-interface` plan (PR #132). ✅ done · ◐ partial · — missing.
+
+| Area | Feature | GUI | Prototype | TUI plan |
+|---|---|---|---|---|
+| Layout | Tabs, several streams | ✅ | ✅ | 0.20.0 |
+| Layout | Split view | ✅ free docking | ◐ two windows | 0.20.0 (two windows; more later) |
+| Layout | Bordered windows, dialogs, focus | ✅ | ✅ | 0.20.0 |
+| Layout | Mouse | ✅ | ✅ | 0.20.0 |
+| Viewing | Follow, scrolling, level colours | ✅ | ✅ | 0.20.0 |
+| Viewing | Keyboard cursor row | ✅ | — | 0.20.0 |
+| Viewing | Line numbers / `Δt` per stream | ✅ | — | 0.20.0 |
+| Viewing | Line wrap | ✅ | — | later |
+| Viewing | HEX view | ✅ | — | 0.20.0 |
+| Viewing | Markdown view | ✅ | — | never |
+| Viewing | ANSI colours in logs | ✅ | ◐ stripped | 0.20.0 |
+| Viewing | Collapse repeated lines | ✅ | ✅ | 0.20.0 |
+| Viewing | Overview strip, timeline histogram | ✅ | — | later |
+| Search | Search, `n` / `N`, hits highlighted | ✅ | ✅ | 0.20.0 |
+| Search | Results pane | ✅ | — | 0.20.0 |
+| Search | Find results across streams | ✅ | — | 0.21.0 |
+| Search | Go to line / time | ✅ | — | 0.20.0 |
+| Filters | Include / exclude | ✅ several terms | ◐ first term | 0.20.0 |
+| Filters | Minimum level | ✅ | ✅ | 0.20.0 |
+| Filters | Time range (popup) | ✅ calendar | — | 0.20.0 (text fields) |
+| Filters | Presets | ✅ | — | 0.20.0 |
+| Filters | Global filter | ✅ edit | ◐ read from ini | 0.20.0 (edit) |
+| Filters | Show in context | ✅ | — | 0.20.0 |
+| Rules | Highlight rules | ✅ edit | ◐ whole-row colours from ini | 0.20.0 (edit, capture groups) |
+| Rules | Quick labels | ✅ | — | 0.20.0 |
+| Bookmarks | Toggle / next / previous | ✅ | ◐ double click | 0.20.0 |
+| Bookmarks | Notes | ✅ | ◐ restored, not shown | 0.20.0 |
+| Bookmarks | Automatic bookmarks from rules | ✅ | ✅ | 0.20.0 |
+| Files | Plain, pattern (`*.log`), stdin | ✅ | ✅ | 0.20.0 |
+| Files | gz / bz2 / xz / zst | ✅ | ✅ | 0.20.0 |
+| Files | Zip / tar entry picker | ✅ | ◐ path form only | 0.20.0 |
+| Files | Encodings | ✅ | ◐ from ini | 0.20.0 (switch) |
+| Selection | Select, copy, export | ✅ | ◐ select + copy | 0.20.0 |
+| Config | Read `fasttail.ini` / sessions | ✅ | ✅ | 0.20.0 |
+| Config | Write `fasttail.ini` / save sessions | ✅ | — | 0.20.0 |
+| Config | Settings dialog | ✅ | — | 0.20.0 |
+| Config | Themes | ✅ | ✅ | 0.20.0 |
+| Config | Languages (16) | ✅ | — | 0.20.0 |
+| Tools | External tools | ✅ | — | 0.20.0 |
+| Tools | Sound alerts | ✅ | — | 0.20.0 (terminal bell) |
+| Security | PIN lock | ✅ | — | 0.20.0 |
+| Extras | Screensaver | ✅ | — | never |
+| Extras | Renderer / GPU / zoom / font settings | ✅ | — | never (GUI only) |
+| Interface | Switch GUI ⇄ TUI | — | — | 0.20.0 |
+
+Roughly a third of the GUI is in the prototype; the 0.20.0 plan closes the gap except the
+never / later rows, at an estimated 8–10 weeks.
+
 ## What the engine gave for free
 
 Almost everything that matters. The prototype is about 3,200 lines, a fifth of them
