@@ -89,8 +89,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   starts from `show_line_numbers` and `show_time_delta` in `[general]`, which Settings
   now labels "… in new streams"; changing them leaves open streams alone. Each stream's
   switches are saved with it in the workspace and in session files as `line_numbers=` /
-  `time_delta=`, written only when they differ from the defaults; older files take the
-  defaults. The Δt gap threshold stays one setting. All 16 languages updated.
+  `time_delta=`, always written, so a saved stream does not follow a later change of the
+  defaults; files from older versions, without the keys, take the defaults. The Δt gap threshold stays one setting. All 16 languages updated.
 
 - **The time range moved to the stream bar's time span.** `🕘 2026-09-18 14:02:05 →
   16:30:12`, the span of the visible lines (the date written once when both ends share

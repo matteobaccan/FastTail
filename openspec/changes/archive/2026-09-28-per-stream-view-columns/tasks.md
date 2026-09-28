@@ -7,8 +7,8 @@
 ## 2. Persistence
 
 - [x] 2.1 `StreamEntry::line_numbers` / `time_delta` (`Option<bool>`), written as `line_numbers=` / `time_delta=` only when set, read back, missing keys as `None`; unit test
-- [x] 2.2 `stream_entry_of` records only what differs from the defaults; `apply_stream_state` restores; the dirty flag is drained with the timeline and collapse flags
-- [x] 2.3 A change of the defaults in Settings re-records every open stream's entry
+- [x] 2.2 `stream_entry_of` always records both switches; `apply_stream_state` restores; the dirty flag is drained with the timeline and collapse flags
+- [x] 2.3 A change of the defaults in Settings saves `fasttail.ini` at once and leaves the open streams and the named session untouched
 
 ## 3. Texts and documentation
 

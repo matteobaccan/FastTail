@@ -33,22 +33,22 @@ carry a dirty flag that the app drains after the dock is drawn, and are saved in
   `time_delta_column` reads `engine.show_time_delta` with the global `gap_ms`. The HEX view
   never showed either column and is unchanged; copy and export never include line numbers.
 - **Persistence.** `StreamEntry` gets `line_numbers: Option<bool>` and
-  `time_delta: Option<bool>`: `None` follows the defaults. `stream_entry_of` records a value
-  only when it differs from the current defaults, and the writer emits `line_numbers=` /
-  `time_delta=` only for `Some`, as for `timeline=` and `collapse=`. Missing or unreadable
-  keys read as `None`. This keeps old files, and a session saved with default columns,
-  byte-identical, so the unsaved-changes check does not flag them.
-- **Changing a default.** Open streams keep their switches. Because an entry records only
-  what differs from the defaults, the app remembers the defaults the entries were written
-  against and, when Settings changes them, marks every stream dirty so its entry is
-  written again against the new defaults.
+  `time_delta: Option<bool>`. `stream_entry_of` always records both values, and the writer
+  emits `line_numbers=` / `time_delta=` for every stream, so a saved stream never depends
+  on the defaults: a session saved with a column off still opens with it off after the
+  default is turned on. Missing or unreadable keys, found only in files from older
+  versions, read as `None` and follow the defaults.
+- **Changing a default.** Open streams keep their switches and nothing in the saved
+  entries depends on the defaults, so a change in Settings neither rewrites the entries
+  nor marks an open named session as modified. `fasttail.ini` is saved at once.
 - **`TimeDeltaPrefs`.** Kept: `show` is now the default for new streams (Settings), `gap_ms`
   the shared threshold. `DockContext` keeps both fields for the Settings tab.
 
 ## Risks / Trade-offs
 
-- A stream whose saved switch equals the default follows a later change of the default
-  when it is reopened. That is the meaning of "default" and matches how `timeline` behaves.
+- Every stream section gains two keys. An older build ignores them.
+- A session file from an older version opened for the first time shows `*` once the app
+  compares it with the live workspace, since the live entries now carry the keys.
 
 ## Threads, memory, large files
 

@@ -19,8 +19,8 @@ stream bar (wrap, timeline, ANSI mode, collapse) already belongs to its stream.
   way. Changing a default does not change the streams already open.
 - The switches are saved with the stream in the workspace and in session files as
   `line_numbers=true|false` and `time_delta=true|false` in the `[stream_N]` section,
-  written only when they differ from the defaults (like `timeline=` and `collapse=`). Old
-  files without the keys take the defaults.
+  always written, so a saved stream never depends on the defaults. Old files without the
+  keys take the defaults.
 - The Δt gap threshold (`time_delta_gap_ms`) stays one global preference.
 - No new key in `[general]`.
 

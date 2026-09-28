@@ -128,9 +128,6 @@ pub struct FastTailApp {
     /// Key of `global_spec`: an apply that does not change it keeps the same set, so no
     /// stream refilters.
     global_key: Option<crate::global_filter::AppliedKey>,
-    /// The line-number and time delta defaults (`[general]`) the stream entries were last
-    /// recorded against, see `check_column_defaults`.
-    column_defaults: (bool, bool),
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -607,10 +604,8 @@ impl FastTailApp {
             global_spec: None,
             global_edit_at: None,
             global_key: None,
-            column_defaults: (false, false),
         };
         app.global_key = app.config.global_filter.applied_key();
-        app.column_defaults = (app.config.show_line_numbers, app.config.show_time_delta);
         app.global_spec = app.config.global_filter.compile();
 
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
@@ -727,7 +722,7 @@ impl FastTailApp {
                 self.engines
                     .iter()
                     .find(|e| paths_equal(&e.path, p))
-                    .map(|e| stream_entry_of(e, &self.config))
+                    .map(stream_entry_of)
             })
             .collect();
         Session {
@@ -746,20 +741,6 @@ impl FastTailApp {
             &crate::ui::find_results::without_find_results(&self.dock_state),
         ));
         session.serialized(base.as_deref())
-    }
-
-    /// After Settings changed the line-number or time delta default: open streams keep
-    /// their columns, but their entries record only what differs from the defaults, so
-    /// every entry is saved again.
-    fn check_column_defaults(&mut self) {
-        let now = (self.config.show_line_numbers, self.config.show_time_delta);
-        if now == self.column_defaults {
-            return;
-        }
-        self.column_defaults = now;
-        for eng in &mut self.engines {
-            eng.view_columns_dirty = true;
-        }
     }
 
     /// Records the live workspace as the saved state of the current session.
@@ -1197,7 +1178,7 @@ impl FastTailApp {
 
         // Per-stream state of the default session (filters, search, encoding).
         for eng in self.engines.iter().filter(|e| !e.is_stdin()) {
-            let mut entry = stream_entry_of(eng, &self.config);
+            let mut entry = stream_entry_of(eng);
             entry.wrap = false;
             entry.bookmarks.clear();
             entry.bookmark_notes.clear();
@@ -2906,6 +2887,7 @@ impl FastTailApp {
             gap_ms: self.config.time_delta_gap_ms,
         };
         let time_delta_before = time_delta;
+        let line_numbers_before = self.config.show_line_numbers;
         let dock_ctx = DockContext {
             engines: &mut self.engines,
             open_files: &mut self.config.open_files,
@@ -3071,7 +3053,6 @@ impl FastTailApp {
             }
         }
         prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
-        self.check_column_defaults();
 
         // Persist bookmarks and wrap toggles that changed this frame, and flash the window
         // on a background sound-alert match when the option is on and the window is not
@@ -3111,7 +3092,7 @@ impl FastTailApp {
                 eng.timeline_dirty = false;
                 eng.collapse_mode_dirty = false;
                 eng.view_columns_dirty = false;
-                let mut entry = stream_entry_of(eng, &self.config);
+                let mut entry = stream_entry_of(eng);
                 entry.wrap = false;
                 entry.bookmarks.clear();
                 entry.bookmark_notes.clear();
@@ -3139,8 +3120,9 @@ impl FastTailApp {
                 let _ = self.config.save();
             }
         }
-        // Time delta column switch and gap threshold: saved as soon as they change.
-        if time_delta != time_delta_before {
+        // Defaults for new streams and the gap threshold (Settings tab): saved as soon as
+        // they change.
+        if time_delta != time_delta_before || self.config.show_line_numbers != line_numbers_before {
             self.config.show_time_delta = time_delta.show;
             self.config.time_delta_gap_ms = time_delta.gap_ms;
             let _ = self.config.save();
@@ -3288,6 +3270,7 @@ impl FastTailApp {
         // 9. Render Settings Dialog if open (Popup modal)
         if self.config.settings_open {
             let mut is_open = true;
+            let line_numbers_before = self.config.show_line_numbers;
             let theme = self.config.theme;
             let prev_borderless = self.config.borderless;
             let prev_theme = self.config.theme;
@@ -3676,6 +3659,7 @@ impl FastTailApp {
             }
             if (time_delta.show, time_delta.gap_ms)
                 != (self.config.show_time_delta, self.config.time_delta_gap_ms)
+                || self.config.show_line_numbers != line_numbers_before
             {
                 self.config.show_time_delta = time_delta.show;
                 self.config.time_delta_gap_ms = time_delta.gap_ms;
@@ -4786,8 +4770,8 @@ impl StdinOptions {
 }
 
 /// The session entry describing `engine` as it is now. The line-number and time delta
-/// columns are recorded only where they differ from the defaults of `cfg`.
-fn stream_entry_of(engine: &TailEngine, cfg: &FastTailConfig) -> StreamEntry {
+/// switches are always recorded, so a saved stream never depends on the defaults.
+fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
     let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
     let mut bookmark_notes = engine.bookmark_notes.clone();
     if let Some(c) = engine.compressed.as_ref() {
@@ -4812,10 +4796,8 @@ fn stream_entry_of(engine: &TailEngine, cfg: &FastTailConfig) -> StreamEntry {
             .collapse_mode()
             .is_on()
             .then(|| engine.collapse_mode().name().to_string()),
-        line_numbers: (engine.show_line_numbers != cfg.show_line_numbers)
-            .then_some(engine.show_line_numbers),
-        time_delta: (engine.show_time_delta != cfg.show_time_delta)
-            .then_some(engine.show_time_delta),
+        line_numbers: Some(engine.show_line_numbers),
+        time_delta: Some(engine.show_time_delta),
         bookmarks,
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),

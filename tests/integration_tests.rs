@@ -11929,19 +11929,26 @@ mod per_stream_columns {
             "the other stream is untouched"
         );
 
-        // Only what differs from the defaults is written, in the stream's section.
+        // Both switches are written for every stream, in its section.
         let entry = app.config.stream_state_for(&a).unwrap();
         assert_eq!(
             (entry.line_numbers, entry.time_delta),
             (Some(false), Some(true))
         );
         let entry = app.config.stream_state_for(&b).unwrap();
-        assert_eq!((entry.line_numbers, entry.time_delta), (None, None));
+        assert_eq!(
+            (entry.line_numbers, entry.time_delta),
+            (Some(true), Some(false))
+        );
         let mut buf = Vec::new();
         app.config.to_ini().write_to(&mut buf).unwrap();
         let text = String::from_utf8(buf).unwrap();
-        assert_eq!(text.matches("line_numbers=false").count(), 1, "{text}");
-        assert_eq!(text.matches("time_delta=true").count(), 1, "{text}");
+        // Anchored at the line start: `[general]` has `show_line_numbers=` too.
+        let count = |key: &str| text.matches(&format!("\n{key}")).count();
+        assert_eq!(count("line_numbers=false"), 1, "{text}");
+        assert_eq!(count("time_delta=true"), 1, "{text}");
+        assert_eq!(count("line_numbers=true"), 1, "{text}");
+        assert_eq!(count("time_delta=false"), 1, "{text}");
 
         // Restored on the next start.
         let restored = FastTailConfig::from_ini(&app.config.to_ini());
@@ -11962,15 +11969,72 @@ mod per_stream_columns {
         app.open_log_file(a.clone());
         frame(&mut app);
         // Settings turns the numbers off for new streams: the open one keeps them, and
-        // its entry now records that it differs from the new default.
+        // so does its saved entry.
         app.config.show_line_numbers = false;
         frame(&mut app);
-        frame(&mut app);
         assert_eq!(columns(&app, &a), (true, false));
+        let entry = app.config.stream_state_for(&a).unwrap();
         assert_eq!(
-            app.config.stream_state_for(&a).unwrap().line_numbers,
-            Some(true)
+            (entry.line_numbers, entry.time_delta),
+            (Some(true), Some(false))
         );
+    }
+
+    #[test]
+    fn a_saved_session_does_not_follow_a_later_change_of_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let b = dir.path().join("b.log");
+        super::write_lines(&a, SHORT);
+        super::write_lines(&b, LONG);
+        // Saved while Δt is off by default: a has it on, b is left at the default.
+        let mut app = FastTailApp::from_config(config_in(dir.path()));
+        app.open_log_file(a.clone());
+        app.open_log_file(b.clone());
+        let first = app.engines.iter_mut().find(|e| e.path == a).unwrap();
+        first.set_show_time_delta(true);
+        let file = dir.path().join(format!("x{SESSION_SUFFIX}"));
+        app.save_session_as(file.clone()).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text.matches("time_delta=").count(), 2, "{text}");
+        assert_eq!(text.matches("line_numbers=").count(), 2, "{text}");
+
+        // Loaded after the defaults changed: every stream comes back as it was saved.
+        let mut later = FastTailApp::from_config(FastTailConfig {
+            show_line_numbers: false,
+            show_time_delta: true,
+            ..config_in(dir.path())
+        });
+        later.load_session_file(file, true);
+        assert_eq!(columns(&later, &a), (true, true));
+        assert_eq!(columns(&later, &b), (true, false));
+    }
+
+    #[test]
+    fn changing_a_default_does_not_mark_the_named_session_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        super::write_lines(&a, SHORT);
+        let mut app = FastTailApp::from_config(config_in(dir.path()));
+        app.open_log_file(a.clone());
+        frame(&mut app);
+        let file = dir.path().join(format!("clean{SESSION_SUFFIX}"));
+        app.save_session_as(file).unwrap();
+        let check = |app: &mut FastTailApp| {
+            app.last_dirty_check = std::time::Instant::now() - std::time::Duration::from_secs(2);
+            frame(app);
+            app.session_dirty
+        };
+        assert!(!check(&mut app));
+
+        app.config.show_line_numbers = false;
+        app.config.show_time_delta = true;
+        assert!(!check(&mut app), "the defaults are not part of the session");
+        assert_eq!(columns(&app, &a), (true, false));
+
+        // A stream's own switch is.
+        app.engines[0].set_show_time_delta(true);
+        assert!(check(&mut app));
     }
 
     #[test]

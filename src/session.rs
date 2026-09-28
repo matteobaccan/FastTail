@@ -48,9 +48,9 @@ pub struct StreamEntry {
     /// Collapse of repeated lines as `CollapseMode::name()` (`exact`, `numbers`), written
     /// as `collapse=` only when not off; `None` is off, and old files read as off.
     pub collapse: Option<String>,
-    /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`),
-    /// written only when they differ from the `[general]` defaults: `None` follows the
-    /// defaults, and old files without the keys read as `None`.
+    /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`).
+    /// The app always records both; `None`, written as no key, is what a file from an
+    /// older version reads as, and follows the `[general]` defaults.
     pub line_numbers: Option<bool>,
     pub time_delta: Option<bool>,
     /// Bookmarked line indices, sorted.
