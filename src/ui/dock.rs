@@ -842,6 +842,40 @@ fn render_collapse_selector(ui: &mut Ui, engine: &mut TailEngine, lang: Language
         .on_hover_text(t(lang, "tip_collapse"));
 }
 
+/// Stream bar `±N` drag value: lines of context shown around each filter match (0 to
+/// `MAX_CONTEXT_LINES`, per stream). Drawn dimmed while the stream has no active filter,
+/// when it has no effect.
+/// A drag applies once, when it ends: each step would otherwise rebuild the ranges (a
+/// worker per step on a huge filter), so the value being dragged is kept in egui memory.
+fn render_context_lines_control(ui: &mut Ui, engine: &mut TailEngine, lang: Language) {
+    let drag_id = egui::Id::new("context_lines_drag").with(&engine.path);
+    let mut n = ui
+        .data(|d| d.get_temp::<u8>(drag_id))
+        .unwrap_or_else(|| engine.context_lines());
+    ui.scope(|ui| {
+        if !engine.is_filter_active() {
+            ui.multiply_opacity(0.45);
+        }
+        let response = ui
+            .add(
+                egui::DragValue::new(&mut n)
+                    .range(0..=crate::context_lines::MAX_CONTEXT_LINES)
+                    .speed(0.2)
+                    .prefix("± "),
+            )
+            .on_hover_text(t(lang, "context_lines_tip"));
+        if response.dragged() {
+            ui.data_mut(|d| d.insert_temp(drag_id, n));
+        } else {
+            ui.data_mut(|d| d.remove::<u8>(drag_id));
+            if n != engine.context_lines() {
+                engine.set_context_lines(n);
+                ui.ctx().request_repaint();
+            }
+        }
+    });
+}
+
 /// Stream bar part of a compressed stream: `decompressing N%` with a cancel button while
 /// the job runs, then why the content is partial if it stopped early, and a button that
 /// extracts the archive again.
@@ -1327,6 +1361,7 @@ fn render_log_stream(
             render_ansi_mode_selector(ui, engine, lang);
             if engine.view_mode != crate::tail_engine::ViewMode::Markdown {
                 render_collapse_selector(ui, engine, lang);
+                render_context_lines_control(ui, engine, lang);
             }
         }
 
@@ -2869,6 +2904,9 @@ fn render_extended_rows(
                         .or_else(|| level_fallback(engine, theme, level_colors, actual_line_idx)),
                     None => row_highlight(engine, theme, level_colors, actual_line_idx, raw_line),
                 };
+                // A context line around the filter matches is drawn dimmed.
+                let dim_row = engine.is_context_row(actual_line_idx);
+                let highlight = highlight.map(|h| if dim_row { dim_style(h) } else { h });
                 // Raw mode draws ESC as ␛, with the spans moved past the wider glyphs.
                 let (shown, spans) = row.display(spans);
                 let is_selected = engine.is_selected(actual_line_idx);
@@ -2964,14 +3002,28 @@ fn render_extended_rows(
                         // Content text: per-span formats when a captures-only rule or a
                         // quick label painted something, the plain label otherwise.
                         if let Some(spans) = spans.as_ref().filter(|s| !s.spans.is_empty()) {
+                            let plain = if dim_row {
+                                theme.text_dim()
+                            } else {
+                                theme.text_primary()
+                            };
                             let base = egui::TextFormat {
                                 font_id: font_id.clone(),
-                                color: highlight.map(|h| h.fg).unwrap_or(theme.text_primary()),
+                                color: highlight.map(|h| h.fg).unwrap_or(plain),
                                 background: highlight.map(|h| h.bg).unwrap_or(Color32::TRANSPARENT),
                                 italics: highlight.map(|h| h.italic).unwrap_or(false),
                                 ..Default::default()
                             };
-                            let job = span_layout_job(&shown, &font_id, base, &spans.spans, theme);
+                            let mut job = span_layout_job(
+                                &shown,
+                                &font_id,
+                                base.clone(),
+                                &spans.spans,
+                                theme,
+                            );
+                            if dim_row {
+                                dim_spans(&mut job, &base);
+                            }
                             ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend));
                             return;
                         }
@@ -2991,6 +3043,8 @@ fn render_extended_rows(
                             if hl.italic {
                                 text = text.italics();
                             }
+                        } else if dim_row {
+                            text = text.color(theme.text_dim());
                         } else {
                             text = text.color(theme.text_primary());
                         }
@@ -3048,6 +3102,18 @@ fn render_extended_rows(
                     if badge.clicked() {
                         badge_toggle = Some(row_idx);
                     }
+                }
+
+                if let Some(gap) = engine.context_gap_above_row(row_idx) {
+                    context_separator(
+                        ui,
+                        click_rect.x_range(),
+                        click_rect.top(),
+                        gap,
+                        actual_line_idx,
+                        theme,
+                        lang,
+                    );
                 }
 
                 if is_active_search && engine.scroll_to_line == Some(actual_line_idx) {
@@ -3304,6 +3370,68 @@ fn row_context_menu(
     });
 }
 
+/// Opacity of the rule, label, ANSI and level colours of a context row.
+const CONTEXT_ROW_OPACITY: f32 = 0.55;
+
+/// A row style drawn on a context row: its colours at reduced opacity.
+fn dim_style(h: HighlightStyle) -> HighlightStyle {
+    HighlightStyle {
+        fg: h.fg.gamma_multiply(CONTEXT_ROW_OPACITY),
+        bg: h.bg.gamma_multiply(CONTEXT_ROW_OPACITY),
+        ..h
+    }
+}
+
+/// Dims the span sections of a context row's layout (rule captures, quick labels, ANSI
+/// colours); the sections in the row's own `base` format are dimmed already.
+fn dim_spans(job: &mut egui::text::LayoutJob, base: &egui::TextFormat) {
+    let dim = |c: Color32| {
+        if c == Color32::PLACEHOLDER {
+            c
+        } else {
+            c.gamma_multiply(CONTEXT_ROW_OPACITY)
+        }
+    };
+    for section in &mut job.sections {
+        let format = &mut section.format;
+        if format.color != base.color {
+            format.color = dim(format.color);
+        }
+        if format.background != base.background {
+            format.background = dim(format.background);
+        }
+        if format.underline != base.underline {
+            format.underline.color = dim(format.underline.color);
+        }
+    }
+}
+
+/// The rule between two groups of context lines that are not adjacent in the file: a
+/// 1 px line along the top edge of the later group's first row, drawn, not a row, with
+/// the number of hidden lines on hover.
+fn context_separator(
+    ui: &Ui,
+    x: egui::Rangef,
+    y: f32,
+    hidden: usize,
+    line: usize,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    ui.painter().hline(
+        x,
+        y,
+        Stroke::new(1.0, theme.border_color().gamma_multiply(0.4)),
+    );
+    let band = egui::Rect::from_x_y_ranges(x, egui::Rangef::new(y - 2.0, y + 2.0));
+    ui.interact(
+        band,
+        ui.id().with(("context_gap", line)),
+        egui::Sense::hover(),
+    )
+    .on_hover_text(t(lang, "context_lines_hidden").replace("{n}", &group_thousands(hidden)));
+}
+
 /// Level-palette fallback for a row no user rule matched (user rules keep priority).
 fn row_highlight(
     engine: &TailEngine,
@@ -3423,6 +3551,8 @@ struct WrappedRow {
     is_json: bool,
     expanded: bool,
     highlight: Option<HighlightStyle>,
+    /// A context line around the filter matches, drawn dimmed.
+    dimmed: bool,
     /// The group this row heads, and the width of its `×N` badge before the text.
     collapsed: Option<CollapsedRow>,
     badge_w: f32,
@@ -3529,6 +3659,9 @@ fn render_wrapped_rows(
                     .or_else(|| level_fallback(eng, theme, level_colors, line)),
                 None => row_highlight(eng, theme, level_colors, line, raw),
             };
+            // A context line around the filter matches is drawn dimmed.
+            let dimmed = eng.is_context_row(line);
+            let highlight = highlight.map(|h| if dimmed { dim_style(h) } else { h });
             let (shown, spans) = row_text.display(spans);
             let format = egui::TextFormat {
                 font_id: font_id.clone(),
@@ -3537,7 +3670,19 @@ fn render_wrapped_rows(
                 ..Default::default()
             };
             let mut job = match spans.filter(|s| !s.spans.is_empty()) {
-                Some(s) => span_layout_job(layout_slice(&shown), &font_id, format, &s.spans, theme),
+                Some(s) => {
+                    let mut job = span_layout_job(
+                        layout_slice(&shown),
+                        &font_id,
+                        format.clone(),
+                        &s.spans,
+                        theme,
+                    );
+                    if dimmed {
+                        dim_spans(&mut job, &format);
+                    }
+                    job
+                }
                 None => {
                     egui::text::LayoutJob::single_section(layout_slice(&shown).to_owned(), format)
                 }
@@ -3575,6 +3720,7 @@ fn render_wrapped_rows(
                     is_json,
                     expanded,
                     highlight,
+                    dimmed,
                     collapsed,
                     badge_w,
                 },
@@ -3735,6 +3881,8 @@ fn render_wrapped_rows(
                 (Color32::BLACK, Some(SEARCH_MATCH_BG))
             } else if let Some(hl) = r.highlight {
                 (hl.fg, Some(hl.bg).filter(|c| c.a() > 0))
+            } else if r.dimmed {
+                (theme.text_dim(), None)
             } else {
                 (theme.text_primary(), None)
             };
@@ -3808,6 +3956,17 @@ fn render_wrapped_rows(
                 egui::vec2(marker_w, font_row_h),
             );
             note_tooltip(ui, eng, line, marker_rect, click);
+            if let Some(gap) = eng.context_gap_above_row(row) {
+                context_separator(
+                    ui,
+                    row_rect.x_range(),
+                    row_rect.top(),
+                    gap,
+                    line,
+                    theme,
+                    lang,
+                );
+            }
             // Badge and JSON toggle, registered after the row so they win the click
             if let Some(c) = r.collapsed {
                 let badge_rect = egui::Rect::from_min_size(

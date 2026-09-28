@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use crate::collapse::CollapseState;
+use crate::context_lines::ContextRanges;
 use crate::i18n::{t, Language};
 use crate::log_level::LogLevel;
 use crate::tail_engine::{is_error_level, TailEngine, ERROR_BLOCK_LINES};
@@ -75,15 +76,19 @@ pub struct MarkInputs<'a> {
     /// they are formed over: rows are then fewer than lines, and a line a group hides is
     /// marked at the group's row.
     pub collapse: Option<(&'a CollapseState, usize)>,
+    /// The context ranges and the file's line count while the rows show context lines
+    /// around the matches in `filtered` (see `context_lines`): positions come from them.
+    pub context: Option<(&'a ContextRanges, usize)>,
 }
 
 impl MarkInputs<'_> {
     /// Visible row of `line`, `None` when a filter hides it.
     fn row_of(&self, line: usize) -> Option<usize> {
         let lines = self.collapse.map_or(self.rows, |(_, lines)| lines);
-        let pos = match self.filtered {
-            Some(f) => f.binary_search(&line).ok()?,
-            None => (line < lines).then_some(line)?,
+        let pos = match (self.context, self.filtered) {
+            (Some((ranges, total)), Some(_)) => ranges.pos_of_line(line, total)?,
+            (_, Some(f)) => f.binary_search(&line).ok()?,
+            (_, None) => (line < lines).then_some(line)?,
         };
         Some(match self.collapse {
             Some((state, _)) => state.row_of_pos(pos).0,
@@ -93,7 +98,19 @@ impl MarkInputs<'_> {
 
     /// The line at visible position `pos`.
     fn line_at(&self, pos: usize) -> usize {
-        self.filtered.map_or(pos, |f| f[pos])
+        match (self.context, self.filtered) {
+            (Some((ranges, total)), Some(_)) => ranges.line_at(pos, total).unwrap_or(pos),
+            (_, Some(f)) => f[pos],
+            (_, None) => pos,
+        }
+    }
+
+    /// Visible lines of a filtered view, context lines included.
+    fn filtered_len(&self, filtered: &[usize]) -> usize {
+        match self.context {
+            Some((ranges, total)) => ranges.visible_count(total),
+            None => filtered.len(),
+        }
     }
 }
 
@@ -192,26 +209,27 @@ pub fn compute_marks(height: usize, input: &MarkInputs) -> Marks {
                 }
             }
         }
-        Some(filtered) if filtered.len() <= EXACT_FILTERED_ROWS => {
-            for (row, &line) in filtered.iter().enumerate() {
-                if level_is_error(line) {
+        Some(filtered) if input.filtered_len(filtered) <= EXACT_FILTERED_ROWS => {
+            for row in 0..input.filtered_len(filtered) {
+                if level_is_error(input.line_at(row)) {
                     marks.pixels[px(row)] |= MARK_ERROR;
                 }
             }
         }
         Some(filtered) => {
             marks.errors_sampled = true;
+            let shown = input.filtered_len(filtered);
             for (p, flags) in marks.pixels.iter_mut().enumerate() {
                 // Rows mapping to pixel `p`: [ceil(p * rows / h), ceil((p + 1) * rows / h)).
                 let from = (p * rows).div_ceil(height);
-                let to = ((p + 1) * rows).div_ceil(height).min(filtered.len());
+                let to = ((p + 1) * rows).div_ceil(height).min(shown);
                 if from >= to {
                     continue;
                 }
                 let step = (to - from).div_ceil(SAMPLES_PER_PIXEL).max(1);
                 if (from..to)
                     .step_by(step)
-                    .any(|row| level_is_error(filtered[row]))
+                    .any(|row| level_is_error(input.line_at(row)))
                 {
                     *flags |= MARK_ERROR;
                 }
@@ -283,6 +301,9 @@ impl StripCache {
             collapse: engine
                 .collapse_rows_state()
                 .map(|state| (state, engine.visible_lines())),
+            context: engine
+                .shown_context_ranges()
+                .map(|ranges| (ranges, engine.total_lines())),
         };
         self.marks = compute_marks(height, &input);
         self.key = Some(key);
@@ -483,6 +504,7 @@ mod tests {
             levels: &levels,
             error_blocks: &blocks,
             collapse: None,
+            context: None,
         };
         // 1000 px: 100 rows per pixel, so every block spans many pixels.
         let marks = compute_marks(1000, &input);
@@ -525,6 +547,7 @@ mod tests {
             levels: &[],
             error_blocks: &[],
             collapse: None,
+            context: None,
         };
         let marks = compute_marks(100, &input);
         assert_eq!(marks.pixels[10], MARK_AUTO_BOOKMARK);
@@ -545,6 +568,7 @@ mod tests {
             levels: &levels[..500],
             error_blocks: &blocks,
             collapse: None,
+            context: None,
         };
         assert!(compute_marks(100, &input).is_empty());
     }
@@ -566,6 +590,7 @@ mod tests {
             levels: &levels,
             error_blocks: &blocks,
             collapse: None,
+            context: None,
         };
         let marks = compute_marks(500, &input);
         assert!(!marks.errors_sampled);
@@ -608,6 +633,7 @@ mod tests {
             levels: &levels,
             error_blocks: &blocks,
             collapse: Some((&state, 100)),
+            context: None,
         };
         let marks = compute_marks(rows, &input);
         assert_eq!(
@@ -618,6 +644,35 @@ mod tests {
         assert_eq!(marks.pixels[31], MARK_BOOKMARK, "line 80 is row 31");
         assert_eq!(marks.pixels[41], MARK_ERROR, "line 90 is row 41");
         assert_eq!(marks.pixels.iter().filter(|&&p| p != 0).count(), 3);
+    }
+
+    #[test]
+    fn context_rows_carry_marks_at_their_row() {
+        // Matches on lines 10 and 50 with one line of context: rows are lines 9, 10, 11,
+        // 49, 50, 51.
+        let matches = [10, 50];
+        let ranges = ContextRanges::build(1, &matches);
+        let mut levels = vec![LogLevel::Info as u8; 100];
+        levels[49] = LogLevel::Error as u8;
+        levels[30] = LogLevel::Error as u8; // hidden
+        let bookmarks: BTreeSet<usize> = [11, 70].into_iter().collect();
+        let input = MarkInputs {
+            rows: 6,
+            filtered: Some(&matches),
+            hits: &[9],
+            bookmarks: &bookmarks,
+            auto_bookmarks: &BTreeSet::new(),
+            dismissed_auto: &BTreeSet::new(),
+            levels: &levels,
+            error_blocks: &[],
+            collapse: None,
+            context: Some((&ranges, 100)),
+        };
+        let marks = compute_marks(6, &input);
+        assert_eq!(
+            marks.pixels,
+            vec![MARK_HIT, 0, MARK_BOOKMARK, MARK_ERROR, 0, 0]
+        );
     }
 
     #[test]
@@ -639,6 +694,7 @@ mod tests {
             levels: &levels,
             error_blocks: &[],
             collapse: None,
+            context: None,
         };
         let marks = compute_marks(100, &input);
         assert!(marks.errors_sampled);

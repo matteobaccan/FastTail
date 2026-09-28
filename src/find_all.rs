@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::paths::paths_equal_fast;
-use crate::scan_job::{JobSpec, ScanBatch, ScanJob};
+use crate::scan_job::{JobSpec, ScanBatch, ScanJob, VisibleSet};
 use crate::tail_engine::{time_window_contains, TailEngine, ViewMode};
 
 /// Hits stored per stream; past it they are counted, not listed.
@@ -256,7 +256,9 @@ impl FindAllSession {
                 range,
                 JobSpec::Search {
                     query_lower: query_lower.clone(),
-                    filter: engine.filter_spec(),
+                    filter: engine
+                        .filter_spec()
+                        .map_or(VisibleSet::All, VisibleSet::Filter),
                     limit,
                     count_past_limit: true,
                 },

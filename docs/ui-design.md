@@ -98,9 +98,9 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 The UI is immediate mode and never blocks on file I/O it can avoid:
 
 - **Reading.** Each frame the UI asks the engine only for what is on screen: `visible_line_count()`, `get_actual_line_idx(row)`, `get_row(line)` / `get_line(line)` (served from the engine's block cache), `get_bytes()` for HEX, `level_of()`, `row_time_delta()` and so on. Rows are virtualized with `ScrollArea::show_rows` in the plain text and HEX views, and with a custom anchored layout in the wrapped view (§3.5).
-- **Writing.** Setters change the engine's view state: `set_include_filter`, `set_filter_terms`, `set_min_level`, `set_view_mode`, `set_encoding`, `set_ansi_mode`, `set_wrap_lines`, `apply_time_range_text`, `toggle_bookmark`, `set_bookmark_note`, `enter_context` / `leave_context`, `set_collapse_mode` / `toggle_collapsed_row`, `set_global_filter`, `set_highlight_rules`, `set_quick_labels` and similar. Heavy work (indexing, filtering, searching, level and timestamp scans, automatic bookmarks, and the collapse detection on a file above 16 MB) runs on worker jobs inside the engine. The UI only draws progress from `scan_progress()`.
+- **Writing.** Setters change the engine's view state: `set_include_filter`, `set_filter_terms`, `set_min_level`, `set_view_mode`, `set_encoding`, `set_ansi_mode`, `set_wrap_lines`, `apply_time_range_text`, `toggle_bookmark`, `set_bookmark_note`, `enter_context` / `leave_context`, `set_collapse_mode` / `toggle_collapsed_row`, `set_context_lines`, `set_global_filter`, `set_highlight_rules`, `set_quick_labels` and similar. Heavy work (indexing, filtering, searching, level and timestamp scans, automatic bookmarks, and the collapse detection on a file above 16 MB) runs on worker jobs inside the engine. The UI only draws progress from `scan_progress()`.
 - **Scroll requests.** The UI sets fields such as `requested_scroll_y`, `requested_scroll_x`, `scroll_to_line`, `wrap_request` or `pending_jump`. The next render consumes them.
-- **Dirty flags.** The engine raises `bookmarks_dirty`, `wrap_dirty`, `ansi_dirty`, `timeline_dirty` and `collapse_mode_dirty`. The app persists the change and clears the flag after the dock is drawn.
+- **Dirty flags.** The engine raises `bookmarks_dirty`, `wrap_dirty`, `ansi_dirty`, `timeline_dirty`, `collapse_mode_dirty` and `context_lines_dirty`. The app persists the change and clears the flag after the dock is drawn.
 - **Activity.** Each frame the app resets `engine.displayed` to false, and the tab viewer sets it back for the tabs on screen. Hidden tabs therefore accumulate `unseen_lines` and `unseen_severity`, which drive the tab badge and the taskbar flash.
 - **Waking.** Every engine gets a `WakeFn` (`make_wake`) that calls `ctx.request_repaint()` from its filesystem watcher thread. An idle window repaints only when data actually arrives.
 
@@ -144,7 +144,7 @@ The UI is immediate mode and never blocks on file I/O it can avoid:
   - `save_dock_layout()` runs every 2 s, when a tab is closed or a file opened, on close request and in `on_exit`.
   - `FastTailConfig::save` writes the file only when its bytes changed (`write_if_changed`).
   - Stale floating-window indices are pruned (`prune_floating_window_rects`). A stale index crashed v0.1.0.
-- **Workspace.** `open_files`, and per-stream state (filters, search, encoding, ANSI mode, timeline flag, collapse mode) in `[session]` / `[stream_N]` sections of `fasttail.ini`. Manual bookmarks and their notes go in `[bookmarks]` and wrap flags in `[wrapped_files]`. Automatic bookmarks are not saved: they are recomputed from the rules.
+- **Workspace.** `open_files`, and per-stream state (filters, search, encoding, ANSI mode, timeline flag, collapse mode, context lines) in `[session]` / `[stream_N]` sections of `fasttail.ini`. Manual bookmarks and their notes go in `[bookmarks]` and wrap flags in `[wrapped_files]`. Automatic bookmarks are not saved: they are recomputed from the rules.
 - **Named sessions.** Saved to `*.fasttail-session.ini` files from the 🗂 menu.
   - The title shows ` · name`, plus `*` when the live workspace differs from the file. The comparison uses a fingerprint that describes the dock by structure, not by geometry (`dock_signature`), and is checked at most once per second.
   - Loading a session over unsaved changes asks for confirmation.
@@ -190,7 +190,7 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ 🌐 Global filter [✓]On Aa .* │ All of: [____][✖][+] │ None of: [____] │ ✖            │ ← global filter bar (CTRL + SHIFT + H / 🌐)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ╭[#1] ▶ app.log ● [12]╮╭[#2] ■ db.log ○╮╭🔎 Find results ⏳╮                          │ ← egui_dock tab bar (26 px)
-│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
+│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾][± 3] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
 │ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row (45 % opacity in context)
 │ │ 🏷 Labels:  1 timeout ✕  4 req=42 ✕                                                   │ ← quick labels strip (if any)
 │ │ ◆ Filters suspended: line 1234 shown in the full log  [Back to filtered view]         │ ← context banner (only in the context view)
@@ -344,6 +344,7 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
    - **Encoding** combo, 90 px: UTF-8, ASCII, ANSI, Unicode, Unicode BE.
    - **ANSI** combo: `ANSI: auto → render`, `render`, `strip`, `raw`.
    - Text only (not MD): the **Collapse** combo (`render_collapse_selector`), whose closed text reads `× Collapse: off|exact|numbers` in 11 pt. Its entries are `off`, `exact` (equal text after the leading timestamp, trailing whitespace ignored) and `numbers` (as exact, with numbers, hex values and ids masked). It is per stream, `CTRL + SHIFT + D` cycles it, and the tooltip explains the modes. Picking a mode detects the groups again from scratch and keeps the line at the top of the view in place.
+   - Text only (not MD), right after it: the **context lines** drag value (`render_context_lines_control`), `± N`, 0 to 100, per stream. With `N > 0` and an active filter every match is shown with the `N` file lines before and after it (see *Context rows* in the row anatomy). The tooltip says it works like `grep -C` and that context lines ignore the filters. Without an active filter it is drawn at 45 % opacity and has no effect. Changing it rebuilds the rows without refiltering and keeps the line at the top of the view in place.
 6. HEX only: **`Hex columns: [-8] N [+8]`**, range 8–64.
 7. **`Lines: v / t`** (dim) when rows are filtered, otherwise `Lines: t`. When repeated entries are collapsed and the rows are fewer than the visible lines, ` · R rows shown` follows. In HEX it shows the hex row count.
 8. **`🕘 from → to`**, text views only: the time span of the visible lines, and the **time range control** (`time_range::control`). It is a frameless button in 11 pt monospace, underlined under the pointer, with a pointing-hand cursor; a click opens or closes the time range popup (§4.15). The date is written once when both ends share it (`🕘 2026-09-18 14:02:05 → 16:30:12`); a label over 40 characters drops the seconds (`🕘 2026-09-18 14:02 → 2026-09-19 16:30`). Without a span it reads `🕘 … N%` while the stream is being timed, `🕘 no timestamps` (dim) on a timed stream without usable timestamps, and `🕘 —` when no visible line carries a time. Colours: warn while a side of the window cannot be read (`time_range_error`), accent while a window narrows the view, dim for *no timestamps*, `text_primary` otherwise; ` ⏳` follows while the window waits for the timing. The tooltip gives the full span, the window as typed, the pending or invalid state and *Click to set the time range*.
@@ -427,6 +428,7 @@ Empty states are centred and dim: `⏳ indexing...`, `⏳ filtering...`, *Log fi
   4. The first matching highlight rule (foreground, background, bold, italic).
   5. The level palette (§6.3), when `level_colors` is on.
   6. `text_primary`.
+- **Context rows** (context lines around the filter matches, `TailEngine::is_context_row`): the text is drawn in `text_dim` instead of `text_primary`, and rule, label, ANSI and level colours (foreground and background) at 55 % opacity (`dim_style`, `dim_spans`); search hits keep their colours, and match rows are unchanged. Between two groups of rows that are not adjacent in the file, a 1 px rule in `border_color` at 40 % runs along the top edge of the later group's first row (`context_separator`, text and wrapped views); hovering a 4 px band around it shows `{n} lines hidden`. The rule is painted, not a row.
 - **Row tint** behind the whole row width: current hit is accent at α70, other hits warn at α40, selected rows `secondary_accent` at α60, bookmarked rows (manual or automatic, or a closed group hiding a bookmark) `secondary_accent` at α28.
 - **Row height:** `max(font row height × 1.25, 18)`, rounded up.
 
@@ -531,7 +533,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
 - **Window:** id `fasttail_help_popup`, default **580 × 500**, geometry persisted.
 - **Contents:** a `⚡ FASTTAIL` header, then three `ui.group`s with warn-coloured titles:
   1. **🔍 ZOOM & FONT SIZE**: `CTRL +  /  CTRL =`, `CTRL -`, `CTRL 0`, `CTRL + Wheel`.
-  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F1`, `Esc`, Drag & Drop.
+  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `± N`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F1`, `Esc`, Drag & Drop.
   3. **⚡ COLOR FILTERS & VISIBILITY**: six bullet paragraphs (evaluation order, reordering, bold and italic, visibility filters, log levels, recent files).
 - Keys are written in capitals joined with ` + ` (house style). The exception is `CTRL F`, which lacks the `+`.
 
