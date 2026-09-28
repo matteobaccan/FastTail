@@ -30,12 +30,14 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 | Module | Role |
 |---|---|
 | `src/ui/mod.rs` | Declares the UI modules and re-exports `FastTailApp`. |
+| `src/ui/calendar.rs` | The month calendar of the time range popup: a 7×6 grid of days starting on Monday, with month and year arrows, on the civil-date functions of `src/timestamp.rs`. |
 | `src/ui/app.rs` | `FastTailApp`, the `eframe::App`. It owns the config, the engines and the dock state. It draws the title bar, toolbar, banners, status bar and every free-floating dialog, and handles the global shortcuts, persistence, lock and screensaver. |
 | `src/ui/dock.rs` | `FastTailTab`, `DockContext`, `FastTailTabViewer` (the `egui_dock::TabViewer`). Draws one stream (stream bar, filter row, rows in text / wrapped / HEX / Markdown), plus the bodies of the Filters, Color Filters and Settings panels. |
 | `src/ui/find_results.rs` | The "Find results" dock tab: a search across all streams. |
 | `src/ui/global_filter_bar.rs` | The global filter bar shown under the toolbar. |
 | `src/ui/hit_list.rs` | Virtualized hit lists: `HitList` (a stream's results pane) and `GroupedHitList` (Find results). |
 | `src/ui/overview_strip.rs` | The 10 px minimap beside the rows' scroll bar. |
+| `src/ui/time_range.rs` | The time range control of the stream bar (the visible time span) and its popup: the draft, the calendar and spinner rules, the shortcuts and OK / Cancel. |
 | `src/ui/timeline_strip.rs` | The 56 px timeline histogram above the rows. |
 | `src/ui/zip_picker.rs` | `ArchivePicker`, the entry picker for a zip that holds several files and for any tar archive (plain or compressed). |
 | `src/collapse.rs` | Not UI code, but it shapes the rows: detection of repeated entries (`CollapseMode`, `CollapseState`) and the row ↔ line mapping of a collapsed text view. |
@@ -188,8 +190,8 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ 🌐 Global filter [✓]On Aa .* │ All of: [____][✖][+] │ None of: [____] │ ✖            │ ← global filter bar (CTRL + SHIFT + H / 🌐)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ╭[#1] ▶ app.log ● [12]╮╭[#2] ■ db.log ○╮╭🔎 Find results ⏳╮                          │ ← egui_dock tab bar (26 px)
-│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾] │ Lines: 9,812 · 9,640 rows shown │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
-│ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 🕘 Time range: [from]→[to]✖ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row (45 % opacity in context)
+│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
+│ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row (45 % opacity in context)
 │ │ 🏷 Labels:  1 timeout ✕  4 req=42 ✕                                                   │ ← quick labels strip (if any)
 │ │ ◆ Filters suspended: line 1234 shown in the full log  [Back to filtered view]         │ ← context banner (only in the context view)
 │ │ ▁▂▅█▃▁▁▂▇▂▁  peak 812                                                                 │ ← timeline strip (📊, 56 px)
@@ -344,7 +346,7 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
    - Text only (not MD): the **Collapse** combo (`render_collapse_selector`), whose closed text reads `× Collapse: off|exact|numbers` in 11 pt. Its entries are `off`, `exact` (equal text after the leading timestamp, trailing whitespace ignored) and `numbers` (as exact, with numbers, hex values and ids masked). It is per stream, `CTRL + SHIFT + D` cycles it, and the tooltip explains the modes. Picking a mode detects the groups again from scratch and keeps the line at the top of the view in place.
 6. HEX only: **`Hex columns: [-8] N [+8]`**, range 8–64.
 7. **`Lines: v / t`** (dim) when rows are filtered, otherwise `Lines: t`. When repeated entries are collapsed and the rows are fewer than the visible lines, ` · R rows shown` follows. In HEX it shows the hex row count.
-8. **`🕘 from → to`**: the time span on screen. Accent when a time range is applied.
+8. **`🕘 from → to`**, text views only: the time span of the visible lines, and the **time range control** (`time_range::control`). It is a frameless button in 11 pt monospace, underlined under the pointer, with a pointing-hand cursor; a click opens or closes the time range popup (§4.15). The date is written once when both ends share it (`🕘 2026-09-18 14:02:05 → 16:30:12`); a label over 40 characters drops the seconds (`🕘 2026-09-18 14:02 → 2026-09-19 16:30`). Without a span it reads `🕘 … N%` while the stream is being timed, `🕘 no timestamps` (dim) on a timed stream without usable timestamps, and `🕘 —` when no visible line carries a time. Colours: warn while a side of the window cannot be read (`time_range_error`), accent while a window narrows the view, dim for *no timestamps*, `text_primary` otherwise; ` ⏳` follows while the window waits for the timing. The tooltip gives the full span, the window as typed, the pending or invalid state and *Click to set the time range*.
 9. **`Δ +2.357 · 14 rows`**: elapsed time of a multi-row selection, in accent.
 10. **Per-level counters**, most severe first, only for levels seen: `FTL n  ERR n  WRN n  INF n  DBG n  TRC n`, each in its `level_color`.
 11. **`⏳ {indexing|filtering|searching|detecting levels|timing lines|finding auto-bookmarks|collapsing} N% (hits)`** in warn, while a background scan runs.
@@ -379,12 +381,7 @@ Shown in the text and wrapped views. Markdown shows it only while a search is ac
 
 1. `⚡ Include (Regex):` (accent), a 180 px field with the hint `ERROR|CRITICAL|Exception...`, `✖`, `+N` (accent; the extra terms are listed in the tooltip) and `+` (adds a term row and opens the Filters window on this stream).
 2. `🚫 Exclude (Regex):` (warn), with the same controls and the hint `healthcheck|ping|DEBUG...`.
-3. **Time range**:
-   - `🕘 Time range:` (accent when usable, dim otherwise).
-   - `[from]` → `[to]` fields, 74 px each.
-   - `✖` (clear).
-   - A hint: `⚠ invalid time`, `⏳ applies when timing finishes` or `ⓘ no timestamps`.
-   - `📊` timeline toggle; while the timeline is open, a `🔍` search-lane toggle.
+3. `📊` timeline toggle; while the timeline is open, a `🔍` search-lane toggle (`render_timeline_toggles`). The time range itself is set from the stream bar's time span (§3.3, §4.15); the row holds no time fields.
 4. `Aa` (case) and `.*` (regex) toggles: accent and strong when on.
 5. **Level selector** (110 px combo): `All levels` or `≥ LEVEL`, each entry in its level colour. `?` shows lines without a level; it is visible only when the minimum is above TRACE.
 6. **`Presets ▾`**: dim when nothing matches, `name ▾` in accent when the stream equals a preset, `name * ▾` in warn when modified.
@@ -652,7 +649,25 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
 
 An export failure is shown as an `ⓘ` notice in the stream bar (`view_notice`).
 
-### 4.15 Things that do not exist
+### 4.15 Time range popup
+
+Opened by a click on the stream bar's time span (§3.3); a second click on the span closes it. An `egui::Popup` anchored under the span (`PopupCloseBehavior::CloseOnClickOutside`, 4 px gap), per stream (`time_range::popup_id`). Opening it asks for the stream to be timed (`request_timeline`), in the background above 16 MB.
+
+- **Two sides**, "from" and "to", side by side with an 18 px gap. Each has:
+  - its label (`from` / `to`) in 11 pt accent;
+  - a 180 px single-line field (hint `2026-09-18 14:02:05` / `2026-09-18 16:30`) that takes every format the time range accepts; editing it moves the calendar to the month typed;
+  - `⚠ invalid time` in warn under it, when it holds text that cannot be read and does not have the focus;
+  - the **calendar** (`calendar::show`): `«` `‹` *Month YYYY* `›` `»` (small buttons with *Previous / Next month / year* tooltips, the title in 11.5 pt accent, 104 px), a row of weekday abbreviations (Monday first, dim), and a 7×6 grid of painted 26×18 px day cells. Days of other months are dim; the days between the log's first and last timestamp have an accent fill at 18 %; the side's day an accent fill at 55 %; today an accent outline; the hovered day a dim outline. A click picks the day (a day of another month moves the calendar there);
+  - `🕘 HH : MM : SS` spinners (`DragValue`, two digits, 0–23 / 0–59, tooltip *Hour, minute and second: drag or type*).
+- **Shortcuts:** `Whole log` (tooltip *Clear the time range*), `First day`, `Last day`, `Last hour`. The last three are disabled until the stream is timed and when it has no usable timestamps.
+- **Hints:** `⏳ applies when timing finishes` (warn) while a window is held, `⏳ timing lines N%` (dim) while the stream is being timed, `ⓘ no timestamps` (dim, with the explanation in the tooltip).
+- **`OK`** (disabled while a side cannot be read, tooltip *invalid time*) and **`Cancel`**, reusing the session dialogs' texts.
+
+Everything edits a **draft** (`TimeRangeDraft`: the two texts and the month of each calendar) kept in egui temp memory while the popup is open, and prefilled with the stream's `time_from_text` / `time_to_text` when it opens. The calendars open on the month of their side, else of the log's first timestamp, else the current month. Picking a day keeps the side's time (`2026-09-19 14:02:00`), otherwise writes the bare date (from midnight, or through 23:59:59.999 on the "to" side); a spinner writes `YYYY-MM-DD HH:MM:SS` on the side's day, or on the log's day (or today) when it lies in the month shown, else on the 1st of that month. The spinners of an empty or bare-date "to" side show `23:59:59`. `First day` / `Last day` put the date of the log's first / last timestamp on both sides; `Last hour` writes the hour ending at the last timestamp; `Whole log` empties both sides.
+
+`OK`, or `Enter` in a field while both sides can be read, writes the draft into the stream through `apply_time_range_text` (the window is applied, or held while the stream is timed, exactly as typed text) and closes the popup. `Cancel`, `Esc` (consumed by the popup) or a click outside drop the draft and leave the window as it was. Nothing of the popup is saved.
+
+### 4.16 Things that do not exist
 
 There is no separate goto-line dialog (it is inline in the stream bar), no bookmarks list window and no note dialog (the note editor is inline in the stream bar). Bookmarks are the `★` / `✏` / `☆` markers, the note tooltips, the overview strip marks, `F2` navigation and "Clear bookmarks". There are no toast notifications. Transient information is shown as `ⓘ` labels in the stream bar or in the small centred notice windows above.
 
@@ -698,7 +713,8 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `# 123` / `# ---` | line numbers on / off |
 | `Δt`, `⚓`, `…` | time-delta column toggle, anchor, pending |
 | `↩` | Wrap |
-| `🕘` | time range, visible time span, first → last time in a collapse badge tooltip |
+| `🕘` | the visible time span, which opens the time range popup; the popup's spinners; first → last time in a collapse badge tooltip |
+| `«` `‹` `›` `»` | calendar of the time range popup: previous / next year and month |
 | `📊` | timeline toggle |
 | `⏳` | background work / progress / cooldown |
 | `ⓘ` | informational notice |
@@ -1014,6 +1030,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `CTRL + F2` | focused stream | On the current row (the selection, else the current hit, else the top row): remove a manual bookmark with its note, dismiss an automatic bookmark, or else add a manual bookmark |
 | `F2` / `SHIFT + F2` | focused stream | Next / previous bookmark, manual or automatic, among the visible lines (wraps); select it and centre it |
 | `Enter` / `Esc` | bookmark note editor | Save / cancel the note |
+| `Enter` / `Esc` | time range popup | `Enter` in a field applies the draft (when both sides can be read) and closes; `Esc` closes and keeps the window |
 | `↑` `↓` | rows | Scroll one line (pauses follow) |
 | `←` `→` | rows | Scroll 40 px horizontally; `CTRL` gives 200 px |
 | `PgUp` / `PgDn` | rows | Scroll one page |
@@ -1038,6 +1055,7 @@ The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL 
   - The wheel scrolls; in wrap mode, a far scroll-bar drag jumps by estimate.
 - **Overview strip:** click or drag to centre the view there; hover shows the line and the notes of nearby bookmarks.
 - **Timeline:** click a column or drag a span to set the time range; hover shows the counts.
+- **Time span** (stream bar): click to open or close the time range popup; in the popup, click a day, drag or type in the spinners, a click outside cancels.
 - **Results pane:** drag its top edge to resize (persisted, shared). Click a hit to commit it and focus the list.
 - **Find results:** click a header to collapse or expand it. Click a hit to show it. Right-click a hit for "Show in context".
 - **Dock:** drag a tab to split, re-dock or float it. Drag the separators to resize. Tab ✕ closes.

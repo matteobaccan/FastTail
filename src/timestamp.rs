@@ -351,7 +351,28 @@ fn days_from_civil(year: u32, month: u32, day: u32) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
-fn days_in_month(year: u32, month: u32) -> u32 {
+/// Days since the Unix epoch of a civil date, for the calendar of the time range popup;
+/// `None` for a date that does not exist or a year outside 1..=9999.
+pub fn date_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
+    if !(1..=9999).contains(&year) {
+        return None;
+    }
+    days_from_civil(year as u32, month, day)
+}
+
+/// Civil date `(year, month, day)` of a day count since the Unix epoch.
+pub fn days_to_date(days: i64) -> (i64, u32, u32) {
+    civil_from_days(days)
+}
+
+/// Day of the week of a day count since the Unix epoch, Monday = 0 (ISO 8601): the epoch
+/// itself was a Thursday.
+pub fn weekday(days: i64) -> u32 {
+    (days + 3).rem_euclid(7) as u32
+}
+
+/// Number of days in a month of a year, 0 for a month that does not exist.
+pub fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -505,6 +526,12 @@ pub fn end_of_typed_time(input: &str, millis: i64) -> i64 {
     }
 }
 
+/// Whether the user typed a date alone (`YYYY-MM-DD`), which names a whole day rather
+/// than an instant.
+pub fn is_bare_date(input: &str) -> bool {
+    is_date(input.trim())
+}
+
 /// `YYYY-MM-DD`, nothing after the day.
 fn is_date(text: &str) -> bool {
     let b = text.as_bytes();
@@ -634,6 +661,45 @@ mod tests {
             None,
             "1900 is not a leap year"
         );
+    }
+
+    #[test]
+    fn civil_dates_for_the_calendar() {
+        // The epoch, a Thursday, and the way back.
+        assert_eq!(date_to_days(1970, 1, 1), Some(0));
+        assert_eq!(days_to_date(0), (1970, 1, 1));
+        assert_eq!(weekday(0), 3);
+        // 2026-09-28 is a Monday; 2100-01-01 a Friday.
+        let monday = date_to_days(2026, 9, 28).unwrap();
+        assert_eq!(weekday(monday), 0);
+        assert_eq!(weekday(monday + 6), 6);
+        assert_eq!(weekday(monday - 1), 6);
+        let y2100 = date_to_days(2100, 1, 1).unwrap();
+        assert_eq!(weekday(y2100), 4);
+        assert_eq!(days_to_date(y2100), (2100, 1, 1));
+        // Month ends and leap years.
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2000, 2), 29);
+        assert_eq!(days_in_month(2100, 2), 28);
+        assert_eq!(days_in_month(2026, 4), 30);
+        assert_eq!(days_in_month(2026, 12), 31);
+        assert_eq!(days_in_month(2026, 13), 0);
+        assert_eq!(date_to_days(2026, 2, 29), None);
+        assert_eq!(
+            date_to_days(2024, 2, 29).map(days_to_date),
+            Some((2024, 2, 29))
+        );
+        assert_eq!(
+            date_to_days(2026, 3, 1),
+            date_to_days(2026, 2, 28).map(|d| d + 1)
+        );
+        assert_eq!(date_to_days(0, 1, 1), None);
+        assert_eq!(date_to_days(10_000, 1, 1), None);
+        // A date alone, and what is not one.
+        assert!(is_bare_date(" 2026-09-18 "));
+        assert!(!is_bare_date("2026-09-18 14:02"));
+        assert!(!is_bare_date("14:02"));
     }
 
     #[test]

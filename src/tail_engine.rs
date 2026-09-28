@@ -4080,16 +4080,31 @@ impl TailEngine {
     /// stream, so a log from last week reads the way it is written. Falls back to now for
     /// a stream that has no timestamps at all.
     pub fn time_reference(&self) -> i64 {
+        self.first_timestamp().unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0)
+        })
+    }
+
+    /// First timestamp of the timed lines, `None` while none carries one.
+    pub fn first_timestamp(&self) -> Option<i64> {
         self.timestamps
             .iter()
             .find(|&&ts| ts != NO_TIMESTAMP)
             .copied()
-            .unwrap_or_else(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0)
-            })
+    }
+
+    /// Timestamp of the last timed line (its own or the one it inherits), `None` while
+    /// none carries one. Timestamps are inherited forward, so the walk back from the end
+    /// of the cache stops at once unless the stream has no timestamps at all.
+    pub fn last_timestamp(&self) -> Option<i64> {
+        self.timestamps
+            .iter()
+            .rev()
+            .find(|&&ts| ts != NO_TIMESTAMP)
+            .copied()
     }
 
     /// Reads the two time fields: each side's instant (`None` = open or unreadable) and
