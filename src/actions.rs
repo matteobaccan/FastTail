@@ -78,6 +78,9 @@ pub enum ActionId {
     SearchPane,
     TimeAnchorSet,
     TimeAnchorClear,
+    TimeDisplayWritten,
+    TimeDisplayUtc,
+    TimeDisplayLocal,
     // Search
     SearchFocus,
     SearchNext,
@@ -349,6 +352,9 @@ pub const ACTIONS: &[Action] = &[
     action(A::SearchPane, "view.search_pane.toggle", "act_search_pane", C::View, S::Window, None, &[]),
     action(A::TimeAnchorSet, "view.time_anchor.set", "time_anchor_set", C::View, S::Stream, None, &[N::TimeDeltaShown, N::Row]),
     action(A::TimeAnchorClear, "view.time_anchor.clear", "time_anchor_clear", C::View, S::Stream, None, &[N::TimeAnchor]),
+    action(A::TimeDisplayWritten, "view.time_display.written", "act_time_written", C::View, S::Stream, None, &[N::LineView]),
+    action(A::TimeDisplayUtc, "view.time_display.utc", "act_time_utc", C::View, S::Stream, None, &[N::LineView]),
+    action(A::TimeDisplayLocal, "view.time_display.local", "act_time_local", C::View, S::Stream, None, &[N::LineView]),
     // Search
     action(A::SearchFocus, "search.focus", "act_search", C::Search, S::Stream, Some("CTRL + F"), &[]),
     action(A::SearchNext, "search.next", "act_search_next", C::Search, S::Stream, Some("F3"), &[N::Search]),

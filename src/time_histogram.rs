@@ -261,12 +261,24 @@ pub fn column_of_bucket(bucket: usize, buckets: usize, columns: usize) -> usize 
 /// both as `format_millis` text. Through `end_of_typed_time` the "to" text covers that
 /// whole second, so the window is exactly the selected buckets.
 pub fn selection_texts(columns: &[Column], first: usize, last: usize) -> Option<(String, String)> {
+    selection_texts_on(columns, first, last, &|ms| ms)
+}
+
+/// `selection_texts` on another clock: `clock` turns the printed times of the columns
+/// into the stream's display clock (see `TailEngine::to_display_clock`), which is the
+/// clock the time fields are read on.
+pub fn selection_texts_on(
+    columns: &[Column],
+    first: usize,
+    last: usize,
+    clock: &dyn Fn(i64) -> i64,
+) -> Option<(String, String)> {
     let (a, b) = (first.min(last), first.max(last));
     let start = columns.get(a)?.start_ms;
     let end = columns.get(b)?.end_ms;
     Some((
-        crate::timestamp::format_millis(start),
-        crate::timestamp::format_millis(end - MIN_BUCKET_MS),
+        crate::timestamp::format_millis(clock(start)),
+        crate::timestamp::format_millis(clock(end - MIN_BUCKET_MS)),
     ))
 }
 

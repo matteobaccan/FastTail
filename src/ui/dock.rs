@@ -1543,6 +1543,22 @@ fn render_log_stream(
         ) {
             ui.separator();
             crate::ui::time_range::control(ui, engine, theme, lang);
+            for (id, display) in [
+                (
+                    ActionId::TimeDisplayWritten,
+                    crate::timestamp::TimeDisplay::Written,
+                ),
+                (ActionId::TimeDisplayUtc, crate::timestamp::TimeDisplay::Utc),
+                (
+                    ActionId::TimeDisplayLocal,
+                    crate::timestamp::TimeDisplay::Local,
+                ),
+            ] {
+                if act(id) {
+                    engine.set_time_display(display);
+                }
+            }
+            render_time_display_menu(ui, engine, theme, lang);
         }
 
         // Elapsed time of a selection of two or more timed rows.
@@ -2732,6 +2748,139 @@ fn render_log_stream(
     }
 }
 
+/// Label of a time display in the stream bar and its menu.
+fn time_display_label(lang: Language, display: crate::timestamp::TimeDisplay) -> String {
+    use crate::timestamp::TimeDisplay;
+    match display {
+        TimeDisplay::Written => t(lang, "time_display_written").to_string(),
+        TimeDisplay::Utc => "UTC".to_string(),
+        TimeDisplay::Local => t(lang, "time_display_local").to_string(),
+        TimeDisplay::Offset(m) => format!("UTC{}", crate::timestamp::format_offset(m)),
+    }
+}
+
+/// The time display menu of the stream bar: the leading timestamp of each row as
+/// written, in UTC, in local time or at a fixed offset, and what a timestamp without a
+/// zone means (the source zone).
+fn render_time_display_menu(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    use crate::timestamp::{format_offset, parse_offset, SourceZone, TimeDisplay};
+    engine.refresh_time_zone_sample();
+    let display = engine.time_display();
+    let source = engine.time_source_zone();
+    let color = if display == TimeDisplay::Written {
+        theme.text_dim()
+    } else {
+        theme.accent_color()
+    };
+    let draft_id = egui::Id::new("time_display_offset").with(&engine.path);
+    ui.menu_button(
+        RichText::new(format!("🌐 {}", time_display_label(lang, display)))
+            .monospace()
+            .size(11.0)
+            .color(color),
+        |ui| {
+            ui.set_min_width(220.0);
+            ui.label(
+                RichText::new(t(lang, "time_display_title"))
+                    .monospace()
+                    .small()
+                    .color(theme.text_dim()),
+            );
+            for choice in [TimeDisplay::Written, TimeDisplay::Utc, TimeDisplay::Local] {
+                if ui
+                    .selectable_label(display == choice, time_display_label(lang, choice))
+                    .clicked()
+                {
+                    engine.set_time_display(choice);
+                    ui.close();
+                }
+            }
+            // A fixed offset, typed as +02:00.
+            let mut draft: String =
+                ui.data(|d| d.get_temp(draft_id))
+                    .unwrap_or_else(|| match display {
+                        TimeDisplay::Offset(m) => format_offset(m),
+                        _ => String::new(),
+                    });
+            ui.horizontal(|ui| {
+                let fixed = matches!(display, TimeDisplay::Offset(_));
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        if fixed { "◉" } else { "○" },
+                        t(lang, "time_display_offset")
+                    ))
+                    .monospace(),
+                );
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut draft)
+                        .hint_text("+02:00")
+                        .desired_width(64.0),
+                );
+                let valid = parse_offset(&draft);
+                let apply = ui
+                    .add_enabled(valid.is_some(), egui::Button::new("✔"))
+                    .on_disabled_hover_text(t(lang, "time_display_offset_tip"));
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if let Some(m) = valid.filter(|_| apply.clicked() || enter) {
+                    engine.set_time_display(TimeDisplay::Offset(m));
+                    ui.close();
+                }
+            });
+            ui.data_mut(|d| d.insert_temp(draft_id, draft));
+            ui.separator();
+            ui.label(
+                RichText::new(t(lang, "time_source_title"))
+                    .monospace()
+                    .small()
+                    .color(theme.text_dim()),
+            )
+            .on_hover_text(t(lang, "time_source_tip"));
+            let mut source_choice = |ui: &mut Ui, zone: SourceZone, label: String| {
+                if ui.selectable_label(source == zone, label).clicked() {
+                    engine.set_time_source_zone(zone);
+                    ui.close();
+                }
+            };
+            source_choice(
+                ui,
+                SourceZone::Local,
+                t(lang, "time_display_local").to_string(),
+            );
+            source_choice(ui, SourceZone::Utc, "UTC".to_string());
+            if let SourceZone::Offset(m) = source {
+                source_choice(ui, source, format!("UTC{}", format_offset(m)));
+            }
+            if let Some(m) = parse_offset(
+                &ui.data(|d| d.get_temp::<String>(draft_id))
+                    .unwrap_or_default(),
+            ) {
+                if source != SourceZone::Offset(m) {
+                    source_choice(
+                        ui,
+                        SourceZone::Offset(m),
+                        format!("UTC{}", format_offset(m)),
+                    );
+                }
+            }
+            ui.separator();
+            ui.label(
+                RichText::new(t(lang, "time_display_note"))
+                    .monospace()
+                    .small()
+                    .color(theme.text_dim()),
+            );
+        },
+    )
+    .response
+    .on_hover_text(t(lang, "time_display_tip"));
+}
+
 /// The time delta column for this frame: `Some(gap_ms)` when the stream shows it. While
 /// the column or a selection's elapsed time needs the stream timed, asks for it - never on
 /// the UI thread for a large file, which a background scan times - and repaints until done.
@@ -3048,6 +3197,9 @@ fn render_extended_rows(
                 let highlight = highlight.map(|h| if dim_row { dim_style(h) } else { h });
                 // Raw mode draws ESC as ␛, with the spans moved past the wider glyphs.
                 let (shown, spans) = row.display(spans);
+                // The leading timestamp in the stream's time display (the tooltip keeps
+                // the text as written).
+                let (shown, spans, time_original) = display_row_time(engine, shown, spans);
                 let is_selected = engine.is_selected(actual_line_idx);
                 // The row's own bookmark, else one of the lines its closed group hides.
                 let bookmark = BookmarkMark::of_row(engine, row_idx, actual_line_idx);
@@ -3255,7 +3407,13 @@ fn render_extended_rows(
                         }
                     }
                 }
-                row_token_clicks(ui, engine, &click, || row_galley(label), &mut token_pick);
+                row_token_clicks(
+                    ui,
+                    engine,
+                    &click,
+                    || row_galley(label.clone()),
+                    &mut token_pick,
+                );
                 row_context_menu(
                     &click,
                     engine,
@@ -3268,6 +3426,16 @@ fn render_extended_rows(
                     engine.is_bookmarked(actual_line_idx),
                     &mut picks,
                 );
+                if let Some((start, end, original)) = &time_original {
+                    if click.hovered() {
+                        if let Some((galley, at)) = row_galley(label.clone()) {
+                            let rect = text_range_rect(&galley, at, *start, *end);
+                            if ui.rect_contains_pointer(rect) {
+                                click.clone().on_hover_text(original);
+                            }
+                        }
+                    }
+                }
                 note_tooltip(ui, engine, actual_line_idx, marker_rect, click);
                 if let (Some(rect), Some(c)) = (badge_rect, collapsed) {
                     let badge = ui
@@ -3424,8 +3592,8 @@ fn collapse_badge_tip(engine: &TailEngine, c: CollapsedRow, lang: Language) -> S
     ) {
         tip.push_str(&format!(
             "\n🕘 {} → {}",
-            crate::timestamp::format_millis(from),
-            crate::timestamp::format_millis(to)
+            crate::timestamp::format_millis(engine.to_display_clock(from)),
+            crate::timestamp::format_millis(engine.to_display_clock(to))
         ));
     }
     tip.push('\n');
@@ -3514,6 +3682,54 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
     if let Some(text) = text {
         ui.ctx().copy_text(text);
     }
+}
+
+/// A drawn row's text with its leading timestamp in the stream's time display, the
+/// spans moved to match, and the replaced range with the text as written (for its
+/// tooltip). Unchanged "as written" or without a timestamp.
+fn display_row_time<'a>(
+    engine: &TailEngine,
+    shown: std::borrow::Cow<'a, str>,
+    spans: Option<crate::tail_engine::SpanHighlight>,
+) -> (
+    std::borrow::Cow<'a, str>,
+    Option<crate::tail_engine::SpanHighlight>,
+    Option<(usize, usize, String)>,
+) {
+    match engine.display_time(&shown) {
+        None => (shown, spans, None),
+        Some((start, end, with)) => {
+            let original = shown[start..end].to_string();
+            let (text, spans) =
+                crate::tail_engine::replace_with_spans(&shown, spans, start, end, &with);
+            (
+                std::borrow::Cow::Owned(text),
+                spans,
+                Some((start, start + with.len(), original)),
+            )
+        }
+    }
+}
+
+/// Screen rectangle of the bytes `start..end` of a galley drawn at `pos` (on its first
+/// row).
+fn text_range_rect(galley: &egui::Galley, pos: egui::Pos2, start: usize, end: usize) -> egui::Rect {
+    use egui::text::CCursor;
+    let text = galley.text();
+    let (start, end) = (start.min(text.len()), end.min(text.len()));
+    if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return egui::Rect::NOTHING;
+    }
+    let first = text[..start].chars().count();
+    let last = first + text[start..end].chars().count();
+    let a = galley.pos_from_cursor(CCursor::new(first));
+    let b = galley.pos_from_cursor(CCursor::new(last));
+    let right = if (a.min.y - b.min.y).abs() < 0.5 {
+        b.min.x
+    } else {
+        galley.size().x
+    };
+    egui::Rect::from_min_max(a.min, egui::pos2(right, a.max.y)).translate(pos.to_vec2())
 }
 
 /// Where the token under the pointer is kept while a row's context menu is open.
@@ -3969,6 +4185,8 @@ struct WrappedRow {
     highlight: Option<HighlightStyle>,
     /// A context line around the filter matches, drawn dimmed.
     dimmed: bool,
+    /// The timestamp shown in the time display: its byte range and the text as written.
+    time_original: Option<(usize, usize, String)>,
     /// The group this row heads, and the width of its `×N` badge before the text.
     collapsed: Option<CollapsedRow>,
     badge_w: f32,
@@ -4080,6 +4298,7 @@ fn render_wrapped_rows(
             let dimmed = eng.is_context_row(line);
             let highlight = highlight.map(|h| if dimmed { dim_style(h) } else { h });
             let (shown, spans) = row_text.display(spans);
+            let (shown, spans, time_original) = display_row_time(eng, shown, spans);
             let format = egui::TextFormat {
                 font_id: font_id.clone(),
                 color: Color32::PLACEHOLDER,
@@ -4138,6 +4357,7 @@ fn render_wrapped_rows(
                     expanded,
                     highlight,
                     dimmed,
+                    time_original,
                     collapsed,
                     badge_w,
                 },
@@ -4383,6 +4603,12 @@ fn render_wrapped_rows(
                 egui::pos2(origin.x + left_pad, text_top),
                 egui::vec2(marker_w, font_row_h),
             );
+            if let Some((start, end, original)) = &r.time_original {
+                let rect = text_range_rect(&r.galley, text_pos, *start, *end);
+                if click.hovered() && ui.rect_contains_pointer(rect) {
+                    click.clone().on_hover_text(original);
+                }
+            }
             note_tooltip(ui, eng, line, marker_rect, click);
             if let Some(gap) = eng.context_gap_above_row(row) {
                 context_separator(

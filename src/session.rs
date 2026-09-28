@@ -56,6 +56,12 @@ pub struct StreamEntry {
     /// older version reads as, and follows the `[general]` defaults.
     pub line_numbers: Option<bool>,
     pub time_delta: Option<bool>,
+    /// Time display of the rows (`time_display=utc|local|+HH:MM`) and the zone of the
+    /// timestamps without one (`time_source_zone=utc|+HH:MM`), as
+    /// `TimeDisplay::to_config` / `SourceZone::to_config`; `None` (no key) is the
+    /// default, as written and local time.
+    pub time_display: Option<String>,
+    pub time_source_zone: Option<String>,
     /// Bookmarked line indices, sorted.
     pub bookmarks: Vec<usize>,
     /// Notes of some of the bookmarks, stored as `bookmark_note.<line>` next to
@@ -171,6 +177,12 @@ impl Session {
             if let Some(show) = s.time_delta {
                 sec.set("time_delta", show.to_string());
             }
+            if let Some(display) = &s.time_display {
+                sec.set("time_display", display);
+            }
+            if let Some(zone) = &s.time_source_zone {
+                sec.set("time_source_zone", zone);
+            }
             sec.set(
                 "bookmarks",
                 s.bookmarks
@@ -285,6 +297,16 @@ impl Session {
                     .min(crate::context_lines::MAX_CONTEXT_LINES),
                 line_numbers: sec.get("line_numbers").and_then(|v| v.parse().ok()),
                 time_delta: sec.get("time_delta").and_then(|v| v.parse().ok()),
+                time_display: sec
+                    .get("time_display")
+                    .and_then(crate::timestamp::TimeDisplay::from_config)
+                    .filter(|d| *d != crate::timestamp::TimeDisplay::Written)
+                    .map(|d| d.to_config()),
+                time_source_zone: sec
+                    .get("time_source_zone")
+                    .and_then(crate::timestamp::SourceZone::from_config)
+                    .filter(|z| *z != crate::timestamp::SourceZone::Local)
+                    .map(|z| z.to_config()),
                 bookmarks,
                 bookmark_notes,
                 archive_entry,
@@ -494,6 +516,55 @@ mod tests {
             Ini::load_from_str(&plain.replace("wrap=", "line_numbers=maybe\nwrap=")).unwrap();
         let read = &Session::read_from(&conf, None).session.streams[0];
         assert_eq!((read.line_numbers, read.time_delta), (None, None));
+    }
+
+    #[test]
+    fn time_display_is_written_only_when_not_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("a.log");
+        std::fs::write(&log, "a\n").unwrap();
+        let mut entry = StreamEntry::new(log.clone());
+        let text = |entry: &StreamEntry| {
+            Session {
+                streams: vec![entry.clone()],
+                dock_layout: None,
+            }
+            .serialized(None)
+        };
+        let plain = text(&entry);
+        assert!(!plain.contains("time_display"), "{plain}");
+        assert!(!plain.contains("time_source_zone"), "{plain}");
+        // An old file: as written, local.
+        let conf = Ini::load_from_str(&plain).unwrap();
+        let read = &Session::read_from(&conf, None).session.streams[0];
+        assert_eq!(
+            (read.time_display.clone(), read.time_source_zone.clone()),
+            (None, None)
+        );
+
+        entry.time_display = Some("local".into());
+        entry.time_source_zone = Some("+05:30".into());
+        let written = text(&entry);
+        assert!(written.contains("time_display=local"), "{written}");
+        assert!(written.contains("time_source_zone=+05:30"), "{written}");
+        let conf = Ini::load_from_str(&written).unwrap();
+        let read = &Session::read_from(&conf, None).session.streams[0];
+        assert_eq!(read.time_display.as_deref(), Some("local"));
+        assert_eq!(read.time_source_zone.as_deref(), Some("+05:30"));
+
+        // Defaults spelled out, and garbage, read as the defaults.
+        for (display, zone) in [("written", "local"), ("sideways", "+99:00")] {
+            let conf = Ini::load_from_str(&plain.replace(
+                "wrap=",
+                &format!("time_display={display}\ntime_source_zone={zone}\nwrap="),
+            ))
+            .unwrap();
+            let read = &Session::read_from(&conf, None).session.streams[0];
+            assert_eq!(
+                (read.time_display.clone(), read.time_source_zone.clone()),
+                (None, None)
+            );
+        }
     }
 
     #[test]

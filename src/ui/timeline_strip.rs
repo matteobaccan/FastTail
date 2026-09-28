@@ -15,7 +15,7 @@ use crate::i18n::{t, Language};
 use crate::log_level::LogLevel;
 use crate::tail_engine::TailEngine;
 use crate::theme::CyberTheme;
-use crate::time_histogram::{column_of_bucket, selection_texts, Column, TimeHistogram};
+use crate::time_histogram::{column_of_bucket, selection_texts_on, Column, TimeHistogram};
 use egui::{Stroke, Ui};
 
 /// Height of the strip in points (bars, lane and labels).
@@ -167,9 +167,10 @@ fn x_frac_of(ms: i64, columns: &[Column]) -> f32 {
     (c as f32 + within.clamp(0.0, 1.0)) / columns.len() as f32
 }
 
-/// `2024-03-05 14:02:00 – 14:02:59`: the span of the columns `a..=b`, the date once.
-fn span_text(columns: &[Column], a: usize, b: usize) -> String {
-    let Some((from, to)) = selection_texts(columns, a, b) else {
+/// `2024-03-05 14:02:00 – 14:02:59`: the span of the columns `a..=b`, the date once,
+/// on the stream's display clock.
+fn span_text(clock: &dyn Fn(i64) -> i64, columns: &[Column], a: usize, b: usize) -> String {
+    let Some((from, to)) = selection_texts_on(columns, a, b, clock) else {
         return String::new();
     };
     let to_short = if from.get(..10) == to.get(..10) {
@@ -365,18 +366,18 @@ pub fn show(
     if k > 0 {
         if response.drag_stopped() {
             if let (Some(a), Some(b)) = (cache.drag_from.take(), pointer_col) {
-                selected = selection_texts(columns, a, b);
+                selected = selection_texts_on(columns, a, b, &|ms| engine.to_display_clock(ms));
             }
         } else if response.clicked() {
             if let Some(c) = pointer_col {
-                selected = selection_texts(columns, c, c);
+                selected = selection_texts_on(columns, c, c, &|ms| engine.to_display_clock(ms));
             }
         }
     }
 
     if let Some(c) = pointer_col.filter(|_| response.hovered() && k > 0) {
         let column = &columns[c];
-        let mut tip = span_text(columns, c, c);
+        let mut tip = span_text(&|ms| engine.to_display_clock(ms), columns, c, c);
         let names = ["ERROR/FATAL", "WARN", "INFO", "DEBUG/TRACE"];
         for (i, n) in group_counts(column).into_iter().enumerate() {
             if n > 0 {
@@ -509,6 +510,14 @@ mod tests {
         assert!((x_frac_of(5_000, &cols) - 0.5).abs() < 1e-6);
         assert!((x_frac_of(5_500, &cols) - 0.55).abs() < 1e-6);
         assert_eq!(x_frac_of(99_000, &cols), 1.0);
-        assert_eq!(span_text(&cols, 2, 3), "1970-01-01 00:00:02 – 00:00:03");
+        assert_eq!(
+            span_text(&|ms| ms, &cols, 2, 3),
+            "1970-01-01 00:00:02 – 00:00:03"
+        );
+        // On another clock (a display zone one hour east).
+        assert_eq!(
+            span_text(&|ms| ms + 3_600_000, &cols, 2, 3),
+            "1970-01-01 01:00:02 – 01:00:03"
+        );
     }
 }

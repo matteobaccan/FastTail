@@ -11,9 +11,7 @@
 use crate::i18n::{t, Language};
 use crate::tail_engine::TailEngine;
 use crate::theme::CyberTheme;
-use crate::timestamp::{
-    days_to_date, format_clock, format_millis, is_bare_date, local_now_millis, parse_user_time,
-};
+use crate::timestamp::{days_to_date, format_clock, format_millis, is_bare_date, parse_user_time};
 use crate::ui::calendar::{self, Marks, Month};
 use egui::{Id, Key, Modifiers, Response, RichText, Ui};
 
@@ -48,9 +46,10 @@ impl TimeRangeDraft {
     /// The draft a popup opens with: the window that is set, each calendar on the month
     /// of its side, else of the log's first timestamp, else of today.
     fn open(engine: &TailEngine) -> Self {
-        let reference = engine.time_reference();
-        let first = engine.first_timestamp();
-        let now = local_now_millis();
+        // Everything the popup shows and reads is on the stream's display clock.
+        let reference = engine.to_display_clock(engine.time_reference());
+        let first = engine.first_timestamp().map(|t| engine.to_display_clock(t));
+        let now = engine.now_on_display_clock();
         Self {
             from: engine.time_from_text.clone(),
             to: engine.time_to_text.clone(),
@@ -276,7 +275,9 @@ pub fn control(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: L
         _ => None,
     };
     let state = ControlState {
-        span: engine.visible_time_span(),
+        span: engine
+            .visible_time_span()
+            .map(|(a, b)| (engine.to_display_clock(a), engine.to_display_clock(b))),
         timed: engine.timestamps_complete(),
         usable: engine.timestamps_usable(),
         filtered: engine.is_time_filtered(),
@@ -379,6 +380,14 @@ fn control_tooltip(engine: &TailEngine, state: &ControlState, lang: Language) ->
             format_millis(to)
         ));
     }
+    // The clock the span and the typed times are on.
+    let display = engine.time_display();
+    if display != crate::timestamp::TimeDisplay::Written {
+        lines.push(format!(
+            "🌐 {}",
+            t(lang, "time_range_zone").replace("{zone}", &display.to_config())
+        ));
+    }
     let (from, to) = (engine.time_from_text.trim(), engine.time_to_text.trim());
     if !from.is_empty() || !to.is_empty() {
         let side = |s: &str| {
@@ -417,13 +426,13 @@ fn popup_contents(
     lang: Language,
     draft: &mut TimeRangeDraft,
 ) -> Option<bool> {
-    let reference = engine.time_reference();
+    let reference = engine.to_display_clock(engine.time_reference());
     let timed = engine.timestamps_complete();
     let usable = engine.timestamps_usable();
     // Both are read from the ends of the timestamp cache: nothing here walks the lines.
-    let first = engine.first_timestamp();
+    let first = engine.first_timestamp().map(|t| engine.to_display_clock(t));
     let last = if timed && usable {
-        engine.last_timestamp()
+        engine.last_timestamp().map(|t| engine.to_display_clock(t))
     } else {
         None
     };

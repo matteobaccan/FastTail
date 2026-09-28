@@ -5105,6 +5105,10 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         context_lines: engine.context_lines(),
         line_numbers: Some(engine.show_line_numbers),
         time_delta: Some(engine.show_time_delta),
+        time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
+            .then(|| engine.time_display().to_config()),
+        time_source_zone: (engine.time_source_zone() != crate::timestamp::SourceZone::Local)
+            .then(|| engine.time_source_zone().to_config()),
         bookmarks,
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
@@ -5140,6 +5144,21 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     engine.timeline_open = entry.timeline;
     engine.show_line_numbers = entry.line_numbers.unwrap_or(cfg.show_line_numbers);
     engine.show_time_delta = entry.time_delta.unwrap_or(cfg.show_time_delta);
+    if let Some(zone) = entry
+        .time_source_zone
+        .as_deref()
+        .and_then(crate::timestamp::SourceZone::from_config)
+    {
+        engine.set_time_source_zone(zone);
+    }
+    if let Some(display) = entry
+        .time_display
+        .as_deref()
+        .and_then(crate::timestamp::TimeDisplay::from_config)
+    {
+        engine.set_time_display(display);
+    }
+    engine.view_columns_dirty = false;
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);

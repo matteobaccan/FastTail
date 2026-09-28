@@ -293,6 +293,45 @@ pub fn token_occurrences(text: &str, token: &str) -> Vec<(usize, usize)> {
     out
 }
 
+/// `text` with `start..end` replaced by `with`, and `spans` (computed on `text`) moved
+/// to match: spans before the range stay, spans after it shift by the change of length,
+/// the parts inside the range are dropped (the time display of a row).
+pub fn replace_with_spans(
+    text: &str,
+    spans: Option<SpanHighlight>,
+    start: usize,
+    end: usize,
+    with: &str,
+) -> (String, Option<SpanHighlight>) {
+    let mut out = String::with_capacity(text.len() + with.len());
+    out.push_str(&text[..start]);
+    out.push_str(with);
+    out.push_str(&text[end..]);
+    let new_end = start + with.len();
+    let spans = spans.map(|mut highlight| {
+        let mut moved = Vec::with_capacity(highlight.spans.len());
+        for sp in highlight.spans {
+            if sp.end <= start {
+                moved.push(sp);
+                continue;
+            }
+            if sp.start < start {
+                moved.push(HighlightSpan { end: start, ..sp });
+            }
+            if sp.end > end {
+                moved.push(HighlightSpan {
+                    start: sp.start.max(end) - end + new_end,
+                    end: sp.end - end + new_end,
+                    ..sp
+                });
+            }
+        }
+        highlight.spans = moved;
+        highlight
+    });
+    (out, spans)
+}
+
 /// Frame time a rule walk may take before it goes on in the next frame.
 pub const RULE_SEEK_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
 
@@ -1397,6 +1436,13 @@ pub struct TailEngine {
     rule_cursor: Option<usize>,
     /// A rule walk still going on (see `step_rule_seek`).
     rule_seek: Option<RuleSeek>,
+    /// How the rows show their leading timestamp, and what a timestamp without a zone
+    /// means (per stream, saved as `time_display` / `time_source_zone`).
+    time_display: crate::timestamp::TimeDisplay,
+    time_source_zone: crate::timestamp::SourceZone,
+    /// Zone the stream's timestamps state (sampled from its first timed lines) and the
+    /// reload generation it was read at: what the time controls convert with.
+    time_zone_sample: Option<(u64, Option<i32>)>,
     /// The stream bar's "search all streams" button was pressed: the app opens the Find
     /// results tab with this stream's query after the dock is drawn.
     pub find_all_request: bool,
@@ -1979,6 +2025,9 @@ impl TailEngine {
             selection_token: None,
             rule_cursor: None,
             rule_seek: None,
+            time_display: crate::timestamp::TimeDisplay::Written,
+            time_source_zone: crate::timestamp::SourceZone::Local,
+            time_zone_sample: None,
             find_all_request: false,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
@@ -4524,7 +4573,8 @@ impl TailEngine {
     /// Reads the two time fields: each side's instant (`None` = open or unreadable) and
     /// whether it parsed. The "to" side covers the whole minute or second it names.
     fn parse_time_fields(&self) -> (Option<i64>, bool, Option<i64>, bool) {
-        let reference = self.time_reference();
+        // The fields are read on the display clock (the time display of the stream).
+        let reference = self.to_display_clock(self.time_reference());
         let parse = |text: &str| -> (Option<i64>, bool) {
             if text.trim().is_empty() {
                 return (None, true);
@@ -4537,7 +4587,123 @@ impl TailEngine {
         let (from, from_ok) = parse(&self.time_from_text);
         let (to, to_ok) = parse(&self.time_to_text);
         let to = to.map(|millis| crate::timestamp::end_of_typed_time(&self.time_to_text, millis));
+        let from = from.map(|millis| self.from_display_clock(millis));
+        let to = to.map(|millis| self.from_display_clock(millis));
         (from, from_ok, to, to_ok)
+    }
+
+    // ----- Time display -----
+
+    /// How the rows show their leading timestamp.
+    pub fn time_display(&self) -> crate::timestamp::TimeDisplay {
+        self.time_display
+    }
+
+    /// What a timestamp without a zone suffix means.
+    pub fn time_source_zone(&self) -> crate::timestamp::SourceZone {
+        self.time_source_zone
+    }
+
+    /// Sets the time display; the timestamp cache is untouched (it keeps the printed
+    /// clock), a time window set from typed text is read again on the new clock.
+    pub fn set_time_display(&mut self, display: crate::timestamp::TimeDisplay) {
+        if display != self.time_display {
+            self.time_display = display;
+            self.view_columns_dirty = true;
+            self.refresh_time_zone_sample();
+        }
+    }
+
+    pub fn set_time_source_zone(&mut self, zone: crate::timestamp::SourceZone) {
+        if zone != self.time_source_zone {
+            self.time_source_zone = zone;
+            self.view_columns_dirty = true;
+        }
+    }
+
+    /// Reads again which zone the stream's timestamps state, from its first timed lines,
+    /// after a reload (cheap otherwise: called by the viewer every frame).
+    pub fn refresh_time_zone_sample(&mut self) {
+        if self.time_display == crate::timestamp::TimeDisplay::Written
+            || self
+                .time_zone_sample
+                .is_some_and(|(generation, _)| generation == self.reload_generation)
+        {
+            return;
+        }
+        let total = self.total_lines();
+        let zone = (0..total.min(TIMESTAMP_RATE_SAMPLE))
+            .filter_map(|idx| self.get_line(idx))
+            .find_map(|line| {
+                crate::timestamp::detect_timestamp_zoned(
+                    &line,
+                    crate::timestamp::FormatHint::Unknown,
+                )
+            })
+            .map(|stamp| stamp.zone_minutes);
+        // Nothing timed yet: sample again once lines arrive.
+        if let Some(zone) = zone {
+            self.time_zone_sample = Some((self.reload_generation, zone));
+        }
+    }
+
+    /// Zone of the stream's timestamps, as sampled.
+    fn sampled_zone(&self) -> Option<i32> {
+        self.time_zone_sample.and_then(|(_, zone)| zone)
+    }
+
+    /// A timestamp of the cache (the printed clock) on the display clock: the value the
+    /// time span, the time range popup, the histogram and the tooltips show.
+    pub fn to_display_clock(&self, printed: i64) -> i64 {
+        use crate::timestamp::{stamp_to_utc, utc_to_display, TimeDisplay};
+        if self.time_display == TimeDisplay::Written || printed == NO_TIMESTAMP {
+            return printed;
+        }
+        let local = crate::timestamp::local_offset_millis;
+        let utc = stamp_to_utc(printed, self.sampled_zone(), self.time_source_zone, &local);
+        utc_to_display(utc, self.time_display, &local)
+    }
+
+    /// The current instant on the display clock: the local clock "as written" (what the
+    /// calendar calls today), else now in the display zone.
+    pub fn now_on_display_clock(&self) -> i64 {
+        use crate::timestamp::{local_now_millis, utc_to_display, TimeDisplay};
+        if self.time_display == TimeDisplay::Written {
+            return local_now_millis();
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        utc_to_display(
+            now,
+            self.time_display,
+            &crate::timestamp::local_offset_millis,
+        )
+    }
+
+    /// A time read on the display clock (typed by the user) on the printed clock of the
+    /// cache.
+    pub fn from_display_clock(&self, shown: i64) -> i64 {
+        use crate::timestamp::{display_to_utc, utc_to_stamp, TimeDisplay};
+        if self.time_display == TimeDisplay::Written {
+            return shown;
+        }
+        let local = crate::timestamp::local_offset_millis;
+        let utc = display_to_utc(shown, self.time_display, &local);
+        utc_to_stamp(utc, self.sampled_zone(), self.time_source_zone, &local)
+    }
+
+    /// The leading timestamp of a drawn row's `text` as the time display shows it: the
+    /// byte range to replace and its text, `None` "as written" or without a timestamp.
+    pub fn display_time(&self, text: &str) -> Option<(usize, usize, String)> {
+        crate::timestamp::display_timestamp(
+            text,
+            crate::timestamp::FormatHint::Unknown,
+            self.time_source_zone,
+            self.time_display,
+            &crate::timestamp::local_offset_millis,
+        )
     }
 
     /// Applies the two fields as the user typed them. Returns which side failed to parse,
@@ -6581,7 +6747,9 @@ impl TailEngine {
 
     /// A go-to-time input over the complete cache: the first line at or after that time.
     fn resolve_goto_time(&self, input: &str) -> Option<GotoTarget> {
-        let millis = crate::timestamp::parse_user_time(input, self.time_reference())?;
+        // Typed on the display clock, like the time range.
+        let reference = self.to_display_clock(self.time_reference());
+        let millis = self.from_display_clock(crate::timestamp::parse_user_time(input, reference)?);
         let line = self.goto_time(millis)?;
         Some(self.goto_target_for(line, self.total_lines()))
     }
