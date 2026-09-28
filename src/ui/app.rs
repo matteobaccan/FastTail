@@ -128,6 +128,11 @@ pub struct FastTailApp {
     /// Key of `global_spec`: an apply that does not change it keeps the same set, so no
     /// stream refilters.
     global_key: Option<crate::global_filter::AppliedKey>,
+    /// Command palette (CTRL + SHIFT + P).
+    pub palette: crate::ui::palette::CommandPalette,
+    /// Stream action picked in the palette, handed to its stream when the dock is drawn
+    /// this frame (see `DockContext::palette_action`).
+    palette_action: Option<(PathBuf, crate::actions::ActionId)>,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -604,6 +609,8 @@ impl FastTailApp {
             global_spec: None,
             global_edit_at: None,
             global_key: None,
+            palette: Default::default(),
+            palette_action: None,
         };
         app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
@@ -1665,6 +1672,11 @@ impl FastTailApp {
             ctx.input_mut(|i| i.events.retain(allowed_while_locked));
         }
 
+        // 0b. Command palette (CTRL + SHIFT + P): drawn before anything else reads the
+        // input, so that while it is open the keyboard is its own; what it picks runs
+        // now, a stream action when that stream is drawn below.
+        self.render_palette(&ctx);
+
         // 1. Detect user activity to reset screensaver & handle window closing and viewport bounds
         let mut escape_pressed = false;
         let mut wheel_zoom = 1.0_f32;
@@ -2013,6 +2025,25 @@ impl FastTailApp {
                             ui.separator();
                         }
 
+                        // Command palette (CTRL + SHIFT + P); lit while it is open.
+                        let palette_color = if self.palette.is_open() {
+                            self.config.theme.accent_color()
+                        } else {
+                            self.config.theme.text_dim()
+                        };
+                        if ui
+                            .button(RichText::new(" ⌨ ").monospace().color(palette_color))
+                            .on_hover_text(format!(
+                                "{}  ({})",
+                                t(self.config.language, "palette_title"),
+                                crate::ui::palette::PALETTE_SHORTCUT_LABEL
+                            ))
+                            .clicked()
+                        {
+                            let target = self.focused_stream_path();
+                            self.palette.toggle(&ctx, target);
+                        }
+
                         // Global filter bar (CTRL + SHIFT + H); lit while the filter applies.
                         let globe_color = if self.config.global_filter.is_applied() {
                             self.config.theme.accent_color()
@@ -2212,15 +2243,7 @@ impl FastTailApp {
                         .on_hover_text(t(self.config.language, "open_file_tip"))
                         .clicked()
                     {
-                        if let Some(paths) = rfd::FileDialog::new()
-                            .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
-                            .set_title("Open Log Files")
-                            .pick_files()
-                        {
-                            for path in paths {
-                                self.open_log_file(path);
-                            }
-                        }
+                        self.pick_and_open_files();
                     }
 
                     // Recent Files dropdown (🕒), right after Open File
@@ -2290,14 +2313,7 @@ impl FastTailApp {
                         .on_hover_text(t(self.config.language, "open_pattern_tip"))
                         .clicked()
                     {
-                        let seed = self
-                            .config
-                            .recent_files
-                            .first()
-                            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                            .map(|d| Self::default_pattern_for(&d))
-                            .unwrap_or_default();
-                        self.pattern_prompt = Some(seed);
+                        self.open_pattern_prompt();
                     }
 
                     // Sessions menu (🗂): save as, save, load, recent, save as default
@@ -2748,14 +2764,7 @@ impl FastTailApp {
         let mut test_screensaver = false;
         // The stream in the focused dock leaf is the "current window": it alone receives
         // F3 / Shift+F3, Ctrl+F and the keyboard navigation shortcuts.
-        let focused_stream = match self.dock_state.find_active_focused() {
-            Some((_, FastTailTab::LogStream(p))) => Some(p.clone()),
-            Some(_) => None,
-            None => match self.dock_state.main_surface_mut().find_active() {
-                Some((_, FastTailTab::LogStream(p))) => Some(p.clone()),
-                _ => None,
-            },
-        };
+        let focused_stream = self.focused_stream_path();
         // Streams drawn this frame set `displayed` again in the tab viewer; the others keep
         // counting unseen lines for the tab badge.
         for eng in &mut self.engines {
@@ -2939,6 +2948,7 @@ impl FastTailApp {
             find_all: &mut self.find_all,
             filter_presets: &mut self.config.filter_presets,
             preset_events: &mut preset_events,
+            palette_action: self.palette_action.take(),
         };
 
         if self.dock_state.iter_all_tabs().count() == 0 {
@@ -2977,18 +2987,7 @@ impl FastTailApp {
                                 .on_hover_text(t(self.config.language, "open_file_tip"))
                                 .clicked()
                             {
-                                if let Some(paths) = rfd::FileDialog::new()
-                                    .add_filter(
-                                        "Log Files (*.log, *.txt, *.*)",
-                                        &["log", "txt", "*"],
-                                    )
-                                    .set_title("Open Log Files")
-                                    .pick_files()
-                                {
-                                    for path in paths {
-                                        self.open_log_file(path);
-                                    }
-                                }
+                                self.pick_and_open_files();
                             }
 
                             if !self.config.recent_files.is_empty() {
@@ -4088,6 +4087,16 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
+                                        RichText::new(crate::ui::palette::PALETTE_SHORTCUT_LABEL)
+                                            .monospace()
+                                            .strong(),
+                                    );
+                                    ui.label(
+                                        RichText::new(t(lang, "help_desc_palette")).monospace(),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label(
                                         RichText::new("CTRL + SHIFT + H").monospace().strong(),
                                     );
                                     ui.label(
@@ -4745,6 +4754,193 @@ impl FastTailApp {
                 let _ = self.config.save();
             }
             SessionAction::SaveDefault => self.save_session_as_default(),
+        }
+    }
+
+    /// The stream of the focused dock leaf (or, without a focused leaf, the active tab of
+    /// the main surface), if it is a stream.
+    fn focused_stream_path(&mut self) -> Option<PathBuf> {
+        match self.dock_state.find_active_focused() {
+            Some((_, FastTailTab::LogStream(p))) => Some(p.clone()),
+            Some(_) => None,
+            None => match self.dock_state.main_surface_mut().find_active() {
+                Some((_, FastTailTab::LogStream(p))) => Some(p.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    /// "Open File": the native picker, then every picked file is opened.
+    fn pick_and_open_files(&mut self) {
+        if let Some(paths) = rfd::FileDialog::new()
+            .add_filter("Log Files (*.log, *.txt, *.*)", &["log", "txt", "*"])
+            .set_title("Open Log Files")
+            .pick_files()
+        {
+            for path in paths {
+                self.open_log_file(path);
+            }
+        }
+    }
+
+    /// "Open pattern": the prompt, seeded with the folder of the most recent file.
+    fn open_pattern_prompt(&mut self) {
+        let seed = self
+            .config
+            .recent_files
+            .first()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .map(|d| Self::default_pattern_for(&d))
+            .unwrap_or_default();
+        self.pattern_prompt = Some(seed);
+    }
+
+    /// CTRL + SHIFT + P opens or closes the palette (never while the window is locked);
+    /// while it is open it takes every key event of the frame, and what it picks runs.
+    fn render_palette(&mut self, ctx: &egui::Context) {
+        use crate::ui::palette::{PaletteOutcome, PALETTE_SHORTCUT};
+        if self.locked {
+            self.palette.close();
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&PALETTE_SHORTCUT)) {
+            if self.palette.is_open() {
+                self.palette.close();
+                ctx.memory_mut(|m| m.stop_text_input());
+            } else {
+                let target = self.focused_stream_path();
+                self.palette.open(target);
+            }
+            ctx.request_repaint();
+        }
+        if !self.palette.is_open() {
+            return;
+        }
+        let target = self.palette.target().cloned();
+        let state = crate::actions::ActionState {
+            stream: target
+                .as_ref()
+                .and_then(|p| self.engines.iter().find(|e| paths_equal(&e.path, p)))
+                .map(crate::actions::StreamState::of),
+            has_pin: !self.config.lock_pin.is_empty(),
+            has_session: self.config.current_session.is_some(),
+        };
+        let outcome = self.palette.show(ctx, &self.config, &state);
+        // Keys typed while the palette is open were its own: no stream or window
+        // shortcut may see them (Space must not toggle follow, F3 not search).
+        ctx.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(
+                    e,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Paste(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                )
+            })
+        });
+        if !self.palette.is_open() {
+            ctx.memory_mut(|m| m.stop_text_input());
+        }
+        match outcome {
+            Some(PaletteOutcome::Run(action)) => {
+                crate::actions::push_recent(&mut self.config.palette_recent, action.key);
+                self.run_action(ctx, action, target);
+                let _ = self.config.save();
+            }
+            Some(PaletteOutcome::SetValue(setting, index)) => {
+                if let Some(meta) = crate::actions::ENUM_SETTINGS
+                    .iter()
+                    .find(|m| m.setting == setting)
+                {
+                    crate::actions::push_recent(&mut self.config.palette_recent, meta.key);
+                }
+                crate::actions::set_enum_value(setting, &mut self.config, index);
+                if setting == crate::actions::EnumSetting::SizeUnit {
+                    for eng in &mut self.engines {
+                        eng.size_unit = self.config.size_unit;
+                    }
+                }
+                let _ = self.config.save();
+            }
+            None => {}
+        }
+        ctx.request_repaint();
+    }
+
+    /// Runs an action picked in the command palette with the same effect as its button,
+    /// menu item or key. A stream action goes to `target`, the stream focused when the
+    /// palette opened, and runs when that stream is drawn this frame.
+    fn run_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::actions::Action,
+        target: Option<PathBuf>,
+    ) {
+        use crate::actions::{ActionId as A, Scope};
+        if action.scope == Scope::Stream {
+            if let Some(path) = target {
+                self.palette_action = Some((path, action.id));
+            }
+            return;
+        }
+        let zoom = ctx.zoom_factor();
+        match action.id {
+            A::Help => self.config.help_open = !self.config.help_open,
+            A::About => self.config.about_open = !self.config.about_open,
+            A::Settings => self.config.settings_open = !self.config.settings_open,
+            A::ColorFilters => self.config.filters_open = !self.config.filters_open,
+            A::AlwaysOnTop => self.config.always_on_top = !self.config.always_on_top,
+            A::LockNow => {
+                if !self.config.lock_pin.is_empty() {
+                    self.lock();
+                }
+            }
+            A::GlobalFilterBar => {
+                self.config.global_filter.bar_open = !self.config.global_filter.bar_open
+            }
+            A::FindAll => {
+                let query = target
+                    .as_ref()
+                    .and_then(|p| self.engines.iter().find(|e| paths_equal(&e.path, p)))
+                    .map(|e| e.search_query.clone());
+                self.open_find_results(query);
+            }
+            A::ZoomIn => ctx.set_zoom_factor(crate::config::stepped_zoom(zoom, 1)),
+            A::ZoomOut => ctx.set_zoom_factor(crate::config::stepped_zoom(zoom, -1)),
+            A::ZoomReset => ctx.set_zoom_factor(1.0),
+            A::PlayAll => {
+                for eng in &mut self.engines {
+                    eng.is_watching = true;
+                    eng.follow_tail = !eng.is_compressed();
+                }
+            }
+            A::PauseAll => {
+                for eng in &mut self.engines {
+                    eng.is_watching = false;
+                    eng.follow_tail = false;
+                }
+            }
+            A::OpenFile => self.pick_and_open_files(),
+            A::OpenPattern => self.open_pattern_prompt(),
+            A::ClearRecentFiles => self.config.recent_files.clear(),
+            A::SessionSaveAs => self.run_session_action(SessionAction::SaveAs),
+            A::SessionSave => self.run_session_action(SessionAction::Save),
+            A::SessionLoad => self.run_session_action(SessionAction::Load),
+            A::SessionClearRecent => self.run_session_action(SessionAction::ClearRecent),
+            A::SessionSaveDefault => self.run_session_action(SessionAction::SaveDefault),
+            A::SearchPane => self.config.search_pane = !self.config.search_pane,
+            A::Toggle(setting) => {
+                let meta = crate::actions::bool_setting(setting);
+                let value = !(meta.get)(&self.config);
+                (meta.set)(&mut self.config, value);
+                if setting == crate::actions::BoolSetting::Borderless {
+                    ctx.send_viewport_cmd(ViewportCommand::Decorations(!self.config.borderless));
+                }
+            }
+            // The value step is the palette's; stream actions were routed above.
+            _ => {}
         }
     }
 }

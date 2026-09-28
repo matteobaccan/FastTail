@@ -981,6 +981,55 @@ fn test_i18n_exhaustive_coverage() {
         "timeline_lane_note",
         "already_at_top",
         "already_at_bottom",
+        // Command palette: categories, texts, disabled reasons and action names.
+        "palette_cat_window",
+        "palette_cat_stream",
+        "palette_cat_view",
+        "palette_cat_search",
+        "palette_cat_bookmarks",
+        "palette_cat_session",
+        "palette_cat_settings",
+        "palette_title",
+        "palette_hint",
+        "palette_no_match",
+        "palette_toggle",
+        "help_desc_palette",
+        "palette_no_stream",
+        "palette_not_hex",
+        "palette_text_only",
+        "palette_no_search",
+        "palette_no_bookmarks",
+        "palette_row_not_bookmarked",
+        "palette_no_selection",
+        "palette_no_filter",
+        "palette_not_in_context",
+        "palette_no_time_delta",
+        "palette_no_anchor",
+        "palette_no_session",
+        "act_global_filter",
+        "act_find_all",
+        "act_play_all",
+        "act_pause_all",
+        "act_open_pattern",
+        "act_follow",
+        "act_monitor",
+        "act_goto",
+        "act_select_all",
+        "act_view_text",
+        "act_view_hex",
+        "act_view_md",
+        "act_time_delta",
+        "act_wrap",
+        "act_collapse",
+        "act_timeline",
+        "act_search_pane",
+        "act_search",
+        "act_search_next",
+        "act_search_prev",
+        "act_bookmark_toggle",
+        "act_bookmark_next",
+        "act_bookmark_prev",
+        "act_size_unit",
     ];
 
     for lang in Language::ALL {
@@ -1045,6 +1094,9 @@ fn test_i18n_exhaustive_coverage() {
         "about_website",
         "toolbar_pause",
         "toolbar_help",
+        // "Stream" (German, Dutch) and "Session" (French, Friulian) are the local words.
+        "palette_cat_stream",
+        "palette_cat_session",
     ];
     let fallbacks: Vec<String> = Language::ALL
         .iter()
@@ -2506,6 +2558,7 @@ fn test_ctrl_f_focus_and_search() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2556,6 +2609,7 @@ fn test_ctrl_f_focus_and_search() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2596,6 +2650,7 @@ fn test_ctrl_f_focus_and_search() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2637,6 +2692,7 @@ fn test_ctrl_f_focus_and_search() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2688,6 +2744,7 @@ fn test_ctrl_f_focus_and_search() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2732,6 +2789,7 @@ fn test_ctrl_f_focus_and_search() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2829,6 +2887,7 @@ fn test_search_query_is_per_tab() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -3314,6 +3373,7 @@ fn test_tab_lookup_tolerates_path_case_differences() {
             find_all: &mut fasttail::find_all::FindAllSession::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
+            palette_action: None,
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         use egui_dock::TabViewer;
@@ -3425,6 +3485,7 @@ fn test_f3_only_advances_the_focused_tab() {
                 find_all: &mut fasttail::find_all::FindAllSession::default(),
                 filter_presets: &mut Vec::new(),
                 preset_events: &mut Default::default(),
+                palette_action: None,
             };
             let mut viewer = FastTailTabViewer { ctx: dock_ctx };
             egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -7548,6 +7609,7 @@ mod search_results_pane {
                     find_all: &mut fasttail::find_all::FindAllSession::default(),
                     filter_presets: &mut Vec::new(),
                     preset_events: &mut Default::default(),
+                    palette_action: None,
                 };
                 let mut viewer = FastTailTabViewer { ctx: dock_ctx };
                 egui_dock::DockArea::new(&mut self.dock).show_inside(ui, &mut viewer);
@@ -8384,6 +8446,7 @@ mod time_delta {
                 find_all: &mut fasttail::find_all::FindAllSession::default(),
                 filter_presets: &mut Vec::new(),
                 preset_events: &mut Default::default(),
+                palette_action: None,
             };
             let mut viewer = FastTailTabViewer { ctx: dock_ctx };
             egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -8534,6 +8597,7 @@ mod search_all_streams {
             find_all: session,
             filter_presets: leak(Vec::new()),
             preset_events: leak(Default::default()),
+            palette_action: None,
         }
     }
 
@@ -11407,6 +11471,7 @@ mod time_range_popup {
                     find_all: &mut fasttail::find_all::FindAllSession::default(),
                     filter_presets: &mut Vec::new(),
                     preset_events: &mut Default::default(),
+                    palette_action: None,
                 };
                 let mut viewer = FastTailTabViewer { ctx: dock_ctx };
                 egui_dock::DockArea::new(&mut self.dock).show_inside(ui, &mut viewer);
@@ -11862,6 +11927,7 @@ mod per_stream_columns {
                     find_all: &mut fasttail::find_all::FindAllSession::default(),
                     filter_presets: &mut Vec::new(),
                     preset_events: &mut Default::default(),
+                    palette_action: None,
                 };
                 let mut viewer = FastTailTabViewer { ctx: dock_ctx };
                 egui_dock::DockArea::new(&mut self.dock).show_inside(ui, &mut viewer);
