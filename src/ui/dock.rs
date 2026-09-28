@@ -5416,11 +5416,241 @@ pub fn render_highlights_content(
         rules_changed = true;
     }
 
+    if render_rule_set_controls(ui, global_rules, theme, lang) {
+        rules_changed = true;
+    }
+
     if rules_changed {
         for engine in engines {
             engine.set_highlight_rules(global_rules.clone());
         }
     }
+}
+
+/// A rule set read from a file, waiting in the Highlights dialog for Append or Replace
+/// (`confirm` once Replace asked for its confirmation).
+#[derive(Debug, Clone)]
+struct RuleImport {
+    file: String,
+    rules: Vec<HighlightRule>,
+    confirm: bool,
+}
+
+/// Outcome of the last rule set export or import, shown under its buttons (text, error).
+type RuleSetNotice = (String, bool);
+
+/// The text of a refused rule set import.
+fn rule_set_error_text(lang: Language, file: &str, err: &crate::config::RuleSetError) -> String {
+    use crate::config::RuleSetError;
+    match err {
+        RuleSetError::NotARuleSet => t(lang, "rules_not_a_set").replace("{file}", file),
+        RuleSetError::NewerVersion(v) => t(lang, "rules_newer_version")
+            .replace("{file}", file)
+            .replace("{version}", &v.to_string()),
+        RuleSetError::Io(error) => t(lang, "rules_read_failed")
+            .replace("{file}", file)
+            .replace("{error}", error),
+    }
+}
+
+/// "Export rules…" and "Import rules…" of the Highlights dialog: the export writes every
+/// rule to a `*.fasttail-rules.ini` file; the import previews the file's rules, then
+/// appends them (skipping duplicates) or replaces every rule after a confirmation.
+/// Returns `true` when the rules changed.
+fn render_rule_set_controls(
+    ui: &mut Ui,
+    rules: &mut Vec<HighlightRule>,
+    theme: &CyberTheme,
+    lang: Language,
+) -> bool {
+    let import_id = egui::Id::new("rule_set_import");
+    let notice_id = egui::Id::new("rule_set_notice");
+    let mut import: Option<RuleImport> = ui.data(|d| d.get_temp(import_id));
+    let mut notice: Option<RuleSetNotice> = ui.data(|d| d.get_temp(notice_id));
+    let mut changed = false;
+
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                !rules.is_empty(),
+                egui::Button::new(
+                    RichText::new(format!("⬇ {}", t(lang, "rules_export"))).monospace(),
+                ),
+            )
+            .on_hover_text(t(lang, "rules_export_tip"))
+            .clicked()
+        {
+            if let Some(target) = rfd::FileDialog::new()
+                .set_title(t(lang, "rules_export"))
+                .set_file_name(format!("highlights{}", crate::config::RULE_SET_SUFFIX))
+                .add_filter("FastTail rules (*.ini)", &["ini"])
+                .save_file()
+            {
+                let file = target.display().to_string();
+                notice = Some(match crate::config::write_rule_set(&target, rules) {
+                    Ok(()) => (
+                        t(lang, "rules_exported")
+                            .replace("{n}", &rules.len().to_string())
+                            .replace("{file}", &file),
+                        false,
+                    ),
+                    Err(err) => (
+                        format!("{} ({file}): {err}", t(lang, "export_failed")),
+                        true,
+                    ),
+                });
+            }
+        }
+        if ui
+            .button(RichText::new(format!("⬆ {}", t(lang, "rules_import"))).monospace())
+            .on_hover_text(t(lang, "rules_import_tip"))
+            .clicked()
+        {
+            if let Some(source) = rfd::FileDialog::new()
+                .set_title(t(lang, "rules_import"))
+                .add_filter("FastTail rules (*.ini)", &["ini"])
+                .pick_file()
+            {
+                let file = source
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| source.display().to_string());
+                match crate::config::read_rule_set(&source) {
+                    Ok(incoming) => {
+                        import = Some(RuleImport {
+                            file,
+                            rules: incoming,
+                            confirm: false,
+                        });
+                        notice = None;
+                    }
+                    Err(err) => {
+                        import = None;
+                        notice = Some((rule_set_error_text(lang, &file, &err), true));
+                    }
+                }
+            }
+        }
+    });
+
+    if let Some(pending) = import.as_mut() {
+        let mut close = false;
+        ui.group(|ui| {
+            ui.label(
+                RichText::new(
+                    t(lang, "rules_import_preview")
+                        .replace("{file}", &pending.file)
+                        .replace("{n}", &pending.rules.len().to_string()),
+                )
+                .monospace()
+                .color(theme.accent_color()),
+            );
+            const PREVIEW: usize = 5;
+            for rule in pending.rules.iter().take(PREVIEW) {
+                let fg = Color32::from_rgb(rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]);
+                let bg = Color32::from_rgb(rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]);
+                ui.label(
+                    RichText::new(format!(" {} ", rule.pattern))
+                        .monospace()
+                        .size(11.0)
+                        .color(fg)
+                        .background_color(bg),
+                );
+            }
+            if pending.rules.len() > PREVIEW {
+                ui.label(RichText::new("…").monospace().color(theme.text_dim()));
+            }
+            let any = !pending.rules.is_empty();
+            ui.horizontal(|ui| {
+                if pending.confirm {
+                    ui.label(
+                        RichText::new(
+                            t(lang, "rules_replace_confirm")
+                                .replace("{n}", &rules.len().to_string()),
+                        )
+                        .monospace()
+                        .color(theme.warn_color()),
+                    );
+                    if ui
+                        .button(RichText::new(t(lang, "rules_import_replace")).monospace())
+                        .clicked()
+                    {
+                        *rules = std::mem::take(&mut pending.rules);
+                        notice = Some((
+                            t(lang, "rules_replaced").replace("{n}", &rules.len().to_string()),
+                            false,
+                        ));
+                        changed = true;
+                        close = true;
+                    }
+                } else {
+                    if ui
+                        .add_enabled(
+                            any,
+                            egui::Button::new(
+                                RichText::new(t(lang, "rules_import_append")).monospace(),
+                            ),
+                        )
+                        .on_hover_text(t(lang, "rules_import_append_tip"))
+                        .clicked()
+                    {
+                        let incoming = std::mem::take(&mut pending.rules);
+                        let total = incoming.len();
+                        let skipped = crate::config::append_rules(rules, incoming);
+                        notice = Some((
+                            t(lang, "rules_appended")
+                                .replace("{added}", &(total - skipped).to_string())
+                                .replace("{skipped}", &skipped.to_string()),
+                            false,
+                        ));
+                        changed = total > skipped;
+                        close = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            any,
+                            egui::Button::new(
+                                RichText::new(t(lang, "rules_import_replace")).monospace(),
+                            ),
+                        )
+                        .on_hover_text(t(lang, "rules_import_replace_tip"))
+                        .clicked()
+                    {
+                        pending.confirm = true;
+                    }
+                }
+                if ui
+                    .button(RichText::new(t(lang, "rules_import_cancel")).monospace())
+                    .clicked()
+                {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            import = None;
+        }
+    }
+
+    if let Some((text, error)) = &notice {
+        ui.label(RichText::new(text).monospace().size(11.0).color(if *error {
+            theme.warn_color()
+        } else {
+            theme.accent_color()
+        }));
+    }
+
+    ui.data_mut(|d| {
+        d.remove::<RuleImport>(import_id);
+        d.remove::<RuleSetNotice>(notice_id);
+        if let Some(pending) = import {
+            d.insert_temp(import_id, pending);
+        }
+        if let Some(n) = notice {
+            d.insert_temp(notice_id, n);
+        }
+    });
+    changed
 }
 
 #[allow(clippy::too_many_arguments)]

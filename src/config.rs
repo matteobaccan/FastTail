@@ -833,32 +833,7 @@ impl FastTailConfig {
             dlg_sec.set("help_size", format!("{},{}", w, h));
         }
 
-        for (i, rule) in self.highlight_rules.iter().enumerate() {
-            let mut sec = conf.with_section(Some(format!("highlight_{}", i)));
-            sec.set("pattern", &rule.pattern);
-            sec.set("is_regex", rule.is_regex.to_string());
-            sec.set("case_sensitive", rule.case_sensitive.to_string());
-            sec.set(
-                "fg",
-                format!(
-                    "{},{},{}",
-                    rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]
-                ),
-            );
-            sec.set(
-                "bg",
-                format!(
-                    "{},{},{}",
-                    rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]
-                ),
-            );
-            sec.set("bold", rule.bold.to_string());
-            sec.set("italic", rule.italic.to_string());
-            sec.set("sound_alert", rule.sound_alert.name());
-            sec.set("enabled", rule.enabled.to_string());
-            sec.set("captures_only", rule.captures_only.to_string());
-            sec.set("bookmark", rule.auto_bookmark.to_string());
-        }
+        write_rule_sections(&mut conf, &self.highlight_rules);
 
         for (i, tool) in self.external_tools.iter().enumerate() {
             let mut sec = conf.with_section(Some(format!("tool.{}", i)));
@@ -1290,62 +1265,7 @@ impl FastTailConfig {
             }
         }
 
-        let mut rules = Vec::new();
-        let mut idx = 0;
-        while let Some(sec) = conf.section(Some(format!("highlight_{}", idx))) {
-            let pattern = sec.get("pattern").unwrap_or("").to_string();
-            if !pattern.is_empty() {
-                let is_regex = sec
-                    .get("is_regex")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(false);
-                let case_sensitive = sec
-                    .get("case_sensitive")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(false);
-                let fg_color = sec.get("fg").and_then(parse_rgb).unwrap_or([255, 255, 255]);
-                let bg_color = sec.get("bg").and_then(parse_rgb).unwrap_or([0, 0, 0]);
-                let bold = sec
-                    .get("bold")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(false);
-                let italic = sec
-                    .get("italic")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(false);
-                let sound_alert = sec
-                    .get("sound_alert")
-                    .map(crate::audio::SoundAlertPreset::from_name)
-                    .unwrap_or(crate::audio::SoundAlertPreset::None);
-                let enabled = sec
-                    .get("enabled")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(true);
-                let captures_only = sec
-                    .get("captures_only")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(false);
-                let auto_bookmark = sec
-                    .get("bookmark")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(false);
-
-                rules.push(HighlightRule {
-                    pattern,
-                    is_regex,
-                    case_sensitive,
-                    fg_color,
-                    bg_color,
-                    bold,
-                    italic,
-                    sound_alert,
-                    enabled,
-                    captures_only,
-                    auto_bookmark,
-                });
-            }
-            idx += 1;
-        }
+        let rules = read_rule_sections(conf);
         if !rules.is_empty() {
             cfg.highlight_rules = rules;
         }
@@ -1497,6 +1417,184 @@ impl FastTailConfig {
     pub fn add_search_history(&mut self, query: &str) {
         push_search_history(&mut self.search_history, query);
     }
+}
+
+/// Writes `rules` as `[highlight_N]` sections: the rules of `fasttail.ini` and of a rule
+/// set file (`write_rule_set`) go through here, so the two formats cannot drift.
+pub fn write_rule_sections(conf: &mut Ini, rules: &[HighlightRule]) {
+    for (i, rule) in rules.iter().enumerate() {
+        let mut sec = conf.with_section(Some(format!("highlight_{}", i)));
+        sec.set("pattern", &rule.pattern);
+        sec.set("is_regex", rule.is_regex.to_string());
+        sec.set("case_sensitive", rule.case_sensitive.to_string());
+        sec.set(
+            "fg",
+            format!(
+                "{},{},{}",
+                rule.fg_color[0], rule.fg_color[1], rule.fg_color[2]
+            ),
+        );
+        sec.set(
+            "bg",
+            format!(
+                "{},{},{}",
+                rule.bg_color[0], rule.bg_color[1], rule.bg_color[2]
+            ),
+        );
+        sec.set("bold", rule.bold.to_string());
+        sec.set("italic", rule.italic.to_string());
+        sec.set("sound_alert", rule.sound_alert.name());
+        sec.set("enabled", rule.enabled.to_string());
+        sec.set("captures_only", rule.captures_only.to_string());
+        sec.set("bookmark", rule.auto_bookmark.to_string());
+    }
+}
+
+/// Reads the `[highlight_N]` sections written by `write_rule_sections`, from 0 up to the
+/// first missing index; a rule without a pattern is skipped.
+pub fn read_rule_sections(conf: &Ini) -> Vec<HighlightRule> {
+    let mut rules = Vec::new();
+    let mut idx = 0;
+    while let Some(sec) = conf.section(Some(format!("highlight_{}", idx))) {
+        let pattern = sec.get("pattern").unwrap_or("").to_string();
+        if !pattern.is_empty() {
+            let is_regex = sec
+                .get("is_regex")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false);
+            let case_sensitive = sec
+                .get("case_sensitive")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false);
+            let fg_color = sec.get("fg").and_then(parse_rgb).unwrap_or([255, 255, 255]);
+            let bg_color = sec.get("bg").and_then(parse_rgb).unwrap_or([0, 0, 0]);
+            let bold = sec
+                .get("bold")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false);
+            let italic = sec
+                .get("italic")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false);
+            let sound_alert = sec
+                .get("sound_alert")
+                .map(crate::audio::SoundAlertPreset::from_name)
+                .unwrap_or(crate::audio::SoundAlertPreset::None);
+            let enabled = sec
+                .get("enabled")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(true);
+            let captures_only = sec
+                .get("captures_only")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false);
+            let auto_bookmark = sec
+                .get("bookmark")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false);
+
+            rules.push(HighlightRule {
+                pattern,
+                is_regex,
+                case_sensitive,
+                fg_color,
+                bg_color,
+                bold,
+                italic,
+                sound_alert,
+                enabled,
+                captures_only,
+                auto_bookmark,
+            });
+        }
+        idx += 1;
+    }
+    rules
+}
+
+/// Section that marks a rule set file, and the format version this build writes and reads.
+pub const RULE_SET_SECTION: &str = "fasttail_rules";
+pub const RULE_SET_VERSION: u32 = 1;
+/// End of the name suggested for an exported rule set.
+pub const RULE_SET_SUFFIX: &str = ".fasttail-rules.ini";
+
+/// Why a rule set file was refused: nothing is changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleSetError {
+    /// Not an INI file, or one without the `[fasttail_rules]` section.
+    NotARuleSet,
+    /// Written by a newer FastTail (`version` above `RULE_SET_VERSION`).
+    NewerVersion(u32),
+    /// The file could not be read.
+    Io(String),
+}
+
+/// A rule set file: `[fasttail_rules] version=1`, then the rules as in `fasttail.ini`
+/// (external tool bindings are not part of it).
+pub fn rule_set_to_ini(rules: &[HighlightRule]) -> Ini {
+    let mut conf = Ini::new();
+    conf.with_section(Some(RULE_SET_SECTION))
+        .set("version", RULE_SET_VERSION.to_string());
+    write_rule_sections(&mut conf, rules);
+    conf
+}
+
+/// The rules of a rule set file's text, or why it is refused.
+pub fn parse_rule_set(text: &str) -> Result<Vec<HighlightRule>, RuleSetError> {
+    let conf = Ini::load_from_str(text).map_err(|_| RuleSetError::NotARuleSet)?;
+    let header = conf
+        .section(Some(RULE_SET_SECTION))
+        .ok_or(RuleSetError::NotARuleSet)?;
+    let version = match header.get("version") {
+        None => RULE_SET_VERSION,
+        Some(v) => v
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| RuleSetError::NotARuleSet)?,
+    };
+    if version > RULE_SET_VERSION {
+        return Err(RuleSetError::NewerVersion(version));
+    }
+    Ok(read_rule_sections(&conf))
+}
+
+/// Writes `rules` to the rule set file `path` (a regular file, created or truncated).
+pub fn write_rule_set(path: &Path, rules: &[HighlightRule]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut buf = Vec::new();
+    rule_set_to_ini(rules)
+        .write_to(&mut buf)
+        .map_err(std::io::Error::other)?;
+    let mut file = crate::ui::dock::create_export_file(path)?;
+    file.write_all(&buf)?;
+    file.flush()
+}
+
+/// Reads the rule set file `path`.
+pub fn read_rule_set(path: &Path) -> Result<Vec<HighlightRule>, RuleSetError> {
+    ensure_regular_or_absent(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
+    let bytes = fs::read(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
+    let text = String::from_utf8_lossy(&bytes);
+    parse_rule_set(text.trim_start_matches('\u{feff}'))
+}
+
+/// Whether two rules are the same rule for an import: same pattern, regex and case flags.
+fn same_rule(a: &HighlightRule, b: &HighlightRule) -> bool {
+    a.pattern == b.pattern && a.is_regex == b.is_regex && a.case_sensitive == b.case_sensitive
+}
+
+/// Import with Append: adds `incoming` after `rules`, skipping every rule equal (see
+/// `same_rule`) to one already there. Returns how many were skipped.
+pub fn append_rules(rules: &mut Vec<HighlightRule>, incoming: Vec<HighlightRule>) -> usize {
+    let mut skipped = 0;
+    for rule in incoming {
+        if rules.iter().any(|r| same_rule(r, &rule)) {
+            skipped += 1;
+        } else {
+            rules.push(rule);
+        }
+    }
+    skipped
 }
 
 /// Maximum number of remembered search queries.
