@@ -34,5 +34,5 @@
 ## 5. Wrap-up
 
 - [x] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 5.2 Local preview exe for the maintainer before the 0.12.0 release
-- [ ] 5.3 After the release, archive the change so `search-and-navigation` and `filters-and-highlighting` gain the new requirements
+- [x] 5.2 Local preview exe for the maintainer before the 0.12.0 release
+- [x] 5.3 After the release, archive the change so `search-and-navigation` and `filters-and-highlighting` gain the new requirements

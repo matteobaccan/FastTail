@@ -99,26 +99,42 @@ Ctrl+G SHALL open a go-to popup for the focused stream. Entering a 1-based line 
 - **THEN** the popup closes, the viewport does not move when timing completes, and the timing itself continues.
 
 ### Requirement: Line Bookmarks
-Each stream SHALL keep a set of bookmarked line indices. Ctrl+F2 SHALL toggle a bookmark on the current row, F2 / Shift+F2 SHALL jump to the next / previous bookmark visible under the active filters with wrap-around, and the stream menu SHALL offer "Clear bookmarks". Bookmarked rows SHALL show `★` in the marker column unless the row is a search match, and SHALL be tinted across their width. Bookmarks SHALL be dropped when the file is truncated or rewritten.
+Each stream SHALL keep a set of manual bookmarked line indices and a set of automatic bookmarks (see Automatic Bookmarks from Rules). `CTRL + F2` SHALL toggle a manual bookmark on the current row; on a row that carries only an automatic bookmark it SHALL dismiss that automatic bookmark instead. `F2` / `SHIFT + F2` SHALL jump to the next / previous bookmark, manual or automatic, visible under the active filters with wrap-around, and the stream menu SHALL offer "Clear bookmarks", which removes every manual bookmark with its note and dismisses every current automatic bookmark. Manual bookmarked rows SHALL show `★` in the marker column (`✏` when the bookmark has a note) and automatic-only rows `☆`, unless the row is a search match, and every bookmarked row SHALL be tinted across its width. Bookmarks, notes, automatic bookmarks and dismissals SHALL be dropped when the file is truncated or rewritten.
 
 #### Scenario: Navigating bookmarks with a filter active
-- **WHEN** rows 5, 60 and 900 are bookmarked, an include filter hides row 60, and the user presses F2 from row 5
-- **THEN** the view jumps to row 900, and pressing F2 again wraps to row 5.
+- **WHEN** rows 5, 60 and 900 are bookmarked, an include filter hides row 60, and the user presses `F2` from row 5
+- **THEN** the view jumps to row 900, and pressing `F2` again wraps to row 5.
 
 #### Scenario: Bookmark on a search match
 - **WHEN** a bookmarked row is also the current search match
 - **THEN** the marker column shows `▶` and the row keeps the bookmark tint.
 
+#### Scenario: Dismissing an automatic bookmark
+- **WHEN** row 42 carries only an automatic bookmark and the user presses `CTRL + F2` on it
+- **THEN** row 42 shows no marker, `F2` skips it, and it is not bookmarked again until the file is reloaded or the rules change.
+
+#### Scenario: Truncated file
+- **WHEN** a stream has manual bookmarks with notes and automatic bookmarks and the file is truncated to 0 bytes
+- **THEN** every bookmark, note and dismissal is dropped, and automatic bookmarks are recomputed on the lines written afterwards.
+
 ### Requirement: Bookmark Persistence per File
-Bookmarks SHALL be saved in `fasttail.ini` keyed by absolute file path (the entry path `<archive>/<entry>` for a zip entry), at most 1,000 per file and 50 files, and restored when the same path is reopened, provided the file still has at least as many lines as the largest saved index; a restored compressed stream applies them once its index covers them.
+Manual bookmarks and their notes SHALL be saved in `fasttail.ini` keyed by absolute file path (the entry path `<archive>/<entry>` for a zip entry), at most 1,000 bookmarks per file and 50 files, and restored when the same path is reopened, provided the file still has at least as many lines as the largest saved index; a restored compressed stream applies them, with their notes, once its index covers them. In the `[bookmarks]` section the lines SHALL stay in `lines_<i>` and each note SHALL be stored as `note_<i>_<line>`; in session files each stream section SHALL keep `bookmarks` and store each note as `bookmark_note.<line>`. A note whose line is not among the saved bookmarks SHALL be ignored on load. Files without note keys SHALL load as before. Automatic bookmarks and dismissals SHALL NOT be saved and SHALL NOT count toward the 1,000 per file. Nothing of the standard-input stream SHALL be saved.
 
 #### Scenario: Reopening a file
-- **WHEN** the user bookmarks rows 10 and 200 in `app.log`, closes FastTail and opens `app.log` again
-- **THEN** rows 10 and 200 are bookmarked.
+- **WHEN** the user bookmarks rows 10 and 200 in `app.log`, gives row 200 the note `first OOM`, closes FastTail and opens `app.log` again
+- **THEN** rows 10 and 200 are bookmarked and row 200 shows the note `first OOM`.
 
 #### Scenario: File rewritten smaller
 - **WHEN** saved bookmarks reference row 200 and the reopened file has 50 lines
-- **THEN** the saved bookmarks for that file are discarded.
+- **THEN** the saved bookmarks and notes for that file are discarded.
+
+#### Scenario: Settings from an older version
+- **WHEN** `fasttail.ini` has `lines_0=10,200` and no `note_0_*` keys
+- **THEN** rows 10 and 200 are restored as bookmarks without notes.
+
+#### Scenario: Notes in a session file
+- **WHEN** the user saves a session whose stream has a bookmark on row 7 with the note `deploy start` and later loads that session
+- **THEN** the stream section holds `bookmarks=7` and `bookmark_note.7=deploy start`, and row 7 is bookmarked with that note after loading.
 
 ### Requirement: Search Results Pane
 A stream with an active query SHALL be able to show a results pane below its rows, toggled from the stream bar, listing only the matching lines in file order with their 1-based line number and text, the query tinted and the level colour applied, under a header naming the query, the total, the capped note and the progress of a running search. The pane SHALL be virtualized: only the rows on screen are read, whatever the number of hits, and hits found by a running search or on appended lines SHALL appear as they are found. Clicking a row, or selecting it with the arrow keys and pressing `Enter`, SHALL make that hit the current match, centre it in the main view and pause follow mode. The current match SHALL be marked `▶` in the pane, and the pane SHALL scroll to keep it visible when it changes by `F3`, `Shift+F3` or a refresh. The pane's open state and height SHALL be one preference shared by every stream (the pane shows in each stream with an active query), persisted in `fasttail.ini` as `search_pane` and `search_pane_height`. In HEX view the pane SHALL show a notice instead of rows.
@@ -179,4 +195,91 @@ The results of a search across streams SHALL be shown in a single "Find results"
 #### Scenario: Stream rewritten after the search
 - **WHEN** `gateway.log` is truncated by its writer after the search and the user clicks one of its results
 - **THEN** the view does not move and the group says the stream changed and offers Refresh.
+
+### Requirement: Show In Context
+While a stream in Text view has an active filter (include or exclude terms, minimum level, time range or the global filter), the row context menu SHALL offer "Show in context", and `CTRL + K` SHALL do the same on the selected row. It SHALL switch that stream to a context view showing every line of the file, unfiltered, with the chosen line centred, selected and marked, and follow mode paused; a banner above the rows SHALL say that the filters are suspended and offer "Back to filtered view". The banner button, `Esc` while the rows have the keyboard, and `CTRL + K` again SHALL return to the filtered view with the same top row, selection and follow state as before entering, and neither entering nor returning SHALL recompute the filter or the search: the filter settings SHALL stay unchanged and the filtered lines SHALL keep being maintained, appended lines included, while the context view is shown. Entering and returning SHALL complete within one frame on a file of any size once its line index is built. Any change of the stream's filter SHALL end the context view and apply the new filter with the chosen line centred when it is still visible; a reload, truncation or rotation, or switching to HEX or Markdown view, SHALL end it without restoring. In the context view, bookmarks, selection, copy, export and the overview strip SHALL work on the lines shown, and `F3` / `SHIFT + F3` SHALL walk the existing search hits. The action SHALL be unavailable in HEX and Markdown views, when the stream has no active filter, and while the line index is being built. The context view SHALL NOT be persisted.
+
+#### Scenario: Reading around an error
+- **WHEN** a stream filtered by the include term `ERROR` shows line 48,211 and the user picks "Show in context" on it
+- **THEN** the stream shows every line of the file with line 48,211 centred, selected and marked, lines 48,200 to 48,210 are visible above it, and the banner offers "Back to filtered view".
+
+#### Scenario: Back exactly where the user was
+- **WHEN** in that context view the user scrolls 5,000 lines away, then presses `Esc`
+- **THEN** the stream shows the `ERROR` lines again with the same top row and selection as before entering, and the include field still holds `ERROR`.
+
+#### Scenario: Large file without recomputation
+- **WHEN** a 4 GB stream filtered to 30,000,000 lines enters and leaves the context view
+- **THEN** no background filter or search job is started and both transitions complete within one frame.
+
+#### Scenario: Growing file
+- **WHEN** a followed filtered stream enters the context view and 200 lines are appended, 3 of which match the filter
+- **THEN** follow stays paused, the 200 lines appear at the end of the context view, and after returning the 3 matching lines are visible and follow is on again.
+
+#### Scenario: Editing the filter ends the context view
+- **WHEN** in the context view the user adds the exclude term `DEBUG`
+- **THEN** the banner disappears and the stream shows the lines matching the new filter.
+
+#### Scenario: Not offered without a filter
+- **WHEN** a stream has no active filter, or is in HEX view
+- **THEN** the row context menu has no "Show in context" item and `CTRL + K` does nothing.
+
+### Requirement: Show In Context from Find Results
+A result in the Find results tab SHALL offer "Show in context" in its context menu, and `CTRL + K` SHALL do the same on the selected result. It SHALL bring that stream's tab to the front and open its context view on the result's line, shown exactly even when the stream's current filter hides it, while the Find results list keeps the keyboard. It SHALL do nothing for a result of a stale group, and SHALL behave as a plain jump when the stream has no active filter.
+
+#### Scenario: A hidden result in context
+- **WHEN** the Find results list a match on line 88,120 of `payment.log`, whose filter now hides that line, and the user picks "Show in context"
+- **THEN** the `payment.log` tab comes to the front in context view with line 88,120 centred and marked, and the banner offers "Back to filtered view".
+
+### Requirement: Bookmark Notes
+A manual bookmark SHALL be able to carry one note: a single line of at most 200 characters, trimmed, with line breaks and tabs replaced by spaces. The row context menu of the Text view SHALL offer "Bookmark note…" on every row, opening a one-line editor (`Enter` saves, `ESC` cancels), and "Remove bookmark" on a bookmarked row. Saving a note on a row without a manual bookmark SHALL add one (an automatic bookmark on that row becomes manual); saving an empty note SHALL remove the note and keep the bookmark; removing the bookmark SHALL remove its note. Hovering the row's marker, or a bookmark mark in the overview strip, SHALL show the note in a tooltip. Adding, editing or removing a note SHALL be saved as a bookmark change.
+
+#### Scenario: Adding a note
+- **WHEN** the user right-clicks row 1,204, picks "Bookmark note…", types `retry storm starts here` and presses `Enter`
+- **THEN** row 1,204 is bookmarked, its marker shows `✏`, and hovering the marker shows `retry storm starts here`.
+
+#### Scenario: Note too long
+- **WHEN** the user pastes 350 characters into the note editor
+- **THEN** only the first 200 characters are kept.
+
+#### Scenario: Note on an automatic bookmark
+- **WHEN** row 42 carries only an automatic bookmark and the user saves the note `check this`
+- **THEN** row 42 becomes a manual bookmark with that note, is saved in `fasttail.ini`, and counts toward the 1,000 per file.
+
+### Requirement: Automatic Bookmarks from Rules
+Every line matching an enabled highlight rule with "Bookmark matching lines" on SHALL carry an automatic bookmark, whatever the stream's filters: the lines already in the file when it is opened, reloaded or when the rules change, and every line appended afterwards, checked as it arrives. At most `auto_bookmark_max` automatic bookmarks SHALL be kept per stream (a setting in `fasttail.ini` and in Settings, default 10,000, clamped to 100..100,000), the first ones in file order; once the cap is reached no more are added and the stream bar SHALL show that automatic bookmarks are capped at that number. Notes SHALL NOT be written by copy or export. For files above 16 MB the existing lines SHALL be matched on a worker thread with progress in the stream bar, the UI staying responsive, and lines appended during that scan SHALL be matched exactly once. Automatic bookmarks SHALL appear in the overview strip with a dimmer mark than manual bookmarks. Turning the option off or disabling the rule SHALL remove the automatic bookmarks it produced at the next recomputation, and a rules change SHALL clear the dismissals. Standard-input and compressed streams SHALL be covered, compressed streams once their index is complete.
+
+#### Scenario: Existing and appended lines
+- **WHEN** a rule `OutOfMemoryError` has "Bookmark matching lines" on, the opened file has 3 matching lines, and 2 more matching lines are appended
+- **THEN** all 5 lines show `☆`, and `F2` visits each of them in order.
+
+#### Scenario: Large file
+- **WHEN** a 2 GB log is opened with an auto-bookmark rule
+- **THEN** the matching runs in the background with progress in the stream bar, rows stay scrollable during it, and the automatic bookmarks appear as the scan reports them.
+
+#### Scenario: Cap reached
+- **WHEN** an auto-bookmark rule `INFO` matches 250,000 lines of a file
+- **THEN** with the default setting the first 10,000 matching lines are bookmarked, the stream bar shows the capped notice, and further appended `INFO` lines are not bookmarked.
+
+#### Scenario: A larger cap
+- **WHEN** the user sets `auto_bookmark_max` to 50,000 in Settings while that stream is open
+- **THEN** the stream recomputes its automatic bookmarks and the first 50,000 matching lines are bookmarked.
+
+#### Scenario: Not saved
+- **WHEN** a file has 12 automatic bookmarks and 3 manual bookmarks and FastTail is restarted
+- **THEN** `fasttail.ini` holds only the 3 manual bookmarks, and the 12 automatic ones are recomputed from the rule when the file is reopened.
+
+### Requirement: Navigation in Collapsed Groups
+While a stream's collapse mode is on, search hits and bookmarks SHALL keep referring to file lines and the match counter SHALL count every hit, hidden or not. A collapsed row SHALL show the match marker when any line it stands for is a hit and the bookmark marker when any of them is bookmarked. Match navigation (F3 and SHIFT + F3) SHALL land on the group row for the first hit inside a collapsed group and the next step SHALL move past the other hits of that group. Showing one exact line that is hidden in a collapsed group, from the search results pane, the Find results tab, go to line, bookmark navigation or a timeline click, SHALL expand that group and select the line. Toggling a bookmark on a collapsed row SHALL apply to its first line. The overview strip and the scrollbar SHALL be proportional to the collapsed rows, and marks of hidden lines SHALL be drawn at their group row. Line numbers SHALL show the number of each row's first line.
+
+#### Scenario: Stepping over a collapsed group
+- **WHEN** a collapsed `×200` group holds 200 hits of the search `timeout`, followed by one more hit on a later line, and the user presses F3 twice from the top
+- **THEN** the first press selects the group row, the second selects the later line, and the counter shows 201 hits.
+
+#### Scenario: Go to a hidden line
+- **WHEN** lines 1,000 to 1,499 form a collapsed group and the user goes to line 1,250
+- **THEN** the group is expanded and line 1,250 is selected and in view.
+
+#### Scenario: Bookmark inside a group
+- **WHEN** line 1,300 is bookmarked and lies inside a collapsed group
+- **THEN** the group row shows the bookmark marker and the overview strip marks the group's position.
 

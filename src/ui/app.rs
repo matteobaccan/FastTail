@@ -1433,8 +1433,8 @@ impl FastTailApp {
     }
 
     /// Pulls the rows a tar scan found into the picker and acts on its end: a scan that
-    /// ends with a single openable entry opens it and closes the picker. Called every
-    /// frame before the picker is drawn.
+    /// ends with a single openable entry opens it and closes the picker. `ArchivePicker::show`
+    /// syncs its own rows every frame; tests call this to drive a scan to its end.
     pub fn poll_archive_picker(&mut self) {
         let Some(picker) = self.archive_picker.as_mut() else {
             return;
@@ -4031,7 +4031,7 @@ impl FastTailApp {
                                     ui.label(RichText::new(t(lang, "help_desc_space")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL F").monospace().strong());
+                                    ui.label(RichText::new("CTRL + F").monospace().strong());
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_search")).monospace(),
                                     );

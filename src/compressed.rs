@@ -189,16 +189,29 @@ fn codec_holds_tar(path: &Path, codec: Codec) -> bool {
     let Some(when) = stamp(path) else {
         return false;
     };
-    static PEEKS: OnceLock<Mutex<StampedLru<bool>>> = OnceLock::new();
-    let peeks = PEEKS.get_or_init(|| Mutex::new(StampedLru::new(64)));
-    if let Some(known) = peeks.lock().ok().and_then(|mut p| p.get(path, when)) {
+    if let Some(known) = tar_peeks().lock().ok().and_then(|mut p| p.get(path, when)) {
         return known;
     }
     let holds = peek_decoded(path, codec).is_some_and(|head| is_tar_head(&head));
-    if let Ok(mut p) = peeks.lock() {
+    if let Ok(mut p) = tar_peeks().lock() {
         p.insert(path, when, holds);
     }
     holds
+}
+
+/// The answers of `codec_holds_tar`, per (path, size, modification time).
+fn tar_peeks() -> &'static Mutex<StampedLru<bool>> {
+    static PEEKS: OnceLock<Mutex<StampedLru<bool>>> = OnceLock::new();
+    PEEKS.get_or_init(|| Mutex::new(StampedLru::new(64)))
+}
+
+/// A decompression job found a tar the UI-thread peek could not see (a window over
+/// `PEEK_WINDOW` and no tar name): opening the file again must show the entry picker,
+/// not stop on the same tar once more.
+fn remember_holds_tar(path: &Path) {
+    if let (Some(when), Ok(mut p)) = (stamp(path), tar_peeks().lock()) {
+        p.insert(path, when, true);
+    }
 }
 
 /// A small most-recently-used map keyed by path, whose values hold while the file's size
@@ -928,7 +941,11 @@ fn run_job(source: &JobSource, out: File, env: &JobEnv) -> JobState {
             let counted = CountingReader::new(file, &shared.consumed, None);
             // Concatenated members (`cat a.gz b.gz`, some rotators) are one stream.
             let decoder = open_decoder(*codec, BufReader::new(counted));
-            pump(decoder, out, env, true)
+            let state = pump(decoder, out, env, true);
+            if state == JobState::Stopped(StopReason::Tar) {
+                remember_holds_tar(path);
+            }
+            state
         }
         JobSource::TarEntry {
             archive,
@@ -3487,6 +3504,15 @@ mod tests {
         let unnamed = dir.path().join("big.bin");
         std::fs::write(&unnamed, &big).unwrap();
         assert_eq!(classify(&unnamed), Target::Compressed(Codec::Xz));
+        // The job decodes it, finds the tar and says so; opening it again then shows the
+        // entry picker instead of stopping on the same tar in a loop.
+        let (state, _, _) = run_to_spool(
+            JobSource::Compressed(unnamed.clone(), Codec::Xz),
+            Limits::default(),
+            dir.path(),
+        );
+        assert_eq!(state, JobState::Stopped(StopReason::Tar));
+        assert_eq!(classify(&unnamed), Target::TarArchive(Some(Codec::Xz)));
         let named = dir.path().join("big.tar.xz");
         std::fs::write(&named, &big).unwrap();
         assert_eq!(classify(&named), Target::TarArchive(Some(Codec::Xz)));

@@ -1581,7 +1581,7 @@ fn render_log_stream(
         }
         if engine.auto_bookmarks_capped() {
             let text = t(lang, "auto_bookmarks_capped")
-                .replace("{n}", &engine.auto_bookmark_max.to_string());
+                .replace("{n}", &group_thousands(engine.auto_bookmark_max));
             ui.label(
                 RichText::new(format!("ⓘ {text}"))
                     .monospace()

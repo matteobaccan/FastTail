@@ -80,6 +80,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Saved per stream in the workspace and in sessions as `collapse=exact|numbers`. Help
   dialog and all 16 languages updated.
 
+### Changed
+
+- Faster ANSI handling and one-byte searches: CSI sequences are parsed in one pass and
+  a one-byte query uses `memchr`.
+
 ### Fixed
 
 - **`Space` no longer toggles Follow while you type.** A space typed in a filter, search or
@@ -97,6 +102,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of going only to a console the GUI build does not have.
 - Closing the borderless window with its `✕` deletes this run's decompression spools, as
   closing it any other way already did.
+- The rule and preset reorder buttons (⬆ / ⬇) say in their tooltip why they are disabled
+  at the ends of the list.
 
 ## [0.11.0] - 2026-09-27
 

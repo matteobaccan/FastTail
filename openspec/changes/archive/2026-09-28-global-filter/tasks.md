@@ -22,5 +22,5 @@
 ## 4. Wrap-up
 
 - [x] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 4.2 Local preview exe for the maintainer before the 0.12.0 release
-- [ ] 4.3 After the release, archive the change so `filters-and-highlighting` gains the Global Filter requirement
+- [x] 4.2 Local preview exe for the maintainer before the 0.12.0 release
+- [x] 4.3 After the release, archive the change so `filters-and-highlighting` gains the Global Filter requirement
