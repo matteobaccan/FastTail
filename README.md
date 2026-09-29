@@ -263,6 +263,8 @@ Settings are stored in a single `fasttail.ini` file, looked up in this order:
 
 New installs write next to the executable and fall back to the per-user directory when that folder is read-only (for example `Program Files`). A legacy `fasttail.toml` from older versions is migrated automatically on first start.
 
+With several FastTail windows open on the same `fasttail.ini`, each one writes the file only when its own settings or workspace change, so a window left idle never brings back an older state over what another window saved. Each window keeps the settings it has in memory and does not reload the file: the last window to change something writes its whole state.
+
 ### Sessions
 The 🗂 button in the title bar saves the workspace under a name and loads it back. A session file (`name.fasttail-session.ini`) holds the open files and patterns, the dock layout, and for every stream its include/exclude filters, search query, line wrap, encoding, ANSI mode, collapse mode, context lines (`context_lines=N`), timeline, line-number and Δt columns (`line_numbers=` / `time_delta=`; a file from an older version, without them, takes the defaults in `fasttail.ini`), time display (`time_display=utc|local|+HH:MM` and `time_source_zone=utc|+HH:MM`, written only when not the default) and bookmarks with their notes (`bookmarks=7,42` and `bookmark_note.7=deploy start`; and the entry of a zip, 7z or tar archive, `entry=`); theme, language, highlight rules and the other preferences stay in `fasttail.ini`. Loading a session replaces the current streams; if the current named session has unsaved changes (a `*` after its name in the title bar) FastTail asks first. Files that no longer exist are listed and skipped.
 
