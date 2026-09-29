@@ -193,8 +193,8 @@ These points are to be folded into the `tui-interface` proposal (PR #132) before
 
 The maintainer asked for an OpenSpec change for every feature the competitors have and
 FastTail lacks, spread over three releases (four since 0.13.0 and 0.14.0 shipped early, each
-moving its unfinished changes to the next) so the whole gap is closed; 0.20.0 stays
-reserved for the terminal interface (PR #132). Each change lives in
+moving its unfinished changes to the next) so the whole gap is closed; 0.20.0, the
+terminal interface (PR #132), comes right after 0.14.0 and the gap resumes with 0.21.0. Each change lives in
 `openspec/changes/<name>/` with proposal, design, tasks and specs; efforts use the scale of
 section 6. The order inside a release follows the dependencies.
 
@@ -217,19 +217,25 @@ moved to 0.14.0 (first in its table), so the release was not held back.
 ### 0.14.0 — structured logs and analysis
 
 Closed on 2026-09-29 with the changes below; the rest of the planned 0.14.0 moved to
-0.15.0, so the release was not held back.
+0.21.0, after the terminal interface, so the release was not held back.
 
 | Change | Gaps | Effort |
 |---|---|---|
 | `relative-time-windows` — "last 15 min / 1 h / 24 h", `--since -3h` | hl | S |
 | `partial-line-selection` — select part of a line | 19 | M |
 | `scratchpad` — notes tab lines can be sent to | klogg | S |
-| `filter-to-tab` — the filtered view as a new following tab (saving the tabs: 0.15.0) | LogExpert | M |
+| `filter-to-tab` — the filtered view as a new following tab (saving the tabs: 0.21.0) | LogExpert | M |
 | `compare-lines` — diff of two lines or two regions | requested | M |
-| `tray-icon` — minimise to tray, tray menu, Windows (Linux: 0.15.0) | SnakeTail | S–M |
+| `tray-icon` — minimise to tray, tray menu, Windows (Linux: 0.21.0) | SnakeTail | S–M |
 | `structured-fields` — JSON / logfmt / regex parsers with detection, column view | 1 | L |
 
-### 0.15.0 — structured logs and analysis, continued
+### 0.20.0 — terminal interface (next)
+
+After 0.14.0 the maintainer moved the terminal interface forward: 0.20.0 is the next
+release and holds only `tui-interface` (PR #132, the TUI at parity with the window, HEX
+view included, Markdown excluded). The gap changes below resume after it.
+
+### 0.21.0 — structured logs and analysis, continued
 
 | Change | Gaps | Effort |
 |---|---|---|
@@ -246,7 +252,7 @@ Closed on 2026-09-29 with the changes below; the rest of the planned 0.14.0 move
 | `export-formats` — CSV and HTML export | 18 | S |
 | `tray-icon` (Linux backend) and `filter-to-tab` (saved derived tabs) — the parts left open | — | S |
 
-### 0.16.0 — sources and integrations
+### 0.22.0 — sources and integrations
 
 | Change | Gaps | Effort |
 |---|---|---|
@@ -263,8 +269,8 @@ Closed on 2026-09-29 with the changes below; the rest of the planned 0.14.0 move
 | `web-ui` — read-only local web view, off by default | Seq, Loki | M |
 | `plugin-api` — out-of-process source plugins, bundled formats | 20 | L |
 
-0.15.0 is the heaviest (one L change and ten M); if it runs long, `operation-timeline` and
-`cross-line-regex` are the first to move to 0.16.0. Open questions are listed in each
+0.21.0 is the heaviest (one L change and ten M); if it runs long, `operation-timeline` and
+`cross-line-regex` are the first to move to 0.22.0. Open questions are listed in each
 change's design.
 
 ## 9. Scan history

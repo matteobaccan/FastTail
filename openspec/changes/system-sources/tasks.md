@@ -29,6 +29,6 @@
 ## 5. Wrap-up
 
 - [ ] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 5.2 Local preview exe for the maintainer before the 0.15.0 release
+- [ ] 5.2 Local preview exe for the maintainer before the 0.22.0 release
 - [ ] 5.3 After the release, archive the change so `stream-engine`, `command-line` and `cyber-ui-docking` gain the new requirements
 - [ ] 5.4 Check that the `ssh-sources` proposal (phase 2) covers the points listed in the design and reuses the piped source

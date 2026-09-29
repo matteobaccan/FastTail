@@ -1,7 +1,7 @@
 ## Context
 
 Stream state lives on the UI thread in `TailEngine`s; lines are read from files by byte
-range. `mcp-server` (also 0.15.0) proposes a `StreamSnapshot` published by the UI thread
+range. `mcp-server` (also 0.22.0) proposes a `StreamSnapshot` published by the UI thread
 and a loopback HTTP server (`src/http_local.rs`) with a token. Rows are painted from
 rule, label, level, ANSI and hit spans computed in `dock.rs`; `export-formats` exposes
 that span computation for its HTML writer.
@@ -60,4 +60,4 @@ None: `[web]` absent means off.
 - Should the page allow its own local (browser-side) filter over the loaded lines?
   Proposed: yes, a simple text filter that never reaches FastTail.
 - Should the web view be enabled from the command line (`--web`) for headless machines?
-  Proposed: not in 0.15.0; `headless-print --follow` plus existing tools cover scripts.
+  Proposed: not in 0.22.0; `headless-print --follow` plus existing tools cover scripts.

@@ -31,7 +31,7 @@ LogExpert's strengths.
 - Storage: the matched lines are copied into a spool file, like standard input, bounded
   by the same `stdin_spool_max_mb` and free-space margin.
 
-Target release: **0.15.0** for saving and restoring the derived tabs (tasks 3.1, 3.2); the rest shipped in 0.14.0 (planned for 0.13.0, moved twice), per the release plan in
+Target release: **0.21.0** for saving and restoring the derived tabs (tasks 3.1, 3.2); the rest shipped in 0.14.0 (planned for 0.13.0, moved after 0.14.0 and after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Medium**. Effort: **M**.
 
 ### Non-goals

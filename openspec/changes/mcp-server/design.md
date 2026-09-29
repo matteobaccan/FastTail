@@ -69,7 +69,7 @@ None: `[mcp]` absent means off.
 ## Open Questions
 
 - Adopt the official `rmcp` crate (pulls tokio) instead of hand-written JSON-RPC?
-  Proposed: no for 0.15.0.
+  Proposed: no for 0.22.0.
 - Should `read_lines` expose lines hidden by the stream's filters? Proposed: yes, with an
   explicit `scope: "all"` argument; default `visible`.
 - Should the HTTP listener be shared with `web-ui` on one port? Proposed: one server,

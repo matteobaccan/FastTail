@@ -39,7 +39,7 @@ lacks (section 2).
   being kept per file as today.
 - New `fasttail.ini` key `folder_max_streams` in `[general]`.
 
-Target release: **0.15.0** (structured logs and analysis, continued; planned for 0.14.0, moved when 0.14.0 shipped early), per the release plan in
+Target release: **0.21.0** (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Medium**. Effort: **M**.
 
 ### Non-goals

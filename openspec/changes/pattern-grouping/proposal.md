@@ -37,7 +37,7 @@ market signal ("patterns and summaries").
 - Not persisted: patterns, the tab and the pattern filter are rebuilt per run. No new key
   in `fasttail.ini`.
 
-Target release: **0.15.0** (structured logs and analysis, continued; planned for 0.14.0, moved when 0.14.0 shipped early), per the release plan in
+Target release: **0.21.0** (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **medium**. Effort: **M (1–3 weeks)**.
 
 ### Non-goals

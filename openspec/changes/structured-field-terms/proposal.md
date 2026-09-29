@@ -22,7 +22,7 @@ inside the cells, "Copy as shown" as columns, and a wrapping last column.
   (from `partial-line-selection` task 2.6), and the last column wrapping in wrap mode
   (0.14.0 keeps one row per line).
 
-Target release: **0.15.0** (structured logs and analysis, continued), per the release plan
+Target release: **0.21.0** (structured logs and analysis, continued), per the release plan
 in `docs/competitor-analysis.md` section 8. Effort: **M**.
 
 ### Non-goals

@@ -117,7 +117,7 @@ copier's 64 KB buffer; the spool is on disk, bounded by `stdin_spool_max_mb` (de
 engine) when a limit is reached, as for standard input. Windows file sharing: the spool is
 opened for shared reading exactly as the standard-input spool.
 
-### SSH: phase 2, not in 0.15.0
+### SSH: phase 2, not in 0.22.0
 
 `ssh://host/path` fits the same process design (`ssh -T -o BatchMode=yes host -- tail -n
 <backlog> -F -- '<path>'`), which is why the source abstraction is generic. It is left for
@@ -157,7 +157,7 @@ file and skip it. Rollback: remove the source kinds; saved URIs become missing s
 ## Open Questions
 
 - Automatic reconnect when a container restarts (poll `docker inspect` every 2 s while
-  ended), or only the Reconnect button (proposed for 0.15.0)?
+  ended), or only the Reconnect button (proposed for 0.22.0)?
 - `kubectl logs -f` (`k8s://namespace/pod`) as a third kind in the same release, since it
   is the same design?
 - Should `docker://` also list stopped containers in the dialog (`docker ps -a`)?
