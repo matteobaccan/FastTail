@@ -103,6 +103,14 @@ pub struct FastTailConfig {
     /// stream, see `StreamEntry::timeline`).
     #[serde(default = "default_true")]
     pub timeline_search_lane: bool,
+    /// Bookmark report dialog: context lines around each bookmark (0..=20), automatic
+    /// bookmarks included, order (`stream` or `time`), as last chosen.
+    #[serde(default = "default_report_context")]
+    pub report_context: u8,
+    #[serde(default)]
+    pub report_auto: bool,
+    #[serde(default)]
+    pub report_order_time: bool,
     #[serde(default)]
     pub borderless: bool,
     #[serde(default = "default_true")]
@@ -266,6 +274,10 @@ pub fn stepped_zoom(zoom: f32, steps: i32) -> f32 {
     (zoom + steps as f32 * ZOOM_STEP).clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
+fn default_report_context() -> u8 {
+    3
+}
+
 fn default_font_size() -> f32 {
     DEFAULT_FONT_SIZE
 }
@@ -347,6 +359,9 @@ impl Default for FastTailConfig {
             search_pane_height: default_search_pane_height(),
             overview_strip: true,
             timeline_search_lane: true,
+            report_context: default_report_context(),
+            report_auto: false,
+            report_order_time: false,
             borderless: false,
             show_line_numbers: true,
             show_time_delta: false,
@@ -687,6 +702,16 @@ impl FastTailConfig {
                 "timeline_search_lane",
                 self.timeline_search_lane.to_string(),
             )
+            .set("report_context", self.report_context.to_string())
+            .set("report_auto", self.report_auto.to_string())
+            .set(
+                "report_order",
+                if self.report_order_time {
+                    "time"
+                } else {
+                    "stream"
+                },
+            )
             .set("screensaver_enabled", self.screensaver_enabled.to_string())
             .set(
                 "screensaver_timeout_mins",
@@ -949,6 +974,21 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.timeline_search_lane = v;
+            }
+            if let Some(v) = general
+                .get("report_context")
+                .and_then(|s| s.trim().parse::<u8>().ok())
+            {
+                cfg.report_context = v.min(crate::bookmark_report::MAX_REPORT_CONTEXT as u8);
+            }
+            if let Some(v) = general
+                .get("report_auto")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.report_auto = v;
+            }
+            if let Some(v) = general.get("report_order") {
+                cfg.report_order_time = v.trim() == "time";
             }
             if let Some(s) = general.get("screensaver_enabled") {
                 if let Ok(v) = s.parse::<bool>() {

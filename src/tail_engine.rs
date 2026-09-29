@@ -1510,6 +1510,9 @@ pub struct TailEngine {
     /// The stream bar's "search all streams" button was pressed: the app opens the Find
     /// results tab with this stream's query after the dock is drawn.
     pub find_all_request: bool,
+    /// The stream menu asked for a bookmark report of this stream: the app opens the
+    /// report dialog after the dock is drawn.
+    pub report_request: bool,
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
     pub markdown_text_cache: Option<(u64, String)>,
     pub highlight_rules: Vec<HighlightRule>,
@@ -2096,6 +2099,7 @@ impl TailEngine {
             time_source_zone: crate::timestamp::SourceZone::Local,
             time_zone_sample: None,
             find_all_request: false,
+            report_request: false,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
@@ -6887,6 +6891,127 @@ impl TailEngine {
         self.scroll_to_line = Some(target);
         self.reveal_line(target);
         Some(target)
+    }
+
+    /// Tags of the note on bookmark `idx` (`#deploy` → `deploy`), in order, each once.
+    pub fn bookmark_tags(&self, idx: usize) -> Vec<String> {
+        self.bookmark_notes
+            .get(&idx)
+            .map(|note| crate::bookmark_report::parse_tags(note))
+            .unwrap_or_default()
+    }
+
+    /// Every tag of the stream's notes with how many bookmarks carry it, by name.
+    pub fn bookmark_tag_counts(&self) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for note in self.bookmark_notes.values() {
+            for tag in crate::bookmark_report::parse_tags(note) {
+                *counts.entry(tag).or_default() += 1;
+            }
+        }
+        counts
+    }
+
+    /// The next visible manual bookmark after line `from` whose note carries `tag`
+    /// (normalized), wrapping around: `(line, wrapped)`. Only manual bookmarks have notes,
+    /// hence tags. The view is not moved: the go-to popup jumps to it.
+    pub fn bookmark_next_tagged(&self, from: usize, tag: &str) -> Option<(usize, bool)> {
+        let tagged: Vec<usize> = self
+            .bookmark_notes
+            .iter()
+            .filter(|(line, note)| {
+                self.bookmarks.contains(line)
+                    && crate::bookmark_report::parse_tags(note)
+                        .iter()
+                        .any(|t| t == tag)
+            })
+            .map(|(&line, _)| line)
+            .filter(|&line| self.is_line_visible(line))
+            .collect();
+        match tagged.iter().copied().find(|&l| l > from) {
+            Some(line) => Some((line, false)),
+            None => tagged.first().map(|&line| (line, true)),
+        }
+    }
+
+    /// How many bookmarks of this stream a report with `options` covers, without reading
+    /// any line (what the report dialog shows while the options change).
+    pub fn bookmark_report_count(&self, options: &crate::bookmark_report::ReportOptions) -> usize {
+        let automatic: BTreeSet<usize> = if options.include_auto {
+            self.auto_bookmarks
+                .difference(&self.dismissed_auto)
+                .copied()
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        crate::bookmark_report::select_bookmarks(
+            &self.bookmarks,
+            &automatic,
+            &self.bookmark_notes,
+            options,
+        )
+        .0
+        .len()
+    }
+
+    /// The bookmarks of this stream as the report shows them: the manual ones with their
+    /// notes and tags, the automatic ones (not dismissed) when included, a tag filter
+    /// applied; timestamps as the view shows them.
+    pub fn bookmark_report_stream(
+        &self,
+        title: String,
+        options: &crate::bookmark_report::ReportOptions,
+    ) -> crate::bookmark_report::ReportStream {
+        use crate::bookmark_report::{select_bookmarks, ReportBookmark, ReportStream};
+        let automatic: BTreeSet<usize> = self
+            .auto_bookmarks
+            .difference(&self.dismissed_auto)
+            .copied()
+            .collect();
+        let (picked, auto_left_out) =
+            select_bookmarks(&self.bookmarks, &automatic, &self.bookmark_notes, options);
+        let bookmarks = picked
+            .into_iter()
+            .map(|(line, automatic)| {
+                // The cache when the line is timed; else the line's own timestamp.
+                let millis = self.line_timestamp(line).or_else(|| {
+                    self.get_line(line).and_then(|text| {
+                        crate::timestamp::detect_timestamp(&text, self.timestamp_hint)
+                            .map(|(millis, _)| millis)
+                    })
+                });
+                ReportBookmark {
+                    line,
+                    millis,
+                    time_text: millis
+                        .map(|m| crate::timestamp::format_millis(self.to_display_clock(m))),
+                    note: self.bookmark_notes.get(&line).cloned(),
+                    tags: self.bookmark_tags(line),
+                    automatic,
+                }
+            })
+            .collect();
+        let path = if self.is_stdin() {
+            crate::stdin_source::STDIN_TITLE.to_string()
+        } else {
+            match &self.compressed {
+                Some(c) => c.title(),
+                None => self
+                    .current_file
+                    .as_deref()
+                    .unwrap_or(&self.path)
+                    .display()
+                    .to_string(),
+            }
+        };
+        ReportStream {
+            title,
+            path,
+            total_lines: self.total_lines(),
+            bookmarks,
+            auto_left_out,
+        }
     }
 
     /// Jumps to the previous visible bookmark before the cursor, wrapping around.

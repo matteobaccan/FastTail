@@ -3,6 +3,7 @@ pub mod ansi;
 pub mod audio;
 pub mod auto_highlight;
 pub mod baretail_bridge;
+pub mod bookmark_report;
 pub mod cli;
 pub mod collapse;
 pub mod compressed;
