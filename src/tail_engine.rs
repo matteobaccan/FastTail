@@ -2802,7 +2802,7 @@ impl TailEngine {
         if derived_from == 0 {
             self.hold_time_window();
             // Line numbers no longer name the same lines: back to the whole view.
-            if !self.search_scope.is_all() {
+            if unchanged_lines == 0 && !self.search_scope.is_all() {
                 self.search_scope = SearchScope::All;
                 self.search_scope_reset = true;
             }
@@ -5275,7 +5275,10 @@ impl TailEngine {
         }
         let timed = matches!(scope, SearchScope::Time { .. });
         self.search_scope = scope;
-        if timed {
+        // The running search covered the old scope: its hits must not reach the new one,
+        // and a timing scan must not wait for it.
+        self.drop_search_job();
+        if timed || (self.job.is_none() && self.timestamps_wanted) {
             self.request_timestamps();
         }
         let query = std::mem::take(&mut self.last_searched_query);
@@ -5782,6 +5785,9 @@ impl TailEngine {
             self.start_search_job();
             return;
         }
+        // A small scope of a large file is searched here: a search job still running
+        // over the whole file would add its hits to these.
+        let dropped = self.drop_search_job();
         let hits = self.find_matches_from(trimmed, 0, MAX_SEARCH_MATCHES);
         self.search_matches = hits.lines;
         self.search_total = hits.total;
@@ -5796,6 +5802,24 @@ impl TailEngine {
         } else {
             None
         };
+        if dropped && self.timestamps_wanted {
+            // A timing scan queued behind the dropped job starts now.
+            self.request_timestamps();
+        }
+    }
+
+    /// Drops a running search job, whose hits no longer apply. Returns whether it did.
+    fn drop_search_job(&mut self) -> bool {
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|j| j.kind == ScanKind::Search)
+        {
+            self.job = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// Starts a background search over the visible lines for the active query. Byte-level
@@ -5830,7 +5854,8 @@ impl TailEngine {
                 limit,
                 count_past_limit: true,
             },
-            0,
+            // A line scope starts the scan at its first line.
+            self.scope_line_bounds().0,
         );
         if self.view_mode == ViewMode::Hex {
             let (byte_matches, max_len) = self.find_byte_matches_from(&query, 0, MAX_BYTE_MATCHES);
@@ -7109,6 +7134,22 @@ impl TailEngine {
             self.is_line_visible(idx)
         } else {
             self.selection.contains(&idx)
+        }
+    }
+
+    /// First and last selected line, without listing the selection (cheap with CTRL + A
+    /// on a huge file); `None` without a selection.
+    pub fn selection_bounds(&self) -> Option<(usize, usize)> {
+        if self.selection_all {
+            let n = self.visible_lines();
+            (n > 0)
+                .then(|| self.line_at(0).zip(self.line_at(n - 1)))
+                .flatten()
+        } else {
+            self.selection
+                .first()
+                .copied()
+                .zip(self.selection.last().copied())
         }
     }
 

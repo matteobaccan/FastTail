@@ -3933,8 +3933,7 @@ fn render_scope_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
             picked = Some(SearchScope::All);
             ui.close();
         }
-        let selected = engine.selected_lines();
-        let selection = selected.first().copied().zip(selected.last().copied());
+        let selection = engine.selection_bounds();
         if ui
             .add_enabled(
                 selection.is_some(),
@@ -4011,6 +4010,10 @@ fn render_scope_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                     let (from_ok, to_ok) = engine.set_search_scope(scope);
                     edit.time_bad = (!from_ok, !to_ok);
                     if from_ok && to_ok {
+                        // Shown like the other picks (the hits may still wait for timing).
+                        if let Some(target) = engine.current_search_line() {
+                            engine.pending_jump = Some(target);
+                        }
                         ui.close();
                     }
                 }
@@ -4057,8 +4060,19 @@ fn render_scope_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                 .color(theme.warn_color()),
         );
     }
-    if matches!(engine.search_scope(), SearchScope::Time { .. }) && !engine.timestamps_complete() {
-        ui.label(RichText::new("⏳").monospace().color(theme.warn_color()));
+    if matches!(engine.search_scope(), SearchScope::Time { .. }) {
+        if !engine.timestamps_complete() {
+            ui.label(RichText::new("⏳").monospace().color(theme.warn_color()));
+        } else if !engine.timestamps_usable() {
+            // Timed at last, without usable timestamps: say why nothing matches.
+            ui.label(
+                RichText::new(t(lang, "time_range_unavailable"))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.warn_color()),
+            )
+            .on_hover_text(t(lang, "time_range_unavailable_tip"));
+        }
     }
 }
 
@@ -4097,8 +4111,7 @@ fn row_context_menu(
         }
         // Search scope: the selection, from this line to the end, or up to it.
         ui.separator();
-        let selected = engine.selected_lines();
-        if let (Some(&first), Some(&last)) = (selected.first(), selected.last()) {
+        if let Some((first, last)) = engine.selection_bounds() {
             if ui
                 .button(RichText::new(format!("⌖ {}", t(lang, "scope_in_selection"))).monospace())
                 .clicked()

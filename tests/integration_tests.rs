@@ -14027,6 +14027,37 @@ mod search_scope {
     }
 
     #[test]
+    fn a_small_scope_set_while_a_whole_file_search_runs_drops_that_job() {
+        let (_dir, log) = hits_log(200_000);
+        // The whole file goes to a job, a 20-line scope is searched on the spot.
+        let mut engine = TailEngine::open_with_thresholds(&log, 64 * 1024, u64::MAX).unwrap();
+        engine.update_search("hit");
+        assert!(engine.scan_progress().is_some(), "a search job runs");
+        engine.set_search_scope(lines(100, Some(119)));
+        wait_for_jobs(&mut engine);
+        assert_eq!(engine.search_matches, (100..120).collect::<Vec<_>>());
+        assert_eq!(engine.search_total(), 20);
+
+        // A line scope too large for the UI thread scans from its first line.
+        engine.set_search_scope(lines(150_000, None));
+        wait_for_jobs(&mut engine);
+        assert_eq!(engine.search_total(), 50_000);
+        assert_eq!(engine.search_matches.first(), Some(&150_000));
+    }
+
+    #[test]
+    fn selection_bounds_without_listing_the_selection() {
+        let (_dir, log) = hits_log(50);
+        let mut engine = TailEngine::open(&log).unwrap();
+        assert_eq!(engine.selection_bounds(), None);
+        engine.selection.extend([7, 3, 12]);
+        assert_eq!(engine.selection_bounds(), Some((3, 12)));
+        engine.selection.clear();
+        engine.selection_all = true;
+        assert_eq!(engine.selection_bounds(), Some((0, 49)));
+    }
+
+    #[test]
     fn truncation_resets_the_scope_and_says_so() {
         let (_dir, log) = hits_log(50);
         let mut engine = TailEngine::open(&log).unwrap();
