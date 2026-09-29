@@ -1447,3 +1447,53 @@ fn test_index_job_builds_the_same_index_as_the_synchronous_path() {
     sync2.set_include_filter("ERROR");
     assert_eq!(bg.filtered_lines, sync2.filtered_lines);
 }
+
+/// Every stream dragged out into floating windows left the main surface without a tree,
+/// and 0.13.0 saved it as `layout=(surfaces:[Empty,Window(...)])`: opening any file after
+/// loading it panicked with "There did not exist a tree at surface index 0".
+#[test]
+fn a_layout_with_an_empty_main_surface_opens_files_without_panicking() {
+    use fasttail::ui::dock::FastTailTab;
+    use fasttail::ui::FastTailApp;
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.log");
+    let second = dir.path().join("second.jsonl");
+    write_lines(&first, &["one"]);
+    write_lines(&second, &[r#"{"id": "x", "titolo": "y"}"#]);
+
+    let mut dock = egui_dock::DockState::new(vec![]);
+    dock.add_window(vec![FastTailTab::LogStream(first.clone())]);
+    *dock
+        .get_surface_mut(egui_dock::SurfaceIndex::main())
+        .unwrap() = egui_dock::Surface::Empty;
+    assert!(ron::to_string(&dock)
+        .unwrap()
+        .starts_with("(surfaces:[Empty,Window("));
+    let mut app = FastTailApp::from_config(FastTailConfig {
+        spool_dir: Some(dir.path().to_path_buf()),
+        dock_layout: Some(ron::to_string(&dock).unwrap()),
+        open_files: vec![first.clone()],
+        ..FastTailConfig::default()
+    });
+    app.open_log_file(second.clone());
+    let ctx = egui::Context::default();
+    for _ in 0..2 {
+        let mut out = ctx.run_ui(Default::default(), |ui| app.render_ui(ui));
+        out.textures_delta.clear();
+    }
+    assert!(app.engines.iter().any(|e| e.path == second));
+    assert!(app
+        .dock_state
+        .iter_surfaces()
+        .next()
+        .unwrap()
+        .node_tree()
+        .is_some());
+
+    // An empty main surface met live is given its tree back, and the saved dock keeps it.
+    let mut live = dock.clone();
+    fasttail::ui::find_results::ensure_main_surface(&mut live);
+    assert!(!live.iter_surfaces().next().unwrap().is_empty());
+    let saved = fasttail::ui::find_results::without_find_results(&dock);
+    assert!(!saved.iter_surfaces().next().unwrap().is_empty());
+}
