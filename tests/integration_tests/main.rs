@@ -23,6 +23,7 @@ use tempfile::NamedTempFile;
 
 mod basics;
 mod bookmark_report;
+mod char_selection;
 mod external_tools;
 mod line_wrap;
 mod log_levels;

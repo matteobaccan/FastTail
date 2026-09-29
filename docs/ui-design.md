@@ -654,6 +654,7 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
 - **Row context menu** (`row_context_menu`, text and wrapped views). It is **always available** on a row. Minimum width 160. The picks are applied after the rows are drawn (`RowMenuPicks`). Groups are separated by separators:
   1. `Copy  (CTRL + C)`: the selection when the clicked row is part of it, else the clicked row alone (it becomes the selection); every underlying line, those a collapsed group hides included.
   2. `Copy as shown`: the same, one line per row as the view shows it, with ` ×N` after a closed group's row.
+  - `Copy selected text`, only while characters are selected inside a row: copies them.
   - Then, after a separator when either applies: `▣ Highlight "token"` (or `▢ Clear the highlight of "token"` when it is the outlined one) on the word under the pointer where the menu was opened (kept in egui temp memory at the right click), and `⇣ Next line of rule  (F4)` ▸, a submenu listing the enabled rules matching the row (`#n pattern`, `▶` on the stream's navigation rule); picking one makes it the navigation rule and walks to its next line.
   3. `✏ Bookmark note…`: opens the note editor in the stream bar (§3.3) on that line.
   4. `☆ Remove bookmark  (CTRL + F2)`, only when the row's own line is bookmarked: what `CTRL + F2` does there (removes a manual bookmark and its note, or dismisses an automatic one).
@@ -1083,7 +1084,8 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `CTRL + SHIFT + D` | focused stream, text views | Cycle the collapse of repeated lines: off → exact → numbers → off (per stream, persisted) |
 | `ALT + W` | focused stream | Toggle line wrap (per file, persisted) |
 | `CTRL + A` | focused stream | Select every visible row |
-| `CTRL + C` | focused stream | Copy the selected rows (or the current hit) as plain text; every line a selected collapsed group hides is included |
+| `CTRL + C` | focused stream | Copy the characters selected inside a row, else the selected rows (or the current hit) as plain text; every line a selected collapsed group hides is included |
+| `SHIFT + ←/→`, `CTRL + SHIFT + ←/→`, `SHIFT + HOME/END` | focused stream with a caret | Move the end of the character selection by a character, a word (letters, digits, `_`) or to the start / end of the row; consumed only while a caret exists |
 | `CTRL + F2` | focused stream | On the current row (the selection, else the current hit, else the top row): remove a manual bookmark with its note, dismiss an automatic bookmark, or else add a manual bookmark |
 | `F2` / `SHIFT + F2` | focused stream | Next / previous bookmark, manual or automatic, among the visible lines (wraps); select it and centre it |
 | `Enter` / `Esc` | bookmark note editor | Save / cancel the note |
@@ -1106,7 +1108,8 @@ The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL 
 - **Rows.**
   - Click selects a row. `SHIFT + click` extends the selection over the visible rows. `CTRL + click` toggles a row. On a closed collapsed group, the row stands for every line of the group.
   - Right-click opens the row context menu (§4.13), on any row.
-  - Double-click a word of a row: outline its occurrences in the stream (selection highlight); on empty space or on the same word: clear.
+  - Double-click a word of a row: outline its occurrences in the stream (selection highlight); on empty space or on the same word: clear. The same double-click selects that word as a character selection; a triple-click selects the whole row text.
+  - **Character selection** (`TailEngine::char_selection`, one per stream, inside one row): the row area senses click-and-drag. A press on the text leaves a caret (a 1 px line in the primary text colour) and selects the row; a drag (past egui's threshold, anchored where the button went down) selects up to the pointer, clamped to the row's galley. The selection is painted over the text with the visuals' selection colour at 55 %, in the normal and the wrapped layout. A click off the text, or a double-click on empty space, clears it; `SHIFT` / `CTRL` clicks keep their row meaning.
   - Clicking `[+] JSON` expands or collapses the pretty-printed JSON.
   - Clicking a `×N` badge expands or collapses that group; hovering it shows the repetitions, the line span and the times.
   - Hovering the `✏` marker shows the bookmark note.

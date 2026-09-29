@@ -19,6 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   there is no line. `--since` / `--until` without `--print` now keep a relative value as
   typed, so the window opened from the command line slides too.
 
+- **Select part of a row.** Pressing on a row's text and dragging selects characters of
+  that row (the row is selected too); a click leaves a caret, `SHIFT + ←/→`,
+  `CTRL + SHIFT + ←/→` and `SHIFT + Home/End` move the end of the selection, a
+  double-click selects the word and a triple-click the whole row, in the normal and the
+  wrapped layout. `CTRL + C` then copies just those characters (as shown: ANSI handled,
+  timestamps as displayed), the row menu offers "Copy selected text", `CTRL + F` puts
+  them in the search box and `Esc` clears them; `SHIFT` / `CTRL` clicks keep selecting
+  rows. The selection is cleared by a reload and when a filter hides its row.
+
 ### Changed
 
 - The "Last hour" shortcut of the time range popup is now "Last hour of the log" (same

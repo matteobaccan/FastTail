@@ -12,8 +12,8 @@ use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
 use crate::scan_job::MAX_FILTER_TERMS;
 use crate::tail_engine::{
-    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SearchScope, SpanStyle, TailEngine,
-    TimeDelta, MAX_LINE_BYTES,
+    CaretStep, CharSelection, HighlightRule, HighlightSpan, HighlightStyle, QuickLabel,
+    SearchScope, SpanStyle, TailEngine, TimeDelta, MAX_LINE_BYTES,
 };
 use crate::theme::CyberTheme;
 use crate::wrap_layout::{
@@ -1768,6 +1768,17 @@ fn render_log_stream(
         if act(ActionId::SearchFocus)
             || (is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_f)))
         {
+            // Characters selected inside a row become the query, as editors do.
+            if let Some(text) = engine
+                .char_selection
+                .as_ref()
+                .filter(|_| !search_resp.has_focus())
+                .map(CharSelection::selected)
+                .filter(|t| !t.is_empty() && t.chars().count() <= 256 && !t.contains('\n'))
+            {
+                *search_query = text.to_string();
+                engine.search_edited_at = Some(Instant::now());
+            }
             ui.ctx().memory_mut(|m| m.request_focus(search_id));
             let mut state =
                 egui::text_edit::TextEditState::load(ui.ctx(), search_id).unwrap_or_default();
@@ -2268,8 +2279,35 @@ fn render_log_stream(
                 ui.ctx().request_repaint();
             }
             if act(ActionId::Copy) || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_c))) {
-                if let Some(text) = engine.copy_selection_text() {
+                // The characters selected inside a row first, else the selected rows.
+                let chars = engine
+                    .char_selection
+                    .as_ref()
+                    .filter(|sel| !sel.is_empty())
+                    .map(|sel| sel.selected().to_string());
+                if let Some(text) = chars.or_else(|| engine.copy_selection_text()) {
                     ui.ctx().copy_text(text);
+                }
+            }
+            // With a caret in this stream, SHIFT + arrows / Home / End move its head
+            // (CTRL + SHIFT by words); without one these keys keep their meaning.
+            if keys_ok && engine.char_selection.is_some() {
+                let shift = egui::Modifiers::SHIFT;
+                let word = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+                for (modifiers, key, step) in [
+                    (word, egui::Key::ArrowLeft, CaretStep::WordLeft),
+                    (word, egui::Key::ArrowRight, CaretStep::WordRight),
+                    (shift, egui::Key::ArrowLeft, CaretStep::Left),
+                    (shift, egui::Key::ArrowRight, CaretStep::Right),
+                    (shift, egui::Key::Home, CaretStep::Home),
+                    (shift, egui::Key::End, CaretStep::End),
+                ] {
+                    if ui.input_mut(|i| i.consume_key(modifiers, key)) {
+                        if let Some(sel) = engine.char_selection.as_mut() {
+                            sel.move_head(step);
+                        }
+                        ui.ctx().request_repaint();
+                    }
                 }
             }
             // CTRL + SHIFT + D cycles the collapse of repeated lines (text view only; a
@@ -2354,6 +2392,21 @@ fn render_log_stream(
                     engine.view_notice = Some(t(lang, "rule_nav_no_rule").to_string());
                 }
                 ui.ctx().request_repaint();
+            }
+            // Esc on the rows: clears a character selection first (a bare caret goes
+            // without using the key, so Esc still does what it did before).
+            if keys_ok && engine.char_selection.is_some() {
+                let non_empty = engine
+                    .char_selection
+                    .as_ref()
+                    .is_some_and(|sel| !sel.is_empty());
+                if non_empty {
+                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                        engine.char_selection = None;
+                    }
+                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    engine.char_selection = None;
+                }
             }
             // Esc on the rows: stops a rule walk, else clears the outlined token (before
             // it leaves the context view, below).
@@ -2830,6 +2883,9 @@ fn render_log_stream(
     }
 
     if let Some((idx, mods)) = row_click {
+        if mods.shift || mods.ctrl || mods.command {
+            engine.char_selection = None;
+        }
         if mods.shift {
             engine.extend_selection_to(idx);
         } else if mods.ctrl || mods.command {
@@ -3238,6 +3294,7 @@ fn render_extended_rows(
     let mut picks = RowMenuPicks::default();
     let mut badge_toggle: Option<usize> = None;
     let mut token_pick: Option<Option<String>> = None;
+    let mut char_pick: Option<CharPick> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
     let visible_lines = engine.visible_line_count();
@@ -3315,7 +3372,11 @@ fn render_extended_rows(
                 // timestamp (its tooltip), or a click this frame (a token pick).
                 let keep_label = engine.selection_token().is_some()
                     || time_original.is_some()
-                    || ui.input(|i| i.pointer.any_click());
+                    || ui.input(|i| i.pointer.any_click() || i.pointer.primary_down())
+                    || engine
+                        .char_selection
+                        .as_ref()
+                        .is_some_and(|sel| sel.line == actual_line_idx);
                 let row_resp = ui
                     .horizontal(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -3486,7 +3547,7 @@ fn render_extended_rows(
                 let click = ui.interact(
                     click_rect,
                     ui.id().with(("row_select", actual_line_idx)),
-                    egui::Sense::click(),
+                    egui::Sense::click_and_drag(),
                 );
                 if click.clicked() {
                     row_click = Some((actual_line_idx, ui.input(|i| i.modifiers)));
@@ -3516,6 +3577,35 @@ fn render_extended_rows(
                     || row_galley(label.clone()),
                     &mut token_pick,
                 );
+                if let Some(pick) = row_char_selection(
+                    ui,
+                    engine.char_selection.as_ref(),
+                    &click,
+                    actual_line_idx,
+                    || row_galley(label.clone()),
+                ) {
+                    // A press on the text selects its row too, as a click does.
+                    if click.drag_started() && matches!(pick, CharPick::Set(_)) {
+                        row_click = Some((actual_line_idx, egui::Modifiers::NONE));
+                    }
+                    char_pick = Some(pick);
+                }
+                if let Some(sel) = engine
+                    .char_selection
+                    .as_ref()
+                    .filter(|sel| sel.line == actual_line_idx)
+                {
+                    if let Some((galley, at)) = row_galley(label.clone()) {
+                        paint_char_selection(
+                            ui.painter(),
+                            &galley,
+                            at,
+                            sel,
+                            ui.visuals().selection.bg_fill.gamma_multiply(0.55),
+                            theme.text_primary(),
+                        );
+                    }
+                }
                 row_context_menu(
                     &click,
                     engine,
@@ -3602,6 +3692,11 @@ fn render_extended_rows(
     if let Some(token) = token_pick {
         engine.toggle_selection_token(token.as_deref());
     }
+    match char_pick {
+        Some(CharPick::Set(sel)) => engine.char_selection = Some(sel),
+        Some(CharPick::Clear) => engine.char_selection = None,
+        None => {}
+    }
     if let Some(row) = badge_toggle {
         engine.toggle_collapsed_row(row);
     }
@@ -3641,6 +3736,8 @@ struct RowMenuPicks {
     rule: Option<(usize, usize)>,
     /// Search scope picked: in the selection, from here, up to here.
     scope: Option<SearchScope>,
+    /// The characters selected inside a row, to put on the clipboard.
+    copy_chars: Option<String>,
 }
 
 impl RowMenuPicks {
@@ -3671,6 +3768,9 @@ impl RowMenuPicks {
                 engine.pending_jump = Some(target);
             }
             ui.ctx().request_repaint();
+        }
+        if let Some(text) = self.copy_chars {
+            ui.ctx().copy_text(text);
         }
         apply_copy_pick(ui, engine, self.copy);
     }
@@ -3855,6 +3955,185 @@ fn menu_token_id(engine: &TailEngine) -> egui::Id {
 /// Byte offset of character `idx` of `text` (its length past the end).
 fn char_to_byte(text: &str, idx: usize) -> usize {
     text.char_indices().nth(idx).map_or(text.len(), |(i, _)| i)
+}
+
+/// What a press, a drag or a click on a row's text does to the character selection.
+enum CharPick {
+    Set(CharSelection),
+    Clear,
+}
+
+/// Byte offset of the character boundary nearest to `pointer` in a galley drawn at
+/// `pos`; the pointer is clamped into the galley, so a drag that leaves the row stays in
+/// it (at its start or end).
+fn byte_at(galley: &egui::Galley, pos: egui::Pos2, pointer: egui::Pos2) -> usize {
+    let size = galley.size();
+    let local = egui::vec2(
+        (pointer.x - pos.x).clamp(0.0, size.x),
+        (pointer.y - pos.y).clamp(0.0, (size.y - 1.0).max(0.0)),
+    );
+    let cursor = galley.cursor_from_pos(local);
+    char_to_byte(galley.text(), cursor.index.0)
+}
+
+/// Whether `pointer` is over the text of a galley drawn at `pos`.
+fn over_text(galley: &egui::Galley, pos: egui::Pos2, pointer: egui::Pos2) -> bool {
+    egui::Rect::from_min_size(pos, galley.size()).contains(pointer)
+}
+
+/// The character selection on a row: a press on the text starts it (a caret), a drag
+/// extends it inside the row, a click places the caret (or clears the selection off the
+/// text), a double-click selects the token under the pointer and a triple-click the
+/// whole text. `SHIFT` / `CTRL` clicks keep their row meaning. `galley` is laid out on
+/// demand.
+fn row_char_selection(
+    ui: &Ui,
+    current: Option<&CharSelection>,
+    click: &egui::Response,
+    line: usize,
+    galley: impl FnOnce() -> Option<(std::sync::Arc<egui::Galley>, egui::Pos2)>,
+) -> Option<CharPick> {
+    let primary = egui::PointerButton::Primary;
+    let started = click.drag_started_by(primary);
+    let dragging = click.dragged_by(primary) && current.is_some_and(|sel| sel.line == line);
+    let (triple, double, clicked) = (
+        click.triple_clicked(),
+        click.double_clicked(),
+        click.clicked(),
+    );
+    if !(started || dragging || triple || double || clicked) {
+        return None;
+    }
+    let modifiers = ui.input(|i| i.modifiers);
+    if (started || (clicked && !double && !triple)) && (modifiers.shift || modifiers.command) {
+        return None;
+    }
+    let now_at = click.interact_pointer_pos()?;
+    // A drag is reported once the pointer has moved a few pixels: it starts where the
+    // button went down, and its head is where the pointer is now.
+    let pointer = if started {
+        ui.input(|i| i.pointer.press_origin()).unwrap_or(now_at)
+    } else {
+        now_at
+    };
+    let Some((galley, pos)) = galley() else {
+        return clicked.then_some(CharPick::Clear);
+    };
+    let on_text = over_text(&galley, pos, pointer);
+    let text = galley.text();
+    if started {
+        return on_text.then(|| {
+            CharPick::Set(CharSelection::new(
+                line,
+                text.to_string(),
+                byte_at(&galley, pos, pointer),
+                byte_at(&galley, pos, now_at),
+            ))
+        });
+    }
+    if dragging && !started {
+        let sel = current?;
+        return Some(CharPick::Set(CharSelection::new(
+            line,
+            sel.text.clone(),
+            sel.anchor,
+            byte_at(&galley, pos, pointer),
+        )));
+    }
+    if !on_text {
+        return (clicked || double).then_some(CharPick::Clear);
+    }
+    let at = byte_at(&galley, pos, pointer);
+    if triple {
+        return Some(CharPick::Set(CharSelection::new(
+            line,
+            text.to_string(),
+            0,
+            text.len(),
+        )));
+    }
+    if double {
+        // The token under the pointer: the character the pointer is on, not the
+        // boundary after it.
+        let local_x = pointer.x - pos.x;
+        let mut idx = galley.cursor_from_pos(pointer - pos).index.0;
+        if idx > 0 && local_x < galley.pos_from_cursor(egui::text::CCursor::new(idx)).min.x {
+            idx -= 1;
+        }
+        return Some(
+            match crate::tail_engine::token_at(text, char_to_byte(text, idx)) {
+                Some((start, end)) => {
+                    CharPick::Set(CharSelection::new(line, text.to_string(), start, end))
+                }
+                None => CharPick::Set(CharSelection::new(line, text.to_string(), at, at)),
+            },
+        );
+    }
+    // A press starts a selection; a click without a drag leaves a caret.
+    Some(CharPick::Set(CharSelection::new(
+        line,
+        text.to_string(),
+        at,
+        at,
+    )))
+}
+
+/// Paints a character selection (or its caret) over a row's galley drawn at `pos`.
+fn paint_char_selection(
+    painter: &egui::Painter,
+    galley: &egui::Galley,
+    pos: egui::Pos2,
+    sel: &CharSelection,
+    fill: Color32,
+    caret: Color32,
+) {
+    use egui::text::CCursor;
+    let text = galley.text();
+    let clamp = |at: usize| {
+        let mut at = at.min(text.len());
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        text[..at].chars().count()
+    };
+    let range = sel.range();
+    let (first, last) = (clamp(range.start), clamp(range.end));
+    let a = galley.pos_from_cursor(CCursor::new(first));
+    if first == last {
+        let x = pos.x + a.min.x;
+        painter.line_segment(
+            [
+                egui::pos2(x, pos.y + a.min.y),
+                egui::pos2(x, pos.y + a.max.y),
+            ],
+            Stroke::new(1.0, caret),
+        );
+        return;
+    }
+    let b = galley.pos_from_cursor(CCursor::new(last));
+    let width = galley.size().x;
+    let mut rects = Vec::new();
+    if (a.min.y - b.min.y).abs() < 0.5 {
+        rects.push(egui::Rect::from_min_max(
+            a.min,
+            egui::pos2(b.min.x, a.max.y),
+        ));
+    } else {
+        rects.push(egui::Rect::from_min_max(a.min, egui::pos2(width, a.max.y)));
+        if b.min.y > a.max.y + 0.5 {
+            rects.push(egui::Rect::from_min_max(
+                egui::pos2(0.0, a.max.y),
+                egui::pos2(width, b.min.y),
+            ));
+        }
+        rects.push(egui::Rect::from_min_max(
+            egui::pos2(0.0, b.min.y),
+            egui::pos2(b.min.x, b.max.y),
+        ));
+    }
+    for rect in rects {
+        painter.rect_filled(rect.translate(pos.to_vec2()), 0.0, fill);
+    }
 }
 
 /// The selection highlight token under `pointer` in a row's galley drawn at `pos` (see
@@ -4202,6 +4481,20 @@ fn row_context_menu(
         {
             picks.copy = Some((line, true));
             ui.close();
+        }
+        if let Some(text) = engine
+            .char_selection
+            .as_ref()
+            .filter(|sel| !sel.is_empty())
+            .map(|sel| sel.selected().to_string())
+        {
+            if ui
+                .button(RichText::new(t(lang, "copy_selected_text")).monospace())
+                .clicked()
+            {
+                picks.copy_chars = Some(text);
+                ui.close();
+            }
         }
         // Search scope: the selection, from this line to the end, or up to it.
         ui.separator();
@@ -4591,6 +4884,7 @@ fn render_wrapped_rows(
     let mut picks = RowMenuPicks::default();
     let mut badge_toggle: Option<usize> = None;
     let mut token_pick: Option<Option<String>> = None;
+    let mut char_pick: Option<CharPick> = None;
 
     let output = scroll_area.show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().min;
@@ -4927,7 +5221,7 @@ fn render_wrapped_rows(
             let click = ui.interact(
                 row_rect,
                 ui.id().with(("row_select", line)),
-                egui::Sense::click(),
+                egui::Sense::click_and_drag(),
             );
             if click.clicked() {
                 row_click = Some((line, ui.input(|i| i.modifiers)));
@@ -4939,6 +5233,26 @@ fn render_wrapped_rows(
                 || Some((r.galley.clone(), text_pos)),
                 &mut token_pick,
             );
+            if let Some(pick) =
+                row_char_selection(ui, eng.char_selection.as_ref(), &click, line, || {
+                    Some((r.galley.clone(), text_pos))
+                })
+            {
+                if click.drag_started() && matches!(pick, CharPick::Set(_)) {
+                    row_click = Some((line, egui::Modifiers::NONE));
+                }
+                char_pick = Some(pick);
+            }
+            if let Some(sel) = eng.char_selection.as_ref().filter(|sel| sel.line == line) {
+                paint_char_selection(
+                    &painter,
+                    &r.galley,
+                    text_pos,
+                    sel,
+                    ui.visuals().selection.bg_fill.gamma_multiply(0.55),
+                    theme.text_primary(),
+                );
+            }
             row_context_menu(
                 &click,
                 eng,
@@ -5040,6 +5354,11 @@ fn render_wrapped_rows(
     engine.current_scroll_y = ended;
     if let Some(token) = token_pick {
         engine.toggle_selection_token(token.as_deref());
+    }
+    match char_pick {
+        Some(CharPick::Set(sel)) => engine.char_selection = Some(sel),
+        Some(CharPick::Clear) => engine.char_selection = None,
+        None => {}
     }
     if let Some(row) = badge_toggle {
         engine.toggle_collapsed_row(row);

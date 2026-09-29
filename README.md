@@ -137,7 +137,8 @@ Search and navigation shortcuts act on the stream in the **focused dock panel** 
 | `Ctrl + End` | Jump to the latest line and resume follow |
 | `Click` / `Shift + Click` / `Ctrl + Click` | Select a row / extend the selection over the visible rows / toggle a row |
 | `Ctrl + A` | Select every visible row of the focused stream |
-| `Ctrl + C` | Copy the selected rows (or the current search hit) as plain text; a collapsed group copies every line it stands for (**Copy as shown** in the row menu writes the rows with their `×N` badge) |
+| Drag on a row's text, `Shift + ←` / `→`, `Ctrl + Shift + ←` / `→`, `Shift + Home` / `End` | Select characters inside one row: a press on the text leaves a caret (and selects the row), a drag selects up to where the pointer is (clamped to the row), the keys move the end of the selection by a character, a word or to the start / end of the row; double-click selects the word, triple-click the whole row; `Esc` clears it |
+| `Ctrl + C` | Copy the characters selected inside a row, else the selected rows (or the current search hit) as plain text; a collapsed group copies every line it stands for (**Copy as shown** in the row menu writes the rows with their `×N` badge) |
 | `Ctrl + G` | Go to line N, `+N` / `-N` from the current line, a time such as `14:02` (first line at or after it), or `#tag` (next bookmark whose note carries that tag, wrapping around); hidden lines resolve to the next visible one |
 | `Enter` / `Esc` in the time range popup | Apply the window and close the popup / close it and keep the window as it was (a click on the stream bar's `🕘` span opens it) |
 | `Ctrl + Shift + T` | Toggle always-on-top (also the 📌 pin in the title bar and a Settings checkbox) |
