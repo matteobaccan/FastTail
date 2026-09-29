@@ -124,10 +124,23 @@ pub fn draft(ctx: &egui::Context, engine: &TailEngine) -> Option<TimeRangeDraft>
     ctx.data(|d| d.get_temp(popup_id(engine).with("draft")))
 }
 
-/// The instant a side names, `None` when it is empty or cannot be read.
+/// The instant a side names, `None` when it is empty or cannot be read. A relative side
+/// (`-15m`, `now`) is read against the local clock, which only matters for the calendar
+/// it opens on; the engine reads it on the stream's own clock.
 fn parse(text: &str, reference: i64) -> Option<i64> {
-    parse_user_time(text, reference)
+    crate::timestamp::parse_relative(text, crate::timestamp::local_now_millis())
+        .or_else(|| parse_user_time(text, reference))
 }
+
+/// The relative shortcuts: label and the "from" side they fill ("to" stays empty).
+pub const RELATIVE_SHORTCUTS: &[(&str, &str)] = &[
+    ("5m", "-5m"),
+    ("15m", "-15m"),
+    ("1h", "-1h"),
+    ("6h", "-6h"),
+    ("24h", "-24h"),
+    ("7d", "-7d"),
+];
 
 /// Whether a side can be applied: empty (an open end) or readable.
 pub fn side_readable(text: &str, reference: i64) -> bool {
@@ -236,6 +249,8 @@ pub struct ControlState {
     pub pending: bool,
     /// Progress of a running timing scan, 0..=1.
     pub progress: Option<f32>,
+    /// The window has a relative side and slides with the clock.
+    pub live: bool,
 }
 
 impl ControlState {
@@ -261,6 +276,9 @@ pub fn control_label(state: &ControlState, no_timestamps: &str) -> String {
     } else {
         "🕘 —".to_string()
     };
+    if state.live {
+        label = label.replacen("🕘 ", "🕘 ⟳ ", 1);
+    }
     if state.pending {
         label.push_str(" ⏳");
     }
@@ -287,7 +305,13 @@ pub fn control(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: L
         filtered: engine.is_time_filtered(),
         pending: engine.time_range_pending(),
         progress,
+        live: engine.time_window_live(),
     };
+    if state.live {
+        // The engine re-reads the window every few seconds; wake up to show it.
+        ui.ctx()
+            .request_repaint_after(crate::tail_engine::LIVE_WINDOW_PERIOD);
+    }
     if state.pending || progress.is_some() {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
@@ -408,6 +432,40 @@ fn control_tooltip(engine: &TailEngine, state: &ControlState, lang: Language) ->
             side(to)
         ));
     }
+    if state.live {
+        if let Some((from, to)) = engine.time_window() {
+            let side = |side: Option<i64>| {
+                side.map_or_else(
+                    || "…".to_string(),
+                    |ms| format_millis(engine.to_display_clock(ms)),
+                )
+            };
+            let key = if engine.time_window_slides_in_place() {
+                "time_range_live"
+            } else {
+                "time_range_live_minute"
+            };
+            lines.push(format!(
+                "⟳ {}",
+                t(lang, key)
+                    .replace("{from}", &side(from))
+                    .replace("{to}", &side(to))
+            ));
+            // An empty live window: the log has nothing that recent.
+            if engine.visible_line_count() == 0 {
+                if let (Some(from), Some(last)) = (from, engine.last_timestamp()) {
+                    if last < from {
+                        lines.push(format!(
+                            "ⓘ {}",
+                            t(lang, "time_range_live_empty")
+                                .replace("{from}", &side(Some(from)))
+                                .replace("{last}", &side(Some(last)))
+                        ));
+                    }
+                }
+            }
+        }
+    }
     if state.pending {
         lines.push(format!("⏳ {}", t(lang, "time_range_pending")));
     }
@@ -510,6 +568,26 @@ fn popup_contents(
         }
         if let Some(last) = shortcut(ui, "time_range_last_hour", "time_range_last_hour_tip", last) {
             draft.set(last_hour(last), reference);
+        }
+    });
+    // Relative to now: the window slides with the clock.
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("⟳ {}:", t(lang, "time_range_relative")))
+                .monospace()
+                .size(10.5),
+        )
+        .on_hover_text(t(lang, "time_range_relative_tip"));
+        for (label, from) in RELATIVE_SHORTCUTS {
+            if tagged(ui, base.with(("relative", *label)), |ui| {
+                ui.add_enabled(!(timed && !usable), egui::Button::new(*label))
+            })
+            .on_hover_text(t(lang, "time_range_relative_tip"))
+            .on_disabled_hover_text(t(lang, "time_range_unavailable_tip"))
+            .clicked()
+            {
+                draft.set((from.to_string(), String::new()), reference);
+            }
         }
     });
 

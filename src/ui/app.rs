@@ -5113,25 +5113,11 @@ fn apply_cli_time_window(engine: &mut TailEngine, since: Option<&str>, until: Op
     if since.is_none() && until.is_none() {
         return;
     }
-    // The texts are read on the stream's display clock (a saved time display included),
-    // so "now" is taken on that clock too.
-    let now = engine.now_on_display_clock();
-    let text = |value: Option<&str>| value.map(|v| cli_time_text(v, now)).unwrap_or_default();
+    // As typed in the popup: a relative value (`-15m`) makes a live window, which slides
+    // with the clock on the stream's display clock.
+    let text = |value: Option<&str>| value.unwrap_or_default().to_string();
     let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
     engine.time_range_error = !from_ok || !to_ok;
-}
-
-/// The popup text for a `--since` / `--until` value: a relative time becomes the instant
-/// it names at `now`, with its milliseconds; anything else is kept as typed.
-fn cli_time_text(value: &str, now: i64) -> String {
-    match crate::timestamp::parse_relative(value, now) {
-        Some(millis) => format!(
-            "{}.{:03}",
-            crate::timestamp::format_millis(millis),
-            millis.rem_euclid(1000)
-        ),
-        None => value.to_string(),
-    }
 }
 
 /// The session entry describing `engine` as it is now. The line-number and time delta
@@ -5300,23 +5286,11 @@ mod tests {
             .filter_map(|r| engine.get_actual_line_idx(r))
             .collect();
         assert_eq!(visible, vec![1]);
-    }
-
-    #[test]
-    fn a_relative_cli_time_keeps_its_milliseconds_and_is_exact_on_the_to_side() {
-        use crate::timestamp::{end_of_typed_time, parse_user_time};
-        let now = 20_000 * 86_400_000 + 14 * 3_600_000 + 2 * 60_000 + 3_456;
-        for (value, instant) in [
-            ("now", now),
-            ("-1h30m", now - 90 * 60_000),
-            ("-45s", now - 45_000),
-        ] {
-            let text = super::cli_time_text(value, now);
-            let parsed = parse_user_time(&text, 0).unwrap_or_else(|| panic!("{text}"));
-            assert_eq!(parsed, instant, "{text}");
-            assert_eq!(end_of_typed_time(&text, parsed), instant, "{text}");
-        }
-        assert_eq!(super::cli_time_text("14:02", now), "14:02");
+        // Kept as typed: the window opened from the command line slides with the clock.
+        assert_eq!(engine.time_from_text, "-1h");
+        assert!(engine.time_window_live());
+        super::apply_cli_time_window(&mut engine, Some("nonsense"), None);
+        assert!(engine.time_range_error);
     }
 
     fn key(key: Key, modifiers: Modifiers) -> Event {
