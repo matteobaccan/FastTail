@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Command palette (CTRL + SHIFT + P): a floating box that lists every action of the
 //! registry (`crate::actions`) and every boolean or enumerated setting, filtered by a
 //! fuzzy match on the localized and the English name as the user types. The palette only

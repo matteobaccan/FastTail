@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! The time range control of the stream bar and its popup.
 //!
 //! The control shows the time span of the visible lines and opens a popup that edits the

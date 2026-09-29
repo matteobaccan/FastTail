@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Collapse of repeated lines: runs of consecutive equal entries of the visible lines
 //! shown as one group with a `×N` badge.
 //!

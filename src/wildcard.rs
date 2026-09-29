@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Pattern streams: a directory plus a file-name pattern with `*` and `?` wildcards,
 //! resolved to the newest matching file. The matcher is in-house (no `glob` crate): it
 //! works on the file name only, the directory part is taken literally and nothing is

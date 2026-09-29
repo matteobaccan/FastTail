@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 use fasttail::compressed::{entry_path, EntryRefusal, JobState};
 use fasttail::config::FastTailConfig;
 use fasttail::session::{Session, StreamEntry, SESSION_SUFFIX};

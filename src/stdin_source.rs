@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Standard input as a stream: `command | fasttail -`.
 //!
 //! A pipe cannot be read twice, and the engine relies on random access, so a background

@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Log level detection: one fixed table of level tokens, matched as whole words in the
 //! first bytes of a line, plus syslog `<n>` priorities. No allocation, no regex.
 

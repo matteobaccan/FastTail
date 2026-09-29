@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Temporary spool files: data that has no random-access file of its own (a decompressed
 //! archive entry, later standard input) is written to a regular file that the unchanged
 //! tail engine then opens and indexes like any other log.

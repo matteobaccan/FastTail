@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! The global filter bar (see `crate::global_filter`): shown under the menu bar with
 //! `CTRL + SHIFT + H` or the `🌐` toolbar button, it edits the terms every stream combines
 //! with its own filter. Hiding the bar does not switch the filter off.

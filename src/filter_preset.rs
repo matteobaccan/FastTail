@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Filter presets: a stream's whole filter state (include and exclude terms, case and
 //! regex toggles, minimum level and unknown-level toggle, optionally the time range as
 //! typed) saved under a name in `fasttail.ini` and applied again to one stream or to all.

@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Named sessions: the workspace (open files and patterns, dock layout, per-stream
 //! filters, search query, wrap, encoding, ANSI and collapse modes, line-number and time
 //! delta columns and bookmarks) saved to and loaded from a `*.fasttail-session.ini` file.

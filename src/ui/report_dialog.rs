@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! The bookmark report dialog: options, then the Markdown report built in bounded steps
 //! (a few milliseconds per frame, with progress and Cancel) and copied to the clipboard
 //! or saved as a `.md` file. The report itself is `crate::bookmark_report`.

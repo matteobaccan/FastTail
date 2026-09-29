@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 use fasttail::tail_engine::TailEngine;
 use fasttail::timestamp::{SourceZone, TimeDisplay};
 use std::io::Write;

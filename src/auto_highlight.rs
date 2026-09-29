@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Automatic highlighting of tokens: IP addresses, UUIDs, URLs, durations and file paths
 //! painted with a colour of the theme, with no rule to write (see `TailEngine::
 //! match_highlight_spans_with`, where the spans rank after the user rules, the quick labels

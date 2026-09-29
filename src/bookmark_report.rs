@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Bookmark tags and the Markdown bookmark report.
 //!
 //! A tag is a `#word` inside a bookmark note: nothing new is stored, so tags are saved,

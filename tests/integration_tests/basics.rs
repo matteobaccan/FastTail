@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 use super::*;
 
 #[test]
@@ -3262,4 +3266,47 @@ fn test_zip_picker_i18n_keys() {
         t(Language::It, "zip_picker_no_selection"),
         "Seleziona almeno una voce da aprire"
     );
+}
+
+/// Every Rust source file starts with the project, copyright and licence header.
+#[test]
+fn every_rust_file_has_the_source_header() {
+    const HEADER: &str = "// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.\n\
+                          // Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail\n\
+                          // SPDX-License-Identifier: MIT\n";
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // The maintainer's own logs live under tests/logs.
+                if path.file_name().is_some_and(|n| n != "logs") {
+                    walk(&path, out);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = vec![root.join("build.rs")];
+    for dir in ["src", "tests", "benches"] {
+        walk(&root.join(dir), &mut files);
+    }
+    let missing: Vec<String> = files
+        .iter()
+        .filter(|path| path.exists())
+        .filter(|path| {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            !text.replace("\r\n", "\n").starts_with(HEADER)
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "files without the source header: {missing:?}"
+    );
+    assert!(files.len() > 80, "found only {} files", files.len());
 }

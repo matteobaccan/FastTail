@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Leading-timestamp detection for log lines.
 //!
 //! Every format here is fixed, so parsing is a handful of byte comparisons over the first
