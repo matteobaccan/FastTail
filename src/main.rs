@@ -332,6 +332,7 @@ fn parse_command_line() -> CliArgs {
         Err(err) => {
             attach_parent_console();
             eprintln!("fasttail: {err}\n\n{USAGE}");
+            fasttail::print_mode::console::release();
             std::process::exit(2);
         }
     };
@@ -343,6 +344,7 @@ fn parse_command_line() -> CliArgs {
         if cli.show_help {
             print!("{USAGE}");
         }
+        fasttail::print_mode::console::release();
         std::process::exit(0);
     }
     if let Some(cfg) = &cli.config {
@@ -351,13 +353,16 @@ fn parse_command_line() -> CliArgs {
     }
     if cli.print {
         // Headless: no window, no workspace, no spool; the configuration is only read.
-        std::process::exit(fasttail::print_mode::run(&cli));
+        let code = fasttail::print_mode::run(&cli);
+        fasttail::print_mode::console::release();
+        std::process::exit(code);
     }
     if cli.stdin && fasttail::stdin_source::classify() != fasttail::stdin_source::StdinKind::Piped {
         // Reported now, while the parent console can still be attached; the rest of the
         // startup goes on, as for a missing file.
         attach_parent_console();
         eprintln!("fasttail: standard input is not a pipe; nothing to read");
+        fasttail::print_mode::console::release();
         cli.stdin = false;
     }
     cli

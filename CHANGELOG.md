@@ -71,6 +71,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`fasttail -V`, `--help` and `--print` from `cmd` or PowerShell (Windows)** no longer seem to
+  wait for a key: the shell does not wait for the GUI program and had already printed its
+  prompt above the output; FastTail now sends one Enter to the console when it is done, so a
+  fresh prompt appears below.
 - **The command palette no longer stays a couple of rows high.** After a search with few
   or no matches, clearing it left the list as short as it had become; it now grows back
   to the rows it shows (up to its usual height).

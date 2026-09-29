@@ -1160,6 +1160,15 @@ mod interrupt {
 
 /// The console of a GUI-subsystem executable on Windows (nothing to do elsewhere).
 pub mod console {
+    #[cfg(windows)]
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Standard output or standard error was pointed at the parent's console by
+    /// `attach_if_missing`: the shell did not wait for this GUI-subsystem program and has
+    /// already printed its prompt above our output (see `release`).
+    #[cfg(windows)]
+    static WROTE_TO_PARENT: AtomicBool = AtomicBool::new(false);
+
     /// Makes standard output and standard error usable from a terminal: a handle that is
     /// already there (redirected to a file or a pipe) is used as it is; when one is
     /// missing — a GUI-subsystem program started from a console — the parent's console is
@@ -1194,14 +1203,96 @@ pub mod console {
             // The handle stays open for the life of the process.
             let handle = conout.into_raw_handle();
             // SAFETY: `handle` is a valid console handle owned by nobody else.
-            unsafe {
-                SetStdHandle(id, handle);
+            if unsafe { SetStdHandle(id, handle) } != 0 {
+                WROTE_TO_PARENT.store(true, Ordering::Relaxed);
             }
         }
     }
 
     #[cfg(not(windows))]
     pub fn attach_if_missing() {}
+
+    /// Called before exiting after writing to the parent's console. `cmd` and PowerShell
+    /// do not wait for a GUI-subsystem program: their prompt is printed at once, our
+    /// output lands after it, and the console looks as if it waited for a key. One Enter
+    /// put in the console's input makes the shell print a fresh prompt below the output
+    /// (an empty command in a shell that did wait, harmless). A no-op when nothing was
+    /// written to the parent's console (output redirected, or launched from Explorer).
+    #[cfg(windows)]
+    pub fn release() {
+        use std::os::windows::io::AsRawHandle;
+        if !WROTE_TO_PARENT.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        let Ok(conin) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("CONIN$")
+        else {
+            return;
+        };
+        const KEY_EVENT: u16 = 0x0001;
+        const VK_RETURN: u16 = 0x0D;
+        const ENTER_SCAN_CODE: u16 = 0x1C;
+        let key = |down: i32| InputRecord {
+            event_type: KEY_EVENT,
+            key: KeyEventRecord {
+                key_down: down,
+                repeat_count: 1,
+                virtual_key_code: VK_RETURN,
+                virtual_scan_code: ENTER_SCAN_CODE,
+                unicode_char: u16::from(b'\r'),
+                control_key_state: 0,
+            },
+        };
+        let records = [key(1), key(0)];
+        let mut written = 0u32;
+        // SAFETY: `records` is a valid array of `INPUT_RECORD`s for the call's duration and
+        // `conin` an open console input handle.
+        unsafe {
+            WriteConsoleInputW(
+                conin.as_raw_handle(),
+                records.as_ptr(),
+                records.len() as u32,
+                &mut written,
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn release() {}
+
+    /// `KEY_EVENT_RECORD`.
+    #[cfg(windows)]
+    #[repr(C)]
+    struct KeyEventRecord {
+        key_down: i32,
+        repeat_count: u16,
+        virtual_key_code: u16,
+        virtual_scan_code: u16,
+        unicode_char: u16,
+        control_key_state: u32,
+    }
+
+    #[cfg(all(test, windows))]
+    #[test]
+    fn input_record_has_the_win32_layout() {
+        assert_eq!(std::mem::size_of::<KeyEventRecord>(), 16);
+        assert_eq!(std::mem::size_of::<InputRecord>(), 20);
+        assert_eq!(std::mem::offset_of!(InputRecord, key), 4);
+    }
+
+    /// `INPUT_RECORD` holding a key event (the union's largest member is 16 bytes, as
+    /// `KEY_EVENT_RECORD`).
+    #[cfg(windows)]
+    #[repr(C)]
+    struct InputRecord {
+        event_type: u16,
+        key: KeyEventRecord,
+    }
 
     /// Turns on virtual-terminal processing on a console standard output. `None` when
     /// standard output is not a console (nothing to turn on), else whether the
@@ -1253,6 +1344,12 @@ pub mod console {
         fn AttachConsole(process_id: u32) -> i32;
         fn GetConsoleMode(handle: Handle, mode: *mut u32) -> i32;
         fn SetConsoleMode(handle: Handle, mode: u32) -> i32;
+        fn WriteConsoleInputW(
+            input: Handle,
+            records: *const InputRecord,
+            count: u32,
+            written: *mut u32,
+        ) -> i32;
     }
 }
 
