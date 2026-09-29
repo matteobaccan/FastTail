@@ -354,6 +354,7 @@ pub fn render(
                 !pad.text.is_empty(),
                 egui::Button::new(format!("✖ {}", t(lang, "scratch_clear"))),
             )
+            .on_disabled_hover_text(t(lang, "scratch_empty_tip"))
             .clicked()
         {
             pad.confirm_clear = true;
