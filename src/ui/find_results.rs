@@ -63,6 +63,10 @@ fn group_header(
             theme.text_dim(),
         )),
         FindState::Stale => notes.push((t(lang, "find_all_stale").to_string(), theme.warn_color())),
+        FindState::SkippedUntimed => notes.push((
+            t(lang, "find_all_skipped_untimed").to_string(),
+            theme.text_dim(),
+        )),
         FindState::Done => {}
     }
     if group.capped() {
@@ -160,6 +164,48 @@ pub fn render_find_results(
             .clicked()
         {
             refresh = true;
+        }
+    });
+    // Optional time scope: every stream's matches limited to from..to, typed as in the
+    // time range popup and read on each stream's own clock.
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("🕘 {}", t(lang, "search_scope_time")))
+                .monospace()
+                .size(11.0)
+                .color(theme.text_dim()),
+        );
+        let (from_ok, to_ok) = session.time_fields_valid();
+        for (text, ok, hint) in [
+            (&mut session.time_from, from_ok, "time_from_hint"),
+            (&mut session.time_to, to_ok, "time_to_hint"),
+        ] {
+            let mut edit = egui::TextEdit::singleline(text)
+                .hint_text(t(lang, hint))
+                .desired_width(150.0);
+            if !ok {
+                edit = edit.text_color(theme.warn_color());
+            }
+            let resp = ui.add(edit);
+            let resp = if ok {
+                resp.on_hover_text(t(lang, "tip_find_all_time_scope"))
+            } else {
+                resp.on_hover_text(t(lang, "time_range_invalid"))
+            };
+            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                run = true;
+            }
+        }
+        if !(from_ok && to_ok) {
+            run = false;
+        }
+        if let Some((from, to)) = session.time_scope() {
+            ui.label(
+                RichText::new(format!("⌖ {from} → {to}"))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.accent_color()),
+            );
         }
     });
     if run {

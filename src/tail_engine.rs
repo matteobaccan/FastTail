@@ -730,6 +730,62 @@ pub fn time_window_contains(millis: Option<i64>, from: Option<i64>, to: Option<i
     from.is_none_or(|from| millis >= from) && to.is_none_or(|to| millis <= to)
 }
 
+/// The part of the view a stream's search covers. Lines outside it stay visible but are
+/// not hits: not counted, not listed, not reached by `F3`. Not persisted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SearchScope {
+    /// Every visible line (the default).
+    #[default]
+    All,
+    /// Lines `first..=last` (0-based); `last: None` runs to the end and grows with the file.
+    Lines { first: usize, last: Option<usize> },
+    /// The lines timed inside `from..=to`, typed as in the time range popup; an empty
+    /// side is open. Read on the stream's display clock once it is timed.
+    Time { from: String, to: String },
+}
+
+impl SearchScope {
+    pub fn is_all(&self) -> bool {
+        matches!(self, SearchScope::All)
+    }
+
+    /// Parses a typed line range, 1-based as the line numbers are shown: `1200-5000`,
+    /// `1200-` (to the end), `-5000` (from the start) or a single `1200`. Thousands
+    /// separators (`,` `.` `'` `_` and spaces) are ignored.
+    pub fn parse_lines(text: &str) -> Option<SearchScope> {
+        let number = |s: &str| -> Option<Option<usize>> {
+            let digits: String = s
+                .chars()
+                .filter(|c| !matches!(c, ',' | '.' | '\'' | '_' | ' ' | '\u{a0}'))
+                .collect();
+            if digits.is_empty() {
+                return Some(None);
+            }
+            let n: usize = digits.parse().ok()?;
+            (n >= 1).then(|| Some(n - 1))
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let (first, last) = match text.split_once(['-', '–', '…']) {
+            Some((a, b)) => match (number(a)?, number(b)?) {
+                (None, None) => return None,
+                sides => sides,
+            },
+            None => {
+                let n = number(text)??;
+                (Some(n), Some(n))
+            }
+        };
+        let first = first.unwrap_or(0);
+        if last.is_some_and(|last| last < first) {
+            return None;
+        }
+        Some(SearchScope::Lines { first, last })
+    }
+}
+
 /// A time window entered before the stream was fully timed, applied once it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingWindow {
@@ -1343,6 +1399,14 @@ pub struct TailEngine {
     search_last_counted_exact: bool,
     /// Bumped whenever `search_matches` changes; keys the UI caches built over the hits.
     pub search_generation: u64,
+    /// The part of the view the search covers (see `SearchScope`).
+    search_scope: SearchScope,
+    /// A `Time` scope read on the display clock: `(from, to)` in cache milliseconds,
+    /// resolved before each search once the stream is timed.
+    scope_time: (Option<i64>, Option<i64>),
+    /// The scope went back to the whole view because the file was truncated, rotated or
+    /// reloaded; the search box says so until the next scope is set.
+    pub search_scope_reset: bool,
     /// Selected rows (line indices) for copy/export; `selection_all` marks "every visible row".
     pub selection: BTreeSet<usize>,
     pub selection_all: bool,
@@ -2013,6 +2077,9 @@ impl TailEngine {
             search_last_counted: 0,
             search_last_counted_exact: false,
             search_generation: 0,
+            search_scope: SearchScope::All,
+            scope_time: (None, None),
+            search_scope_reset: false,
             search_byte_matches: Vec::new(),
             search_byte_max_len: 0,
             current_match_idx: None,
@@ -2339,10 +2406,24 @@ impl TailEngine {
     /// The timeline histogram wants the stream timed: starts timing (in the background for
     /// a large file) unless it is complete or already on its way.
     pub fn request_timeline(&mut self) {
+        self.request_timing();
+    }
+
+    /// Something outside the stream (the Find results time scope) wants it timed: starts
+    /// timing unless it is complete or already on its way.
+    pub fn request_timing(&mut self) {
         if self.timestamps_complete() || self.timestamps_wanted {
             return;
         }
         self.request_timestamps();
+    }
+
+    /// A from / to pair typed as in the time range popup, read on this stream's display
+    /// clock and day: `(from, to)` in cache milliseconds, `None` when a side does not
+    /// parse. Meaningful once the stream is timed.
+    pub fn read_time_texts(&self, from: &str, to: &str) -> Option<(Option<i64>, Option<i64>)> {
+        let (from, from_ok, to, to_ok) = self.parse_time_texts(from, to);
+        (from_ok && to_ok).then_some((from, to))
     }
 
     /// Detected levels (`LogLevel as u8`) of the cached prefix of the lines.
@@ -2720,6 +2801,11 @@ impl TailEngine {
         self.truncate_timestamps(derived_from);
         if derived_from == 0 {
             self.hold_time_window();
+            // Line numbers no longer name the same lines: back to the whole view.
+            if !self.search_scope.is_all() {
+                self.search_scope = SearchScope::All;
+                self.search_scope_reset = true;
+            }
         }
         if unchanged_lines == 0 && total_len > self.index_job_threshold_bytes {
             // Large file: index on a worker thread; the view shows lines as they arrive.
@@ -4573,6 +4659,16 @@ impl TailEngine {
     /// Reads the two time fields: each side's instant (`None` = open or unreadable) and
     /// whether it parsed. The "to" side covers the whole minute or second it names.
     fn parse_time_fields(&self) -> (Option<i64>, bool, Option<i64>, bool) {
+        self.parse_time_texts(&self.time_from_text, &self.time_to_text)
+    }
+
+    /// Reads a typed from / to pair as the time range popup does: `(from, from_ok, to,
+    /// to_ok)`, `to` at the end of the unit typed, both in cache milliseconds.
+    fn parse_time_texts(
+        &self,
+        from_text: &str,
+        to_text: &str,
+    ) -> (Option<i64>, bool, Option<i64>, bool) {
         // The fields are read on the display clock (the time display of the stream).
         let reference = self.to_display_clock(self.time_reference());
         let parse = |text: &str| -> (Option<i64>, bool) {
@@ -4584,9 +4680,9 @@ impl TailEngine {
                 None => (None, false),
             }
         };
-        let (from, from_ok) = parse(&self.time_from_text);
-        let (to, to_ok) = parse(&self.time_to_text);
-        let to = to.map(|millis| crate::timestamp::end_of_typed_time(&self.time_to_text, millis));
+        let (from, from_ok) = parse(from_text);
+        let (to, to_ok) = parse(to_text);
+        let to = to.map(|millis| crate::timestamp::end_of_typed_time(to_text, millis));
         let from = from.map(|millis| self.from_display_clock(millis));
         let to = to.map(|millis| self.from_display_clock(millis));
         (from, from_ok, to, to_ok)
@@ -4769,6 +4865,7 @@ impl TailEngine {
             || self.pending_window.is_some()
             || self.pending_goto_time.is_some()
             || self.is_time_filtered()
+            || matches!(self.search_scope, SearchScope::Time { .. })
     }
 
     /// Asks for every line to be timed. When the untimed lines take at most
@@ -5051,15 +5148,24 @@ impl TailEngine {
         }
         let q_lower = query.to_lowercase();
 
+        // Hits outside the search scope are not hits; a line scope bounds the walk too.
+        let (lo, total) = self.scope_line_bounds();
+        let start = start.max(lo);
+        if start >= total {
+            return hits;
+        }
+        let scoped = !self.search_scope.is_all();
         let check_match = |line: &str| -> bool { contains_case_insensitive(line, &q_lower) };
         let mut record = |idx: usize| {
+            if idx >= total || (scoped && !self.in_search_scope(idx)) {
+                return;
+            }
             if hits.lines.len() < limit {
                 hits.lines.push(idx);
             }
             hits.total += 1;
             hits.last = Some(idx);
         };
-        let total = self.total_lines();
 
         if self.has_context() {
             // The rows shown, context rows included.
@@ -5068,7 +5174,10 @@ impl TailEngine {
             let shown = view.len().saturating_sub(first);
             if shown * 4 < total.saturating_sub(start) {
                 // Sparse: reading only the shown lines beats scanning the file.
-                for idx in (first..view.len()).filter_map(|p| view.line_at(p)) {
+                for idx in (first..view.len())
+                    .filter_map(|p| view.line_at(p))
+                    .take_while(|&idx| idx < total)
+                {
                     if let Some(line) = self.get_line(idx) {
                         if check_match(&line) {
                             record(idx);
@@ -5091,7 +5200,7 @@ impl TailEngine {
             let visible = &self.filtered_lines[first..];
             if visible.len() * 4 < total.saturating_sub(start) {
                 // Sparse filter: reading only the visible lines beats scanning the file.
-                for &idx in visible {
+                for &idx in visible.iter().take_while(|&&idx| idx < total) {
                     if let Some(line) = self.get_line(idx) {
                         if check_match(&line) {
                             record(idx);
@@ -5137,6 +5246,90 @@ impl TailEngine {
         self.view_mode != ViewMode::Hex && self.search_total > self.search_matches.len()
     }
 
+    /// The part of the view the search covers.
+    pub fn search_scope(&self) -> &SearchScope {
+        &self.search_scope
+    }
+
+    /// Sets the search scope and runs the active search again over it. A `Time` scope
+    /// times the stream first (in the background for a large file) and the search waits
+    /// for it; a `Time` scope with both sides empty is the whole view. Returns whether
+    /// each side of a `Time` scope parses (an empty side is open); on a failure nothing
+    /// changes.
+    pub fn set_search_scope(&mut self, scope: SearchScope) -> (bool, bool) {
+        let scope = match scope {
+            SearchScope::Time { from, to } if from.trim().is_empty() && to.trim().is_empty() => {
+                SearchScope::All
+            }
+            scope => scope,
+        };
+        if let SearchScope::Time { from, to } = &scope {
+            let (_, from_ok, _, to_ok) = self.parse_time_texts(from, to);
+            if !(from_ok && to_ok) {
+                return (from_ok, to_ok);
+            }
+        }
+        self.search_scope_reset = false;
+        if scope == self.search_scope {
+            return (true, true);
+        }
+        let timed = matches!(scope, SearchScope::Time { .. });
+        self.search_scope = scope;
+        if timed {
+            self.request_timestamps();
+        }
+        let query = std::mem::take(&mut self.last_searched_query);
+        if !query.is_empty() {
+            self.update_search(&query);
+        }
+        (true, true)
+    }
+
+    /// Whether line `idx` lies inside the search scope.
+    fn in_search_scope(&self, idx: usize) -> bool {
+        match &self.search_scope {
+            SearchScope::All => true,
+            SearchScope::Lines { first, last } => idx >= *first && last.is_none_or(|l| idx <= l),
+            SearchScope::Time { .. } => time_window_contains(
+                self.line_timestamp(idx),
+                self.scope_time.0,
+                self.scope_time.1,
+            ),
+        }
+    }
+
+    /// Lines `lo..hi` a search has to look at: the scope's line range, else every line.
+    fn scope_line_bounds(&self) -> (usize, usize) {
+        let total = self.total_lines();
+        match &self.search_scope {
+            SearchScope::Lines { first, last } => (
+                (*first).min(total),
+                last.map_or(total, |l| l.saturating_add(1).min(total)),
+            ),
+            _ => (0, total),
+        }
+    }
+
+    /// Bytes of the file a search covers, which decides between the UI thread and a job.
+    fn search_bytes(&self) -> u64 {
+        let (lo, hi) = self.scope_line_bounds();
+        let offset = |line: usize| -> u64 {
+            self.line_offsets
+                .get(line)
+                .map_or(self.source.len(), |&o| o)
+        };
+        offset(hi).saturating_sub(offset(lo))
+    }
+
+    /// Reads a `Time` scope on the display clock; the search runs only once the stream is
+    /// timed (see `search_waits`), so the reference day is known.
+    fn resolve_scope_time(&mut self) {
+        if let SearchScope::Time { from, to } = &self.search_scope {
+            let (from, _, to, _) = self.parse_time_texts(from, to);
+            self.scope_time = (from, to);
+        }
+    }
+
     /// Forgets the line hits of the search, listed and counted.
     fn clear_search_hits(&mut self) {
         self.search_matches = Vec::new();
@@ -5156,6 +5349,8 @@ impl TailEngine {
                 .map(|j| j.kind == ScanKind::Filter)
                 .unwrap_or(false)
             || self.timestamps_hold_scans()
+            || (matches!(self.search_scope, SearchScope::Time { .. })
+                && !self.timestamps_complete())
     }
 
     /// Re-runs the active search over lines `>= start` after the buffer or the filter
@@ -5172,6 +5367,7 @@ impl TailEngine {
             self.pending_search = true;
             return;
         }
+        self.resolve_scope_time();
         if self.job.is_some() && start > 0 {
             self.pending_refresh_from =
                 Some(self.pending_refresh_from.map_or(start, |p| p.min(start)));
@@ -5197,7 +5393,7 @@ impl TailEngine {
             self.refresh_search_from(0);
             return;
         };
-        if start == 0 && self.source.len() > self.job_threshold_bytes {
+        if start == 0 && self.search_bytes() > self.job_threshold_bytes {
             self.start_search_job();
             return;
         }
@@ -5581,7 +5777,8 @@ impl TailEngine {
             self.pending_search = true;
             return;
         }
-        if self.source.len() > self.job_threshold_bytes {
+        self.resolve_scope_time();
+        if self.search_bytes() > self.job_threshold_bytes {
             self.start_search_job();
             return;
         }
@@ -5618,11 +5815,14 @@ impl TailEngine {
         // The time window is applied to the hits as they are drained, so the worker must
         // not stop at the cap counting hits the window will drop; the drain caps and
         // counts instead. Otherwise the worker lists up to the cap and counts past it.
-        let limit = if self.is_time_filtered() && !self.has_context() {
-            usize::MAX
-        } else {
-            MAX_SEARCH_MATCHES
-        };
+        // So must it under a search scope, applied in the drain too.
+        self.resolve_scope_time();
+        let limit =
+            if (self.is_time_filtered() && !self.has_context()) || !self.search_scope.is_all() {
+                usize::MAX
+            } else {
+                MAX_SEARCH_MATCHES
+            };
         self.start_job(
             JobSpec::Search {
                 query_lower: query.to_lowercase(),
@@ -5703,6 +5903,9 @@ impl TailEngine {
                     let ranged_search = job.kind == ScanKind::Search && self.has_context();
                     if self.is_time_filtered() && !ranged_search {
                         lines.retain(|&idx| self.in_time_range(idx));
+                    }
+                    if job.kind == ScanKind::Search && !self.search_scope.is_all() {
+                        lines.retain(|&idx| self.in_search_scope(idx));
                     }
                     job.hits += lines.len();
                     match job.kind {

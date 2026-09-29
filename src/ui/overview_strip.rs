@@ -340,6 +340,26 @@ pub fn paint(
         Stroke::new(1.0, theme.border_color().gamma_multiply(0.4)),
     );
 
+    // A line search scope is shaded: the rows it covers, over the whole strip width.
+    if let crate::tail_engine::SearchScope::Lines { first, last } = engine.search_scope() {
+        if rows > 0 {
+            let top_row = engine.row_of_line_or_next(*first);
+            let end_row = last.map_or(rows, |l| engine.row_of_line_or_next(l.saturating_add(1)));
+            if end_row > top_row {
+                let top = rect.top() + row_frac(top_row, rows) * rect.height();
+                let bottom = rect.top() + row_frac(end_row, rows).min(1.0) * rect.height();
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), top),
+                        egui::pos2(rect.right(), bottom.max(top + 2.0)),
+                    ),
+                    0.0,
+                    theme.accent_color().gamma_multiply(0.18),
+                );
+            }
+        }
+    }
+
     // Runs of equal flags become one rectangle per mark kind.
     let height = marks.pixels.len();
     let scale = if height > 0 {

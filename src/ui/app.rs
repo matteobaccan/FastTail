@@ -1802,6 +1802,19 @@ impl FastTailApp {
         }
         self.run_rule_bound_tools();
         // The search across streams drains its jobs and notices closed or reloaded streams.
+        // Under a time scope the streams it waits for are timed first.
+        let to_time: Vec<PathBuf> = self
+            .find_all
+            .waiting_for_timing(&self.engines)
+            .map(Path::to_path_buf)
+            .collect();
+        for eng in self
+            .engines
+            .iter_mut()
+            .filter(|e| to_time.contains(&e.path))
+        {
+            eng.request_timing();
+        }
         self.find_all.poll(&self.engines);
         if self.find_all.is_active() {
             ctx.request_repaint_after(Duration::from_millis(100));
