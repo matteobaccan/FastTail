@@ -1,0 +1,5 @@
+# Link Windows builds with the LLVM linker shipped with the Rust toolchain: much faster
+# than MSVC link.exe on the five binaries `cargo test` builds (lib tests, bin,
+# integration_tests, print_mode). It still writes the .pdb files the release publishes.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

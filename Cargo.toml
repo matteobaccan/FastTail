@@ -109,3 +109,11 @@ lto = "thin"
 codegen-units = 1
 panic = "unwind"
 debug = 1
+
+# Development and test builds: file and line numbers in backtraces, no full debug info.
+# Less to write and link on every change; dependencies carry none at all.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
