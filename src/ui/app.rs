@@ -106,6 +106,9 @@ pub struct FastTailApp {
     pub scratchpad: crate::ui::scratchpad::Scratchpad,
     /// A reference line to show once its stream has indexed that line.
     scratch_jump: Option<(PathBuf, usize)>,
+    /// The side marked for compare, and the compare shown in the Compare tab.
+    pub compare_mark: Option<crate::ui::compare_tab::CompareSide>,
+    pub compare: Option<crate::ui::compare_tab::CompareView>,
     /// Entry picker of a zip holding several files or of a tar archive, while it is shown.
     pub archive_picker: Option<crate::ui::zip_picker::ArchivePicker>,
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
@@ -610,6 +613,8 @@ impl FastTailApp {
             report_dialog: None,
             scratchpad: crate::ui::scratchpad::Scratchpad::default(),
             scratch_jump: None,
+            compare_mark: None,
+            compare: None,
             archive_picker: None,
             open_notice: None,
             pending_stdin: None,
@@ -1079,6 +1084,59 @@ impl FastTailApp {
                 changed = true;
             }
             derived.derived = Some(feeder);
+        }
+        changed
+    }
+
+    /// Applies the compares the row menus asked for, and a line double-clicked in the
+    /// Compare tab. Returns whether anything changed.
+    pub fn apply_compare_requests(&mut self) -> bool {
+        use crate::compare::CompareRequest as C;
+        use crate::ui::compare_tab::{CompareSide, CompareView};
+        let lang = self.config.language;
+        let mut changed = false;
+        for i in 0..self.engines.len() {
+            let Some(request) = self.engines[i].compare_request.take() else {
+                continue;
+            };
+            changed = true;
+            let engine = &self.engines[i];
+            let lines = engine.selected_lines();
+            match request {
+                C::SelectedPair if lines.len() == 2 => {
+                    let left = CompareSide::of(engine, vec![lines[0]]);
+                    let right = CompareSide::of(engine, vec![lines[1]]);
+                    self.compare = Some(CompareView::new(left, right));
+                    crate::ui::compare_tab::open_tab(&mut self.dock_state);
+                }
+                C::SelectedPair => {}
+                C::Mark => {
+                    let side = CompareSide::of(engine, lines);
+                    self.engines[i].view_notice =
+                        Some(t(lang, "compare_marked").replace("{mark}", &side.label()));
+                    self.compare_mark = Some(side);
+                }
+                C::WithMark => {
+                    if let Some(mark) = self.compare_mark.clone() {
+                        let right = CompareSide::of(engine, lines);
+                        self.compare = Some(CompareView::new(mark, right));
+                        crate::ui::compare_tab::open_tab(&mut self.dock_state);
+                    }
+                }
+            }
+        }
+        // A closed stream takes its mark with it.
+        if let Some(mark) = &self.compare_mark {
+            if !self.engines.iter().any(|e| e.path == mark.path) {
+                self.compare_mark = None;
+            }
+        }
+        if let Some((path, line)) = self.compare.as_mut().and_then(|v| v.jump.take()) {
+            if self.engines.iter().any(|e| e.path == path) {
+                self.find_all.jump = Some((path, line));
+                self.find_all.jump_in_context = false;
+                changed = true;
+            }
         }
         changed
     }
@@ -3255,6 +3313,7 @@ impl FastTailApp {
             time_delta: &mut time_delta,
             find_all: &mut self.find_all,
             scratchpad: &mut self.scratchpad,
+            compare: &mut self.compare,
             filter_presets: &mut self.config.filter_presets,
             preset_events: &mut preset_events,
             palette_action: self.palette_action.as_ref().map(|p| (p.path.clone(), p.id)),
@@ -3376,6 +3435,16 @@ impl FastTailApp {
         if self.apply_filter_tab_requests() {
             ctx.request_repaint();
         }
+        if self.apply_compare_requests() {
+            ctx.request_repaint();
+        }
+        let mark = self.compare_mark.as_ref().map(|m| m.label());
+        ctx.data_mut(|d| match mark {
+            Some(label) => {
+                d.insert_temp(crate::ui::compare_tab::mark_id(), label);
+            }
+            None => d.remove::<String>(crate::ui::compare_tab::mark_id()),
+        });
         self.scratchpad.save_if_due();
         if self.scratchpad.is_dirty() {
             ctx.request_repaint_after(crate::ui::scratchpad::SAVE_DELAY);
@@ -4559,6 +4628,12 @@ impl FastTailApp {
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_token_hl")).monospace(),
                                     );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("F7  /  SHIFT + F7").monospace().strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "compare_next")).monospace());
                                     ui.end_row();
 
                                     ui.label(

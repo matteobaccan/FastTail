@@ -1636,6 +1636,8 @@ pub struct TailEngine {
     pub derived: Option<Box<crate::filter_tab::DerivedFeeder>>,
     /// The stream menu asked for its filter as a new tab (applied by the app).
     pub filter_tab_request: bool,
+    /// The row menu asked for a compare (applied by the app).
+    pub compare_request: Option<crate::compare::CompareRequest>,
     /// "Show in context" on a derived stream: the source line to show in the source.
     pub source_context_request: Option<usize>,
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
@@ -2231,6 +2233,7 @@ impl TailEngine {
             scratch_request: None,
             derived: None,
             filter_tab_request: false,
+            compare_request: None,
             source_context_request: None,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),

@@ -44,6 +44,15 @@ appears as one changed row.
 `F7` / `SHIFT + F7` (unused in 0.12.0) move between changes when the Compare tab has
 focus; with `remappable-shortcuts` they become `compare.next` / `compare.prev`.
 
+### As implemented (0.14.0)
+- **Normalisation (D2)** keys each token instead of rewriting the text: the diff runs on
+  the keys and maps back to the tokens' byte ranges, so no span map is needed. "Ignore
+  numbers" replaces every digit run inside a word (`5ms` → `⟨n⟩ms`).
+- **Threads (D4):** regions are diffed on the UI thread with `similar`'s 2 s deadline
+  (the result is flagged coarse when it is reached); no worker thread.
+- **The mark (D3)** is shown in the row menu entry (*Compare the selection with …*) and
+  a notice in the stream bar, not as a gutter marker.
+
 ## Risks / Trade-offs
 
 - [Large regions slow] → caps and worker deadline (D4).

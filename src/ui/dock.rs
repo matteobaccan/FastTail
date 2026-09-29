@@ -57,6 +57,8 @@ pub enum FastTailTab {
     FindResults,
     /// The session's scratchpad (`ui::scratchpad`); saved in the layout.
     Scratchpad,
+    /// Two lines or two lists of lines compared (`ui::compare_tab`); never saved.
+    Compare,
 }
 
 pub struct DockContext<'a> {
@@ -105,6 +107,7 @@ pub struct DockContext<'a> {
     /// Search across every open stream, shown by the Find results tab.
     pub find_all: &'a mut crate::find_all::FindAllSession,
     pub scratchpad: &'a mut crate::ui::scratchpad::Scratchpad,
+    pub compare: &'a mut Option<crate::ui::compare_tab::CompareView>,
     /// Named filter presets (global preferences) and what the stream bars asked about
     /// them this frame.
     pub filter_presets: &'a mut Vec<FilterPreset>,
@@ -441,6 +444,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .strong(),
                 )
             }
+            FastTailTab::Compare => WidgetText::from(
+                RichText::new(format!("⇄ {}", t(*self.ctx.language, "compare_title")))
+                    .monospace()
+                    .strong(),
+            ),
             FastTailTab::Scratchpad => {
                 let dirty = if self.ctx.scratchpad.is_dirty() {
                     " *"
@@ -581,6 +589,15 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     *self.ctx.level_colors,
                 );
             }
+            FastTailTab::Compare => {
+                crate::ui::compare_tab::render(
+                    ui,
+                    self.ctx.compare,
+                    self.ctx.theme,
+                    *self.ctx.language,
+                    *self.ctx.font_size,
+                );
+            }
             FastTailTab::Scratchpad => {
                 crate::ui::scratchpad::render(
                     ui,
@@ -641,6 +658,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 // Closing the results cancels every search job.
                 self.ctx.find_all.close();
             }
+            FastTailTab::Compare => *self.ctx.compare = None,
             _ => {
                 *self.ctx.tab_closed = true;
             }
@@ -3827,6 +3845,8 @@ struct RowMenuPicks {
     scratch: Option<(usize, bool)>,
     /// "Open filter as new tab" was picked.
     filter_tab: bool,
+    /// Row a compare was asked on, and what it is.
+    compare: Option<(usize, crate::compare::CompareRequest)>,
 }
 
 impl RowMenuPicks {
@@ -3845,6 +3865,14 @@ impl RowMenuPicks {
         }
         if self.filter_tab {
             engine.filter_tab_request = true;
+        }
+        if let Some((line, request)) = self.compare {
+            // The row the menu was opened on joins the selection (a pair keeps both).
+            if request != crate::compare::CompareRequest::SelectedPair && !engine.is_selected(line)
+            {
+                engine.select_row(line);
+            }
+            engine.compare_request = Some(request);
         }
         if let Some(line) = self.note {
             engine.open_note_editor(line);
@@ -4609,6 +4637,46 @@ fn row_context_menu(
         {
             picks.scratch = Some((line, true));
             ui.close();
+        }
+        // Compare: two selected rows, or the selection against a marked one.
+        {
+            use crate::compare::CompareRequest as C;
+            let pair = !engine.selection_all && engine.selection.len() == 2;
+            let marked: Option<String> = ui
+                .ctx()
+                .data(|d| d.get_temp(crate::ui::compare_tab::mark_id()));
+            ui.menu_button(
+                RichText::new(format!("⇄ {}", t(lang, "compare_menu"))).monospace(),
+                |ui| {
+                    if ui
+                        .add_enabled(
+                            pair,
+                            egui::Button::new(
+                                RichText::new(t(lang, "compare_selected")).monospace(),
+                            ),
+                        )
+                        .on_disabled_hover_text(t(lang, "compare_selected_tip"))
+                        .clicked()
+                    {
+                        picks.compare = Some((line, C::SelectedPair));
+                        ui.close();
+                    }
+                    if ui
+                        .button(RichText::new(t(lang, "compare_mark")).monospace())
+                        .clicked()
+                    {
+                        picks.compare = Some((line, C::Mark));
+                        ui.close();
+                    }
+                    if let Some(label) = marked {
+                        let text = t(lang, "compare_with_mark").replace("{mark}", &label);
+                        if ui.button(RichText::new(text).monospace()).clicked() {
+                            picks.compare = Some((line, C::WithMark));
+                            ui.close();
+                        }
+                    }
+                },
+            );
         }
         if ui
             .button(RichText::new(format!("🗒 {}", t(lang, "scratch_send_plain"))).monospace())

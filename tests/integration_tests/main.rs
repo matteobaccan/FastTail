@@ -24,6 +24,7 @@ use tempfile::NamedTempFile;
 mod basics;
 mod bookmark_report;
 mod char_selection;
+mod compare_lines;
 mod external_tools;
 mod filter_tabs;
 mod line_wrap;
