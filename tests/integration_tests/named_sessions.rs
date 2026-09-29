@@ -29,6 +29,8 @@ fn entry(path: PathBuf) -> StreamEntry {
         bookmarks: vec![3, 7, 42],
         bookmark_notes: [(7, "deploy start".to_string())].into_iter().collect(),
         archive_entry: None,
+        fields_parser: Some("regex".to_string()),
+        fields_regex: Some(r" ^(?P<lvl>\w+) ".to_string()),
     }
 }
 

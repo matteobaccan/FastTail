@@ -33,6 +33,7 @@ mod pattern_streams;
 mod relative_time_windows;
 mod review_regressions;
 mod scratchpad;
+mod structured_fields;
 
 /// Serialized `fasttail.ini` bytes of `cfg`.
 fn ini_bytes(cfg: &FastTailConfig) -> Vec<u8> {

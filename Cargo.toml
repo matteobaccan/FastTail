@@ -104,6 +104,11 @@ sevenz-rust2 = { version = "0.23", default-features = false, features = ["compre
 name = "filter_bench"
 harness = false
 
+# Field scanner throughput (structured logs): `cargo bench --bench fields`.
+[[bench]]
+name = "fields"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "thin"
