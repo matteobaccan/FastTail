@@ -7,10 +7,10 @@
 
 ## 2. Column view (phase 1)
 
-- [ ] 2.1 Engine: parser per stream (done: `set_field_choice`, `parser_generation`), field catalogue (≤ 256 keys) and the row field cache (≤ 1,024 rows, cleared on `reload_generation` or parser change)
-- [ ] 2.2 (chip and menu done; `▦ Columns` open) `dock.rs`: parser chip and menu in the stream bar (auto result, JSON, logfmt, regex with a pattern field and invalid flag, Apache, syslog, off); `▦ Columns` toggle, Text view only
-- [ ] 2.3 Column header (drag reorder, width drag in character cells, right-click menu: hide, show all, move left / right, reset), cells drawn after the marker / number / delta columns, unparsed and continuation lines across the columns, last column wrapping in wrap mode
-- [ ] 2.4 (parser and regex done) Persistence: `fields_parser`, `fields_regex`, `fields_view`, `fields_columns`, `fields_width.<field>` in `StreamEntry`, workspace and session files; round-trip and old-file tests
+- [x] 2.1 Engine: parser per stream (`set_field_choice`, `parser_generation`), field catalogue (≤ 256 keys) and the row field cache (≤ 1,024 rows, cleared on `reload_generation` or parser change)
+- [x] 2.2 `dock.rs`: parser chip and menu in the stream bar (auto result, JSON, logfmt, regex with a pattern field and invalid flag, Apache, syslog, off); `▦ Columns` toggle, Text view only
+- [x] 2.3 (wrap: the column view keeps one row per line for now) Column header (drag reorder, width drag in character cells, right-click menu: hide, show all, move left / right, reset), cells drawn after the marker / number / delta columns, unparsed and continuation lines across the columns, last column wrapping in wrap mode
+- [x] 2.4 Persistence: `fields_parser`, `fields_regex`, `fields_view`, `fields_columns`, `fields_width.<field>` in `StreamEntry`, workspace and session files; round-trip and old-file tests
 
 ## 3. Field terms (phase 2)
 

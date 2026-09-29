@@ -3692,6 +3692,8 @@ impl FastTailApp {
         // on a background sound-alert match when the option is on and the window is not
         // focused.
         let mut bookmarks_changed = false;
+        // A column width being dragged is saved once, when the button is released.
+        let pointer_down = ctx.input(|i| i.pointer.any_down());
         let mut critical_in_background = false;
         for eng in &mut self.engines {
             if eng.is_stdin() || eng.derived.is_some() {
@@ -3721,7 +3723,7 @@ impl FastTailApp {
                 || eng.collapse_mode_dirty
                 || eng.context_lines_dirty
                 || eng.view_columns_dirty
-                || eng.fields_dirty
+                || (eng.fields_dirty && !pointer_down)
             {
                 // The ANSI mode, the timeline flag, the collapse mode, the context lines
                 // and the line-number and time delta columns live in the stream entry, as
@@ -5770,6 +5772,9 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
             crate::fields::ParserChoice::Regex(p) if !p.is_empty() => Some(p.clone()),
             _ => None,
         },
+        fields_view: engine.fields_view(),
+        fields_columns: engine.chosen_field_columns().to_vec(),
+        fields_widths: engine.field_widths().clone(),
     }
 }
 
@@ -5821,8 +5826,13 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
         crate::fields::ParserChoice::from_name(name, entry.fields_regex.as_deref().unwrap_or(""))
     }) {
         engine.set_field_choice(choice);
-        engine.fields_dirty = false;
     }
+    engine.set_fields_view(entry.fields_view);
+    engine.set_field_columns(entry.fields_columns.clone());
+    for (key, cells) in &entry.fields_widths {
+        engine.set_field_width(key, *cells);
+    }
+    engine.fields_dirty = false;
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);

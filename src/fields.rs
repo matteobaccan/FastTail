@@ -14,6 +14,7 @@
 use regex::{CaptureLocations, Regex};
 use smallvec::SmallVec;
 use std::borrow::Cow;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 /// Nested JSON objects are flattened as `a.b.c` up to this many key segments; a deeper
@@ -163,6 +164,8 @@ pub struct FieldSpans {
     pub truncated: bool,
     /// `key=` pairs of the last logfmt scan (bare keys and the prefix not counted).
     logfmt_pairs: usize,
+    /// Byte range of the whole match of the last regex scan.
+    matched: Option<(usize, usize)>,
 }
 
 /// A field of a scanned line.
@@ -198,6 +201,7 @@ impl FieldSpans {
         self.partial = false;
         self.truncated = false;
         self.logfmt_pairs = 0;
+        self.matched = None;
     }
 
     pub fn len(&self) -> usize {
@@ -591,6 +595,7 @@ fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> bool {
     };
     let matched = r.regex.captures_read(&mut locs, line).is_some();
     if matched {
+        out.matched = locs.get(0);
         for (group, name) in &r.names {
             if let Some((a, z)) = locs.get(*group) {
                 let (ka, kz) = out.scratch_key(name.as_bytes());
@@ -600,6 +605,219 @@ fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> bool {
     }
     out.locs = Some((id, locs));
     matched
+}
+
+/// Keys whose value is a line's message: shown in the last column of the column view.
+pub const MESSAGE_KEYS: [&str; 4] = ["msg", "message", "@message", "MESSAGE"];
+/// Keys a stream's field catalogue lists at most ("more fields not listed" after).
+pub const MAX_CATALOGUE: usize = 256;
+/// Columns shown by default: the first keys of the catalogue, message keys aside.
+pub const DEFAULT_COLUMNS: usize = 8;
+/// Rows whose fields the column view keeps parsed.
+pub const ROW_CACHE: usize = 1024;
+/// Width of a column in character cells.
+pub const MIN_WIDTH: u16 = 3;
+pub const MAX_WIDTH: u16 = 200;
+/// Largest width suggested from the values seen.
+const SUGGESTED_MAX_WIDTH: usize = 40;
+
+/// The fields of one line as the column view draws them: decoded, on one line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RowFields {
+    /// The line has the parser's shape (a JSON object, logfmt pairs, a regex match).
+    pub shaped: bool,
+    /// It did not scan to its end.
+    pub partial: bool,
+    pub fields: Vec<(String, String)>,
+    /// Regex parsers: the text of the line outside the match.
+    pub outside: String,
+}
+
+impl RowFields {
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The last column when `shown` are the other columns: the message field, then the
+    /// fields not shown as `key=value`, then the text outside a regex match.
+    pub fn message(&self, shown: &[String]) -> String {
+        let is_shown = |key: &str| shown.iter().any(|s| s == key);
+        let mut out = String::new();
+        let mut used = None;
+        for key in MESSAGE_KEYS {
+            if !is_shown(key) {
+                if let Some(value) = self.get(key) {
+                    out.push_str(value);
+                    used = Some(key);
+                    break;
+                }
+            }
+        }
+        for (key, value) in &self.fields {
+            if is_shown(key) || Some(key.as_str()) == used {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(key);
+            out.push('=');
+            out.push_str(value);
+        }
+        if !self.outside.is_empty() {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(&self.outside);
+        }
+        out
+    }
+}
+
+/// A value on one line: line breaks and tabs become spaces.
+fn one_line(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+/// Scans `line` into owned, decoded `RowFields` (`spans` is the reused scratch).
+pub fn row_fields(parser: &FieldParser, line: &str, spans: &mut FieldSpans) -> RowFields {
+    let shaped = scan(parser, line, spans);
+    let fields = spans
+        .iter(line)
+        .map(|f| (f.key.to_string(), one_line(&f.value())))
+        .collect();
+    let outside = match spans.matched {
+        Some((a, z)) if shaped => {
+            let before = line[..a].trim();
+            let after = line[z..].trim();
+            one_line(&format!(
+                "{before}{}{after}",
+                if before.is_empty() || after.is_empty() {
+                    ""
+                } else {
+                    " "
+                }
+            ))
+        }
+        _ => String::new(),
+    };
+    RowFields {
+        shaped,
+        partial: spans.partial,
+        fields,
+        outside,
+    }
+}
+
+/// The keys seen in a stream's lines, in the order first seen, with a width suggested
+/// from the values of the sample.
+#[derive(Debug, Clone, Default)]
+pub struct FieldCatalogue {
+    keys: Vec<String>,
+    widths: HashMap<String, u16>,
+    /// Keys past `MAX_CATALOGUE` were seen and not listed.
+    pub more: bool,
+}
+
+impl FieldCatalogue {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn keys(&self) -> &[String] {
+        &self.keys
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.widths.contains_key(key)
+    }
+
+    /// Records `key` with a value `value_chars` long. `grow` widens the suggestion of a
+    /// known key (the sample); rows drawn later only add keys, so columns do not change
+    /// width while scrolling.
+    pub fn note(&mut self, key: &str, value_chars: usize, grow: bool) {
+        let fit = value_chars
+            .max(key.chars().count())
+            .clamp(MIN_WIDTH as usize, SUGGESTED_MAX_WIDTH) as u16;
+        if let Some(width) = self.widths.get_mut(key) {
+            if grow {
+                *width = (*width).max(fit);
+            }
+        } else if self.keys.len() < MAX_CATALOGUE {
+            self.keys.push(key.to_string());
+            self.widths.insert(key.to_string(), fit);
+        } else {
+            self.more = true;
+        }
+    }
+
+    /// Width suggested for `key`, in character cells.
+    pub fn suggested_width(&self, key: &str) -> u16 {
+        self.widths
+            .get(key)
+            .copied()
+            .unwrap_or_else(|| (key.chars().count() as u16).clamp(MIN_WIDTH, 12))
+    }
+
+    /// The default columns: the first `DEFAULT_COLUMNS` keys, message keys aside.
+    pub fn default_columns(&self) -> Vec<String> {
+        self.keys
+            .iter()
+            .filter(|k| !MESSAGE_KEYS.contains(&k.as_str()))
+            .take(DEFAULT_COLUMNS)
+            .cloned()
+            .collect()
+    }
+}
+
+/// Parsed fields of the rows drawn last, at most `ROW_CACHE`, all dropped when `key`
+/// (the generations of the text and of the parser) changes. The oldest row goes first.
+#[derive(Debug, Default)]
+pub struct RowCache {
+    key: (u64, u64, u64),
+    map: HashMap<usize, Arc<RowFields>>,
+    order: VecDeque<usize>,
+}
+
+impl RowCache {
+    pub fn get(&mut self, key: (u64, u64, u64), line: usize) -> Option<Arc<RowFields>> {
+        if self.key != key {
+            self.clear();
+            self.key = key;
+            return None;
+        }
+        self.map.get(&line).cloned()
+    }
+
+    pub fn put(&mut self, line: usize, fields: Arc<RowFields>) {
+        if self.map.insert(line, fields).is_none() {
+            self.order.push_back(line);
+        }
+        while self.order.len() > ROW_CACHE {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
 }
 
 /// Chooses a parser from the first lines of a stream (continuation lines already left
@@ -805,6 +1023,70 @@ mod tests {
         scan(&parser, "A: b", &mut spans);
         assert!(scan(&other, "Oct 11 22:14:15 h a: m", &mut spans));
         assert_eq!(spans.get("Oct 11 22:14:15 h a: m", "app").unwrap().raw, "a");
+    }
+
+    #[test]
+    fn row_fields_message_and_outside() {
+        let line = r#"{"ts":"t1","level":"info","msg":"hello\nworld","user":"bob","n":1}"#;
+        let mut spans = FieldSpans::new();
+        let row = row_fields(&FieldParser::Json, line, &mut spans);
+        assert!(row.shaped && !row.partial);
+        assert_eq!(row.get("msg"), Some("hello world"));
+        let shown = vec!["ts".to_string(), "level".to_string()];
+        assert_eq!(row.message(&shown), "hello world user=bob n=1");
+        let shown = vec!["msg".to_string(), "user".to_string()];
+        assert_eq!(row.message(&shown), "ts=t1 level=info n=1");
+
+        let parser = ParserChoice::Regex(r"(?P<lvl>[A-Z]+):".into())
+            .build()
+            .unwrap()
+            .unwrap();
+        let row = row_fields(&parser, "at start WARN: disk low", &mut spans);
+        assert_eq!(row.outside, "at start disk low");
+        assert_eq!(row.message(&["lvl".to_string()]), "at start disk low");
+        let row = row_fields(&parser, "no match", &mut spans);
+        assert!(!row.shaped && row.fields.is_empty() && row.outside.is_empty());
+    }
+
+    #[test]
+    fn catalogue_order_widths_cap_and_defaults() {
+        let mut cat = FieldCatalogue::default();
+        cat.note("ts", 24, true);
+        cat.note("msg", 80, true);
+        cat.note("level", 4, true);
+        cat.note("level", 7, true);
+        cat.note("level", 30, false);
+        assert_eq!(cat.keys(), ["ts", "msg", "level"]);
+        assert_eq!(cat.suggested_width("ts"), 24);
+        assert_eq!(cat.suggested_width("msg"), 40);
+        assert_eq!(
+            cat.suggested_width("level"),
+            7,
+            "only the sample grows a width"
+        );
+        assert_eq!(cat.suggested_width("unknown_key_long"), 12);
+        assert_eq!(cat.default_columns(), ["ts", "level"]);
+        for i in 0..MAX_CATALOGUE + 5 {
+            cat.note(&format!("k{i}"), 1, false);
+        }
+        assert_eq!(cat.keys().len(), MAX_CATALOGUE);
+        assert!(cat.more);
+        assert_eq!(cat.default_columns().len(), DEFAULT_COLUMNS);
+    }
+
+    #[test]
+    fn row_cache_evicts_the_oldest_and_resets_on_a_new_key() {
+        let mut cache = RowCache::default();
+        let key = (1, 1, 1);
+        assert!(cache.get(key, 0).is_none());
+        for line in 0..ROW_CACHE + 10 {
+            cache.put(line, Arc::new(RowFields::default()));
+        }
+        assert_eq!(cache.len(), ROW_CACHE);
+        assert!(cache.get(key, 0).is_none());
+        assert!(cache.get(key, ROW_CACHE + 9).is_some());
+        assert!(cache.get((1, 2, 1), ROW_CACHE + 9).is_none());
+        assert!(cache.is_empty());
     }
 
     #[test]

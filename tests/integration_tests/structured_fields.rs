@@ -160,3 +160,245 @@ fn the_forced_parser_is_kept_in_the_workspace() {
     assert_eq!(kind(engine), "regex");
     assert!(!engine.fields_dirty);
 }
+
+const JSON_LOG: &[&str] = &[
+    r#"{"ts":"2024-05-01T10:00:00Z","level":"info","msg":"started","user":"ann"}"#,
+    r#"{"ts":"2024-05-01T10:00:01Z","level":"error","msg":"boom","user":"bob","extra":{"code":7}}"#,
+    r#"{"ts":"2024-05-01T10:00:02Z","level":"warn","msg":"slow","user":"cy"}"#,
+    r#"{"ts":"2024-05-01T10:00:03Z","level":"info","msg":"done","user":"dee"}"#,
+    "not json at all",
+];
+
+#[test]
+fn the_catalogue_is_sampled_and_gives_the_default_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.json");
+    write_lines(&path, JSON_LOG);
+    let mut engine = open(&path);
+    engine.poll_updates();
+    assert_eq!(
+        engine.field_catalogue().keys(),
+        ["ts", "level", "msg", "user", "extra.code"]
+    );
+    // The message field is the last column, not one of the defaults.
+    assert_eq!(
+        engine.field_columns(),
+        ["ts", "level", "user", "extra.code"]
+    );
+    assert_eq!(engine.field_width("ts"), 20);
+    assert_eq!(engine.field_width("level"), 5);
+    assert!(engine.chosen_field_columns().is_empty());
+
+    engine.set_field_columns(vec!["level".into(), "ts".into(), "level".into(), "".into()]);
+    assert_eq!(engine.field_columns(), ["level", "ts"]);
+    assert!(engine.fields_dirty);
+    engine.set_field_width("ts", 1);
+    assert_eq!(engine.field_width("ts"), fasttail::fields::MIN_WIDTH);
+    engine.set_field_width("ts", 9999);
+    assert_eq!(engine.field_width("ts"), fasttail::fields::MAX_WIDTH);
+    engine.reset_field_columns();
+    assert_eq!(
+        engine.field_columns(),
+        ["ts", "level", "user", "extra.code"]
+    );
+    assert_eq!(engine.field_width("ts"), 20);
+
+    // Parsed rows are kept until the parser changes.
+    let text = engine.get_line(1).unwrap().into_owned();
+    let first = engine.row_fields(1, &text).unwrap();
+    assert_eq!(first.get("extra.code"), Some("7"));
+    assert!(std::sync::Arc::ptr_eq(
+        &first,
+        &engine.row_fields(1, &text).unwrap()
+    ));
+    engine.set_field_choice(ParserChoice::Logfmt);
+    let again = engine.row_fields(1, &text).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &again));
+    engine.set_field_choice(ParserChoice::Off);
+    assert!(engine.row_fields(1, &text).is_none());
+    assert!(!engine.columns_shown());
+}
+
+fn app_frame(app: &mut FastTailApp) -> Vec<String> {
+    let ctx = egui::Context::default();
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(2400.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| app.render_ui(ui));
+        out.textures_delta.clear();
+        texts.clear();
+        for clipped in &out.shapes {
+            collect_texts(&clipped.shape, &mut texts);
+        }
+    }
+    texts
+}
+
+fn collect_texts(shape: &egui::Shape, out: &mut Vec<String>) {
+    match shape {
+        egui::Shape::Text(text) => out.push(text.galley.text().to_string()),
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect_texts(s, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn the_column_view_draws_cells_a_header_and_the_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.json");
+    write_lines(&log, JSON_LOG);
+    let mut app = FastTailApp::from_config(FastTailConfig {
+        spool_dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    });
+    app.open_log_file(log.clone());
+    let texts = app_frame(&mut app);
+    let has = |texts: &[String], s: &str| texts.iter().any(|t| t == s);
+    assert!(has(&texts, "[+] JSON"), "text view first: {texts:?}");
+    let lang = app.config.language;
+    let columns = format!("▦ {}", fasttail::i18n::t(lang, "fields_columns"));
+    assert!(has(&texts, &columns));
+
+    app.engines[0].set_fields_view(true);
+    let texts = app_frame(&mut app);
+    let message = fasttail::i18n::t(lang, "fields_message");
+    for cell in [
+        "ts",
+        "level",
+        "user",
+        "extra.code",
+        message,
+        "error",
+        "bob",
+        "7",
+        "boom",
+        "started",
+    ] {
+        assert!(has(&texts, cell), "{cell} missing in {texts:?}");
+    }
+    assert!(has(&texts, "2024-05-01T10:00:01Z"));
+    assert!(
+        has(&texts, "not json at all"),
+        "an unparsed line runs across"
+    );
+    assert!(
+        !has(&texts, "[+] JSON"),
+        "no JSON expander in the column view"
+    );
+
+    // Fewer columns: the hidden fields join the message.
+    app.engines[0].set_field_columns(vec!["level".into()]);
+    let texts = app_frame(&mut app);
+    assert!(
+        has(&texts, "boom ts=2024-05-01T10:00:01Z user=bob extra.code=7"),
+        "{texts:?}"
+    );
+
+    // Without a parser the rows are text again.
+    app.engines[0].set_field_choice(ParserChoice::Off);
+    let texts = app_frame(&mut app);
+    assert!(has(&texts, "[+] JSON"));
+}
+
+#[test]
+fn the_column_view_is_kept_in_the_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.json");
+    write_lines(&log, JSON_LOG);
+    let config = FastTailConfig {
+        spool_dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let mut app = FastTailApp::from_config(config);
+    app.open_log_file(log.clone());
+    app_frame(&mut app);
+    {
+        let engine = &mut app.engines[0];
+        engine.set_fields_view(true);
+        engine.set_field_columns(vec!["user".into(), "level".into()]);
+        engine.set_field_width("user", 12);
+    }
+    app_frame(&mut app);
+    let mut buf = Vec::new();
+    app.config.to_ini().write_to(&mut buf).unwrap();
+    let text = String::from_utf8(buf).unwrap();
+    for key in [
+        "fields_view=true",
+        "fields_columns=user,level",
+        "fields_width.user=12",
+    ] {
+        assert!(text.contains(key), "{key} in {text}");
+    }
+    let restored = FastTailConfig::from_ini(&app.config.to_ini());
+    let app = FastTailApp::from_config(FastTailConfig {
+        spool_dir: Some(dir.path().to_path_buf()),
+        ..restored
+    });
+    let engine = app.engines.iter().find(|e| e.path == log).unwrap();
+    assert!(engine.fields_view());
+    assert_eq!(engine.chosen_field_columns(), ["user", "level"]);
+    assert_eq!(engine.field_width("user"), 12);
+    assert!(!engine.fields_dirty);
+}
+
+#[test]
+fn the_column_view_keeps_one_row_per_line_and_the_top_row_across_the_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.json");
+    write_lines(&path, JSON_LOG);
+    let mut engine = open(&path);
+    engine.follow_tail = false;
+    engine.set_wrap_lines(true, 0);
+    engine.sync_row_mode(20.0);
+    assert!(engine.wraps_rows());
+    engine.wrap_anchor.row = 3;
+
+    // Columns on: one row per line, scrolled to the wrap view's top row.
+    engine.set_fields_view(true);
+    assert!(!engine.wraps_rows());
+    engine.sync_row_mode(20.0);
+    assert_eq!(engine.requested_scroll_y, Some(60.0));
+    assert!(engine.wrap_request.is_none());
+
+    // Columns off again: wrapped, anchored on the extended view's top row.
+    engine.requested_scroll_y = None;
+    engine.current_scroll_y = 40.0;
+    engine.set_fields_view(false);
+    engine.sync_row_mode(20.0);
+    assert!(engine.wraps_rows());
+    assert_eq!(engine.wrap_anchor.row, 2);
+}
+
+#[test]
+fn field_names_with_ini_delimiters_keep_their_widths_and_spaces() {
+    use fasttail::session::{Session, StreamEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.json");
+    write_lines(&log, JSON_LOG);
+    let mut entry = StreamEntry::new(log.clone());
+    entry.fields_columns = vec![" padded ".into(), "k8s:pod".into()];
+    entry.fields_widths = [
+        ("http:status".into(), 6),
+        ("a=b".into(), 7),
+        ("50%".into(), 8),
+        ("%3D".into(), 9),
+    ]
+    .into_iter()
+    .collect();
+    let session = Session {
+        streams: vec![entry.clone()],
+        dock_layout: None,
+    };
+    // Through the file text, as a save and a load do.
+    let text = session.serialized(None);
+    let conf = ini::Ini::load_from_str(&text).unwrap();
+    let back = Session::read_from(&conf, None).session.streams.remove(0);
+    assert_eq!(back.fields_widths, entry.fields_widths);
+    assert_eq!(back.fields_columns, entry.fields_columns);
+}
