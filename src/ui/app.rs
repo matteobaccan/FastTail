@@ -102,6 +102,10 @@ pub struct FastTailApp {
     pub session_missing: Option<Vec<PathBuf>>,
     /// The bookmark report dialog, while it is open.
     pub report_dialog: Option<crate::ui::report_dialog::ReportDialog>,
+    /// The scratchpad of the current session (see `ui::scratchpad`).
+    pub scratchpad: crate::ui::scratchpad::Scratchpad,
+    /// A reference line to show once its stream has indexed that line.
+    scratch_jump: Option<(PathBuf, usize)>,
     /// Entry picker of a zip holding several files or of a tar archive, while it is shown.
     pub archive_picker: Option<crate::ui::zip_picker::ArchivePicker>,
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
@@ -604,6 +608,8 @@ impl FastTailApp {
             pending_session_load: None,
             session_missing: None,
             report_dialog: None,
+            scratchpad: crate::ui::scratchpad::Scratchpad::default(),
+            scratch_jump: None,
             archive_picker: None,
             open_notice: None,
             pending_stdin: None,
@@ -683,6 +689,7 @@ impl FastTailApp {
                 Err(_) => app.config.current_session = None,
             }
         }
+        app.scratchpad = crate::ui::scratchpad::Scratchpad::load(app.scratchpad_file());
 
         app
     }
@@ -849,7 +856,119 @@ impl FastTailApp {
         self.config.add_recent_session(&file);
         let _ = self.config.save();
         self.refresh_session_snapshot();
+        // The pad goes with the session it is saved as.
+        self.scratchpad.move_to(self.scratchpad_file());
         Ok(())
+    }
+
+    /// The file the scratchpad of the current session is saved to: beside the named
+    /// session, else `scratchpad.txt` beside `fasttail.ini`.
+    pub fn scratchpad_file(&self) -> PathBuf {
+        match &self.config.current_session {
+            Some(session) => crate::ui::scratchpad::sidecar_of(session),
+            None => crate::ui::scratchpad::default_pad_of(&FastTailConfig::config_path()),
+        }
+    }
+
+    /// Applies what the streams, the Find results tab and the scratchpad asked for this
+    /// frame: rows to send, a reference line to show. Returns whether anything changed.
+    pub fn apply_scratchpad_requests(&mut self) -> bool {
+        let lang = self.config.language;
+        let mut changed = false;
+        for engine in self.engines.iter_mut() {
+            let Some(with_reference) = engine.scratch_request.take() else {
+                continue;
+            };
+            changed = true;
+            let first = engine
+                .selection_bounds()
+                .map(|(first, _)| first)
+                .or_else(|| engine.current_search_line());
+            let (Some(first), Some(text)) = (first, engine.copy_selection_text()) else {
+                engine.view_notice = Some(t(lang, "scratch_nothing").to_string());
+                continue;
+            };
+            let name = crate::find_all::stream_name(engine);
+            let path = engine.path.clone();
+            engine.view_notice = Some(
+                match self
+                    .scratchpad
+                    .send(&name, &path, first, &text, with_reference)
+                {
+                    Ok(()) => {
+                        t(lang, "scratch_sent").replace("{n}", &text.lines().count().to_string())
+                    }
+                    Err(crate::ui::scratchpad::SendRefused::TooLarge) => {
+                        t(lang, "scratch_too_large").to_string()
+                    }
+                    Err(crate::ui::scratchpad::SendRefused::Empty) => {
+                        t(lang, "scratch_nothing").to_string()
+                    }
+                },
+            );
+        }
+        if let Some((path, line)) = self.find_all.scratch.take() {
+            if let Some(engine) = self.engines.iter().find(|e| e.path == path) {
+                if let Some(text) = engine.get_line(line) {
+                    let name = crate::find_all::stream_name(engine);
+                    if self
+                        .scratchpad
+                        .send(&name, &path, line, &text, true)
+                        .is_err()
+                    {
+                        self.scratchpad.notice =
+                            Some((t(lang, "scratch_too_large").to_string(), true));
+                    }
+                    changed = true;
+                }
+            }
+        }
+        // A reference line picked in the pad: shown like "Show in context", the file
+        // opened first when it is not.
+        let open: Vec<(String, PathBuf)> = self
+            .engines
+            .iter()
+            .map(|e| (crate::find_all::stream_name(e), e.path.clone()))
+            .collect();
+        self.scratchpad.resolve_jump(&open, lang);
+        if let Some((path, line)) = self.scratchpad.jump.take() {
+            if !self.engines.iter().any(|e| e.path == path) {
+                self.open_log_file(path.clone());
+            }
+            if self.engines.iter().any(|e| e.path == path) {
+                self.scratch_jump = Some((path, line));
+            } else {
+                // An archive asks which entry to open: its lines are not reachable here.
+                self.scratchpad.notice = Some((
+                    t(lang, "scratch_file_not_found")
+                        .replace("{name}", &path.display().to_string()),
+                    true,
+                ));
+            }
+            changed = true;
+        }
+        // Shown once the stream has indexed that line (or is fully indexed).
+        if let Some((path, line)) = self.scratch_jump.clone() {
+            match self.engines.iter().find(|e| e.path == path) {
+                None => self.scratch_jump = None,
+                Some(engine) => {
+                    let complete = !engine.index_pending
+                        && engine.compressed.as_ref().is_none_or(|c| c.is_finalized());
+                    if complete || engine.total_lines() > line {
+                        self.scratch_jump = None;
+                        self.find_all.jump = Some((path, line));
+                        self.find_all.jump_in_context = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// Opens the Scratchpad tab (or brings it to the front).
+    pub fn open_scratchpad(&mut self) {
+        crate::ui::scratchpad::open_tab(&mut self.dock_state);
     }
 
     /// Opens the bookmark report dialog for one stream or for every open stream.
@@ -875,6 +994,7 @@ impl FastTailApp {
         self.config.current_session = None;
         let _ = self.config.save();
         self.refresh_session_snapshot();
+        self.scratchpad.move_to(self.scratchpad_file());
     }
 
     /// Loads `file`, replacing the workspace. Unless `force`, a named session with unsaved
@@ -889,7 +1009,12 @@ impl FastTailApp {
             }
         }
         match Session::load_from(&file) {
-            Ok(loaded) => self.replace_workspace(loaded, Some(file)),
+            Ok(loaded) => {
+                self.replace_workspace(loaded, Some(file));
+                // The pad of the session loaded (the current one is saved first).
+                let pad = self.scratchpad_file();
+                self.scratchpad.switch_to(pad);
+            }
             Err(err) => {
                 eprintln!("fasttail: cannot load session {}: {err}", file.display());
                 self.session_missing = Some(vec![file]);
@@ -2355,6 +2480,7 @@ impl FastTailApp {
                             .min_size(egui::vec2(30.0, 26.0));
                     let mut session_action: Option<SessionAction> = None;
                     let mut report_all = false;
+                    let mut open_pad = false;
                     let lang = self.config.language;
                     let has_session = self.config.current_session.is_some();
                     let recent_sessions = self.config.recent_sessions.clone();
@@ -2413,8 +2539,16 @@ impl FastTailApp {
                                 session_action = Some(SessionAction::SaveDefault);
                                 ui.close();
                             }
-                            // Every open stream's bookmarks as one Markdown report.
+                            // The session's scratchpad.
                             ui.separator();
+                            if ui
+                                .button(format!("🗒 {}", t(lang, "scratch_open")))
+                                .clicked()
+                            {
+                                open_pad = true;
+                                ui.close();
+                            }
+                            // Every open stream's bookmarks as one Markdown report.
                             if ui
                                 .button(format!("📝 {}", t(lang, "bookmark_report_all")))
                                 .clicked()
@@ -2429,6 +2563,9 @@ impl FastTailApp {
                     }
                     if report_all {
                         self.open_bookmark_report(crate::ui::report_dialog::ReportScope::All);
+                    }
+                    if open_pad {
+                        self.open_scratchpad();
                     }
 
                     // Filter button with amber border
@@ -2996,6 +3133,7 @@ impl FastTailApp {
             search_view: &mut search_view,
             time_delta: &mut time_delta,
             find_all: &mut self.find_all,
+            scratchpad: &mut self.scratchpad,
             filter_presets: &mut self.config.filter_presets,
             preset_events: &mut preset_events,
             palette_action: self.palette_action.as_ref().map(|p| (p.path.clone(), p.id)),
@@ -3110,6 +3248,13 @@ impl FastTailApp {
             self.config.language,
         ) {
             ctx.request_repaint();
+        }
+        if self.apply_scratchpad_requests() {
+            ctx.request_repaint();
+        }
+        self.scratchpad.save_if_due();
+        if self.scratchpad.is_dirty() {
+            ctx.request_repaint_after(crate::ui::scratchpad::SAVE_DELAY);
         }
         if let Some(eng) = self.engines.iter_mut().find(|e| e.report_request) {
             eng.report_request = false;
@@ -4293,6 +4438,12 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
+                                        RichText::new("CTRL + SHIFT + N").monospace().strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "scratch_send")).monospace());
+                                    ui.end_row();
+
+                                    ui.label(
                                         RichText::new(t(lang, "help_key_charsel"))
                                             .monospace()
                                             .strong(),
@@ -4804,6 +4955,7 @@ impl eframe::App for FastTailApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.scratchpad.save_on_exit();
         self.save_dock_layout();
         let _ = self.config.save();
         // Dropping the engines stops their decompression jobs and deletes their spools;
@@ -5044,6 +5196,7 @@ impl FastTailApp {
             A::BookmarkReportAll => {
                 self.open_bookmark_report(crate::ui::report_dialog::ReportScope::All)
             }
+            A::ScratchpadOpen => self.open_scratchpad(),
             A::SessionLoad => self.run_session_action(SessionAction::Load),
             A::SessionClearRecent => self.run_session_action(SessionAction::ClearRecent),
             A::SessionSaveDefault => self.run_session_action(SessionAction::SaveDefault),

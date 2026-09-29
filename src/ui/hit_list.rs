@@ -432,6 +432,8 @@ pub struct GroupedOutput {
     pub toggled: Option<usize>,
     /// Hit `(group, hit)` for "Show in context": its context menu, or `CTRL + K` on it.
     pub in_context: Option<(usize, usize)>,
+    /// A hit whose "Send to scratchpad" was picked in its context menu.
+    pub to_scratchpad: Option<(usize, usize)>,
     pub has_focus: bool,
 }
 
@@ -446,6 +448,8 @@ pub struct GroupedHitList<'a> {
     level_colors: bool,
     /// Label of the hits' "Show in context" menu entry; no menu without it.
     context_label: Option<String>,
+    /// Label of the hits' "Send to scratchpad" menu entry, when offered.
+    scratch_label: Option<String>,
 }
 
 impl<'a> GroupedHitList<'a> {
@@ -457,7 +461,14 @@ impl<'a> GroupedHitList<'a> {
             font_size: 13.0,
             level_colors: true,
             context_label: None,
+            scratch_label: None,
         }
+    }
+
+    /// Offers "Send to scratchpad" in each hit's context menu.
+    pub fn scratch_label(mut self, label: String) -> Self {
+        self.scratch_label = Some(label);
+        self
     }
 
     /// Offers "Show in context" on each hit: its context menu, and `CTRL + K` on the
@@ -575,6 +586,7 @@ impl<'a> GroupedHitList<'a> {
         let marker_w = char_w * 2.0;
         let mut clicked = None;
         let mut in_context = None;
+        let mut to_scratchpad = None;
         let selected = state.selected;
         let groups = self.groups;
         let style = LineStyle {
@@ -678,6 +690,12 @@ impl<'a> GroupedHitList<'a> {
                             in_context = Some((group, hit));
                             ui.close();
                         }
+                        if let Some(label) = &self.scratch_label {
+                            if ui.button(egui::RichText::new(label).monospace()).clicked() {
+                                to_scratchpad = Some((group, hit));
+                                ui.close();
+                            }
+                        }
                     });
                 }
             }
@@ -690,6 +708,7 @@ impl<'a> GroupedHitList<'a> {
             activate(row, &mut out);
             ui.memory_mut(|m| m.request_focus(id));
         }
+        out.to_scratchpad = to_scratchpad;
         if in_context.is_some() {
             out.in_context = in_context;
         }

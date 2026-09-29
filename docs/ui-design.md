@@ -571,6 +571,14 @@ All three are anchored at the centre, not resizable and not collapsible.
 - An 11 pt status line: *Report copied to the clipboard* / *Report saved to path* (accent), *Too large for the clipboard…* / save errors (warn).
 - The choices are written back to `report_context`, `report_auto`, `report_order`.
 
+### 4.6c Scratchpad tab — `🗒 Scratchpad`
+
+Source: `src/ui/scratchpad.rs`. A dock tab (`FastTailTab::Scratchpad`, saved in the layout), opened by `🗒 Scratchpad` in the 🗂 menu or the palette (`scratchpad.open`), added to the right of the first leaf. The title shows ` *` while a change waits to be saved.
+
+- **Toolbar:** `🔍` and a 200 px find field (hint *find in the pad*; `Enter` or `▼` selects the next case-insensitive occurrence after the cursor, wrapping; *not found* in warn), `💾 Save as…` (native dialog, `scratchpad.txt`), `✖ Clear` then *Clear the scratchpad?* with OK / Cancel, and a dim `N KB / 4096 KB`.
+- A dim hint line, then a notice line (saved / errors / *file is not open and its path is unknown*).
+- **Editor:** a multiline code-editor `TextEdit` in the stream font size, filling the tab in a two-way scroll area. `CTRL + click` or `ALT + Enter` on a `── name:line ──` line resolves the name against the open streams, then against the names sent before (`….scratch.paths`), and shows the line like *Show in context*, opening the file first when needed.
+
 ### 4.7 Compressed-open notice — `🗜 Cannot open the compressed file`
 
 `fasttail_open_notice`, anchored at the centre. It shows the path and the reason (empty zip, no space, refused entry, *the archive no longer holds this entry*, I/O error) and an `OK` button.
@@ -655,6 +663,7 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
   1. `Copy  (CTRL + C)`: the selection when the clicked row is part of it, else the clicked row alone (it becomes the selection); every underlying line, those a collapsed group hides included.
   2. `Copy as shown`: the same, one line per row as the view shows it, with ` ×N` after a closed group's row.
   - `Copy selected text`, only while characters are selected inside a row: copies them.
+  - `🗒 Send to scratchpad  (CTRL + SHIFT + N)` and `🗒 Send without reference line`: select the row when it is not selected, then send the selection.
   - Then, after a separator when either applies: `▣ Highlight "token"` (or `▢ Clear the highlight of "token"` when it is the outlined one) on the word under the pointer where the menu was opened (kept in egui temp memory at the right click), and `⇣ Next line of rule  (F4)` ▸, a submenu listing the enabled rules matching the row (`#n pattern`, `▶` on the stream's navigation rule); picking one makes it the navigation rule and walks to its next line.
   3. `✏ Bookmark note…`: opens the note editor in the stream bar (§3.3) on that line.
   4. `☆ Remove bookmark  (CTRL + F2)`, only when the row's own line is bookmarked: what `CTRL + F2` does there (removes a manual bookmark and its note, or dismisses an automatic one).
@@ -761,6 +770,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `⏹` | stdin ended |
 | `📦` | file size |
 | `🔎` | search all streams / Find results tab |
+| `🗒` | scratchpad tab, menu entries, send to scratchpad |
 | `⇣` | Next line of rule (row menu) |
 | `▣` / `▢` | Highlight "token" / Clear the highlight (row menu) |
 | `⌖` | search scope chip, row menu scope entries, Find results time scope |
@@ -1085,6 +1095,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `ALT + W` | focused stream | Toggle line wrap (per file, persisted) |
 | `CTRL + A` | focused stream | Select every visible row |
 | `CTRL + C` | focused stream | Copy the characters selected inside a row, else the selected rows (or the current hit) as plain text; every line a selected collapsed group hides is included |
+| `CTRL + SHIFT + N` | focused stream | Send the selected rows (or the current hit) to the scratchpad with a reference line (`TailEngine::scratch_request`, applied by the app after the dock) |
 | `SHIFT + ←/→`, `CTRL + SHIFT + ←/→`, `SHIFT + HOME/END` | focused stream with a caret | Move the end of the character selection by a character, a word (letters, digits, `_`) or to the start / end of the row; consumed only while a caret exists |
 | `CTRL + F2` | focused stream | On the current row (the selection, else the current hit, else the top row): remove a manual bookmark with its note, dismiss an automatic bookmark, or else add a manual bookmark |
 | `F2` / `SHIFT + F2` | focused stream | Next / previous bookmark, manual or automatic, among the visible lines (wraps); select it and centre it |

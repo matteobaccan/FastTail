@@ -257,6 +257,7 @@ fn render(engines: &mut Vec<TailEngine>, prefs: &mut fasttail::ui::dock::TimeDel
             search_view: &mut fasttail::ui::dock::SearchViewPrefs::default(),
             time_delta: prefs,
             find_all: &mut fasttail::find_all::FindAllSession::default(),
+            scratchpad: &mut Default::default(),
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
