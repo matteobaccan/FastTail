@@ -106,6 +106,16 @@ pub struct FastTailApp {
     pub scratchpad: crate::ui::scratchpad::Scratchpad,
     /// A reference line to show once its stream has indexed that line.
     scratch_jump: Option<(PathBuf, usize)>,
+    /// The notification-area icon while it is on, whether the window is hidden in it,
+    /// a real quit (CTRL + Q, the tray's Quit) under close to tray, the alert count's
+    /// baseline and the menu and badge last handed to the tray.
+    tray: Option<crate::tray::Tray>,
+    tray_failed: bool,
+    hidden_in_tray: bool,
+    quitting: bool,
+    alert_baseline: u64,
+    tray_menu_sent: crate::tray::TrayMenu,
+    tray_badge_sent: Option<(bool, String)>,
     /// The side marked for compare, and the compare shown in the Compare tab.
     pub compare_mark: Option<crate::ui::compare_tab::CompareSide>,
     pub compare: Option<crate::ui::compare_tab::CompareView>,
@@ -615,6 +625,13 @@ impl FastTailApp {
             scratch_jump: None,
             compare_mark: None,
             compare: None,
+            tray: None,
+            tray_failed: false,
+            hidden_in_tray: false,
+            quitting: false,
+            alert_baseline: 0,
+            tray_menu_sent: crate::tray::TrayMenu::default(),
+            tray_badge_sent: None,
             archive_picker: None,
             open_notice: None,
             pending_stdin: None,
@@ -1144,6 +1161,163 @@ impl FastTailApp {
             }
         }
         changed
+    }
+
+    /// The app icon (RGBA, 128 × 128), also used for the tray.
+    const ICON_RGBA: &'static [u8] = include_bytes!("../../assets/icon-128.rgba");
+
+    /// Quits for real, even with close to tray on.
+    pub fn quit(&mut self, ctx: &egui::Context) {
+        self.quitting = true;
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+    }
+
+    /// Hides the window in the tray; the tray keeps waking the app so the streams, rules
+    /// and sounds go on.
+    pub fn hide_to_tray(&mut self, ctx: &egui::Context) {
+        if self.tray.is_none() {
+            return;
+        }
+        self.save_dock_layout();
+        self.hidden_in_tray = true;
+        if let Some(tray) = &self.tray {
+            tray.set_hidden(true);
+        }
+        ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+    }
+
+    /// Shows the window hidden in the tray, focused.
+    pub fn show_from_tray(&mut self, ctx: &egui::Context) {
+        self.hidden_in_tray = false;
+        if let Some(tray) = &self.tray {
+            tray.set_hidden(false);
+        }
+        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+    }
+
+    /// The tray menu as it should read now.
+    fn tray_menu(&self) -> crate::tray::TrayMenu {
+        let lang = self.config.language;
+        crate::tray::TrayMenu {
+            show: t(lang, "tray_show").to_string(),
+            hide: t(lang, "tray_hide").to_string(),
+            follow_all: t(lang, "act_play_all").to_string(),
+            pause_all: t(lang, "act_pause_all").to_string(),
+            mute: t(lang, "tray_mute").to_string(),
+            quit: t(lang, "tray_quit").to_string(),
+            visible: !self.hidden_in_tray,
+            muted: !self.config.sound_enabled,
+            streams: self
+                .engines
+                .iter()
+                .map(crate::find_all::stream_name)
+                .collect(),
+        }
+    }
+
+    /// Starts or stops the tray icon with the option, applies its clicks and menu picks,
+    /// and keeps its menu and alert badge up to date.
+    fn update_tray(&mut self, ctx: &egui::Context) {
+        if !self.config.tray_icon || !crate::tray::Tray::available() {
+            if self.tray.is_some() {
+                if self.hidden_in_tray {
+                    self.show_from_tray(ctx);
+                }
+                self.tray = None;
+            }
+            self.tray_failed = false;
+            return;
+        }
+        if self.tray.is_none() && !self.tray_failed {
+            let menu = self.tray_menu();
+            self.tray = crate::tray::Tray::start(
+                ctx.clone(),
+                Self::ICON_RGBA,
+                128,
+                "FastTail",
+                menu.clone(),
+            );
+            self.tray_failed = self.tray.is_none();
+            self.tray_menu_sent = menu;
+            self.tray_badge_sent = None;
+        }
+        let Some(events) = self.tray.as_ref().map(|t| t.events()) else {
+            return;
+        };
+        for event in events {
+            use crate::tray::TrayEvent as E;
+            // While the workspace is locked the tray only shows, hides or quits.
+            if self.locked && !matches!(event, E::Toggle | E::Show | E::Quit) {
+                continue;
+            }
+            match event {
+                E::Toggle if self.hidden_in_tray => self.show_from_tray(ctx),
+                E::Toggle => self.hide_to_tray(ctx),
+                E::Show => self.show_from_tray(ctx),
+                E::FollowAll => {
+                    for eng in &mut self.engines {
+                        eng.is_watching = true;
+                        eng.follow_tail = !eng.is_compressed();
+                    }
+                }
+                E::PauseAll => {
+                    for eng in &mut self.engines {
+                        eng.is_watching = false;
+                        eng.follow_tail = false;
+                    }
+                }
+                E::ToggleMute => {
+                    self.config.sound_enabled = !self.config.sound_enabled;
+                    let _ = self.config.save();
+                }
+                E::Stream(i) => {
+                    self.show_from_tray(ctx);
+                    if let Some(path) = self.engines.get(i).map(|e| e.path.clone()) {
+                        if let Some(tab) = self.dock_state.find_tab(&FastTailTab::LogStream(path)) {
+                            let _ = self.dock_state.set_active_tab(tab);
+                            self.dock_state
+                                .set_focused_node_and_surface(tab.node_path());
+                        }
+                    }
+                }
+                E::Quit => self.quit(ctx),
+            }
+        }
+        let menu = self.tray_menu();
+        if menu != self.tray_menu_sent {
+            if let Some(tray) = &self.tray {
+                tray.set_menu(menu.clone());
+            }
+            self.tray_menu_sent = menu;
+        }
+        // The badge: alerts sounded while the window is hidden or not focused.
+        let total: u64 = self.engines.iter().map(|e| e.sound_alerts).sum();
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        // A stream closed meanwhile takes its alerts with it.
+        self.alert_baseline = self.alert_baseline.min(total);
+        if focused && !self.hidden_in_tray {
+            self.alert_baseline = total;
+        }
+        let alerts = total.saturating_sub(self.alert_baseline);
+        let lang = self.config.language;
+        let mut tooltip = t(lang, "tray_tip").replace("{n}", &self.engines.len().to_string());
+        if alerts > 0 {
+            let count = if alerts > 99 {
+                "99+".to_string()
+            } else {
+                alerts.to_string()
+            };
+            tooltip.push_str(&t(lang, "tray_tip_alerts").replace("{n}", &count));
+        }
+        let badge = (alerts > 0, tooltip);
+        if self.tray_badge_sent.as_ref() != Some(&badge) {
+            if let Some(tray) = &self.tray {
+                tray.set_badge(badge.0.then_some([220, 40, 40]), &badge.1);
+            }
+            self.tray_badge_sent = Some(badge);
+        }
     }
 
     /// Opens the Scratchpad tab (or brings it to the front).
@@ -1946,6 +2120,7 @@ impl FastTailApp {
 
     pub fn render_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.update_tray(&ctx);
 
         // Fill background of the window canvas with current theme bg color
         ui.painter()
@@ -2006,10 +2181,14 @@ impl FastTailApp {
         // 1. Detect user activity to reset screensaver & handle window closing and viewport bounds
         let mut escape_pressed = false;
         let mut wheel_zoom = 1.0_f32;
+        let mut close_requested = false;
+        let mut os_minimized = false;
         ctx.input(|i| {
             if i.viewport().close_requested() {
                 self.save_dock_layout();
+                close_requested = true;
             }
+            os_minimized = i.viewport().minimized == Some(true);
 
             if let Some(maximized) = i.viewport().maximized {
                 self.config.window_maximized = maximized;
@@ -2095,6 +2274,27 @@ impl FastTailApp {
                 }
             }
         });
+
+        // Close to tray: the close is cancelled and the window hidden (the workspace was
+        // saved above, as on a real close). CTRL + Q and the tray's Quit really quit.
+        if close_requested && self.tray.is_some() && self.config.close_to_tray && !self.quitting {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            self.hide_to_tray(&ctx);
+        }
+        // Minimise to tray through the window's own button: best effort, on the frame
+        // that reports the window minimised.
+        if os_minimized
+            && self.tray.is_some()
+            && self.config.minimize_to_tray
+            && !self.hidden_in_tray
+        {
+            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+            self.hide_to_tray(&ctx);
+        }
+        let ctrl_q = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Q);
+        if ctx.input_mut(|i| i.consume_shortcut(&ctrl_q)) {
+            self.quit(&ctx);
+        }
 
         if escape_pressed {
             ctx.memory_mut(|m| m.stop_text_input());
@@ -2346,11 +2546,14 @@ impl FastTailApp {
                             }
 
                             // Minimize button [—]
-                            if ui
+                            let minimize = ui
                                 .button(RichText::new(" — ").monospace())
                                 .on_hover_text(t(self.config.language, "minimize_tip"))
-                                .clicked()
-                            {
+                                .clicked();
+                            // With minimise to tray, the window goes to the tray instead.
+                            if minimize && self.tray.is_some() && self.config.minimize_to_tray {
+                                self.hide_to_tray(&ctx);
+                            } else if minimize {
                                 ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                                 #[cfg(windows)]
                                 unsafe {
@@ -3858,6 +4061,33 @@ impl FastTailApp {
                         {
                             let _ = self.config.save();
                         }
+                        // Notification-area icon (Windows only in this version).
+                        let tray_ok = crate::tray::Tray::available();
+                        ui.add_enabled_ui(tray_ok, |ui| {
+                            let mut changed = ui
+                                .checkbox(&mut self.config.tray_icon, t(lang, "tray_icon"))
+                                .on_hover_text(t(lang, "tray_icon_tip"))
+                                .on_disabled_hover_text(t(lang, "tray_unavailable"))
+                                .changed();
+                            ui.add_enabled_ui(self.config.tray_icon, |ui| {
+                                changed |= ui
+                                    .checkbox(
+                                        &mut self.config.minimize_to_tray,
+                                        t(lang, "minimize_to_tray"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .checkbox(
+                                        &mut self.config.close_to_tray,
+                                        t(lang, "close_to_tray"),
+                                    )
+                                    .on_hover_text(t(lang, "close_to_tray_tip"))
+                                    .changed();
+                            });
+                            if changed {
+                                let _ = self.config.save();
+                            }
+                        });
 
                         ui.add_space(6.0);
                         ui.separator();
@@ -4633,6 +4863,10 @@ impl FastTailApp {
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_token_hl")).monospace(),
                                     );
+                                    ui.end_row();
+
+                                    ui.label(RichText::new("CTRL + Q").monospace().strong());
+                                    ui.label(RichText::new(t(lang, "help_desc_quit")).monospace());
                                     ui.end_row();
 
                                     ui.label(

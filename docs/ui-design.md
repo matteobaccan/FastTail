@@ -571,6 +571,14 @@ All three are anchored at the centre, not resizable and not collapsible.
 - An 11 pt status line: *Report copied to the clipboard* / *Report saved to path* (accent), *Too large for the clipboard…* / save errors (warn).
 - The choices are written back to `report_context`, `report_auto`, `report_order`.
 
+### 4.6f Tray icon (Windows)
+
+Source: `src/tray.rs` (a `Shell_NotifyIconW` icon on a message-only window of its own thread), `src/ui/app.rs` (`update_tray`, `hide_to_tray`, `show_from_tray`, `quit`). Settings (after *Flash on alert*): **Tray icon**, and under it **Minimise to tray** and **Close to tray** (enabled with the tray on); all greyed out with *The tray icon is available on Windows in this version* elsewhere.
+
+- **Icon:** the app icon scaled to 32 × 32; a red dot ringed in black in the top-right corner while alerts sounded with the window hidden or unfocused. **Tooltip:** `FastTail — N streams` plus ` · M alerts` (`99+`).
+- **Clicks:** left click toggles the window, double click shows it. **Menu** (right click): Show / Hide FastTail, Follow all, Pause all, Mute sounds (checked when muted), the open streams (up to 30; a pick shows the window with that stream focused), Quit.
+- **Hidden:** `ViewportCommand::Visible(false)`; the tray thread wakes the app every 250 ms so the streams keep being polled (a minimised window gets no frames on Windows, see issue #161). Close to tray cancels the close (`CancelClose`) after saving the workspace. `CTRL + Q` and Quit really quit.
+
 ### 4.6e Compare tab — `⇄ Compare`
 
 Sources: `src/compare.rs` (tokens, ignore options, word and region diff with `similar`, JSON canonicalisation, unified text), `src/ui/compare_tab.rs`. A dock tab (`FastTailTab::Compare`, left out of the saved layout like Find results) added below the first leaf; closing it drops the compare.
@@ -1112,6 +1120,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `ALT + W` | focused stream | Toggle line wrap (per file, persisted) |
 | `CTRL + A` | focused stream | Select every visible row |
 | `CTRL + C` | focused stream | Copy the characters selected inside a row, else the selected rows (or the current hit) as plain text; every line a selected collapsed group hides is included |
+| `CTRL + Q` | global | Quit, also with close to tray on |
 | `CTRL + SHIFT + N` | focused stream | Send the selected rows (or the current hit) to the scratchpad with a reference line (`TailEngine::scratch_request`, applied by the app after the dock) |
 | `SHIFT + ←/→`, `CTRL + SHIFT + ←/→`, `SHIFT + HOME/END` | focused stream with a caret | Move the end of the character selection by a character, a word (letters, digits, `_`) or to the start / end of the row; consumed only while a caret exists |
 | `CTRL + F2` | focused stream | On the current row (the selection, else the current hit, else the top row): remove a manual bookmark with its note, dismiss an automatic bookmark, or else add a manual bookmark |
@@ -1249,6 +1258,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `always_on_top` | false | window level; 📌 |
 | `flash_on_alert` | false | taskbar attention for background errors |
 | `level_colors` | true | colour rows by level |
+| `tray_icon`, `minimize_to_tray`, `close_to_tray` | false, false, false | notification-area icon (Windows) and hiding the window in it on minimise / close |
 | `auto_highlight`, `auto_highlight_kinds` | false, `ip,uuid,url,duration,path` | automatic token highlighting and the kinds it paints |
 | `report_context`, `report_auto`, `report_order` | 3, false, `stream` | bookmark report dialog: context lines (0–20), automatic bookmarks, `stream` or `time` order |
 | `search_pane`, `search_pane_height` | false, 180 | results pane on or off, and its height (accepted 40–4000) |

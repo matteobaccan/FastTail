@@ -1590,6 +1590,9 @@ pub struct TailEngine {
     pub displayed: bool,
     pub unseen_lines: usize,
     pub unseen_severity: u8,
+    /// Lines that sounded a highlight rule's alert since the stream opened (the tray badge
+    /// counts them while the window is hidden or unfocused).
+    pub sound_alerts: u64,
     /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
     pub search_byte_matches: Vec<(usize, usize)>,
     search_byte_max_len: usize,
@@ -2230,6 +2233,7 @@ impl TailEngine {
             time_zone_sample: None,
             find_all_request: false,
             report_request: false,
+            sound_alerts: 0,
             scratch_request: None,
             derived: None,
             filter_tab_request: false,
@@ -3550,6 +3554,7 @@ impl TailEngine {
                     {
                         ch.sound_alert.play();
                         self.last_sound_alert_time = Instant::now();
+                        self.sound_alerts += 1;
                         return;
                     }
                 }
