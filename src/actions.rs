@@ -97,6 +97,8 @@ pub enum ActionId {
     BookmarkNote,
     BookmarkRemove,
     BookmarkClear,
+    BookmarkReport,
+    BookmarkReportAll,
     // Settings (generated from `BOOL_SETTINGS` / `ENUM_SETTINGS`)
     Toggle(BoolSetting),
     Choose(EnumSetting),
@@ -373,6 +375,8 @@ pub const ACTIONS: &[Action] = &[
     action(A::BookmarkNote, "bookmark.note", "bookmark_note_menu", C::Bookmarks, S::Stream, None, &[N::Row]),
     action(A::BookmarkRemove, "bookmark.remove", "bookmark_remove", C::Bookmarks, S::Stream, None, &[N::RowBookmarked]),
     action(A::BookmarkClear, "bookmark.clear", "clear_bookmarks", C::Bookmarks, S::Stream, None, &[N::Bookmarks]),
+    action(A::BookmarkReport, "bookmark.report", "bookmark_report_menu", C::Bookmarks, S::Stream, None, &[N::Bookmarks]),
+    action(A::BookmarkReportAll, "bookmark.report.all", "bookmark_report_all", C::Bookmarks, S::Window, None, &[]),
     // Window
     action(A::OpenFile, "window.open_file", "open_file", C::Window, S::Window, None, &[]),
     action(A::OpenPattern, "window.open_pattern", "act_open_pattern", C::Window, S::Window, None, &[]),
@@ -725,6 +729,8 @@ pub const MENU_KEYS: &[&str] = &[
     "export_visible",
     "export_matches",
     "clear_bookmarks",
+    "bookmark_report_menu",
+    "bookmark_report_all",
     "ext_tools_menu",
     "copy_rows",
     "copy_as_shown",

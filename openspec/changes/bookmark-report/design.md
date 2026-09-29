@@ -55,13 +55,15 @@ Tags: #deploy (2), #oom (1)
 
 ### D3. Where the work runs
 The UI thread collects, per stream, the bookmark lines, notes and timestamps (already in
-memory) and reads the context lines through `get_line`: at most
-`bookmarks × (2N + 1)` reads, e.g. 1,000 × 7 = 7,000 per stream at the default N = 3.
-When the total exceeds 20,000 lines (many streams, many automatic bookmarks or N = 20) the
-UI thread only collects the byte ranges of the needed lines from each engine's line index
-and a worker reads them with its own handle, opened in the same shared read mode as scan
-jobs (Windows writers keep writing), and builds the text; the dialog shows progress and a
-Cancel button. Compressed streams read their spool; standard input its spool too.
+memory) and plans the lines to read: at most `bookmarks × (2N + 1)`, e.g. 1,000 × 7 =
+7,000 per stream at the default N = 3. The lines are then read through `get_line` in
+bounded steps of a few milliseconds per frame (`ReportJob::step`), with a progress bar and
+Cancel, so no report stalls a frame whatever its size.
+*As implemented:* the worker thread with its own shared-read handle first planned here
+was dropped. It would have had to redo decoding, BOM, ANSI stripping and the spools of
+compressed and standard-input streams, which `get_line` already does. Stepping on the UI
+thread covers the same cost bound (tens of thousands of cached reads) without a second
+reader.
 Automatic bookmarks, when included, are capped at 1,000 per stream in the report (the
 first ones in line order), and the report says how many were left out.
 

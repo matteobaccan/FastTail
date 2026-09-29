@@ -96,6 +96,8 @@ pub struct FastTailApp {
     pub pending_session_load: Option<PathBuf>,
     /// Streams of the last loaded session that could not be opened, shown once.
     pub session_missing: Option<Vec<PathBuf>>,
+    /// The bookmark report dialog, while it is open.
+    pub report_dialog: Option<crate::ui::report_dialog::ReportDialog>,
     /// Entry picker of a zip holding several files or of a tar archive, while it is shown.
     pub archive_picker: Option<crate::ui::zip_picker::ArchivePicker>,
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
@@ -596,6 +598,7 @@ impl FastTailApp {
             last_dirty_check: Instant::now(),
             pending_session_load: None,
             session_missing: None,
+            report_dialog: None,
             archive_picker: None,
             open_notice: None,
             pending_stdin: None,
@@ -845,6 +848,14 @@ impl FastTailApp {
     }
 
     /// Saves the live workspace to the current session file, if any.
+    /// Opens the bookmark report dialog for one stream or for every open stream.
+    pub fn open_bookmark_report(&mut self, scope: crate::ui::report_dialog::ReportScope) {
+        self.report_dialog = Some(crate::ui::report_dialog::ReportDialog::new(
+            scope,
+            &self.config,
+        ));
+    }
+
     pub fn save_session(&mut self) -> std::io::Result<()> {
         match self.config.current_session.clone() {
             Some(file) => self.save_session_as(file),
@@ -2338,6 +2349,7 @@ impl FastTailApp {
                             .corner_radius(CornerRadius::same(6))
                             .min_size(egui::vec2(30.0, 26.0));
                     let mut session_action: Option<SessionAction> = None;
+                    let mut report_all = false;
                     let lang = self.config.language;
                     let has_session = self.config.current_session.is_some();
                     let recent_sessions = self.config.recent_sessions.clone();
@@ -2396,10 +2408,22 @@ impl FastTailApp {
                                 session_action = Some(SessionAction::SaveDefault);
                                 ui.close();
                             }
+                            // Every open stream's bookmarks as one Markdown report.
+                            ui.separator();
+                            if ui
+                                .button(format!("📝 {}", t(lang, "bookmark_report_all")))
+                                .clicked()
+                            {
+                                report_all = true;
+                                ui.close();
+                            }
                         });
                     let _ = session_menu.0.on_hover_text(t(lang, "session_tip"));
                     if let Some(action) = session_action {
                         self.run_session_action(action);
+                    }
+                    if report_all {
+                        self.open_bookmark_report(crate::ui::report_dialog::ReportScope::All);
                     }
 
                     // Filter button with amber border
@@ -3080,6 +3104,12 @@ impl FastTailApp {
             &mut self.dock_state,
             self.config.language,
         ) {
+            ctx.request_repaint();
+        }
+        if let Some(eng) = self.engines.iter_mut().find(|e| e.report_request) {
+            eng.report_request = false;
+            let scope = crate::ui::report_dialog::ReportScope::Stream(eng.path.clone());
+            self.open_bookmark_report(scope);
             ctx.request_repaint();
         }
         if let Some(eng) = self.engines.iter_mut().find(|e| e.find_all_request) {
@@ -4457,6 +4487,12 @@ impl FastTailApp {
                 None => {}
             }
         }
+        // Bookmark report dialog: built a few milliseconds per frame, then copied or saved.
+        if let Some(mut dialog) = self.report_dialog.take() {
+            if dialog.show(&ctx, &self.engines, &mut self.config) {
+                self.report_dialog = Some(dialog);
+            }
+        }
         if let Some(missing) = self.session_missing.clone() {
             let lang = self.config.language;
             let theme = self.config.theme;
@@ -4990,6 +5026,9 @@ impl FastTailApp {
             A::ClearRecentFiles => self.config.recent_files.clear(),
             A::SessionSaveAs => self.run_session_action(SessionAction::SaveAs),
             A::SessionSave => self.run_session_action(SessionAction::Save),
+            A::BookmarkReportAll => {
+                self.open_bookmark_report(crate::ui::report_dialog::ReportScope::All)
+            }
             A::SessionLoad => self.run_session_action(SessionAction::Load),
             A::SessionClearRecent => self.run_session_action(SessionAction::ClearRecent),
             A::SessionSaveDefault => self.run_session_action(SessionAction::SaveDefault),

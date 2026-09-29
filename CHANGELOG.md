@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Bookmark report and tags.** "Bookmark report…" in the stream menu (this stream) and
+  "Bookmark report (all streams)…" in the 🗂 menu and the palette write a Markdown
+  incident report of the bookmarks: summary, then each bookmark with line number,
+  timestamp, note and tags and its line with 0 to 20 context lines in a fenced block
+  (overlaps merged, fence longer than any backtick run), by stream or by time across
+  streams, optionally with automatic bookmarks and a tag filter; copied to the clipboard
+  or saved as `.md`, built in small steps with progress and Cancel. Every `#word` in a
+  note is a tag: shown as chips in the tooltip, and `CTRL + G` with `#tag` jumps to the
+  next bookmark carrying it. New `[general]` keys `report_context`, `report_auto`,
+  `report_order`.
+
 - **Search in a range.** The `⌖` chip beside a stream's search box limits hits, the
   counter (`[3 / 17 in range]`), `F3` / `SHIFT + F3`, the results pane and the timeline's
   search lane to part of the view, which stays visible: the selection, a typed line range

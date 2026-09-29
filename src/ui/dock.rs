@@ -678,7 +678,28 @@ fn note_tooltip(
 ) {
     if let Some(note) = engine.bookmark_note(line) {
         if row.hovered() && ui.rect_contains_pointer(marker) {
-            row.on_hover_text(note);
+            let tags = engine.bookmark_tags(line);
+            if tags.is_empty() {
+                row.on_hover_text(note);
+            } else {
+                // The tags under the note, as chips (`#tag` in CTRL + G jumps to them).
+                row.on_hover_ui(|ui| {
+                    ui.label(note);
+                    ui.horizontal_wrapped(|ui| {
+                        for tag in tags {
+                            egui::Frame::new()
+                                .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.5))
+                                .corner_radius(4.0)
+                                .inner_margin(egui::Margin::symmetric(4, 1))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(format!("#{tag}")).monospace().size(11.0),
+                                    );
+                                });
+                        }
+                    });
+                });
+            }
         }
     }
 }
@@ -1976,7 +1997,7 @@ fn render_log_stream(
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut engine.goto_input)
                     .hint_text(t(lang, "goto_hint"))
-                    .desired_width(90.0)
+                    .desired_width(130.0)
                     .id(goto_id),
             );
             let enter = resp.has_focus()
@@ -1986,7 +2007,60 @@ fn render_log_stream(
             // Where to land: the target entered now, or a time jump that waited for the
             // background timing and has just been resolved.
             let mut landed = engine.take_goto_time_result();
-            if enter {
+            // `#tag`: the stream's tags as suggestions, a click jumps like Enter.
+            let mut tag_jump = enter && engine.goto_input.trim_start().starts_with('#');
+            if engine.goto_input.trim_start().starts_with('#') {
+                let typed = engine
+                    .goto_input
+                    .trim()
+                    .trim_start_matches('#')
+                    .to_lowercase();
+                let suggestions: Vec<(String, usize)> = engine
+                    .bookmark_tag_counts()
+                    .into_iter()
+                    .filter(|(tag, _)| tag.starts_with(&typed))
+                    .take(8)
+                    .collect();
+                for (tag, count) in suggestions {
+                    if ui
+                        .small_button(RichText::new(format!("#{tag} ({count})")).monospace())
+                        .clicked()
+                    {
+                        engine.goto_input = format!("#{tag}");
+                        tag_jump = true;
+                    }
+                }
+            }
+            if tag_jump {
+                // The next bookmark carrying the tag after the selected (or top) row.
+                let from = engine
+                    .selection_bounds()
+                    .map(|(first, _)| first)
+                    .or_else(|| engine.get_actual_line_idx(top_row(engine)))
+                    .unwrap_or(0);
+                let typed = engine.goto_input.trim().to_string();
+                let found = crate::bookmark_report::normalize_tag(&typed)
+                    .and_then(|tag| engine.bookmark_next_tagged(from, &tag));
+                match found {
+                    Some((line, wrapped)) => {
+                        if wrapped && sound_enabled {
+                            crate::audio::SoundAlertPreset::Beep.play();
+                        }
+                        engine.goto_notice = None;
+                        engine.reveal_line(line);
+                        scroll_to_target(engine, line);
+                        engine.select_row(line);
+                        engine.goto_open = false;
+                        ui.ctx().memory_mut(|m| m.stop_text_input());
+                        ui.ctx().request_repaint();
+                    }
+                    None => {
+                        engine.goto_notice = Some(
+                            t(lang, "goto_no_tag").replace("{tag}", typed.trim_start_matches('#')),
+                        );
+                    }
+                }
+            } else if enter {
                 let current_line = engine.get_actual_line_idx(top_row(engine)).unwrap_or(0);
                 match engine.resolve_goto(&engine.goto_input.clone(), current_line) {
                     Some(target) if target.waiting => engine.goto_notice = None,
@@ -2099,6 +2173,9 @@ fn render_log_stream(
         if act(ActionId::ExportMatches) {
             export_stream_lines(engine, lang, true);
         }
+        if act(ActionId::BookmarkReport) {
+            engine.report_request = true;
+        }
         ui.menu_button("💾", |ui| {
             ui.set_max_width(260.0);
             if ui
@@ -2118,6 +2195,16 @@ fn render_log_stream(
             }
             if engine.has_bookmarks() {
                 ui.separator();
+                if ui
+                    .button(
+                        RichText::new(format!("📝 {}", t(lang, "bookmark_report_menu")))
+                            .monospace(),
+                    )
+                    .clicked()
+                {
+                    engine.report_request = true;
+                    ui.close();
+                }
                 if ui
                     .button(RichText::new(t(lang, "clear_bookmarks")).monospace())
                     .clicked()

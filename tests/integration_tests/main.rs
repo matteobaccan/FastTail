@@ -18,6 +18,7 @@ use std::time::Duration;
 use tempfile::NamedTempFile;
 
 mod basics;
+mod bookmark_report;
 mod external_tools;
 mod line_wrap;
 mod log_levels;
