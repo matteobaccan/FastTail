@@ -586,6 +586,7 @@ fn test_i18n_exhaustive_coverage() {
         "scratch_sent",
         "scratch_too_large",
         "scratch_nothing",
+        "scratch_large",
         "app_subtitle",
         "follow_tail",
         "paused",

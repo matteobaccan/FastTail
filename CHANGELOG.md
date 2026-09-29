@@ -34,7 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `CTRL + click` / `ALT + Enter` on a reference shows the line in its stream, reopening
   the file if needed. Find box, Save as…, Clear; 4 MB cap; saved beside the session
   (`….scratch.txt`, `scratchpad.txt` for the default workspace) a second after each
-  change and on exit.
+  change and on exit. A dock layout saved while the Scratchpad tab is open is not read
+  by older versions (they start with the default layout).
 
 ### Changed
 

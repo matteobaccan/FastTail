@@ -109,12 +109,24 @@ pub struct Scratchpad {
     find: String,
     pub notice: Option<(String, bool)>,
     confirm_clear: bool,
+    /// The pad file exists but could not be read: it is left alone (never written over
+    /// or deleted) until another pad is loaded.
+    load_failed: bool,
 }
+
+/// Above this size the editor lays out slowly; the tab says so.
+pub const LARGE_PAD_BYTES: usize = 512 * 1024;
 
 impl Scratchpad {
     /// The pad saved at `file` (empty when there is none), which it is saved to from now.
     pub fn load(file: PathBuf) -> Self {
-        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        // Not UTF-8 (re-saved by another editor): read as well as can be, invalid bytes
+        // replaced. A file that cannot be read at all is left alone.
+        let (text, load_failed) = match std::fs::read(&file) {
+            Ok(bytes) => (String::from_utf8_lossy(&bytes).into_owned(), false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
+            Err(_) => (String::new(), true),
+        };
         let paths = std::fs::read_to_string(paths_file_of(&file))
             .unwrap_or_default()
             .lines()
@@ -125,6 +137,7 @@ impl Scratchpad {
             text,
             paths,
             file: Some(file),
+            load_failed,
             ..Default::default()
         }
     }
@@ -182,6 +195,11 @@ impl Scratchpad {
 
     /// Writes the pad (and its map) now. An empty pad removes its files.
     pub fn save(&mut self) -> std::io::Result<()> {
+        if self.load_failed {
+            return Err(std::io::Error::other(
+                "the scratchpad file could not be read: it is left as it is",
+            ));
+        }
         self.dirty_at = None;
         let Some(file) = self.file.clone() else {
             return Ok(());
@@ -215,9 +233,22 @@ impl Scratchpad {
             return;
         }
         if self.is_dirty() {
-            let _ = self.save();
+            if let Err(e) = self.save() {
+                // The notes stay here (and dirty): nothing is lost, the switch waits.
+                self.dirty_at = Some(Instant::now());
+                self.notice = Some((e.to_string(), true));
+                return;
+            }
         }
         *self = Self::load(file);
+    }
+
+    /// Saves on exit, only when something changed (another instance may have written
+    /// the same pad since).
+    pub fn save_on_exit(&mut self) {
+        if self.is_dirty() {
+            let _ = self.save();
+        }
     }
 
     /// Copies the pad to `file` and keeps it there (Save session as…).
@@ -351,6 +382,14 @@ pub fn render(
             .size(10.5)
             .color(theme.text_dim()),
     );
+    if pad.text.len() > LARGE_PAD_BYTES {
+        ui.label(
+            RichText::new(t(lang, "scratch_large"))
+                .monospace()
+                .size(10.5)
+                .color(theme.warn_color()),
+        );
+    }
 
     let id = editor_id();
     if find_next && !pad.find.is_empty() {
@@ -361,21 +400,25 @@ pub fn render(
             .char_range()
             .map(|r| r.primary.index.0.max(r.secondary.index.0))
             .unwrap_or(0);
-        let lower = pad.text.to_lowercase();
-        let needle = pad.find.to_lowercase();
-        // Lowercasing can change byte lengths; positions are compared in characters.
-        let from_byte = lower
+        // Matched on the text itself, so the offsets are the text's own.
+        let matcher = regex::RegexBuilder::new(&regex::escape(&pad.find))
+            .case_insensitive(true)
+            .build()
+            .ok();
+        let from_byte = pad
+            .text
             .char_indices()
             .nth(from_char)
-            .map_or(lower.len(), |(i, _)| i);
-        let hit = lower[from_byte..]
-            .find(&needle)
-            .map(|i| from_byte + i)
-            .or_else(|| lower.find(&needle));
+            .map_or(pad.text.len(), |(i, _)| i);
+        let hit = matcher.and_then(|m| {
+            m.find_at(&pad.text, from_byte)
+                .or_else(|| m.find(&pad.text))
+                .map(|found| (found.start(), found.end()))
+        });
         match hit {
-            Some(at) => {
-                let start = lower[..at].chars().count();
-                let end = start + needle.chars().count();
+            Some((at, to)) => {
+                let start = pad.text[..at].chars().count();
+                let end = start + pad.text[at..to].chars().count();
                 let mut state = state;
                 state
                     .cursor
@@ -391,6 +434,16 @@ pub fn render(
         }
     }
 
+    // ALT + Enter on a reference line: taken before the editor, which would otherwise
+    // insert a line break (its Enter ignores an extra ALT), read at the cursor as it is.
+    let alt_enter_at = (ui.memory(|m| m.has_focus(id))
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::Enter)))
+    .then(|| {
+        egui::text_edit::TextEditState::load(ui.ctx(), id)
+            .and_then(|s| s.cursor.char_range())
+            .map(|r| r.primary.index.0)
+    })
+    .flatten();
     let font = egui::FontId::monospace(font_size);
     let output = egui::ScrollArea::both()
         .auto_shrink([false, false])
@@ -409,20 +462,17 @@ pub fn render(
         pad.touch();
     }
     // CTRL + click, or ALT + Enter, on a reference line shows the line it names.
-    let ctrl_click = output.response.clicked() && ui.input(|i| i.modifiers.command);
-    let alt_enter = output.response.has_focus()
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::Enter));
-    if ctrl_click || alt_enter {
-        if let Some(range) = output.cursor_range {
-            let char_idx = range.primary.index.0;
-            let byte = pad
-                .text
-                .char_indices()
-                .nth(char_idx)
-                .map_or(pad.text.len(), |(i, _)| i);
-            if let Some((name, line)) = parse_reference(line_at(&pad.text, byte)) {
-                pad.jump_request = Some((name, line));
-            }
+    let ctrl_click = (output.response.clicked() && ui.input(|i| i.modifiers.command))
+        .then(|| output.cursor_range.map(|r| r.primary.index.0))
+        .flatten();
+    if let Some(char_idx) = alt_enter_at.or(ctrl_click) {
+        let byte = pad
+            .text
+            .char_indices()
+            .nth(char_idx)
+            .map_or(pad.text.len(), |(i, _)| i);
+        if let Some((name, line)) = parse_reference(line_at(&pad.text, byte)) {
+            pad.jump_request = Some((name, line));
         }
     }
 }
@@ -522,6 +572,42 @@ mod tests {
         pad.jump_request = Some(("a.log".into(), 3));
         pad.resolve_jump(&open, Language::En);
         assert_eq!(pad.jump, Some((PathBuf::from("/new/a.log"), 3)));
+    }
+
+    #[test]
+    fn a_pad_that_is_not_utf8_loads_lossily_and_exit_saves_only_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("pad.txt");
+        std::fs::write(&file, b"caf\xe9 notes\n").unwrap();
+        let mut pad = Scratchpad::load(file.clone());
+        assert_eq!(pad.text, "caf\u{fffd} notes\n");
+        // Nothing changed: exit leaves the file as the other editor wrote it.
+        pad.save_on_exit();
+        assert_eq!(std::fs::read(&file).unwrap(), b"caf\xe9 notes\n");
+        pad.touch();
+        pad.save_on_exit();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "caf\u{fffd} notes\n"
+        );
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_notes_instead_of_switching() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory where the pad file should be: the save fails.
+        let blocked = dir.path().join("blocked.txt");
+        std::fs::create_dir(&blocked).unwrap();
+        let mut pad = Scratchpad {
+            file: Some(blocked.clone()),
+            ..Default::default()
+        };
+        pad.send("a.log", Path::new("/x/a.log"), 0, "keep me", true)
+            .unwrap();
+        pad.switch_to(dir.path().join("other.txt"));
+        assert_eq!(pad.file.as_deref(), Some(blocked.as_path()));
+        assert!(pad.text.contains("keep me"));
+        assert!(pad.notice.as_ref().is_some_and(|(_, warn)| *warn));
     }
 
     #[test]

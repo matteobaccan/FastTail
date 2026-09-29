@@ -104,6 +104,8 @@ pub struct FastTailApp {
     pub report_dialog: Option<crate::ui::report_dialog::ReportDialog>,
     /// The scratchpad of the current session (see `ui::scratchpad`).
     pub scratchpad: crate::ui::scratchpad::Scratchpad,
+    /// A reference line to show once its stream has indexed that line.
+    scratch_jump: Option<(PathBuf, usize)>,
     /// Entry picker of a zip holding several files or of a tar archive, while it is shown.
     pub archive_picker: Option<crate::ui::zip_picker::ArchivePicker>,
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
@@ -607,6 +609,7 @@ impl FastTailApp {
             session_missing: None,
             report_dialog: None,
             scratchpad: crate::ui::scratchpad::Scratchpad::default(),
+            scratch_jump: None,
             archive_picker: None,
             open_notice: None,
             pending_stdin: None,
@@ -932,9 +935,33 @@ impl FastTailApp {
             if !self.engines.iter().any(|e| e.path == path) {
                 self.open_log_file(path.clone());
             }
-            self.find_all.jump = Some((path, line));
-            self.find_all.jump_in_context = true;
+            if self.engines.iter().any(|e| e.path == path) {
+                self.scratch_jump = Some((path, line));
+            } else {
+                // An archive asks which entry to open: its lines are not reachable here.
+                self.scratchpad.notice = Some((
+                    t(lang, "scratch_file_not_found")
+                        .replace("{name}", &path.display().to_string()),
+                    true,
+                ));
+            }
             changed = true;
+        }
+        // Shown once the stream has indexed that line (or is fully indexed).
+        if let Some((path, line)) = self.scratch_jump.clone() {
+            match self.engines.iter().find(|e| e.path == path) {
+                None => self.scratch_jump = None,
+                Some(engine) => {
+                    let complete = !engine.index_pending
+                        && engine.compressed.as_ref().is_none_or(|c| c.is_finalized());
+                    if complete || engine.total_lines() > line {
+                        self.scratch_jump = None;
+                        self.find_all.jump = Some((path, line));
+                        self.find_all.jump_in_context = true;
+                        changed = true;
+                    }
+                }
+            }
         }
         changed
     }
@@ -4928,7 +4955,7 @@ impl eframe::App for FastTailApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let _ = self.scratchpad.save();
+        self.scratchpad.save_on_exit();
         self.save_dock_layout();
         let _ = self.config.save();
         // Dropping the engines stops their decompression jobs and deletes their spools;
