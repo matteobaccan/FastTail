@@ -55,6 +55,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The "Last hour" shortcut of the time range popup is now "Last hour of the log" (same
   behaviour), next to the new relative shortcuts.
 
+### Fixed
+
+- **The command palette no longer stays a couple of rows high.** After a search with few
+  or no matches, clearing it left the list as short as it had become; it now grows back
+  to the rows it shows (up to its usual height).
+
 ## [0.13.0] - 2026-09-29
 
 ### Added

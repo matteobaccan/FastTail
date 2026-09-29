@@ -264,6 +264,9 @@ struct Row {
     action: Option<Action>,
 }
 
+/// Height of a row of the list.
+const ROW_HEIGHT: f32 = 22.0;
+
 /// State of the palette between frames.
 #[derive(Debug, Default)]
 pub struct CommandPalette {
@@ -422,8 +425,14 @@ impl CommandPalette {
                                     .color(theme.text_dim()),
                             );
                         }
+                        // The list asks for the height its rows need (at most 360 px): the
+                        // palette's area remembers its last size, and a list left to shrink
+                        // to it stayed a couple of rows high after a query with few matches.
+                        let row_step = ROW_HEIGHT + ui.spacing().item_spacing.y;
+                        let list_height = (order.len() as f32 * row_step).min(360.0);
                         egui::ScrollArea::vertical()
                             .max_height(360.0)
+                            .min_scrolled_height(list_height)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
                                 for (pos, &idx) in order.iter().enumerate() {
@@ -556,7 +565,7 @@ impl CommandPalette {
 /// reason it is greyed, the category and the shortcut.
 fn draw_row(ui: &mut egui::Ui, row: &Row, selected: bool, cfg: &FastTailConfig) -> egui::Response {
     let theme = cfg.theme;
-    let height = 22.0;
+    let height = ROW_HEIGHT;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
@@ -835,6 +844,46 @@ mod tests {
         for a in actions::all() {
             assert_ne!(a.shortcut, Some(PALETTE_SHORTCUT_LABEL));
         }
+    }
+
+    /// Height of the palette after a few frames of `palette.show`.
+    fn palette_height(
+        ctx: &egui::Context,
+        palette: &mut CommandPalette,
+        cfg: &FastTailConfig,
+    ) -> f32 {
+        let state = ActionState::default();
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                palette.show(ui.ctx(), cfg, &state);
+            });
+            out.textures_delta.clear();
+        }
+        ctx.memory(|m| m.area_rect(egui::Id::new("command_palette")))
+            .expect("the palette is drawn")
+            .height()
+    }
+
+    #[test]
+    fn the_list_grows_back_after_a_query_with_few_matches() {
+        let ctx = egui::Context::default();
+        let cfg = english();
+        let mut palette = CommandPalette::default();
+        palette.open(None);
+        let full = palette_height(&ctx, &mut palette, &cfg);
+        palette.query = "zzzz no such command".into();
+        let empty = palette_height(&ctx, &mut palette, &cfg);
+        assert!(empty < full, "{empty} < {full}");
+        palette.query.clear();
+        let again = palette_height(&ctx, &mut palette, &cfg);
+        assert!((again - full).abs() < 1.0, "back to {full}, got {again}");
     }
 
     #[test]
