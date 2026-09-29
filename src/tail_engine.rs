@@ -515,6 +515,102 @@ pub const LIVE_WINDOW_PERIOD: Duration = Duration::from_secs(5);
 /// Least time between two full refilters of a live window that cannot slide in place.
 pub const LIVE_FULL_REFRESH: Duration = Duration::from_secs(60);
 
+/// A character selection inside one row: byte offsets `anchor` (where it started) and
+/// `head` (where it ends now) into `text`, the row as the view showed it (ANSI handled,
+/// long lines cut, timestamps as displayed). An empty one is a caret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CharSelection {
+    pub line: usize,
+    pub anchor: usize,
+    pub head: usize,
+    pub text: String,
+}
+
+/// How a caret key moves the head of a character selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaretStep {
+    Left,
+    Right,
+    WordLeft,
+    WordRight,
+    Home,
+    End,
+}
+
+impl CharSelection {
+    /// A selection of `range` (byte offsets, clamped to character boundaries) of `text`.
+    pub fn new(line: usize, text: String, anchor: usize, head: usize) -> Self {
+        let clamp = |at: usize| {
+            let mut at = at.min(text.len());
+            while !text.is_char_boundary(at) {
+                at -= 1;
+            }
+            at
+        };
+        let (anchor, head) = (clamp(anchor), clamp(head));
+        Self {
+            line,
+            anchor,
+            head,
+            text,
+        }
+    }
+
+    pub fn range(&self) -> std::ops::Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head)
+    }
+
+    /// The selected text; empty for a caret.
+    pub fn selected(&self) -> &str {
+        &self.text[self.range()]
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.head
+    }
+
+    /// Moves the head (the anchor stays): one character, one word (letters, digits and
+    /// `_`; the gaps between words are skipped), or to the start / end of the row.
+    pub fn move_head(&mut self, step: CaretStep) {
+        let text = &self.text;
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let before = |at: usize| text[..at].chars().next_back();
+        let after = |at: usize| text[at..].chars().next();
+        let mut at = self.head;
+        match step {
+            CaretStep::Left => {
+                if let Some(c) = before(at) {
+                    at -= c.len_utf8();
+                }
+            }
+            CaretStep::Right => {
+                if let Some(c) = after(at) {
+                    at += c.len_utf8();
+                }
+            }
+            CaretStep::WordLeft => {
+                while let Some(c) = before(at).filter(|c| !is_word(*c)) {
+                    at -= c.len_utf8();
+                }
+                while let Some(c) = before(at).filter(|c| is_word(*c)) {
+                    at -= c.len_utf8();
+                }
+            }
+            CaretStep::WordRight => {
+                while let Some(c) = after(at).filter(|c| !is_word(*c)) {
+                    at += c.len_utf8();
+                }
+                while let Some(c) = after(at).filter(|c| is_word(*c)) {
+                    at += c.len_utf8();
+                }
+            }
+            CaretStep::Home => at = 0,
+            CaretStep::End => at = text.len(),
+        }
+        self.head = at;
+    }
+}
+
 /// A time field counted back from now: `-15m`, `-1h30m`, `now`.
 pub fn is_relative_time(text: &str) -> bool {
     crate::timestamp::parse_relative(text, 0).is_some()
@@ -1425,6 +1521,8 @@ pub struct TailEngine {
     /// The scope went back to the whole view because the file was truncated, rotated or
     /// reloaded; the search box says so until the next scope is set.
     pub search_scope_reset: bool,
+    /// A character selection inside one row (`CharSelection`), beside the row selection.
+    pub char_selection: Option<CharSelection>,
     /// Selected rows (line indices) for copy/export; `selection_all` marks "every visible row".
     pub selection: BTreeSet<usize>,
     pub selection_all: bool,
@@ -1997,6 +2095,7 @@ impl TailEngine {
             file_size,
             last_modified,
             follow_tail: true,
+            char_selection: None,
             selection: BTreeSet::new(),
             selection_all: false,
             selection_anchor: None,
@@ -2225,6 +2324,14 @@ impl TailEngine {
         let anchor = self.context.take().map(|c| c.line);
         self.filter = self.build_filter();
         self.recompute_filtered_lines();
+        // A character selection goes with its line when the new filter hides it.
+        if self
+            .char_selection
+            .as_ref()
+            .is_some_and(|sel| !self.is_line_visible(sel.line))
+        {
+            self.char_selection = None;
+        }
         if let Some(line) = anchor {
             if self.get_visible_row_of_line(line).is_some() {
                 self.pending_jump = Some(line);
@@ -2823,6 +2930,9 @@ impl TailEngine {
         if derived_from == 0 {
             self.hold_time_window();
             // Line numbers no longer name the same lines: back to the whole view.
+            if unchanged_lines == 0 {
+                self.char_selection = None;
+            }
             if unchanged_lines == 0 && !self.search_scope.is_all() {
                 self.search_scope = SearchScope::All;
                 self.search_scope_reset = true;

@@ -570,6 +570,8 @@ fn test_i18n_exhaustive_coverage() {
         "time_range_live",
         "time_range_live_minute",
         "time_range_live_empty",
+        "copy_selected_text",
+        "help_desc_charsel",
         "app_subtitle",
         "follow_tail",
         "paused",
