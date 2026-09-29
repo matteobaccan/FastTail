@@ -77,6 +77,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Crash on opening a file with every stream in floating windows** ("There did not exist a
+  tree at surface index 0"). With all the tabs dragged out of the main window, the layout
+  was saved with an empty main surface and the next open of any file panicked; such
+  layouts now load, and the main surface is kept when saving.
 - **`fasttail -V`, `--help` and `--print` from `cmd` or PowerShell (Windows)** no longer seem to
   wait for a key: the shell does not wait for the GUI program and had already printed its
   prompt above the output; FastTail now sends one Enter to the console when it is done, so a

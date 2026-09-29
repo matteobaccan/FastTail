@@ -387,6 +387,29 @@ pub fn apply_find_jump(
 /// The dock as it is saved: without the Find results tab (results are not persisted).
 pub fn without_find_results(dock: &DockState<FastTailTab>) -> DockState<FastTailTab> {
     let mut saved = dock.clone();
-    saved.retain_tabs(|tab| *tab != FastTailTab::FindResults && *tab != FastTailTab::Compare);
+    retain_tabs(&mut saved, |tab| {
+        *tab != FastTailTab::FindResults && *tab != FastTailTab::Compare
+    });
     saved
+}
+
+/// `DockState::retain_tabs`, keeping the main surface: egui_dock turns a main surface left
+/// without tabs into `Surface::Empty`, and every later access to it (opening a file with
+/// the other tabs in a floating window, a layout saved like that and loaded again)
+/// panics with "There did not exist a tree at surface index 0".
+pub fn retain_tabs(
+    dock: &mut DockState<FastTailTab>,
+    predicate: impl FnMut(&mut FastTailTab) -> bool,
+) {
+    dock.retain_tabs(predicate);
+    ensure_main_surface(dock);
+}
+
+/// Gives an empty main surface back its (empty) tree; see `retain_tabs`.
+pub fn ensure_main_surface(dock: &mut DockState<FastTailTab>) {
+    if let Some(surface) = dock.get_surface_mut(egui_dock::SurfaceIndex::main()) {
+        if surface.is_empty() {
+            *surface = egui_dock::Surface::Main(egui_dock::Tree::new(vec![]));
+        }
+    }
 }

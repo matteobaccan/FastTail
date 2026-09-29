@@ -572,11 +572,13 @@ impl FastTailApp {
         let baretail_dialog_open = baretail_config.is_some();
 
         // Restore saved dock layout from config, or start clean
-        let dock_state: DockState<FastTailTab> = config
+        let mut dock_state: DockState<FastTailTab> = config
             .dock_layout
             .as_ref()
             .and_then(|ron_str| ron::from_str(ron_str).ok())
             .unwrap_or_else(|| DockState::new(vec![]));
+        // A layout saved by 0.13.0 or earlier may hold an empty main surface.
+        crate::ui::find_results::ensure_main_surface(&mut dock_state);
 
         let mut floating_window_rects = std::collections::HashMap::new();
         for (surf_index, surface) in dock_state.iter_surfaces_indexed() {
@@ -746,7 +748,7 @@ impl FastTailApp {
         // Results are not persisted: the Find results tab is left out (after the window
         // rects are applied, since dropping it may drop a floating window).
         let mut dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
-        dock_to_save.retain_tabs(|tab| !is_stdin_tab(tab));
+        crate::ui::find_results::retain_tabs(&mut dock_to_save, |tab| !is_stdin_tab(tab));
         ron::to_string(&dock_to_save).ok()
     }
 
@@ -1404,7 +1406,8 @@ impl FastTailApp {
             self.open_log_file(entry.path.clone());
         }
         if let Some(layout) = &loaded.session.dock_layout {
-            if let Ok(ds) = ron::from_str::<DockState<FastTailTab>>(layout) {
+            if let Ok(mut ds) = ron::from_str::<DockState<FastTailTab>>(layout) {
+                crate::ui::find_results::ensure_main_surface(&mut ds);
                 let tabs: Vec<PathBuf> = ds
                     .iter_all_tabs()
                     .filter_map(|(_, t)| match t {
@@ -1712,7 +1715,7 @@ impl FastTailApp {
         let mut dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
 
         // After the floating rectangles, whose surface indices this may shift.
-        dock_to_save.retain_tabs(|tab| !is_stdin_tab(tab));
+        crate::ui::find_results::retain_tabs(&mut dock_to_save, |tab| !is_stdin_tab(tab));
         if let Ok(ron_str) = ron::to_string(&dock_to_save) {
             if self.config.dock_layout.as_deref() != Some(&ron_str) {
                 self.config.dock_layout = Some(ron_str);
@@ -2120,6 +2123,9 @@ impl FastTailApp {
 
     pub fn render_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Every tab dragged out into floating windows can leave the main surface without
+        // a tree; the next open of a file would panic on it.
+        crate::ui::find_results::ensure_main_surface(&mut self.dock_state);
         self.update_tray(&ctx);
 
         // Fill background of the window canvas with current theme bg color
