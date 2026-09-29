@@ -27,6 +27,7 @@ mod external_tools;
 mod line_wrap;
 mod log_levels;
 mod pattern_streams;
+mod relative_time_windows;
 mod review_regressions;
 
 /// Serialized `fasttail.ini` bytes of `cfg`.

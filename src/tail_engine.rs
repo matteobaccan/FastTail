@@ -509,6 +509,16 @@ impl HighlightRule {
 /// Upper bound on the stored line hits of a search: 8 bytes each, so at most 8 MB per
 /// stream. Past it the search keeps counting (`search_total`) without storing.
 pub const MAX_SEARCH_MATCHES: usize = 1_000_000;
+
+/// How often a live time window (a relative side such as `-15m`) is re-read.
+pub const LIVE_WINDOW_PERIOD: Duration = Duration::from_secs(5);
+/// Least time between two full refilters of a live window that cannot slide in place.
+pub const LIVE_FULL_REFRESH: Duration = Duration::from_secs(60);
+
+/// A time field counted back from now: `-15m`, `-1h30m`, `now`.
+pub fn is_relative_time(text: &str) -> bool {
+    crate::timestamp::parse_relative(text, 0).is_some()
+}
 /// Upper bound on the byte-level hits of the HEX view.
 pub const MAX_BYTE_MATCHES: usize = 20_000;
 /// Lines per bucket of the ERROR / FATAL counts kept beside the level cache.
@@ -1277,6 +1287,10 @@ pub struct TailEngine {
     /// One of the two time fields does not parse: the row says so instead of silently
     /// leaving that side open.
     pub time_range_error: bool,
+    /// When a live window was last re-read, and last refiltered in full (see
+    /// `slide_live_window_at`).
+    live_checked_at: Instant,
+    live_refiltered_at: Option<Instant>,
     /// Include terms (all must match) and exclude terms (none may match), at most
     /// `MAX_FILTER_TERMS` each; empty rows are kept for the editor and ignored. The first
     /// term of each side is the stream bar's field (`include_filter` / `exclude_filter`).
@@ -2034,6 +2048,8 @@ impl TailEngine {
             time_from_text: String::new(),
             time_to_text: String::new(),
             time_range_error: false,
+            live_checked_at: Instant::now(),
+            live_refiltered_at: None,
             min_level: LogLevel::Unknown,
             show_unknown_levels: false,
             levels: Vec::new(),
@@ -3124,6 +3140,12 @@ impl TailEngine {
     pub fn poll_updates(&mut self) {
         self.poll_context_rebuild();
         self.drain_job();
+        // A live time window slides with the clock.
+        if self.time_window_live() && self.live_checked_at.elapsed() >= LIVE_WINDOW_PERIOD {
+            self.live_checked_at = Instant::now();
+            let now = self.now_on_display_clock();
+            self.slide_live_window_at(now);
+        }
         // An automatic-bookmark scan displaced by another job, or waiting for the index.
         self.run_auto_scan_if_due();
         if !self.is_watching {
@@ -4621,6 +4643,107 @@ impl TailEngine {
         true
     }
 
+    /// Whether the time window has a relative side (`-15m`, `now`): it slides with the
+    /// clock, re-read every `LIVE_WINDOW_PERIOD` (see `slide_live_window_at`).
+    pub fn time_window_live(&self) -> bool {
+        self.is_time_filtered()
+            && (is_relative_time(&self.time_from_text) || is_relative_time(&self.time_to_text))
+    }
+
+    /// Re-reads a live window at `now` (display clock) and moves its bounds. On a log
+    /// whose timestamps never go back, the lines that left the window are dropped from the
+    /// front and only the lines after the old "to" are read again, so the cost follows the
+    /// lines that changed, not the file. Otherwise (a log that goes back in time, context
+    /// lines, a scan running, a bound moving back) the filters run again, at most once
+    /// every `LIVE_FULL_REFRESH`.
+    pub fn slide_live_window_at(&mut self, now: i64) {
+        if !self.time_window_live() || self.pending_window.is_some() {
+            return;
+        }
+        let (from_text, to_text) = (self.time_from_text.clone(), self.time_to_text.clone());
+        let (from, from_ok, to, to_ok) = self.parse_time_texts_at(&from_text, &to_text, now);
+        if !(from_ok && to_ok) || (from, to) == (self.time_from, self.time_to) {
+            return;
+        }
+        if self.slide_time_window(from, to) {
+            return;
+        }
+        if self
+            .live_refiltered_at
+            .is_some_and(|at| at.elapsed() < LIVE_FULL_REFRESH)
+        {
+            return;
+        }
+        self.live_refiltered_at = Some(Instant::now());
+        self.apply_time_window(from, to);
+    }
+
+    /// Moves the window forward on an ordered, fully timed log without running the
+    /// filters over the whole file. Returns `false` when that cannot be done here.
+    fn slide_time_window(&mut self, from: Option<i64>, to: Option<i64>) -> bool {
+        let forward = |old: Option<i64>, new: Option<i64>| match (old, new) {
+            (None, None) => true,
+            (Some(old), Some(new)) => new >= old,
+            _ => false,
+        };
+        if self.timestamps_unordered()
+            || !self.timestamps_complete()
+            || self.job.is_some()
+            || self.index_pending
+            || self.has_context()
+            || !forward(self.time_from, from)
+            || !forward(self.time_to, to)
+        {
+            return false;
+        }
+        let old_to = self.time_to;
+        self.time_from = from;
+        self.time_to = to;
+        // Untimed lines (`NO_TIMESTAMP`, the smallest value) stay before the cut.
+        let cut = from.map_or(0, |f| self.timestamps.partition_point(|&ts| ts < f));
+        let dropped = self.filtered_lines.partition_point(|&idx| idx < cut);
+        // Lines after the old "to" that the new one lets in are read again.
+        let rescan = match (old_to, to) {
+            (Some(old), Some(new)) if new > old => {
+                Some(self.timestamps.partition_point(|&ts| ts <= old))
+            }
+            _ => None,
+        };
+        if dropped == 0 && rescan.is_none_or(|start| start >= self.total_lines()) {
+            return true;
+        }
+        let top = self.view_top_line;
+        if dropped > 0 {
+            let kept = self.filtered_lines.split_off(dropped);
+            self.clear_filtered();
+            self.extend_filtered(kept);
+            if self.search_capped() {
+                self.refresh_search_from(0);
+            } else if !self.last_searched_query.is_empty() {
+                let gone = self.search_matches.partition_point(|&idx| idx < cut);
+                if gone > 0 {
+                    self.search_matches.drain(..gone);
+                    self.search_total = self.search_matches.len();
+                    let left = self.search_matches.len();
+                    self.current_match_idx = self
+                        .current_match_idx
+                        .map(|i| i.saturating_sub(gone))
+                        .filter(|_| left > 0);
+                    self.search_generation = self.search_generation.wrapping_add(1);
+                }
+            }
+        }
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+        self.mark_collapse_dirty(0);
+        if let Some(start) = rescan {
+            self.recompute_filtered_lines_from(start);
+            self.refresh_search_from(start);
+        }
+        self.update_collapse();
+        self.keep_top_line(top);
+        true
+    }
+
     /// Whether a window has been entered and waits for the stream to be timed.
     pub fn time_range_pending(&self) -> bool {
         self.pending_window.is_some()
@@ -4674,11 +4797,25 @@ impl TailEngine {
         from_text: &str,
         to_text: &str,
     ) -> (Option<i64>, bool, Option<i64>, bool) {
+        self.parse_time_texts_at(from_text, to_text, self.now_on_display_clock())
+    }
+
+    /// `parse_time_texts` with "now" given (on the display clock): a relative side
+    /// (`-15m`, `-1h30m`, `now`) is counted back from it.
+    fn parse_time_texts_at(
+        &self,
+        from_text: &str,
+        to_text: &str,
+        now: i64,
+    ) -> (Option<i64>, bool, Option<i64>, bool) {
         // The fields are read on the display clock (the time display of the stream).
         let reference = self.to_display_clock(self.time_reference());
         let parse = |text: &str| -> (Option<i64>, bool) {
             if text.trim().is_empty() {
                 return (None, true);
+            }
+            if let Some(millis) = crate::timestamp::parse_relative(text, now) {
+                return (Some(millis), true);
             }
             match crate::timestamp::parse_user_time(text, reference) {
                 Some(millis) => (Some(millis), true),
@@ -4687,7 +4824,14 @@ impl TailEngine {
         };
         let (from, from_ok) = parse(from_text);
         let (to, to_ok) = parse(to_text);
-        let to = to.map(|millis| crate::timestamp::end_of_typed_time(to_text, millis));
+        // A relative "to" is the exact instant; a typed one runs to the end of its unit.
+        let to = to.map(|millis| {
+            if is_relative_time(to_text) {
+                millis
+            } else {
+                crate::timestamp::end_of_typed_time(to_text, millis)
+            }
+        });
         let from = from.map(|millis| self.from_display_clock(millis));
         let to = to.map(|millis| self.from_display_clock(millis));
         (from, from_ok, to, to_ok)

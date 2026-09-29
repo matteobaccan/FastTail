@@ -40,8 +40,9 @@ fn without_print_since_and_until_set_the_window_of_the_streams_opened() {
     let mut app = FastTailApp::from_config(FastTailConfig::default());
     app.apply_cli(&cli);
     let engine = &app.engines[0];
-    // A relative time is fixed to the instant it names at start, with its milliseconds.
-    assert_eq!(engine.time_from_text.len(), "2026-09-18 14:02:10.123".len());
+    // A relative time is kept as typed: the window slides with the clock.
+    assert_eq!(engine.time_from_text, "-1h");
+    assert!(engine.time_window_live());
     assert!(!engine.time_range_error);
     assert_eq!(engine.visible_line_count(), 0);
 

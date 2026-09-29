@@ -35,7 +35,7 @@ OPTIONS:
     --since <TIME>       Start of the time window of the files opened from the command line:
                          14:02, 2026-09-28 14:02, a timestamp copied from a line, or a
                          relative time: now, -15m, -3h, -1h30m, -2d, -1w (units s, m, h,
-                         d, w, counted back from now; fixed at start in the window)
+                         d, w, counted back from now; in the window it slides with the clock)
     --until <TIME>       End of that time window, in the same forms
     --follow             Enable follow mode on the files opened from the command line
     --no-follow          Disable follow mode on those files

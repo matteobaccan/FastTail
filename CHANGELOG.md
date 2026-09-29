@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Relative, live time windows.** The time range fields take `-15m`, `-90s`, `-3h`, `-2d`,
+  `-1w`, `-1h30m` and `now`, counted back from now on the stream's display clock. A window
+  with a relative side is re-read every 5 seconds and slides: on a log whose timestamps
+  never go back only the lines that left or entered it are touched, otherwise it is
+  refiltered at most once a minute. The popup has a "Relative to now" row (5m, 15m, 1h, 6h,
+  24h, 7d); the stream bar shows `⟳` and the tooltip the bounds in force, or since when
+  there is no line. `--since` / `--until` without `--print` now keep a relative value as
+  typed, so the window opened from the command line slides too.
+
+### Changed
+
+- The "Last hour" shortcut of the time range popup is now "Last hour of the log" (same
+  behaviour), next to the new relative shortcuts.
+
 ## [0.13.0] - 2026-09-29
 
 ### Added
