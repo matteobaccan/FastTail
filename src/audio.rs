@@ -50,6 +50,8 @@ impl SoundAlertPreset {
         if *self == SoundAlertPreset::None {
             return;
         }
+        // Only the Windows sounds tell the presets apart; elsewhere every one is the bell.
+        #[cfg_attr(not(windows), allow(unused_variables))]
         let preset = *self;
         thread::spawn(move || {
             #[cfg(windows)]

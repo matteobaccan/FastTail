@@ -41,7 +41,7 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 | `src/actions.rs` | Not UI code: the action registry the palette lists (ids, i18n names, categories, scopes, enabled conditions, shortcut labels), and the boolean and enumerated settings it turns into commands. |
 | `src/ui/time_range.rs` | The time range control of the stream bar (the visible time span) and its popup: the draft, the calendar and spinner rules, the shortcuts and OK / Cancel. |
 | `src/ui/timeline_strip.rs` | The 56 px timeline histogram above the rows. |
-| `src/ui/zip_picker.rs` | `ArchivePicker`, the entry picker for a zip that holds several files and for any tar archive (plain or compressed). |
+| `src/ui/zip_picker.rs` | `ArchivePicker`, the entry picker for a zip or 7z that holds several files and for any tar archive (plain or compressed). |
 | `src/collapse.rs` | Not UI code, but it shapes the rows: detection of repeated entries (`CollapseMode`, `CollapseState`) and the row ↔ line mapping of a collapsed text view. |
 | `src/theme.rs` | `CyberTheme`: palettes, level, label and ANSI colours, and `apply()` to egui `Visuals`. |
 | `src/renderer.rs` | Backend choice (`auto`, `glow`, `wgpu`, `software`) and the description of the active backend (`ActiveRenderer`). |
@@ -579,10 +579,10 @@ All three are anchored at the centre, not resizable and not collapsible.
 
 Source: `src/ui/zip_picker.rs` (`ArchivePicker`), with the archive detection in `src/compressed.rs`
 
-Files are recognised by their content, not their name: gzip, bzip2, xz and zstd files are single compressed logs, zip and tar are archives. A gzip, bzip2, xz or zstd file whose decompressed content starts with a tar header is a compressed tar (see §10.3 for how that is decided).
+Files are recognised by their content, not their name: gzip, bzip2, xz and zstd files are single compressed logs, zip, 7z and tar are archives. A gzip, bzip2, xz or zstd file whose decompressed content starts with a tar header is a compressed tar (see §10.3 for how that is decided).
 
 - **Opened**
-  - for a zip that holds more than one file entry; a zip with a single openable entry opens directly, and an empty zip shows the compressed-open notice (*the zip archive holds no file*);
+  - for a zip or a 7z that holds more than one file entry, its list read at once (a zip's central directory, a 7z's header; a 7z listing past its entry cap shows only its start, with a note); one with a single openable entry opens directly, and an empty one shows the compressed-open notice (*the zip archive holds no file*);
   - at once for **any tar**, plain or compressed (`ArchivePicker::scanning`). A tar has no central directory, so a background `TarScan` walks its headers and the picker pulls the rows it found every frame (`sync`). When the scan ends with exactly one openable entry, and the user neither opened nor checked anything, that entry opens and the picker closes by itself.
 - **Window:** id `fasttail_zip_picker`, resizable, not collapsible, default width **520**. The list scroll area is at most 320 px high. The title is `🗜 Choose entries — <archive file name>`.
 - **Contents:**

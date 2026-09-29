@@ -48,7 +48,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: 🎨 Check formatting
         if: runner.os == 'Linux'
@@ -80,6 +80,11 @@ jobs:
       # build can take several minutes, the suite itself well under one.
       - name: 🔨 Build test binaries
         run: cargo test --no-run --target ${{ matrix.target }}
+
+      # Lints on both systems: part of the code (DPI, clipboard, the BareTail bridge)
+      # is compiled on Windows only.
+      - name: 📎 Clippy
+        run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
 
       # A hung test fails the job in minutes instead of holding the runner for hours.
       - name: 🧪 Run test suite

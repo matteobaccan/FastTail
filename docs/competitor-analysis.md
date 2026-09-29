@@ -199,26 +199,30 @@ section 6. The order inside a release follows the dependencies.
 
 ### 0.13.0 — basics and quick wins
 
+Closed on 2026-09-29 with the seven changes below; `relative-time-windows`,
+`filter-to-tab`, `compare-lines`, `partial-line-selection`, `scratchpad` and `tray-icon`
+moved to 0.14.0 (first in its table), so the release was not held back.
+
 | Change | Gaps | Effort |
 |---|---|---|
 | `context-lines` — ±N lines around filter matches | 3 | S–M |
 | `quick-wins-0-13` — selection highlight, next / previous line of a rule, rule-set import / export, epoch and time zones, automatic highlighting | 8, 9, 10, 11 | M (five S items) |
 | `headless-print` — `fasttail --print` to stdout | 7 | S |
 | `search-in-range` — find limited to a line / time range or the selection | klogg | S |
-| `relative-time-windows` — "last 15 min / 1 h / 24 h", `--since -3h` | hl | S |
 | `bookmark-report` — Markdown report of bookmarks and notes | 16 | S |
 | `command-palette` — CTRL + SHIFT + P over every action; creates the action registry | lnav, editors | M |
-| `filter-to-tab` — the filtered view as a new following tab | LogExpert | M |
-| `compare-lines` — diff of two lines or two regions | requested | M |
-| `partial-line-selection` — select part of a line | 19 | M |
-| `scratchpad` — notes tab lines can be sent to | klogg | S |
-| `tray-icon` — minimise to tray, tray menu | SnakeTail | S–M |
 | `archive-7z` — 7z entries like zip / tar | 20 | S |
 
 ### 0.14.0 — structured logs and analysis
 
 | Change | Gaps | Effort |
 |---|---|---|
+| `relative-time-windows` — "last 15 min / 1 h / 24 h", `--since -3h` | hl | S |
+| `partial-line-selection` — select part of a line | 19 | M |
+| `scratchpad` — notes tab lines can be sent to | klogg | S |
+| `filter-to-tab` — the filtered view as a new following tab | LogExpert | M |
+| `compare-lines` — diff of two lines or two regions | requested | M |
+| `tray-icon` — minimise to tray, tray menu | SnakeTail | S–M |
 | `structured-fields` — JSON / logfmt / regex fields, column view, field filters | 1, 4 | L |
 | `custom-log-formats` — user-defined formats (named groups, timestamp, multiline start) | 1 | M |
 | `boolean-filter-expressions` — AND / OR / NOT, field operands | 4 | M |
@@ -248,7 +252,7 @@ section 6. The order inside a release follows the dependencies.
 | `web-ui` — read-only local web view, off by default | Seq, Loki | M |
 | `plugin-api` — out-of-process source plugins, bundled formats | 20 | L |
 
-0.14.0 is the heaviest (two L changes); if it runs long, `operation-timeline` and
+0.14.0 is the heaviest (two L changes, plus the six carried over from 0.13.0); if it runs long, `operation-timeline` and
 `cross-line-regex` are the first to move to 0.15.0. Open questions are listed in each
 change's design.
 

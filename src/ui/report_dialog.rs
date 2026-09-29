@@ -56,8 +56,11 @@ pub struct ReportDialog {
     status: Option<(String, bool)>,
     /// What the dialog shows while it is open, recomputed only when the options or a
     /// stream's bookmarks change: `(key, bookmarks, streams, skipped, tag counts)`.
-    counts: Option<(CountsKey, usize, usize, usize, BTreeMap<String, usize>)>,
+    counts: Option<(CountsKey, ReportCounts)>,
 }
+
+/// Bookmarks, streams with bookmarks, streams without, and tag counts.
+type ReportCounts = (usize, usize, usize, BTreeMap<String, usize>);
 
 /// The options and, per stream in scope, its path, bookmark generation and line count.
 type CountsKey = (ReportOptions, Vec<(PathBuf, u64, usize)>);
@@ -127,9 +130,9 @@ impl ReportDialog {
 
     /// Bookmarks, streams with and without bookmarks, and tag counts of the streams in
     /// scope, recomputed only when `counts_key` changes.
-    fn counts(&mut self, engines: &[TailEngine]) -> (usize, usize, usize, BTreeMap<String, usize>) {
+    fn counts(&mut self, engines: &[TailEngine]) -> ReportCounts {
         let key = self.counts_key(engines);
-        if self.counts.as_ref().is_none_or(|(k, ..)| *k != key) {
+        if self.counts.as_ref().is_none_or(|(k, _)| *k != key) {
             let options = &key.0;
             let (mut bookmarks, mut streams, mut skipped) = (0, 0, 0);
             let mut tags: BTreeMap<String, usize> = BTreeMap::new();
@@ -145,10 +148,9 @@ impl ReportDialog {
                     *tags.entry(tag).or_default() += count;
                 }
             }
-            self.counts = Some((key, bookmarks, streams, skipped, tags));
+            self.counts = Some((key, (bookmarks, streams, skipped, tags)));
         }
-        let (_, bookmarks, streams, skipped, tags) = self.counts.as_ref().expect("counts");
-        (*bookmarks, *streams, *skipped, tags.clone())
+        self.counts.as_ref().expect("counts").1.clone()
     }
 
     /// The engines the report covers, in dock order (`engines` is in that order).

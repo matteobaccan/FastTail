@@ -26,7 +26,7 @@ competitor scan ranks it gap 19 (value Low–Medium, effort M).
   also starts from a double-click) outlines that word's other occurrences at the same time.
 - No new `fasttail.ini` key.
 
-Target release: **0.13.0** (basics and quick wins), per the release plan in
+Target release: **0.14.0** (planned for 0.13.0, moved when 0.13.0 shipped early), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low–Medium**. Effort: **M**.
 
 ### Non-goals

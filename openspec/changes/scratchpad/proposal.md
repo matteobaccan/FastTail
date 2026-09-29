@@ -27,7 +27,7 @@ it under klogg's strengths.
   as…" writes a copy anywhere; "Clear" asks for confirmation.
 - Size cap: 4 MB; sending more is refused with a message.
 
-Target release: **0.13.0** (basics and quick wins), per the release plan in
+Target release: **0.14.0** (planned for 0.13.0, moved when 0.13.0 shipped early), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low–Medium**. Effort: **S**.
 
 ### Non-goals
