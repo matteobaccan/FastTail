@@ -74,6 +74,11 @@ pub struct StreamEntry {
     /// Entry name when the stream is a zip entry: `path` is then `archive/entry` (see
     /// `compressed::entry_path`), and the file stores the archive path and the entry.
     pub archive_entry: Option<String>,
+    /// The field parser forced for the stream as `ParserChoice::name` (`off`, `json`,
+    /// `logfmt`, `regex`, `apache`, `syslog`), written as `fields_parser=` only when not
+    /// auto, and the pattern of `regex` (`fields_regex=`). Older builds ignore both.
+    pub fields_parser: Option<String>,
+    pub fields_regex: Option<String>,
 }
 
 impl StreamEntry {
@@ -186,6 +191,12 @@ impl Session {
             }
             if let Some(zone) = &s.time_source_zone {
                 sec.set("time_source_zone", zone);
+            }
+            if let Some(parser) = &s.fields_parser {
+                sec.set("fields_parser", parser);
+            }
+            if let Some(regex) = &s.fields_regex {
+                sec.set("fields_regex", ini_value(regex));
             }
             sec.set(
                 "bookmarks",
@@ -314,6 +325,15 @@ impl Session {
                 bookmarks,
                 bookmark_notes,
                 archive_entry,
+                fields_parser: sec
+                    .get("fields_parser")
+                    .and_then(|p| crate::fields::ParserChoice::from_name(p, ""))
+                    .filter(|c| *c != crate::fields::ParserChoice::Auto)
+                    .map(|c| c.name().to_string()),
+                fields_regex: sec
+                    .get("fields_regex")
+                    .filter(|r| !r.is_empty())
+                    .map(str::to_string),
             });
         }
         if out.relocated {

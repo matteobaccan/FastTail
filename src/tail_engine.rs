@@ -9,6 +9,7 @@ use crate::collapse::{badge_text, CollapseMode, CollapseState, CollapsedRow, Det
 use crate::context_lines::{
     ContextRanges, VisibleView, BACKGROUND_REBUILD_MATCHES, MAX_CONTEXT_LINES,
 };
+use crate::fields::{FieldParser, ParserChoice};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{
@@ -1593,6 +1594,19 @@ pub struct TailEngine {
     /// Lines that sounded a highlight rule's alert since the stream opened (the tray badge
     /// counts them while the window is hidden or unfocused).
     pub sound_alerts: u64,
+    /// Field parser chosen for the stream (auto by default), what auto detection found,
+    /// the number of lines when it ran (it runs again once, when a stream that had fewer
+    /// than `fields::DETECT_LINES` reaches them), the parser in use, and why a forced
+    /// regex gives none.
+    field_choice: ParserChoice,
+    field_auto: Option<ParserChoice>,
+    field_detected_at: Option<usize>,
+    field_parser: Option<Arc<FieldParser>>,
+    field_error: Option<String>,
+    /// Bumped whenever the parser in use changes; keys the caches of parsed fields.
+    pub parser_generation: u64,
+    /// The field parser choice changed and should be persisted.
+    pub fields_dirty: bool,
     /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
     pub search_byte_matches: Vec<(usize, usize)>,
     search_byte_max_len: usize,
@@ -2234,6 +2248,13 @@ impl TailEngine {
             find_all_request: false,
             report_request: false,
             sound_alerts: 0,
+            field_choice: ParserChoice::Auto,
+            field_auto: None,
+            field_detected_at: None,
+            field_parser: None,
+            field_error: None,
+            parser_generation: 0,
+            fields_dirty: false,
             scratch_request: None,
             derived: None,
             filter_tab_request: false,
@@ -3272,6 +3293,109 @@ impl TailEngine {
         self.ensure_levels();
     }
 
+    /// The field parser the user chose (`Auto` unless forced).
+    pub fn field_choice(&self) -> &ParserChoice {
+        &self.field_choice
+    }
+
+    /// What auto detection found (`Json`, `Logfmt`), `None` when nothing or not run yet.
+    pub fn field_auto(&self) -> Option<&ParserChoice> {
+        self.field_auto.as_ref()
+    }
+
+    /// The parser the stream's fields are read with, if any.
+    pub fn field_parser(&self) -> Option<&Arc<FieldParser>> {
+        self.field_parser.as_ref()
+    }
+
+    /// Why a forced regex parser gives no parser (it does not compile or has no named
+    /// group).
+    pub fn field_error(&self) -> Option<&str> {
+        self.field_error.as_deref()
+    }
+
+    /// Chooses the field parser. `Auto` runs detection again on the current lines.
+    pub fn set_field_choice(&mut self, choice: ParserChoice) {
+        if self.field_choice == choice {
+            return;
+        }
+        self.field_choice = choice;
+        self.fields_dirty = true;
+        self.field_error = None;
+        match self.field_choice.build() {
+            Ok(parser) => self.set_field_parser(parser),
+            Err(e) => {
+                self.field_error = Some(e);
+                self.set_field_parser(None);
+            }
+        }
+        if self.field_choice == ParserChoice::Auto {
+            self.field_auto = None;
+            self.field_detected_at = None;
+            self.detect_fields();
+        }
+    }
+
+    fn set_field_parser(&mut self, parser: Option<Arc<FieldParser>>) {
+        let same = match (&self.field_parser, &parser) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        if !same {
+            self.field_parser = parser;
+            self.parser_generation = self.parser_generation.wrapping_add(1);
+        }
+    }
+
+    /// Auto detection of the field parser over the first lines (see `fields::detect`):
+    /// once when the stream has lines, and once more when a stream that had fewer than
+    /// `fields::DETECT_LINES` reaches them. A no-op when the parser is forced.
+    pub fn detect_fields(&mut self) {
+        use crate::fields::{DETECT_BYTES, DETECT_LINES};
+        if self.field_choice != ParserChoice::Auto || self.index_pending {
+            return;
+        }
+        let total = self.total_lines();
+        let due = match self.field_detected_at {
+            None => total > 0,
+            Some(n) => n < DETECT_LINES && total >= DETECT_LINES,
+        };
+        if !due {
+            return;
+        }
+        // Continuation lines are skipped, up to a bound: a stream of stack traces must
+        // not be read to its end.
+        let mut sample: Vec<String> = Vec::new();
+        let mut bytes = 0;
+        for idx in 0..total.min(DETECT_LINES * 4) {
+            if sample.len() >= DETECT_LINES || bytes >= DETECT_BYTES {
+                break;
+            }
+            let Some(row) = self.get_row(idx) else {
+                break;
+            };
+            if Self::is_stacktrace_continuation(&row.line) {
+                continue;
+            }
+            bytes += row.line.len();
+            sample.push(row.line);
+        }
+        self.field_detected_at = Some(total);
+        let found = crate::fields::detect(sample.iter().map(String::as_str));
+        let same_kind = matches!(
+            (&found, self.field_parser.as_deref()),
+            (None, None)
+                | (Some(ParserChoice::Json), Some(FieldParser::Json))
+                | (Some(ParserChoice::Logfmt), Some(FieldParser::Logfmt))
+        );
+        if !same_kind {
+            let parser = found.as_ref().and_then(|c| c.build().ok().flatten());
+            self.set_field_parser(parser);
+        }
+        self.field_auto = found;
+    }
+
     pub fn poll_updates(&mut self) {
         self.poll_context_rebuild();
         self.drain_job();
@@ -3283,6 +3407,7 @@ impl TailEngine {
         }
         // An automatic-bookmark scan displaced by another job, or waiting for the index.
         self.run_auto_scan_if_due();
+        self.detect_fields();
         if !self.is_watching {
             return;
         }

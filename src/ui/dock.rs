@@ -967,6 +967,141 @@ fn render_ansi_mode_selector(ui: &mut Ui, engine: &mut TailEngine, lang: Languag
         .on_hover_text(t(lang, "tip_ansi"));
 }
 
+/// Glyph and name of a field parser choice, as the stream bar chip shows it.
+fn field_choice_label(choice: &crate::fields::ParserChoice, lang: Language) -> String {
+    use crate::fields::ParserChoice as P;
+    match choice {
+        P::Auto => format!("ƒ {}", t(lang, "ansi_auto")),
+        P::Off => format!("ƒ {}", t(lang, "collapse_off")),
+        P::Json => "{} JSON".to_string(),
+        P::Logfmt => "k=v logfmt".to_string(),
+        P::Apache => "(?) Apache".to_string(),
+        P::Syslog => "(?) syslog".to_string(),
+        P::Regex(_) => format!("(?) {}", t(lang, "fields_regex")),
+    }
+}
+
+/// Stream bar chip of the field parser (Text view): `{} JSON`, `k=v logfmt`, `(?)` for
+/// the regex parsers, `ƒ —` dimmed when auto found nothing. The menu forces a parser,
+/// a regular expression with named groups (red while it is invalid), or off.
+fn render_fields_selector(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    use crate::fields::ParserChoice as P;
+    let choice = engine.field_choice().clone();
+    let label = match (&choice, engine.field_auto()) {
+        (P::Auto, Some(found)) => field_choice_label(found, lang),
+        (P::Auto, None) => "ƒ —".to_string(),
+        (other, _) => field_choice_label(other, lang),
+    };
+    let color = if engine.field_error().is_some() {
+        theme.error_color()
+    } else if engine.field_parser().is_some() {
+        theme.accent_color()
+    } else {
+        theme.text_dim()
+    };
+    // The pattern being edited, with the active pattern it started from: when the active
+    // one changes elsewhere (a session restored, a stream reopened) the edit starts over.
+    let active = match &choice {
+        P::Regex(p) => p.clone(),
+        _ => String::new(),
+    };
+    let edit_id = egui::Id::new("fields_regex_edit").with(&engine.path);
+    let mut pattern: String = ui
+        .ctx()
+        .data(|d| d.get_temp::<(String, String)>(edit_id))
+        .filter(|(from, _)| *from == active)
+        .map(|(_, text)| text)
+        .unwrap_or_else(|| active.clone());
+    let mut picked: Option<P> = None;
+    // Clicks inside keep the menu open, so the pattern field can take the focus.
+    let config = egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (menu, _) = egui::containers::menu::MenuButton::new(
+        RichText::new(label).monospace().size(11.0).color(color),
+    )
+    .config(config)
+    .ui(ui, |ui| {
+        ui.set_min_width(260.0);
+        let auto = match engine.field_auto() {
+            Some(found) => format!(
+                "{} → {}",
+                field_choice_label(&P::Auto, lang),
+                field_choice_label(found, lang)
+            ),
+            None => format!(
+                "{} → {}",
+                field_choice_label(&P::Auto, lang),
+                t(lang, "fields_none")
+            ),
+        };
+        let items = [
+            (P::Auto, auto),
+            (P::Json, field_choice_label(&P::Json, lang)),
+            (P::Logfmt, field_choice_label(&P::Logfmt, lang)),
+            (P::Apache, field_choice_label(&P::Apache, lang)),
+            (P::Syslog, field_choice_label(&P::Syslog, lang)),
+            (P::Off, field_choice_label(&P::Off, lang)),
+        ];
+        for (item, text) in items {
+            if ui
+                .selectable_label(choice == item, RichText::new(text).monospace())
+                .clicked()
+            {
+                picked = Some(item);
+                ui.close();
+            }
+        }
+        ui.separator();
+        let is_regex = matches!(choice, P::Regex(_));
+        ui.label(
+            RichText::new(field_choice_label(&P::Regex(String::new()), lang))
+                .monospace()
+                .color(if is_regex {
+                    theme.accent_color()
+                } else {
+                    theme.text_primary()
+                }),
+        );
+        let invalid = is_regex && engine.field_error().is_some();
+        let mut edit = egui::TextEdit::singleline(&mut pattern)
+            .font(egui::TextStyle::Monospace)
+            .hint_text(t(lang, "fields_regex_hint"))
+            .desired_width(f32::INFINITY);
+        if invalid {
+            edit = edit.text_color(theme.error_color());
+        }
+        let response = ui.add(edit);
+        if let Some(error) = engine.field_error().filter(|_| is_regex) {
+            ui.label(
+                RichText::new(format!("{}: {error}", t(lang, "fields_regex_invalid")))
+                    .small()
+                    .color(theme.error_color()),
+            );
+        }
+        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter || ui.button(t(lang, "fields_regex_apply")).clicked() {
+            picked = Some(P::Regex(pattern.clone()));
+            ui.close();
+        }
+    });
+    let mut tip = t(lang, "tip_fields").to_string();
+    if let Some(error) = engine.field_error() {
+        tip = format!("{tip}\n{}: {error}", t(lang, "fields_regex_invalid"));
+    }
+    menu.on_hover_text(tip);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(edit_id, (active, pattern)));
+    if let Some(choice) = picked {
+        engine.set_field_choice(choice);
+        ui.ctx().request_repaint();
+    }
+}
+
 /// Toolbar selector of the stream's collapse of repeated lines (also cycled with
 /// CTRL + SHIFT + D): picking a mode detects the groups again.
 fn render_collapse_selector(ui: &mut Ui, engine: &mut TailEngine, lang: Language) {
@@ -1542,6 +1677,9 @@ fn render_log_stream(
                     }
                 });
             render_ansi_mode_selector(ui, engine, lang);
+            if engine.view_mode == crate::tail_engine::ViewMode::Text {
+                render_fields_selector(ui, engine, theme, lang);
+            }
             if engine.view_mode != crate::tail_engine::ViewMode::Markdown {
                 render_collapse_selector(ui, engine, lang);
                 render_context_lines_control(ui, engine, lang);

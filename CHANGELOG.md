@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Field parser for structured logs.** A stream bar chip shows how the lines' fields are
+  read: JSON and logfmt are detected from the first 200 lines, and the menu forces JSON,
+  logfmt, Apache / NGINX combined, syslog (RFC 3164), a regular expression with named
+  groups, or off. Saved per stream as `fields_parser=` and `fields_regex=` (older builds
+  ignore them). Scanners borrow the line and allocate nothing per line (~500 MB/s on
+  JSON, ~700 MB/s on logfmt; `cargo bench --bench fields`). First step of the column view
+  and field filter terms.
+
 - **Relative, live time windows.** The time range fields take `-15m`, `-90s`, `-3h`, `-2d`,
   `-1w`, `-1h30m` and `now`, counted back from now on the stream's display clock. A window
   with a relative side is re-read every 5 seconds and slides: on a log whose timestamps

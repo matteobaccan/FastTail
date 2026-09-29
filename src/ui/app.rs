@@ -3702,6 +3702,7 @@ impl FastTailApp {
                 eng.collapse_mode_dirty = false;
                 eng.context_lines_dirty = false;
                 eng.view_columns_dirty = false;
+                eng.fields_dirty = false;
             }
             if eng.bookmarks_dirty {
                 eng.bookmarks_dirty = false;
@@ -3720,6 +3721,7 @@ impl FastTailApp {
                 || eng.collapse_mode_dirty
                 || eng.context_lines_dirty
                 || eng.view_columns_dirty
+                || eng.fields_dirty
             {
                 // The ANSI mode, the timeline flag, the collapse mode, the context lines
                 // and the line-number and time delta columns live in the stream entry, as
@@ -3729,6 +3731,7 @@ impl FastTailApp {
                 eng.collapse_mode_dirty = false;
                 eng.context_lines_dirty = false;
                 eng.view_columns_dirty = false;
+                eng.fields_dirty = false;
                 let mut entry = stream_entry_of(eng);
                 entry.wrap = false;
                 entry.bookmarks.clear();
@@ -5761,6 +5764,12 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         bookmarks,
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
+        fields_parser: (*engine.field_choice() != crate::fields::ParserChoice::Auto)
+            .then(|| engine.field_choice().name().to_string()),
+        fields_regex: match engine.field_choice() {
+            crate::fields::ParserChoice::Regex(p) if !p.is_empty() => Some(p.clone()),
+            _ => None,
+        },
     }
 }
 
@@ -5808,6 +5817,12 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
         engine.set_time_display(display);
     }
     engine.view_columns_dirty = false;
+    if let Some(choice) = entry.fields_parser.as_deref().and_then(|name| {
+        crate::fields::ParserChoice::from_name(name, entry.fields_regex.as_deref().unwrap_or(""))
+    }) {
+        engine.set_field_choice(choice);
+        engine.fields_dirty = false;
+    }
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);
