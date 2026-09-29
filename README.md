@@ -191,7 +191,7 @@ Example: `fasttail --fresh --filter ERROR app.log err.log`.
 Without `--print`, `--since` and `--until` fill the time range of the streams opened from the command line (the stdin stream included) as if typed in the popup; a relative time is turned into the instant it names at start, to the millisecond and exact on both sides (`-3h` becomes that timestamp; the window does not slide yet). A time FastTail cannot read is a usage error (exit code 2).
 
 ### Print mode (no window)
-`fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme and the highlight rules). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.
+`fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme, the level colours, the highlight rules and automatic highlighting). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.
 
 ```text
   --filter <TEXT>    include term, up to 8 times: every term must match

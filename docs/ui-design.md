@@ -1,6 +1,6 @@
 # FastTail — Graphical Interface Design Document
 
-Describes the desktop UI of FastTail as of v0.12.0 (global filter, show in context, more archive formats, bookmark notes and triggers, collapse of repeated lines, the time range popup and per-stream line numbers / Δt). Everything here comes from the source code; each section names the files it describes. Keep this document in step with the UI when it changes.
+Describes the desktop UI of FastTail as of v0.13.0 (command palette, context lines, automatic highlighting, rule sets, selection highlight, rule navigation, per-stream time display, search in a range, bookmark report and tags, 7z archives), on top of v0.12.0 (global filter, show in context, more archive formats, bookmark notes and triggers, collapse of repeated lines, the time range popup and per-stream line numbers / Δt). Everything here comes from the source code; each section names the files it describes. Keep this document in step with the UI when it changes.
 
 Stack: Rust, `eframe` / `egui` 0.36, `egui_dock` 0.21 (with `serde`), `egui_commonmark` 0.25 for the Markdown view, and `rfd` for the native file dialogs.
 
@@ -543,9 +543,9 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
 - **Window:** id `fasttail_help_popup`, default **580 × 500**, geometry persisted.
 - **Contents:** a `⚡ FASTTAIL` header, then three `ui.group`s with warn-coloured titles:
   1. **🔍 ZOOM & FONT SIZE**: `CTRL +  /  CTRL =`, `CTRL -`, `CTRL 0`, `CTRL + Wheel`.
-  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + P`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `± N`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F4  /  SHIFT + F4`, Double-click, `F1`, `Esc`, Drag & Drop.
+  2. **🧭 NAVIGATION & LOG STREAMING**: Spacebar, `CTRL + F`, `CTRL + SHIFT + F`, `CTRL + K`, `CTRL + SHIFT + P`, `CTRL + SHIFT + H`, `CTRL + SHIFT + D`, `± N`, `F3  /  SHIFT + F3`, `Click / SHIFT + Click / CTRL + Click`, `CTRL + A  /  CTRL + C`, `CTRL + G`, `ALT + W`, `ALT + 1..9`, `☰ ↑ ↓ PgUp PgDn Enter Esc`, `CTRL + SHIFT + 1..9`, Right click / tool shortcut, `CTRL + SHIFT + T`, `CTRL + L`, `CTRL + F2  /  F2  /  SHIFT + F2`, `F4  /  SHIFT + F4`, Double-click, `F1`, `Esc`, Drag & Drop.
   3. **⚡ COLOR FILTERS & VISIBILITY**: six bullet paragraphs (evaluation order, reordering, bold and italic, visibility filters, log levels, recent files).
-- Keys are written in capitals joined with ` + ` (house style). The exception is `CTRL F`, which lacks the `+`.
+- Keys are written in capitals joined with ` + ` (house style).
 
 ### 4.5 Open pattern prompt — `📂* Open pattern`
 
@@ -724,7 +724,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `F` (painted badge) | app logo, title bar |
 | `✕` `🗖` `🗗` `—` | borderless window buttons |
 | `⌨` | command palette (title bar button) |
-| `🌐` | global filter (title bar button, stream badge, bar title, Filters window) |
+| `🌐` | global filter (title bar button, stream badge, bar title, Filters window); time display menu in the stream bar |
 | `📌` | always on top |
 | `🔍` | zoom level; search field label; timeline search-lane toggle; Filters heading; archive picker filter |
 | `🖥` | CPU meter |
@@ -745,6 +745,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `◆` | line shown in context (marker, banner, "Show in context" menu entries) |
 | `×`, `×N` | collapse selector (`× Collapse: …`); badge of a collapsed group (`×57`, `×1.2M`) |
 | `🔤 TXT` `🔢 HEX` `📝 MD` | view modes |
+| `📝` | Bookmark report… (💾 and 🗂 menus) and its dialog |
 | `# 123` / `# ---` | line numbers on / off |
 | `Δt`, `⚓`, `…` | time-delta column toggle, anchor, pending |
 | `↩` | Wrap |
@@ -757,6 +758,8 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `⏹` | stdin ended |
 | `📦` | file size |
 | `🔎` | search all streams / Find results tab |
+| `⇣` | Next line of rule (row menu) |
+| `▣` / `▢` | Highlight "token" / Clear the highlight (row menu) |
 | `⌖` | search scope chip, row menu scope entries, Find results time scope |
 | `☰` | search results pane |
 | `▲` `▼` | previous / next hit; sort direction; group collapsed / expanded (`▶` / `▼`) in Find results |
@@ -1054,7 +1057,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | Shortcut | Scope | Action |
 |---|---|---|
 | `F1` | global | Toggle the Help window |
-| `Esc` | global | Close the topmost of Help, Settings, Filters and About, and end text input. Also closes the pattern prompt, session dialogs, notices and the preset modal; leaves the search box, the go-to box and hit lists; cancels the bookmark note editor; leaves the context view when no widget has the focus |
+| `Esc` | global | Close the topmost of Help, Settings, Filters and About, and end text input. Also closes the pattern prompt, session dialogs, notices and the preset modal; leaves the search box, the go-to box and hit lists; cancels the bookmark note editor; on the rows, stops a rule walk, else clears the outlined word, before leaving the context view when no widget has the focus |
 | `Space` | focused stream | Toggle Follow (not on a compressed stream, not while a text field has the keyboard) |
 | `CTRL + SHIFT + T` | global | Toggle always-on-top |
 | `CTRL + L` | global | Lock behind the PIN (needs a PIN) |
@@ -1071,7 +1074,8 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `Enter` / `SHIFT + ENTER` | search box | Next / previous hit, using the text as typed (bypasses the debounce) |
 | `↑` / `↓` | search box | Next / previous hit; scrolls one line when there are no hits |
 | `PgUp` / `PgDn` | search box | Scroll one page |
-| `CTRL + G` | focused stream | Open the inline go-to box. It accepts `N`, `+N`, `-N` or a time such as `14:02`. `Enter` jumps and selects; `Esc` closes |
+| `CTRL + G` | focused stream | Open the inline go-to box. It accepts `N`, `+N`, `-N`, a time such as `14:02`, or `#tag` (next bookmark carrying it). `Enter` jumps and selects; `Esc` closes |
+| `F4` / `SHIFT + F4` | focused stream, text views | Next / previous shown line of the navigation rule (row menu "Next line of rule"), else of the first rule matching the selected row; wraps with the search beep |
 | `CTRL + K` | focused stream | Show the selection anchor (or the first selected line) in context with the filters suspended; pressed again, go back |
 | `CTRL + K` | Find results list | Show the selected hit in context |
 | `CTRL + SHIFT + D` | focused stream, text views | Cycle the collapse of repeated lines: off → exact → numbers → off (per stream, persisted) |
@@ -1100,6 +1104,7 @@ The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL 
 - **Rows.**
   - Click selects a row. `SHIFT + click` extends the selection over the visible rows. `CTRL + click` toggles a row. On a closed collapsed group, the row stands for every line of the group.
   - Right-click opens the row context menu (§4.13), on any row.
+  - Double-click a word of a row: outline its occurrences in the stream (selection highlight); on empty space or on the same word: clear.
   - Clicking `[+] JSON` expands or collapses the pretty-printed JSON.
   - Clicking a `×N` badge expands or collapses that group; hovering it shows the repetitions, the line span and the times.
   - Hovering the `✏` marker shows the bookmark note.
@@ -1211,6 +1216,8 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `always_on_top` | false | window level; 📌 |
 | `flash_on_alert` | false | taskbar attention for background errors |
 | `level_colors` | true | colour rows by level |
+| `auto_highlight`, `auto_highlight_kinds` | false, `ip,uuid,url,duration,path` | automatic token highlighting and the kinds it paints |
+| `report_context`, `report_auto`, `report_order` | 3, false, `stream` | bookmark report dialog: context lines (0–20), automatic bookmarks, `stream` or `time` order |
 | `search_pane`, `search_pane_height` | false, 180 | results pane on or off, and its height (accepted 40–4000) |
 | `overview_strip` | true | minimap beside the scroll bar |
 | `timeline_search_lane` | true | hit lane in the timeline |
@@ -1249,7 +1256,7 @@ Environment overrides for support: `FASTTAIL_POLL_INTERVAL_MS`, `FASTTAIL_SIZE_C
 | `[search_history]` | `query_N` | search 🕒 menu |
 | `[bookmarks]` | `file_N`, `lines_N`, `note_<N>_<line>` | manual bookmarks (`★`, `✏`) and their notes, one key per note so a note that does not read back loses only itself (at most 50 files × 1000 lines; a note of a line not kept is dropped). Automatic bookmarks are not stored |
 | `[wrapped_files]` | `file_N` | ↩ Wrap per file (at most 50) |
-| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, `line_numbers`, `time_delta`, … | per-stream state of the default workspace. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. `line_numbers=` and `time_delta=` are always written, so a saved stream never depends on the `[general]` defaults; a missing value (a file from an older version) takes the default. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
+| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, `line_numbers`, `time_delta`, `context_lines`, `time_display`, `time_source_zone`, … | per-stream state of the default workspace. `context_lines` is written only above 0, `time_display` and `time_source_zone` only when not the default. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. `line_numbers=` and `time_delta=` are always written, so a saved stream never depends on the `[general]` defaults; a missing value (a file from an older version) takes the default. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
 | `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only`, `bookmark` | Color Filters; `bookmark=true` is "Bookmark matching lines" (default false) |
 | `[tool.N]` | `name`, `program`, `args`, `shortcut`, `rule`, `shell`, `match` | external tools, menus, shortcuts |
 | `[filter_preset.N]` | `name`, `include.n`, `exclude.n`, `case_sensitive`, `regex`, `min_level`, `show_unknown_levels`, `time_from`, `time_to` | Presets ▾ |

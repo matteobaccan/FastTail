@@ -37,6 +37,6 @@
 
 ## 7. Wrap-up
 
-- [ ] 7.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; one PR per feature (or one per two) with Linux and Windows CI green
-- [ ] 7.2 Local preview exe for the maintainer before the 0.13.0 release
-- [ ] 7.3 After the release, archive the change so `filters-and-highlighting`, `search-and-navigation`, `log-intelligence` and `cyber-themes` gain the new requirements
+- [x] 7.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; one PR per feature (or one per two) with Linux and Windows CI green
+- [x] 7.2 Local preview exe for the maintainer before the 0.13.0 release
+- [x] 7.3 After the release, archive the change so `filters-and-highlighting`, `search-and-navigation`, `log-intelligence` and `cyber-themes` gain the new requirements

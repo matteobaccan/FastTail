@@ -18,6 +18,6 @@
 
 ## 4. Wrap-up
 
-- [ ] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 4.2 Local preview exe for the maintainer before the release
-- [ ] 4.3 After the release, archive the change so `archive-7z` becomes a spec
+- [x] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
+- [x] 4.2 Local preview exe for the maintainer before the release
+- [x] 4.3 After the release, archive the change so `archive-7z` becomes a spec

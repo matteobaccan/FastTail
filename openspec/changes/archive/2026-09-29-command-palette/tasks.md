@@ -19,6 +19,6 @@
 
 ## 4. Wrap-up
 
-- [ ] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 4.2 Local preview exe for the maintainer before the 0.13.0 release
-- [ ] 4.3 After the release, archive the change so the `command-palette` capability is created
+- [x] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
+- [x] 4.2 Local preview exe for the maintainer before the 0.13.0 release
+- [x] 4.3 After the release, archive the change so the `command-palette` capability is created
