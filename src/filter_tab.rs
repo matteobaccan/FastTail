@@ -39,7 +39,12 @@ pub struct FrozenFilter {
 impl FrozenFilter {
     /// The filter `engine` applies now (its own terms, level and time window).
     pub fn of(engine: &TailEngine) -> Self {
-        let (time_from, time_to) = engine.time_window().unwrap_or((None, None));
+        let (time_from, mut time_to) = engine.time_window().unwrap_or((None, None));
+        // A relative "to" (`now`, `-5m`) would freeze the window at this instant and stop
+        // the tab from following: it stays open. A relative "from" is frozen where it is.
+        if crate::tail_engine::is_relative_time(&engine.time_to_text) {
+            time_to = None;
+        }
         Self {
             include: nonempty(engine.include_terms()),
             exclude: nonempty(engine.exclude_terms()),
@@ -176,7 +181,15 @@ pub struct DerivedFeeder {
     written: u64,
     max_bytes: u64,
     pub stopped: Option<Stopped>,
+    /// The source's size when last seen and since when it has not changed.
+    seen_len: u64,
+    seen_at: Instant,
+    /// A last line read before its newline arrived (see `step`).
+    partial: Option<usize>,
 }
+
+/// How long the source must stay the same size before an unterminated last line is read.
+pub const SETTLED: Duration = Duration::from_secs(2);
 
 impl DerivedFeeder {
     /// A new empty spool in `spool_dir` for a derived stream of `source`.
@@ -187,7 +200,10 @@ impl DerivedFeeder {
         spool_dir: &Path,
         max_bytes: u64,
     ) -> std::io::Result<Self> {
-        let (spool, out) = SpoolFile::create(spool_dir, &format!("filter-{source_name}"))?;
+        // The name keeps the `filter-` prefix `is_derived_path` looks for (`sanitize`
+        // would keep only what follows a path separator of the source name).
+        let name = format!("filter-{}", crate::spool::sanitize(&source_name));
+        let (spool, out) = SpoolFile::create(spool_dir, &name)?;
         Ok(Self {
             source: source.path.clone(),
             source_name,
@@ -202,6 +218,9 @@ impl DerivedFeeder {
             written: 0,
             max_bytes,
             stopped: None,
+            seen_len: source.file_size,
+            seen_at: Instant::now(),
+            partial: None,
         })
     }
 
@@ -216,10 +235,27 @@ impl DerivedFeeder {
         (self.next as f32 / total as f32).min(1.0)
     }
 
+    /// Empties the spool and starts reading the source again from its first line.
+    fn restart(&mut self) -> bool {
+        match self.spool.rewrite() {
+            Ok(file) => self.out = Some(file),
+            Err(_) => {
+                self.stopped = Some(Stopped::WriteFailed);
+                return false;
+            }
+        }
+        self.next = 0;
+        self.parent_visible = false;
+        self.map.clear();
+        self.written = 0;
+        self.partial = None;
+        true
+    }
+
     /// Reads source lines and appends the ones the frozen filter passes, until the
     /// source's complete lines are all read or `budget` is spent. A reloaded source
     /// (truncated, rotated, rewritten) empties the spool and starts again. Returns
-    /// whether the spool changed.
+    /// whether the spool changed or work is left (the caller keeps stepping, repainting).
     pub fn step(&mut self, source: &TailEngine, budget: Duration) -> bool {
         if self.stopped.is_some() {
             return false;
@@ -227,36 +263,42 @@ impl DerivedFeeder {
         let mut changed = false;
         if source.reload_generation != self.source_generation {
             self.source_generation = source.reload_generation;
-            match self.spool.rewrite() {
-                Ok(file) => self.out = Some(file),
-                Err(_) => {
-                    self.stopped = Some(Stopped::WriteFailed);
+            if !self.restart() {
+                return false;
+            }
+            changed = true;
+        }
+        // While the source is (re)indexed its last line index spans unread text: wait.
+        if source.index_pending {
+            return true;
+        }
+        // Track growth: an unterminated last line is read once the source stops growing
+        // for a moment; if it grows after that, the spool is written again.
+        if source.file_size != self.seen_len {
+            self.seen_len = source.file_size;
+            self.seen_at = Instant::now();
+            if self.partial.is_some() {
+                if !self.restart() {
                     return false;
                 }
+                changed = true;
             }
-            self.next = 0;
-            self.parent_visible = false;
-            self.map.clear();
-            self.written = 0;
-            changed = true;
         }
         // A time window reads the source's timestamp cache: wait until it is complete.
         if self.filter.has_window() && !source.timestamps_complete() {
-            return changed;
+            return true;
         }
-        // The last line may still be growing: read it once a newline ends it.
-        let end = if source.last_line_complete() {
+        let idle = self.seen_at.elapsed() >= SETTLED;
+        let end = if source.last_line_complete() || idle {
             source.total_lines()
         } else {
             source.total_lines().saturating_sub(1)
         };
         let started = Instant::now();
-        let mut block = String::new();
         while self.next < end {
             let idx = self.next;
             let text = source.get_line(idx).unwrap_or_default();
             let (visible, next) = self.spec.visible_in_sequence(&text, self.parent_visible);
-            self.parent_visible = next;
             let in_window = !self.filter.has_window()
                 || time_window_contains(
                     source.line_timestamp(idx),
@@ -264,35 +306,42 @@ impl DerivedFeeder {
                     self.filter.time_to,
                 );
             if visible && in_window {
-                block.push_str(&text);
-                block.push('\n');
+                let bytes = text.len() as u64 + 1;
+                if self.written + bytes > self.max_bytes {
+                    self.stopped = Some(Stopped::Full);
+                    return changed;
+                }
+                let Some(out) = self.out.as_mut() else {
+                    return changed;
+                };
+                if out
+                    .write_all(text.as_bytes())
+                    .and_then(|_| out.write_all(b"\n"))
+                    .is_err()
+                {
+                    self.stopped = Some(Stopped::WriteFailed);
+                    return changed;
+                }
+                self.written += bytes;
                 self.map.push(idx);
+                changed = true;
             }
+            self.parent_visible = next;
             self.next += 1;
+            if idx + 1 == source.total_lines() && !source.last_line_complete() {
+                // Read before its newline arrived.
+                self.partial = Some(idx);
+            }
             if idx % 256 == 255 && started.elapsed() >= budget {
                 break;
             }
         }
-        if block.is_empty() {
-            return changed;
+        if changed {
+            if let Some(out) = self.out.as_mut() {
+                let _ = out.flush();
+            }
         }
-        if self.written + block.len() as u64 > self.max_bytes {
-            // The lines just mapped are not written: forget them.
-            self.map
-                .truncate(self.map.len() - block.matches('\n').count());
-            self.stopped = Some(Stopped::Full);
-            return changed;
-        }
-        let Some(out) = self.out.as_mut() else {
-            return changed;
-        };
-        if out.write_all(block.as_bytes()).is_err() {
-            self.stopped = Some(Stopped::WriteFailed);
-            return changed;
-        }
-        let _ = out.flush();
-        self.written += block.len() as u64;
-        true
+        changed || self.next < end
     }
 
     /// The source line of derived line `idx`.
@@ -319,7 +368,12 @@ mod tests {
     }
 
     fn fill(feeder: &mut DerivedFeeder, source: &TailEngine) {
-        while feeder.step(source, Duration::from_secs(5)) {}
+        for _ in 0..1000 {
+            if !feeder.step(source, Duration::from_secs(5)) {
+                return;
+            }
+        }
+        panic!("the feeder never settles");
     }
 
     fn spool_text(feeder: &DerivedFeeder) -> String {
@@ -408,6 +462,60 @@ mod tests {
         fill(&mut feeder, &source);
         assert_eq!(spool_text(&feeder), "ERROR new\n");
         assert_eq!(feeder.map, vec![0]);
+    }
+
+    #[test]
+    fn an_unterminated_last_line_is_read_once_the_source_settles_and_rewritten_if_it_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        std::fs::write(&path, "ERROR one\nERROR two").unwrap();
+        let mut source = TailEngine::open(&path).unwrap();
+        source.set_include_filter("ERROR");
+        let filter = FrozenFilter::of(&source);
+        let mut feeder = DerivedFeeder::create(
+            &source,
+            "app.log".into(),
+            filter,
+            &dir.path().join("spool"),
+            1 << 20,
+        )
+        .unwrap();
+        fill(&mut feeder, &source);
+        assert_eq!(spool_text(&feeder), "ERROR one\n");
+        feeder.seen_at = Instant::now() - SETTLED;
+        fill(&mut feeder, &source);
+        assert_eq!(spool_text(&feeder), "ERROR one\nERROR two\n");
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(b" more\n").unwrap();
+        drop(f);
+        source.poll_updates();
+        fill(&mut feeder, &source);
+        assert_eq!(spool_text(&feeder), "ERROR one\nERROR two more\n");
+    }
+
+    #[test]
+    fn a_spool_named_after_an_archive_entry_is_still_a_derived_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut source = open(dir.path(), "x.log", &["ERROR a"]);
+        source.set_include_filter("ERROR");
+        let filter = FrozenFilter::of(&source);
+        let feeder = DerivedFeeder::create(
+            &source,
+            "logs.zip › app/x.log".into(),
+            filter,
+            &dir.path().join("spool"),
+            1 << 20,
+        )
+        .unwrap();
+        assert!(
+            is_derived_path(feeder.spool_path()),
+            "{:?}",
+            feeder.spool_path()
+        );
+        assert!(!is_derived_path(&dir.path().join("x.log")));
     }
 
     #[test]

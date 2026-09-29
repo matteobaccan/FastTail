@@ -972,6 +972,11 @@ impl FastTailApp {
     pub fn open_filter_tab(&mut self, idx: usize) -> Option<PathBuf> {
         let lang = self.config.language;
         let source = self.engines.get(idx)?;
+        if source.time_range_pending() {
+            // The window is not applied yet: there is nothing to freeze.
+            self.engines[idx].view_notice = Some(t(lang, "time_range_pending").to_string());
+            return None;
+        }
         let filter = crate::filter_tab::FrozenFilter::of(source);
         if !filter.is_active() {
             self.engines[idx].view_notice = Some(t(lang, "filter_tab_no_filter").to_string());
@@ -3412,8 +3417,8 @@ impl FastTailApp {
         let mut bookmarks_changed = false;
         let mut critical_in_background = false;
         for eng in &mut self.engines {
-            if eng.is_stdin() {
-                // Nothing of the standard-input stream is persisted.
+            if eng.is_stdin() || eng.derived.is_some() {
+                // Nothing of the standard-input stream or a derived stream is persisted.
                 eng.bookmarks_dirty = false;
                 eng.wrap_dirty = false;
                 eng.ansi_dirty = false;

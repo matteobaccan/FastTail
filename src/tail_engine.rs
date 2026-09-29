@@ -3613,11 +3613,18 @@ impl TailEngine {
     /// Whether the last line ends with a newline (an unterminated one may still grow).
     pub fn last_line_complete(&self) -> bool {
         let len = self.source.len();
+        let newline: &[u8] = match self.encoding {
+            FileEncoding::UnicodeLe => b"\n\0",
+            FileEncoding::UnicodeBe => b"\0\n",
+            _ => b"\n",
+        };
+        let n = newline.len() as u64;
         len == 0
-            || self
-                .source
-                .read_with(len - 1, 1, |b| b == b"\n")
-                .unwrap_or(false)
+            || (len >= n
+                && self
+                    .source
+                    .read_with(len - n, newline.len(), |b| b == newline)
+                    .unwrap_or(false))
     }
 
     /// Start offset, byte length to read (capped at `MAX_LINE_BYTES`) and truncation flag
