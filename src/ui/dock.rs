@@ -340,6 +340,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     // Pattern stream: the tab names the pattern and the file it resolves to;
                     // a zip entry names the archive and the entry.
                     let file_name = match engine.current_file_name() {
+                        _ if engine.derived.is_some() => {
+                            format!("⧉ {}", crate::find_all::stream_name(engine))
+                        }
                         Some(current) if engine.is_pattern() => {
                             format!("{file_name} ▸ {current}")
                         }
@@ -593,6 +596,18 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
     fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
         // A compressed stream: the tab tooltip names the archive (and the entry).
         if let FastTailTab::LogStream(path) = tab {
+            // A derived stream: its source and the frozen filter.
+            if let Some(d) = find_engine_index(self.ctx.engines, path)
+                .and_then(|i| self.ctx.engines[i].derived.as_ref())
+            {
+                let tip = format!(
+                    "{}\n{}\n{}",
+                    t(*self.ctx.language, "filter_tab_tip"),
+                    d.source.display(),
+                    d.filter.describe()
+                );
+                response.clone().on_hover_text(tip);
+            }
             if let Some(c) = find_engine_index(self.ctx.engines, path)
                 .and_then(|i| self.ctx.engines[i].compressed.as_ref())
             {
@@ -1881,6 +1896,19 @@ fn render_log_stream(
         }
 
         render_scope_chip(ui, engine, theme, lang);
+        if let Some(stopped) = engine.derived.as_ref().and_then(|d| d.stopped) {
+            let key = match stopped {
+                crate::filter_tab::Stopped::SourceClosed => "filter_tab_source_closed",
+                crate::filter_tab::Stopped::Full => "filter_tab_full",
+                crate::filter_tab::Stopped::WriteFailed => "filter_tab_write_failed",
+            };
+            ui.label(
+                RichText::new(format!("⧉ {}", t(lang, key)))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.warn_color()),
+            );
+        }
 
         // Match counter & Next/Prev navigation buttons
         if has_query {
@@ -2016,7 +2044,12 @@ fn render_log_stream(
                 .selection_anchor
                 .or_else(|| engine.selection.iter().next().copied())
             {
-                engine.enter_context(line);
+                match engine.derived.as_ref().and_then(|d| d.source_line(line)) {
+                    Some(source_line) => engine.source_context_request = Some(source_line),
+                    None => {
+                        engine.enter_context(line);
+                    }
+                }
             }
         }
 
@@ -2236,6 +2269,19 @@ fn render_log_stream(
                     .clicked()
             {
                 export_stream_lines(engine, lang, true);
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    engine.is_filter_active(),
+                    egui::Button::new(
+                        RichText::new(format!("⧉ {}", t(lang, "filter_tab_open"))).monospace(),
+                    ),
+                )
+                .on_disabled_hover_text(t(lang, "filter_tab_no_filter"))
+                .clicked()
+            {
+                engine.filter_tab_request = true;
                 ui.close();
             }
             if engine.has_bookmarks() {
@@ -3436,7 +3482,8 @@ fn render_extended_rows(
 
                         // Line number
                         if show_line_numbers {
-                            let line_num_str = format!("{:>6} │", actual_line_idx + 1);
+                            let line_num_str =
+                                format!("{:>6} │", engine.shown_line_number(actual_line_idx));
                             let num_color = if is_active_search {
                                 theme.accent_color()
                             } else {
@@ -3778,6 +3825,8 @@ struct RowMenuPicks {
     copy_chars: Option<String>,
     /// Row whose selection goes to the scratchpad, and whether with a reference line.
     scratch: Option<(usize, bool)>,
+    /// "Open filter as new tab" was picked.
+    filter_tab: bool,
 }
 
 impl RowMenuPicks {
@@ -3786,7 +3835,16 @@ impl RowMenuPicks {
             engine.toggle_time_anchor(line);
         }
         if let Some(line) = self.context {
-            engine.enter_context(line);
+            // A derived stream shows the line in its source.
+            match engine.derived.as_ref().and_then(|d| d.source_line(line)) {
+                Some(source_line) => engine.source_context_request = Some(source_line),
+                None => {
+                    engine.enter_context(line);
+                }
+            }
+        }
+        if self.filter_tab {
+            engine.filter_tab_request = true;
         }
         if let Some(line) = self.note {
             engine.open_note_editor(line);
@@ -4653,7 +4711,17 @@ fn row_context_menu(
         if filtered || anchor.is_some() || !tools.is_empty() {
             ui.separator();
         }
-        // On a filtered stream: the same line in the full log (CTRL + K).
+        // On a filtered stream: the same line in the full log (CTRL + K); on a derived
+        // stream, in its source.
+        let filtered = filtered || engine.derived.is_some();
+        if engine.is_filter_active()
+            && ui
+                .button(RichText::new(format!("⧉ {}", t(lang, "filter_tab_open"))).monospace())
+                .clicked()
+        {
+            picks.filter_tab = true;
+            ui.close();
+        }
         if filtered {
             if ui
                 .button(
@@ -5205,7 +5273,7 @@ fn render_wrapped_rows(
                 painter.text(
                     egui::pos2(origin.x + left_pad + marker_w, text_top),
                     egui::Align2::LEFT_TOP,
-                    format!("{:>6} │", line + 1),
+                    format!("{:>6} │", eng.shown_line_number(line)),
                     font_id.clone(),
                     num_color,
                 );

@@ -50,6 +50,18 @@ show in context on the mapped line; if the source tab is closed it is reopened.
 The spool uses `stdin_spool_max_mb` and the 512 MB free-space margin; on reaching them
 the derived stream restarts from empty (as stdin), saying earlier matches were dropped.
 
+### As implemented (0.14.0)
+- **Feeding (D2):** the spool is fed from the source *stream* (`DerivedFeeder::step`, a
+  few milliseconds per frame), not from a second handle on the file: the source engine
+  already decodes, strips ANSI, follows appends and reports truncation and rotation
+  (`reload_generation`), so one reader serves both and every encoding works. An
+  unterminated last line waits for its newline.
+- **Persistence (D3) is not done:** a derived tab is transient like standard input (left
+  out of the dock layout, `open_files` and sessions). Tasks 3.1 / 3.2 stay open.
+- **Bounds (D5):** a full spool stops the tab from following (it says so) instead of
+  restarting from empty; the large-copy warning is not done.
+- **Bookmarks** are kept by derived line, not by source line (they are not saved anyway).
+
 ## Risks / Trade-offs
 
 - [Broad filter copies most of a huge file] → the dialog warns when the source filter

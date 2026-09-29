@@ -571,6 +571,10 @@ All three are anchored at the centre, not resizable and not collapsible.
 - An 11 pt status line: *Report copied to the clipboard* / *Report saved to path* (accent), *Too large for the clipboard…* / save errors (warn).
 - The choices are written back to `report_context`, `report_auto`, `report_order`.
 
+### 4.6d Derived streams — "Open filter as new tab"
+
+Sources: `src/filter_tab.rs` (`FrozenFilter`, `DerivedFeeder`), `src/ui/app.rs` (`open_filter_tab`, `apply_filter_tab_requests`). `⧉ Open filter as new tab` in the stream's 💾 menu (disabled with the tooltip *No filter to open as a tab…* without a filter) and in the row menu. The new tab (`FastTailTab::LogStream` of a spool `<pid>-<n>-filter-<name>`) is pushed into the source's dock leaf; its title is `⧉ source ▸ label` (the first include term, `¬term`, `≥LEVEL` or `🕘`) with the usual follow and new-data marks; its tooltip is *The lines of the source that passed its filter…*, the source path and the frozen filter one part per line. The gutter shows source line numbers (`shown_line_number`). When the feeder stops, the stream bar shows `⧉ source closed: no longer following` (or spool full / cannot write) in warn. Like stdin, the tab is left out of the saved dock, `open_files` and sessions.
+
 ### 4.6c Scratchpad tab — `🗒 Scratchpad`
 
 Source: `src/ui/scratchpad.rs`. A dock tab (`FastTailTab::Scratchpad`, saved in the layout), opened by `🗒 Scratchpad` in the 🗂 menu or the palette (`scratchpad.open`), added to the right of the first leaf. The title shows ` *` while a change waits to be saved.
@@ -664,6 +668,7 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
   2. `Copy as shown`: the same, one line per row as the view shows it, with ` ×N` after a closed group's row.
   - `Copy selected text`, only while characters are selected inside a row: copies them.
   - `🗒 Send to scratchpad  (CTRL + SHIFT + N)` and `🗒 Send without reference line`: select the row when it is not selected, then send the selection.
+  - `⧉ Open filter as new tab`, only while the stream has a filter; on a derived stream `◆ Show in context` is always offered and shows the line in the source.
   - Then, after a separator when either applies: `▣ Highlight "token"` (or `▢ Clear the highlight of "token"` when it is the outlined one) on the word under the pointer where the menu was opened (kept in egui temp memory at the right click), and `⇣ Next line of rule  (F4)` ▸, a submenu listing the enabled rules matching the row (`#n pattern`, `▶` on the stream's navigation rule); picking one makes it the navigation rule and walks to its next line.
   3. `✏ Bookmark note…`: opens the note editor in the stream bar (§3.3) on that line.
   4. `☆ Remove bookmark  (CTRL + F2)`, only when the row's own line is bookmarked: what `CTRL + F2` does there (removes a manual bookmark and its note, or dismisses an automatic one).
@@ -771,6 +776,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `📦` | file size |
 | `🔎` | search all streams / Find results tab |
 | `🗒` | scratchpad tab, menu entries, send to scratchpad |
+| `⧉` | filter as a new tab: menu entries, the derived tab's title (`⧉ app.log ▸ ERROR`) and its stopped state in the stream bar |
 | `⇣` | Next line of rule (row menu) |
 | `▣` / `▢` | Highlight "token" / Clear the highlight (row menu) |
 | `⌖` | search scope chip, row menu scope entries, Find results time scope |
