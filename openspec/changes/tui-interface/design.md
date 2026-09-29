@@ -254,7 +254,7 @@ stream, `q` quit. From the competitor analysis after 0.12.0 (section 7): `e` / `
 count (`10j`, `3n`, less / vim); `?` and `F1` work even with no file open; `:` opens the
 command palette over the shared action registry of `command-palette` (0.13.0), where a
 number jumps to that line, so the go-to dialog keeps `Ctrl+G`; the default bindings come
-from that registry, so `remappable-shortcuts` (0.15.0) rebinds both interfaces; the
+from that registry, so `remappable-shortcuts` (0.22.0) rebinds both interfaces; the
 Kitty keyboard protocol is enabled when the terminal supports it, so `Ctrl+Shift`
 combinations are told apart. The status bar keeps the key hints on screen, idle drawing
 stays event-driven (toolong #17 burned a core polling), and pipes work as

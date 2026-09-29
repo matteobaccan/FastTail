@@ -19,7 +19,9 @@ graphical or the terminal version and expects the same things from either: the s
 workspace, the same settings, the same rules, presets and tools, the same PIN lock,
 saved to the same `fasttail.ini`.
 
-Target release: **0.20.0**, released only when the terminal interface reaches parity
+Target release: **0.20.0**, the release after 0.14.0 (the maintainer moved the terminal
+interface ahead of the other planned changes, which resume with 0.21.0), released only
+when the terminal interface reaches parity
 with the GUI for everything in scope below.
 
 ## What Changes
