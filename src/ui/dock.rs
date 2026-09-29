@@ -1382,8 +1382,9 @@ fn render_log_stream(
     // Viewport movement helpers. Extend mode maps lines to pixels through the constant row
     // height; wrap mode hands the wrap renderer a request that it resolves through the real
     // row heights (see `wrap_layout`), so every jump stays anchored to a line index.
+    engine.sync_row_mode(row_height);
     let wrap_view = |engine: &TailEngine| {
-        engine.wrap_lines && engine.view_mode != crate::tail_engine::ViewMode::Hex
+        engine.wraps_rows() && engine.view_mode != crate::tail_engine::ViewMode::Hex
     };
     let top_row = |engine: &TailEngine| -> usize {
         if wrap_view(engine) {
@@ -3113,7 +3114,7 @@ fn render_log_stream(
     if let Some(marks) = strip_marks {
         let strip_rect =
             egui::Rect::from_min_max(egui::pos2(rows_rect.max.x, area.min.y), area.max);
-        let per_row = if engine.wrap_lines {
+        let per_row = if engine.wraps_rows() {
             engine.wrap_avg_row_height.max(1.0)
         } else {
             row_height
@@ -3378,7 +3379,7 @@ fn render_rows(
             Some(&layout),
         );
     }
-    if engine.wrap_lines {
+    if engine.wraps_rows() {
         render_wrapped_rows(
             ui,
             engine,
@@ -3575,8 +3576,13 @@ fn render_extended_rows(
     let mut char_pick: Option<CharPick> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
-    // Where the first field column starts in a row, for the column header.
+    // Where the first field column starts in a row, for the column header: the widest
+    // prefix (marker, number, delta, `×N` badge) of this frame's rows. Every row starts its
+    // cells at the widest prefix of the previous frame, so the columns stay aligned.
     let mut cells_x: Option<f32> = None;
+    let aligned_x: f32 = columns
+        .and_then(|_| ui.data(|d| d.get_temp(field_header_id(engine).with("cells_x"))))
+        .unwrap_or(0.0);
     let visible_lines = engine.visible_line_count();
     let font_id = egui::FontId::monospace(font_size);
     let char_w = ui.ctx().fonts_mut(|f| f.glyph_width(&font_id, '0'));
@@ -3723,7 +3729,11 @@ fn render_extended_rows(
                         }
 
                         if let Some(layout) = columns {
-                            cells_x.get_or_insert(ui.cursor().left() - ui.max_rect().left());
+                            let here = ui.cursor().left() - ui.max_rect().left();
+                            cells_x = Some(cells_x.map_or(here, |x| x.max(here)));
+                            if aligned_x > here {
+                                ui.add_space(aligned_x - here);
+                            }
                             let (text, bg) = if is_active_search {
                                 (Color32::BLACK, Some(SEARCH_ACTIVE_BG))
                             } else if matches_search {

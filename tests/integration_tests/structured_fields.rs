@@ -346,3 +346,59 @@ fn the_column_view_is_kept_in_the_workspace() {
     assert_eq!(engine.field_width("user"), 12);
     assert!(!engine.fields_dirty);
 }
+
+#[test]
+fn the_column_view_keeps_one_row_per_line_and_the_top_row_across_the_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.json");
+    write_lines(&path, JSON_LOG);
+    let mut engine = open(&path);
+    engine.follow_tail = false;
+    engine.set_wrap_lines(true, 0);
+    engine.sync_row_mode(20.0);
+    assert!(engine.wraps_rows());
+    engine.wrap_anchor.row = 3;
+
+    // Columns on: one row per line, scrolled to the wrap view's top row.
+    engine.set_fields_view(true);
+    assert!(!engine.wraps_rows());
+    engine.sync_row_mode(20.0);
+    assert_eq!(engine.requested_scroll_y, Some(60.0));
+    assert!(engine.wrap_request.is_none());
+
+    // Columns off again: wrapped, anchored on the extended view's top row.
+    engine.requested_scroll_y = None;
+    engine.current_scroll_y = 40.0;
+    engine.set_fields_view(false);
+    engine.sync_row_mode(20.0);
+    assert!(engine.wraps_rows());
+    assert_eq!(engine.wrap_anchor.row, 2);
+}
+
+#[test]
+fn field_names_with_ini_delimiters_keep_their_widths_and_spaces() {
+    use fasttail::session::{Session, StreamEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.json");
+    write_lines(&log, JSON_LOG);
+    let mut entry = StreamEntry::new(log.clone());
+    entry.fields_columns = vec![" padded ".into(), "k8s:pod".into()];
+    entry.fields_widths = [
+        ("http:status".into(), 6),
+        ("a=b".into(), 7),
+        ("50%".into(), 8),
+        ("%3D".into(), 9),
+    ]
+    .into_iter()
+    .collect();
+    let session = Session {
+        streams: vec![entry.clone()],
+        dock_layout: None,
+    };
+    // Through the file text, as a save and a load do.
+    let text = session.serialized(None);
+    let conf = ini::Ini::load_from_str(&text).unwrap();
+    let back = Session::read_from(&conf, None).session.streams.remove(0);
+    assert_eq!(back.fields_widths, entry.fields_widths);
+    assert_eq!(back.fields_columns, entry.fields_columns);
+}

@@ -1618,6 +1618,9 @@ pub struct TailEngine {
     field_catalogue_due: bool,
     field_rows: RowCache,
     field_spans: FieldSpans,
+    /// Whether the rows were wrapped when `sync_row_mode` last looked (`None` before the
+    /// first frame): the column view keeps one row per line even with wrap on.
+    rows_wrapped: Option<bool>,
     /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
     pub search_byte_matches: Vec<(usize, usize)>,
     search_byte_max_len: usize,
@@ -2273,6 +2276,7 @@ impl TailEngine {
             field_catalogue_due: false,
             field_rows: RowCache::default(),
             field_spans: FieldSpans::new(),
+            rows_wrapped: None,
             scratch_request: None,
             derived: None,
             filter_tab_request: false,
@@ -2452,7 +2456,7 @@ impl TailEngine {
         self.follow_tail = c.saved_follow;
         self.pending_jump = None;
         if !c.saved_follow {
-            if self.wrap_lines {
+            if self.wraps_rows() {
                 self.wrap_request = Some(WrapScroll::CenterLine(c.line));
             } else {
                 self.requested_scroll_y = Some(c.saved_scroll_y);
@@ -6236,6 +6240,40 @@ impl TailEngine {
         } else {
             None
         };
+        self.rows_wrapped = Some(self.wraps_rows());
+    }
+
+    /// Whether the Text view wraps its rows: wrap is on and the rows are not columns.
+    pub fn wraps_rows(&self) -> bool {
+        self.wrap_lines && !self.columns_shown()
+    }
+
+    /// Called by the Text view each frame before it moves: when the rows switch between
+    /// wrapped and one per line without `set_wrap_lines` (the column view turned on or
+    /// off, a parser found or dropped), the top row is kept across the switch and a
+    /// pending wrap request is dropped.
+    pub fn sync_row_mode(&mut self, row_height: f32) {
+        let wrapped = self.wraps_rows();
+        let before = self.rows_wrapped.replace(wrapped);
+        if before.is_none_or(|b| b == wrapped) {
+            return;
+        }
+        if wrapped {
+            let top = (self.current_scroll_y / row_height.max(1.0)).round() as usize;
+            self.wrap_anchor = WrapAnchor {
+                row: top,
+                within: 0.0,
+            };
+            self.wrap_virtual_offset = None;
+            self.wrap_scroll_delta = 0.0;
+            self.wrap_at_bottom = self.follow_tail;
+            self.wrap_request = self.follow_tail.then_some(WrapScroll::Bottom);
+        } else {
+            self.wrap_request = None;
+            if !self.follow_tail {
+                self.requested_scroll_y = Some(self.wrap_anchor.row as f32 * row_height);
+            }
+        }
     }
 
     /// Shows or hides this stream's line-number column; other streams keep theirs.

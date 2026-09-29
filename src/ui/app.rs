@@ -3692,6 +3692,8 @@ impl FastTailApp {
         // on a background sound-alert match when the option is on and the window is not
         // focused.
         let mut bookmarks_changed = false;
+        // A column width being dragged is saved once, when the button is released.
+        let pointer_down = ctx.input(|i| i.pointer.any_down());
         let mut critical_in_background = false;
         for eng in &mut self.engines {
             if eng.is_stdin() || eng.derived.is_some() {
@@ -3721,7 +3723,7 @@ impl FastTailApp {
                 || eng.collapse_mode_dirty
                 || eng.context_lines_dirty
                 || eng.view_columns_dirty
-                || eng.fields_dirty
+                || (eng.fields_dirty && !pointer_down)
             {
                 // The ANSI mode, the timeline flag, the collapse mode, the context lines
                 // and the line-number and time delta columns live in the stream entry, as

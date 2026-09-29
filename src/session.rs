@@ -25,6 +25,23 @@ use std::path::{Path, PathBuf};
 pub const SESSION_SUFFIX: &str = ".fasttail-session.ini";
 /// Prefix of the keys holding a column view width (`fields_width.status=6`).
 const FIELDS_WIDTH_PREFIX: &str = "fields_width.";
+/// A field name as part of an INI key: `%`, `=` and `:` (which end an INI key) as
+/// `%25`, `%3D`, `%3A`.
+fn encode_ini_key(key: &str) -> String {
+    key.replace('%', "%25")
+        .replace('=', "%3D")
+        .replace(':', "%3A")
+}
+
+/// The field name of `encode_ini_key`.
+fn decode_ini_key(key: &str) -> String {
+    key.replace("%3D", "=")
+        .replace("%3d", "=")
+        .replace("%3A", ":")
+        .replace("%3a", ":")
+        .replace("%25", "%")
+}
+
 /// Maximum number of remembered session files.
 pub const MAX_RECENT_SESSIONS: usize = 10;
 
@@ -219,7 +236,10 @@ impl Session {
                 sec.set("fields_columns", ini_value(&columns.join(",")));
             }
             for (key, cells) in &s.fields_widths {
-                sec.set(format!("{FIELDS_WIDTH_PREFIX}{key}"), cells.to_string());
+                sec.set(
+                    format!("{FIELDS_WIDTH_PREFIX}{}", encode_ini_key(key)),
+                    cells.to_string(),
+                );
             }
             sec.set(
                 "bookmarks",
@@ -364,8 +384,8 @@ impl Session {
                 fields_columns: sec
                     .get("fields_columns")
                     .map(|c| {
+                        // Not trimmed: a key may start or end with a space.
                         c.split(',')
-                            .map(str::trim)
                             .filter(|c| !c.is_empty())
                             .map(str::to_string)
                             .collect()
@@ -374,11 +394,11 @@ impl Session {
                 fields_widths: sec
                     .iter()
                     .filter_map(|(k, v)| {
-                        let key = k.strip_prefix(FIELDS_WIDTH_PREFIX)?;
+                        let key = decode_ini_key(k.strip_prefix(FIELDS_WIDTH_PREFIX)?);
                         let cells = v.trim().parse::<u16>().ok()?;
                         (!key.is_empty()).then(|| {
                             (
-                                key.to_string(),
+                                key,
                                 cells.clamp(crate::fields::MIN_WIDTH, crate::fields::MAX_WIDTH),
                             )
                         })
