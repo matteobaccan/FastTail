@@ -1004,87 +1004,98 @@ fn render_fields_selector(
     } else {
         theme.text_dim()
     };
+    // The pattern being edited, with the active pattern it started from: when the active
+    // one changes elsewhere (a session restored, a stream reopened) the edit starts over.
+    let active = match &choice {
+        P::Regex(p) => p.clone(),
+        _ => String::new(),
+    };
     let edit_id = egui::Id::new("fields_regex_edit").with(&engine.path);
-    let mut pattern: String =
-        ui.ctx()
-            .data(|d| d.get_temp(edit_id))
-            .unwrap_or_else(|| match &choice {
-                P::Regex(p) => p.clone(),
-                _ => String::new(),
-            });
+    let mut pattern: String = ui
+        .ctx()
+        .data(|d| d.get_temp::<(String, String)>(edit_id))
+        .filter(|(from, _)| *from == active)
+        .map(|(_, text)| text)
+        .unwrap_or_else(|| active.clone());
     let mut picked: Option<P> = None;
-    let menu = ui.menu_button(
+    // Clicks inside keep the menu open, so the pattern field can take the focus.
+    let config = egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (menu, _) = egui::containers::menu::MenuButton::new(
         RichText::new(label).monospace().size(11.0).color(color),
-        |ui| {
-            ui.set_min_width(260.0);
-            let auto = match engine.field_auto() {
-                Some(found) => format!(
-                    "{} → {}",
-                    field_choice_label(&P::Auto, lang),
-                    field_choice_label(found, lang)
-                ),
-                None => format!(
-                    "{} → {}",
-                    field_choice_label(&P::Auto, lang),
-                    t(lang, "fields_none")
-                ),
-            };
-            let items = [
-                (P::Auto, auto),
-                (P::Json, field_choice_label(&P::Json, lang)),
-                (P::Logfmt, field_choice_label(&P::Logfmt, lang)),
-                (P::Apache, field_choice_label(&P::Apache, lang)),
-                (P::Syslog, field_choice_label(&P::Syslog, lang)),
-                (P::Off, field_choice_label(&P::Off, lang)),
-            ];
-            for (item, text) in items {
-                if ui
-                    .selectable_label(choice == item, RichText::new(text).monospace())
-                    .clicked()
-                {
-                    picked = Some(item);
-                    ui.close();
-                }
+    )
+    .config(config)
+    .ui(ui, |ui| {
+        ui.set_min_width(260.0);
+        let auto = match engine.field_auto() {
+            Some(found) => format!(
+                "{} → {}",
+                field_choice_label(&P::Auto, lang),
+                field_choice_label(found, lang)
+            ),
+            None => format!(
+                "{} → {}",
+                field_choice_label(&P::Auto, lang),
+                t(lang, "fields_none")
+            ),
+        };
+        let items = [
+            (P::Auto, auto),
+            (P::Json, field_choice_label(&P::Json, lang)),
+            (P::Logfmt, field_choice_label(&P::Logfmt, lang)),
+            (P::Apache, field_choice_label(&P::Apache, lang)),
+            (P::Syslog, field_choice_label(&P::Syslog, lang)),
+            (P::Off, field_choice_label(&P::Off, lang)),
+        ];
+        for (item, text) in items {
+            if ui
+                .selectable_label(choice == item, RichText::new(text).monospace())
+                .clicked()
+            {
+                picked = Some(item);
+                ui.close();
             }
-            ui.separator();
-            let is_regex = matches!(choice, P::Regex(_));
+        }
+        ui.separator();
+        let is_regex = matches!(choice, P::Regex(_));
+        ui.label(
+            RichText::new(field_choice_label(&P::Regex(String::new()), lang))
+                .monospace()
+                .color(if is_regex {
+                    theme.accent_color()
+                } else {
+                    theme.text_primary()
+                }),
+        );
+        let invalid = is_regex && engine.field_error().is_some();
+        let mut edit = egui::TextEdit::singleline(&mut pattern)
+            .font(egui::TextStyle::Monospace)
+            .hint_text(t(lang, "fields_regex_hint"))
+            .desired_width(f32::INFINITY);
+        if invalid {
+            edit = edit.text_color(theme.error_color());
+        }
+        let response = ui.add(edit);
+        if let Some(error) = engine.field_error().filter(|_| is_regex) {
             ui.label(
-                RichText::new(field_choice_label(&P::Regex(String::new()), lang))
-                    .monospace()
-                    .color(if is_regex {
-                        theme.accent_color()
-                    } else {
-                        theme.text_primary()
-                    }),
+                RichText::new(format!("{}: {error}", t(lang, "fields_regex_invalid")))
+                    .small()
+                    .color(theme.error_color()),
             );
-            let invalid = is_regex && engine.field_error().is_some();
-            let mut edit = egui::TextEdit::singleline(&mut pattern)
-                .font(egui::TextStyle::Monospace)
-                .hint_text(t(lang, "fields_regex_hint"))
-                .desired_width(f32::INFINITY);
-            if invalid {
-                edit = edit.text_color(theme.error_color());
-            }
-            let response = ui.add(edit);
-            if let Some(error) = engine.field_error().filter(|_| is_regex) {
-                ui.label(
-                    RichText::new(format!("{}: {error}", t(lang, "fields_regex_invalid")))
-                        .small()
-                        .color(theme.error_color()),
-                );
-            }
-            let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if enter || ui.button(t(lang, "fields_regex_apply")).clicked() {
-                picked = Some(P::Regex(pattern.clone()));
-            }
-        },
-    );
+        }
+        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter || ui.button(t(lang, "fields_regex_apply")).clicked() {
+            picked = Some(P::Regex(pattern.clone()));
+            ui.close();
+        }
+    });
     let mut tip = t(lang, "tip_fields").to_string();
     if let Some(error) = engine.field_error() {
         tip = format!("{tip}\n{}: {error}", t(lang, "fields_regex_invalid"));
     }
-    menu.response.on_hover_text(tip);
-    ui.ctx().data_mut(|d| d.insert_temp(edit_id, pattern));
+    menu.on_hover_text(tip);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(edit_id, (active, pattern)));
     if let Some(choice) = picked {
         engine.set_field_choice(choice);
         ui.ctx().request_repaint();

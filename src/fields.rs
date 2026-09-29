@@ -158,6 +158,9 @@ pub struct FieldSpans {
     /// The line did not scan to its end (JSON syntax error, too many fields, unclosed
     /// quote): the fields found before are kept.
     pub partial: bool,
+    /// The line was cut only because it has more than `MAX_LINE_FIELDS` fields (then
+    /// `partial` is set too): it still has the parser's shape.
+    pub truncated: bool,
     /// `key=` pairs of the last logfmt scan (bare keys and the prefix not counted).
     logfmt_pairs: usize,
 }
@@ -193,6 +196,7 @@ impl FieldSpans {
         self.spans.clear();
         self.scratch.clear();
         self.partial = false;
+        self.truncated = false;
         self.logfmt_pairs = 0;
     }
 
@@ -235,6 +239,7 @@ impl FieldSpans {
     fn push(&mut self, key: KeyAt, value: (usize, usize), quoted: bool) -> bool {
         if self.spans.len() >= MAX_LINE_FIELDS {
             self.partial = true;
+            self.truncated = true;
             return false;
         }
         self.spans.push(FieldSpan {
@@ -579,8 +584,9 @@ fn scan_logfmt(line: &str, out: &mut FieldSpans) -> bool {
 
 fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> bool {
     let id = r as *const RegexFields as usize;
+    // The address alone could be reused by a later parser: the slot count must match too.
     let mut locs = match out.locs.take() {
-        Some((owner, locs)) if owner == id => locs,
+        Some((owner, locs)) if owner == id && locs.len() == r.regex.captures_len() => locs,
         _ => r.regex.capture_locations(),
     };
     let matched = r.regex.captures_read(&mut locs, line).is_some();
@@ -610,7 +616,10 @@ pub fn detect<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<ParserChoi
         }
         total += 1;
         bytes += line.len();
-        if scan(&FieldParser::Json, line, &mut spans) && !spans.partial && !spans.is_empty() {
+        if scan(&FieldParser::Json, line, &mut spans)
+            && (!spans.partial || spans.truncated)
+            && !spans.is_empty()
+        {
             json += 1;
         } else if scan(&FieldParser::Logfmt, line, &mut spans)
             && spans.logfmt_pairs >= DETECT_LOGFMT_PAIRS
@@ -844,6 +853,15 @@ mod tests {
         assert_eq!(detect(logfmt), Some(ParserChoice::Logfmt));
         assert_eq!(detect(["a=1 b=2", "c=1 d=2"]), None);
         assert_eq!(detect(["", "  "]), None);
+        // A wide object cut at the field cap is still JSON.
+        let wide = format!(
+            "{{{}}}",
+            (0..MAX_LINE_FIELDS + 20)
+                .map(|i| format!(r#""k{i}":{i}"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert_eq!(detect([wide.as_str(); 5]), Some(ParserChoice::Json));
         assert_eq!(detect(["2024-01-01 12:00:00 bare words only"]), None);
     }
 }
