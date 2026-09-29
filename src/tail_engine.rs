@@ -1636,6 +1636,8 @@ pub struct TailEngine {
     pub derived: Option<Box<crate::filter_tab::DerivedFeeder>>,
     /// The stream menu asked for its filter as a new tab (applied by the app).
     pub filter_tab_request: bool,
+    /// The row menu asked for a compare (applied by the app).
+    pub compare_request: Option<crate::compare::CompareRequest>,
     /// "Show in context" on a derived stream: the source line to show in the source.
     pub source_context_request: Option<usize>,
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
@@ -2231,6 +2233,7 @@ impl TailEngine {
             scratch_request: None,
             derived: None,
             filter_tab_request: false,
+            compare_request: None,
             source_context_request: None,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
@@ -7640,6 +7643,22 @@ impl TailEngine {
                 .copied()
                 .zip(self.selection.last().copied())
         }
+    }
+
+    /// The first `max` selected lines and whether there were more, without listing the
+    /// rest of a CTRL + A selection.
+    pub fn selected_lines_capped(&self, max: usize) -> (Vec<usize>, bool) {
+        let mut lines: Vec<usize> = if self.selection_all {
+            (0..self.visible_lines())
+                .filter_map(|p| self.line_at(p))
+                .take(max + 1)
+                .collect()
+        } else {
+            self.selection.iter().copied().take(max + 1).collect()
+        };
+        let capped = lines.len() > max;
+        lines.truncate(max);
+        (lines, capped)
     }
 
     /// Selected line indices in file order (with CTRL + A, every visible line, those a

@@ -387,6 +387,6 @@ pub fn apply_find_jump(
 /// The dock as it is saved: without the Find results tab (results are not persisted).
 pub fn without_find_results(dock: &DockState<FastTailTab>) -> DockState<FastTailTab> {
     let mut saved = dock.clone();
-    saved.retain_tabs(|tab| *tab != FastTailTab::FindResults);
+    saved.retain_tabs(|tab| *tab != FastTailTab::FindResults && *tab != FastTailTab::Compare);
     saved
 }

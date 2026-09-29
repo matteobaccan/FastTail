@@ -571,6 +571,15 @@ All three are anchored at the centre, not resizable and not collapsible.
 - An 11 pt status line: *Report copied to the clipboard* / *Report saved to path* (accent), *Too large for the clipboard…* / save errors (warn).
 - The choices are written back to `report_context`, `report_auto`, `report_order`.
 
+### 4.6e Compare tab — `⇄ Compare`
+
+Sources: `src/compare.rs` (tokens, ignore options, word and region diff with `similar`, JSON canonicalisation, unified text), `src/ui/compare_tab.rs`. A dock tab (`FastTailTab::Compare`, left out of the saved layout like Find results) added below the first leaf; closing it drops the compare.
+
+- **Options row:** *Ignore:* checkboxes (timestamp, numbers, hex ids, whitespace, case), *as JSON* (enabled when both sides are one line holding JSON), `▲` / `▼` (previous / next change, also `SHIFT + F7` / `F7`), `📋 Copy as unified diff`.
+- **Summary:** `N changes` or *identical* (accent, bold), then warn notes: *large difference: a coarser diff is shown* (the 2 s deadline was reached), *a side is capped at 20,000 lines*.
+- **Headers:** the two sides' labels (`name:12`, `name:12-40`, `name (N lines)`) in the secondary accent.
+- **Rows:** two half-width columns; removed rows tinted red, added green, changed amber, the differing tokens with a stronger red (left) / green (right) background; the current change is outlined in the accent colour. Up to 300 rows every row is laid out and wraps; above, only the visible rows, one text line each. A double-click on a side shows that line in its stream (*Double-click a row…* tooltip).
+
 ### 4.6d Derived streams — "Open filter as new tab"
 
 Sources: `src/filter_tab.rs` (`FrozenFilter`, `DerivedFeeder`), `src/ui/app.rs` (`open_filter_tab`, `apply_filter_tab_requests`). `⧉ Open filter as new tab` in the stream's 💾 menu (disabled with the tooltip *No filter to open as a tab…* without a filter) and in the row menu. The new tab (`FastTailTab::LogStream` of a spool `<pid>-<n>-filter-<name>`) is pushed into the source's dock leaf; its title is `⧉ source ▸ label` (the first include term, `¬term`, `≥LEVEL` or `🕘`) with the usual follow and new-data marks; its tooltip is *The lines of the source that passed its filter…*, the source path and the frozen filter one part per line. The gutter shows source line numbers (`shown_line_number`). When the feeder stops, the stream bar shows `⧉ source closed: no longer following` (or spool full / cannot write) in warn. Like stdin, the tab is left out of the saved dock, `open_files` and sessions.
@@ -668,6 +677,7 @@ Source: `src/ui/app.rs`, `render_lock_overlay`
   2. `Copy as shown`: the same, one line per row as the view shows it, with ` ×N` after a closed group's row.
   - `Copy selected text`, only while characters are selected inside a row: copies them.
   - `🗒 Send to scratchpad  (CTRL + SHIFT + N)` and `🗒 Send without reference line`: select the row when it is not selected, then send the selection.
+  - `⇄ Compare ▸` submenu: *Compare the two selected lines* (disabled unless exactly two rows are selected), *Mark the selection for compare*, and, while a mark exists, *Compare the selection with <mark>*.
   - `⧉ Open filter as new tab`, only while the stream has a filter; on a derived stream `◆ Show in context` is always offered and shows the line in the source.
   - Then, after a separator when either applies: `▣ Highlight "token"` (or `▢ Clear the highlight of "token"` when it is the outlined one) on the word under the pointer where the menu was opened (kept in egui temp memory at the right click), and `⇣ Next line of rule  (F4)` ▸, a submenu listing the enabled rules matching the row (`#n pattern`, `▶` on the stream's navigation rule); picking one makes it the navigation rule and walks to its next line.
   3. `✏ Bookmark note…`: opens the note editor in the stream bar (§3.3) on that line.
@@ -776,6 +786,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `📦` | file size |
 | `🔎` | search all streams / Find results tab |
 | `🗒` | scratchpad tab, menu entries, send to scratchpad |
+| `⇄` | compare: row submenu and the Compare tab |
 | `⧉` | filter as a new tab: menu entries, the derived tab's title (`⧉ app.log ▸ ERROR`) and its stopped state in the stream bar |
 | `⇣` | Next line of rule (row menu) |
 | `▣` / `▢` | Highlight "token" / Clear the highlight (row menu) |

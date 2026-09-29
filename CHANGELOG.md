@@ -28,6 +28,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   them in the search box and `Esc` clears them; `SHIFT` / `CTRL` clicks keep selecting
   rows. The selection is cleared by a reload and when a filter hides its row.
 
+- **Compare lines.** The row menu's "Compare" compares the two selected lines, or a marked
+  selection with another one (any streams, up to 20,000 lines a side), in a Compare tab:
+  side by side, differing tokens highlighted, rows aligned as equal / changed / removed /
+  added, `F7` / `SHIFT + F7` between changes, double-click back to the line. Ignore
+  options (leading timestamp by default, numbers, hex ids and UUIDs, whitespace, case),
+  a JSON mode with sorted keys, and "Copy as unified diff". Uses the `similar` crate.
 - **Filter as a new tab.** "Open filter as new tab" (stream menu, row menu) opens a tab
   `⧉ app.log ▸ ERROR` with the lines passing the stream's filter as it is now (frozen),
   following the source (appends added, truncation or rotation rebuilds it). It is a normal
