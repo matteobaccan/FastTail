@@ -2558,17 +2558,14 @@ impl TailEngine {
         let mut unordered = false;
         let mut fresh = Vec::with_capacity(to - from);
         self.scan_lines(from, to, |_, text| {
-            match crate::timestamp::detect_timestamp(text, hint) {
-                Some((millis, format)) => {
-                    hint = format;
-                    parsed += 1;
-                    if inherited != NO_TIMESTAMP && millis < inherited {
-                        unordered = true;
-                    }
-                    inherited = millis;
+            // A line without a timestamp of its own belongs to the entry above it.
+            if let Some((millis, format)) = crate::timestamp::detect_timestamp(text, hint) {
+                hint = format;
+                parsed += 1;
+                if inherited != NO_TIMESTAMP && millis < inherited {
+                    unordered = true;
                 }
-                // No timestamp of its own: it belongs to the entry above it.
-                None => {}
+                inherited = millis;
             }
             fresh.push(inherited);
             true

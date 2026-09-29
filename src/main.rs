@@ -38,22 +38,22 @@ mod legacy_compat {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetSystemTimeAsFileTime(lp_system_time_as_file_time: *mut FileTime);
-        pub fn GetModuleHandleA(lp_module_name: *const u8) -> *mut std::ffi::c_void;
-        pub fn LoadLibraryA(lp_lib_name: *const u8) -> *mut std::ffi::c_void;
+        pub fn GetModuleHandleA(lp_module_name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+        pub fn LoadLibraryA(lp_lib_name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
         pub fn GetProcAddress(
             h_module: *mut std::ffi::c_void,
-            lp_proc_name: *const u8,
+            lp_proc_name: *const std::ffi::c_char,
         ) -> *mut std::ffi::c_void;
     }
 
     // Dynamic GetDpiForSystem (Win10 1607+) or fallback to 96 (Win7/2008 R2)
     pub unsafe fn get_system_dpi() -> u32 {
-        let mut user32 = GetModuleHandleA(b"user32.dll\0".as_ptr());
+        let mut user32 = GetModuleHandleA(c"user32.dll".as_ptr());
         if user32.is_null() {
-            user32 = LoadLibraryA(b"user32.dll\0".as_ptr());
+            user32 = LoadLibraryA(c"user32.dll".as_ptr());
         }
         if !user32.is_null() {
-            let proc = GetProcAddress(user32, b"GetDpiForSystem\0".as_ptr());
+            let proc = GetProcAddress(user32, c"GetDpiForSystem".as_ptr());
             if !proc.is_null() {
                 let get_dpi: unsafe extern "system" fn() -> u32 = std::mem::transmute(proc);
                 return get_dpi();
@@ -70,9 +70,9 @@ mod legacy_compat {
     #[no_mangle]
     pub unsafe extern "system" fn hook_GetSystemTimePreciseAsFileTime(ft: *mut FileTime) {
         if !CHECKED_TIME.load(std::sync::atomic::Ordering::Acquire) {
-            let kernel32 = GetModuleHandleA(b"kernel32.dll\0".as_ptr());
+            let kernel32 = GetModuleHandleA(c"kernel32.dll".as_ptr());
             if !kernel32.is_null() {
-                let proc = GetProcAddress(kernel32, b"GetSystemTimePreciseAsFileTime\0".as_ptr());
+                let proc = GetProcAddress(kernel32, c"GetSystemTimePreciseAsFileTime".as_ptr());
                 RESOLVED_TIME.store(proc, std::sync::atomic::Ordering::Release);
             }
             CHECKED_TIME.store(true, std::sync::atomic::Ordering::Release);
@@ -100,12 +100,12 @@ mod legacy_compat {
     #[no_mangle]
     pub unsafe extern "system" fn hook_CoTaskMemFree(pv: *mut std::ffi::c_void) {
         if !CHECKED_COTASK.load(std::sync::atomic::Ordering::Acquire) {
-            let mut ole32 = GetModuleHandleA(b"ole32.dll\0".as_ptr());
+            let mut ole32 = GetModuleHandleA(c"ole32.dll".as_ptr());
             if ole32.is_null() {
-                ole32 = LoadLibraryA(b"ole32.dll\0".as_ptr());
+                ole32 = LoadLibraryA(c"ole32.dll".as_ptr());
             }
             if !ole32.is_null() {
-                let proc = GetProcAddress(ole32, b"CoTaskMemFree\0".as_ptr());
+                let proc = GetProcAddress(ole32, c"CoTaskMemFree".as_ptr());
                 RESOLVED_COTASK.store(proc, std::sync::atomic::Ordering::Release);
             }
             CHECKED_COTASK.store(true, std::sync::atomic::Ordering::Release);
@@ -130,12 +130,12 @@ mod legacy_compat {
     #[no_mangle]
     pub unsafe extern "system" fn hook_ProcessPrng(buffer: *mut u8, size: usize) -> i32 {
         if !CHECKED_PRNG.load(std::sync::atomic::Ordering::Acquire) {
-            let mut bcrypt = GetModuleHandleA(b"bcryptprimitives.dll\0".as_ptr());
+            let mut bcrypt = GetModuleHandleA(c"bcryptprimitives.dll".as_ptr());
             if bcrypt.is_null() {
-                bcrypt = LoadLibraryA(b"bcryptprimitives.dll\0".as_ptr());
+                bcrypt = LoadLibraryA(c"bcryptprimitives.dll".as_ptr());
             }
             if !bcrypt.is_null() {
-                let proc = GetProcAddress(bcrypt, b"ProcessPrng\0".as_ptr());
+                let proc = GetProcAddress(bcrypt, c"ProcessPrng".as_ptr());
                 RESOLVED_PRNG.store(proc, std::sync::atomic::Ordering::Release);
             }
             CHECKED_PRNG.store(true, std::sync::atomic::Ordering::Release);
@@ -146,12 +146,12 @@ mod legacy_compat {
             let f: ProcessPrngFn = std::mem::transmute(ptr);
             f(buffer, size)
         } else {
-            let mut advapi = GetModuleHandleA(b"advapi32.dll\0".as_ptr());
+            let mut advapi = GetModuleHandleA(c"advapi32.dll".as_ptr());
             if advapi.is_null() {
-                advapi = LoadLibraryA(b"advapi32.dll\0".as_ptr());
+                advapi = LoadLibraryA(c"advapi32.dll".as_ptr());
             }
             if !advapi.is_null() {
-                let proc = GetProcAddress(advapi, b"SystemFunction036\0".as_ptr());
+                let proc = GetProcAddress(advapi, c"SystemFunction036".as_ptr());
                 if !proc.is_null() {
                     let rtl_gen_random: unsafe extern "system" fn(*mut u8, u32) -> u8 =
                         std::mem::transmute(proc);
@@ -182,25 +182,25 @@ mod legacy_compat {
 
     unsafe fn init_synch() {
         if !CHECKED_SYNCH.load(std::sync::atomic::Ordering::Acquire) {
-            let mut kb = GetModuleHandleA(b"KernelBase.dll\0".as_ptr());
+            let mut kb = GetModuleHandleA(c"KernelBase.dll".as_ptr());
             if kb.is_null() {
-                kb = LoadLibraryA(b"KernelBase.dll\0".as_ptr());
+                kb = LoadLibraryA(c"KernelBase.dll".as_ptr());
             }
             if !kb.is_null() {
-                let p_wait = GetProcAddress(kb, b"WaitOnAddress\0".as_ptr());
-                let p_wake1 = GetProcAddress(kb, b"WakeByAddressSingle\0".as_ptr());
-                let p_wakeall = GetProcAddress(kb, b"WakeByAddressAll\0".as_ptr());
+                let p_wait = GetProcAddress(kb, c"WaitOnAddress".as_ptr());
+                let p_wake1 = GetProcAddress(kb, c"WakeByAddressSingle".as_ptr());
+                let p_wakeall = GetProcAddress(kb, c"WakeByAddressAll".as_ptr());
                 RESOLVED_WAIT.store(p_wait, std::sync::atomic::Ordering::Release);
                 RESOLVED_WAKE1.store(p_wake1, std::sync::atomic::Ordering::Release);
                 RESOLVED_WAKEALL.store(p_wakeall, std::sync::atomic::Ordering::Release);
             }
-            let mut ntdll = GetModuleHandleA(b"ntdll.dll\0".as_ptr());
+            let mut ntdll = GetModuleHandleA(c"ntdll.dll".as_ptr());
             if ntdll.is_null() {
-                ntdll = LoadLibraryA(b"ntdll.dll\0".as_ptr());
+                ntdll = LoadLibraryA(c"ntdll.dll".as_ptr());
             }
             if !ntdll.is_null() {
-                let p_ntwait = GetProcAddress(ntdll, b"NtWaitForKeyedEvent\0".as_ptr());
-                let p_ntrel = GetProcAddress(ntdll, b"NtReleaseKeyedEvent\0".as_ptr());
+                let p_ntwait = GetProcAddress(ntdll, c"NtWaitForKeyedEvent".as_ptr());
+                let p_ntrel = GetProcAddress(ntdll, c"NtReleaseKeyedEvent".as_ptr());
                 RESOLVED_NT_WAIT.store(p_ntwait, std::sync::atomic::Ordering::Release);
                 RESOLVED_NT_REL.store(p_ntrel, std::sync::atomic::Ordering::Release);
             }

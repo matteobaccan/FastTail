@@ -5341,13 +5341,12 @@ mod tests {
 
     fn measure_lock_width(lang: crate::i18n::Language, screen: egui::Vec2) -> f32 {
         let ctx = egui::Context::default();
-        let mut width = 0.0;
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
             ..Default::default()
         };
         ctx.begin_pass(input);
-        width = super::lock_prompt_width(&ctx, lang);
+        let width = super::lock_prompt_width(&ctx, lang);
         // The font atlas built while measuring comes back as a texture delta that egui
         // insists is consumed; there is no painter here to consume it.
         let mut output = ctx.end_pass();

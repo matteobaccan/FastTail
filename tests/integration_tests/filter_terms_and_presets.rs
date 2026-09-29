@@ -364,7 +364,7 @@ fn applying_to_all_streams_and_the_time_range_rules() {
     let (_dir, a) = log_with("2026-09-20 14:01:00 WARN payment a\n2026-09-20 14:03:00 WARN payment b\n2026-09-20 14:07:00 WARN payment c\n");
     let (_dir2, b) =
         log_with("2026-09-21 14:03:30 ERROR payment x\n2026-09-21 15:00:00 ERROR payment y\n");
-    let mut engines = vec![TailEngine::open(&a).unwrap(), TailEngine::open(&b).unwrap()];
+    let mut engines = [TailEngine::open(&a).unwrap(), TailEngine::open(&b).unwrap()];
     for e in engines.iter_mut() {
         e.apply_time_range_text("14:00", "14:30");
     }

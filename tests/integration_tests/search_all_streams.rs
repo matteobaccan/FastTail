@@ -270,14 +270,6 @@ impl Harness {
         out.textures_delta.clear();
         taken
     }
-
-    fn active_is_stream(&mut self, idx: usize) -> bool {
-        let path = self.engines[idx].path.clone();
-        matches!(
-            self.dock.find_active_focused(),
-            Some((_, FastTailTab::LogStream(p))) if *p == path
-        )
-    }
 }
 
 /// A palette action for a stream whose tab is hidden stays pending (the app keeps it

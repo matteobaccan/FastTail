@@ -488,9 +488,7 @@ mod tests {
     fn open_file_shared_rejects_non_regular_files() {
         let dir = tempfile::tempdir().unwrap();
         let res = open_file_shared(dir.path());
-        let err = res
-            .err()
-            .expect("a directory must not open via open_file_shared");
+        let err = res.expect_err("a directory must not open via open_file_shared");
         #[cfg(not(windows))]
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         #[cfg(windows)]

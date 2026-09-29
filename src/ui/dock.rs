@@ -234,9 +234,11 @@ pub fn create_export_file(target: &Path) -> std::io::Result<std::fs::File> {
             ));
         }
     }
+    // Not truncated on open: only once it is known to be a regular file (below).
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(false)
         .open(target)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
@@ -1125,6 +1127,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_log_stream(
     ui: &mut Ui,
     engine: &mut TailEngine,
@@ -6587,6 +6590,7 @@ fn render_lock_settings(
     ui.label(RichText::new(t(lang, "lock_note")).small());
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_settings_content(
     ui: &mut Ui,
     theme: &mut CyberTheme,
