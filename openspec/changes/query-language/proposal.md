@@ -32,7 +32,7 @@ fields (`structured-fields`) and single-field statistics (`field-statistics`) ex
   (`fasttail.ini`, `[query] history.1`…`history.20`, values through
   `filter_preset::ini_value`).
 
-Target release: **0.15.0** (sources and integrations), per the release plan in
+Target release: **0.16.0** (moved from 0.15.0 when 0.14.0 shipped early; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **low**. Effort: **L (more than 3 weeks)**.
 
 ### Non-goals

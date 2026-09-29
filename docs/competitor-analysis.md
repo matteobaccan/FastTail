@@ -192,7 +192,8 @@ These points are to be folded into the `tui-interface` proposal (PR #132) before
 ## 8. Release plan: closing the gap
 
 The maintainer asked for an OpenSpec change for every feature the competitors have and
-FastTail lacks, spread over three releases so the whole gap is closed; 0.20.0 stays
+FastTail lacks, spread over three releases (four since 0.13.0 and 0.14.0 shipped early, each
+moving its unfinished changes to the next) so the whole gap is closed; 0.20.0 stays
 reserved for the terminal interface (PR #132). Each change lives in
 `openspec/changes/<name>/` with proposal, design, tasks and specs; efforts use the scale of
 section 6. The order inside a release follows the dependencies.
@@ -215,15 +216,24 @@ moved to 0.14.0 (first in its table), so the release was not held back.
 
 ### 0.14.0 — structured logs and analysis
 
+Closed on 2026-09-29 with the changes below; the rest of the planned 0.14.0 moved to
+0.15.0, so the release was not held back.
+
 | Change | Gaps | Effort |
 |---|---|---|
 | `relative-time-windows` — "last 15 min / 1 h / 24 h", `--since -3h` | hl | S |
 | `partial-line-selection` — select part of a line | 19 | M |
 | `scratchpad` — notes tab lines can be sent to | klogg | S |
-| `filter-to-tab` — the filtered view as a new following tab | LogExpert | M |
+| `filter-to-tab` — the filtered view as a new following tab (saving the tabs: 0.15.0) | LogExpert | M |
 | `compare-lines` — diff of two lines or two regions | requested | M |
-| `tray-icon` — minimise to tray, tray menu | SnakeTail | S–M |
-| `structured-fields` — JSON / logfmt / regex fields, column view, field filters | 1, 4 | L |
+| `tray-icon` — minimise to tray, tray menu, Windows (Linux: 0.15.0) | SnakeTail | S–M |
+| `structured-fields` — JSON / logfmt / regex parsers with detection, column view | 1 | L |
+
+### 0.15.0 — structured logs and analysis, continued
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `structured-field-terms` — field filter terms, level and time from fields, cell spans, copy as shown | 1, 4 | M |
 | `custom-log-formats` — user-defined formats (named groups, timestamp, multiline start) | 1 | M |
 | `boolean-filter-expressions` — AND / OR / NOT, field operands | 4 | M |
 | `merged-timeline-view` — several files merged by timestamp | 2 | L |
@@ -234,8 +244,9 @@ moved to 0.14.0 (first in its table), so the release was not held back.
 | `operation-timeline` — Gantt of operations by an id field | lnav | M |
 | `cross-line-regex` — regex across lines (plus single-line regex search) | 20 | M |
 | `export-formats` — CSV and HTML export | 18 | S |
+| `tray-icon` (Linux backend) and `filter-to-tab` (saved derived tabs) — the parts left open | — | S |
 
-### 0.15.0 — sources and integrations
+### 0.16.0 — sources and integrations
 
 | Change | Gaps | Effort |
 |---|---|---|
@@ -252,8 +263,8 @@ moved to 0.14.0 (first in its table), so the release was not held back.
 | `web-ui` — read-only local web view, off by default | Seq, Loki | M |
 | `plugin-api` — out-of-process source plugins, bundled formats | 20 | L |
 
-0.14.0 is the heaviest (two L changes, plus the six carried over from 0.13.0); if it runs long, `operation-timeline` and
-`cross-line-regex` are the first to move to 0.15.0. Open questions are listed in each
+0.15.0 is the heaviest (one L change and ten M); if it runs long, `operation-timeline` and
+`cross-line-regex` are the first to move to 0.16.0. Open questions are listed in each
 change's design.
 
 ## 9. Scan history

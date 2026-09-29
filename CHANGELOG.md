@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-29
+
 ### Added
 
 - **Field parser for structured logs.** A stream bar chip shows how the lines' fields are
@@ -1158,6 +1160,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.14.0]: https://github.com/matteobaccan/FastTail/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/matteobaccan/FastTail/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/matteobaccan/FastTail/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/matteobaccan/FastTail/compare/v0.10.1...v0.11.0

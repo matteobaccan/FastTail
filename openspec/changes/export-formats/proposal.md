@@ -30,7 +30,7 @@ the obvious CSV columns.
   one used), `export_csv_separator` (`comma`, `semicolon`, `tab`), `export_csv_bom`
   (default `true`), `export_csv_protect` (default `true`).
 
-Target release: **0.14.0** (structured logs and analysis), per the release plan in
+Target release: **0.15.0** (structured logs and analysis, continued; planned for 0.14.0, moved when 0.14.0 shipped early), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low**. Effort: **S**.
 
 ### Non-goals

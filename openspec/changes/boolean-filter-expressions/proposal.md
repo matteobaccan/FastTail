@@ -44,7 +44,7 @@ half to its own change (its design, decision 6).
   each `[filter_preset_N]` section. Older builds ignore the new keys and fall back to the
   saved include terms.
 
-Target release: **0.14.0** (structured logs and analysis), per the release plan in
+Target release: **0.15.0** (structured logs and analysis, continued; planned for 0.14.0, moved when 0.14.0 shipped early), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **high**. Effort: **M (1–3 weeks)**.
 
 ### Non-goals

@@ -91,3 +91,14 @@ With `--follow`, print mode SHALL print the existing content of every input and 
 - **WHEN** `fasttail --print --follow app.log` is running and the logger truncates `app.log` and starts writing it again
 - **THEN** standard error says that the file was truncated and the new lines are printed from the start of the file.
 
+### Requirement: Time Window Options
+Without `--print`, the executable SHALL accept `--since <TIME>` and `--until <TIME>`, which SHALL set the "from" and "to" sides of the time window of the streams opened from the command line, the standard-input stream included, exactly as if typed in the time range popup, relative times included (a relative value giving a live window). A value that cannot be read SHALL print usage to stderr and exit with code 2 before any window opens.
+
+#### Scenario: The last three hours
+- **WHEN** the user runs `fasttail --since -3h app.log`
+- **THEN** `app.log` opens with the live window from `-3h`, showing the lines of the last three hours.
+
+#### Scenario: Unreadable time
+- **WHEN** the user runs `fasttail --since yesterday app.log`
+- **THEN** usage is printed to stderr and the process exits with code 2.
+

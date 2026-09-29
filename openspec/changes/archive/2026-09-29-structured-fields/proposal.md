@@ -46,8 +46,9 @@ have them) and the first gap of the post-0.12.0 competitor scan.
 
 Target release: **0.14.0** (structured logs and analysis), per the release plan in
 `docs/competitor-analysis.md` section 8. Effort: **L**.
-Phase 3 (level and timestamp from fields, cell-level search and rule spans) may
-move to a follow-up change if it is not ready (see tasks).
+Shipped in 0.14.0: the parsers with detection and the column view. Field filter terms,
+level and timestamp from fields, and the column view's cell spans, copy as shown and
+wrapping moved to `structured-field-terms` (0.15.0), which holds their requirements.
 
 ### Non-goals
 
@@ -72,9 +73,8 @@ move to a follow-up change if it is not ready (see tasks).
 
 ### Modified Capabilities
 
-- `filters-and-highlighting`: Combined Filter Terms no longer says "no operator syntax"
-  unconditionally: on a stream with an active field parser, a term in the field-term
-  form is a field term.
+None in this change: the change to Combined Filter Terms (`filters-and-highlighting`)
+moved to `structured-field-terms` with the field terms.
 
 ## Impact
 

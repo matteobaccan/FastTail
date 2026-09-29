@@ -34,7 +34,7 @@ with the matching line in it, closes the gap with a checkbox.
 - `fasttail.ini`: `notify` per `[highlight_N]` section (default `false`), and
   `notifications_enabled`, `notify_when` in `[general]`.
 
-Target release: **0.15.0** (sources and integrations), per the release plan in
+Target release: **0.16.0** (moved from 0.15.0 when 0.14.0 shipped early; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Medium**. Effort: **S**.
 
 ### Non-goals
