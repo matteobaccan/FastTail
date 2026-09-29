@@ -190,7 +190,8 @@ mod win {
     const MF_CHECKED: u32 = 0x8;
     const TPM_RETURNCMD: u32 = 0x100;
     const TPM_RIGHTBUTTON: u32 = 0x2;
-    const HWND_MESSAGE: isize = -3;
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 
     const CMD_TOGGLE: usize = 1;
     const CMD_FOLLOW: usize = 2;
@@ -300,6 +301,7 @@ mod win {
             xor_bits: *const u8,
         ) -> Handle_;
         fn DestroyIcon(icon: Handle_) -> i32;
+        fn RegisterWindowMessageW(name: *const u16) -> u32;
     }
 
     #[link(name = "kernel32")]
@@ -322,6 +324,12 @@ mod win {
         pending: Option<(Vec<u8>, String)>,
         hidden: bool,
         icon: usize,
+        /// The tooltip shown, for adding the icon again after Explorer restarts.
+        tooltip: String,
+        /// A double click just arrived: the button-up that follows is not a toggle.
+        skip_up: bool,
+        /// `TaskbarCreated`, broadcast when Explorer (re)starts.
+        taskbar_created: u32,
     }
 
     static SHARED: OnceLock<Mutex<Option<Shared>>> = OnceLock::new();
@@ -467,24 +475,52 @@ mod win {
         match msg {
             WM_TRAY => {
                 match lparam as u32 {
-                    WM_LBUTTONUP => send(TrayEvent::Toggle),
-                    WM_LBUTTONDBLCLK => send(TrayEvent::Show),
+                    WM_LBUTTONUP => {
+                        // A double click sends up, double-click, up: the last up is part
+                        // of the double click, not a toggle.
+                        let skip = shared()
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .as_mut()
+                            .is_some_and(|s| std::mem::take(&mut s.skip_up));
+                        if !skip {
+                            send(TrayEvent::Toggle);
+                        }
+                    }
+                    WM_LBUTTONDBLCLK => {
+                        if let Some(s) = shared().lock().unwrap_or_else(|e| e.into_inner()).as_mut()
+                        {
+                            s.skip_up = true;
+                        }
+                        send(TrayEvent::Show);
+                    }
                     WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(hwnd),
                     _ => {}
                 }
                 0
             }
             WM_REFRESH => {
-                let mut guard = shared().lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(s) = guard.as_mut() {
-                    if let Some((rgba, tooltip)) = s.pending.take() {
-                        let icon = make_icon(&rgba);
-                        let mut data = notify_data(hwnd, icon, &tooltip);
-                        Shell_NotifyIconW(NIM_MODIFY, &mut data);
-                        if s.icon != 0 {
-                            DestroyIcon(s.icon as Handle_);
-                        }
-                        s.icon = icon as usize;
+                // Explorer is called without holding the lock: a hung shell must not
+                // block the app thread, which takes the lock every frame.
+                let pending = shared()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_mut()
+                    .and_then(|s| s.pending.take());
+                if let Some((rgba, tooltip)) = pending {
+                    let icon = make_icon(&rgba);
+                    let mut data = notify_data(hwnd, icon, &tooltip);
+                    Shell_NotifyIconW(NIM_MODIFY, &mut data);
+                    let old = shared()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_mut()
+                        .map(|s| {
+                            s.tooltip = tooltip;
+                            std::mem::replace(&mut s.icon, icon as usize)
+                        });
+                    if let Some(old) = old.filter(|&old| old != 0) {
+                        DestroyIcon(old as Handle_);
                     }
                 }
                 0
@@ -507,7 +543,21 @@ mod win {
                 PostQuitMessage(0);
                 0
             }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            _ => {
+                // Explorer restarted: the icon is added again.
+                let again = shared()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .filter(|s| s.taskbar_created != 0 && msg == s.taskbar_created)
+                    .map(|s| (s.icon, s.tooltip.clone()));
+                if let Some((icon, tooltip)) = again {
+                    let mut data = notify_data(hwnd, icon as Handle_, &tooltip);
+                    Shell_NotifyIconW(NIM_ADD, &mut data);
+                    return 0;
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
         }
     }
 
@@ -579,6 +629,9 @@ mod win {
             pending: None,
             hidden: false,
             icon: 0,
+            tooltip: tooltip.to_string(),
+            skip_up: false,
+            taskbar_created: 0,
         });
         let (ready_tx, ready_rx) = channel::<usize>();
         let tooltip = tooltip.to_string();
@@ -603,16 +656,18 @@ mod win {
                 };
                 // Already registered by an earlier tray of this process: fine.
                 RegisterClassExW(&wc);
+                // A hidden top-level tool window (never shown): unlike a message-only
+                // window it receives `TaskbarCreated` and can own the popup menu.
                 let hwnd = CreateWindowExW(
-                    0,
+                    WS_EX_TOOLWINDOW,
                     class.as_ptr(),
                     class.as_ptr(),
+                    WS_POPUP,
                     0,
                     0,
                     0,
                     0,
-                    0,
-                    HWND_MESSAGE as Hwnd,
+                    std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     instance,
                     std::ptr::null_mut(),
@@ -621,9 +676,15 @@ mod win {
                     let _ = ready_tx.send(0);
                     return;
                 }
+                let created = wide("TaskbarCreated");
+                let taskbar_created = RegisterWindowMessageW(created.as_ptr());
+                if let Some(s) = shared().lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    s.taskbar_created = taskbar_created;
+                }
                 let icon = make_icon(&base);
                 let mut data = notify_data(hwnd, icon, &tooltip);
                 if Shell_NotifyIconW(NIM_ADD, &mut data) == 0 {
+                    DestroyIcon(icon);
                     DestroyWindow(hwnd);
                     let _ = ready_tx.send(0);
                     return;

@@ -1248,6 +1248,10 @@ impl FastTailApp {
         };
         for event in events {
             use crate::tray::TrayEvent as E;
+            // While the workspace is locked the tray only shows, hides or quits.
+            if self.locked && !matches!(event, E::Toggle | E::Show | E::Quit) {
+                continue;
+            }
             match event {
                 E::Toggle if self.hidden_in_tray => self.show_from_tray(ctx),
                 E::Toggle => self.hide_to_tray(ctx),
@@ -1291,6 +1295,8 @@ impl FastTailApp {
         // The badge: alerts sounded while the window is hidden or not focused.
         let total: u64 = self.engines.iter().map(|e| e.sound_alerts).sum();
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        // A stream closed meanwhile takes its alerts with it.
+        self.alert_baseline = self.alert_baseline.min(total);
         if focused && !self.hidden_in_tray {
             self.alert_baseline = total;
         }
