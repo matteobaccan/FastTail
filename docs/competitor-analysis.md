@@ -187,7 +187,8 @@ L > 3 weeks).
 - **Terminal support**: mouse, the Kitty keyboard protocol, colours that degrade from
   truecolor to 16, rebindable keys.
 
-These points are to be folded into the `tui-interface` proposal (PR #132) before it is merged.
+These points are folded into the `tui-interface` proposal (PR #132, design decision 7 and
+the Terminal Key Conventions requirement).
 
 ## 8. Release plan: closing the gap
 
