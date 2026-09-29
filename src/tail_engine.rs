@@ -4212,6 +4212,7 @@ impl TailEngine {
         };
         let strip = self.strips_ansi();
         let mut chunk = vec![0u8; SCAN_CHUNK];
+        let mut strip_buf = String::new();
         let mut i = start;
         while i < end {
             let base = self.line_offsets[i];
@@ -4250,12 +4251,14 @@ impl TailEngine {
                     FileEncoding::Utf8 if !truncated => {
                         let content = &bytes[..trim_newline_1(bytes)];
                         match std::str::from_utf8(content) {
-                            Ok(text) if strip => f(idx, &crate::ansi::strip(text)),
+                            Ok(text) if strip => {
+                                f(idx, crate::ansi::strip_to_buf(text, &mut strip_buf))
+                            }
                             Ok(text) => f(idx, text),
                             Err(_) => {
                                 let text = String::from_utf8_lossy(content);
                                 if strip {
-                                    f(idx, &crate::ansi::strip(&text))
+                                    f(idx, crate::ansi::strip_to_buf(&text, &mut strip_buf))
                                 } else {
                                     f(idx, &text)
                                 }
