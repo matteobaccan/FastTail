@@ -57,7 +57,7 @@ impl CompareSide {
     pub fn label(&self) -> String {
         match (self.lines.first(), self.lines.last()) {
             (Some(&a), Some(&b)) if a == b => format!("{}:{}", self.name, a + 1),
-            (Some(&a), Some(&b)) if b - a + 1 == self.lines.len() => {
+            (Some(&a), Some(&b)) if b >= a && b - a + 1 == self.lines.len() => {
                 format!("{}:{}-{}", self.name, a + 1, b + 1)
             }
             _ => format!("{} ({} lines)", self.name, self.lines.len()),
@@ -70,7 +70,9 @@ pub struct CompareView {
     pub right: CompareSide,
     pub opts: CompareOptions,
     /// The diff and the options and texts it was computed on.
-    result: Option<(CompareOptions, RegionDiff)>,
+    result: Option<(CompareOptions, std::sync::Arc<RegionDiff>)>,
+    /// Both sides are one line holding JSON (computed once).
+    json_ok: bool,
     left_texts: Vec<String>,
     right_texts: Vec<String>,
     /// The change the arrows / `F7` last moved to, and a row to scroll to.
@@ -94,19 +96,26 @@ impl CompareView {
             scroll_to: None,
             jump: None,
             notice: None,
+            json_ok: false,
         }
+        .with_json_check()
+    }
+
+    fn with_json_check(mut self) -> Self {
+        self.json_ok = self.left.texts.len() == 1
+            && self.right.texts.len() == 1
+            && canonical_json(&self.left.texts[0]).is_some()
+            && canonical_json(&self.right.texts[0]).is_some();
+        self
     }
 
     /// Both sides are one line holding JSON: the JSON option can apply.
     pub fn json_possible(&self) -> bool {
-        self.left.texts.len() == 1
-            && self.right.texts.len() == 1
-            && canonical_json(&self.left.texts[0]).is_some()
-            && canonical_json(&self.right.texts[0]).is_some()
+        self.json_ok
     }
 
     /// The diff for the current options, computed again when they changed.
-    pub fn diff(&mut self) -> &RegionDiff {
+    pub fn diff(&mut self) -> std::sync::Arc<RegionDiff> {
         if self
             .result
             .as_ref()
@@ -125,9 +134,9 @@ impl CompareView {
             self.left_texts = left;
             self.right_texts = right;
             self.current = None;
-            self.result = Some((self.opts, diff));
+            self.result = Some((self.opts, std::sync::Arc::new(diff)));
         }
-        &self.result.as_ref().expect("computed").1
+        self.result.as_ref().expect("computed").1.clone()
     }
 
     /// Moves to the next (or previous) block of changes, wrapping around.
@@ -282,7 +291,7 @@ pub fn render(
         view.step_change(true);
     }
 
-    let diff = view.diff().clone();
+    let diff = view.diff();
     let summary = if diff.changes.is_empty() {
         t(lang, "compare_identical").to_string()
     } else {
@@ -350,6 +359,7 @@ pub fn render(
     let mut draw_row = |ui: &mut Ui, idx: usize| {
         let row = &diff.rows[idx];
         let bg = match row.kind {
+            _ if !wrap && current_row == Some(idx) => theme.accent_color().gamma_multiply(0.25),
             RowKind::Equal => Color32::TRANSPARENT,
             RowKind::Changed => changed_bg,
             RowKind::Removed => removed_bg,
@@ -357,7 +367,7 @@ pub fn render(
         };
         let response = egui::Frame::NONE
             .fill(bg)
-            .stroke(if current_row == Some(idx) {
+            .stroke(if wrap && current_row == Some(idx) {
                 egui::Stroke::new(1.0, theme.accent_color())
             } else {
                 egui::Stroke::NONE
@@ -373,6 +383,7 @@ pub fn render(
                         ui.allocate_ui(egui::vec2(half, 0.0), |ui| {
                             ui.set_width(half);
                             if !wrap {
+                                ui.set_min_height(row_height);
                                 ui.set_max_height(row_height);
                             }
                             let Some(line) = line else {

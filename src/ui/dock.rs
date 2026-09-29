@@ -3867,7 +3867,8 @@ impl RowMenuPicks {
             engine.filter_tab_request = true;
         }
         if let Some((line, request)) = self.compare {
-            // The row the menu was opened on joins the selection (a pair keeps both).
+            // A menu opened outside the selection selects that row, as the other row
+            // actions do; inside it the selection stays (a pair always keeps both).
             if request != crate::compare::CompareRequest::SelectedPair && !engine.is_selected(line)
             {
                 engine.select_row(line);

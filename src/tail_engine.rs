@@ -7645,6 +7645,22 @@ impl TailEngine {
         }
     }
 
+    /// The first `max` selected lines and whether there were more, without listing the
+    /// rest of a CTRL + A selection.
+    pub fn selected_lines_capped(&self, max: usize) -> (Vec<usize>, bool) {
+        let mut lines: Vec<usize> = if self.selection_all {
+            (0..self.visible_lines())
+                .filter_map(|p| self.line_at(p))
+                .take(max + 1)
+                .collect()
+        } else {
+            self.selection.iter().copied().take(max + 1).collect()
+        };
+        let capped = lines.len() > max;
+        lines.truncate(max);
+        (lines, capped)
+    }
+
     /// Selected line indices in file order (with CTRL + A, every visible line, those a
     /// collapsed group hides included).
     pub fn selected_lines(&self) -> Vec<usize> {

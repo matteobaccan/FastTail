@@ -191,12 +191,36 @@ fn push_range(ranges: &mut Vec<Range<usize>>, range: Range<usize>) {
 
 /// Compares two lines token by token.
 pub fn diff_words(a: &str, b: &str, opts: &CompareOptions) -> WordDiff {
+    diff_words_until(a, b, opts, None)
+}
+
+/// `diff_words` that gives up at `deadline`: past it the whole of both lines is marked.
+fn diff_words_until(
+    a: &str,
+    b: &str,
+    opts: &CompareOptions,
+    deadline: Option<Instant>,
+) -> WordDiff {
+    if deadline.is_some_and(|d| Instant::now() >= d) {
+        return WordDiff {
+            left: (!a.is_empty()).then_some(0..a.len()).into_iter().collect(),
+            right: (!b.is_empty()).then_some(0..b.len()).into_iter().collect(),
+        };
+    }
     let ta = tokens(a, opts);
     let tb = tokens(b, opts);
     let ka: Vec<&str> = ta.iter().map(|(_, k)| k.as_str()).collect();
     let kb: Vec<&str> = tb.iter().map(|(_, k)| k.as_str()).collect();
     let mut diff = WordDiff::default();
-    for op in similar::capture_diff_slices(Algorithm::Myers, &ka, &kb) {
+    let ops = similar::capture_diff_deadline(
+        Algorithm::Myers,
+        &ka,
+        0..ka.len(),
+        &kb,
+        0..kb.len(),
+        deadline,
+    );
+    for op in ops {
         match op {
             DiffOp::Equal { .. } => {}
             DiffOp::Delete {
@@ -265,13 +289,14 @@ pub fn diff_regions(a: &[String], b: &[String], opts: &CompareOptions) -> Region
     let ka: Vec<String> = a.iter().map(|l| line_key(l, opts)).collect();
     let kb: Vec<String> = b.iter().map(|l| line_key(l, opts)).collect();
     let started = Instant::now();
+    let deadline = started + REGION_DEADLINE;
     let ops = similar::capture_diff_deadline(
         Algorithm::Myers,
         &ka,
         0..ka.len(),
         &kb,
         0..kb.len(),
-        Some(started + REGION_DEADLINE),
+        Some(deadline),
     );
     let mut diff = RegionDiff {
         coarse: started.elapsed() >= REGION_DEADLINE,
@@ -336,7 +361,7 @@ pub fn diff_regions(a: &[String], b: &[String], opts: &CompareOptions) -> Region
                         kind: RowKind::Changed,
                         left: Some(l),
                         right: Some(r),
-                        words: Some(diff_words(&a[l], &b[r], opts)),
+                        words: Some(diff_words_until(&a[l], &b[r], opts, Some(deadline))),
                     });
                 }
                 for i in paired..old_len {
@@ -364,11 +389,13 @@ pub fn diff_regions(a: &[String], b: &[String], opts: &CompareOptions) -> Region
 /// A JSON object or array in `line` (from its first `{` or `[` to the end), pretty-printed
 /// with sorted keys, one line per entry; `None` when there is none.
 pub fn canonical_json(line: &str) -> Option<Vec<String>> {
-    let start = line.find(['{', '['])?;
-    let value: serde_json::Value = serde_json::from_str(line[start..].trim_end()).ok()?;
-    if !(value.is_object() || value.is_array()) {
-        return None;
-    }
+    // `[2026-09-18 12:00:00] INFO {...}`: the first bracket may open the timestamp, so
+    // every `{` / `[` is tried until one starts a JSON value that runs to the end.
+    let value = line.match_indices(['{', '[']).find_map(|(start, _)| {
+        serde_json::from_str::<serde_json::Value>(line[start..].trim_end())
+            .ok()
+            .filter(|v| v.is_object() || v.is_array())
+    })?;
     // `serde_json` keeps object keys sorted (no `preserve_order`).
     let pretty = serde_json::to_string_pretty(&value).ok()?;
     Some(pretty.lines().map(str::to_string).collect())
@@ -448,6 +475,8 @@ mod tests {
         assert_eq!(changed.len(), 1, "{:?}", diff.rows);
         assert_eq!(ja[changed[0].left.unwrap()].trim(), "\"x\": 1,");
         assert!(canonical_json("no json here").is_none());
+        let bracketed = r#"[2026-09-18 12:00:00] INFO {"a":1}"#;
+        assert_eq!(canonical_json(bracketed).unwrap().len(), 3);
     }
 
     #[test]

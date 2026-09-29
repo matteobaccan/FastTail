@@ -1101,7 +1101,12 @@ impl FastTailApp {
             };
             changed = true;
             let engine = &self.engines[i];
-            let lines = engine.selected_lines();
+            let (lines, capped) = engine.selected_lines_capped(crate::compare::MAX_REGION_LINES);
+            let side = |engine: &TailEngine, lines: Vec<usize>| {
+                let mut side = CompareSide::of(engine, lines);
+                side.capped |= capped;
+                side
+            };
             match request {
                 C::SelectedPair if lines.len() == 2 => {
                     let left = CompareSide::of(engine, vec![lines[0]]);
@@ -1111,14 +1116,14 @@ impl FastTailApp {
                 }
                 C::SelectedPair => {}
                 C::Mark => {
-                    let side = CompareSide::of(engine, lines);
+                    let side = side(engine, lines);
                     self.engines[i].view_notice =
                         Some(t(lang, "compare_marked").replace("{mark}", &side.label()));
                     self.compare_mark = Some(side);
                 }
                 C::WithMark => {
                     if let Some(mark) = self.compare_mark.clone() {
-                        let right = CompareSide::of(engine, lines);
+                        let right = side(engine, lines);
                         self.compare = Some(CompareView::new(mark, right));
                         crate::ui::compare_tab::open_tab(&mut self.dock_state);
                     }
