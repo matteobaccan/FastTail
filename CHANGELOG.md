@@ -135,6 +135,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--case-sensitive` without `--print` are usage errors. `--help`, `--version` and usage
   errors now go to a redirected standard output or error as they are.
 
+### Fixed
+
+- **Two windows no longer overwrite each other's settings.** With two FastTail windows on
+  the same `fasttail.ini`, the idle one rewrote the file every couple of seconds with the
+  state it had loaded, undoing what the other had just saved (a new rule, a theme, a
+  preset). Each window now writes the file only when its own settings or workspace
+  change.
+
 ## [0.12.0] - 2026-09-28
 
 ### Added

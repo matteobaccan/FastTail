@@ -1734,6 +1734,72 @@ fn test_config_save_only_when_different() {
     assert_ne!(std::fs::read(&cfg_path).unwrap(), first);
 }
 
+/// Serialized `fasttail.ini` bytes of `cfg`.
+fn ini_bytes(cfg: &FastTailConfig) -> Vec<u8> {
+    let mut buf = Vec::new();
+    cfg.to_ini().write_to(&mut buf).unwrap();
+    buf
+}
+
+#[test]
+fn test_config_two_instances_write_only_their_own_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fasttail.ini");
+
+    // Instance A starts first and writes its state.
+    let mut a = FastTailConfig::default();
+    a.font_size = 14.0;
+    let mut a_synced = None;
+    assert!(FastTailConfig::write_own_change(&path, &ini_bytes(&a), &mut a_synced).unwrap());
+
+    // Instance B loads that file, then changes a setting and saves.
+    let mut b_synced = Some(std::fs::read(&path).unwrap());
+    let mut b = a.clone();
+    b.font_size = 20.0;
+    assert!(FastTailConfig::write_own_change(&path, &ini_bytes(&b), &mut b_synced).unwrap());
+    let written_by_b = std::fs::read(&path).unwrap();
+
+    // A's periodic save with nothing changed must not bring its old state back.
+    for _ in 0..3 {
+        assert!(
+            !FastTailConfig::write_own_change(&path, &ini_bytes(&a), &mut a_synced).unwrap(),
+            "an unchanged instance must not overwrite another instance's save"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), written_by_b);
+
+    // B saving again without changes leaves the file alone too.
+    assert!(!FastTailConfig::write_own_change(&path, &ini_bytes(&b), &mut b_synced).unwrap());
+
+    // A change of A's own is written (the last instance to change something wins).
+    a.zoom_factor = 1.5;
+    assert!(FastTailConfig::write_own_change(&path, &ini_bytes(&a), &mut a_synced).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), ini_bytes(&a));
+}
+
+#[test]
+fn test_config_save_to_keeps_an_external_edit_until_an_own_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fasttail.ini");
+
+    let mut config = FastTailConfig::default();
+    config.font_size = 14.0;
+    assert!(config.save_to(&path).unwrap());
+
+    // Another instance (or the user) rewrites the file.
+    let mut other = config.clone();
+    other.font_size = 22.0;
+    let external = ini_bytes(&other);
+    std::fs::write(&path, &external).unwrap();
+
+    assert!(!config.save_to(&path).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), external);
+
+    config.font_size = 16.0;
+    assert!(config.save_to(&path).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), ini_bytes(&config));
+}
+
 #[test]
 fn test_perf_config_bounds_and_defaults() {
     let cfg = FastTailConfig::default();

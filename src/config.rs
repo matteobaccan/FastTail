@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 const CONFIG_FILE_NAME: &str = "fasttail.ini";
 const OLD_CONFIG_FILE_NAME: &str = "fasttail.toml";
@@ -399,6 +400,17 @@ impl Default for FastTailConfig {
             help_size: None,
         }
     }
+}
+
+/// The bytes this process last read from or wrote to each configuration file, so that a
+/// save writes only this instance's own changes (see `FastTailConfig::write_own_change`).
+static SYNCED: Mutex<BTreeMap<PathBuf, Vec<u8>>> = Mutex::new(BTreeMap::new());
+
+fn remember_synced(path: &Path, bytes: Vec<u8>) {
+    SYNCED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_path_buf(), bytes);
 }
 
 /// Fails with `InvalidInput` when `path` exists and is not a regular file (a directory,
@@ -1313,6 +1325,9 @@ impl FastTailConfig {
         let path = Self::config_path();
         let mut cfg = if path.exists() {
             if let Ok(conf) = Ini::load_from_file(&path) {
+                if let Ok(bytes) = fs::read(&path) {
+                    remember_synced(&path, bytes);
+                }
                 Self::from_ini(&conf)
             } else {
                 Self::default()
@@ -1384,13 +1399,39 @@ impl FastTailConfig {
         Ok(true)
     }
 
-    /// Serializes the config to `path`. Returns `true` when the file changed on disk.
+    /// Writes `buf` to `path` only when it differs from `synced`, the bytes this instance
+    /// last read from or wrote to that file, and then remembers `buf` there. So an
+    /// instance whose own state has not changed never overwrites the file, even when
+    /// another instance has written something else in the meantime. Returns whether the
+    /// file was actually written.
+    pub fn write_own_change(
+        path: &Path,
+        buf: &[u8],
+        synced: &mut Option<Vec<u8>>,
+    ) -> Result<bool, std::io::Error> {
+        if synced.as_deref() == Some(buf) {
+            return Ok(false);
+        }
+        let written = Self::write_if_changed(path, buf)?;
+        *synced = Some(buf.to_vec());
+        Ok(written)
+    }
+
+    /// Serializes the config to `path` when this instance's state changed since it last
+    /// read or wrote that file (see `write_own_change`). Returns `true` when the file
+    /// changed on disk.
     pub fn save_to(&self, path: &Path) -> Result<bool, std::io::Error> {
         let mut buf = Vec::new();
         self.to_ini()
             .write_to(&mut buf)
             .map_err(std::io::Error::other)?;
-        Self::write_if_changed(path, &buf)
+        let mut all = SYNCED.lock().unwrap_or_else(|e| e.into_inner());
+        let mut synced = all.remove(path);
+        let result = Self::write_own_change(path, &buf, &mut synced);
+        if let Some(bytes) = synced {
+            all.insert(path.to_path_buf(), bytes);
+        }
+        result
     }
 
     pub fn save(&self) -> Result<(), std::io::Error> {
