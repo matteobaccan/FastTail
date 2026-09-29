@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 
 /// File name suffix of a session file (`incident.fasttail-session.ini`).
 pub const SESSION_SUFFIX: &str = ".fasttail-session.ini";
+/// Prefix of the keys holding a column view width (`fields_width.status=6`).
+const FIELDS_WIDTH_PREFIX: &str = "fields_width.";
 /// Maximum number of remembered session files.
 pub const MAX_RECENT_SESSIONS: usize = 10;
 
@@ -79,6 +81,12 @@ pub struct StreamEntry {
     /// auto, and the pattern of `regex` (`fields_regex=`). Older builds ignore both.
     pub fields_parser: Option<String>,
     pub fields_regex: Option<String>,
+    /// The column view (`fields_view=true`, written only when on), the columns chosen in
+    /// order (`fields_columns=ts,level,msg`, none: the defaults; keys holding a comma are
+    /// not saved) and their widths in character cells (`fields_width.<key>=N`).
+    pub fields_view: bool,
+    pub fields_columns: Vec<String>,
+    pub fields_widths: BTreeMap<String, u16>,
 }
 
 impl StreamEntry {
@@ -197,6 +205,21 @@ impl Session {
             }
             if let Some(regex) = &s.fields_regex {
                 sec.set("fields_regex", ini_value(regex));
+            }
+            if s.fields_view {
+                sec.set("fields_view", "true");
+            }
+            let columns: Vec<&str> = s
+                .fields_columns
+                .iter()
+                .map(String::as_str)
+                .filter(|c| !c.is_empty() && !c.contains(','))
+                .collect();
+            if !columns.is_empty() {
+                sec.set("fields_columns", ini_value(&columns.join(",")));
+            }
+            for (key, cells) in &s.fields_widths {
+                sec.set(format!("{FIELDS_WIDTH_PREFIX}{key}"), cells.to_string());
             }
             sec.set(
                 "bookmarks",
@@ -334,6 +357,33 @@ impl Session {
                     .get("fields_regex")
                     .filter(|r| !r.is_empty())
                     .map(str::to_string),
+                fields_view: sec
+                    .get("fields_view")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(false),
+                fields_columns: sec
+                    .get("fields_columns")
+                    .map(|c| {
+                        c.split(',')
+                            .map(str::trim)
+                            .filter(|c| !c.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                fields_widths: sec
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        let key = k.strip_prefix(FIELDS_WIDTH_PREFIX)?;
+                        let cells = v.trim().parse::<u16>().ok()?;
+                        (!key.is_empty()).then(|| {
+                            (
+                                key.to_string(),
+                                cells.clamp(crate::fields::MIN_WIDTH, crate::fields::MAX_WIDTH),
+                            )
+                        })
+                    })
+                    .collect(),
             });
         }
         if out.relocated {

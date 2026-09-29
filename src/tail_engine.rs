@@ -9,7 +9,7 @@ use crate::collapse::{badge_text, CollapseMode, CollapseState, CollapsedRow, Det
 use crate::context_lines::{
     ContextRanges, VisibleView, BACKGROUND_REBUILD_MATCHES, MAX_CONTEXT_LINES,
 };
-use crate::fields::{FieldParser, ParserChoice};
+use crate::fields::{FieldCatalogue, FieldParser, FieldSpans, ParserChoice, RowCache, RowFields};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level, LogLevel};
 use crate::scan_job::{
@@ -1605,8 +1605,19 @@ pub struct TailEngine {
     field_error: Option<String>,
     /// Bumped whenever the parser in use changes; keys the caches of parsed fields.
     pub parser_generation: u64,
-    /// The field parser choice changed and should be persisted.
+    /// The field parser choice or the column view changed and should be persisted.
     pub fields_dirty: bool,
+    /// Column view of the fields (a layout of the Text view), the columns chosen in
+    /// order (empty: the catalogue's defaults) and their widths in character cells.
+    field_view: bool,
+    field_columns: Vec<String>,
+    field_widths: BTreeMap<String, u16>,
+    /// Keys seen in the lines (sampled when the parser changes, then from the rows
+    /// drawn), whether the sample is still to take, and the parsed rows drawn last.
+    field_catalogue: FieldCatalogue,
+    field_catalogue_due: bool,
+    field_rows: RowCache,
+    field_spans: FieldSpans,
     /// Byte-level hits `(offset, len)` used by the HEX view (text and hex-pattern queries).
     pub search_byte_matches: Vec<(usize, usize)>,
     search_byte_max_len: usize,
@@ -2255,6 +2266,13 @@ impl TailEngine {
             field_error: None,
             parser_generation: 0,
             fields_dirty: false,
+            field_view: false,
+            field_columns: Vec::new(),
+            field_widths: BTreeMap::new(),
+            field_catalogue: FieldCatalogue::default(),
+            field_catalogue_due: false,
+            field_rows: RowCache::default(),
+            field_spans: FieldSpans::new(),
             scratch_request: None,
             derived: None,
             filter_tab_request: false,
@@ -3345,30 +3363,23 @@ impl TailEngine {
         if !same {
             self.field_parser = parser;
             self.parser_generation = self.parser_generation.wrapping_add(1);
+            // Another parser gives other keys: sample them again.
+            self.field_catalogue.clear();
+            self.field_rows.clear();
+            self.field_catalogue_due = self.field_parser.is_some();
+            self.sample_field_catalogue();
         }
     }
 
-    /// Auto detection of the field parser over the first lines (see `fields::detect`):
-    /// once when the stream has lines, and once more when a stream that had fewer than
-    /// `fields::DETECT_LINES` reaches them. A no-op when the parser is forced.
-    pub fn detect_fields(&mut self) {
+    /// The first `fields::DETECT_LINES` non-continuation lines (at most
+    /// `fields::DETECT_BYTES`), read for detection and for the field catalogue.
+    /// Continuation lines are skipped up to a bound: a stream of stack traces must not be
+    /// read to its end.
+    fn field_sample(&self) -> Vec<String> {
         use crate::fields::{DETECT_BYTES, DETECT_LINES};
-        if self.field_choice != ParserChoice::Auto || self.index_pending {
-            return;
-        }
-        let total = self.total_lines();
-        let due = match self.field_detected_at {
-            None => total > 0,
-            Some(n) => n < DETECT_LINES && total >= DETECT_LINES,
-        };
-        if !due {
-            return;
-        }
-        // Continuation lines are skipped, up to a bound: a stream of stack traces must
-        // not be read to its end.
         let mut sample: Vec<String> = Vec::new();
         let mut bytes = 0;
-        for idx in 0..total.min(DETECT_LINES * 4) {
+        for idx in 0..self.total_lines().min(DETECT_LINES * 4) {
             if sample.len() >= DETECT_LINES || bytes >= DETECT_BYTES {
                 break;
             }
@@ -3381,6 +3392,154 @@ impl TailEngine {
             bytes += row.line.len();
             sample.push(row.line);
         }
+        sample
+    }
+
+    /// Fills the field catalogue from the sample, once the index allows reading it.
+    fn sample_field_catalogue(&mut self) {
+        if !self.field_catalogue_due || self.index_pending {
+            return;
+        }
+        let Some(parser) = self.field_parser.clone() else {
+            self.field_catalogue_due = false;
+            return;
+        };
+        if self.total_lines() == 0 {
+            return;
+        }
+        self.field_catalogue_due = false;
+        for line in self.field_sample() {
+            crate::fields::scan(&parser, &line, &mut self.field_spans);
+            for field in self.field_spans.iter(&line) {
+                let chars = field.value().chars().count();
+                self.field_catalogue.note(field.key, chars, true);
+            }
+        }
+    }
+
+    /// Whether the column view is on (it shows only while a parser is active).
+    pub fn fields_view(&self) -> bool {
+        self.field_view
+    }
+
+    pub fn set_fields_view(&mut self, on: bool) {
+        if self.field_view != on {
+            self.field_view = on;
+            self.fields_dirty = true;
+        }
+    }
+
+    /// Whether the rows are drawn as columns now: the view is on and a parser active.
+    pub fn columns_shown(&self) -> bool {
+        self.field_view && self.field_parser.is_some()
+    }
+
+    /// The columns chosen by the user, in order; empty when they are the defaults.
+    pub fn chosen_field_columns(&self) -> &[String] {
+        &self.field_columns
+    }
+
+    /// The columns shown, in order: the chosen ones, else the catalogue's defaults.
+    pub fn field_columns(&self) -> Vec<String> {
+        if self.field_columns.is_empty() {
+            self.field_catalogue.default_columns()
+        } else {
+            self.field_columns.clone()
+        }
+    }
+
+    /// Chooses the columns shown, in order (an empty list is back to the defaults).
+    pub fn set_field_columns(&mut self, columns: Vec<String>) {
+        let mut seen = HashSet::new();
+        let columns: Vec<String> = columns
+            .into_iter()
+            .filter(|c| !c.is_empty() && seen.insert(c.clone()))
+            .collect();
+        if self.field_columns != columns {
+            self.field_columns = columns;
+            self.fields_dirty = true;
+        }
+    }
+
+    /// Width of the column `key` in character cells: the user's, else the suggested one.
+    pub fn field_width(&self, key: &str) -> u16 {
+        self.field_widths
+            .get(key)
+            .copied()
+            .unwrap_or_else(|| self.field_catalogue.suggested_width(key))
+    }
+
+    /// The widths the user set, by key.
+    pub fn field_widths(&self) -> &BTreeMap<String, u16> {
+        &self.field_widths
+    }
+
+    pub fn set_field_width(&mut self, key: &str, cells: u16) {
+        let cells = cells.clamp(crate::fields::MIN_WIDTH, crate::fields::MAX_WIDTH);
+        if self.field_widths.get(key) != Some(&cells) {
+            self.field_widths.insert(key.to_string(), cells);
+            self.fields_dirty = true;
+        }
+    }
+
+    /// Back to the default columns and widths.
+    pub fn reset_field_columns(&mut self) {
+        if !self.field_columns.is_empty() || !self.field_widths.is_empty() {
+            self.field_columns.clear();
+            self.field_widths.clear();
+            self.fields_dirty = true;
+        }
+    }
+
+    pub fn field_catalogue(&self) -> &FieldCatalogue {
+        &self.field_catalogue
+    }
+
+    /// Parsed fields of line `idx`, whose text is `text`, from the row cache or scanned
+    /// now (the keys found join the catalogue). `None` without a parser.
+    pub fn row_fields(&mut self, idx: usize, text: &str) -> Option<Arc<RowFields>> {
+        let parser = self.field_parser.clone()?;
+        let key = (
+            self.reload_generation,
+            self.buffer_generation,
+            self.parser_generation,
+        );
+        if let Some(row) = self.field_rows.get(key, idx) {
+            return Some(row);
+        }
+        let row = Arc::new(crate::fields::row_fields(
+            &parser,
+            text,
+            &mut self.field_spans,
+        ));
+        for (field, value) in &row.fields {
+            if !self.field_catalogue.contains(field) {
+                self.field_catalogue
+                    .note(field, value.chars().count(), false);
+            }
+        }
+        self.field_rows.put(idx, row.clone());
+        Some(row)
+    }
+
+    /// Auto detection of the field parser over the first lines (see `fields::detect`):
+    /// once when the stream has lines, and once more when a stream that had fewer than
+    /// `fields::DETECT_LINES` reaches them. A no-op when the parser is forced.
+    pub fn detect_fields(&mut self) {
+        use crate::fields::DETECT_LINES;
+        self.sample_field_catalogue();
+        if self.field_choice != ParserChoice::Auto || self.index_pending {
+            return;
+        }
+        let total = self.total_lines();
+        let due = match self.field_detected_at {
+            None => total > 0,
+            Some(n) => n < DETECT_LINES && total >= DETECT_LINES,
+        };
+        if !due {
+            return;
+        }
+        let sample = self.field_sample();
         self.field_detected_at = Some(total);
         let found = crate::fields::detect(sample.iter().map(String::as_str));
         let same_kind = matches!(

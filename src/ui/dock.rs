@@ -1679,6 +1679,22 @@ fn render_log_stream(
             render_ansi_mode_selector(ui, engine, lang);
             if engine.view_mode == crate::tail_engine::ViewMode::Text {
                 render_fields_selector(ui, engine, theme, lang);
+                // Only on a stream with fields: plain logs keep the bar they had.
+                let label = format!("▦ {}", t(lang, "fields_columns"));
+                if engine.field_parser().is_some()
+                    && toggle_button(
+                        ui,
+                        theme,
+                        &label,
+                        engine.columns_shown(),
+                        theme.accent_color(),
+                    )
+                    .on_hover_text(t(lang, "tip_fields_columns"))
+                    .clicked()
+                {
+                    engine.set_fields_view(!engine.fields_view());
+                    ui.ctx().request_repaint();
+                }
             }
             if engine.view_mode != crate::tail_engine::ViewMode::Markdown {
                 render_collapse_selector(ui, engine, lang);
@@ -3342,6 +3358,26 @@ fn render_rows(
     has_search: bool,
     external_tools: &[ExternalTool],
 ) -> RowInteractions {
+    if engine.columns_shown() {
+        // The column view keeps one row per line: the wrap setting waits for the text view.
+        let layout = ColumnLayout::of(ui, engine, font_size);
+        render_field_header(ui, engine, theme, lang, &layout, font_size, row_height);
+        return render_extended_rows(
+            ui,
+            engine,
+            theme,
+            lang,
+            font_size,
+            row_height,
+            show_line_numbers,
+            time_delta,
+            show_markers,
+            level_colors,
+            has_search,
+            external_tools,
+            Some(&layout),
+        );
+    }
     if engine.wrap_lines {
         render_wrapped_rows(
             ui,
@@ -3371,6 +3407,7 @@ fn render_rows(
             level_colors,
             has_search,
             external_tools,
+            None,
         )
     }
 }
@@ -3527,6 +3564,7 @@ fn render_extended_rows(
     level_colors: bool,
     has_search: bool,
     external_tools: &[ExternalTool],
+    columns: Option<&ColumnLayout>,
 ) -> RowInteractions {
     let mut toggle_json = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
@@ -3537,6 +3575,8 @@ fn render_extended_rows(
     let mut char_pick: Option<CharPick> = None;
     let mut clear_scroll_to_line = false;
     let mut max_row_natural_width = 0.0_f32;
+    // Where the first field column starts in a row, for the column header.
+    let mut cells_x: Option<f32> = None;
     let visible_lines = engine.visible_line_count();
     let font_id = egui::FontId::monospace(font_size);
     let char_w = ui.ctx().fonts_mut(|f| f.glyph_width(&font_id, '0'));
@@ -3567,7 +3607,9 @@ fn render_extended_rows(
 
             if let Some(row) = engine.get_row(actual_line_idx) {
                 let raw_line: &str = &row.line;
-                let is_json = TailEngine::is_json_line(raw_line);
+                let row_fields = columns.and_then(|_| engine.row_fields(actual_line_idx, raw_line));
+                // The column view has its own cells: no JSON expander there.
+                let is_json = columns.is_none() && TailEngine::is_json_line(raw_line);
                 let is_expanded = engine.expanded_json_lines.contains(&actual_line_idx);
                 // A collapsed row is marked for the lines it hides too.
                 let (matches_search, is_active_search, is_bookmarked) =
@@ -3678,6 +3720,38 @@ fn render_extended_rows(
                         if let Some(c) = collapsed {
                             badge_rect =
                                 Some(ui.label(collapse_badge_text(c, theme, font_size)).rect);
+                        }
+
+                        if let Some(layout) = columns {
+                            cells_x.get_or_insert(ui.cursor().left() - ui.max_rect().left());
+                            let (text, bg) = if is_active_search {
+                                (Color32::BLACK, Some(SEARCH_ACTIVE_BG))
+                            } else if matches_search {
+                                (Color32::BLACK, Some(SEARCH_MATCH_BG))
+                            } else if let Some(hl) = highlight {
+                                (hl.fg, (hl.bg != Color32::TRANSPARENT).then_some(hl.bg))
+                            } else if dim_row {
+                                (theme.text_dim(), None)
+                            } else {
+                                (theme.text_primary(), None)
+                            };
+                            let style = CellStyle {
+                                font_id: &font_id,
+                                row_height,
+                                text,
+                                bg,
+                                // Level colours only where nothing else colours the row.
+                                level_colors: level_colors && bg.is_none() && highlight.is_none(),
+                            };
+                            draw_field_cells(
+                                ui,
+                                layout,
+                                row_fields.as_deref(),
+                                raw_line,
+                                &style,
+                                theme,
+                            );
+                            return;
                         }
 
                         // JSON toggle button
@@ -3945,9 +4019,353 @@ fn render_extended_rows(
     if max_row_natural_width > engine.max_detected_width {
         engine.max_detected_width = max_row_natural_width;
     }
+    if let Some(x) = cells_x {
+        let id = field_header_id(engine).with("cells_x");
+        let before: Option<f32> = ui.data(|d| d.get_temp(id));
+        if before != Some(x) {
+            ui.data_mut(|d| d.insert_temp(id, x));
+            // The header drawn this frame used the old position.
+            ui.ctx().request_repaint();
+        }
+    }
+    if engine.current_scroll_x != scroll_output.state.offset.x && columns.is_some() {
+        ui.ctx().request_repaint();
+    }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
     (row_click, toggle_json, tool_run)
+}
+
+/// Keys whose value is a log level: the column view colours them by level.
+const LEVEL_KEYS: [&str; 6] = [
+    "level",
+    "lvl",
+    "severity",
+    "log.level",
+    "loglevel",
+    "levelname",
+];
+
+/// The columns of the column view for this frame: keys in order and widths in points
+/// (a character cell of gap included).
+struct ColumnLayout {
+    keys: Vec<String>,
+    widths: Vec<f32>,
+    char_w: f32,
+}
+
+impl ColumnLayout {
+    fn of(ui: &Ui, engine: &TailEngine, font_size: f32) -> Self {
+        let font_id = egui::FontId::monospace(font_size);
+        let char_w = ui.ctx().fonts_mut(|f| f.glyph_width(&font_id, '0'));
+        let keys = engine.field_columns();
+        let widths = keys
+            .iter()
+            .map(|k| (f32::from(engine.field_width(k)) + 1.0) * char_w)
+            .collect();
+        Self {
+            keys,
+            widths,
+            char_w,
+        }
+    }
+}
+
+/// Colours of a row's cells.
+struct CellStyle<'a> {
+    font_id: &'a egui::FontId,
+    row_height: f32,
+    text: Color32,
+    bg: Option<Color32>,
+    level_colors: bool,
+}
+
+fn field_header_id(engine: &TailEngine) -> egui::Id {
+    egui::Id::new("fields_header").with(&engine.path)
+}
+
+/// The cells of one row: each shown field clipped to its column, then the message.
+/// A line without the parser's shape (or a continuation line) runs across the columns,
+/// dimmed when it is not a continuation.
+fn draw_field_cells(
+    ui: &mut Ui,
+    layout: &ColumnLayout,
+    fields: Option<&crate::fields::RowFields>,
+    line: &str,
+    style: &CellStyle,
+    theme: &CyberTheme,
+) {
+    let label = |ui: &mut Ui, text: &str, color: Color32| {
+        let mut rich = RichText::new(text).font(style.font_id.clone()).color(color);
+        if let Some(bg) = style.bg {
+            rich = rich.background_color(bg);
+        }
+        ui.add(egui::Label::new(rich).wrap_mode(egui::TextWrapMode::Extend));
+    };
+    let Some(fields) = fields.filter(|f| f.shaped) else {
+        let color = if TailEngine::is_stacktrace_continuation(line) || style.bg.is_some() {
+            style.text
+        } else {
+            style.text.gamma_multiply(0.6)
+        };
+        label(ui, line, color);
+        return;
+    };
+    for (key, width) in layout.keys.iter().zip(&layout.widths) {
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(*width, style.row_height), egui::Sense::hover());
+        if let Some(bg) = style.bg {
+            ui.painter().rect_filled(rect, 0.0, bg);
+        }
+        let Some(value) = fields.get(key) else {
+            continue;
+        };
+        let mut color = style.text;
+        if style.level_colors && LEVEL_KEYS.contains(&key.as_str()) {
+            let level = crate::log_level::LogLevel::parse(value);
+            if level != crate::log_level::LogLevel::Unknown {
+                color = theme.level_color(level);
+            }
+        }
+        let clip = rect
+            .with_max_x(rect.max.x - layout.char_w)
+            .intersect(ui.clip_rect());
+        ui.painter().with_clip_rect(clip).text(
+            egui::pos2(rect.left(), rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            value,
+            style.font_id.clone(),
+            color,
+        );
+    }
+    label(ui, &fields.message(&layout.keys), style.text);
+}
+
+/// What the column header asked for this frame.
+enum HeaderAction {
+    Columns(Vec<String>),
+    Width(String, u16),
+    Reset,
+}
+
+/// Header row of the column view: the field names over their columns (following the
+/// rows' horizontal scroll), drag a name to move its column, drag its right edge to
+/// resize it, right-click for hide / move / the fields shown / reset.
+fn render_field_header(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    layout: &ColumnLayout,
+    font_size: f32,
+    row_height: f32,
+) {
+    let id = field_header_id(engine);
+    let cells_x: f32 = ui.data(|d| d.get_temp(id.with("cells_x"))).unwrap_or(0.0);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), row_height + 4.0),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme.panel_bg());
+    painter.hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1.0, theme.border_color().gamma_multiply(0.6)),
+    );
+    let font_id = egui::FontId::monospace(font_size);
+    let mut action: Option<HeaderAction> = None;
+    let mut x = rect.left() + cells_x - engine.current_scroll_x;
+    let mut cells = Vec::with_capacity(layout.keys.len());
+    for width in &layout.widths {
+        cells.push(egui::Rect::from_min_size(
+            egui::pos2(x, rect.top()),
+            egui::vec2(*width, rect.height()),
+        ));
+        x += width;
+    }
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    for (i, (key, cell)) in layout.keys.iter().zip(&cells).enumerate() {
+        let visible = cell.intersect(rect);
+        if visible.width() <= 0.0 {
+            continue;
+        }
+        painter
+            .with_clip_rect(visible.with_max_x(cell.max.x - layout.char_w))
+            .text(
+                egui::pos2(cell.left(), cell.center().y),
+                egui::Align2::LEFT_CENTER,
+                key,
+                font_id.clone(),
+                theme.accent_color(),
+            );
+        let resp = ui
+            .interact(visible, id.with(("cell", i)), egui::Sense::click_and_drag())
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        // Drop position while a name is dragged: before the first column whose middle
+        // is right of the pointer.
+        let target = |px: f32| {
+            cells
+                .iter()
+                .enumerate()
+                .filter(|(j, c)| *j != i && c.center().x < px)
+                .count()
+        };
+        if resp.dragged() {
+            if let Some(p) = pointer {
+                let t = target(p.x);
+                let others: Vec<&egui::Rect> = cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, c)| c)
+                    .collect();
+                let at = others.get(t).map(|c| c.left()).unwrap_or(x);
+                painter.vline(at, rect.y_range(), Stroke::new(2.0, theme.accent_color()));
+            }
+        }
+        if resp.drag_stopped() {
+            if let Some(p) = pointer {
+                let t = target(p.x);
+                let mut keys = layout.keys.clone();
+                let moved = keys.remove(i);
+                keys.insert(t.min(keys.len()), moved);
+                if keys != layout.keys {
+                    action = Some(HeaderAction::Columns(keys));
+                }
+            }
+        }
+        resp.context_menu(|ui| {
+            if let Some(a) = header_menu(ui, engine, lang, layout, Some(i)) {
+                action = Some(a);
+            }
+        });
+        // Width handle on the right edge.
+        let edge = cell.right() - layout.char_w * 0.5;
+        let handle =
+            egui::Rect::from_x_y_ranges(edge - 3.0..=edge + 3.0, rect.y_range()).intersect(rect);
+        if handle.width() > 0.0 {
+            let drag = ui
+                .interact(handle, id.with(("width", i)), egui::Sense::drag())
+                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            let start_id = id.with(("width_start", i));
+            if drag.drag_started() {
+                ui.data_mut(|d| d.insert_temp(start_id, engine.field_width(key)));
+            }
+            if drag.dragged() {
+                let start: u16 = ui
+                    .data(|d| d.get_temp(start_id))
+                    .unwrap_or_else(|| engine.field_width(key));
+                let moved = drag.total_drag_delta().map(|d| d.x).unwrap_or(0.0);
+                let cells = (f32::from(start) + moved / layout.char_w).round().max(0.0) as u16;
+                action = Some(HeaderAction::Width(key.clone(), cells));
+            }
+        }
+    }
+    // The message column: its name, and the same menu without a column.
+    let message = egui::Rect::from_min_max(egui::pos2(x, rect.top()), rect.max);
+    if message.width() > 0.0 {
+        painter.text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            t(lang, "fields_message"),
+            font_id,
+            theme.text_dim(),
+        );
+    }
+    let rest = message.intersect(rect);
+    if rest.width() > 0.0 {
+        ui.interact(rest, id.with("message"), egui::Sense::click())
+            .context_menu(|ui| {
+                if let Some(a) = header_menu(ui, engine, lang, layout, None) {
+                    action = Some(a);
+                }
+            });
+    }
+    match action {
+        Some(HeaderAction::Columns(keys)) => engine.set_field_columns(keys),
+        Some(HeaderAction::Width(key, cells)) => engine.set_field_width(&key, cells),
+        Some(HeaderAction::Reset) => engine.reset_field_columns(),
+        None => return,
+    }
+    ui.ctx().request_repaint();
+}
+
+/// Right-click menu of the column header; `column` is the column clicked, if any.
+fn header_menu(
+    ui: &mut Ui,
+    engine: &TailEngine,
+    lang: Language,
+    layout: &ColumnLayout,
+    column: Option<usize>,
+) -> Option<HeaderAction> {
+    let mut action = None;
+    let keys = &layout.keys;
+    if let Some(i) = column {
+        // The last column stays: no columns at all would read as the defaults.
+        if ui
+            .add_enabled(keys.len() > 1, egui::Button::new(t(lang, "fields_hide")))
+            .clicked()
+        {
+            let mut next = keys.clone();
+            next.remove(i);
+            action = Some(HeaderAction::Columns(next));
+            ui.close();
+        }
+        if ui
+            .add_enabled(i > 0, egui::Button::new(t(lang, "fields_move_left")))
+            .clicked()
+        {
+            let mut next = keys.clone();
+            next.swap(i, i - 1);
+            action = Some(HeaderAction::Columns(next));
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                i + 1 < keys.len(),
+                egui::Button::new(t(lang, "fields_move_right")),
+            )
+            .clicked()
+        {
+            let mut next = keys.clone();
+            next.swap(i, i + 1);
+            action = Some(HeaderAction::Columns(next));
+            ui.close();
+        }
+        ui.separator();
+    }
+    ui.label(RichText::new(t(lang, "fields_shown")).strong());
+    ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        for key in engine.field_catalogue().keys() {
+            let mut shown = keys.contains(key);
+            let can_change = !shown || keys.len() > 1;
+            if ui
+                .add_enabled(
+                    can_change,
+                    egui::Checkbox::new(&mut shown, RichText::new(key).monospace()),
+                )
+                .changed()
+            {
+                let mut next = keys.clone();
+                if shown {
+                    next.push(key.clone());
+                } else {
+                    next.retain(|k| k != key);
+                }
+                action = Some(HeaderAction::Columns(next));
+            }
+        }
+    });
+    if engine.field_catalogue().more {
+        ui.label(RichText::new(t(lang, "fields_more")).small().weak());
+    }
+    ui.separator();
+    if ui.button(t(lang, "fields_reset")).clicked() {
+        action = Some(HeaderAction::Reset);
+        ui.close();
+    }
+    action
 }
 
 /// What the user did on the rows this frame: a row click with its modifiers, a JSON

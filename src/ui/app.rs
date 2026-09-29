@@ -5770,6 +5770,9 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
             crate::fields::ParserChoice::Regex(p) if !p.is_empty() => Some(p.clone()),
             _ => None,
         },
+        fields_view: engine.fields_view(),
+        fields_columns: engine.chosen_field_columns().to_vec(),
+        fields_widths: engine.field_widths().clone(),
     }
 }
 
@@ -5821,8 +5824,13 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
         crate::fields::ParserChoice::from_name(name, entry.fields_regex.as_deref().unwrap_or(""))
     }) {
         engine.set_field_choice(choice);
-        engine.fields_dirty = false;
     }
+    engine.set_fields_view(entry.fields_view);
+    engine.set_field_columns(entry.fields_columns.clone());
+    for (key, cells) in &entry.fields_widths {
+        engine.set_field_width(key, *cells);
+    }
+    engine.fields_dirty = false;
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);

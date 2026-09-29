@@ -15,8 +15,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   logfmt, Apache / NGINX combined, syslog (RFC 3164), a regular expression with named
   groups, or off. Saved per stream as `fields_parser=` and `fields_regex=` (older builds
   ignore them). Scanners borrow the line and allocate nothing per line (~500 MB/s on
-  JSON, ~700 MB/s on logfmt; `cargo bench --bench fields`). First step of the column view
-  and field filter terms.
+  JSON, ~700 MB/s on logfmt; `cargo bench --bench fields`).
+- **Column view of the fields.** `▦ Columns` in the stream bar shows the parsed fields as
+  columns with a header: the first 8 keys by default, then the message (the fields not
+  shown follow it as `key=value`). Drag to move or resize a column; the header menu hides,
+  moves and picks fields, or resets. Level fields take the level colour, unparsed lines
+  run across the columns. Only the drawn rows are parsed (a cache of 1,024 rows). Saved
+  as `fields_view`, `fields_columns`, `fields_width.<key>`. The view keeps one row per
+  line, also with wrap on.
 
 - **Relative, live time windows.** The time range fields take `-15m`, `-90s`, `-3h`, `-2d`,
   `-1w`, `-1h30m` and `now`, counted back from now on the stream's display clock. A window
