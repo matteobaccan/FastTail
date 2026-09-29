@@ -560,6 +560,7 @@ fn test_i18n_exhaustive_coverage() {
         "report_saved",
         "report_save_failed",
         "goto_no_tag",
+        "report_stream_closed",
         "app_subtitle",
         "follow_tail",
         "paused",

@@ -44,13 +44,19 @@ pub struct ReportDialog {
     tags_text: String,
     /// The report being built, the paths of its streams (by report index) and where it
     /// goes once built.
-    job: Option<(ReportJob, Vec<PathBuf>, Output)>,
+    job: Option<(ReportJob, Vec<PathBuf>, Output, CountsKey)>,
     /// The last report built, kept so a report too large for the clipboard can be saved
     /// without building it again (with the options it was built with).
-    built: Option<(ReportOptions, String)>,
+    built: Option<(CountsKey, String)>,
     /// Last outcome: text and whether it is a warning.
     status: Option<(String, bool)>,
+    /// What the dialog shows while it is open, recomputed only when the options or a
+    /// stream's bookmarks change: `(key, bookmarks, streams, skipped, tag counts)`.
+    counts: Option<(CountsKey, usize, usize, usize, BTreeMap<String, usize>)>,
 }
+
+/// The options and, per stream in scope, its path, bookmark generation and line count.
+type CountsKey = (ReportOptions, Vec<(PathBuf, u64, usize)>);
 
 /// Local time now as `YYYY-MM-DD HH:MM:SS`.
 fn local_now() -> String {
@@ -73,6 +79,7 @@ impl ReportDialog {
             job: None,
             built: None,
             status: None,
+            counts: None,
         }
     }
 
@@ -103,6 +110,43 @@ impl ReportDialog {
         }
     }
 
+    /// What the report depends on: the options and each stream's bookmarks and length.
+    fn counts_key(&self, engines: &[TailEngine]) -> CountsKey {
+        (
+            self.options(),
+            self.in_scope(engines)
+                .iter()
+                .map(|e| (e.path.clone(), e.bookmarks_generation, e.total_lines()))
+                .collect(),
+        )
+    }
+
+    /// Bookmarks, streams with and without bookmarks, and tag counts of the streams in
+    /// scope, recomputed only when `counts_key` changes.
+    fn counts(&mut self, engines: &[TailEngine]) -> (usize, usize, usize, BTreeMap<String, usize>) {
+        let key = self.counts_key(engines);
+        if self.counts.as_ref().is_none_or(|(k, ..)| *k != key) {
+            let options = &key.0;
+            let (mut bookmarks, mut streams, mut skipped) = (0, 0, 0);
+            let mut tags: BTreeMap<String, usize> = BTreeMap::new();
+            for engine in self.in_scope(engines) {
+                let n = engine.bookmark_report_count(options);
+                if n > 0 {
+                    streams += 1;
+                    bookmarks += n;
+                } else {
+                    skipped += 1;
+                }
+                for (tag, count) in engine.bookmark_tag_counts() {
+                    *tags.entry(tag).or_default() += count;
+                }
+            }
+            self.counts = Some((key, bookmarks, streams, skipped, tags));
+        }
+        let (_, bookmarks, streams, skipped, tags) = self.counts.as_ref().expect("counts");
+        (*bookmarks, *streams, *skipped, tags.clone())
+    }
+
     /// The engines the report covers, in dock order (`engines` is in that order).
     fn in_scope<'a>(&self, engines: &'a [TailEngine]) -> Vec<&'a TailEngine> {
         engines
@@ -128,18 +172,28 @@ impl ReportDialog {
         }
         self.status = None;
         self.built = None;
-        self.job = Some((ReportJob::new(streams, options), paths, output));
+        let key = self.counts_key(engines);
+        self.job = Some((ReportJob::new(streams, options), paths, output, key));
     }
 
     /// Hands a finished report to its output.
-    fn deliver(&mut self, ctx: &egui::Context, lang: Language, markdown: String, output: Output) {
+    fn deliver(
+        &mut self,
+        ctx: &egui::Context,
+        lang: Language,
+        markdown: String,
+        output: Output,
+        key: CountsKey,
+    ) {
         match output {
             Output::Copy if markdown.len() > MAX_CLIPBOARD_BYTES => {
                 self.status = Some((t(lang, "report_too_large").to_string(), true));
             }
             Output::Copy => {
-                ctx.copy_text(markdown.clone());
+                ctx.copy_text(markdown);
                 self.status = Some((t(lang, "report_copied").to_string(), false));
+                self.built = None;
+                return;
             }
             Output::Save => {
                 let name = report_file_name(&local_now()[..10]);
@@ -157,9 +211,13 @@ impl ReportDialog {
                         Err(e) => (format!("{}: {e}", t(lang, "report_save_failed")), true),
                     });
                 }
+                self.built = None;
+                return;
             }
         }
-        self.built = Some((self.options(), markdown));
+        // Only a report too large for the clipboard is kept, for Save, and only while
+        // nothing it was built from changes (see `counts_key`).
+        self.built = Some((key, markdown));
     }
 
     /// Draws the dialog and advances the report being built. Returns `false` once the
@@ -173,12 +231,16 @@ impl ReportDialog {
         let lang = config.language;
         let theme: CyberTheme = config.theme;
 
-        // Advance the report being built.
-        if let Some((job, paths, output)) = self.job.as_mut() {
+        // Advance the report being built; a stream closed meanwhile ends it.
+        if let Some((job, paths, output, _)) = self.job.as_mut() {
             let index: Vec<Option<&TailEngine>> = paths
                 .iter()
                 .map(|p| engines.iter().find(|e| &e.path == p))
                 .collect();
+            if index.iter().any(Option::is_none) {
+                job.cancel();
+                self.status = Some((t(lang, "report_stream_closed").to_string(), true));
+            }
             let done = job.step(STEP_BUDGET, |s, line| {
                 index[s].and_then(|e| e.get_line(line).map(|l| l.into_owned()))
             });
@@ -186,14 +248,16 @@ impl ReportDialog {
             if job.is_cancelled() {
                 self.job = None;
             } else if done {
-                let (job, _, _) = self.job.take().expect("a job");
+                let (job, _, _, key) = self.job.take().expect("a job");
                 let markdown = job.markdown(&local_now()[..16], env!("CARGO_PKG_VERSION"));
-                self.deliver(ctx, lang, markdown, output);
+                self.deliver(ctx, lang, markdown, output, key);
             } else {
                 ctx.request_repaint();
             }
         }
 
+        let (bookmarks, streams, skipped, tag_counts) = self.counts(engines);
+        let tags_valid = self.tags().1;
         let mut open = true;
         let mut close = false;
         let title = match &self.scope {
@@ -258,15 +322,9 @@ impl ReportDialog {
                 ui.checkbox(&mut self.include_auto, t(lang, "report_include_auto"));
 
                 // The tags of the streams in scope, a click adds one to the filter.
-                let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-                for engine in self.in_scope(engines) {
-                    for (tag, n) in engine.bookmark_tag_counts() {
-                        *counts.entry(tag).or_default() += n;
-                    }
-                }
-                if !counts.is_empty() {
+                if !tag_counts.is_empty() {
                     ui.horizontal_wrapped(|ui| {
-                        for (tag, n) in counts.iter().take(24) {
+                        for (tag, n) in tag_counts.iter().take(24) {
                             if ui
                                 .small_button(RichText::new(format!("#{tag} ({n})")).monospace())
                                 .clicked()
@@ -282,17 +340,6 @@ impl ReportDialog {
             });
 
             // What the report will hold.
-            let options = self.options();
-            let (mut streams, mut bookmarks, mut skipped) = (0usize, 0usize, 0usize);
-            for engine in self.in_scope(engines) {
-                let n = engine.bookmark_report_count(&options);
-                if n > 0 {
-                    streams += 1;
-                    bookmarks += n;
-                } else {
-                    skipped += 1;
-                }
-            }
             ui.add_space(4.0);
             let mut summary = t(lang, "report_summary")
                 .replace("{bookmarks}", &bookmarks.to_string())
@@ -309,7 +356,7 @@ impl ReportDialog {
             );
 
             ui.add_space(6.0);
-            if let Some((job, _, _)) = self.job.as_mut() {
+            if let Some((job, _, _, _)) = self.job.as_mut() {
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::ProgressBar::new(job.progress())
@@ -321,38 +368,42 @@ impl ReportDialog {
                     }
                 });
             } else {
-                // A report already built with these options is reused (e.g. saved after
-                // being too large for the clipboard).
+                // A report too large for the clipboard is kept for Save while nothing it
+                // was built from has changed.
+                let key = self.counts_key(engines);
                 let ready = self
                     .built
                     .as_ref()
-                    .filter(|(built_with, _)| *built_with == options)
+                    .filter(|(built_from, _)| *built_from == key)
                     .map(|(_, md)| md.clone());
                 let too_large = ready
                     .as_ref()
                     .is_some_and(|md| md.len() > MAX_CLIPBOARD_BYTES);
+                // An invalid word in the tag filter would silently mean "all bookmarks".
+                let can_build = bookmarks > 0 && tags_valid;
                 ui.horizontal(|ui| {
                     let copy = ui
                         .add_enabled(
-                            bookmarks > 0 && !too_large,
+                            can_build && !too_large,
                             egui::Button::new(format!("📋 {}", t(lang, "report_copy"))),
                         )
-                        .on_disabled_hover_text(t(lang, "report_too_large"));
+                        .on_disabled_hover_text(if too_large {
+                            t(lang, "report_too_large")
+                        } else {
+                            t(lang, "tip_report_tags")
+                        });
                     if copy.clicked() {
-                        match ready.clone() {
-                            Some(md) => self.deliver(ui.ctx(), lang, md, Output::Copy),
-                            None => self.start(engines, Output::Copy),
-                        }
+                        self.start(engines, Output::Copy);
                     }
                     if ui
                         .add_enabled(
-                            bookmarks > 0,
+                            can_build,
                             egui::Button::new(format!("💾 {}", t(lang, "report_save"))),
                         )
                         .clicked()
                     {
                         match ready {
-                            Some(md) => self.deliver(ui.ctx(), lang, md, Output::Save),
+                            Some(md) => self.deliver(ui.ctx(), lang, md, Output::Save, key.clone()),
                             None => self.start(engines, Output::Save),
                         }
                     }

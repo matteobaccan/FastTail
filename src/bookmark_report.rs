@@ -41,8 +41,9 @@ fn tag_of(word: &str) -> Option<String> {
 }
 
 /// The tags of a note in order of appearance, lowercase, each once: every `#word` at the
-/// start of the note or after a space. `issue #42` has none (a tag needs a letter), and
-/// `a#b` neither (the `#` must start a word).
+/// start of the note or after a space, up to the first character a tag cannot hold
+/// (`#deploy(prod)` → `deploy`). `issue #42` has none (a tag needs a letter), and `a#b`
+/// neither (the `#` must start a word).
 pub fn parse_tags(note: &str) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
     for word in note.split_whitespace() {
@@ -54,9 +55,6 @@ pub fn parse_tags(note: &str) -> Vec<String> {
             .char_indices()
             .find(|&(_, c)| !is_tag_char(c))
             .map_or(rest.len(), |(i, _)| i);
-        if end < rest.len() && !rest[end..].chars().all(|c| c.is_ascii_punctuation()) {
-            continue;
-        }
         if let Some(tag) = tag_of(&rest[..end]) {
             if !tags.contains(&tag) {
                 tags.push(tag);
@@ -242,8 +240,12 @@ impl ReportJob {
             let first = line.saturating_sub(context);
             let last = (line + context).min(stream.total_lines.saturating_sub(1).max(line));
             match blocks.last_mut() {
-                // Consecutive entries of the same stream whose ranges touch share a block.
-                Some(prev) if prev.stream == s && first <= prev.last + 1 && line >= prev.first => {
+                // Consecutive entries of the same stream whose ranges touch share a block
+                // (in time order the later one may sit on an earlier line).
+                Some(prev)
+                    if prev.stream == s && first <= prev.last + 1 && last + 1 >= prev.first =>
+                {
+                    prev.first = prev.first.min(first);
                     prev.last = prev.last.max(last);
                     prev.bookmarks.push(b);
                 }
@@ -531,9 +533,9 @@ mod tests {
         assert!(parse_tags(&format!("#{long}b")).is_empty(), "33 characters");
         assert_eq!(parse_tags("#café #Überlast"), vec!["café", "überlast"]);
         assert_eq!(parse_tags("#v1.2 #a_b"), vec!["v1.2", "a_b"]);
-        assert!(
-            parse_tags("#a/b").is_empty(),
-            "a slash is not a tag character"
+        assert_eq!(
+            parse_tags("#a/b #deploy(prod) #oom's"),
+            vec!["a", "deploy", "oom"]
         );
     }
 
@@ -623,6 +625,42 @@ Tags: #deploy (1)\n\n\
         assert_eq!(md.matches("a line 2\n").count(), 1, "no line written twice");
         assert!(
             md.contains("> 1 | a line 1\n") && md.contains("> 6 | a line 6\n"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn time_order_merges_a_later_bookmark_on_an_earlier_line() {
+        let md = build(
+            vec![stream(
+                "a",
+                200,
+                vec![
+                    bm(97, Some(2), Some("second")),
+                    bm(99, Some(1), Some("first")),
+                ],
+            )],
+            ReportOptions {
+                context: 3,
+                order: ReportOrder::Time,
+                ..Default::default()
+            },
+        );
+        assert_eq!(md.matches("```text").count(), 1, "{md}");
+        assert!(
+            md.contains(
+                "   95 | a line 95
+"
+            ),
+            "context of the earlier line kept: {md}"
+        );
+        assert_eq!(
+            md.matches(
+                "a line 99
+"
+            )
+            .count(),
+            1,
             "{md}"
         );
     }

@@ -847,7 +847,6 @@ impl FastTailApp {
         Ok(())
     }
 
-    /// Saves the live workspace to the current session file, if any.
     /// Opens the bookmark report dialog for one stream or for every open stream.
     pub fn open_bookmark_report(&mut self, scope: crate::ui::report_dialog::ReportScope) {
         self.report_dialog = Some(crate::ui::report_dialog::ReportDialog::new(
@@ -856,6 +855,7 @@ impl FastTailApp {
         ));
     }
 
+    /// Saves the live workspace to the current session file, if any.
     pub fn save_session(&mut self) -> std::io::Result<()> {
         match self.config.current_session.clone() {
             Some(file) => self.save_session_as(file),
