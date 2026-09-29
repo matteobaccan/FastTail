@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Integration tests, one binary (`cargo test --test integration_tests`): one module per
 //! feature in this folder, the helpers they share (`write_lines`, `wait_for_jobs`, …)
 //! here. Keep it a single binary: every file directly under `tests/` is linked as a

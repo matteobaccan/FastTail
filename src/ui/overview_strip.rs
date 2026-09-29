@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Overview strip: a narrow column beside the main view's scroll bar marking where the
 //! search hits, the bookmarks (automatic ones dimmer) and the ERROR / FATAL lines sit
 //! among the visible rows, with the viewport drawn as a box. A click or a drag scrolls

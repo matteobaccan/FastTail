@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Action registry: every command FastTail can run by name, as the command palette
 //! (`ui::palette`) lists it. It is UI-free: ids, i18n names, categories, scopes, enabled
 //! conditions and shortcut labels only; the GUI runs the actions and a future terminal

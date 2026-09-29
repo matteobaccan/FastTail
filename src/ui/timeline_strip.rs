@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Timeline histogram strip: the stream's lines per level over time, drawn above the rows
 //! from the engine's `TimeHistogram`, with the current time window shaded and an optional
 //! lane marking where the search hits fall. A click selects one column's span, a drag the

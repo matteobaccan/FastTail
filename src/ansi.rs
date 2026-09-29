@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! ANSI escape sequences in log lines: detection, removal and SGR styling.
 //!
 //! Only the framing of the sequences is parsed (CSI `ESC [ … final`, the string

@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Compressed log input: gzip, bzip2, xz and zstd files, zip and 7z entries and tar entries
 //! (plain or compressed tar) are decompressed on a background thread into a spool file
 //! (see `spool`) that the tail engine opens like any other log, so every feature works on

@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Context lines around filter matches (`grep -C N` in the viewer).
 //!
 //! The matches stay in the engine's `filtered_lines`; the lines shown around them are

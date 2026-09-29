@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Print mode (`fasttail --print`), run as a process: what reaches standard output and
 //! standard error, the exit codes, and the same result as the window's export.
 

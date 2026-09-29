@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Entry picker shown when a zip or 7z archive holds more than one file entry, or for
 //! any tar archive: a filter box, a list sortable by name or size, multi-select, and the
 //! entries that cannot be opened listed disabled with the reason. Each chosen entry opens

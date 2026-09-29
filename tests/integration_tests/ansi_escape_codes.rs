@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 use super::wait_for_jobs;
 use fasttail::ansi::{AnsiColor, AnsiMode};
 use fasttail::config::FastTailConfig;

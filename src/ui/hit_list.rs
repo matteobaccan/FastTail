@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Virtualized list of search hits: the rows of a stream's search results pane.
 //!
 //! The list is drawn over a slice of line indices (the stream's `search_matches`) and

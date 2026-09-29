@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Rendering backend selection (OpenGL via `glow`, or `wgpu`) and the description of
 //! the backend the running window ended up on.
 //!

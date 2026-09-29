@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! The global filter: include and exclude terms, with their own case and regex toggles,
 //! that every stream combines with its own filter (see `FilterSpec::with_global`). The
 //! app compiles them once per edit into one shared `Arc<FilterSpec>` handed to every

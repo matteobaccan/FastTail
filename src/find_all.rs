@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Search across every open stream: one query, one background job per stream.
 //!
 //! A `FindAllSession` owns its own `ScanJob`s, spawned over each stream's current file with

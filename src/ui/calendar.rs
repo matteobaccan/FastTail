@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 //! Month calendar of the time range popup: a 7×6 grid of days starting on Monday
 //! (ISO 8601), with arrows for the previous and next month and year. It works on day
 //! counts since the Unix epoch, through the civil-date functions of `crate::timestamp`,

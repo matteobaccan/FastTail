@@ -1,3 +1,7 @@
+// FastTail -- Ultra-fast multi-stream log monitor and tail viewer.
+// Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
+// SPDX-License-Identifier: MIT
+
 use crate::ansi::{AnsiMode, AnsiStyle, StyleRun};
 use crate::audio::SoundAlertPreset;
 use crate::auto_highlight::{TokenKind, TokenKinds};
