@@ -55,6 +55,8 @@ pub enum FastTailTab {
     /// Results of a search across every open stream (`find_all`); never saved in the
     /// dock layout.
     FindResults,
+    /// The session's scratchpad (`ui::scratchpad`); saved in the layout.
+    Scratchpad,
 }
 
 pub struct DockContext<'a> {
@@ -102,6 +104,7 @@ pub struct DockContext<'a> {
     pub time_delta: &'a mut TimeDeltaPrefs,
     /// Search across every open stream, shown by the Find results tab.
     pub find_all: &'a mut crate::find_all::FindAllSession,
+    pub scratchpad: &'a mut crate::ui::scratchpad::Scratchpad,
     /// Named filter presets (global preferences) and what the stream bars asked about
     /// them this frame.
     pub filter_presets: &'a mut Vec<FilterPreset>,
@@ -435,6 +438,21 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .strong(),
                 )
             }
+            FastTailTab::Scratchpad => {
+                let dirty = if self.ctx.scratchpad.is_dirty() {
+                    " *"
+                } else {
+                    ""
+                };
+                WidgetText::from(
+                    RichText::new(format!(
+                        "🗒 {}{dirty}",
+                        t(*self.ctx.language, "scratch_title")
+                    ))
+                    .monospace()
+                    .strong(),
+                )
+            }
         }
     }
 
@@ -558,6 +576,15 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     *self.ctx.language,
                     *self.ctx.font_size,
                     *self.ctx.level_colors,
+                );
+            }
+            FastTailTab::Scratchpad => {
+                crate::ui::scratchpad::render(
+                    ui,
+                    self.ctx.scratchpad,
+                    self.ctx.theme,
+                    *self.ctx.language,
+                    *self.ctx.font_size,
                 );
             }
         }
@@ -2310,6 +2337,17 @@ fn render_log_stream(
                     }
                 }
             }
+            // CTRL + SHIFT + N sends the selected rows (or the current hit) to the
+            // scratchpad, with a reference line.
+            let ctrl_shift_n = egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::N,
+            );
+            if act(ActionId::ScratchpadSend)
+                || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_shift_n)))
+            {
+                engine.scratch_request = Some(true);
+            }
             // CTRL + SHIFT + D cycles the collapse of repeated lines (text view only; a
             // text field with the keyboard keeps its keys, see `keyboard_free`).
             let ctrl_shift_d = egui::KeyboardShortcut::new(
@@ -3738,6 +3776,8 @@ struct RowMenuPicks {
     scope: Option<SearchScope>,
     /// The characters selected inside a row, to put on the clipboard.
     copy_chars: Option<String>,
+    /// Row whose selection goes to the scratchpad, and whether with a reference line.
+    scratch: Option<(usize, bool)>,
 }
 
 impl RowMenuPicks {
@@ -3771,6 +3811,12 @@ impl RowMenuPicks {
         }
         if let Some(text) = self.copy_chars {
             ui.ctx().copy_text(text);
+        }
+        if let Some((line, with_reference)) = self.scratch {
+            if !engine.is_selected(line) {
+                engine.select_row(line);
+            }
+            engine.scratch_request = Some(with_reference);
         }
         apply_copy_pick(ui, engine, self.copy);
     }
@@ -4495,6 +4541,23 @@ fn row_context_menu(
                 picks.copy_chars = Some(text);
                 ui.close();
             }
+        }
+        if ui
+            .button(
+                RichText::new(format!("🗒 {}  (CTRL + SHIFT + N)", t(lang, "scratch_send")))
+                    .monospace(),
+            )
+            .clicked()
+        {
+            picks.scratch = Some((line, true));
+            ui.close();
+        }
+        if ui
+            .button(RichText::new(format!("🗒 {}", t(lang, "scratch_send_plain"))).monospace())
+            .clicked()
+        {
+            picks.scratch = Some((line, false));
+            ui.close();
         }
         // Search scope: the selection, from this line to the end, or up to it.
         ui.separator();

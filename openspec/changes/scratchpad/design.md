@@ -28,6 +28,9 @@ small map `name → full path` recorded at each send and kept in the session fil
 reference still works after restart without putting paths into the pad text. Unresolvable
 references show "file not found". *Alternative:* hidden anchors
 in a rich model — rejected, it breaks copy-paste into tickets.
+*As implemented:* the map is a second sidecar, `….scratch.paths` (`name|path` per line),
+beside the pad instead of a `[scratchpad]` section of the session file: the pad and its
+map move, switch and are saved together, and the default workspace needs no INI change.
 
 ### D3. Editor
 `egui::TextEdit::multiline` is adequate up to a few MB; above that it becomes slow, hence

@@ -28,6 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   them in the search box and `Esc` clears them; `SHIFT` / `CTRL` clicks keep selecting
   rows. The selection is cleared by a reload and when a filter hides its row.
 
+- **Scratchpad.** A plain-text tab per session (🗂 menu, palette) to collect lines and
+  notes: "Send to scratchpad" in the row menu and in Find results, or `CTRL + SHIFT + N`,
+  appends the selected rows under a `── app.log:1204 ──` reference line (or without it);
+  `CTRL + click` / `ALT + Enter` on a reference shows the line in its stream, reopening
+  the file if needed. Find box, Save as…, Clear; 4 MB cap; saved beside the session
+  (`….scratch.txt`, `scratchpad.txt` for the default workspace) a second after each
+  change and on exit.
+
 ### Changed
 
 - The "Last hour" shortcut of the time range popup is now "Last hour of the log" (same

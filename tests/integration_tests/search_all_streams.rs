@@ -98,6 +98,7 @@ fn dock_context<'a>(
         search_view: leak(fasttail::ui::dock::SearchViewPrefs::default()),
         time_delta: leak(fasttail::ui::dock::TimeDeltaPrefs::default()),
         find_all: session,
+        scratchpad: leak(Default::default()),
         filter_presets: leak(Vec::new()),
         preset_events: leak(Default::default()),
         palette_action: None,

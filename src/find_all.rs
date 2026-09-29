@@ -109,6 +109,9 @@ pub struct FindAllSession {
     pub jump_in_context: bool,
     /// The query box takes the keyboard on the next frame (Ctrl+Shift+F).
     pub focus_input: bool,
+    /// A result whose "Send to scratchpad" was picked: `(stream path, line)`, applied by
+    /// the app.
+    pub scratch: Option<(PathBuf, usize)>,
     /// The optional time scope fields (from / to, typed as in the time range popup):
     /// what the next Find limits every stream to.
     pub time_from: String,
@@ -137,6 +140,7 @@ impl FindAllSession {
             jump: None,
             jump_in_context: false,
             focus_input: false,
+            scratch: None,
             time_from: String::new(),
             time_to: String::new(),
             time_scope: None,

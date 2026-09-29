@@ -296,6 +296,7 @@ pub fn render_find_results(
     }
     let output = GroupedHitList::new(results_list_id(), &groups, &session.query)
         .context_label(format!("◆ {}  (CTRL + K)", t(lang, "context_show")))
+        .scratch_label(format!("🗒 {}", t(lang, "scratch_send")))
         .font_size(font_size)
         .level_colors(level_colors)
         .show(ui, theme);
@@ -313,6 +314,13 @@ pub fn render_find_results(
     }
     if let Some((g, hit)) = output.in_context {
         session.commit_in_context(g, hit);
+    }
+    if let Some((g, hit)) = output.to_scratchpad {
+        if let Some(group) = session.groups.get(g) {
+            if let Some(&line) = group.hits.get(hit) {
+                session.scratch = Some((group.path.clone(), line));
+            }
+        }
     }
 }
 

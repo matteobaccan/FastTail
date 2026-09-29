@@ -106,6 +106,7 @@ impl Harness {
                 search_view: &mut fasttail::ui::dock::SearchViewPrefs::default(),
                 time_delta: &mut fasttail::ui::dock::TimeDeltaPrefs::default(),
                 find_all: &mut fasttail::find_all::FindAllSession::default(),
+                scratchpad: &mut Default::default(),
                 filter_presets: &mut Vec::new(),
                 preset_events: &mut Default::default(),
                 palette_action: None,

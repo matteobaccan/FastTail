@@ -103,6 +103,8 @@ pub enum ActionId {
     BookmarkClear,
     BookmarkReport,
     BookmarkReportAll,
+    ScratchpadOpen,
+    ScratchpadSend,
     // Settings (generated from `BOOL_SETTINGS` / `ENUM_SETTINGS`)
     Toggle(BoolSetting),
     Choose(EnumSetting),
@@ -381,6 +383,8 @@ pub const ACTIONS: &[Action] = &[
     action(A::BookmarkClear, "bookmark.clear", "clear_bookmarks", C::Bookmarks, S::Stream, None, &[N::Bookmarks]),
     action(A::BookmarkReport, "bookmark.report", "bookmark_report_menu", C::Bookmarks, S::Stream, None, &[N::Bookmarks]),
     action(A::BookmarkReportAll, "bookmark.report.all", "bookmark_report_all", C::Bookmarks, S::Window, None, &[]),
+    action(A::ScratchpadOpen, "scratchpad.open", "scratch_open", C::Window, S::Window, None, &[]),
+    action(A::ScratchpadSend, "scratchpad.send", "scratch_send", C::Stream, S::Stream, Some("CTRL + SHIFT + N"), &[N::Row]),
     // Window
     action(A::OpenFile, "window.open_file", "open_file", C::Window, S::Window, None, &[]),
     action(A::OpenPattern, "window.open_pattern", "act_open_pattern", C::Window, S::Window, None, &[]),

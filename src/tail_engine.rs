@@ -1629,6 +1629,9 @@ pub struct TailEngine {
     /// The stream menu asked for a bookmark report of this stream: the app opens the
     /// report dialog after the dock is drawn.
     pub report_request: bool,
+    /// The selected rows (or the current hit) go to the scratchpad; `true` with a
+    /// reference line above them. Applied by the app after the dock is drawn.
+    pub scratch_request: Option<bool>,
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
     pub markdown_text_cache: Option<(u64, String)>,
     pub highlight_rules: Vec<HighlightRule>,
@@ -2219,6 +2222,7 @@ impl TailEngine {
             time_zone_sample: None,
             find_all_request: false,
             report_request: false,
+            scratch_request: None,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
