@@ -423,6 +423,9 @@ pub enum BoolSetting {
     OverviewStrip,
     TimelineSearchLane,
     FlashOnAlert,
+    TrayIcon,
+    MinimizeToTray,
+    CloseToTray,
 }
 
 pub struct BoolSettingMeta {
@@ -460,6 +463,9 @@ pub const BOOL_SETTINGS: &[BoolSettingMeta] = &[
     bool_setting!(OverviewStrip, "settings.overview_strip.toggle", "overview_strip", overview_strip),
     bool_setting!(TimelineSearchLane, "settings.timeline_search_lane.toggle", "timeline_search_lane_tip", timeline_search_lane),
     bool_setting!(FlashOnAlert, "settings.flash_on_alert.toggle", "flash_on_alert", flash_on_alert),
+    bool_setting!(TrayIcon, "settings.tray_icon.toggle", "tray_icon", tray_icon),
+    bool_setting!(MinimizeToTray, "settings.minimize_to_tray.toggle", "minimize_to_tray", minimize_to_tray),
+    bool_setting!(CloseToTray, "settings.close_to_tray.toggle", "close_to_tray", close_to_tray),
 ];
 
 pub fn bool_setting(setting: BoolSetting) -> &'static BoolSettingMeta {

@@ -50,6 +50,22 @@ workspace is saved as on a real close so a crash later loses nothing. The tray m
 and CTRL + Q quit for real. The first time the window goes to the tray, a one-line hint
 says where it went.
 
+### As implemented (0.14.0)
+- **Scope:** Windows only (maintainer's choice); on other systems the options are greyed
+  out. The Linux `ksni` backend (D3) stays open.
+- **Spike (D1)**, run on Windows 11 with eframe 0.36: a window hidden with
+  `Visible(false)` keeps running `update` when another thread requests repaints (~4
+  frames/s at 250 ms); a *minimised* window gets no frame at all, even with those
+  requests (issue #161). Hence hide-to-tray uses `Visible(false)` and the tray thread's
+  `SetTimer` wakes the app every 250 ms while hidden; no `WS_EX_TOOLWINDOW` fallback.
+- **FFI (D2):** raw `extern "system"` declarations like the rest of the project, no
+  `windows-sys` dependency.
+- **Badge (D4):** a red dot on the icon and the count in the tooltip (no digits drawn on
+  the 32 × 32 icon); one colour, not per preset.
+- **Minimise to tray:** FastTail's own minimise button; the system one is handled on the
+  frame that reports the window minimised (best effort, as such frames may not come).
+- **First-time hint (D5):** not done.
+
 ## Risks / Trade-offs
 
 - [Hidden window stops `update` on some platform] → D1 spike and fallback.

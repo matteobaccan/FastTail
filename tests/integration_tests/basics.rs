@@ -616,6 +616,19 @@ fn test_i18n_exhaustive_coverage() {
         "compare_mark",
         "compare_with_mark",
         "compare_marked",
+        "tray_show",
+        "tray_hide",
+        "tray_mute",
+        "tray_quit",
+        "tray_tip",
+        "tray_tip_alerts",
+        "tray_icon",
+        "tray_icon_tip",
+        "tray_unavailable",
+        "minimize_to_tray",
+        "close_to_tray",
+        "close_to_tray_tip",
+        "help_desc_quit",
         "app_subtitle",
         "follow_tail",
         "paused",
@@ -3374,4 +3387,18 @@ fn every_rust_file_has_the_source_header() {
         "files without the source header: {missing:?}"
     );
     assert!(files.len() > 80, "found only {} files", files.len());
+}
+
+#[test]
+fn tray_options_round_trip_and_default_off() {
+    let off = FastTailConfig::default();
+    assert!(!off.tray_icon && !off.minimize_to_tray && !off.close_to_tray);
+    let on = FastTailConfig {
+        tray_icon: true,
+        minimize_to_tray: true,
+        close_to_tray: true,
+        ..FastTailConfig::default()
+    };
+    let back = FastTailConfig::from_ini(&on.to_ini());
+    assert!(back.tray_icon && back.minimize_to_tray && back.close_to_tray);
 }

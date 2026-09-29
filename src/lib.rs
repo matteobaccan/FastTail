@@ -36,6 +36,7 @@ pub mod tail_engine;
 pub mod theme;
 pub mod time_histogram;
 pub mod timestamp;
+pub mod tray;
 pub mod ui;
 pub mod wildcard;
 pub mod wrap_layout;

@@ -28,6 +28,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   them in the search box and `Esc` clears them; `SHIFT` / `CTRL` clicks keep selecting
   rows. The selection is cleared by a reload and when a filter hides its row.
 
+- **Tray icon (Windows).** Settings → Tray icon (off by default): click to show or hide the
+  window, a menu to show / hide, follow or pause every stream, mute, pick a stream or
+  quit; minimise to tray and close to tray options; `CTRL + Q` quits. While hidden the
+  streams, rules and sounds keep running, and a red dot on the icon (with a count in the
+  tooltip) marks the alerts sounded meanwhile. New `[general]` keys `tray_icon`,
+  `minimize_to_tray`, `close_to_tray`. Linux and macOS later.
 - **Compare lines.** The row menu's "Compare" compares the two selected lines, or a marked
   selection with another one (any streams, up to 20,000 lines a side), in a Compare tab:
   side by side, differing tokens highlighted, rows aligned as equal / changed / removed /

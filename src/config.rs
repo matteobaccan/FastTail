@@ -85,6 +85,14 @@ pub struct FastTailConfig {
     /// while the window is unfocused.
     #[serde(default)]
     pub flash_on_alert: bool,
+    /// Notification-area icon (Windows), hiding the window there when minimised or
+    /// closed; all off by default.
+    #[serde(default)]
+    pub tray_icon: bool,
+    #[serde(default)]
+    pub minimize_to_tray: bool,
+    #[serde(default)]
+    pub close_to_tray: bool,
     /// Colour rows by their detected log level when no highlight rule matches them.
     #[serde(default = "default_true")]
     pub level_colors: bool,
@@ -356,6 +364,9 @@ impl Default for FastTailConfig {
             renderer: crate::renderer::RendererChoice::Auto,
             always_on_top: false,
             flash_on_alert: false,
+            tray_icon: false,
+            minimize_to_tray: false,
+            close_to_tray: false,
             level_colors: true,
             auto_highlight: false,
             auto_highlight_kinds: TokenKinds::ALL,
@@ -690,6 +701,9 @@ impl FastTailConfig {
             .set("renderer", self.renderer.as_str())
             .set("always_on_top", self.always_on_top.to_string())
             .set("flash_on_alert", self.flash_on_alert.to_string())
+            .set("tray_icon", self.tray_icon.to_string())
+            .set("minimize_to_tray", self.minimize_to_tray.to_string())
+            .set("close_to_tray", self.close_to_tray.to_string())
             .set("level_colors", self.level_colors.to_string())
             .set("auto_highlight", self.auto_highlight.to_string())
             .set(
@@ -938,6 +952,15 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.flash_on_alert = v;
+            }
+            for (key, field) in [
+                ("tray_icon", &mut cfg.tray_icon),
+                ("minimize_to_tray", &mut cfg.minimize_to_tray),
+                ("close_to_tray", &mut cfg.close_to_tray),
+            ] {
+                if let Some(v) = general.get(key).and_then(|s| s.parse::<bool>().ok()) {
+                    *field = v;
+                }
             }
             if let Some(v) = general
                 .get("level_colors")
