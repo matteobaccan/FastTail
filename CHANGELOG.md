@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Search in a range.** The `⌖` chip beside a stream's search box limits hits, the
+  counter (`[3 / 17 in range]`), `F3` / `SHIFT + F3`, the results pane and the timeline's
+  search lane to part of the view, which stays visible: the selection, a typed line range
+  (`1200-5000`, `1200-`, `-5000`) or a time span typed as in the time range popup. The row
+  menu offers "Search in selection", "Search from here" and "Search up to here"; the
+  overview strip shades a line scope; a reload resets it, with a note. A small line scope
+  of a huge file is searched on the UI thread. The Find results tab gets optional from /
+  to time fields applied to every stream, on each stream's own clock. Not saved.
+
 - **Selection highlight.** Double-clicking a word of a row (letters, digits and
   `_ . : / @ - %`, trailing `.` / `:` dropped, 2 to 256 bytes: an id, an IP with its port,
   a UUID, a path) outlines every exact, case-sensitive occurrence of it in the rows of that

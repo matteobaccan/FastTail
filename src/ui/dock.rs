@@ -8,8 +8,8 @@ use crate::i18n::{t, Language};
 use crate::paths::{paths_equal, paths_equal_fast};
 use crate::scan_job::MAX_FILTER_TERMS;
 use crate::tail_engine::{
-    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SpanStyle, TailEngine, TimeDelta,
-    MAX_LINE_BYTES,
+    HighlightRule, HighlightSpan, HighlightStyle, QuickLabel, SearchScope, SpanStyle, TailEngine,
+    TimeDelta, MAX_LINE_BYTES,
 };
 use crate::theme::CyberTheme;
 use crate::wrap_layout::{
@@ -1814,6 +1814,8 @@ fn render_log_stream(
             }
         }
 
+        render_scope_chip(ui, engine, theme, lang);
+
         // Match counter & Next/Prev navigation buttons
         if has_query {
             if match_count == 0 {
@@ -1825,9 +1827,14 @@ fn render_log_stream(
             } else {
                 let current_1based = engine.current_match_idx.map(|i| i + 1).unwrap_or(0);
                 // The true total: past the cap the hits are counted, not listed.
+                let in_range = if engine.search_scope().is_all() {
+                    String::new()
+                } else {
+                    format!(" {}", t(lang, "scope_in_range"))
+                };
                 let counter = ui.label(
                     RichText::new(format!(
-                        "[{} / {}]",
+                        "[{} / {}{in_range}]",
                         current_1based,
                         group_thousands(engine.search_total())
                     ))
@@ -3538,6 +3545,8 @@ struct RowMenuPicks {
     token: Option<String>,
     /// Rule picked in "Next line of rule" and the row it was picked on.
     rule: Option<(usize, usize)>,
+    /// Search scope picked: in the selection, from here, up to here.
+    scope: Option<SearchScope>,
 }
 
 impl RowMenuPicks {
@@ -3560,6 +3569,13 @@ impl RowMenuPicks {
         if let Some((rule, line)) = self.rule {
             // The walk starts at once and runs at the top of the next frame.
             let _ = engine.start_rule_seek(Some(rule), true, line);
+            ui.ctx().request_repaint();
+        }
+        if let Some(scope) = self.scope {
+            engine.set_search_scope(scope);
+            if let Some(target) = engine.current_search_line() {
+                engine.pending_jump = Some(target);
+            }
             ui.ctx().request_repaint();
         }
         apply_copy_pick(ui, engine, self.copy);
@@ -3857,6 +3873,209 @@ fn outline_token(
     }
 }
 
+/// What the search scope editor holds while it is open: the typed line range and time
+/// sides, and which of them was refused.
+#[derive(Clone, Default)]
+struct ScopeEdit {
+    lines: String,
+    from: String,
+    to: String,
+    lines_bad: bool,
+    time_bad: (bool, bool),
+}
+
+/// The chip text of a scope: `⌖` for the whole view, `⌖ 1,200–5,000`, `⌖ 1,200–end`,
+/// `⌖ 14:00–14:10`.
+pub fn scope_chip_text(scope: &SearchScope, lang: Language) -> String {
+    let side = |text: &str| {
+        if text.trim().is_empty() {
+            "…".to_string()
+        } else {
+            text.trim().to_string()
+        }
+    };
+    match scope {
+        SearchScope::All => "⌖".to_string(),
+        SearchScope::Lines { first, last } => format!(
+            "⌖ {}–{}",
+            group_thousands(first + 1),
+            last.map_or_else(
+                || t(lang, "scope_end").to_string(),
+                |l| group_thousands(l + 1)
+            )
+        ),
+        SearchScope::Time { from, to } => format!("⌖ {}–{}", side(from), side(to)),
+    }
+}
+
+/// The search scope chip beside the search box: a menu to pick the part of the view the
+/// search covers (whole view, selection, lines, time), `✖` to go back to the whole view,
+/// and a note when a truncation or reload reset it.
+fn render_scope_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let all = engine.search_scope().is_all();
+    let color = if all {
+        theme.text_dim()
+    } else {
+        theme.accent_color()
+    };
+    let edit_id = egui::Id::new("search_scope_edit").with(&engine.path);
+    let mut edit: ScopeEdit = ui.ctx().data(|d| d.get_temp(edit_id)).unwrap_or_default();
+    let mut picked: Option<SearchScope> = None;
+    let chip = RichText::new(scope_chip_text(engine.search_scope(), lang))
+        .monospace()
+        .color(color);
+    let menu = ui.menu_button(chip, |ui| {
+        ui.set_min_width(260.0);
+        if ui
+            .button(RichText::new(t(lang, "scope_whole_view")).monospace())
+            .clicked()
+        {
+            picked = Some(SearchScope::All);
+            ui.close();
+        }
+        let selection = engine.selection_bounds();
+        if ui
+            .add_enabled(
+                selection.is_some(),
+                egui::Button::new(RichText::new(t(lang, "scope_in_selection")).monospace()),
+            )
+            .clicked()
+        {
+            if let Some((first, last)) = selection {
+                picked = Some(SearchScope::Lines {
+                    first,
+                    last: Some(last),
+                });
+                ui.close();
+            }
+        }
+        ui.separator();
+        ui.label(RichText::new(t(lang, "scope_lines")).monospace().size(11.0));
+        ui.horizontal(|ui| {
+            let mut field = egui::TextEdit::singleline(&mut edit.lines)
+                .hint_text("1200-5000")
+                .desired_width(150.0);
+            if edit.lines_bad {
+                field = field.text_color(theme.warn_color());
+            }
+            let resp = ui.add(field).on_hover_text(t(lang, "tip_scope_lines"));
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("OK").clicked() || enter {
+                match SearchScope::parse_lines(&edit.lines) {
+                    Some(scope) => {
+                        edit.lines_bad = false;
+                        picked = Some(scope);
+                        ui.close();
+                    }
+                    None => edit.lines_bad = true,
+                }
+            }
+        });
+        if edit.lines_bad {
+            ui.label(
+                RichText::new(t(lang, "goto_invalid"))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.warn_color()),
+            );
+        }
+        ui.separator();
+        ui.label(
+            RichText::new(t(lang, "search_scope_time"))
+                .monospace()
+                .size(11.0),
+        );
+        let untimed = engine.timestamps_complete() && !engine.timestamps_usable();
+        ui.add_enabled_ui(!untimed, |ui| {
+            ui.horizontal(|ui| {
+                let mut enter = false;
+                for (text, bad, hint) in [
+                    (&mut edit.from, edit.time_bad.0, "time_from_hint"),
+                    (&mut edit.to, edit.time_bad.1, "time_to_hint"),
+                ] {
+                    let mut field = egui::TextEdit::singleline(text)
+                        .hint_text(t(lang, hint))
+                        .desired_width(110.0);
+                    if bad {
+                        field = field.text_color(theme.warn_color());
+                    }
+                    let resp = ui.add(field);
+                    enter |= resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                }
+                if ui.button("OK").clicked() || enter {
+                    let scope = SearchScope::Time {
+                        from: edit.from.clone(),
+                        to: edit.to.clone(),
+                    };
+                    let (from_ok, to_ok) = engine.set_search_scope(scope);
+                    edit.time_bad = (!from_ok, !to_ok);
+                    if from_ok && to_ok {
+                        // Shown like the other picks (the hits may still wait for timing).
+                        if let Some(target) = engine.current_search_line() {
+                            engine.pending_jump = Some(target);
+                        }
+                        ui.close();
+                    }
+                }
+            });
+        });
+        if untimed {
+            ui.label(
+                RichText::new(t(lang, "time_range_unavailable"))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.text_dim()),
+            );
+        } else if edit.time_bad.0 || edit.time_bad.1 {
+            ui.label(
+                RichText::new(t(lang, "time_range_invalid"))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.warn_color()),
+            );
+        }
+    });
+    menu.response.on_hover_text(t(lang, "tip_search_scope"));
+    ui.ctx().data_mut(|d| d.insert_temp(edit_id, edit));
+    if !all
+        && ui
+            .small_button("✖")
+            .on_hover_text(t(lang, "scope_clear"))
+            .clicked()
+    {
+        picked = Some(SearchScope::All);
+    }
+    if let Some(scope) = picked {
+        engine.set_search_scope(scope);
+        if let Some(target) = engine.current_search_line() {
+            engine.pending_jump = Some(target);
+        }
+        ui.ctx().request_repaint();
+    }
+    if engine.search_scope_reset {
+        ui.label(
+            RichText::new(t(lang, "scope_reset"))
+                .monospace()
+                .size(11.0)
+                .color(theme.warn_color()),
+        );
+    }
+    if matches!(engine.search_scope(), SearchScope::Time { .. }) {
+        if !engine.timestamps_complete() {
+            ui.label(RichText::new("⏳").monospace().color(theme.warn_color()));
+        } else if !engine.timestamps_usable() {
+            // Timed at last, without usable timestamps: say why nothing matches.
+            ui.label(
+                RichText::new(t(lang, "time_range_unavailable"))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.warn_color()),
+            )
+            .on_hover_text(t(lang, "time_range_unavailable_tip"));
+        }
+    }
+}
+
 /// Row context menu: the two copies (every underlying line, or as shown), the bookmark
 /// note and removal, the line in context on a filtered stream, the time anchor entries
 /// while the time delta column is shown (`anchor` is `Some(current anchor)` then), all
@@ -3888,6 +4107,40 @@ fn row_context_menu(
             .clicked()
         {
             picks.copy = Some((line, true));
+            ui.close();
+        }
+        // Search scope: the selection, from this line to the end, or up to it.
+        ui.separator();
+        if let Some((first, last)) = engine.selection_bounds() {
+            if ui
+                .button(RichText::new(format!("⌖ {}", t(lang, "scope_in_selection"))).monospace())
+                .clicked()
+            {
+                picks.scope = Some(SearchScope::Lines {
+                    first,
+                    last: Some(last),
+                });
+                ui.close();
+            }
+        }
+        if ui
+            .button(RichText::new(format!("⌖ {}", t(lang, "scope_from_here"))).monospace())
+            .clicked()
+        {
+            picks.scope = Some(SearchScope::Lines {
+                first: line,
+                last: None,
+            });
+            ui.close();
+        }
+        if ui
+            .button(RichText::new(format!("⌖ {}", t(lang, "scope_up_to_here"))).monospace())
+            .clicked()
+        {
+            picks.scope = Some(SearchScope::Lines {
+                first: 0,
+                last: Some(line),
+            });
             ui.close();
         }
         // The token under the pointer (where the menu was opened) and the rules the row

@@ -48,6 +48,8 @@ pub enum FindState {
     SkippedHex,
     /// The stream was reloaded since its job started: its line numbers mean other lines.
     Stale,
+    /// A time scope was given and the stream has no usable timestamps.
+    SkippedUntimed,
 }
 
 /// Results of one stream.
@@ -61,6 +63,8 @@ pub struct StreamFind {
     job: Option<ScanJob>,
     /// Time window of the stream when the job started, applied to the drained hits.
     window: Option<(Option<i64>, Option<i64>)>,
+    /// The session's time scope read on this stream's clock, applied like the window.
+    scope: Option<(Option<i64>, Option<i64>)>,
     /// Matching line indices in file order, at most the session's cap.
     pub hits: Vec<usize>,
     /// Every match, the ones past the cap included.
@@ -101,6 +105,12 @@ pub struct FindAllSession {
     pub jump_in_context: bool,
     /// The query box takes the keyboard on the next frame (Ctrl+Shift+F).
     pub focus_input: bool,
+    /// The optional time scope fields (from / to, typed as in the time range popup):
+    /// what the next Find limits every stream to.
+    pub time_from: String,
+    pub time_to: String,
+    /// The time scope of the results listed, as it was run; `None` without one.
+    time_scope: Option<(String, String)>,
     limit: usize,
     max_hits: usize,
     next_generation: u64,
@@ -123,6 +133,9 @@ impl FindAllSession {
             jump: None,
             jump_in_context: false,
             focus_input: false,
+            time_from: String::new(),
+            time_to: String::new(),
+            time_scope: None,
             limit: limit.max(1),
             max_hits,
             next_generation: 0,
@@ -146,6 +159,8 @@ impl FindAllSession {
             self.started_at = None;
             return;
         }
+        self.time_scope = (!self.time_from.trim().is_empty() || !self.time_to.trim().is_empty())
+            .then(|| (self.time_from.clone(), self.time_to.clone()));
         self.started_at = Some(Instant::now());
         self.groups = engines
             .iter()
@@ -155,6 +170,7 @@ impl FindAllSession {
                 reload_generation: engine.reload_generation,
                 job: None,
                 window: None,
+                scope: None,
                 hits: Vec::new(),
                 total: 0,
                 progress: 0.0,
@@ -172,6 +188,13 @@ impl FindAllSession {
     /// Runs the last query again over the streams as they are now.
     pub fn refresh(&mut self, engines: &[TailEngine]) {
         self.input = self.query.clone();
+        if let Some((from, to)) = &self.time_scope {
+            self.time_from = from.clone();
+            self.time_to = to.clone();
+        } else {
+            self.time_from.clear();
+            self.time_to.clear();
+        }
         self.start(engines);
     }
 
@@ -222,8 +245,40 @@ impl FindAllSession {
         self.launch(engines);
     }
 
+    /// Whether each time scope field parses (an empty one is open), for the field hints.
+    pub fn time_fields_valid(&self) -> (bool, bool) {
+        let valid = |text: &str| {
+            text.trim().is_empty() || crate::timestamp::parse_user_time(text, 0).is_some()
+        };
+        (valid(&self.time_from), valid(&self.time_to))
+    }
+
+    /// The time scope of the results listed, as typed: `(from, to)`.
+    pub fn time_scope(&self) -> Option<(&str, &str)> {
+        self.time_scope
+            .as_ref()
+            .map(|(from, to)| (from.as_str(), to.as_str()))
+    }
+
+    /// Streams queued behind their timing: under a time scope a stream is searched once
+    /// it is timed, and the app asks each of these to be timed (`request_timing`).
+    pub fn waiting_for_timing<'a>(
+        &'a self,
+        engines: &'a [TailEngine],
+    ) -> impl Iterator<Item = &'a std::path::Path> + 'a {
+        let scoped = self.time_scope.is_some();
+        self.groups
+            .iter()
+            .filter(move |g| scoped && g.state == FindState::Queued)
+            .filter(move |g| {
+                find_engine(engines, &g.path).is_some_and(|e| !e.timestamps_complete())
+            })
+            .map(|g| g.path.as_path())
+    }
+
     /// Starts queued jobs, in order, while fewer than `limit` run. A stream still being
-    /// indexed, or whose time window waits for its timing, keeps its place in the queue.
+    /// indexed, or whose time window waits for its timing, keeps its place in the queue;
+    /// so does one still being timed under a time scope.
     fn launch(&mut self, engines: &[TailEngine]) {
         let mut running = self.running_count();
         let query_lower = self.query.to_lowercase();
@@ -240,11 +295,26 @@ impl FindAllSession {
             if engine.index_pending || engine.time_range_pending() {
                 continue;
             }
+            let scope = match &self.time_scope {
+                None => None,
+                Some(_) if !engine.timestamps_complete() => continue,
+                Some(_) if !engine.timestamps_usable() => {
+                    g.state = FindState::SkippedUntimed;
+                    continue;
+                }
+                Some((from, to)) => match engine.read_time_texts(from, to) {
+                    Some(bounds) => Some(bounds),
+                    None => {
+                        g.state = FindState::SkippedUntimed;
+                        continue;
+                    }
+                },
+            };
             let (file, range) = engine.full_scan_range();
             let window = engine.time_window();
             // Under a time window the drain drops hits, so the worker must not stop listing
             // at the cap: the drain caps and counts (as the stream's own search does).
-            let limit = if window.is_some() {
+            let limit = if window.is_some() || scope.is_some() {
                 usize::MAX
             } else {
                 self.max_hits
@@ -264,6 +334,7 @@ impl FindAllSession {
                 },
             ));
             g.window = window;
+            g.scope = scope;
             g.reload_generation = engine.reload_generation;
             g.state = FindState::Running;
             running += 1;
@@ -334,7 +405,7 @@ fn drain(g: &mut StreamFind, engine: &TailEngine, max_hits: usize) {
     while let Some(batch) = job.try_recv() {
         match batch {
             ScanBatch::Lines(mut lines) => {
-                if let Some((from, to)) = g.window {
+                for (from, to) in [g.window, g.scope].into_iter().flatten() {
                     lines.retain(|&idx| time_window_contains(engine.line_timestamp(idx), from, to));
                 }
                 g.total += lines.len();
@@ -419,6 +490,53 @@ mod tests {
 
     fn lines(n: usize, f: impl Fn(usize) -> String) -> String {
         (0..n).map(|i| f(i) + "\n").collect()
+    }
+
+    #[test]
+    fn a_time_scope_limits_every_stream_and_skips_untimed_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = |day: &str| lines(30, |i| format!("{day}T14:{i:02}:00.000Z INFO job {i}"));
+        let mut a = open(dir.path(), "a.log", &text("2026-09-18"));
+        // Another day: a bare 14:05 belongs to the day of each stream.
+        let mut b = open(dir.path(), "b.log", &text("2026-09-20"));
+        let mut untimed = open(dir.path(), "c.log", &lines(30, |i| format!("job {i}")));
+        let mut session = FindAllSession {
+            input: "job".into(),
+            time_from: "14:05".into(),
+            time_to: "14:09".into(),
+            ..Default::default()
+        };
+        assert_eq!(session.time_fields_valid(), (true, true));
+        let engines_before = vec![
+            open(dir.path(), "a.log", &text("2026-09-18")),
+            open(dir.path(), "b.log", &text("2026-09-20")),
+        ];
+        session.start(&engines_before);
+        // Not timed yet: the app is asked to time them, nothing runs.
+        assert_eq!(session.waiting_for_timing(&engines_before).count(), 2);
+        assert_eq!(session.running_count(), 0);
+
+        a.request_timing();
+        b.request_timing();
+        untimed.request_timing();
+        let engines = vec![a, b, untimed];
+        session.start(&engines);
+        run_to_end(&mut session, &engines);
+        assert_eq!(session.groups[0].hits, (5..10).collect::<Vec<_>>());
+        assert_eq!(session.groups[1].hits, (5..10).collect::<Vec<_>>());
+        assert_eq!(session.groups[2].state, FindState::SkippedUntimed);
+        assert!(session.groups[2].hits.is_empty());
+        assert_eq!(session.time_scope(), Some(("14:05", "14:09")));
+
+        // Refresh keeps the scope the results were run with.
+        session.time_from.clear();
+        session.time_to.clear();
+        session.refresh(&engines);
+        run_to_end(&mut session, &engines);
+        assert_eq!(session.groups[0].total, 5);
+
+        session.time_from = "not a time".into();
+        assert_eq!(session.time_fields_valid(), (false, true));
     }
 
     #[test]

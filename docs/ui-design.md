@@ -374,7 +374,8 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
 18. **Search**:
     - A 🔍 label, then the search field, whose width is clamped to 160–360 px. Its hint is *Search buffer (F3 next, Shift+F3 prev)…*.
     - `🔎` (search every stream).
-    - `[cur / total]` (accent) or `[0 / 0]` (warn), plus a "first 1,000,000 listed" note when capped.
+    - The **search scope chip** `⌖` (dim for the whole view; accent `⌖ 1,200–5,000`, `⌖ 1,200–end` or `⌖ 14:00–14:10` when set). It is a menu: *Whole view*, *Search in selection* (enabled with a selection), a *Lines* field (`1200-5000`, `1200-`, `-5000`, 1-based, OK / `Enter`, warn text and "not a line number" when refused) and a *Time* from / to pair (OK / `Enter`, warn text and "invalid time" when refused; disabled with "no timestamps" on an untimed stream). A small `✖` beside a set chip returns to the whole view. `⏳` follows the chip while a time scope waits for the timing, and "scope reset: the file was reloaded" (warn, 11 pt) after a truncation, rotation or reload cleared it. Not saved.
+    - `[cur / total]` (accent) or `[0 / 0]` (warn), `[cur / total in range]` under a scope, plus a "first 1,000,000 listed" note when capped.
     - `▲` / `▼`, `☰` (results pane toggle), `🕒` (history menu), `✖` (clear).
 19. **Go to line** (`CTRL + G`): `⇢ Go to line: [____]`, 90 px. The hint is `line, +N, -N, 14:02`. It shows a notice (hidden or invalid) or `⏳ timing lines N%` while a time jump waits. A jump to a line hidden inside a collapsed group expands that group (`reveal_line`).
 20. **Bookmark note editor**, only while it is open (row context menu → `✏ Bookmark note…`): a separator, `✏ Bookmark note, line N:` in 11 pt accent, then a 260 px single-line field with the hint *one line, Enter saves, ESC cancels*, limited to 200 characters (`MAX_NOTE_CHARS`). It takes focus on the frame after it opens and is prefilled with the current note. `Enter` saves, `Esc` cancels. Saving a note bookmarks the line (an automatic bookmark becomes a manual one); saving an empty text removes the note and keeps the bookmark. Line breaks and tabs become spaces, and the text is trimmed.
@@ -746,6 +747,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `⏹` | stdin ended |
 | `📦` | file size |
 | `🔎` | search all streams / Find results tab |
+| `⌖` | search scope chip, row menu scope entries, Find results time scope |
 | `☰` | search results pane |
 | `▲` `▼` | previous / next hit; sort direction; group collapsed / expanded (`▶` / `▼`) in Find results |
 | `✖` / `✕` | clear / remove / close / cancel (also stops decompression and the tar scan) |
@@ -808,6 +810,7 @@ Source: `src/ui/hit_list.rs`
   - In HEX view it only shows a notice.
 - **Find results tab.**
   - A query box, `Find`, `■ Stop` and `⟳ Refresh`.
+  - A second row: `🕘 Time` with optional from / to fields (150 px each, warn text and "invalid time" when a side does not parse, `Enter` runs), then `⌖ from → to` (accent) for the scope of the results listed. Under a scope each stream is timed first (queued meanwhile) and one without usable timestamps is listed as "no usable timestamps: skipped". Refresh keeps the scope the results were run with.
   - A summary: `N matches in s of t streams`, `⏳ r searching, q queued`, `snapshot 42s ago`.
   - One virtualized list grouped by stream. Header rows have a fill of accent at α28 and show `▶/▼ name — N matches` with coloured notes: queued, `⏳ %`, stopped, cannot read, HEX skipped, stale (drawn dimmed), capped.
 
