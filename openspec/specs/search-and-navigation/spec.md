@@ -283,3 +283,74 @@ While a stream's collapse mode is on, search hits and bookmarks SHALL keep refer
 - **WHEN** line 1,300 is bookmarked and lies inside a collapsed group
 - **THEN** the group row shows the bookmark marker and the overview strip marks the group's position.
 
+### Requirement: Navigation with Context Lines
+While a stream shows context lines, the stream search SHALL cover every row shown, context rows included: the match marker, the query tint, the match counter, `F3` / `SHIFT + F3` and the search results pane SHALL include hits on context rows, and changing the number of context lines SHALL refresh the search (in the background above 16 MB) without refreshing the filter. Bookmarks, go to line and timeline jumps SHALL treat a context row as a visible row; a target line that is neither a match nor a context line SHALL behave as a line hidden by the filters. The overview strip and the scroll bar SHALL be proportional to the rows shown. "Show in context" SHALL show every line as it does without context lines, and returning SHALL restore the view with its context lines. When collapse is on, runs SHALL be formed over the rows shown, context rows included. The Find results tab SHALL keep searching the lines that pass the filters, without context lines.
+
+#### Scenario: A hit on a context row
+- **WHEN** `N` is 2, the filter is `ERROR`, and the search `retry` matches a context line just before an ERROR line
+- **THEN** the context row shows the match marker and `F3` selects it.
+
+#### Scenario: Going to a hidden line
+- **WHEN** `N` is 2 and the user goes to a line 500 lines away from any match
+- **THEN** the view goes to the next shown row after that line, as it does for a line hidden by the filters.
+
+#### Scenario: Back from show in context
+- **WHEN** `N` is 3 and the user enters and leaves "Show in context" on a match
+- **THEN** the view shows the matches with three context lines each again, with the same top row as before.
+
+### Requirement: Rule Navigation
+The row context menu SHALL offer "Next line of rule" with the enabled highlight rules whose pattern matches that row, regardless of their priority; picking one SHALL make it the stream's navigation rule and go to the next shown line that the rule's pattern matches. `F4` SHALL go to the next and `SHIFT + F4` to the previous shown line matching the navigation rule, starting from the selected row or, without a selection, from the top row of the view, and wrapping around once at the end or the start with the same beep as the search. Without a navigation rule, `F4` SHALL use the first rule in priority order that matches the selected row, and when there is none the stream bar SHALL say so. The walk SHALL never block a frame for more than 4 ms: when the next line is not found within that time the stream bar SHALL show that the rule is being sought and the walk SHALL go on in the following frames until it finds a line, `Esc` is pressed, or the whole stream has been walked, in which case the stream bar SHALL say that no line matches. The jump SHALL select the line, centre it, pause follow mode and expand a collapsed group that hides it. The navigation rule SHALL be forgotten when the rules change and SHALL NOT be persisted.
+
+#### Scenario: Next slow query
+- **WHEN** the rule `duration_ms=\d{4,}` paints slow queries yellow, the user picks "Next line of rule" on a yellow row, then presses `F4`
+- **THEN** the view goes to the next shown line that the rule matches, and `SHIFT + F4` goes back to the previous one.
+
+#### Scenario: Seeking through a large file
+- **WHEN** the navigation rule's next match is 3 GB further down a stream
+- **THEN** the interface stays responsive, the stream bar says the rule is being sought, and the view goes to that line once it is found.
+
+#### Scenario: No rule on the row
+- **WHEN** no navigation rule is set and no rule matches the selected row
+- **THEN** `F4` does not move the view and the stream bar says that no rule matches the row.
+
+### Requirement: Search Scope
+Each stream's search SHALL have a scope, Whole view by default, shown as a chip in the search box. The user SHALL be able to set it to the lines from the first to the last selected line ("Search in selection"), to a typed line range (`first-last`, `first-` to the end of the file, or `-last`), to a time range typed with the formats and rules of the time range popup, or, from the row menu, from the clicked line to the end ("Search from here") or from the start to the clicked line ("Search up to here"). While a scope is set, only visible lines inside it SHALL be hits: the match marker, the tint, the counter (which SHALL say the hits are in range), `F3` / `SHIFT + F3` with their wrap-around, the search results pane and the histogram's search lane SHALL ignore hits outside it, and lines outside it SHALL stay visible. The overview strip SHALL shade the scope. A scope with an open end or a time scope SHALL include matching appended lines; a closed line range SHALL NOT. A time scope SHALL be held while the stream is timed in the background and SHALL be unavailable on a stream without usable timestamps. A truncation, rotation or reload SHALL return the scope to Whole view with a note in the search box. The chip's `✖` SHALL return to Whole view. The scope SHALL NOT be persisted.
+
+#### Scenario: Searching inside a line range
+- **WHEN** the user sets the scope to `1200000-1250000` and searches `timeout`, which occurs 40 times in the file and 3 times in that range
+- **THEN** the counter reads `[1 / 3]` with the in-range note, `F3` from the third hit wraps to the first hit of the range, and the lines outside the range are still shown.
+
+#### Scenario: Search in selection
+- **WHEN** rows 500 to 620 are selected and the user picks "Search in selection" and searches `retry`
+- **THEN** only the `retry` lines between lines 500 and 620 are hits.
+
+#### Scenario: Search from here while following
+- **WHEN** the user picks "Search from here" on line 90,000 of a growing log, searches `ERROR`, and the writer appends an ERROR line
+- **THEN** the appended line is a hit and no ERROR line before line 90,000 is.
+
+#### Scenario: Time scope
+- **WHEN** the user sets the scope to the time range `14:00` to `14:10` and searches `503`
+- **THEN** only lines stamped from 14:00:00.000 to 14:10:59.999 containing `503` are hits, a stack-trace line inheriting a timestamp in the range included.
+
+### Requirement: Find Results Time Scope
+The Find results tab SHALL offer optional from and to fields, accepting the formats of the time range popup, that limit the search of every stream to the lines whose timestamp lies in that range, each stream being timed first when needed. A stream without usable timestamps SHALL be reported as skipped for the time scope. Empty fields SHALL search the whole of each stream, as before.
+
+#### Scenario: Ten minutes across all logs
+- **WHEN** `gateway.log` and `payment.log` are open and the user searches all streams for `req-7f3a` with from `14:00` and to `14:10`
+- **THEN** the results list only the lines of each stream stamped in that range.
+
+### Requirement: Bookmark Tags
+Every `#` word in a bookmark note SHALL be a tag: `#` at the start of the note or after a space, followed by 1 to 32 characters among letters, digits, `-`, `_` and `.`, containing at least one letter, a trailing `.` excluded, compared case-insensitively. Tags SHALL be stored only as part of the note text, so they are saved and restored wherever notes are. The note tooltip of the marker column and of the overview strip SHALL show the tags as chips. The go-to popup (`CTRL + G`) SHALL accept `#tag`: it SHALL jump to the next manual bookmark after the current row whose note carries that tag and that is visible under the active filters, wrapping around; when none exists the popup SHALL say that no bookmark carries the tag. Typing `#` in the popup SHALL suggest the tags of the focused stream.
+
+#### Scenario: Jumping to a tag
+- **WHEN** rows 120, 900 and 4,500 carry notes `start #deploy`, `pool exhausted #db` and `rollback #Deploy`, the current row is 200, and the user enters `#deploy` in the go-to popup
+- **THEN** the view jumps to row 4,500, and entering `#deploy` again wraps to row 120.
+
+#### Scenario: Numbers are not tags
+- **WHEN** a note reads `see issue #42 and #db.`
+- **THEN** the note has the single tag `#db`.
+
+#### Scenario: Unknown tag
+- **WHEN** no note of the focused stream carries `#cache` and the user enters `#cache` in the go-to popup
+- **THEN** the view does not move and the popup says that no bookmark is tagged `#cache`.
+

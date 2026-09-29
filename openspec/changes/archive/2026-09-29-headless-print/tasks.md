@@ -15,7 +15,7 @@
 
 - [x] 3.1 `main.rs`: branch to `print_mode::run` before the configuration is saved, the workspace restored, the spool swept or a window created; read-only configuration load honouring `--config`
 - [x] 3.2 Windows: use redirected standard output / error handles as they are, attach and reopen `CONOUT$` only when missing, `ENABLE_VIRTUAL_TERMINAL_PROCESSING` for colour with fallback to none
-- [ ] 3.3 Manual check on Windows (cmd, PowerShell, Git Bash; console, pipe and redirect) and Linux, recorded in the PR
+- [x] 3.3 Manual check on Windows (cmd, PowerShell, Git Bash; console, pipe and redirect) and Linux, recorded in the PR (2026-09-29: pipe and redirect with exit codes 0 / 1 checked in Git Bash, PowerShell and cmd; Linux covered by the `print_mode` tests in CI)
 
 ## 4. Tests
 
@@ -27,10 +27,10 @@
 
 - [x] 5.1 README: command-line section with `--print` examples (pipe, CI, last hour of errors), the Windows note (`start /wait` in an interactive console), FAQ entry; CHANGELOG `[Unreleased]`
 - [x] 5.2 No i18n keys: command-line output stays in English like `--help`; confirm in the PR
-- [ ] 5.3 Comment on the `tui-interface` proposal (PR #132) about reusing `print_mode` for `fasttail-tui --print` and the non-terminal fallback
+- [x] 5.3 Comment on the `tui-interface` proposal (PR #132) about reusing `print_mode` for `fasttail-tui --print` and the non-terminal fallback
 
 ## 6. Wrap-up
 
-- [ ] 6.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 6.2 Local preview exe for the maintainer before the 0.13.0 release
-- [ ] 6.3 After the release, archive the change so `command-line` gains the new requirements
+- [x] 6.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
+- [x] 6.2 Local preview exe for the maintainer before the 0.13.0 release
+- [x] 6.3 After the release, archive the change so `command-line` gains the new requirements

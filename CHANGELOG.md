@@ -92,7 +92,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (zstd, brotli, lz4...), unsafe or duplicate names and a dictionary above 256 MiB are
   listed disabled with the reason; a 7z whose header is encrypted, larger than 64 MB or
   declaring more than 250,000 files, blocks or streams is refused with a message, and no
-  password is asked; a 7z whose start header fails its CRC is reported as damaged. The picker lists at most 100 000
+  password is asked; a 7z whose start header fails its CRC is reported as damaged. The
+  picker lists at most 100,000
   entries and says when the list is partial. Space guard, output cap, re-extract,
   nested `.gz` entries, workspace, sessions (`entry=`), recent files and bookmarks work
   as for zip entries. Pure-Rust decoder (`sevenz-rust2`); all 16 languages updated.
@@ -133,7 +134,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Command palette.** `CTRL + SHIFT + P`, or `⌨` in the title bar, opens a box over the
   window listing every command: the window, stream, search, bookmark, session and view
   actions (follow, wrap, collapse, go to line, export, next match, show in context, open
-  file, sessions...), every stream menu and row menu item, and every on / off or
+  file, sessions...), the items of the stream menus and of the row menu (bookmark note,
+  copy as shown, time anchor…), and every on / off or
   multiple-choice setting of the Settings page ("Toggle …" with its state; theme,
   language, renderer and size unit open a second step listing the values, the current one
   marked). Typing filters with a fuzzy, case- and accent-insensitive match on the name in
@@ -148,6 +150,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Development.** Windows builds link with `rust-lld` and development builds keep line
+  tables only (an incremental test build went from about two minutes to ten seconds); CI
+  fails on clippy warnings; every Rust file carries the project, copyright and SPDX
+  header.
 - **Building from source needs Rust 1.93.** `sevenz-rust2` 0.23, used to read `.7z`
   logs, requires it; the release binaries are unaffected.
 - `--filter` and `--exclude` can be repeated with `--print` (the window keeps using the last one, as before);
