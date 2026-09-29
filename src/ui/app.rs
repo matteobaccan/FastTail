@@ -442,6 +442,7 @@ fn capture_dialog_geometry<R>(
     }
 }
 
+#[cfg_attr(not(windows), allow(unused_variables))]
 fn setup_cjk_fonts(ctx: &egui::Context) {
     #[cfg(windows)]
     {

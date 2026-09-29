@@ -670,7 +670,7 @@ pub fn local_offset_millis(utc_millis: i64) -> i64 {
         !localtime_r(&secs, &mut tm).is_null()
     };
     if ok {
-        i64::from(tm.gmtoff) * 1000
+        tm.gmtoff * 1000
     } else {
         0
     }
