@@ -966,6 +966,118 @@ impl FastTailApp {
         changed
     }
 
+    /// Opens the stream at `idx`'s filter as a derived stream in a new tab next to it.
+    /// Returns the derived stream's path, `None` when the stream has no filter or the
+    /// spool cannot be created (the stream bar says why).
+    pub fn open_filter_tab(&mut self, idx: usize) -> Option<PathBuf> {
+        let lang = self.config.language;
+        let source = self.engines.get(idx)?;
+        let filter = crate::filter_tab::FrozenFilter::of(source);
+        if !filter.is_active() {
+            self.engines[idx].view_notice = Some(t(lang, "filter_tab_no_filter").to_string());
+            return None;
+        }
+        let name = crate::find_all::stream_name(source);
+        let spool_dir = self.config.compressed_settings().spool_dir;
+        let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
+        let feeder = match crate::filter_tab::DerivedFeeder::create(
+            source, name, filter, &spool_dir, max_bytes,
+        ) {
+            Ok(feeder) => feeder,
+            Err(e) => {
+                self.engines[idx].view_notice = Some(e.to_string());
+                return None;
+            }
+        };
+        let source_path = source.path.clone();
+        let spool = feeder.spool_path().to_path_buf();
+        let mut engine = match TailEngine::open(&spool) {
+            Ok(engine) => engine,
+            Err(e) => {
+                self.engines[idx].view_notice = Some(e.to_string());
+                return None;
+            }
+        };
+        engine.derived = Some(Box::new(feeder));
+        engine.set_global_filter(self.global_spec.clone());
+        engine.follow_tail = true;
+        self.engines.push(engine);
+        // Next to its source: in the source's dock leaf.
+        let tab = FastTailTab::LogStream(spool.clone());
+        match self
+            .dock_state
+            .find_tab(&FastTailTab::LogStream(source_path))
+        {
+            Some(at) => {
+                self.dock_state.set_focused_node_and_surface(at.node_path());
+                self.dock_state.push_to_focused_leaf(tab);
+            }
+            None => self.add_stream_tab(spool.clone()),
+        }
+        Some(spool)
+    }
+
+    /// Feeds the derived streams from their sources (a few milliseconds each per frame)
+    /// and applies their requests: a filter to open as a tab, a line to show in the
+    /// source. Returns whether anything changed.
+    pub fn apply_filter_tab_requests(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(idx) = self.engines.iter().position(|e| e.filter_tab_request) {
+            self.engines[idx].filter_tab_request = false;
+            changed |= self.open_filter_tab(idx).is_some();
+        }
+        for d in 0..self.engines.len() {
+            let Some(source_path) = self.engines[d].derived.as_ref().map(|f| f.source.clone())
+            else {
+                continue;
+            };
+            if let Some(line) = self.engines[d].source_context_request.take() {
+                // Shown like "Show in context" in the source (opened again if closed).
+                if !self.engines.iter().any(|e| e.path == source_path) {
+                    self.open_log_file(source_path.clone());
+                }
+                self.scratch_jump = Some((source_path.clone(), line));
+                changed = true;
+            }
+            let Some(s) = self.engines.iter().position(|e| e.path == source_path) else {
+                if let Some(f) = self.engines[d].derived.as_mut() {
+                    if f.stopped.is_none() {
+                        f.stopped = Some(crate::filter_tab::Stopped::SourceClosed);
+                        changed = true;
+                    }
+                }
+                continue;
+            };
+            if self.engines[d]
+                .derived
+                .as_ref()
+                .is_some_and(|f| f.stopped.is_some())
+            {
+                continue;
+            }
+            if self.engines[d]
+                .derived
+                .as_ref()
+                .is_some_and(|f| f.filter.time_from.is_some() || f.filter.time_to.is_some())
+            {
+                self.engines[s].request_timing();
+            }
+            let (source, derived) = if s < d {
+                let (a, b) = self.engines.split_at_mut(d);
+                (&a[s], &mut b[0])
+            } else {
+                let (a, b) = self.engines.split_at_mut(s);
+                (&b[0], &mut a[d])
+            };
+            let mut feeder = derived.derived.take().expect("a derived stream");
+            if feeder.step(source, std::time::Duration::from_millis(4)) {
+                changed = true;
+            }
+            derived.derived = Some(feeder);
+        }
+        changed
+    }
+
     /// Opens the Scratchpad tab (or brings it to the front).
     pub fn open_scratchpad(&mut self) {
         crate::ui::scratchpad::open_tab(&mut self.dock_state);
@@ -1326,7 +1438,11 @@ impl FastTailApp {
         self.config.open_files = current_open;
 
         // Per-stream state of the default session (filters, search, encoding).
-        for eng in self.engines.iter().filter(|e| !e.is_stdin()) {
+        for eng in self
+            .engines
+            .iter()
+            .filter(|e| !e.is_stdin() && e.derived.is_none())
+        {
             let mut entry = stream_entry_of(eng);
             entry.wrap = false;
             entry.bookmarks.clear();
@@ -3250,6 +3366,9 @@ impl FastTailApp {
             ctx.request_repaint();
         }
         if self.apply_scratchpad_requests() {
+            ctx.request_repaint();
+        }
+        if self.apply_filter_tab_requests() {
             ctx.request_repaint();
         }
         self.scratchpad.save_if_due();
@@ -5242,8 +5361,11 @@ fn extra_terms(terms: &[String]) -> Vec<String> {
 }
 
 /// True for the tab of the standard-input stream, which no workspace or session keeps.
+/// Streams that are not saved in the workspace or sessions: standard input and the
+/// derived streams of "Open filter as new tab" (their spools go with the process).
 fn is_stdin_tab(tab: &FastTailTab) -> bool {
-    matches!(tab, FastTailTab::LogStream(p) if crate::stdin_source::is_stdin_path(p))
+    matches!(tab, FastTailTab::LogStream(p)
+        if crate::stdin_source::is_stdin_path(p) || crate::filter_tab::is_derived_path(p))
 }
 
 /// Command line options applied to the standard-input stream when it opens.

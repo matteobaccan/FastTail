@@ -1632,6 +1632,12 @@ pub struct TailEngine {
     /// The selected rows (or the current hit) go to the scratchpad; `true` with a
     /// reference line above them. Applied by the app after the dock is drawn.
     pub scratch_request: Option<bool>,
+    /// A derived stream ("Open filter as new tab") feeds its spool from its source.
+    pub derived: Option<Box<crate::filter_tab::DerivedFeeder>>,
+    /// The stream menu asked for its filter as a new tab (applied by the app).
+    pub filter_tab_request: bool,
+    /// "Show in context" on a derived stream: the source line to show in the source.
+    pub source_context_request: Option<usize>,
     /// Markdown-mode text (HTML converted when needed), cached per buffer generation.
     pub markdown_text_cache: Option<(u64, String)>,
     pub highlight_rules: Vec<HighlightRule>,
@@ -2223,6 +2229,9 @@ impl TailEngine {
             find_all_request: false,
             report_request: false,
             scratch_request: None,
+            derived: None,
+            filter_tab_request: false,
+            source_context_request: None,
             markdown_text_cache: None,
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
@@ -3590,6 +3599,25 @@ impl TailEngine {
 
     pub fn total_lines(&self) -> usize {
         self.line_offsets.len()
+    }
+
+    /// The line number shown for line `idx`: the source's for a derived stream (1-based).
+    pub fn shown_line_number(&self, idx: usize) -> usize {
+        self.derived
+            .as_ref()
+            .and_then(|d| d.source_line(idx))
+            .unwrap_or(idx)
+            + 1
+    }
+
+    /// Whether the last line ends with a newline (an unterminated one may still grow).
+    pub fn last_line_complete(&self) -> bool {
+        let len = self.source.len();
+        len == 0
+            || self
+                .source
+                .read_with(len - 1, 1, |b| b == b"\n")
+                .unwrap_or(false)
     }
 
     /// Start offset, byte length to read (capped at `MAX_LINE_BYTES`) and truncation flag
@@ -7436,7 +7464,13 @@ impl TailEngine {
         } else if let Some(rel) = s.strip_prefix('-') {
             current_line.saturating_sub(rel.trim().parse::<usize>().ok()?)
         } else {
-            s.parse::<usize>().ok()?.checked_sub(1)?
+            let number = s.parse::<usize>().ok()?.checked_sub(1)?;
+            // A derived stream numbers its rows as the source does: the row holding that
+            // source line, or the next one.
+            match &self.derived {
+                Some(d) => d.derived_line_at_or_after(number).unwrap_or(total - 1),
+                None => number,
+            }
         };
         let clamped = requested.min(total - 1);
         Some(self.goto_target_for(clamped, total))

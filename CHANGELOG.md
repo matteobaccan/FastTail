@@ -28,6 +28,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   them in the search box and `Esc` clears them; `SHIFT` / `CTRL` clicks keep selecting
   rows. The selection is cleared by a reload and when a filter hides its row.
 
+- **Filter as a new tab.** "Open filter as new tab" (stream menu, row menu) opens a tab
+  `⧉ app.log ▸ ERROR` with the lines passing the stream's filter as it is now (frozen),
+  following the source (appends added, truncation or rotation rebuilds it). It is a normal
+  stream with its own search and filters; the gutter and go to line use the source's line
+  numbers, and Show in context / `CTRL + K` shows the line in the source. It stops
+  following when the source is closed or its spool (bounded by `stdin_spool_max_mb`) is
+  full, and is not saved with the workspace, like standard input.
 - **Scratchpad.** A plain-text tab per session (🗂 menu, palette) to collect lines and
   notes: "Send to scratchpad" in the row menu and in Find results, or `CTRL + SHIFT + N`,
   appends the selected rows under a `── app.log:1204 ──` reference line (or without it);

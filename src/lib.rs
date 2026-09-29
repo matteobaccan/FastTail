@@ -17,6 +17,7 @@ pub mod crash_handler;
 pub mod external_tools;
 pub mod file_source;
 pub mod filter_preset;
+pub mod filter_tab;
 pub mod find_all;
 pub mod global_filter;
 pub mod html_converter;
