@@ -440,9 +440,14 @@ fn control_tooltip(engine: &TailEngine, state: &ControlState, lang: Language) ->
                     |ms| format_millis(engine.to_display_clock(ms)),
                 )
             };
+            let key = if engine.time_window_slides_in_place() {
+                "time_range_live"
+            } else {
+                "time_range_live_minute"
+            };
             lines.push(format!(
                 "⟳ {}",
-                t(lang, "time_range_live")
+                t(lang, key)
                     .replace("{from}", &side(from))
                     .replace("{to}", &side(to))
             ));

@@ -4650,14 +4650,21 @@ impl TailEngine {
             && (is_relative_time(&self.time_from_text) || is_relative_time(&self.time_to_text))
     }
 
+    /// Whether a live window moves in place (`slide_time_window`): the log's timestamps
+    /// never go back. Otherwise it is refiltered at most once every `LIVE_FULL_REFRESH`.
+    pub fn time_window_slides_in_place(&self) -> bool {
+        !self.timestamps_unordered()
+    }
+
     /// Re-reads a live window at `now` (display clock) and moves its bounds. On a log
     /// whose timestamps never go back, the lines that left the window are dropped from the
-    /// front and only the lines after the old "to" are read again, so the cost follows the
-    /// lines that changed, not the file. Otherwise (a log that goes back in time, context
-    /// lines, a scan running, a bound moving back) the filters run again, at most once
-    /// every `LIVE_FULL_REFRESH`.
+    /// front and only the lines between the old and the new "to" are read, so the cost
+    /// follows the lines that changed, not the file. Otherwise (a log that goes back in
+    /// time, context lines, a filter or search scan running, a bound moving back) the
+    /// filters run again, at most once every `LIVE_FULL_REFRESH`, keeping the top line.
+    /// Nothing moves while "Show in context" suspends the filters.
     pub fn slide_live_window_at(&mut self, now: i64) {
-        if !self.time_window_live() || self.pending_window.is_some() {
+        if !self.time_window_live() || self.pending_window.is_some() || self.context.is_some() {
             return;
         }
         let (from_text, to_text) = (self.time_from_text.clone(), self.time_to_text.clone());
@@ -4675,7 +4682,10 @@ impl TailEngine {
             return;
         }
         self.live_refiltered_at = Some(Instant::now());
-        self.apply_time_window(from, to);
+        let top = self.view_top_line;
+        if self.apply_time_window(from, to) {
+            self.keep_top_line(top);
+        }
     }
 
     /// Moves the window forward on an ordered, fully timed log without running the
@@ -4686,9 +4696,17 @@ impl TailEngine {
             (Some(old), Some(new)) => new >= old,
             _ => false,
         };
+        // Scans that build the visible lines or the hits conflict; level, collapse and
+        // automatic-bookmark scans do not (their results follow the rows).
+        let conflicting_job = self.job.as_ref().is_some_and(|j| {
+            matches!(
+                j.kind,
+                ScanKind::Filter | ScanKind::Search | ScanKind::Timestamps | ScanKind::Index
+            )
+        });
         if self.timestamps_unordered()
             || !self.timestamps_complete()
-            || self.job.is_some()
+            || conflicting_job
             || self.index_pending
             || self.has_context()
             || !forward(self.time_from, from)
@@ -4702,14 +4720,17 @@ impl TailEngine {
         // Untimed lines (`NO_TIMESTAMP`, the smallest value) stay before the cut.
         let cut = from.map_or(0, |f| self.timestamps.partition_point(|&ts| ts < f));
         let dropped = self.filtered_lines.partition_point(|&idx| idx < cut);
-        // Lines after the old "to" that the new one lets in are read again.
-        let rescan = match (old_to, to) {
+        // The lines the moved "to" lets in: after the old bound, up to the new one. On an
+        // ordered log every visible line lies before them, and those after stay hidden.
+        let admitted = match (old_to, to) {
             (Some(old), Some(new)) if new > old => {
-                Some(self.timestamps.partition_point(|&ts| ts <= old))
+                let first = self.timestamps.partition_point(|&ts| ts <= old);
+                let last = self.timestamps.partition_point(|&ts| ts <= new);
+                (first < last).then_some((first.max(cut), last))
             }
             _ => None,
         };
-        if dropped == 0 && rescan.is_none_or(|start| start >= self.total_lines()) {
+        if dropped == 0 && admitted.is_none() {
             return true;
         }
         let top = self.view_top_line;
@@ -4717,9 +4738,18 @@ impl TailEngine {
             let kept = self.filtered_lines.split_off(dropped);
             self.clear_filtered();
             self.extend_filtered(kept);
+        }
+        let admitted_from = admitted.map(|(first, _)| first);
+        if let Some((first, last)) = admitted {
+            let fresh = self.visible_between(first, last);
+            self.extend_filtered(fresh);
+        }
+        // The hits follow: trimmed at the front, searched again over the admitted lines
+        // (or from the start when the list is capped and the counts cannot be cut).
+        if !self.last_searched_query.is_empty() {
             if self.search_capped() {
                 self.refresh_search_from(0);
-            } else if !self.last_searched_query.is_empty() {
+            } else {
                 let gone = self.search_matches.partition_point(|&idx| idx < cut);
                 if gone > 0 {
                     self.search_matches.drain(..gone);
@@ -4731,17 +4761,33 @@ impl TailEngine {
                         .filter(|_| left > 0);
                     self.search_generation = self.search_generation.wrapping_add(1);
                 }
+                if let Some(first) = admitted_from {
+                    self.refresh_search_from(first);
+                }
             }
         }
         self.filter_generation = self.filter_generation.wrapping_add(1);
+        // The groups are formed over the visible positions, which all moved.
         self.mark_collapse_dirty(0);
-        if let Some(start) = rescan {
-            self.recompute_filtered_lines_from(start);
-            self.refresh_search_from(start);
-        }
         self.update_collapse();
         self.keep_top_line(top);
         true
+    }
+
+    /// The visible lines among `[start, end)` under the text, level and time filters, a
+    /// stack-trace line following its entry: what a filter pass over that range keeps.
+    fn visible_between(&self, start: usize, end: usize) -> Vec<usize> {
+        let mut fresh = Vec::new();
+        let mut parent_visible = self.parent_visible_before(start);
+        self.scan_lines(start, end, |idx, line| {
+            let (visible, next) = self.filter.visible_in_sequence(line, parent_visible);
+            parent_visible = next;
+            if visible && self.in_time_range(idx) {
+                fresh.push(idx);
+            }
+            true
+        });
+        fresh
     }
 
     /// Whether a window has been entered and waits for the stream to be timed.
@@ -4987,6 +5033,9 @@ impl TailEngine {
             return (true, true);
         }
         self.pending_window = Some(PendingWindow::Texts);
+        // The window is filtered in full now: a live one starts its minute from here.
+        self.live_refiltered_at = Some(Instant::now());
+        self.live_checked_at = Instant::now();
         self.request_timestamps();
         let (_, from_ok, _, to_ok) = self.parse_time_fields();
         (from_ok, to_ok)
@@ -5414,6 +5463,11 @@ impl TailEngine {
         };
         if let SearchScope::Time { from, to } = &scope {
             let (_, from_ok, _, to_ok) = self.parse_time_texts(from, to);
+            // A search scope is fixed when it is set: a relative time would not slide.
+            let (from_ok, to_ok) = (
+                from_ok && !is_relative_time(from),
+                to_ok && !is_relative_time(to),
+            );
             if !(from_ok && to_ok) {
                 return (from_ok, to_ok);
             }

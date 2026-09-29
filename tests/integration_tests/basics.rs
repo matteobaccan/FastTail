@@ -568,6 +568,7 @@ fn test_i18n_exhaustive_coverage() {
         "time_range_relative",
         "time_range_relative_tip",
         "time_range_live",
+        "time_range_live_minute",
         "time_range_live_empty",
         "app_subtitle",
         "follow_tail",
