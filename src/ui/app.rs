@@ -5607,10 +5607,8 @@ impl FastTailApp {
             A::Settings => self.config.settings_open = !self.config.settings_open,
             A::ColorFilters => self.config.filters_open = !self.config.filters_open,
             A::AlwaysOnTop => self.config.always_on_top = !self.config.always_on_top,
-            A::LockNow => {
-                if !self.config.lock_pin.is_empty() {
-                    self.lock();
-                }
+            A::LockNow if !self.config.lock_pin.is_empty() => {
+                self.lock();
             }
             A::GlobalFilterBar => {
                 self.config.global_filter.bar_open = !self.config.global_filter.bar_open

@@ -1463,11 +1463,12 @@ fn render_log_stream(
     // frame; a match is shown through `request_jump`, handled right below.
     let sought = engine.rule_seek_pattern().map(str::to_owned);
     match engine.step_rule_seek(crate::tail_engine::RULE_SEEK_BUDGET, lang) {
-        Some(crate::tail_engine::RuleSeekStep::Found { wrapped, .. }) => {
-            if wrapped && sound_enabled {
-                crate::audio::SoundAlertPreset::Beep.play();
-            }
+        Some(crate::tail_engine::RuleSeekStep::Found {
+            wrapped: true, ..
+        }) if sound_enabled => {
+            crate::audio::SoundAlertPreset::Beep.play();
         }
+        Some(crate::tail_engine::RuleSeekStep::Found { .. }) => {}
         Some(crate::tail_engine::RuleSeekStep::Pending) => ui.ctx().request_repaint(),
         Some(crate::tail_engine::RuleSeekStep::NotFound) => {
             engine.view_notice =
