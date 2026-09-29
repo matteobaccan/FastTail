@@ -1772,6 +1772,7 @@ fn render_log_stream(
             if let Some(text) = engine
                 .char_selection
                 .as_ref()
+                .filter(|_| !search_resp.has_focus())
                 .map(CharSelection::selected)
                 .filter(|t| !t.is_empty() && t.chars().count() <= 256 && !t.contains('\n'))
             {
@@ -2392,12 +2393,20 @@ fn render_log_stream(
                 }
                 ui.ctx().request_repaint();
             }
-            // Esc on the rows: clears a character selection first.
-            if keys_ok
-                && engine.char_selection.is_some()
-                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-            {
-                engine.char_selection = None;
+            // Esc on the rows: clears a character selection first (a bare caret goes
+            // without using the key, so Esc still does what it did before).
+            if keys_ok && engine.char_selection.is_some() {
+                let non_empty = engine
+                    .char_selection
+                    .as_ref()
+                    .is_some_and(|sel| !sel.is_empty());
+                if non_empty {
+                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                        engine.char_selection = None;
+                    }
+                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    engine.char_selection = None;
+                }
             }
             // Esc on the rows: stops a rule walk, else clears the outlined token (before
             // it leaves the context view, below).
@@ -2874,6 +2883,9 @@ fn render_log_stream(
     }
 
     if let Some((idx, mods)) = row_click {
+        if mods.shift || mods.ctrl || mods.command {
+            engine.char_selection = None;
+        }
         if mods.shift {
             engine.extend_selection_to(idx);
         } else if mods.ctrl || mods.command {
@@ -3945,8 +3957,6 @@ fn char_to_byte(text: &str, idx: usize) -> usize {
     text.char_indices().nth(idx).map_or(text.len(), |(i, _)| i)
 }
 
-/// The selection highlight token under `pointer` in a row's galley drawn at `pos` (see
-/// `tail_engine::token_at`), `None` over empty space or a character no token has.
 /// What a press, a drag or a click on a row's text does to the character selection.
 enum CharPick {
     Set(CharSelection),
@@ -3995,7 +4005,7 @@ fn row_char_selection(
         return None;
     }
     let modifiers = ui.input(|i| i.modifiers);
-    if clicked && !double && !triple && (modifiers.shift || modifiers.command) {
+    if (started || (clicked && !double && !triple)) && (modifiers.shift || modifiers.command) {
         return None;
     }
     let now_at = click.interact_pointer_pos()?;
@@ -4126,6 +4136,8 @@ fn paint_char_selection(
     }
 }
 
+/// The selection highlight token under `pointer` in a row's galley drawn at `pos` (see
+/// `tail_engine::token_at`), `None` over empty space or a character no token has.
 fn token_under(galley: &egui::Galley, pos: egui::Pos2, pointer: egui::Pos2) -> Option<String> {
     let local = pointer - pos;
     let size = galley.size();

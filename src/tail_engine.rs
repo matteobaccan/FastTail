@@ -2927,12 +2927,17 @@ impl TailEngine {
         }
         self.truncate_levels(derived_from);
         self.truncate_timestamps(derived_from);
+        // A character selection keeps the text its row showed: a row read again (or every
+        // row, when the whole file is) may show other text.
+        if self
+            .char_selection
+            .as_ref()
+            .is_some_and(|sel| derived_from == 0 || sel.line >= derived_from)
+        {
+            self.char_selection = None;
+        }
         if derived_from == 0 {
             self.hold_time_window();
-            // Line numbers no longer name the same lines: back to the whole view.
-            if unchanged_lines == 0 {
-                self.char_selection = None;
-            }
             if unchanged_lines == 0 && !self.search_scope.is_all() {
                 self.search_scope = SearchScope::All;
                 self.search_scope_reset = true;
@@ -5010,6 +5015,7 @@ impl TailEngine {
     pub fn set_time_display(&mut self, display: crate::timestamp::TimeDisplay) {
         if display != self.time_display {
             self.time_display = display;
+            self.char_selection = None;
             self.view_columns_dirty = true;
             self.refresh_time_zone_sample();
             self.reread_time_window();
@@ -5921,6 +5927,9 @@ impl TailEngine {
         if mode == ViewMode::Markdown && self.markdown_too_large() {
             // Rendered Markdown needs the whole text in memory: stay in the current view.
             return;
+        }
+        if mode != ViewMode::Text {
+            self.char_selection = None;
         }
         if matches!(mode, ViewMode::Hex | ViewMode::Markdown) {
             self.leave_context();
@@ -7548,6 +7557,7 @@ impl TailEngine {
 
     /// Selects every row visible under the active filters (Ctrl+A), lazily.
     pub fn select_all_visible(&mut self) {
+        self.char_selection = None;
         self.selection.clear();
         self.selection_all = true;
         self.selection_anchor = None;

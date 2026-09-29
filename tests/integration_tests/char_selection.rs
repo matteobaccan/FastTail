@@ -294,3 +294,65 @@ fn ctrl_c_copies_the_selected_characters_before_the_rows() {
     h.frame(vec![ctrl_c]);
     assert_eq!(h.copied.as_deref(), Some(row));
 }
+
+#[test]
+fn select_all_other_views_and_the_time_display_drop_the_selection() {
+    use fasttail::tail_engine::ViewMode;
+    use fasttail::timestamp::TimeDisplay;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.log");
+    super::write_lines(&path, LOG);
+    let mut engine = TailEngine::open(&path).unwrap();
+    let select = |engine: &mut TailEngine| {
+        let text = engine.get_line(0).unwrap().into_owned();
+        engine.char_selection = Some(CharSelection::new(0, text, 0, 4));
+    };
+    select(&mut engine);
+    engine.select_all_visible();
+    assert!(engine.char_selection.is_none());
+    select(&mut engine);
+    engine.set_view_mode(ViewMode::Hex);
+    assert!(engine.char_selection.is_none());
+    engine.set_view_mode(ViewMode::Text);
+    select(&mut engine);
+    engine.set_time_display(TimeDisplay::Utc);
+    assert!(engine.char_selection.is_none());
+}
+
+#[test]
+fn a_shift_click_selects_rows_and_ctrl_c_copies_them_again() {
+    let mut h = Harness::new();
+    h.frame(Vec::new());
+    h.frame(Vec::new());
+    let row = LOG[0];
+    let start = row.find("abc").unwrap();
+    h.drag(h.char_pos(row, start), h.char_pos(row, start + 3));
+    assert_eq!(h.selected().as_deref(), Some("abc"));
+    let at = h.char_pos(LOG[1], 2);
+    let shift_button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::SHIFT,
+    };
+    h.frame(vec![
+        egui::Event::ModifiersChanged(egui::Modifiers::SHIFT),
+        egui::Event::PointerMoved(at),
+    ]);
+    h.frame(vec![shift_button(true)]);
+    h.frame(vec![shift_button(false)]);
+    h.frame(vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+    assert!(h.engines[0].char_selection.is_none());
+    assert!(h.engines[0].is_selected(0) && h.engines[0].is_selected(1));
+    h.frame(vec![egui::Event::Key {
+        key: egui::Key::C,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::COMMAND,
+    }]);
+    assert_eq!(
+        h.copied.as_deref(),
+        Some(format!("{}\n{}", LOG[0], LOG[1]).as_str())
+    );
+}
