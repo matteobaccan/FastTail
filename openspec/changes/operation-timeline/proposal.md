@@ -30,7 +30,7 @@ it; with `structured-fields` giving ids as fields, FastTail can.
   and reported, not drawn).
 - "Copy as CSV" copies the table. Not persisted; no new key in `fasttail.ini`.
 
-Target release: **0.14.0** (structured logs and analysis), per the release plan in
+Target release: **0.21.0** (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Medium**. Effort: **M**.
 
 ### Non-goals

@@ -24,5 +24,5 @@
 ## 5. Wrap-up
 
 - [x] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 5.2 Local preview exe for the maintainer before the 0.13.0 release
+- [x] 5.2 Local preview exe for the maintainer before the 0.13.0 release
 - [ ] 5.3 After the release, archive the change so `filters-and-highlighting` gains the new requirements

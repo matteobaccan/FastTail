@@ -8,7 +8,7 @@ A request crosses several services and several log files. Tailviewer's merged vi
 - The merged view follows all sources live, supports the usual filters, search, highlight rules, bookmarks and export, and lets the user toggle sources on and off.
 - Sources without timestamps cannot be merged and are refused with a hint.
 
-Target release: **0.14.0** (structured logs and analysis), per the release plan in
+Target release: **0.21.0** (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Effort: **L**.
 
 ## Capabilities

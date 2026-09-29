@@ -89,3 +89,59 @@ The stream menu SHALL offer "Bookmark report…" for its stream and the main men
 - **WHEN** the report of all streams exceeds 4 MB
 - **THEN** the Copy button is disabled with a tooltip giving the reason and Save writes the whole report.
 
+### Requirement: Compare Lines
+With exactly two rows selected in a stream, the row context menu SHALL offer "Compare selected lines". The row context menu SHALL also offer "Mark for compare", which records the row under the menu as the window's compare mark, shown in its stream's gutter, and, while a line is marked, "Compare with marked line" on any row of any stream. Comparing SHALL open a Compare tab showing the two lines side by side, wrapped, with the differing words highlighted on each side, the text being the line without ANSI escape sequences as copy produces it. Each side SHALL name its stream and line number, and a double click on a side SHALL focus that line in its stream. "Copy as unified diff" SHALL copy the comparison as unified diff text. Compare tabs SHALL NOT be saved in the workspace or sessions.
+
+#### Scenario: One field differs
+- **WHEN** lines 120 and 480 differ only in `status=200` versus `status=503` and the user compares them
+- **THEN** the Compare tab highlights `200` on the left and `503` on the right and nothing else.
+
+#### Scenario: Across streams
+- **WHEN** the user marks line 77 of `node-a.log` and picks "Compare with marked line" on line 81 of `node-b.log`
+- **THEN** the Compare tab shows `node-a.log:77` on the left and `node-b.log:81` on the right.
+
+### Requirement: Compare Regions
+When the compare mark holds a selection of several lines, the row context menu of a stream with a selection SHALL offer "Compare selection with marked selection", comparing the two lists of lines in file order with a line diff that aligns unchanged lines and shows added, removed and changed lines, with word highlights inside changed lines. Each side SHALL be limited to 20,000 lines, a larger selection being refused with a message. The comparison SHALL run off the UI thread; if it exceeds 2 seconds, a coarser line-only result SHALL be shown with a notice. The tab SHALL show the number of changes, and `F7` / `SHIFT + F7` SHALL move to the next / previous change.
+
+#### Scenario: Two runs of a job
+- **WHEN** the user marks lines 1–300 of `run1.log`, selects lines 1–302 of `run2.log` and compares them
+- **THEN** the tab aligns the common lines, shows the 2 extra lines of `run2.log` as added and F7 jumps to them.
+
+### Requirement: Compare Ignore Options
+The Compare tab SHALL offer toggles to ignore the leading timestamp (on by default), numbers, hexadecimal ids and UUIDs, differences in whitespace amount and letter case; ignored parts SHALL NOT count as differences but SHALL still be shown as written. When both compared lines contain a JSON object, a "Compare as JSON" toggle SHALL compare them pretty-printed with keys sorted.
+
+#### Scenario: Timestamps ignored
+- **WHEN** two lines are identical except for their leading timestamps and the timestamp option is on
+- **THEN** the Compare tab reports no difference.
+
+#### Scenario: JSON key order
+- **WHEN** two lines hold `{"a":1,"b":2}` and `{"b":3,"a":1}` and "Compare as JSON" is on
+- **THEN** only the row `"b": 2` versus `"b": 3` is shown as changed.
+
+### Requirement: Character Selection Inside a Row
+In the Text view each stream SHALL keep at most one character selection, inside a single row, beside its row selection. Pressing the mouse on a row's text and dragging SHALL select the characters between the press and the pointer, clamped to that row and scrolling horizontally near the edges; a press released without moving more than 4 pixels SHALL act as today's click and place a caret at that character. With a caret in the focused stream, `SHIFT + ←` / `SHIFT + →` SHALL extend the selection by one character, `CTRL + SHIFT + ←` / `CTRL + SHIFT + →` by one word, and `SHIFT + Home` / `SHIFT + End` to the start or end of the row; these keys SHALL NOT be consumed when the focused stream has no caret. A double-click SHALL select the word under the pointer and a triple-click the whole row text. The selection SHALL be drawn over the row tints in the theme's selection colour, and SHALL be cleared by `Esc`, by a click on another row, when the file is truncated or reloaded, and when a filter change hides its row. With a non-empty character selection, `CTRL + C` SHALL copy exactly the selected characters of the shown text (without ANSI escapes in render and strip modes, tabs kept, never the `×N` badge or the gutter) and the row context menu SHALL offer "Copy selected text"; otherwise `CTRL + C` SHALL copy the selected rows as before. `CTRL + F` with a non-empty character selection of at most 256 characters SHALL put that text in the search box. Row selection by click, `SHIFT + click`, `CTRL + click` and `CTRL + A` SHALL be unchanged. The HEX and rendered Markdown views SHALL keep row selection only.
+
+#### Scenario: Copying a request id
+- **WHEN** row 88 reads `INFO req=7f3a9c21 user=bob done` and the user drags from `7` to `1` of `7f3a9c21` and presses `CTRL + C`
+- **THEN** the clipboard holds `7f3a9c21` and row 88 is the selected row.
+
+#### Scenario: Keyboard extension
+- **WHEN** the user clicks just before `user` in row 88 and presses `CTRL + SHIFT + →` once
+- **THEN** the character selection is `user` and `CTRL + C` copies `user`.
+
+#### Scenario: Drag clamped to the row
+- **WHEN** the user presses on row 88 and releases the mouse over row 95
+- **THEN** only characters of row 88 are selected and rows 89 to 95 are not selected.
+
+#### Scenario: Rows still copy
+- **WHEN** rows 3 and 4 are selected by `SHIFT + click` and no character selection exists
+- **THEN** `CTRL + C` copies both rows in full, as before.
+
+#### Scenario: Search from the selection
+- **WHEN** the character selection is `OutOfMemoryError` and the user presses `CTRL + F`
+- **THEN** the search box of the focused stream holds `OutOfMemoryError`.
+
+#### Scenario: Coloured stream
+- **WHEN** a stream in ANSI render mode shows `ESC[31mERRORESC[0m payment failed` and the user selects `ERROR pay`
+- **THEN** `CTRL + C` copies `ERROR pay` without any escape byte.
+

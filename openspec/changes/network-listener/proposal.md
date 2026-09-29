@@ -42,7 +42,7 @@ TCP / UDP / syslog listener gap 13 (value medium).
 - **OTLP** is not part of this change: the `otlp-receiver` change is its phase 2 and
   reuses these listener streams, bounds and settings.
 
-Target release: **0.15.0** (sources and integrations), per the release plan in
+Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **medium**. Effort: **M (about 2 weeks)**.
 
 ### Non-goals

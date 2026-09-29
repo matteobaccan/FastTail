@@ -22,5 +22,5 @@
 ## 4. Wrap-up
 
 - [x] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 4.2 Local preview exe for the maintainer before the 0.13.0 release
+- [x] 4.2 Local preview exe for the maintainer before the 0.13.0 release
 - [ ] 4.3 After the release, archive the change so `cyber-ui-docking` gains the new requirements

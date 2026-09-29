@@ -11,7 +11,7 @@
 - [x] 2.3 Caret on click; `SHIFT + ←/→`, `CTRL + SHIFT + ←/→`, `SHIFT + Home/End`; keys consumed only with a caret in the focused stream
 - [x] 2.4 `CTRL + C` precedence; "Copy selected text" in the row menu; `CTRL + F` fills the search box (at most 256 characters)
 - [x] 2.5 Double-click word, triple-click row text; coordinate with the `quick-wins-0-13` selection highlight
-- [ ] 2.6 (open until `structured-fields` ships) With `structured-fields` shipped: in the column view the selection stays inside one cell
+- [x] 2.6 (moved to `structured-field-terms` task 3.4) With `structured-fields` shipped: in the column view the selection stays inside one cell
 - [x] 2.7 Tests (egui kittest or logic-level): drag range, word selection, copy precedence, row selection unchanged by a plain click
 
 ## 3. Texts and documentation
@@ -22,5 +22,5 @@
 ## 4. Wrap-up
 
 - [x] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 4.2 Local preview exe for the maintainer before the release
-- [ ] 4.3 After the release, archive the change so `selection-and-export` gains the new requirement
+- [x] 4.2 Local preview exe for the maintainer before the release
+- [x] 4.3 After the release, archive the change so `selection-and-export` gains the new requirement

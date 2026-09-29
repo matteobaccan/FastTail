@@ -31,7 +31,7 @@ spans lines; the post-0.12.0 scan lists cross-line regex among the low-value, Sâ
 - The mode is saved per stream as `search_mode=regex|multiline` (only when not text);
   the search history stores the query with its mode.
 
-Target release: **0.14.0** (structured logs and analysis), per the release plan in
+Target release: **0.21.0** (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low**. Effort: **M**.
 
 ### Non-goals

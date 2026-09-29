@@ -32,7 +32,7 @@ button. The post-0.12.0 competitor scan lists the tray icon among the small gaps
 - New `fasttail.ini` keys in `[general]`: `tray_icon`, `minimize_to_tray`,
   `close_to_tray` (all default `false`).
 
-Target release: **0.14.0** (planned for 0.13.0, moved when 0.13.0 shipped early), per the release plan in
+Target release: **0.21.0** for the Linux backend (task 1.3); the Windows tray shipped in 0.14.0 (planned for 0.13.0, moved after 0.14.0 and after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low**. Effort: **S–M**.
 
 ### Non-goals

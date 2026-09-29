@@ -22,7 +22,7 @@ in the post-0.12.0 competitor scan), but cheap once `network-listener` exists.
 - Answers `200` with an empty `ExportLogsServiceResponse`, `415` for other content
   types, `413` above 16 MB per request, `429` with `Retry-After: 1` when rate-limited.
 
-Target release: **0.15.0** (sources and integrations), per the release plan in
+Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **low**. Effort: **S (under a week on top of `network-listener`)**.
 
 ### Non-goals

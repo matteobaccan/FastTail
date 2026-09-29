@@ -226,15 +226,19 @@ Each side of the popup SHALL offer a calendar of one month (a 7×6 grid, weeks s
 - **THEN** both calendars show July 2025 with the days the log spans tinted
 
 ### Requirement: Time range shortcuts
-The popup SHALL offer shortcut buttons that fill the draft: "Whole log" empties both sides; "First day" and "Last day" set both sides to the date of the stream's first or last timestamp; "Last hour" sets the window to the hour ending at the stream's last timestamp. The shortcuts that need timestamps SHALL be disabled until the stream has been timed and when it has no usable timestamps. Like any edit, a shortcut SHALL take effect when OK is pressed.
+The popup SHALL offer shortcut buttons that fill the draft: "Whole log" empties both sides; "First day" and "Last day" set both sides to the date of the stream's first or last timestamp; "Last hour of the log" sets the window to the hour ending at the stream's last timestamp. A "Relative to now" row SHALL offer 5 min, 15 min, 1 h, 6 h, 24 h and 7 d, each setting the "from" side to the matching relative time (`-5m`, `-15m`, `-1h`, `-6h`, `-24h`, `-7d`) and emptying the "to" side. The shortcuts that need the stream's timestamps ("First day", "Last day", "Last hour of the log") SHALL be disabled until the stream has been timed and when it has no usable timestamps; the relative shortcuts SHALL be disabled only when the stream has no usable timestamps. Like any edit, a shortcut SHALL take effect when OK is pressed.
 
 #### Scenario: Last day of a multi-day log
 - **WHEN** a log runs from 2026-05-25 to 2026-05-29 and the user presses "Last day" and then OK
 - **THEN** only the lines of 2026-05-29 are visible
 
-#### Scenario: Last hour
-- **WHEN** the last timestamp of the log is 2026-05-29 23:38:12 and the user presses "Last hour"
+#### Scenario: Last hour of the log
+- **WHEN** the last timestamp of the log is 2026-05-29 23:38:12 and the user presses "Last hour of the log"
 - **THEN** the sides read `2026-05-29 22:38:12` and `2026-05-29 23:38:12`
+
+#### Scenario: Relative shortcut
+- **WHEN** the user presses "15 min" in the "Relative to now" row and then OK
+- **THEN** the "from" side reads `-15m`, the "to" side is empty, and the window is live
 
 ### Requirement: Context Lines Around Matches
 The text view of a stream SHALL offer a context lines setting `N` from 0 to 100 (default 0), set from a `±N` control in the stream bar. While `N` is greater than 0 and the stream has an active filter (include or exclude terms, minimum level, time range or the global filter), the view SHALL show every line that passes the filters (a match) together with the `N` file lines before it and the `N` file lines after it, in file order, each line at most once. Context lines SHALL be taken from the file regardless of every filter, and a line that is itself a match SHALL be shown as a match. Context rows SHALL be drawn with the theme's dim text colour and their rule, label, ANSI and level colours at reduced opacity; match rows SHALL keep their normal style. Between two shown lines that are not consecutive in the file, a separator rule SHALL be drawn between their rows, not as a row of its own, with a tooltip giving the number of hidden lines. Changing `N` SHALL NOT recompute the filter, and scrolling SHALL NOT recompute anything. With `N` equal to 0, or without an active filter, the view SHALL behave exactly as without this feature. The setting SHALL NOT affect the HEX and rendered Markdown views. It SHALL be saved with the stream in the workspace and in session files as `context_lines=N`, written only when `N` is greater than 0.
@@ -326,4 +330,26 @@ The application SHALL offer automatic highlighting of tokens, off by default, sw
 #### Scenario: Off by default
 - **WHEN** FastTail starts with a `fasttail.ini` that has no `auto_highlight` key
 - **THEN** no automatic token colour is painted.
+
+### Requirement: Relative Time Windows
+Each side of the time range SHALL also accept a relative time: `now`, or `-` followed by one or more number-and-unit pairs with the units `s`, `m`, `h`, `d` and `w` (for example `-15m`, `-3h`, `-1h30m`), meaning the current time minus that duration. The current time SHALL be the local clock, or the current time in the stream's source zone when one is set. A relative "to" side SHALL be the exact instant, without widening to the end of a unit. While a side of the window is relative the window SHALL be live: its bounds SHALL be re-evaluated at least every 5 seconds and when lines are appended, lines that leave the window SHALL disappear and appended lines inside it SHALL appear, without recomputing the filter over the whole file when the stream's timestamps never decrease, and with a full recomputation at most once a minute otherwise. The time span control SHALL begin with `⟳` while the window is live, and its tooltip SHALL give the typed text and the bounds in force. When a live window holds no line because the stream's last timestamp is before its start, the control SHALL say so and give the last line's time. A filter preset saved with a relative window SHALL keep the relative text.
+
+#### Scenario: The last 15 minutes of a live log
+- **WHEN** the local time is 14:30:00, the user enters from `-15m` with an empty "to" on a followed log and confirms
+- **THEN** the lines stamped from 14:15:00 are visible, the control begins with `⟳`, and at 14:31 the lines stamped before 14:16:00 are no longer shown while the lines appended meanwhile are.
+
+#### Scenario: Relative text that is not valid
+- **WHEN** the "from" field holds `-15x`
+- **THEN** the popup shows the invalid-time hint and OK is disabled.
+
+#### Scenario: A log that stopped writing
+- **WHEN** the window is from `-15m` and the log's last line is stamped two hours ago
+- **THEN** no line is visible and the control says there are no lines in the window and gives the time of the last line.
+
+### Requirement: Time Window Sliding Cost
+Re-evaluating a live window on a stream whose timestamps never decrease SHALL only remove lines from the start of the visible lines and add lines after the last visible one, so that the cost is proportional to the lines that enter or leave the window and not to the size of the file.
+
+#### Scenario: A 3 GB followed log
+- **WHEN** a live window `-1h` is set on a followed 3 GB log with ordered timestamps and one minute passes
+- **THEN** no background filter job is started and the interface stays responsive.
 
