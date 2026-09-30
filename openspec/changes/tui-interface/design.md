@@ -257,7 +257,7 @@ bookmark, `]` `[` or `F2` `Shift+F2` next / previous bookmark, `m` note, `Ctrl+K
 in context, `Ctrl+G` or `:` go to, `h` HEX view, `a` ANSI mode, `t` time range, `f`
 global filter on / off, `F` global filter editor, `p` presets, `r` rule editor, `!`
 external tools menu, `,` Settings, `Ctrl+L` lock, `T` next theme (saved like a theme
-change in the GUI), `o` open file, `O` open session, `S` save session as, `Ctrl+W` close
+change in the GUI), `o` open file (folder browser), `O` open session, `S` save session as, `w` close
 stream, `q` quit. From the competitor analysis after 0.12.0 (section 7): `e` / `E` and
 `w` / `W` jump to the next / previous error and warning (lnav); movement keys take a
 count (`10j`, `3n`, less / vim); `?` and `F1` work even with no file open; `:` opens the

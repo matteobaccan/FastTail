@@ -199,11 +199,15 @@ Lines with ANSI SGR sequences SHALL be drawn according to the stream's ANSI mode
 - **THEN** the clipboard and the screen are not affected, and in `raw` mode the characters appear as `^[]52;c;ZXZpbA==^G`.
 
 ### Requirement: Terminal Dialogs
-Dialogs SHALL open centred over the windows, clear what is under them, take the keyboard until closed, and offer `[ OK ]` / `[ Cancel ]` (or the named buttons) that `Enter` / `Esc` and the mouse press. The viewing dialogs SHALL be: help (`?` / `F1`, listing every key), search, include, exclude, go to, bookmark note, archive entry picker, time range (from / to text fields with the GUI's parser, `Enter` applies, `Esc` keeps the previous range, an empty field removes that side), open file (typed path), open session (the recent sessions and a typed path) and save session as. Text fields SHALL support `←` `→`, `Home` `End`, `Backspace`, `Delete`, `Ctrl+U` to clear, and paste. The archive entry picker SHALL list the entries of a zip or tar with more than one entry, filterable by typing, and open the chosen entry.
+Dialogs SHALL open centred over the windows, clear what is under them, take the keyboard until closed, and offer `[ OK ]` / `[ Cancel ]` (or the named buttons) that `Enter` / `Esc` and the mouse press. The viewing dialogs SHALL be: help (`?` / `F1`, listing every key), search, include, exclude, go to, bookmark note, archive entry picker, time range (from / to text fields with the GUI's parser, `Enter` applies, `Esc` keeps the previous range, an empty field removes that side), open file (a folder list as in a Windows file dialog: `..`, folders, then files with size and date, the drives above a Windows root; `↑` `↓` and the mouse select, `Enter` or a click on the selected entry enters a folder or opens a file, `Backspace` on an empty name goes up; the name field filters the list, and a typed path, pattern such as `*.log` or archive entry opens directly), open session (the recent sessions and a typed path) and save session as. Text fields SHALL support `←` `→`, `Home` `End`, `Backspace`, `Delete`, `Ctrl+U` to clear, and paste. The archive entry picker SHALL list the entries of a zip or tar with more than one entry, filterable by typing, and open the chosen entry.
 
 #### Scenario: Archive entry picker
 - **WHEN** the user opens `logs.tar.gz` holding `app.log`, `db.log` and `web.log`
 - **THEN** a dialog lists the three entries, typing `db` leaves only `db.log`, and `Enter` opens a stream titled `logs.tar.gz/db.log`.
+
+#### Scenario: Browsing to a file
+- **WHEN** the user presses `o` while `/var/log/app/app.log` is focused, selects `old`, presses `Enter`, then `Enter` on `app.1.log`
+- **THEN** the dialog first lists `/var/log/app` (`..`, the folders, then the files with size and date), then `old`, and `app.1.log` opens as a new tab of the focused window.
 
 #### Scenario: Time range by text
 - **WHEN** the user presses `t`, types `2026-09-28 14:00` in From and `2026-09-28 14:30` in To, and presses `Enter`
