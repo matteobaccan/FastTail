@@ -1163,8 +1163,12 @@ type Pieces = smallvec::SmallVec<[(usize, usize); 8]>;
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
-    // Fast path: if no spans exist yet, push directly without any piece vector allocation.
-    if spans.is_empty() {
+    if start >= end {
+        return spans.len() >= MAX_ROW_SPANS;
+    }
+    // Fast path: if no spans exist yet or if [start, end) does not overlap with any existing span,
+    // push directly without double-buffered SmallVec piece vector allocation or draining.
+    if spans.is_empty() || spans.iter().all(|sp| end <= sp.start || start >= sp.end) {
         spans.push(HighlightSpan { start, end, style });
         return spans.len() >= MAX_ROW_SPANS;
     }
