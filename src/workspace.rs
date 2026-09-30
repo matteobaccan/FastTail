@@ -418,3 +418,44 @@ pub fn save_changes(
     }
     changed
 }
+
+/// Streams reopened from a saved workspace.
+pub struct Restored {
+    /// The engines, with their settings and saved state, in the order of the paths.
+    pub engines: Vec<TailEngine>,
+    /// Paths that did not open: missing, unreadable, or an archive whose entries have to
+    /// be chosen (a workspace keeps entry paths, not bare archives).
+    pub skipped: Vec<PathBuf>,
+}
+
+/// Reopens `paths` (duplicates ignored) with the settings and the saved state of each: a
+/// pattern resolves to its newest match again, a compressed file is decompressed again in
+/// the background.
+pub fn open_all(paths: &[PathBuf], config: &FastTailConfig, wake: Option<WakeFn>) -> Restored {
+    let mut restored = Restored {
+        engines: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let mut seen: Vec<&PathBuf> = Vec::new();
+    for path in paths {
+        if seen.iter().any(|p| paths_equal(p, path)) {
+            continue;
+        }
+        seen.push(path);
+        match open_target(path, config, wake.clone()) {
+            OpenOutcome::Opened(engine) => {
+                let mut engine = *engine;
+                apply_settings(&mut engine, config);
+                restore_stream(&mut engine, config, path);
+                restored.engines.push(engine);
+            }
+            _ => restored.skipped.push(path.clone()),
+        }
+    }
+    restored
+}
+
+/// Reopens the workspace `fasttail.ini` keeps: its open files, in tab order.
+pub fn restore(config: &FastTailConfig, wake: Option<WakeFn>) -> Restored {
+    open_all(&config.open_files, config, wake)
+}

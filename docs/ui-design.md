@@ -39,7 +39,9 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 | `src/ui/overview_strip.rs` | The 10 px minimap beside the rows' scroll bar. |
 | `src/ui/palette.rs` | The command palette (`CommandPalette`, §4.16): the floating box, its fuzzy scorer and ranking, the value step of enumerated settings. |
 | `src/actions.rs` | Not UI code: the action registry the palette lists (ids, i18n names, categories, scopes, enabled conditions, shortcut labels), and the boolean and enumerated settings it turns into commands. |
-| `src/ui/time_range.rs` | The time range control of the stream bar (the visible time span) and its popup: the draft, the calendar and spinner rules, the shortcuts and OK / Cancel. |
+| `src/ui/time_range.rs` | The time range control of the stream bar (the visible time span) and its popup: the draft, the calendar and OK / Cancel. |
+| `src/time_range_text.rs` | Not UI code: the time range as text, shared with the terminal interface: reading a side, the shortcuts, the day and clock edits of a side, the span label. |
+| `src/workspace.rs` | Not UI code: opening a path (`open_target`), the settings and saved state of a new stream, the workspace snapshot written to `fasttail.ini` and its restore, shared with the terminal interface. |
 | `src/ui/timeline_strip.rs` | The 56 px timeline histogram above the rows. |
 | `src/ui/zip_picker.rs` | `ArchivePicker`, the entry picker for a zip or 7z that holds several files and for any tar archive (plain or compressed). |
 | `src/collapse.rs` | Not UI code, but it shapes the rows: detection of repeated entries (`CollapseMode`, `CollapseState`) and the row ↔ line mapping of a collapsed text view. |
