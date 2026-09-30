@@ -11,6 +11,8 @@
 use crate::ansi::AnsiMode;
 use crate::compressed::{ArchiveEntryInfo, Codec, OpenError, Target};
 use crate::config::FastTailConfig;
+use crate::paths::paths_equal;
+use crate::session::StreamEntry;
 use crate::tail_engine::{FileEncoding, TailEngine, WakeFn};
 use std::path::{Path, PathBuf};
 
@@ -246,4 +248,173 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
         engine.set_collapse_mode(mode);
         engine.collapse_mode_dirty = false;
     }
+}
+
+/// Whether a stream is kept in the workspace and in sessions: not standard input, not a
+/// derived stream of "Open filter as new tab" (their spools go with the process).
+pub fn is_persisted(engine: &TailEngine) -> bool {
+    !engine.is_stdin() && engine.derived.is_none()
+}
+
+/// The session entry describing `engine` as it is now. The line-number and time delta
+/// switches are always recorded, so a saved stream never depends on the defaults.
+pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
+    let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
+    let mut bookmark_notes = engine.bookmark_notes.clone();
+    if let Some(c) = engine.compressed.as_ref() {
+        // A restored compressed stream still waiting for its index to reach them.
+        if bookmarks.is_empty() {
+            bookmarks = c.pending_bookmarks.clone();
+            bookmark_notes = c.pending_bookmark_notes.clone();
+        }
+    }
+    StreamEntry {
+        path: engine.path.clone(),
+        include_filter: engine.include_filter().to_string(),
+        exclude_filter: engine.exclude_filter().to_string(),
+        include_extra: extra_terms(engine.include_terms()),
+        exclude_extra: extra_terms(engine.exclude_terms()),
+        search_query: engine.search_query.trim().to_string(),
+        wrap: engine.wrap_lines,
+        encoding: Some(engine.encoding.name().to_string()),
+        ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),
+        timeline: engine.timeline_open,
+        collapse: engine
+            .collapse_mode()
+            .is_on()
+            .then(|| engine.collapse_mode().name().to_string()),
+        context_lines: engine.context_lines(),
+        line_numbers: Some(engine.show_line_numbers),
+        time_delta: Some(engine.show_time_delta),
+        time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
+            .then(|| engine.time_display().to_config()),
+        time_source_zone: (engine.time_source_zone() != crate::timestamp::SourceZone::Local)
+            .then(|| engine.time_source_zone().to_config()),
+        bookmarks,
+        bookmark_notes,
+        archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
+        fields_parser: (*engine.field_choice() != crate::fields::ParserChoice::Auto)
+            .then(|| engine.field_choice().name().to_string()),
+        fields_regex: match engine.field_choice() {
+            crate::fields::ParserChoice::Regex(p) if !p.is_empty() => Some(p.clone()),
+            _ => None,
+        },
+        fields_view: engine.fields_view(),
+        fields_columns: engine.chosen_field_columns().to_vec(),
+        fields_widths: engine.field_widths().clone(),
+    }
+}
+
+/// The non-empty terms after the first row, as a session stores them.
+fn extra_terms(terms: &[String]) -> Vec<String> {
+    terms
+        .iter()
+        .skip(1)
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .collect()
+}
+
+/// The workspace as `fasttail.ini` keeps it: the open files in tab order and the state of
+/// each stream (filters, search, encoding, columns, bookmarks, wrap...).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceState {
+    pub open_files: Vec<PathBuf>,
+    pub streams: Vec<StreamEntry>,
+}
+
+/// The workspace of `engines`, with `order` the paths of the open tabs in the order the
+/// front end shows them. Streams that are not persisted are left out.
+pub fn snapshot(order: &[PathBuf], engines: &[TailEngine]) -> WorkspaceState {
+    let mut open_files: Vec<PathBuf> = Vec::new();
+    for path in order {
+        let skipped =
+            crate::stdin_source::is_stdin_path(path) || crate::filter_tab::is_derived_path(path);
+        if !skipped && !open_files.iter().any(|p| paths_equal(p, path)) {
+            open_files.push(path.clone());
+        }
+    }
+    let streams = engines
+        .iter()
+        .filter(|e| is_persisted(e))
+        .map(stream_entry)
+        .collect();
+    WorkspaceState {
+        open_files,
+        streams,
+    }
+}
+
+impl WorkspaceState {
+    /// Writes the open files and the stream states into `config`, dropping the state of
+    /// files no longer open. Wrap and bookmarks live in their own sections, written as
+    /// they change (see `save_changes`), so their most-recent order is kept.
+    pub fn write_into(self, config: &mut FastTailConfig) {
+        config.open_files = self.open_files;
+        for entry in self.streams {
+            config.set_stream_state(stream_state_only(entry));
+        }
+        let open = config.open_files.clone();
+        config.retain_stream_state_of(&open);
+    }
+}
+
+/// `entry` without wrap and bookmarks, as the `stream_N` sections store it.
+fn stream_state_only(mut entry: StreamEntry) -> StreamEntry {
+    entry.wrap = false;
+    entry.bookmarks.clear();
+    entry.bookmark_notes.clear();
+    entry
+}
+
+/// Records in `config` what changed in `engine` since the last call (bookmarks and notes,
+/// wrap, and the stream state: ANSI mode, timeline, collapse, context lines, columns,
+/// fields) and clears the change flags. `defer_fields` keeps a field column change for a
+/// later call (a width still being dragged). True when `config` changed and should be
+/// saved. Nothing of a stream that is not persisted is recorded.
+pub fn save_changes(
+    engine: &mut TailEngine,
+    config: &mut FastTailConfig,
+    defer_fields: bool,
+) -> bool {
+    if !is_persisted(engine) {
+        engine.bookmarks_dirty = false;
+        engine.wrap_dirty = false;
+        engine.ansi_dirty = false;
+        engine.timeline_dirty = false;
+        engine.collapse_mode_dirty = false;
+        engine.context_lines_dirty = false;
+        engine.view_columns_dirty = false;
+        engine.fields_dirty = false;
+        return false;
+    }
+    let mut changed = false;
+    if engine.bookmarks_dirty {
+        engine.bookmarks_dirty = false;
+        let lines: Vec<usize> = engine.bookmarks.iter().copied().collect();
+        config.set_bookmarks_with_notes(&engine.path, &lines, &engine.bookmark_notes);
+        changed = true;
+    }
+    if engine.wrap_dirty {
+        engine.wrap_dirty = false;
+        config.set_wrap(&engine.path, engine.wrap_lines);
+        changed = true;
+    }
+    if engine.ansi_dirty
+        || engine.timeline_dirty
+        || engine.collapse_mode_dirty
+        || engine.context_lines_dirty
+        || engine.view_columns_dirty
+        || (engine.fields_dirty && !defer_fields)
+    {
+        engine.ansi_dirty = false;
+        engine.timeline_dirty = false;
+        engine.collapse_mode_dirty = false;
+        engine.context_lines_dirty = false;
+        engine.view_columns_dirty = false;
+        engine.fields_dirty = false;
+        config.set_stream_state(stream_state_only(stream_entry(engine)));
+        changed = true;
+    }
+    changed
 }
