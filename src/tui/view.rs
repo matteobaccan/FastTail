@@ -112,8 +112,11 @@ pub fn sanitize(text: &str) -> String {
     out
 }
 
-/// Drops the first `skip` characters of the segment list (horizontal scroll).
-pub fn skip_chars(segments: Vec<(String, bool)>, mut skip: usize) -> Vec<(String, bool)> {
+/// Drops the first `skip` terminal cells of the segment list (horizontal scroll). Wide
+/// characters (CJK, most emoji) take two cells; one cut in half becomes a space, so the
+/// columns after it stay where they are.
+pub fn skip_cells(segments: Vec<(String, bool)>, mut skip: usize) -> Vec<(String, bool)> {
+    use unicode_width::UnicodeWidthChar;
     if skip == 0 {
         return segments;
     }
@@ -123,14 +126,35 @@ pub fn skip_chars(segments: Vec<(String, bool)>, mut skip: usize) -> Vec<(String
             out.push((text, hit));
             continue;
         }
-        let n = text.chars().count();
-        if n <= skip {
-            skip -= n;
-            continue;
+        let mut cut = text.len();
+        let mut pad = false;
+        for (byte, c) in text.char_indices() {
+            if skip == 0 {
+                cut = byte;
+                break;
+            }
+            let w = c.width().unwrap_or(0);
+            if w > skip {
+                // A wide character straddling the edge: its right half shows as a blank.
+                cut = byte + c.len_utf8();
+                pad = true;
+                skip = 0;
+                break;
+            }
+            skip -= w;
         }
-        let byte = text.char_indices().nth(skip).map_or(text.len(), |(b, _)| b);
-        out.push((text[byte..].to_string(), hit));
-        skip = 0;
+        if cut < text.len() || pad {
+            let rest = &text[cut..];
+            out.push((
+                if pad {
+                    format!(" {rest}")
+                } else {
+                    rest.to_string()
+                },
+                hit,
+            ));
+            skip = 0;
+        }
     }
     out
 }
@@ -203,9 +227,22 @@ mod tests {
     fn sanitize_and_horizontal_scroll() {
         assert_eq!(sanitize("a\tb\x1b[0m\r"), "a    b\u{b7}[0m\u{b7}");
         let segs = vec![("hello ".to_string(), false), ("world".to_string(), true)];
-        let cut = skip_chars(segs.clone(), 8);
+        let cut = skip_cells(segs.clone(), 8);
         assert_eq!(cut, vec![("rld".to_string(), true)]);
-        assert_eq!(skip_chars(segs.clone(), 0), segs);
-        assert!(skip_chars(segs, 50).is_empty());
+        assert_eq!(skip_cells(segs.clone(), 0), segs);
+        assert!(skip_cells(segs, 50).is_empty());
+    }
+
+    #[test]
+    fn sideways_scroll_counts_terminal_cells() {
+        let seg = |s: &str| vec![(s.to_string(), false)];
+        let text = |v: Vec<(String, bool)>| v.into_iter().map(|(s, _)| s).collect::<String>();
+        assert_eq!(text(skip_cells(seg("abcdef"), 2)), "cdef");
+        // "日本" is four cells: skipping two drops 日, skipping one halves it.
+        assert_eq!(text(skip_cells(seg("日本x"), 2)), "本x");
+        assert_eq!(text(skip_cells(seg("日本x"), 1)), " 本x");
+        assert_eq!(text(skip_cells(seg("ab"), 9)), "");
+        let two = vec![("ab".to_string(), false), ("cd".to_string(), true)];
+        assert_eq!(skip_cells(two, 3), vec![("d".to_string(), true)]);
     }
 }

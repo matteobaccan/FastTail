@@ -21,6 +21,9 @@ pub enum Action {
     Top,
     LineUp,
     LineDown,
+    /// SHIFT + UP / DOWN: extends the selection from the cursor row.
+    SelectUp,
+    SelectDown,
     PageUp,
     PageDown,
     ScrollLeft,
@@ -64,6 +67,13 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
             KeyCode::Char(c @ '1'..='9') => Some(Action::GotoTab(c as usize - '1' as usize)),
             _ => None,
         };
+    }
+    if key.modifiers.contains(KeyModifiers::SHIFT) {
+        match key.code {
+            KeyCode::Up => return Some(Action::SelectUp),
+            KeyCode::Down => return Some(Action::SelectDown),
+            _ => {}
+        }
     }
     Some(match key.code {
         KeyCode::Char('q') => Action::Quit,
