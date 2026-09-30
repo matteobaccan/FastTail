@@ -63,6 +63,9 @@ pub enum Action {
     TimeRange,
     /// `o`: open a file by path.
     OpenFile,
+    /// `O`: load a session; `S`: save the open streams as a session.
+    OpenSession,
+    SaveSession,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -131,6 +134,8 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('a') => Action::CycleAnsi,
         KeyCode::Char('t') => Action::TimeRange,
         KeyCode::Char('o') => Action::OpenFile,
+        KeyCode::Char('O') => Action::OpenSession,
+        KeyCode::Char('S') => Action::SaveSession,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -169,6 +174,9 @@ mod tests {
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));
         assert_eq!(k(KeyCode::Char('o'), none), Some(Action::OpenFile));
+        let shift = KeyModifiers::SHIFT;
+        assert_eq!(k(KeyCode::Char('O'), shift), Some(Action::OpenSession));
+        assert_eq!(k(KeyCode::Char('S'), shift), Some(Action::SaveSession));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),

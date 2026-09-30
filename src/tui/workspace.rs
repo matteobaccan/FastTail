@@ -16,6 +16,7 @@ use crate::session::{Session, StreamEntry};
 use crate::tail_engine::TailEngine;
 
 /// The configuration of this run and where it came from.
+#[derive(Default)]
 pub struct Settings {
     pub config: FastTailConfig,
     pub path: PathBuf,
