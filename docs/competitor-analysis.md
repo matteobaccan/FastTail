@@ -230,11 +230,18 @@ Closed on 2026-09-29 with the changes below; the rest of the planned 0.14.0 move
 | `tray-icon` — minimise to tray, tray menu, Windows (Linux: 0.21.0) | SnakeTail | S–M |
 | `structured-fields` — JSON / logfmt / regex parsers with detection, column view | 1 | L |
 
+### 0.15.0 — terminal interface preview, then nightly patches
+
+Released on 2026-09-30 at the maintainer's request: the Commander theme and `fasttail-tui`
+as a preview in every archive (dock, dialogs, themes, mouse, file browser; editors, lock,
+hand-off and translations still missing). From then on a patch release (`0.15.x`) is cut
+every evening after 18:00 when something was merged (AGENTS.md, release process).
+
 ### 0.20.0 — terminal interface (next)
 
-After 0.14.0 the maintainer moved the terminal interface forward: 0.20.0 is the next
-release and holds only `tui-interface` (PR #132, the TUI at parity with the window, HEX
-view included, Markdown excluded). The gap changes below resume after it.
+After 0.14.0 the maintainer moved the terminal interface forward: 0.20.0 holds only
+`tui-interface` (PR #132, the TUI at parity with the window, HEX view included, Markdown
+excluded), completed through the 0.15.x patches. The gap changes below resume after it.
 
 ### 0.21.0 — structured logs and analysis, continued
 

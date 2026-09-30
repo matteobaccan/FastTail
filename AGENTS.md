@@ -83,6 +83,15 @@ plus binary. Maintainer: Matteo Baccan. Licence: MIT.
 5. After the release: refresh `docs/competitor-analysis.md` (BareTail, Tailviewer, klogg,
    lnav, LogExpert, ...) and propose the next features as OpenSpec changes.
 
+**Nightly release (maintainer decision, 2026-09-30).** Every evening after 18:00 (Europe/Rome)
+a patch release is cut from `main` (`0.15.1`, `0.15.2`, ...) when something was merged since
+the last tag; nothing merged, no release. Steps 1 to 3 above are skipped for it (the
+maintainer tests the published build); step 4 applies (release PR, CI green, merge, tag
+`vx.y.z`), with the CHANGELOG `[Unreleased]` entries of the day as its section. A minor
+version (`0.16.0`, ..., `0.20.0`) is cut only when a milestone of the plan is complete, with
+the full process. Work that is not ready stays out of `main` or is described in the
+CHANGELOG as a preview.
+
 Fixed decisions: release targets are Windows x86_64, Linux x86_64, Linux ARM64,
 macOS ARM64 (no Windows ARM64, no macOS test job); release profile keeps thin LTO and
 debug info for crash logs.
@@ -91,14 +100,16 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.14.0** (2026-09-29).
-- Next: **0.20.0 terminal interface (TUI)**, spec `openspec/changes/tui-interface/`.
-  Start with task group 1 (engine decoupling from egui), one small PR per task:
-  1.1 `src/color.rs` (`Rgba` instead of `egui::Color32` in engine/theme), then 1.2 to 1.9.
-  The prototype in draft PR #131 (`src/bin/fasttail-tui/`, feature `tui`) moves into the
-  `tui` module in task 3.1; 0.20.0 ships only at full GUI parity (no "experimental" label).
-- Then **0.21.0** analysis (`structured-field-terms`, field statistics, ...) and
-  **0.22.0** sources/integrations (see `docs/competitor-analysis.md` section 8).
+- Latest release: **0.15.0** (2026-09-30): Commander theme and the terminal interface as a
+  preview (`fasttail-tui` in every archive).
+- Next: nightly patch releases (`0.15.x`) while **0.20.0 terminal interface (TUI)** is
+  completed, spec `openspec/changes/tui-interface/`: task group 4 (rule editor, presets,
+  global filter, external tools, lock, the rest of 4.5b: `?` with no file, `:` palette,
+  registry bindings), then groups 5 to 8 (hand-off, release pipeline, i18n, docs,
+  parity checklist). 0.20.0 ships at full GUI parity without the "preview" label.
+- Then **0.21.0** analysis (`structured-field-terms`, field statistics, ...),
+  **0.22.0** sources/integrations and **0.23.0** binary views (`disassembly-view`); see
+  `docs/competitor-analysis.md` section 8.
 
 ## For Claude Code sessions with the maintainer
 

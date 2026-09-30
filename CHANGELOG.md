@@ -8,7 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-30
+
 ### Added
+
+- **Terminal interface (preview).** `fasttail-tui` ships next to `fasttail` in every
+  archive: the same engine and `fasttail.ini` in a terminal window, for SSH sessions and
+  servers without a desktop. It reads the GUI's workspace and writes back only what it
+  changes, so both can be used on the same configuration. This preview has:
+  - windows arranged as the GUI's dock, moved and resized with the mouse (drag a
+    divider, drag a title onto a window's edge or centre) or the keys (`s` `|` `_`
+    split, `<` `>` move, `Alt+arrows` resize, `Alt+X` close a window), saved in the
+    same `[dock] layout` and in sessions;
+  - follow, search (`/`, `n` `N`, `F3`), include / exclude filters, level, collapse,
+    context lines, time range with a calendar, bookmarks and notes, go to line or time,
+    HEX view, ANSI colours, copy, compressed files and archive entries, standard input;
+  - an Open dialog that browses folders like a file dialog, sessions (open, save as),
+    the Settings dialog, the five themes (`Shift+T`) at 256 colours or truecolor,
+    ASCII borders (`--ascii`) and the mouse;
+  - `e` `E` / `w` `W` jumps to the next ERROR / WARN line, counts before moves (`10j`,
+    `3e`), `Ctrl+W` to close a stream, and the help (`?`, `F1`) as a menu of commands.
+
+  Still missing, planned for 0.20.0 (the terminal interface at parity with the window):
+  the rule editor, filter presets, the global filter, external tools, the PIN lock,
+  the command palette, switching between the two interfaces, and translations (the
+  terminal speaks English for now).
 
 - **Commander theme.** A fifth theme, the classic blue and white of the DOS file managers:
   blue screen and panels, near-white text, light cyan borders and yellow accents. Listed
@@ -1167,6 +1191,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.15.0]: https://github.com/matteobaccan/FastTail/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/matteobaccan/FastTail/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/matteobaccan/FastTail/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/matteobaccan/FastTail/compare/v0.11.0...v0.12.0
