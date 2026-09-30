@@ -132,3 +132,56 @@ fn a_new_engine_gets_the_settings_and_the_saved_stream_state() {
         Some("look")
     );
 }
+
+#[test]
+fn snapshot_writes_the_open_files_and_stream_states_into_the_config() {
+    use fasttail::workspace::{save_changes, snapshot};
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.log");
+    let b = dir.path().join("b.log");
+    std::fs::write(&a, "one\ntwo\n").unwrap();
+    std::fs::write(&b, "three\n").unwrap();
+    let mut cfg = config(dir.path());
+    let gone = dir.path().join("gone.log");
+    cfg.set_stream_state(fasttail::session::StreamEntry::new(gone.clone()));
+
+    let mut engines = vec![
+        fasttail::tail_engine::TailEngine::open(&a).unwrap(),
+        fasttail::tail_engine::TailEngine::open(&b).unwrap(),
+    ];
+    engines[0].set_include_filter("two");
+    engines[0].toggle_bookmark(1);
+    let order = vec![b.clone(), a.clone(), a.clone()];
+    let state = snapshot(&order, &engines);
+    assert_eq!(state.open_files, vec![b.clone(), a.clone()]);
+    assert_eq!(state.streams.len(), 2);
+    assert_eq!(
+        state.streams[0].bookmarks,
+        vec![1],
+        "sessions get the bookmarks"
+    );
+
+    state.write_into(&mut cfg);
+    assert_eq!(cfg.open_files, vec![b.clone(), a.clone()]);
+    let saved = cfg.stream_state_for(&a).unwrap();
+    assert_eq!(saved.include_filter, "two");
+    assert!(
+        saved.bookmarks.is_empty(),
+        "bookmarks have their own section"
+    );
+    assert!(
+        cfg.stream_state_for(&gone).is_none(),
+        "closed files are dropped"
+    );
+
+    // Bookmarks are written as they change.
+    assert!(save_changes(&mut engines[0], &mut cfg, false));
+    assert_eq!(
+        cfg.saved_bookmarks(&a).map(|(_, lines, _)| lines.clone()),
+        Some(vec![1])
+    );
+    assert!(
+        !save_changes(&mut engines[0], &mut cfg, false),
+        "nothing new"
+    );
+}

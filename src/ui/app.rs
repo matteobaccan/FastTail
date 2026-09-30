@@ -2,14 +2,13 @@
 // Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
 // SPDX-License-Identifier: MIT
 
-use crate::ansi::AnsiMode;
 use crate::baretail_bridge::{detect_baretail_config, BareTailConfig};
 use crate::config::FastTailConfig;
 use crate::external_tools::ToolRunner;
 use crate::i18n::t;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
-use crate::session::{LoadedSession, Session, StreamEntry};
+use crate::session::{LoadedSession, Session};
 use crate::tail_engine::{QuickLabel, TailEngine};
 use crate::theme::CyberTheme;
 use crate::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
@@ -764,7 +763,7 @@ impl FastTailApp {
                 self.engines
                     .iter()
                     .find(|e| paths_equal(&e.path, p))
-                    .map(stream_entry_of)
+                    .map(crate::workspace::stream_entry)
             })
             .collect();
         Session {
@@ -1663,34 +1662,15 @@ impl FastTailApp {
     }
 
     pub fn save_dock_layout(&mut self) {
-        let mut current_open: Vec<PathBuf> = Vec::new();
-        for (_, tab) in self.dock_state.iter_all_tabs() {
-            if let FastTailTab::LogStream(p) = tab {
-                if !is_stdin_tab(tab)
-                    && !current_open
-                        .iter()
-                        .any(|existing| paths_equal(existing.as_path(), p.as_path()))
-                {
-                    current_open.push(p.clone());
-                }
-            }
-        }
-        self.config.open_files = current_open;
-
-        // Per-stream state of the default session (filters, search, encoding).
-        for eng in self
-            .engines
-            .iter()
-            .filter(|e| !e.is_stdin() && e.derived.is_none())
-        {
-            let mut entry = stream_entry_of(eng);
-            entry.wrap = false;
-            entry.bookmarks.clear();
-            entry.bookmark_notes.clear();
-            self.config.set_stream_state(entry);
-        }
-        let open = self.config.open_files.clone();
-        self.config.retain_stream_state_of(&open);
+        let order: Vec<PathBuf> = self
+            .dock_state
+            .iter_all_tabs()
+            .filter_map(|(_, tab)| match tab {
+                FastTailTab::LogStream(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        crate::workspace::snapshot(&order, &self.engines).write_into(&mut self.config);
 
         prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
         let mut dock_to_save = self.dock_state.clone();
@@ -3604,49 +3584,7 @@ impl FastTailApp {
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let mut critical_in_background = false;
         for eng in &mut self.engines {
-            if eng.is_stdin() || eng.derived.is_some() {
-                // Nothing of the standard-input stream or a derived stream is persisted.
-                eng.bookmarks_dirty = false;
-                eng.wrap_dirty = false;
-                eng.ansi_dirty = false;
-                eng.collapse_mode_dirty = false;
-                eng.context_lines_dirty = false;
-                eng.view_columns_dirty = false;
-                eng.fields_dirty = false;
-            }
-            if eng.bookmarks_dirty {
-                eng.bookmarks_dirty = false;
-                let lines: Vec<usize> = eng.bookmarks.iter().copied().collect();
-                self.config
-                    .set_bookmarks_with_notes(&eng.path, &lines, &eng.bookmark_notes);
-                bookmarks_changed = true;
-            }
-            if eng.wrap_dirty {
-                eng.wrap_dirty = false;
-                self.config.set_wrap(&eng.path, eng.wrap_lines);
-                bookmarks_changed = true;
-            }
-            if eng.ansi_dirty
-                || eng.timeline_dirty
-                || eng.collapse_mode_dirty
-                || eng.context_lines_dirty
-                || eng.view_columns_dirty
-                || (eng.fields_dirty && !pointer_down)
-            {
-                // The ANSI mode, the timeline flag, the collapse mode, the context lines
-                // and the line-number and time delta columns live in the stream entry, as
-                // in `save_dock_layout`.
-                eng.ansi_dirty = false;
-                eng.timeline_dirty = false;
-                eng.collapse_mode_dirty = false;
-                eng.context_lines_dirty = false;
-                eng.view_columns_dirty = false;
-                eng.fields_dirty = false;
-                let mut entry = stream_entry_of(eng);
-                entry.wrap = false;
-                entry.bookmarks.clear();
-                entry.bookmark_notes.clear();
-                self.config.set_stream_state(entry);
+            if crate::workspace::save_changes(eng, &mut self.config, pointer_down) {
                 bookmarks_changed = true;
             }
             if !eng.displayed && eng.unseen_severity >= 2 {
@@ -5588,16 +5526,6 @@ fn dock_signature(dock: &DockState<FastTailTab>) -> String {
     out
 }
 
-/// The non-empty terms after the first row, as a session stores them.
-fn extra_terms(terms: &[String]) -> Vec<String> {
-    terms
-        .iter()
-        .skip(1)
-        .filter(|t| !t.is_empty())
-        .cloned()
-        .collect()
-}
-
 /// True for the tab of the standard-input stream, which no workspace or session keeps.
 /// Streams that are not saved in the workspace or sessions: standard input and the
 /// derived streams of "Open filter as new tab" (their spools go with the process).
@@ -5641,55 +5569,6 @@ fn apply_cli_time_window(engine: &mut TailEngine, since: Option<&str>, until: Op
     let text = |value: Option<&str>| value.unwrap_or_default().to_string();
     let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
     engine.time_range_error = !from_ok || !to_ok;
-}
-
-/// The session entry describing `engine` as it is now. The line-number and time delta
-/// switches are always recorded, so a saved stream never depends on the defaults.
-fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
-    let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
-    let mut bookmark_notes = engine.bookmark_notes.clone();
-    if let Some(c) = engine.compressed.as_ref() {
-        // A restored compressed stream still waiting for its index to reach them.
-        if bookmarks.is_empty() {
-            bookmarks = c.pending_bookmarks.clone();
-            bookmark_notes = c.pending_bookmark_notes.clone();
-        }
-    }
-    StreamEntry {
-        path: engine.path.clone(),
-        include_filter: engine.include_filter().to_string(),
-        exclude_filter: engine.exclude_filter().to_string(),
-        include_extra: extra_terms(engine.include_terms()),
-        exclude_extra: extra_terms(engine.exclude_terms()),
-        search_query: engine.search_query.trim().to_string(),
-        wrap: engine.wrap_lines,
-        encoding: Some(engine.encoding.name().to_string()),
-        ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),
-        timeline: engine.timeline_open,
-        collapse: engine
-            .collapse_mode()
-            .is_on()
-            .then(|| engine.collapse_mode().name().to_string()),
-        context_lines: engine.context_lines(),
-        line_numbers: Some(engine.show_line_numbers),
-        time_delta: Some(engine.show_time_delta),
-        time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
-            .then(|| engine.time_display().to_config()),
-        time_source_zone: (engine.time_source_zone() != crate::timestamp::SourceZone::Local)
-            .then(|| engine.time_source_zone().to_config()),
-        bookmarks,
-        bookmark_notes,
-        archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
-        fields_parser: (*engine.field_choice() != crate::fields::ParserChoice::Auto)
-            .then(|| engine.field_choice().name().to_string()),
-        fields_regex: match engine.field_choice() {
-            crate::fields::ParserChoice::Regex(p) if !p.is_empty() => Some(p.clone()),
-            _ => None,
-        },
-        fields_view: engine.fields_view(),
-        fields_columns: engine.chosen_field_columns().to_vec(),
-        fields_widths: engine.field_widths().clone(),
-    }
 }
 
 #[cfg(test)]
