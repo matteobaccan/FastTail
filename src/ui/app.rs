@@ -6,6 +6,7 @@ use crate::baretail_bridge::{detect_baretail_config, BareTailConfig};
 use crate::config::FastTailConfig;
 use crate::external_tools::ToolRunner;
 use crate::i18n::t;
+use crate::lock::LockAttempts;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
 use crate::session::{LoadedSession, Session};
@@ -235,46 +236,6 @@ fn restore_dialog_geometry<'a>(
     match size {
         Some([w, h]) => win.default_size(egui::vec2(w, h)),
         None => default_size(win),
-    }
-}
-
-/// Wrong PIN attempts on the lock screen. Three in a row close the prompt for a minute,
-/// so guessing a 4-digit PIN costs hours instead of seconds; a correct PIN clears the
-/// count. The state is deliberately in memory only: it is a deterrent, and a restart
-/// clearing it changes nothing an attacker could not do by editing `fasttail.ini`.
-#[derive(Debug, Default, Clone)]
-pub struct LockAttempts {
-    failures: u32,
-    retry_at: Option<Instant>,
-}
-
-/// Wrong attempts allowed before the prompt pauses.
-pub const LOCK_MAX_FAILURES: u32 = 3;
-/// How long the prompt stays closed after those attempts.
-pub const LOCK_COOLDOWN: Duration = Duration::from_secs(60);
-
-impl LockAttempts {
-    /// Registers a wrong PIN and returns whether it started a cooldown.
-    pub fn register_failure(&mut self, now: Instant) -> bool {
-        self.failures += 1;
-        if self.failures.is_multiple_of(LOCK_MAX_FAILURES) {
-            self.retry_at = Some(now + LOCK_COOLDOWN);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Time left before the next attempt is accepted, `None` when it is accepted now.
-    pub fn cooldown_left(&self, now: Instant) -> Option<Duration> {
-        let retry_at = self.retry_at?;
-        (retry_at > now).then(|| retry_at - now)
-    }
-
-    /// Clears everything after a correct PIN.
-    pub fn reset(&mut self) {
-        self.failures = 0;
-        self.retry_at = None;
     }
 }
 
@@ -1489,7 +1450,7 @@ impl FastTailApp {
     /// Puts the window behind the PIN. Does nothing when no PIN is set, so the user can
     /// never lock themselves out of a lock they cannot open.
     pub fn lock(&mut self) {
-        if self.config.lock_pin.is_empty() {
+        if !crate::lock::can_lock(&self.config) {
             return;
         }
         self.locked = true;
@@ -1501,7 +1462,7 @@ impl FastTailApp {
     /// `crate::config::LOCK_BACKDOOR` opens it whatever the PIN is.
     /// The PIN prompt shown while `locked`, over an animated opaque backdrop that hides
     /// the workspace. `crate::config::LOCK_BACKDOOR` opens it whatever the PIN is, and
-    /// three wrong PINs in a row close the prompt for `LOCK_COOLDOWN`.
+    /// three wrong PINs in a row close the prompt for `lock::LOCK_COOLDOWN`.
     fn render_lock_overlay(&mut self, ctx: &egui::Context) {
         let theme = self.config.theme;
         let lang = self.config.language;
@@ -5660,40 +5621,6 @@ mod tests {
     fn the_lock_prompt_never_outgrows_a_small_window() {
         let width = measure_lock_width(crate::i18n::Language::Ru, egui::vec2(320.0, 240.0));
         assert!(width <= super::LOCK_MIN_WIDTH.max(320.0 * super::LOCK_MAX_WIDTH_RATIO));
-    }
-
-    #[test]
-    fn three_wrong_pins_pause_the_prompt_for_a_minute() {
-        use super::{LockAttempts, LOCK_COOLDOWN};
-        use std::time::{Duration, Instant};
-
-        let now = Instant::now();
-        let mut attempts = LockAttempts::default();
-        assert!(!attempts.register_failure(now));
-        assert!(!attempts.register_failure(now));
-        assert!(
-            attempts.cooldown_left(now).is_none(),
-            "two misses cost nothing"
-        );
-
-        assert!(
-            attempts.register_failure(now),
-            "the third one starts the pause"
-        );
-        let left = attempts.cooldown_left(now).expect("prompt is paused");
-        assert!(left <= LOCK_COOLDOWN && left > LOCK_COOLDOWN - Duration::from_secs(1));
-        assert!(attempts
-            .cooldown_left(now + LOCK_COOLDOWN - Duration::from_secs(1))
-            .is_some());
-        assert!(attempts.cooldown_left(now + LOCK_COOLDOWN).is_none());
-
-        // Three more misses pause it again, and a correct PIN forgets everything.
-        for _ in 0..3 {
-            attempts.register_failure(now + LOCK_COOLDOWN);
-        }
-        assert!(attempts.cooldown_left(now + LOCK_COOLDOWN).is_some());
-        attempts.reset();
-        assert!(attempts.cooldown_left(now + LOCK_COOLDOWN).is_none());
     }
 
     #[test]
