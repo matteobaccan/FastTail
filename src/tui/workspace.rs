@@ -29,12 +29,19 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Reads `path` read-only. `FastTailConfig::load` is not used because it may write:
-    /// it migrates an old `fasttail.toml` by saving the ini. A missing or unreadable
-    /// file gives the defaults.
+    /// Reads `path` without writing anything. `FastTailConfig::load` is not used because
+    /// it may write at once: it migrates an old `fasttail.toml` by saving the ini. A
+    /// missing or unreadable file gives the defaults. The bytes read are remembered, so
+    /// `save` writes only this run's own changes.
     pub fn read(path: &Path) -> Self {
         let found = path.is_file();
         let conf = found.then(|| ini::Ini::load_from_file(path).ok()).flatten();
+        if conf.is_some() {
+            // What this run loaded: it writes the file only when its own state differs.
+            if let Ok(bytes) = std::fs::read(path) {
+                crate::config::remember_synced(path, bytes);
+            }
+        }
         let mut config = conf
             .as_ref()
             .map(FastTailConfig::from_ini)
@@ -74,6 +81,28 @@ impl Settings {
     /// directory, next to the executable, in the user config directory.
     pub fn locate() -> Self {
         Self::read(&FastTailConfig::config_path())
+    }
+
+    /// Writes the configuration when this run's state differs from what it last loaded
+    /// or wrote (so an idle terminal never overwrites what a GUI saved meanwhile), with
+    /// the GUI's fallback to the user directory when the file cannot be written. Returns
+    /// whether the file changed on disk.
+    pub fn save(&mut self) -> std::io::Result<bool> {
+        match self.config.save_to(&self.path) {
+            Ok(written) => Ok(written),
+            Err(e) => {
+                let user = FastTailConfig::user_config_path().filter(|u| *u != self.path);
+                let Some(user) = user else {
+                    return Err(e);
+                };
+                if let Some(parent) = user.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let written = self.config.save_to(&user)?;
+                self.path = user;
+                Ok(written)
+            }
+        }
     }
 
     /// Idle poll of the event loop: the GUI's background polling cadence.

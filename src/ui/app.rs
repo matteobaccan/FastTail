@@ -1939,11 +1939,7 @@ impl FastTailApp {
         }
 
         // Keep recent files in MRU order (most recent at top, max 15)
-        self.config.recent_files.retain(|p| !paths_equal(p, &path));
-        self.config.recent_files.insert(0, path.clone());
-        if self.config.recent_files.len() > 15 {
-            self.config.recent_files.truncate(15);
-        }
+        self.config.add_recent_file(&path);
         let _ = self.config.save();
 
         self.add_stream_tab(path);

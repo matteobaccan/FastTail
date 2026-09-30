@@ -325,7 +325,10 @@ pub struct WorkspaceState {
 
 /// The workspace of `engines`, with `order` the paths of the open tabs in the order the
 /// front end shows them. Streams that are not persisted are left out.
-pub fn snapshot(order: &[PathBuf], engines: &[TailEngine]) -> WorkspaceState {
+pub fn snapshot<'a>(
+    order: &[PathBuf],
+    engines: impl IntoIterator<Item = &'a TailEngine>,
+) -> WorkspaceState {
     let mut open_files: Vec<PathBuf> = Vec::new();
     for path in order {
         let skipped =
@@ -335,7 +338,7 @@ pub fn snapshot(order: &[PathBuf], engines: &[TailEngine]) -> WorkspaceState {
         }
     }
     let streams = engines
-        .iter()
+        .into_iter()
         .filter(|e| is_persisted(e))
         .map(stream_entry)
         .collect();
