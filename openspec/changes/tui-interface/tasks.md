@@ -33,6 +33,7 @@
 - [x] 3.8 Colour depth detection with the 256-colour cube; ASCII fallback; alternate screen; key-press filtering on Windows; terminal restore on exit and panic; mintty message and exit code 1
 - [x] 3.9 256 KiB buffered output; redraw only on change; poll 100 ms / 50 ms
 - [x] 3.10 Theme look (maintainer request): theme backgrounds, text and borders at 256 colours and truecolor, dialog shadows, square dialog corners, `T` theme cycle saved as `theme`
+- [x] 3.11 Dock (maintainer request): `src/dock_layout.rs` reads and writes the GUI's `[dock] layout` without egui; the terminal draws the tree, tabs in the window border, `s` `|` `_` split, `Ctrl+W` close, `<` `>` move, `Ctrl+PgUp/PgDn` tabs, `Alt+arrows` and divider drag resize, title drag with edge / centre drop; saved after a change and in sessions
 
 ## 4. Terminal interface: settings, editors, tools, lock
 

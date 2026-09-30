@@ -7,6 +7,8 @@
 
 use ratatui::layout::{Position, Rect};
 
+use crate::tui::dock::{DividerArea, LeafArea};
+
 /// A stream window as it was last drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowHit {
@@ -39,6 +41,12 @@ pub struct HitMap {
     pub list_items: Vec<(Rect, usize)>,
     /// The `[ ... ]` buttons of the status bar, and their position in its list.
     pub buttons: Vec<(Rect, usize)>,
+    /// The dock's leaves, where a moved window can be dropped.
+    pub leaves: Vec<LeafArea>,
+    /// The dock's dividers, dragged to resize.
+    pub dividers: Vec<DividerArea>,
+    /// The titles of a window's tabs in its top border: the leaf and the tab's place.
+    pub leaf_tabs: Vec<(Rect, Vec<bool>, usize)>,
 }
 
 /// What a cell of the screen is.
@@ -56,6 +64,10 @@ pub enum Target {
     OutsideDialog,
     /// A title in the stream strip at the top.
     TabTitle(usize),
+    /// A tab title in a window's top border (its position in `HitMap::leaf_tabs`).
+    LeafTab(usize),
+    /// A divider between two windows (its position in `HitMap::dividers`).
+    Divider(usize),
     /// The top border of a window, where its `[#N]` title sits.
     WindowTitle(usize),
     /// A drawn row of a window (a view row of the engine).
@@ -93,6 +105,13 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
     }
     if let Some((_, tab)) = map.tab_titles.iter().find(|(r, _)| r.contains(p)) {
         return Target::TabTitle(*tab);
+    }
+    if let Some(i) = map.leaf_tabs.iter().position(|(r, _, _)| r.contains(p)) {
+        return Target::LeafTab(i);
+    }
+    // The innermost divider wins where two meet.
+    if let Some(i) = map.dividers.iter().rposition(|d| d.handle.contains(p)) {
+        return Target::Divider(i);
     }
     for w in &map.windows {
         if !w.outer.contains(p) {
@@ -151,8 +170,8 @@ mod tests {
                 },
             ],
             dialog: None,
-            list_items: Vec::new(),
             buttons: vec![(Rect::new(2, 30, 8, 1), 4)],
+            ..HitMap::default()
         }
     }
 
@@ -173,6 +192,22 @@ mod tests {
         assert_eq!(hit_test(&map, 5, 20), Target::Nothing);
         assert_eq!(window_at(&map, 60, 8), Some(1));
         assert_eq!(window_at(&map, 60, 0), None);
+    }
+
+    #[test]
+    fn dividers_and_border_tabs_come_before_the_windows() {
+        let mut map = split_map();
+        map.dividers.push(DividerArea {
+            path: vec![],
+            dir: crate::dock_layout::Dir::Horizontal,
+            split: Rect::new(0, 1, 80, 10),
+            handle: Rect::new(39, 2, 2, 9),
+        });
+        map.leaf_tabs.push((Rect::new(45, 1, 8, 1), vec![true], 1));
+        assert_eq!(hit_test(&map, 40, 5), Target::Divider(0));
+        assert_eq!(hit_test(&map, 39, 5), Target::Divider(0));
+        assert_eq!(hit_test(&map, 47, 1), Target::LeafTab(0));
+        assert_eq!(hit_test(&map, 60, 1), Target::WindowTitle(1));
     }
 
     #[test]
