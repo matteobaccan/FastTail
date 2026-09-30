@@ -270,6 +270,16 @@ view included, Markdown excluded). The gap changes below resume after it.
 | `web-ui` — read-only local web view, off by default | Seq, Loki | M |
 | `plugin-api` — out-of-process source plugins, bundled formats | 20 | L |
 
+### 0.23.0 — binary views
+
+A maintainer request (2026-09-30), not a competitor gap among log viewers: hex editors with a
+disassembly pane (Hiew, 010 Editor) have it. It extends the HEX view in the window and in the
+terminal interface.
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `disassembly-view` — ASM view of a stream: x86 16 / 32 / 64-bit, PE and ELF entry point and sections | requested | M |
+
 0.21.0 is the heaviest (one L change and ten M); if it runs long, `operation-timeline` and
 `cross-line-regex` are the first to move to 0.22.0. Open questions are listed in each
 change's design.
