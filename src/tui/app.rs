@@ -1520,7 +1520,45 @@ impl App {
         self.focus_tab(self.active);
     }
 
-    /// `Ctrl+W`: the focused window closes; its tabs join the window beside it.
+    /// `Ctrl+W`: the focused stream closes, as the GUI's tab ✕ does: its state is kept
+    /// in the configuration, its window goes when it was its last tab, and the focus
+    /// moves to the stream shown in its place. The last stream stays.
+    fn close_stream(&mut self) {
+        if self.tabs.len() < 2 {
+            self.message = Some("The only stream: o opens another, q quits".into());
+            return;
+        }
+        let i = self.active;
+        let path = self.active_path();
+        let leaf = self.focused_leaf();
+        if let Some(s) = self.settings.as_mut() {
+            crate::workspace::save_changes(&mut self.tabs[i].engine, &mut s.config, false);
+        }
+        let tab = self.tabs.remove(i);
+        // Indices of the last frame and of a gesture in progress no longer hold.
+        self.drag = None;
+        self.last_click = None;
+        self.dock_drag = None;
+        let rest = self.open_paths();
+        let dock = self
+            .dock
+            .clone()
+            .remove_stream(&path)
+            .unwrap_or_else(|| Pane::with_streams(&rest));
+        self.set_dock(dock);
+        self.active = self
+            .shown_in(&leaf)
+            .or_else(|| {
+                let first = self.dock.leaf_paths().into_iter().next()?;
+                self.shown_in(&first)
+            })
+            .unwrap_or(0)
+            .min(self.tabs.len() - 1);
+        self.focus_tab(self.active);
+        self.message = Some(format!("Closed {}", tab.title));
+    }
+
+    /// `Alt+X`: the focused window closes; its tabs join the window beside it.
     fn close_pane(&mut self) {
         let leaf = self.focused_leaf();
         if leaf.is_empty() {
@@ -1659,6 +1697,7 @@ impl App {
             Action::SplitRight => self.split_focused(Dir::Horizontal),
             Action::SplitDown => self.split_focused(Dir::Vertical),
             Action::ClosePane => self.close_pane(),
+            Action::CloseStream => self.close_stream(),
             Action::ResizeLeft => self.resize_pane(Dir::Horizontal, -RESIZE_STEP),
             Action::ResizeRight => self.resize_pane(Dir::Horizontal, RESIZE_STEP),
             Action::ResizeUp => self.resize_pane(Dir::Vertical, -RESIZE_STEP),
@@ -3086,6 +3125,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         "Ctrl+W",
+        "close the stream (its window when it is the last tab)",
+        Some(Action::CloseStream),
+    ),
+    (
+        "Alt+X",
         "close the window (its tabs join the next)",
         Some(Action::ClosePane),
     ),
@@ -5067,6 +5111,50 @@ mod tests {
         // Every stream is still drawn somewhere.
         let screen = render(&mut app, 80, 14);
         assert!(screen[1].contains("[#3] c.log"), "{screen:#?}");
+    }
+
+    #[test]
+    fn ctrl_w_closes_the_stream_and_its_window_with_the_last_tab() {
+        let files = [("a.log", LOG), ("b.log", LOG), ("c.log", LOG)];
+        let (mut app, _dir) = app_with(&files, false);
+        let (a, b, c) = (path_of(&app, 0), path_of(&app, 1), path_of(&app, 2));
+        // a and c on the left, b on the right; b focused and closed.
+        app.apply(Action::SplitRight);
+        app.focus_tab(1);
+        app.settings = Some(crate::tui::workspace::Settings::default());
+        app.tabs[1].engine.toggle_bookmark(0);
+        app.apply(Action::CloseStream);
+        assert_eq!(app.message.as_deref(), Some("Closed b.log"));
+        let config = &app.settings.as_ref().unwrap().config;
+        assert_eq!(
+            config.bookmarks_for(&b, 3),
+            Some(vec![0]),
+            "kept for next time"
+        );
+        assert_eq!(app.open_paths(), vec![a.clone(), c.clone()]);
+        assert_eq!(
+            app.dock.leaf_paths(),
+            vec![Vec::<bool>::new()],
+            "b's window went"
+        );
+        assert!(app.dock.find_stream(&b).is_none());
+        // The focus is on the stream the remaining window shows.
+        assert_eq!(app.active, 0);
+        assert!(app.dock_dirty);
+        // Closing a tab of a window with two keeps the window, showing the other.
+        app.apply(Action::CloseStream);
+        assert_eq!(app.open_paths(), vec![c.clone()]);
+        assert_eq!(app.active, 0);
+        let screen = render(&mut app, 80, 14);
+        assert!(screen[0].contains("[#1] c.log"), "{screen:#?}");
+        // The last stream stays.
+        app.apply(Action::CloseStream);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app
+            .message
+            .as_deref()
+            .unwrap()
+            .starts_with("The only stream"));
     }
 
     #[test]

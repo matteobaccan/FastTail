@@ -33,7 +33,7 @@
 - [x] 3.8 Colour depth detection with the 256-colour cube; ASCII fallback; alternate screen; key-press filtering on Windows; terminal restore on exit and panic; mintty message and exit code 1
 - [x] 3.9 256 KiB buffered output; redraw only on change; poll 100 ms / 50 ms
 - [x] 3.10 Theme look (maintainer request): theme backgrounds, text and borders at 256 colours and truecolor, dialog shadows, square dialog corners, `T` theme cycle saved as `theme`
-- [x] 3.11 Dock (maintainer request): `src/dock_layout.rs` reads and writes the GUI's `[dock] layout` without egui; the terminal draws the tree, tabs in the window border, `s` `|` `_` split, `Ctrl+W` close, `<` `>` move, `Ctrl+PgUp/PgDn` tabs, `Alt+arrows` and divider drag resize, title drag with edge / centre drop; saved after a change and in sessions
+- [x] 3.11 Dock (maintainer request): `src/dock_layout.rs` reads and writes the GUI's `[dock] layout` without egui; the terminal draws the tree, tabs in the window border, `s` `|` `_` split, `Alt+X` close, `<` `>` move, `Ctrl+PgUp/PgDn` tabs, `Alt+arrows` and divider drag resize, title drag with edge / centre drop; saved after a change and in sessions
 - [x] 3.12 Open dialog as a file browser (maintainer request): `..`, folders, files with size and date, drives on Windows, keys and mouse, name field that filters or takes a path, pattern or archive entry
 
 ## 4. Terminal interface: settings, editors, tools, lock
@@ -45,7 +45,7 @@
 - [ ] 4.5 External tools: editor page in Settings, `!` menu on the cursor row or selection, shortcuts, rule-bound runs with the 1 per second and 10 children limits, null standard handles for every child
 - [ ] 4.5b Key conventions: `e`/`E`, `w`/`W` level jumps, counts, `?` with no file, `:` palette over `src/actions.rs` (line jump), bindings from the registry, Kitty keyboard protocol on / off
 - [ ] 4.6 Lock screen: `Ctrl+L`, idle lock from the shared idle clock, full-screen bordered PIN dialog with nothing else drawn, key and mouse filtering (`q`, `Esc`, `Ctrl+C` dropped), shared attempts and cooldown, maintenance phrase, tailing continues, exact restore
-- [ ] 4.7 Close stream (`w`) (the theme cycle `T` shipped with 3.10)
+- [x] 4.7 Close stream (`Ctrl+W`, as a browser or editor tab; `w` / `W` are the warning jumps of 4.5b and closing a window moved to `Alt+X`); the last stream stays open until 4.5b handles an empty workspace (the theme cycle `T` shipped with 3.10)
 
 ## 5. Interface selection and hand-offs
 

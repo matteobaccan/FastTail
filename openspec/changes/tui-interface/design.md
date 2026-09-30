@@ -250,14 +250,14 @@ Cursor and scrolling: `↑` `↓` / `j` `k` move the cursor row; `PgUp` `PgDn` /
 `Ctrl+B` `Ctrl+F` by a page; `Home` / `g` first row, `End` / `G` last row with follow
 on; `←` `→` / `0` sideways. `Space` follow, `/` search, `n` `N` and `F3` `Shift+F3`
 next / previous hit, `i` `x` include / exclude, `l` level, `c` collapse, `s` `|` `_` new window
-beside / below, `Ctrl+W` close window, `<` `>` move the stream to another window,
+beside / below, `Alt+X` close window, `<` `>` move the stream to another window,
 `Ctrl+PgUp` `Ctrl+PgDn` tab of the window, `Alt+arrows` divider, `Tab` next window or
 stream, `Alt+1..9` stream, `y` or `Ctrl+C` copy, `b` or `Ctrl+F2`
 bookmark, `]` `[` or `F2` `Shift+F2` next / previous bookmark, `m` note, `Ctrl+K` show
 in context, `Ctrl+G` or `:` go to, `h` HEX view, `a` ANSI mode, `t` time range, `f`
 global filter on / off, `F` global filter editor, `p` presets, `r` rule editor, `!`
 external tools menu, `,` Settings, `Ctrl+L` lock, `T` next theme (saved like a theme
-change in the GUI), `o` open file (folder browser), `O` open session, `S` save session as, `w` close
+change in the GUI), `o` open file (folder browser), `O` open session, `S` save session as, `Ctrl+W` close
 stream, `q` quit. From the competitor analysis after 0.12.0 (section 7): `e` / `E` and
 `w` / `W` jump to the next / previous error and warning (lnav); movement keys take a
 count (`10j`, `3n`, less / vim); `?` and `F1` work even with no file open; `:` opens the

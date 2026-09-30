@@ -42,8 +42,10 @@ pub enum Action {
     /// next stream.
     SplitRight,
     SplitDown,
-    /// CTRL + W: the focused window closes, its tabs joining the window beside it.
+    /// ALT + X: the focused window closes, its tabs joining the window beside it.
     ClosePane,
+    /// CTRL + W: the focused stream closes (its window too when it was its last tab).
+    CloseStream,
     /// ALT + arrows: the nearest divider of the focused window moves that way.
     ResizeLeft,
     ResizeRight,
@@ -111,7 +113,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::F(2) => Some(Action::ToggleBookmark),
             KeyCode::Char('k') => Some(Action::ToggleContext),
             KeyCode::Char('g') => Some(Action::GoTo),
-            KeyCode::Char('w') => Some(Action::ClosePane),
+            KeyCode::Char('w') => Some(Action::CloseStream),
             KeyCode::PageUp => Some(Action::PrevInPane),
             KeyCode::PageDown => Some(Action::NextInPane),
             _ => None,
@@ -120,6 +122,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
     if alt {
         return match key.code {
             KeyCode::Char(c @ '1'..='9') => Some(Action::GotoTab(c as usize - '1' as usize)),
+            KeyCode::Char('x') => Some(Action::ClosePane),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -313,7 +316,8 @@ mod tests {
         assert_eq!(k(KeyCode::Char('s'), none), Some(Action::SplitRight));
         assert_eq!(k(KeyCode::Char('|'), shift), Some(Action::SplitRight));
         assert_eq!(k(KeyCode::Char('_'), shift), Some(Action::SplitDown));
-        assert_eq!(k(KeyCode::Char('w'), ctrl), Some(Action::ClosePane));
+        assert_eq!(k(KeyCode::Char('w'), ctrl), Some(Action::CloseStream));
+        assert_eq!(k(KeyCode::Char('x'), alt), Some(Action::ClosePane));
         assert_eq!(k(KeyCode::Left, alt), Some(Action::ResizeLeft));
         assert_eq!(k(KeyCode::Down, alt), Some(Action::ResizeDown));
         assert_eq!(k(KeyCode::Char('<'), none), Some(Action::MovePrevPane));
