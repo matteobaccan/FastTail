@@ -16,6 +16,7 @@ use crate::collapse::CollapseMode;
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
 use crate::tail_engine::{TailEngine, ViewMode};
+use crate::time_range_text::side_readable;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -24,8 +25,9 @@ use ratatui::Frame;
 
 use crate::tui::clipboard::{Clipboard, Copied};
 use crate::tui::colors::{Chrome, Palette};
+use crate::tui::form::{FieldKey, TextField};
 use crate::tui::hex;
-use crate::tui::keys::{self, Action, PromptKey};
+use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::view::{self, Paint};
 
@@ -179,7 +181,26 @@ pub enum PromptKind {
 
 pub struct Prompt {
     pub kind: PromptKind,
-    pub text: String,
+    pub field: TextField,
+}
+
+/// The time range dialog of the focused stream: the two sides as typed, which one has
+/// the keyboard, and whether `[ OK ]` found a side it cannot read.
+pub struct TimeRangeDialog {
+    pub from: TextField,
+    pub to: TextField,
+    pub on_to: bool,
+    pub invalid: bool,
+}
+
+impl TimeRangeDialog {
+    fn focused(&mut self) -> &mut TextField {
+        if self.on_to {
+            &mut self.to
+        } else {
+            &mut self.from
+        }
+    }
 }
 
 /// How the screen is divided between streams.
@@ -230,6 +251,7 @@ pub struct App {
     pub split: Option<Split>,
     pub palette: Palette,
     pub prompt: Option<Prompt>,
+    pub time_range: Option<TimeRangeDialog>,
     pub message: Option<String>,
     pub show_help: bool,
     pub quit: bool,
@@ -260,6 +282,7 @@ impl App {
             split: None,
             palette,
             prompt: None,
+            time_range: None,
             message: None,
             show_help: false,
             quit: false,
@@ -389,6 +412,9 @@ impl App {
 
     /// Handles a key; returns true when the screen changed.
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        if self.time_range.is_some() {
+            return self.on_time_range_key(key);
+        }
         if self.prompt.is_some() {
             return self.on_prompt_key(key);
         }
@@ -408,27 +434,84 @@ impl App {
     }
 
     fn on_prompt_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        let Some(pk) = keys::map_prompt_key(key) else {
-            return false;
-        };
         let Some(prompt) = self.prompt.as_mut() else {
             return false;
         };
-        match keys::edit_prompt(&mut prompt.text, pk) {
-            Some(PromptKey::Submit) => {
+        match prompt.field.on_key(key) {
+            FieldKey::Submit => {
                 if let Some(prompt) = self.prompt.take() {
                     self.submit_prompt(prompt);
                 }
             }
-            Some(PromptKey::Cancel) => self.prompt = None,
-            _ => {}
+            FieldKey::Cancel => self.prompt = None,
+            FieldKey::Edited => {}
+            FieldKey::Other => return false,
         }
         true
     }
 
+    /// Pasted text (bracketed paste) goes into the field being edited.
+    pub fn on_paste(&mut self, text: &str) -> bool {
+        if let Some(d) = self.time_range.as_mut() {
+            d.focused().insert(text);
+        } else if let Some(p) = self.prompt.as_mut() {
+            p.field.insert(text);
+        } else {
+            return false;
+        }
+        true
+    }
+
+    fn open_time_range(&mut self) {
+        let e = &self.tabs[self.active].engine;
+        self.time_range = Some(TimeRangeDialog {
+            from: TextField::new(&e.time_from_text),
+            to: TextField::new(&e.time_to_text),
+            on_to: false,
+            invalid: false,
+        });
+    }
+
+    fn on_time_range_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        let Some(d) = self.time_range.as_mut() else {
+            return false;
+        };
+        match d.focused().on_key(key) {
+            FieldKey::Submit => self.submit_time_range(),
+            // The previous range stays.
+            FieldKey::Cancel => self.time_range = None,
+            FieldKey::Edited => d.invalid = false,
+            FieldKey::Other => match key.code {
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => d.on_to = !d.on_to,
+                _ => return false,
+            },
+        }
+        true
+    }
+
+    /// Applies both sides when both can be read (an empty side is an open end); otherwise
+    /// marks the dialog and changes nothing.
+    fn submit_time_range(&mut self) {
+        let Some(d) = self.time_range.as_mut() else {
+            return;
+        };
+        let engine = &mut self.tabs[self.active].engine;
+        let reference = engine.time_reference();
+        let (from, to) = (d.from.text().trim(), d.to.text().trim());
+        if !(side_readable(from, reference) && side_readable(to, reference)) {
+            d.invalid = true;
+            return;
+        }
+        let (from_ok, to_ok) = engine.apply_time_range_text(from, to);
+        engine.time_range_error = !from_ok || !to_ok;
+        self.time_range = None;
+        self.tabs[self.active].top = 0;
+    }
+
     fn submit_prompt(&mut self, prompt: Prompt) {
         let tab = &mut self.tabs[self.active];
-        let text = prompt.text.trim().to_string();
+        let text = prompt.field.text().trim().to_string();
         match prompt.kind {
             PromptKind::Search => {
                 tab.engine.search_query = text.clone();
@@ -469,7 +552,7 @@ impl App {
     pub fn search(&mut self, text: &str) {
         self.submit_prompt(Prompt {
             kind: PromptKind::Search,
-            text: text.to_string(),
+            field: TextField::new(text),
         });
     }
 
@@ -482,7 +565,10 @@ impl App {
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
         };
-        self.prompt = Some(Prompt { kind, text });
+        self.prompt = Some(Prompt {
+            kind,
+            field: TextField::new(&text),
+        });
     }
 
     /// Puts stream `i` in the focused window; in a split, choosing the stream of the
@@ -531,6 +617,7 @@ impl App {
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
+            Action::TimeRange => self.open_time_range(),
             Action::EditNote => match self.tabs[self.active].cursor_line() {
                 Some(line) => self.open_prompt(PromptKind::Note(line)),
                 None => self.message = Some("No row for a note".into()),
@@ -579,7 +666,7 @@ impl App {
     pub fn on_mouse(&mut self, ev: MouseEvent) -> bool {
         match ev.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                if self.prompt.is_some() || self.show_help {
+                if self.prompt.is_some() || self.time_range.is_some() || self.show_help {
                     return false;
                 }
                 let Some(tab) = mouse::window_at(&self.hits, ev.column, ev.row) else {
@@ -634,13 +721,16 @@ impl App {
         let target = mouse::hit_test(&self.hits, ev.column, ev.row);
         match target {
             Target::DialogOk => {
-                if let Some(prompt) = self.prompt.take() {
+                if self.time_range.is_some() {
+                    self.submit_time_range();
+                } else if let Some(prompt) = self.prompt.take() {
                     self.submit_prompt(prompt);
                 }
                 self.show_help = false;
             }
             Target::DialogCancel | Target::OutsideDialog => {
                 self.prompt = None;
+                self.time_range = None;
                 self.show_help = false;
             }
             Target::DialogBody | Target::Nothing => return false,
@@ -879,6 +969,9 @@ impl App {
         if self.prompt.is_some() {
             self.draw_prompt(frame, main_area);
         }
+        if self.time_range.is_some() {
+            self.draw_time_range(frame, main_area);
+        }
     }
 
     /// The strip of stream titles, drawn span by span so each title's cells are known
@@ -1091,12 +1184,74 @@ impl App {
             "Enter confirm   Esc cancel   Ctrl+U clear",
             Style::default().fg(self.palette.dim()),
         );
+        let (shown, x) = p.field.view(inner.width.saturating_sub(2) as usize);
         frame.render_widget(
-            Paragraph::new(vec![Line::raw(format!("> {}", p.text)), hint]),
+            Paragraph::new(vec![
+                Line::raw(format!("> {}", view::sanitize(&shown))),
+                hint,
+            ]),
             inner,
         );
-        let x = inner.x + 2 + p.text.chars().count() as u16;
-        frame.set_cursor_position((x.min(inner.right().saturating_sub(1)), inner.y));
+        frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    fn draw_time_range(&mut self, frame: &mut Frame, area: Rect) {
+        let inner = self.dialog(frame, area, (64, 9), "Time range", true);
+        let palette = self.palette;
+        let Some(d) = &self.time_range else {
+            return;
+        };
+        let reference = self.tabs[self.active].engine.time_reference();
+        const LABEL: u16 = 7;
+        let width = inner.width.saturating_sub(LABEL) as usize;
+        let mut lines = Vec::with_capacity(6);
+        let mut cursor = (inner.x, inner.y);
+        for (row, (label, field, focused)) in [("From", &d.from, !d.on_to), ("To", &d.to, d.on_to)]
+            .into_iter()
+            .enumerate()
+        {
+            let (shown, x) = field.view(width);
+            let bad = !side_readable(field.text().trim(), reference);
+            let label_style = if focused {
+                Style::default()
+                    .fg(palette.accent())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.dim())
+            };
+            let field_style = if bad {
+                Style::default().fg(palette.level_color(LogLevel::Error))
+            } else {
+                Style::default()
+            }
+            .add_modifier(Modifier::UNDERLINED);
+            let pad = width.saturating_sub(unicode_width::UnicodeWidthStr::width(shown.as_str()));
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label:<w$}", w = LABEL as usize), label_style),
+                Span::styled(
+                    format!("{}{}", view::sanitize(&shown), " ".repeat(pad)),
+                    field_style,
+                ),
+            ]));
+            if focused {
+                cursor = (inner.x + LABEL + x as u16, inner.y + row as u16);
+            }
+        }
+        let dim = Style::default().fg(palette.dim());
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("2026-09-18 14:02:05, 14:02, -15m, now", dim));
+        lines.push(Line::styled(
+            "An empty side is open. Tab switches side.",
+            dim,
+        ));
+        if d.invalid {
+            lines.push(Line::styled(
+                "A side cannot be read as a time",
+                Style::default().fg(palette.level_color(LogLevel::Error)),
+            ));
+        }
+        frame.render_widget(Paragraph::new(lines), inner);
+        frame.set_cursor_position(cursor);
     }
 
     fn draw_help(&mut self, frame: &mut Frame, area: Rect) {
@@ -1123,6 +1278,7 @@ impl App {
             "m                note of the cursor row's bookmark",
             "Ctrl+K           cursor row in context (filters off), again back",
             "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
+            "t                time range: from / to (14:02, -15m, now)",
             "a                ANSI colours: auto, render, strip, raw (^[)",
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
             "y  Ctrl+C        copy the selection or the cursor row",
@@ -1208,6 +1364,10 @@ fn view_state_text(e: &TailEngine, hex: bool) -> String {
     }
     if e.min_level != LogLevel::Unknown {
         parts.push(format!(">={}", e.min_level.short()));
+    }
+    let (from, to) = (e.time_from_text.trim(), e.time_to_text.trim());
+    if !from.is_empty() || !to.is_empty() {
+        parts.push(format!("time:{from}..{to}"));
     }
     if e.ansi_mode != AnsiMode::Auto {
         parts.push(format!("ansi:{}", e.ansi_mode.name()));
@@ -1699,7 +1859,7 @@ mod tests {
         );
         let prompt = app.prompt.take().unwrap();
         app.submit_prompt(Prompt {
-            text: "payment retried".into(),
+            field: TextField::new("payment retried"),
             ..prompt
         });
         assert!(app.tabs[0].engine.is_bookmarked(87));
@@ -1770,7 +1930,7 @@ mod tests {
             let prompt = app.prompt.take().expect("the go-to dialog");
             assert_eq!(prompt.kind, PromptKind::Goto);
             app.submit_prompt(Prompt {
-                text: text.into(),
+                field: TextField::new(text),
                 ..prompt
             });
             app.tick();
@@ -1794,7 +1954,7 @@ mod tests {
         app.apply(Action::GoTo);
         let prompt = app.prompt.take().expect("the go-to dialog");
         app.submit_prompt(Prompt {
-            text: text.into(),
+            field: TextField::new(text),
             ..prompt
         });
         app.tick();
@@ -1993,6 +2153,84 @@ mod tests {
         assert_eq!(app.message.as_deref(), Some("ANSI: auto (now render)"));
     }
 
+    fn keys(app: &mut App, text: &str) {
+        use crossterm::event::{KeyCode, KeyEvent};
+        for c in text.chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    fn press(app: &mut App, code: crossterm::event::KeyCode) {
+        app.on_key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn the_time_range_dialog_checks_both_sides_and_esc_keeps_the_range() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("t.log", LOG)], false);
+        render(&mut app, 80, 20);
+        app.apply(Action::TimeRange);
+        keys(&mut app, "10:00:01");
+        press(&mut app, KeyCode::Tab);
+        keys(&mut app, "yesterday-ish");
+        let screen = render(&mut app, 80, 20);
+        assert!(
+            screen.iter().any(|l| l.contains("Time range")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Enter);
+        let d = app.time_range.as_ref().expect("still open");
+        assert!(d.invalid, "an unreadable side blocks OK");
+        assert!(
+            app.tabs[0].engine.time_from_text.is_empty(),
+            "nothing applied"
+        );
+
+        // Emptied, the "to" side is an open end.
+        app.on_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        ));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.time_range.is_none());
+        assert_eq!(app.tabs[0].engine.time_from_text, "10:00:01");
+        for _ in 0..200 {
+            app.tick();
+            if app.tabs[0].engine.visible_line_count() == 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(app.tabs[0].engine.visible_line_count(), 2);
+        let screen = render(&mut app, 80, 20);
+        assert!(
+            screen.iter().any(|l| l.contains("time:10:00:01..")),
+            "{screen:#?}"
+        );
+
+        // Reopened with the range as typed; Esc keeps it.
+        app.apply(Action::TimeRange);
+        assert_eq!(app.time_range.as_ref().unwrap().from.text(), "10:00:01");
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.time_range.is_none());
+        assert_eq!(app.tabs[0].engine.time_from_text, "10:00:01");
+    }
+
+    #[test]
+    fn a_paste_goes_into_the_open_field_and_the_cursor_edits_in_place() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        assert!(!app.on_paste("ignored"), "no field open");
+        app.apply(Action::StartSearch);
+        app.on_paste("disk\r\n");
+        press(&mut app, KeyCode::Home);
+        keys(&mut app, "slow ");
+        assert_eq!(app.prompt.as_ref().unwrap().field.text(), "slow disk  ");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tabs[0].engine.search_query, "slow disk");
+    }
+
     #[test]
     fn stream_window_has_borders_title_and_counts() {
         let (mut app, _dir) = app_with(&[("test.log", LOG)], false);
@@ -2113,7 +2351,7 @@ mod tests {
         let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
         app.apply(Action::StartSearch);
         if let Some(p) = app.prompt.as_mut() {
-            p.text = "warn".into();
+            p.field = TextField::new("warn");
         }
         render(&mut app, 80, 14);
         let ok = app.hits.dialog.unwrap().ok;

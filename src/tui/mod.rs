@@ -10,6 +10,7 @@
 mod app;
 mod clipboard;
 mod colors;
+mod form;
 mod hex;
 mod keys;
 mod mouse;
@@ -22,7 +23,10 @@ use std::time::{Duration, Instant};
 
 use crate::tail_engine::TailEngine;
 use crate::theme::CyberTheme;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event,
+};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
@@ -319,7 +323,7 @@ fn wait_idle(app: &mut App) {
 /// Puts the terminal back: mouse capture and raw mode off, main screen, cursor shown.
 /// Disabling a capture that was never enabled is harmless.
 fn restore_terminal() {
-    let _ = execute!(io::stdout(), DisableMouseCapture);
+    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     let _ = terminal::disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
 }
@@ -339,6 +343,9 @@ fn run_terminal(app: &mut App, stats: &mut FrameStats, opts: &Options) -> io::Re
         // the console mode without it and restores the old mode on disable).
         execute!(io::stdout(), EnableMouseCapture)?;
     }
+    // A paste arrives as one event (into the field being edited) rather than as keys
+    // that would act on the view; a terminal without it still types the keys.
+    let _ = execute!(io::stdout(), EnableBracketedPaste);
     // `Stdout` flushes through a 1 KiB line buffer: a full frame would reach the console
     // in dozens of small writes, each a round trip to the terminal host. One large
     // buffer sends the frame in a single write when ratatui flushes.
@@ -412,6 +419,7 @@ where
                 match event::read()? {
                     Event::Key(key) => dirty |= app.on_key(key),
                     Event::Mouse(m) => dirty |= app.on_mouse(m),
+                    Event::Paste(text) => dirty |= app.on_paste(&text),
                     Event::Resize(_, _) => {
                         terminal.autoresize().map_err(Into::into)?;
                         dirty = true;

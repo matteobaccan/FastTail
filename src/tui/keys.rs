@@ -59,6 +59,8 @@ pub enum Action {
     ToggleHex,
     /// `a`: how escape sequences show: auto, render, strip, raw.
     CycleAnsi,
+    /// `t`: the time range dialog.
+    TimeRange,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -125,50 +127,10 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char(':') => Action::GoTo,
         KeyCode::Char('h') => Action::ToggleHex,
         KeyCode::Char('a') => Action::CycleAnsi,
+        KeyCode::Char('t') => Action::TimeRange,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
-}
-
-/// What a key does while the prompt line (search, include, exclude) is being edited.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptKey {
-    Insert(char),
-    Backspace,
-    /// CTRL + U: empties the field.
-    Clear,
-    Submit,
-    Cancel,
-}
-
-pub fn map_prompt_key(key: KeyEvent) -> Option<PromptKey> {
-    if key.kind == KeyEventKind::Release {
-        return None;
-    }
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
-        KeyCode::Char('c') if ctrl => Some(PromptKey::Cancel),
-        KeyCode::Char('u') if ctrl => Some(PromptKey::Clear),
-        KeyCode::Char(c) if !ctrl => Some(PromptKey::Insert(c)),
-        KeyCode::Backspace => Some(PromptKey::Backspace),
-        KeyCode::Enter => Some(PromptKey::Submit),
-        KeyCode::Esc => Some(PromptKey::Cancel),
-        _ => None,
-    }
-}
-
-/// Applies a prompt key to `text`; returns the key back for `Submit` / `Cancel`, which
-/// the caller acts on.
-pub fn edit_prompt(text: &mut String, key: PromptKey) -> Option<PromptKey> {
-    match key {
-        PromptKey::Insert(c) => text.push(c),
-        PromptKey::Backspace => {
-            text.pop();
-        }
-        PromptKey::Clear => text.clear(),
-        PromptKey::Submit | PromptKey::Cancel => return Some(key),
-    }
-    None
 }
 
 #[cfg(test)]
@@ -202,6 +164,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char(':'), none), Some(Action::GoTo));
         assert_eq!(k(KeyCode::Char('h'), none), Some(Action::ToggleHex));
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
+        assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),
@@ -266,33 +229,5 @@ mod tests {
         let mut key = press(KeyCode::Char('q'), KeyModifiers::NONE);
         key.kind = KeyEventKind::Release;
         assert_eq!(map_key(key), None);
-        assert_eq!(map_prompt_key(key), None);
-    }
-
-    #[test]
-    fn prompt_editing() {
-        let mut text = String::from("err");
-        for key in [
-            PromptKey::Insert('o'),
-            PromptKey::Insert('r'),
-            PromptKey::Backspace,
-        ] {
-            assert_eq!(edit_prompt(&mut text, key), None);
-        }
-        assert_eq!(text, "erro");
-        assert_eq!(
-            edit_prompt(&mut text, PromptKey::Submit),
-            Some(PromptKey::Submit)
-        );
-        edit_prompt(&mut text, PromptKey::Clear);
-        assert!(text.is_empty());
-        assert_eq!(
-            map_prompt_key(press(KeyCode::Char('q'), KeyModifiers::NONE)),
-            Some(PromptKey::Insert('q'))
-        );
-        assert_eq!(
-            map_prompt_key(press(KeyCode::Esc, KeyModifiers::NONE)),
-            Some(PromptKey::Cancel)
-        );
     }
 }
