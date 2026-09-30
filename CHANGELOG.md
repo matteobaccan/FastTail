@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Terminal help (`?`, `F1`).** It now covers the whole screen and uses up to three
+  columns, so every key shows at once on a 120 x 30 terminal; a smaller one scrolls and
+  says how many entries are below without covering one. The mouse gestures are listed as
+  entries of their own.
 - **Bookmark report export.** Saving the report refuses a directory or another
   non-regular file instead of writing through it, as the other exports do (#201).
 
