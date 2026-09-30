@@ -3912,7 +3912,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.poll_interval_ms)
-                                        .range(50..=5000)
+                                        .range(crate::settings_model::POLL_INTERVAL_MS)
                                         .suffix(" ms"),
                                 )
                                 .on_hover_text(t(lang, "poll_interval_tip"))
@@ -3930,7 +3930,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.size_check_interval_ms)
-                                        .range(50..=10000)
+                                        .range(crate::settings_model::SIZE_CHECK_INTERVAL_MS)
                                         .suffix(" ms"),
                                 )
                                 .on_hover_text(t(lang, "size_check_interval_tip"))
@@ -3945,7 +3945,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.max_fps)
-                                        .range(15..=240)
+                                        .range(crate::settings_model::MAX_FPS)
                                         .suffix(" FPS"),
                                 )
                                 .on_hover_text(t(lang, "max_fps_tip"))
@@ -3963,7 +3963,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.max_fps_software)
-                                        .range(10..=120)
+                                        .range(crate::settings_model::MAX_FPS_SOFTWARE)
                                         .suffix(" FPS"),
                                 )
                                 .on_hover_text(t(lang, "max_fps_software_tip"))
@@ -3981,7 +3981,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.mouse_throttle_ms)
-                                        .range(0..=1000)
+                                        .range(crate::settings_model::MOUSE_THROTTLE_MS)
                                         .suffix(" ms"),
                                 )
                                 .on_hover_text(t(lang, "mouse_throttle_tip"))
@@ -3999,7 +3999,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.markdown_max_mb)
-                                        .range(1..=100)
+                                        .range(crate::settings_model::MARKDOWN_MAX_MB)
                                         .suffix(" MB"),
                                 )
                                 .on_hover_text(t(lang, "markdown_max_size_tip"))
@@ -4024,10 +4024,7 @@ impl FastTailApp {
                             let resp = ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.auto_bookmark_max)
-                                        .range(
-                                            crate::tail_engine::MIN_AUTO_BOOKMARK_MAX
-                                                ..=crate::tail_engine::MAX_AUTO_BOOKMARK_MAX,
-                                        )
+                                        .range(crate::settings_model::AUTO_BOOKMARK_MAX)
                                         .speed(100.0),
                                 )
                                 .on_hover_text(t(lang, "auto_bookmark_max_tip"));
@@ -4048,10 +4045,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.compressed_max_gb)
-                                        .range(
-                                            crate::compressed::MIN_MAX_GB
-                                                ..=crate::compressed::MAX_MAX_GB,
-                                        )
+                                        .range(crate::settings_model::COMPRESSED_MAX_GB)
                                         .suffix(" GB"),
                                 )
                                 .on_hover_text(t(lang, "compressed_max_size_tip"))
@@ -4069,10 +4063,7 @@ impl FastTailApp {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut self.config.stdin_spool_max_mb)
-                                        .range(
-                                            crate::stdin_source::MIN_MAX_MB
-                                                ..=crate::stdin_source::MAX_MAX_MB,
-                                        )
+                                        .range(crate::settings_model::STDIN_SPOOL_MAX_MB)
                                         .suffix(" MB"),
                                 )
                                 .on_hover_text(t(lang, "stdin_spool_max_tip"))

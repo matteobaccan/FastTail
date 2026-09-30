@@ -6865,7 +6865,8 @@ fn render_preset_manager(
                 Some(PresetEdit::Rename(idx, text)) if *idx == i => {
                     ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
                     let name = text.trim().to_string();
-                    let taken = crate::filter_preset::name_taken(presets, &name, Some(i));
+                    let taken = crate::settings_model::preset_name_problem(presets, &name, Some(i))
+                        == Some(crate::settings_model::PresetNameProblem::Taken);
                     if taken {
                         ui.label(
                             RichText::new(format!("⚠ {}", t(lang, "preset_name_taken")))
@@ -7884,8 +7885,11 @@ pub fn render_settings_content(
     if *screensaver_enabled {
         ui.horizontal(|ui| {
             ui.label(t(*lang, "screensaver_timeout"));
-            ui.add(egui::DragValue::new(screensaver_timeout_mins).range(0..=120))
-                .on_hover_text(t(*lang, "screensaver_zero_off"));
+            ui.add(
+                egui::DragValue::new(screensaver_timeout_mins)
+                    .range(crate::settings_model::SCREENSAVER_TIMEOUT_MINS),
+            )
+            .on_hover_text(t(*lang, "screensaver_zero_off"));
             ui.add_space(8.0);
             if ui.button(t(*lang, "test_screensaver")).clicked() {
                 *test_screensaver = true;
@@ -7928,7 +7932,7 @@ pub fn render_settings_content(
         ui.label(t(*lang, "time_delta_gap"));
         ui.add(
             egui::DragValue::new(&mut time_delta.gap_ms)
-                .range(0..=86_400_000)
+                .range(crate::settings_model::TIME_DELTA_GAP_MS)
                 .speed(10.0)
                 .suffix(" ms"),
         );
@@ -8019,7 +8023,9 @@ fn render_external_tools_editor(
                             let trimmed = text.trim().to_string();
                             tool.shortcut = (!trimmed.is_empty()).then_some(trimmed);
                         }
-                        if tool.shortcut.is_some() && tool.parsed_shortcut().is_none() {
+                        if crate::settings_model::tool_problems(tool, &[])
+                            .contains(&crate::settings_model::ToolProblem::BadShortcut)
+                        {
                             ui.label(
                                 RichText::new(t(lang, "ext_tool_bad_shortcut"))
                                     .small()
@@ -8053,14 +8059,14 @@ fn render_external_tools_editor(
                                     }
                                 }
                             });
-                        if let Some(bound) = tool.bound_rule.as_deref() {
-                            if !rule_patterns.contains(&bound) {
-                                ui.label(
-                                    RichText::new(t(lang, "ext_tool_rule_missing"))
-                                        .small()
-                                        .color(warn),
-                                );
-                            }
+                        if crate::settings_model::tool_problems(tool, &rule_patterns)
+                            .contains(&crate::settings_model::ToolProblem::MissingRule)
+                        {
+                            ui.label(
+                                RichText::new(t(lang, "ext_tool_rule_missing"))
+                                    .small()
+                                    .color(warn),
+                            );
                         }
                     });
                     ui.end_row();

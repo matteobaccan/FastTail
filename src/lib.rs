@@ -33,6 +33,7 @@ pub mod renderer;
 pub mod scan_job;
 pub mod screensaver;
 pub mod session;
+pub mod settings_model;
 pub mod spool;
 pub mod stdin_source;
 pub mod tail_engine;

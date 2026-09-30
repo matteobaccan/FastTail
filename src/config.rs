@@ -994,7 +994,10 @@ impl FastTailConfig {
             }
             if let Some(s) = general.get("screensaver_timeout_mins") {
                 if let Ok(v) = s.parse::<u32>() {
-                    cfg.screensaver_timeout_mins = v;
+                    cfg.screensaver_timeout_mins = crate::settings_model::clamp(
+                        v,
+                        &crate::settings_model::SCREENSAVER_TIMEOUT_MINS,
+                    );
                 }
             }
             if let Some(s) = general.get("lock_enabled") {
@@ -1035,7 +1038,8 @@ impl FastTailConfig {
                 .get("time_delta_gap_ms")
                 .and_then(|s| s.trim().parse::<u64>().ok())
             {
-                cfg.time_delta_gap_ms = v;
+                cfg.time_delta_gap_ms =
+                    crate::settings_model::clamp(v, &crate::settings_model::TIME_DELTA_GAP_MS);
             }
             if let Some(s) = general.get("font_size") {
                 if let Ok(v) = s.parse::<f32>() {
@@ -1049,42 +1053,47 @@ impl FastTailConfig {
             }
             if let Some(s) = general.get("poll_interval_ms") {
                 if let Ok(v) = s.parse::<u32>() {
-                    cfg.poll_interval_ms = v.clamp(50, 5000);
+                    cfg.poll_interval_ms =
+                        crate::settings_model::clamp(v, &crate::settings_model::POLL_INTERVAL_MS);
                 }
             }
             if let Some(s) = general.get("size_check_interval_ms") {
                 if let Ok(v) = s.parse::<u32>() {
-                    cfg.size_check_interval_ms = v.clamp(50, 10000);
+                    cfg.size_check_interval_ms = crate::settings_model::clamp(
+                        v,
+                        &crate::settings_model::SIZE_CHECK_INTERVAL_MS,
+                    );
                 }
             }
             if let Some(s) = general.get("max_fps") {
                 if let Ok(v) = s.parse::<u32>() {
-                    cfg.max_fps = v.clamp(5, 240);
+                    cfg.max_fps = crate::settings_model::clamp(v, &crate::settings_model::MAX_FPS);
                 }
             }
             if let Some(s) = general.get("max_fps_software") {
                 if let Ok(v) = s.parse::<u32>() {
-                    cfg.max_fps_software = v.clamp(5, 120);
+                    cfg.max_fps_software =
+                        crate::settings_model::clamp(v, &crate::settings_model::MAX_FPS_SOFTWARE);
                 }
             }
             if let Some(s) = general.get("mouse_throttle_ms") {
                 if let Ok(v) = s.parse::<u64>() {
-                    cfg.mouse_throttle_ms = v.clamp(0, 1000);
+                    cfg.mouse_throttle_ms =
+                        crate::settings_model::clamp(v, &crate::settings_model::MOUSE_THROTTLE_MS);
                 }
             }
             if let Some(s) = general.get("markdown_max_mb") {
                 if let Ok(v) = s.parse::<u32>() {
-                    cfg.markdown_max_mb = v.clamp(1, 100);
+                    cfg.markdown_max_mb =
+                        crate::settings_model::clamp(v, &crate::settings_model::MARKDOWN_MAX_MB);
                 }
             }
             if let Some(v) = general
                 .get("auto_bookmark_max")
                 .and_then(|s| s.trim().parse::<usize>().ok())
             {
-                cfg.auto_bookmark_max = v.clamp(
-                    crate::tail_engine::MIN_AUTO_BOOKMARK_MAX,
-                    crate::tail_engine::MAX_AUTO_BOOKMARK_MAX,
-                );
+                cfg.auto_bookmark_max =
+                    crate::settings_model::clamp(v, &crate::settings_model::AUTO_BOOKMARK_MAX);
             }
             if let Some(s) = general.get("spool_dir") {
                 let s = s.trim();
@@ -1093,15 +1102,13 @@ impl FastTailConfig {
             if let Some(s) = general.get("compressed_max_gb") {
                 if let Ok(v) = s.parse::<u32>() {
                     cfg.compressed_max_gb =
-                        v.clamp(crate::compressed::MIN_MAX_GB, crate::compressed::MAX_MAX_GB);
+                        crate::settings_model::clamp(v, &crate::settings_model::COMPRESSED_MAX_GB);
                 }
             }
             if let Some(s) = general.get("stdin_spool_max_mb") {
                 if let Ok(v) = s.parse::<u32>() {
-                    cfg.stdin_spool_max_mb = v.clamp(
-                        crate::stdin_source::MIN_MAX_MB,
-                        crate::stdin_source::MAX_MAX_MB,
-                    );
+                    cfg.stdin_spool_max_mb =
+                        crate::settings_model::clamp(v, &crate::settings_model::STDIN_SPOOL_MAX_MB);
                 }
             }
             if let Some(s) = general.get("size_unit") {
@@ -1389,32 +1396,39 @@ impl FastTailConfig {
         // Environment variables override for live testing and support
         if let Ok(v) = std::env::var("FASTTAIL_POLL_INTERVAL_MS") {
             if let Ok(ms) = v.parse::<u32>() {
-                cfg.poll_interval_ms = ms.clamp(50, 5000);
+                cfg.poll_interval_ms =
+                    crate::settings_model::clamp(ms, &crate::settings_model::POLL_INTERVAL_MS);
             }
         }
         if let Ok(v) = std::env::var("FASTTAIL_SIZE_CHECK_INTERVAL_MS") {
             if let Ok(ms) = v.parse::<u32>() {
-                cfg.size_check_interval_ms = ms.clamp(50, 10000);
+                cfg.size_check_interval_ms = crate::settings_model::clamp(
+                    ms,
+                    &crate::settings_model::SIZE_CHECK_INTERVAL_MS,
+                );
             }
         }
         if let Ok(v) = std::env::var("FASTTAIL_MAX_FPS") {
             if let Ok(fps) = v.parse::<u32>() {
-                cfg.max_fps = fps.clamp(5, 240);
+                cfg.max_fps = crate::settings_model::clamp(fps, &crate::settings_model::MAX_FPS);
             }
         }
         if let Ok(v) = std::env::var("FASTTAIL_MAX_FPS_SOFTWARE") {
             if let Ok(fps) = v.parse::<u32>() {
-                cfg.max_fps_software = fps.clamp(5, 120);
+                cfg.max_fps_software =
+                    crate::settings_model::clamp(fps, &crate::settings_model::MAX_FPS_SOFTWARE);
             }
         }
         if let Ok(v) = std::env::var("FASTTAIL_MOUSE_THROTTLE_MS") {
             if let Ok(ms) = v.parse::<u64>() {
-                cfg.mouse_throttle_ms = ms.clamp(0, 1000);
+                cfg.mouse_throttle_ms =
+                    crate::settings_model::clamp(ms, &crate::settings_model::MOUSE_THROTTLE_MS);
             }
         }
         if let Ok(v) = std::env::var("FASTTAIL_MARKDOWN_MAX_MB") {
             if let Ok(mb) = v.parse::<u32>() {
-                cfg.markdown_max_mb = mb.clamp(1, 100);
+                cfg.markdown_max_mb =
+                    crate::settings_model::clamp(mb, &crate::settings_model::MARKDOWN_MAX_MB);
             }
         }
 
@@ -1935,6 +1949,20 @@ mod tests {
         let mut ini = cfg.to_ini();
         ini.with_section(Some("general")).set("zoom_factor", "42");
         assert_eq!(FastTailConfig::from_ini(&ini).zoom_factor, MAX_ZOOM);
+    }
+
+    #[test]
+    fn test_numeric_settings_load_into_the_shared_ranges() {
+        let cfg = FastTailConfig::default();
+        let mut ini = cfg.to_ini();
+        ini.with_section(Some("general"))
+            .set("screensaver_timeout_mins", "500")
+            .set("time_delta_gap_ms", "999999999999")
+            .set("max_fps", "10");
+        let loaded = FastTailConfig::from_ini(&ini);
+        assert_eq!(loaded.screensaver_timeout_mins, 120);
+        assert_eq!(loaded.time_delta_gap_ms, 86_400_000);
+        assert_eq!(loaded.max_fps, 10, "a value in range is kept as saved");
     }
 
     #[test]
