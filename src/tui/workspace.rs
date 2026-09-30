@@ -261,7 +261,7 @@ mod tests {
             "no duplicate b"
         );
 
-        let plan = start_plan(&mut settings, None, true, &[c.clone()]).unwrap();
+        let plan = start_plan(&mut settings, None, true, std::slice::from_ref(&c)).unwrap();
         assert_eq!(plan.paths, vec![c.clone()], "--fresh skips the workspace");
 
         let missing = dir.path().join("none.fasttail-session.ini");
