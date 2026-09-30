@@ -23,37 +23,7 @@ pub const MAX_BOOKMARKS_PER_FILE: usize = 1000;
 /// Cap for the files remembered with line wrap on.
 pub const MAX_WRAPPED_FILES: usize = 50;
 
-/// Unlock phrase that always works, whatever the PIN is — a nod to WarGames.
-pub const LOCK_BACKDOOR: &str = "joshua";
-
-/// Scrambles a PIN before it is written to the ini file. FNV-1a over a fixed salt plus
-/// the digits: it keeps the PIN from being read at a glance out of `fasttail.ini`, and
-/// that is the whole of its ambition. The lock is a deterrent against someone walking
-/// past the screen, not a security boundary — the log files stay readable on disk and
-/// `LOCK_BACKDOOR` opens it anyway.
-pub fn scramble_pin(pin: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in b"fasttail-lock-v1".iter().chain(pin.as_bytes()) {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
-}
-
-/// Whether `attempt` opens a lock whose scrambled PIN is `stored`.
-pub fn pin_matches(stored: &str, attempt: &str) -> bool {
-    let attempt = attempt.trim();
-    if attempt.eq_ignore_ascii_case(LOCK_BACKDOOR) {
-        return true;
-    }
-    !stored.is_empty() && scramble_pin(attempt) == stored
-}
-
-/// A PIN the lock will accept: 4 to 12 digits.
-pub fn is_valid_pin(pin: &str) -> bool {
-    let pin = pin.trim();
-    (4..=12).contains(&pin.chars().count()) && pin.chars().all(|c| c.is_ascii_digit())
-}
+pub use crate::lock::{is_valid_pin, pin_matches, scramble_pin, LOCK_BACKDOOR};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FastTailConfig {

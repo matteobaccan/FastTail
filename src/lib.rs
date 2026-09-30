@@ -25,6 +25,7 @@ pub mod find_all;
 pub mod global_filter;
 pub mod html_converter;
 pub mod i18n;
+pub mod lock;
 pub mod log_level;
 pub mod paths;
 pub mod print_mode;
