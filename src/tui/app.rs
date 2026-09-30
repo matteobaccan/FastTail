@@ -288,8 +288,9 @@ pub struct App {
     pub quit: bool,
     /// Mouse capture is on (the help says how to select text natively).
     pub mouse: bool,
-    /// Event-loop wait when nothing runs (the ini's `poll_interval_ms`).
+    /// How often the files are read (the ini's `poll_interval_ms`).
     pub idle_poll: Duration,
+    last_engine_poll: Option<Instant>,
     /// Clickable rectangles of the last frame.
     pub hits: HitMap,
     clipboard: Clipboard,
@@ -324,6 +325,7 @@ impl App {
             quit: false,
             mouse: true,
             idle_poll: Duration::from_millis(250),
+            last_engine_poll: None,
             hits: HitMap::default(),
             clipboard: Clipboard::default(),
             last_click: None,
@@ -343,8 +345,17 @@ impl App {
     /// Polls every engine (hidden streams keep tailing), applies what the engines ask the
     /// view to do, and says whether the screen needs a redraw.
     pub fn tick(&mut self) -> bool {
-        for tab in &mut self.tabs {
-            tab.engine.poll_updates();
+        // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
+        // every tick while background work runs, whose results arrive through the poll.
+        let due = self.busy()
+            || self
+                .last_engine_poll
+                .is_none_or(|at| at.elapsed() >= self.idle_poll);
+        if due {
+            self.last_engine_poll = Some(Instant::now());
+            for tab in &mut self.tabs {
+                tab.engine.poll_updates();
+            }
         }
         let listed = self.picker.as_mut().is_some_and(|p| p.pull());
         for i in self.visible_tabs() {
@@ -403,6 +414,7 @@ impl App {
     pub fn busy(&self) -> bool {
         self.tabs.iter().any(|t| {
             t.engine.scan_progress().is_some()
+                || t.engine.index_pending
                 || t.engine.compressed.as_ref().is_some_and(|c| c.is_running())
         }) || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
     }
@@ -2237,14 +2249,18 @@ pub fn absolute(p: &str) -> PathBuf {
     }
 }
 
-/// Poll timeout of the event loop: `idle` (the ini's `poll_interval_ms`) when nothing
-/// runs, at most 50 ms while background work runs so progress shows smoothly. Input
-/// ends the wait at once either way.
-pub fn poll_timeout(busy: bool, idle: Duration) -> Duration {
+/// Longest wait of the event loop for input when nothing runs.
+pub const IDLE_TICK: Duration = Duration::from_millis(100);
+/// Longest wait while background work runs, so its progress moves smoothly.
+pub const BUSY_TICK: Duration = Duration::from_millis(50);
+
+/// Poll timeout of the event loop: 100 ms, 50 ms while background work runs. Input ends
+/// the wait at once either way; the files are read at their own cadence (see `tick`).
+pub fn poll_timeout(busy: bool) -> Duration {
     if busy {
-        idle.min(Duration::from_millis(50))
+        BUSY_TICK
     } else {
-        idle
+        IDLE_TICK
     }
 }
 
@@ -2977,6 +2993,27 @@ mod tests {
             .any(|l| l.contains("move the cursor one row")));
         press(&mut app, KeyCode::Char('x'));
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn the_loop_ticks_at_100_ms_and_reads_the_files_at_the_ini_cadence() {
+        assert_eq!(poll_timeout(false), Duration::from_millis(100));
+        assert_eq!(poll_timeout(true), Duration::from_millis(50));
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        app.idle_poll = Duration::from_secs(3600);
+        app.tick();
+        let before = app.tabs[0].engine.total_lines();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join("a.log"))
+            .unwrap();
+        f.write_all(b"2026-09-28 10:00:03 INFO more\n").unwrap();
+        drop(f);
+        app.tick();
+        assert_eq!(app.tabs[0].engine.total_lines(), before, "not due yet");
+        app.idle_poll = Duration::ZERO;
+        app.tick();
+        assert_eq!(app.tabs[0].engine.total_lines(), before + 1);
     }
 
     #[test]
