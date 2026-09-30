@@ -387,6 +387,7 @@ fn test_tab_lookup_tolerates_path_case_differences() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         use egui_dock::TabViewer;
