@@ -14,6 +14,7 @@ mod form;
 mod hex;
 mod keys;
 mod mouse;
+mod picker;
 mod view;
 mod workspace;
 
@@ -261,6 +262,8 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     app.active = focus;
     app.mouse = !opts.no_mouse;
     app.idle_poll = settings.poll_interval();
+    // Streams opened later (`o`, the entry picker) get the same setup.
+    app.settings = Some(settings);
     if !notices.is_empty() {
         app.message = Some(notices.join("  |  "));
     }
