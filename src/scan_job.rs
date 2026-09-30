@@ -593,6 +593,7 @@ fn run(
         _ => None,
     };
     let strip = range.ansi.strips();
+    let mut strip_buf = String::new();
     let mut eval = |idx: usize,
                     bytes: &[u8],
                     hits: &mut Vec<usize>,
@@ -606,7 +607,7 @@ fn run(
             JobSpec::Collapse { .. } => {
                 let pos = walk.as_mut().and_then(|w| w.pos(idx));
                 if let Some(detector) = collapse.as_mut() {
-                    line_passes(bytes, range.encoding, strip, |s| {
+                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                         detector.feed(idx, s, pos);
                         true
                     });
@@ -614,7 +615,7 @@ fn run(
                 true
             }
             JobSpec::Levels => {
-                line_passes(bytes, range.encoding, strip, |s| {
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     levels.push(detect_level(s) as u8);
                     true
                 });
@@ -622,7 +623,7 @@ fn run(
             }
             JobSpec::Timestamps { levels_from, .. } => {
                 let with_level = levels_from.is_some_and(|from| idx >= from);
-                line_passes(bytes, range.encoding, strip, |s| {
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     timing.push(s);
                     if with_level {
                         levels.push(detect_level(s) as u8);
@@ -632,7 +633,7 @@ fn run(
                 true
             }
             JobSpec::Filter(filter) => {
-                let visible = line_passes(bytes, range.encoding, strip, |s| {
+                let visible = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     let (v, next) = filter.visible_in_sequence(s, parent_visible);
                     parent_visible = next;
                     v
@@ -648,7 +649,7 @@ fn run(
                 count_past_limit,
                 ..
             } => {
-                let hit = line_passes(bytes, range.encoding, strip, |s| {
+                let hit = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     let visible = walk.as_mut().is_none_or(|w| w.visible(idx, s));
                     visible && contains_case_insensitive(s, query_lower)
                 });
@@ -667,7 +668,7 @@ fn run(
                 true
             }
             JobSpec::AutoBookmarks { rules, limit } => {
-                if line_passes(bytes, range.encoding, strip, |s| {
+                if line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     rules.iter().any(|r| r.is_match(s))
                 }) {
                     hits.push(idx);
@@ -869,23 +870,24 @@ fn run(
 
 /// Decodes a raw line (newline already stripped), removes its escape sequences when
 /// `strip` is set, and applies `pred`, borrowing UTF-8 text when it is valid and holds no
-/// sequence.
+/// sequence. Reuses `strip_buf` to eliminate per-line heap allocations when stripping sequences.
 fn line_passes(
     bytes: &[u8],
     encoding: FileEncoding,
     strip: bool,
+    strip_buf: &mut String,
     pred: impl FnOnce(&str) -> bool,
 ) -> bool {
     match encoding {
         FileEncoding::Utf8 => {
             let content = &bytes[..trim_cr(bytes)];
             match std::str::from_utf8(content) {
-                Ok(s) if strip => pred(&crate::ansi::strip(s)),
+                Ok(s) if strip => pred(crate::ansi::strip_to_buf(s, strip_buf)),
                 Ok(s) => pred(s),
                 Err(_) => {
                     let s = String::from_utf8_lossy(content);
                     if strip {
-                        pred(&crate::ansi::strip(&s))
+                        pred(crate::ansi::strip_to_buf(&s, strip_buf))
                     } else {
                         pred(&s)
                     }

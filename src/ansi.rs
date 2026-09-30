@@ -252,6 +252,23 @@ pub fn strip(line: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Strips escape sequences from `line` into `buf` (cleared first if sequences are present).
+/// Returns `line` borrowed directly if `line` holds no escape sequence, or `buf.as_str()`
+/// when stripping occurred. Avoids heap allocations when scanning in a loop with a reused `buf`.
+pub fn strip_to_buf<'a>(line: &'a str, buf: &'a mut String) -> &'a str {
+    if !has_escape(line.as_bytes()) {
+        return line;
+    }
+    buf.clear();
+    buf.reserve(line.len());
+    for token in Tokens::new(line) {
+        if let Token::Text(s, e) = token {
+            buf.push_str(&line[s..e]);
+        }
+    }
+    buf.as_str()
+}
+
 /// Like `strip`, for an owned line: returned as it is when it holds no sequence.
 pub fn strip_owned(line: String) -> String {
     match strip(&line) {
@@ -746,5 +763,22 @@ mod tests {
         assert_eq!(AnsiMode::from_name("colour"), None);
         assert!(AnsiMode::Render.strips() && AnsiMode::Strip.strips());
         assert!(!AnsiMode::Raw.strips() && !AnsiMode::Auto.strips());
+    }
+
+    #[test]
+    fn strip_to_buf_matches_strip() {
+        let mut buf = String::new();
+        let cases = [
+            "plain line",
+            "\x1b[32mINFO \x1b[0mstarted \x1b[1;31mERROR\x1b[0m done",
+            "see \x1b]8;;https://example.com\x1b\\the docs\x1b]8;;\x07 now",
+            "\x1b[1;31m",
+            "",
+        ];
+        for line in cases {
+            let expected = strip(line);
+            let got = strip_to_buf(line, &mut buf);
+            assert_eq!(got, expected.as_ref());
+        }
     }
 }
