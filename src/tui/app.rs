@@ -18,6 +18,7 @@ use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
 use crate::tail_engine::{TailEngine, ViewMode};
 use crate::time_range_text::{self, side_readable, Side};
+use crate::tui::browser::{self, FileBrowser, Kind};
 use crate::tui::calendar::{self, Calendar};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -192,8 +193,6 @@ pub enum PromptKind {
     Note(usize),
     /// Go to a line or a time.
     Goto,
-    /// A file, pattern or archive entry path to open.
-    OpenFile,
     /// The file to save the open streams to as a session.
     SaveSession,
 }
@@ -380,6 +379,8 @@ pub struct App {
     pub prompt: Option<Prompt>,
     pub time_range: Option<TimeRangeDialog>,
     pub picker: Option<EntryPicker>,
+    /// The Open dialog (`o`).
+    pub browser: Option<FileBrowser>,
     pub sessions: Option<SessionDialog>,
     /// The Settings dialog (`,`).
     pub settings_form: Option<SettingsForm>,
@@ -442,6 +443,7 @@ impl App {
             prompt: None,
             time_range: None,
             picker: None,
+            browser: None,
             sessions: None,
             settings_form: None,
             confirm_overwrite: None,
@@ -710,6 +712,9 @@ impl App {
         if self.picker.is_some() {
             return self.on_picker_key(key);
         }
+        if self.browser.is_some() {
+            return self.on_browser_key(key);
+        }
         if self.time_range.is_some() {
             return self.on_time_range_key(key);
         }
@@ -810,6 +815,9 @@ impl App {
         } else if let Some(p) = self.picker.as_mut() {
             p.filter.insert(text);
             p.filter_changed();
+        } else if let Some(b) = self.browser.as_mut() {
+            b.field.insert(text);
+            b.filter_changed();
         } else if let Some(d) = self.time_range.as_mut() {
             d.focused().insert(text);
         } else if let Some(p) = self.prompt.as_mut() {
@@ -1118,6 +1126,55 @@ impl App {
         true
     }
 
+    /// `o`: the Open dialog on the folder of the focused stream (the current folder
+    /// for standard input or an archive entry).
+    fn open_browser(&mut self) {
+        let start = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.engine.path.parent().map(Path::to_path_buf))
+            .filter(|d| d.is_dir())
+            .or_else(|| std::env::current_dir().ok());
+        self.browser = Some(FileBrowser::at(start));
+    }
+
+    fn on_browser_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        let Some(b) = self.browser.as_mut() else {
+            return false;
+        };
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let page = 10;
+        match key.code {
+            KeyCode::Up => b.move_by(-1),
+            KeyCode::Down => b.move_by(1),
+            KeyCode::PageUp => b.move_by(-page),
+            KeyCode::PageDown => b.move_by(page),
+            // Backspace on an empty name goes up, as in a file dialog.
+            KeyCode::Backspace if b.field.text().is_empty() => b.up(),
+            _ => match b.field.on_key(key) {
+                FieldKey::Submit => self.submit_browser(),
+                FieldKey::Cancel => self.browser = None,
+                FieldKey::Edited => b.filter_changed(),
+                FieldKey::Other => return false,
+            },
+        }
+        true
+    }
+
+    /// `Enter` / `[ OK ]` in the Open dialog: a folder is listed, a file opens.
+    fn submit_browser(&mut self) {
+        let Some(b) = self.browser.as_mut() else {
+            return;
+        };
+        if let Some(path) = b.activate() {
+            self.browser = None;
+            self.open_file(&path);
+        }
+    }
+
     fn close_picker(&mut self) {
         if let Some(mut p) = self.picker.take() {
             p.close();
@@ -1330,11 +1387,6 @@ impl App {
             }
             // A note bookmarks the line; an empty one removes the note, not the bookmark.
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
-            PromptKind::OpenFile => {
-                if !text.is_empty() {
-                    self.open_file(&absolute(&text));
-                }
-            }
             PromptKind::SaveSession => self.submit_save_session(&text),
             PromptKind::Goto if tab.is_hex() => match hex::parse_offset(&text) {
                 Some(offset) if tab.engine.file_size > 0 => {
@@ -1371,7 +1423,7 @@ impl App {
             PromptKind::Include => e.include_filter().to_string(),
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
-            PromptKind::Goto | PromptKind::OpenFile => String::new(),
+            PromptKind::Goto => String::new(),
             PromptKind::SaveSession => {
                 let current = self
                     .settings
@@ -1596,7 +1648,7 @@ impl App {
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
             Action::Settings => self.open_settings(),
-            Action::OpenFile => self.open_prompt(PromptKind::OpenFile),
+            Action::OpenFile => self.open_browser(),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
             Action::EditNote => match self.tabs[self.active].cursor_line() {
@@ -1657,6 +1709,15 @@ impl App {
     pub fn on_mouse(&mut self, ev: MouseEvent) -> bool {
         match ev.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if let Some(b) = self.browser.as_mut() {
+                    let up = ev.kind == MouseEventKind::ScrollUp;
+                    b.move_by(if up {
+                        -(WHEEL_ROWS as isize)
+                    } else {
+                        WHEEL_ROWS as isize
+                    });
+                    return true;
+                }
                 if self.prompt.is_some()
                     || self.time_range.is_some()
                     || self.picker.is_some()
@@ -1797,6 +1858,17 @@ impl App {
                     f.focus = i;
                 }
             }
+            // One click selects, a click on the selected entry opens it (as a double
+            // click does in a file dialog).
+            Target::ListItem(i) if self.browser.is_some() => {
+                if let Some(b) = self.browser.as_mut() {
+                    if b.selected == i {
+                        self.submit_browser();
+                    } else {
+                        b.selected = i;
+                    }
+                }
+            }
             Target::ListItem(i) if self.sessions.is_some() => {
                 if let Some(d) = self.sessions.as_mut() {
                     d.selected = i;
@@ -1819,6 +1891,8 @@ impl App {
                     self.submit_sessions();
                 } else if self.picker.is_some() {
                     self.open_picked();
+                } else if self.browser.is_some() {
+                    self.submit_browser();
                 } else if self.time_range.is_some() {
                     self.submit_time_range();
                 } else if let Some(prompt) = self.prompt.take() {
@@ -1832,6 +1906,7 @@ impl App {
                 self.sessions = None;
                 self.settings_form = None;
                 self.confirm_overwrite = None;
+                self.browser = None;
                 self.close_picker();
                 self.show_help = false;
             }
@@ -2061,6 +2136,9 @@ impl App {
         }
         if self.time_range.is_some() {
             self.draw_time_range(frame, main_area);
+        }
+        if self.browser.is_some() {
+            self.draw_browser(frame, main_area);
         }
         if self.picker.is_some() {
             self.draw_picker(frame, main_area);
@@ -2412,7 +2490,6 @@ impl App {
                 "Go to byte offset (decimal or 0x hex)"
             }
             PromptKind::Goto => "Go to line (N, +N, -N) or time (14:02)",
-            PromptKind::OpenFile => "Open file, pattern (*.log) or archive entry",
             PromptKind::SaveSession => "Save session as",
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
@@ -2555,6 +2632,97 @@ impl App {
             Line::raw("Replace it with the open streams? (Enter / Esc)"),
         ];
         frame.render_widget(Paragraph::new(text), inner);
+    }
+
+    /// The Open dialog: the folder, the name field, the list (name, size or kind,
+    /// date) and a status line.
+    fn draw_browser(&mut self, frame: &mut Frame, area: Rect) {
+        let height = area.height.saturating_sub(2).clamp(10, 30);
+        let inner = self.dialog(frame, area, (78, height), "Open", true);
+        let palette = self.palette;
+        let Some(b) = self.browser.as_mut() else {
+            return;
+        };
+        let dim = Style::default().fg(palette.dim());
+        let accent = Style::default().fg(palette.accent());
+        let row = |y: u16| Rect {
+            y,
+            height: 1,
+            ..inner
+        };
+        let width = inner.width as usize;
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Look in ", dim),
+                Span::styled(
+                    view::sanitize(&tail_chars(&b.location(), width.saturating_sub(8))),
+                    accent,
+                ),
+            ])),
+            row(inner.y),
+        );
+        let (shown_field, x) = b.field.view(width.saturating_sub(6));
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Name ", dim),
+                Span::raw(view::sanitize(&shown_field)),
+            ])),
+            row(inner.y + 1),
+        );
+        frame.set_cursor_position((inner.x + 5 + x as u16, inner.y + 1));
+        let list = Rect {
+            y: inner.y + 2,
+            height: inner.height.saturating_sub(4),
+            ..inner
+        };
+        let shown = b.shown();
+        let rows = list.height as usize;
+        if b.selected < b.top {
+            b.top = b.selected;
+        } else if rows > 0 && b.selected >= b.top + rows {
+            b.top = b.selected + 1 - rows;
+        }
+        // Name, then a 10-cell size or kind and a 16-cell date.
+        let name_w = width.saturating_sub(29).max(8);
+        let mut lines = Vec::with_capacity(rows);
+        for (k, &i) in shown.iter().enumerate().skip(b.top).take(rows) {
+            let e = &b.entries[i];
+            let (kind, style) = match e.kind {
+                Kind::Parent => ("<UP>".to_string(), accent),
+                Kind::Drive => ("<DRIVE>".to_string(), accent),
+                Kind::Dir => ("<DIR>".to_string(), accent),
+                Kind::File => (crate::tui::picker::human_size(e.size), Style::default()),
+            };
+            let date = e.modified.map(browser::date_text).unwrap_or_default();
+            let name = head_chars(&view::sanitize(&e.name), name_w);
+            let text = format!("{name:<name_w$} {kind:>10} {date:>16}");
+            let style = if k == b.selected {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            };
+            let y = list.y + (k - b.top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(list.x, y, list.width, 1), k));
+            lines.push(Line::styled(text, style));
+        }
+        frame.render_widget(Paragraph::new(lines), list);
+        let (dirs, files) = b.entries.iter().fold((0, 0), |(d, f), e| match e.kind {
+            Kind::File => (d, f + 1),
+            Kind::Dir | Kind::Drive => (d + 1, f),
+            Kind::Parent => (d, f),
+        });
+        let status = match &b.note {
+            Some(note) => note.clone(),
+            None => format!(
+                "{dirs} folders, {files} files. Enter opens, Backspace goes up, type to filter or a path"
+            ),
+        };
+        frame.render_widget(
+            Paragraph::new(Line::styled(head_chars(&status, width), dim)),
+            row(list.bottom()),
+        );
     }
 
     fn draw_picker(&mut self, frame: &mut Frame, area: Rect) {
@@ -2970,7 +3138,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         "o",
-        "open a file, pattern or archive entry",
+        "open: browse folders, or type a path or *.log",
         Some(Action::OpenFile),
     ),
     ("Shift+O", "open a session", Some(Action::OpenSession)),
@@ -3013,6 +3181,27 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ("?  F1", "this help", None),
     ("q", "quit", Some(Action::Quit)),
 ];
+
+/// The first `n` characters of `s`, the last one an ellipsis when it is cut.
+fn head_chars(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+    out.push('~');
+    out
+}
+
+/// The last `n` characters of `s` (the end of a long path), marked when cut.
+fn tail_chars(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    if count <= n {
+        return s.to_string();
+    }
+    let mut out = String::from("~");
+    out.extend(s.chars().skip(count + 1 - n.max(1)));
+    out
+}
 
 /// The name of a tab that is not an open stream: a GUI panel, or a file this run does
 /// not have open.
@@ -4114,6 +4303,54 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.tabs.len(), 2);
         assert!(app.message.as_deref().unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn o_browses_the_folder_of_the_stream_with_keys_and_mouse() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        std::fs::create_dir(dir.path().join("old")).unwrap();
+        std::fs::write(dir.path().join("old").join("c.log"), "c\n").unwrap();
+        std::fs::write(dir.path().join("b.log"), "b\n").unwrap();
+        app.apply(Action::OpenFile);
+        let screen = render(&mut app, 100, 30);
+        assert!(screen.iter().any(|l| l.contains(" Open ")), "{screen:#?}");
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("<DIR>") && l.contains("old")));
+        // .., old, a.log, b.log: Down twice then Enter enters old; Enter on c.log.
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.browser.as_ref().unwrap().dir.as_deref(),
+            Some(dir.path().join("old").as_path())
+        );
+        // Backspace on the empty name goes back up, onto the folder it left.
+        press(&mut app, KeyCode::Backspace);
+        let b = app.browser.as_ref().unwrap();
+        assert_eq!(b.chosen().unwrap().name, "old");
+        // Typing filters (a.log is then selected); a click selects b.log, a second
+        // click opens it.
+        app.on_paste(".log");
+        assert_eq!(
+            app.browser.as_ref().unwrap().chosen().unwrap().name,
+            "a.log"
+        );
+        let screen = render(&mut app, 100, 30);
+        let y = screen
+            .iter()
+            .position(|l| l.contains("b.log") && l.contains(" B "))
+            .unwrap();
+        assert!(app.on_mouse(click(30, y as u16)));
+        assert!(app.browser.is_some());
+        assert!(app.on_mouse(click(30, y as u16)));
+        assert!(app.browser.is_none());
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.tabs[1].title, "b.log");
+        // Esc closes the dialog.
+        app.apply(Action::OpenFile);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.browser.is_none());
     }
 
     fn prompt_submit(app: &mut App, text: &str) {
