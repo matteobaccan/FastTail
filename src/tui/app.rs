@@ -873,11 +873,14 @@ impl App {
             KeyCode::Home => self.help_sel = help_step(HELP.len() - 1, 1),
             KeyCode::End => self.help_sel = help_step(0, -1),
             // Two columns: Left / Right jump to the other one.
+            // Several columns: Left / Right move to the entry beside.
             KeyCode::Left | KeyCode::Right if self.help_half > 0 => {
-                let other = if sel >= self.help_half {
-                    sel - self.help_half
+                let other = if key.code == KeyCode::Left {
+                    sel.checked_sub(self.help_half).unwrap_or(sel)
+                } else if sel + self.help_half < HELP.len() {
+                    sel + self.help_half
                 } else {
-                    (sel + self.help_half).min(HELP.len() - 1)
+                    sel
                 };
                 self.help_sel = if HELP[other].2.is_some() {
                     other
@@ -2287,7 +2290,8 @@ impl App {
         self.draw_dock(frame, main_area);
         self.draw_status(frame, status_area);
         if self.show_help {
-            self.draw_help(frame, main_area);
+            // The whole screen: the keys need the room more than the windows do.
+            self.draw_help(frame, frame.area());
         }
         if self.prompt.is_some() {
             self.draw_prompt(frame, main_area);
@@ -3093,51 +3097,62 @@ impl App {
     }
 
     fn draw_help(&mut self, frame: &mut Frame, area: Rect) {
-        let mouse_hint = if self.mouse {
-            "Mouse on: SHIFT + drag selects text natively (--no-mouse)"
+        let note = if self.mouse {
+            "Mouse on: SHIFT + drag selects text natively (--no-mouse turns the mouse off)"
         } else {
             "Mouse off (--no-mouse): the terminal selects text"
         };
-        let notes = [
-            "",
-            "Wheel scrolls the window under the pointer; click focuses",
-            "and selects a row, SHIFT + click or drag a range, double",
-            "click toggles a bookmark.",
-            mouse_hint,
-        ];
-        // On a wide screen the keys go in two columns, so they all show at once; the
-        // mouse notes stay under them. The cursor walks the entries that run a command.
-        const COL: usize = 76;
-        let two = area.width as usize >= 2 * COL + 6;
-        let half = if two {
-            HELP.len().div_ceil(2)
-        } else {
-            HELP.len()
+        // As many columns (up to 3, each at least 44 cells) as it takes to show every
+        // entry at once; a screen too small for that scrolls, the cursor kept in view.
+        let kw = HELP
+            .iter()
+            .map(|(k, _, _)| k.chars().count())
+            .max()
+            .unwrap_or(0)
+            + 2;
+        let entries: Vec<String> = HELP
+            .iter()
+            .map(|(k, d, _)| format!("{k:<kw$}{d}"))
+            .collect();
+        let longest = entries.iter().map(|e| e.chars().count()).max().unwrap_or(0);
+        let room_w = (area.width as usize).saturating_sub(4);
+        let room_h = (area.height as usize).saturating_sub(4);
+        let fits = |n: usize| {
+            let col = longest.min(room_w.saturating_sub(2 * (n - 1)) / n);
+            (col >= 44 || n == 1).then_some(col)
         };
-        self.help_half = if two { half } else { 0 };
-        let entry = |i: usize| -> String {
-            HELP.get(i)
-                .map(|(k, d, _)| format!("{k:<17}{d}"))
-                .unwrap_or_default()
-        };
-        let total = half + notes.len();
-        let width = if two { 2 * COL as u16 + 4 } else { 78 };
+        let mut cols = 1;
+        let mut col = fits(1).unwrap_or(longest).max(1);
+        for n in 1..=3 {
+            let Some(c) = fits(n) else {
+                break;
+            };
+            cols = n;
+            col = c;
+            if HELP.len().div_ceil(n) < room_h {
+                break;
+            }
+        }
+        let per_col = HELP.len().div_ceil(cols);
+        self.help_half = if cols > 1 { per_col } else { 0 };
+        let total = per_col + 1;
+        let width = (cols * col + 2 * (cols - 1) + 2) as u16;
         let height = (total as u16 + 3).min(area.height);
         let rows = height.saturating_sub(3) as usize;
         // Keep the selected entry's row on screen.
-        let sel_row = self.help_sel % half.max(1);
+        let sel_row = self.help_sel % per_col.max(1);
         if sel_row < self.help_top {
             self.help_top = sel_row;
         } else if rows > 0 && sel_row >= self.help_top + rows {
             self.help_top = sel_row + 1 - rows;
         }
         self.help_top = self.help_top.min(total.saturating_sub(rows));
-        let more_below = self.help_top + rows < total;
+        let hidden = total.saturating_sub(self.help_top + rows);
         let inner = self.dialog(
             frame,
             area,
             (width, height),
-            "Keys - Up/Down choose, Enter runs, Esc closes",
+            "Keys - arrows choose, Enter runs, Esc closes",
             false,
         );
         let selected = Style::default().add_modifier(Modifier::REVERSED);
@@ -3145,13 +3160,13 @@ impl App {
         let mut lines = Vec::with_capacity(rows);
         for row in self.help_top..(self.help_top + rows).min(total) {
             let y = inner.y + (row - self.help_top) as u16;
-            if row >= half {
-                lines.push(Line::raw(notes[row - half].to_string()));
+            if row >= per_col {
+                lines.push(Line::styled(head_chars(note, inner.width as usize), info));
                 continue;
             }
-            let mut spans = Vec::with_capacity(3);
-            let cols: &[usize] = if two { &[row, row + half] } else { &[row] };
-            for (c, &i) in cols.iter().enumerate() {
+            let mut spans = Vec::with_capacity(2 * cols);
+            for c in 0..cols {
+                let i = row + c * per_col;
                 if i >= HELP.len() {
                     continue;
                 }
@@ -3162,27 +3177,28 @@ impl App {
                 } else {
                     Style::default()
                 };
-                let x = inner.x + (c * (COL + 2)) as u16;
+                let x = inner.x + (c * (col + 2)) as u16;
                 self.hits
                     .list_items
-                    .push((Rect::new(x, y, COL as u16, 1), i));
+                    .push((Rect::new(x, y, col as u16, 1), i));
                 if c > 0 {
                     spans.push(Span::raw("  "));
                 }
-                spans.push(Span::styled(format!("{:<COL$}", entry(i)), style));
+                let text = head_chars(&entries[i], col);
+                spans.push(Span::styled(format!("{text:<col$}"), style));
             }
             lines.push(Line::from(spans));
         }
         frame.render_widget(Paragraph::new(lines), inner);
-        if more_below {
-            // On the last row, left of the OK button: there is more under the fold.
-            let hint = " \u{2193} more (Down) ";
-            let at = Rect {
-                y: inner.bottom().saturating_sub(1),
-                height: 1,
-                width: hint.chars().count() as u16,
-                ..inner
-            };
+        if hidden > 0 {
+            // On the button row, left of OK, so no entry is covered.
+            let hint = format!(" \u{2193} {hidden} more (Down) ");
+            let at = Rect::new(
+                inner.x,
+                inner.bottom(),
+                (hint.chars().count() as u16).min(inner.width),
+                1,
+            );
             frame.render_widget(
                 Paragraph::new(Line::styled(
                     hint,
@@ -3190,7 +3206,7 @@ impl App {
                         .fg(self.palette.accent())
                         .add_modifier(Modifier::BOLD),
                 )),
-                at.intersection(inner),
+                at,
             );
         }
     }
@@ -3212,11 +3228,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "last row, and follow it",
         Some(Action::Bottom),
     ),
-    (
-        "Left/Right 0",
-        "scroll sideways one cell / back to column 0",
-        None,
-    ),
+    ("Left/Right 0", "scroll sideways / back to column 0", None),
     ("Space", "toggle follow", Some(Action::ToggleFollow)),
     ("/", "search", Some(Action::StartSearch)),
     (
@@ -3239,12 +3251,12 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         "s |  _",
-        "new window beside / below, with the next stream",
+        "new window beside / below (next stream)",
         Some(Action::SplitRight),
     ),
     (
         "Ctrl+W",
-        "close the stream (its window when it is the last tab)",
+        "close the stream, and its empty window",
         Some(Action::CloseStream),
     ),
     (
@@ -3254,7 +3266,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         "< >",
-        "move the stream to the previous / next window",
+        "move the stream to the prev / next window",
         Some(Action::MoveNextPane),
     ),
     (
@@ -3263,14 +3275,23 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::NextInPane),
     ),
     ("Alt+arrows", "move the window's divider", None),
+    ("click", "focus a window, select a row, show a tab", None),
     (
-        "mouse",
-        "drag a divider: resize; a title: move (edge splits)",
+        "Shift+click",
+        "extend the selection (or drag over rows)",
+        None,
+    ),
+    ("double click", "toggle the row's bookmark", None),
+    ("wheel", "scroll the window under the pointer", None),
+    ("drag divider", "resize the windows beside it", None),
+    (
+        "drag title",
+        "onto a window: edge splits, centre = tab",
         None,
     ),
     (
         "Tab  Alt+1..9",
-        "next window or file / file N (Shift+Tab back)",
+        "next window or file / file N (Shift+Tab)",
         Some(Action::NextTab),
     ),
     (
@@ -3288,11 +3309,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "next / previous WARN line (wraps)",
         Some(Action::NextWarn),
     ),
-    (
-        "count",
-        "digits before j k n N e E w W repeat it: 10j, 3e",
-        None,
-    ),
+    ("10j  3e", "a count repeats j k n N e E w W", None),
     ("] F2", "next bookmark (wraps)", Some(Action::NextBookmark)),
     (
         "[ Shift+F2",
@@ -3306,17 +3323,17 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         "Ctrl+K",
-        "cursor row in context (filters off), again back",
+        "the row in context (filters off) and back",
         Some(Action::ToggleContext),
     ),
     (
         "Ctrl+G  :",
-        "go to a line (N, +N, -N) or a time (14:02)",
+        "go to a line (N +N -N) or a time (14:02)",
         Some(Action::GoTo),
     ),
     (
         "o",
-        "open: browse folders, or type a path or *.log",
+        "open: browse folders, a path or *.log",
         Some(Action::OpenFile),
     ),
     ("Shift+O", "open a session", Some(Action::OpenSession)),
@@ -3332,22 +3349,22 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         ",",
-        "Settings: theme, language, view, refresh, sound",
+        "Settings: theme, language, view, sound",
         Some(Action::Settings),
     ),
     (
         "Shift+T",
-        "next theme: Tron, Matrix, Blade, Light, Commander",
+        "next theme (Tron ... Commander)",
         Some(Action::CycleTheme),
     ),
     (
         "a",
-        "ANSI colours: auto, render, strip, raw (^[)",
+        "ANSI colours: auto, render, strip, raw",
         Some(Action::CycleAnsi),
     ),
     (
         "h",
-        "HEX view of the bytes (go to: 1024, 0x400), again back",
+        "HEX view (go to 1024 or 0x400) and back",
         Some(Action::ToggleHex),
     ),
     (
@@ -5305,6 +5322,25 @@ mod tests {
         app.on_key(down);
         assert!(!app.on_key(up_again));
         assert_eq!(app.settings_form.as_ref().unwrap().focus, focus + 1);
+    }
+
+    #[test]
+    fn the_help_shows_every_entry_on_a_120_by_30_screen() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        app.apply(Action::ToggleHelp);
+        let screen = render(&mut app, 120, 30);
+        for (key, what, _) in HELP {
+            assert!(
+                screen.iter().any(|l| l.contains(what)),
+                "{key} missing: {screen:#?}"
+            );
+        }
+        assert!(!screen.iter().any(|l| l.contains("more (Down)")));
+        // A small screen scrolls, and says how much is below on the button row, where
+        // it covers no entry.
+        let small = render(&mut app, 80, 24);
+        let hint = small.iter().find(|l| l.contains("more (Down)")).unwrap();
+        assert!(hint.contains("[ OK ]"), "{small:#?}");
     }
 
     #[test]
