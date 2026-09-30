@@ -324,36 +324,234 @@ pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
     cmd
 }
 
-/// A parsed keyboard shortcut: modifier flags plus the egui key name (`F9`, `E`, `Num1`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Shortcut {
+/// Canonical key names, spelled as egui names its keys so the GUI maps them directly and a
+/// terminal maps them to its own key codes. Index = `KeyName` value.
+const KEY_NAMES: [&str; 105] = [
+    "Down",
+    "Left",
+    "Right",
+    "Up",
+    "Escape",
+    "Tab",
+    "Backspace",
+    "Enter",
+    "Insert",
+    "Delete",
+    "Home",
+    "End",
+    "Copy",
+    "Cut",
+    "Paste",
+    "Space",
+    "Colon",
+    "Comma",
+    "Minus",
+    "Period",
+    "Plus",
+    "Equals",
+    "Semicolon",
+    "Backslash",
+    "Slash",
+    "Pipe",
+    "Questionmark",
+    "Exclamationmark",
+    "OpenBracket",
+    "CloseBracket",
+    "OpenCurlyBracket",
+    "CloseCurlyBracket",
+    "Backtick",
+    "Quote",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
+    "F20",
+    "F21",
+    "F22",
+    "F23",
+    "F24",
+    "F25",
+    "F26",
+    "F27",
+    "F28",
+    "F29",
+    "F30",
+    "F31",
+    "F32",
+    "F33",
+    "F34",
+    "F35",
+];
+
+/// Other spellings accepted for a key, after the case normalisation of `Shortcut::parse`.
+const KEY_ALIASES: [(&str, &str); 47] = [
+    ("⏷", "Down"),
+    ("⏴", "Left"),
+    ("⏵", "Right"),
+    ("⏶", "Up"),
+    ("Esc", "Escape"),
+    ("Return", "Enter"),
+    ("Help", "Insert"),
+    ("−", "Minus"),
+    ("Equal", "Equals"),
+    ("Backquote", "Backtick"),
+    ("Grave", "Backtick"),
+    (":", "Colon"),
+    (",", "Comma"),
+    (".", "Period"),
+    ("=", "Equals"),
+    (";", "Semicolon"),
+    ("\\", "Backslash"),
+    ("/", "Slash"),
+    ("|", "Pipe"),
+    ("?", "Questionmark"),
+    ("!", "Exclamationmark"),
+    ("[", "OpenBracket"),
+    ("]", "CloseBracket"),
+    ("{", "OpenCurlyBracket"),
+    ("}", "CloseCurlyBracket"),
+    ("`", "Backtick"),
+    ("'", "Quote"),
+    ("Digit0", "0"),
+    ("Numpad0", "0"),
+    ("Digit1", "1"),
+    ("Numpad1", "1"),
+    ("Digit2", "2"),
+    ("Numpad2", "2"),
+    ("Digit3", "3"),
+    ("Numpad3", "3"),
+    ("Digit4", "4"),
+    ("Numpad4", "4"),
+    ("Digit5", "5"),
+    ("Numpad5", "5"),
+    ("Digit6", "6"),
+    ("Numpad6", "6"),
+    ("Digit7", "7"),
+    ("Numpad7", "7"),
+    ("Digit8", "8"),
+    ("Numpad8", "8"),
+    ("Digit9", "9"),
+    ("Numpad9", "9"),
+];
+
+/// A key of a tool shortcut, independent of any GUI or terminal library: letters, digits,
+/// `F1`..`F35`, arrows, editing and punctuation keys. Each front end maps it to its own
+/// key events through `name()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KeyName(u8);
+
+impl KeyName {
+    /// The key called `name` (a canonical name or an alias, exact spelling), if any.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let name = KEY_ALIASES
+            .iter()
+            .find(|(alias, _)| *alias == name)
+            .map_or(name, |(_, canonical)| canonical);
+        KEY_NAMES
+            .iter()
+            .position(|n| *n == name)
+            .map(|i| KeyName(i as u8))
+    }
+
+    /// The canonical name: `A`, `7`, `F9`, `Enter`, `Down`, `Comma`, ...
+    pub fn name(self) -> &'static str {
+        KEY_NAMES[self.0 as usize]
+    }
+
+    /// Every key, in a fixed order.
+    pub fn all() -> impl Iterator<Item = KeyName> {
+        (0..KEY_NAMES.len() as u8).map(KeyName)
+    }
+}
+
+/// Modifier keys of a shortcut. `ctrl` is Command on macOS, as in the rest of FastTail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Mods {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
-    pub key: egui::Key,
+}
+
+impl Mods {
+    pub fn any(self) -> bool {
+        self.ctrl || self.shift || self.alt
+    }
+}
+
+/// A parsed keyboard shortcut: modifiers plus a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shortcut {
+    pub mods: Mods,
+    pub key: KeyName,
 }
 
 impl Shortcut {
     /// Parses `Ctrl+Shift+F9`, `ctrl+alt+e`, `Alt+1` (case-insensitive, `+` or `-`
-    /// separated). Bare digits and letters map to egui's `1`..`9` and `A`..`Z`; every
-    /// other key uses egui's own name (`F1`..`F35`, `Enter`, `Home`, ...). At least one
-    /// modifier is required so a tool cannot swallow plain typing.
+    /// separated). Bare digits and letters are the keys `1`..`9` and `A`..`Z`; other keys
+    /// go by name (`F1`..`F35`, `Enter`, `Home`, `Comma`, ...) or by their character
+    /// (`,`, `[`, ...). At least one modifier is required so a tool cannot swallow plain
+    /// typing.
     pub fn parse(s: &str) -> Option<Self> {
-        let mut out = Shortcut {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            key: egui::Key::Space,
-        };
-        let mut key: Option<egui::Key> = None;
+        let mut mods = Mods::default();
+        let mut key: Option<KeyName> = None;
         for part in s.split(['+', '-']).map(str::trim).filter(|p| !p.is_empty()) {
             match part.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" | "cmd" | "command" => out.ctrl = true,
-                "shift" => out.shift = true,
-                "alt" | "option" => out.alt = true,
+                "ctrl" | "control" | "cmd" | "command" => mods.ctrl = true,
+                "shift" => mods.shift = true,
+                "alt" | "option" => mods.alt = true,
                 name => {
                     let candidate = if name.len() == 1 {
-                        // egui names digits "1".."9" and letters "A".."Z".
                         name.to_ascii_uppercase()
                     } else {
                         // Capitalise the first letter so `f9`, `enter`, `home` resolve.
@@ -364,30 +562,15 @@ impl Shortcut {
                     if key.is_some() {
                         return None;
                     }
-                    key = egui::Key::from_name(&candidate);
+                    key = KeyName::from_name(&candidate);
                     key?;
                 }
             }
         }
-        if !(out.ctrl || out.shift || out.alt) {
+        if !mods.any() {
             return None;
         }
-        out.key = key?;
-        Some(out)
-    }
-
-    pub fn modifiers(&self) -> egui::Modifiers {
-        let mut m = egui::Modifiers::NONE;
-        if self.ctrl {
-            m |= egui::Modifiers::COMMAND;
-        }
-        if self.shift {
-            m |= egui::Modifiers::SHIFT;
-        }
-        if self.alt {
-            m |= egui::Modifiers::ALT;
-        }
-        m
+        Some(Shortcut { mods, key: key? })
     }
 }
 
@@ -532,10 +715,13 @@ mod tests {
     #[test]
     fn shortcut_parsing() {
         let s = Shortcut::parse("Ctrl+Shift+F9").unwrap();
-        assert!(s.ctrl && s.shift && !s.alt);
-        assert_eq!(s.key, egui::Key::F9);
-        assert_eq!(Shortcut::parse("alt+1").unwrap().key, egui::Key::Num1);
-        assert_eq!(Shortcut::parse("ctrl-e").unwrap().key, egui::Key::E);
+        assert!(s.mods.ctrl && s.mods.shift && !s.mods.alt);
+        assert_eq!(s.key.name(), "F9");
+        assert_eq!(Shortcut::parse("alt+1").unwrap().key.name(), "1");
+        assert_eq!(Shortcut::parse("ctrl-e").unwrap().key.name(), "E");
+        assert_eq!(Shortcut::parse("ctrl+esc").unwrap().key.name(), "Escape");
+        assert_eq!(Shortcut::parse("ctrl+,").unwrap().key.name(), "Comma");
+        assert_eq!(Shortcut::parse("ctrl+'").unwrap().key.name(), "Quote");
         assert!(Shortcut::parse("F9").is_none(), "a modifier is required");
         assert!(Shortcut::parse("Ctrl+Nope").is_none());
         assert!(Shortcut::parse("Ctrl+A+B").is_none());
