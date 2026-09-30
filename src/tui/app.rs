@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
+use crate::ansi::{AnsiMode, StyleRun};
 use crate::collapse::CollapseMode;
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
@@ -26,7 +27,7 @@ use crate::tui::colors::{Chrome, Palette};
 use crate::tui::hex;
 use crate::tui::keys::{self, Action, PromptKey};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
-use crate::tui::view;
+use crate::tui::view::{self, Paint};
 
 /// Columns moved by one horizontal scroll step.
 /// Characters of a bookmark note the status bar shows.
@@ -211,6 +212,7 @@ struct PaneSignature {
     collapse_pending: bool,
     decompressed: Option<u16>,
     hex: Option<(usize, Option<(usize, usize)>)>,
+    ansi: AnsiMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -367,6 +369,7 @@ impl App {
                     .as_ref()
                     .filter(|c| c.is_running())
                     .map(|c| (c.progress() * 1000.0) as u16),
+                ansi: e.ansi_effective(),
                 hex: self.tabs[i]
                     .is_hex()
                     .then(|| (e.search_byte_matches.len(), e.current_search_byte())),
@@ -781,6 +784,21 @@ impl App {
             }
             Action::ToggleContext => toggle_context(tab, &mut self.message),
             Action::ToggleHex => tab.toggle_hex(),
+            Action::CycleAnsi => {
+                let next = match tab.engine.ansi_mode {
+                    AnsiMode::Auto => AnsiMode::Render,
+                    AnsiMode::Render => AnsiMode::Strip,
+                    AnsiMode::Strip => AnsiMode::Raw,
+                    AnsiMode::Raw => AnsiMode::Auto,
+                };
+                tab.engine.set_ansi_mode(next);
+                self.message = Some(match next {
+                    AnsiMode::Auto => {
+                        format!("ANSI: auto (now {})", tab.engine.ansi_effective().name())
+                    }
+                    mode => format!("ANSI: {}", mode.name()),
+                });
+            }
             // In the context view, Esc returns to the filtered rows first.
             Action::ClearSearch if tab.engine.context_line().is_some() => {
                 toggle_context(tab, &mut self.message)
@@ -1105,6 +1123,7 @@ impl App {
             "m                note of the cursor row's bookmark",
             "Ctrl+K           cursor row in context (filters off), again back",
             "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
+            "a                ANSI colours: auto, render, strip, raw (^[)",
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
             "y  Ctrl+C        copy the selection or the cursor row",
             "                 (Ctrl+C quits when nothing is selected)",
@@ -1189,6 +1208,9 @@ fn view_state_text(e: &TailEngine, hex: bool) -> String {
     }
     if e.min_level != LogLevel::Unknown {
         parts.push(format!(">={}", e.min_level.short()));
+    }
+    if e.ansi_mode != AnsiMode::Auto {
+        parts.push(format!("ansi:{}", e.ansi_mode.name()));
     }
     if e.collapse_mode() != CollapseMode::Off {
         parts.push(format!("collapse:{}", e.collapse_mode().name()));
@@ -1406,30 +1428,44 @@ pub fn render_row(
                 .bg(palette.level_color(LogLevel::Debug)),
         ));
     }
-    let text = engine.get_row(line_idx).map(|r| r.line).unwrap_or_default();
+    // Render mode strips the sequences and hands their style runs; raw mode keeps the
+    // ESC bytes, which `sanitize` shows as `^[`.
+    let row = engine.get_row(line_idx);
+    let text = row.as_ref().map_or("", |r| r.line.as_str());
     let text = text.trim_end_matches(['\r', '\n']);
-    // The first highlight rule that matches colours the row, as in the GUI; the level
-    // palette only applies to rows no rule matched.
-    let base = match engine.match_highlight(text) {
-        Some(rule) => palette.rule_style(&rule),
+    // Precedence as in the GUI: a search hit over a highlight rule over the ANSI
+    // colours; the level palette only applies to rows no rule matched.
+    let rule = engine.match_highlight(text);
+    let base = match &rule {
+        Some(rule) => palette.rule_style(rule),
         None => palette.level_style(engine.level_of(line_idx)),
     };
+    let runs: &[StyleRun] = match (&rule, &row) {
+        (None, Some(r)) => &r.ansi,
+        _ => &[],
+    };
+    let run_ranges: Vec<std::ops::Range<usize>> = runs.iter().map(|r| r.start..r.end).collect();
     let hits = if hit && !query.is_empty() {
         view::hit_ranges(text, query)
     } else {
         Vec::new()
     };
-    let segs: Vec<(String, bool)> = view::segments(text, &hits)
+    let segs: Vec<(String, Paint)> = view::segments(text, &hits, &run_ranges)
         .into_iter()
-        .map(|(s, h)| (view::sanitize(s), h))
+        .map(|(s, p)| (view::sanitize(s), p))
         .collect();
     let hit_style = if active {
         palette.active_hit()
     } else {
         palette.hit()
     };
-    for (s, is_hit) in view::skip_cells(segs, hscroll) {
-        spans.push(Span::styled(s, if is_hit { hit_style } else { base }));
+    for (s, paint) in view::skip_cells(segs, hscroll) {
+        let style = match paint {
+            Paint::Plain => base,
+            Paint::Run(i) => base.patch(palette.ansi_style(&runs[i].style)),
+            Paint::Hit => hit_style,
+        };
+        spans.push(Span::styled(s, style));
     }
     let line = Line::from(spans);
     // A selected row gets a background of its own; hit spans keep theirs.
@@ -1877,6 +1913,84 @@ mod tests {
             screen.iter().any(|l| l.contains("00 01 02 62 69 6E")),
             "{screen:#?}"
         );
+    }
+
+    /// Draws the app and returns the buffer, to look at the cells' styles.
+    fn draw_buffer(app: &mut App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        app.tick();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The cell where `needle` first starts on screen.
+    fn cell_of<'a>(buf: &'a ratatui::buffer::Buffer, needle: &str) -> &'a ratatui::buffer::Cell {
+        let rows = buffer_text(buf);
+        let (y, x) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(y, r)| r.find(needle).map(|b| (y, r[..b].chars().count())))
+            .unwrap_or_else(|| panic!("{needle:?} not on screen: {rows:#?}"));
+        &buf[(x as u16, y as u16)]
+    }
+
+    #[test]
+    fn a_cycles_the_ansi_modes_and_no_escape_reaches_the_terminal() {
+        use crate::ansi::{AnsiColor, AnsiStyle};
+        let body = "plain\n\x1b[31mred\x1b[0m and \x1b[1;4mloud\x1b[0m\n";
+        let (mut app, _dir) = app_with(&[("c.log", body)], false);
+        let red = app
+            .palette
+            .ansi_style(&AnsiStyle {
+                fg: Some(AnsiColor::Indexed(1)),
+                ..Default::default()
+            })
+            .fg;
+        let no_esc = |buf: &ratatui::buffer::Buffer| {
+            assert!(buffer_text(buf).iter().all(|r| !r.contains('\x1b')));
+        };
+
+        // Auto found the sequences: the colours and attributes are drawn.
+        let buf = draw_buffer(&mut app, 80, 10);
+        no_esc(&buf);
+        assert!(buffer_text(&buf).iter().any(|r| r.contains("red and loud")));
+        assert_eq!(cell_of(&buf, "red").fg, red.unwrap());
+        let loud = cell_of(&buf, "loud").modifier;
+        assert!(loud.contains(Modifier::BOLD | Modifier::UNDERLINED));
+
+        // A search hit wins over the ANSI colour under it.
+        app.search("red");
+        let buf = draw_buffer(&mut app, 80, 10);
+        assert_eq!(
+            cell_of(&buf, "red and").bg,
+            app.palette.active_hit().bg.unwrap()
+        );
+        app.apply(Action::ClearSearch);
+
+        app.apply(Action::CycleAnsi);
+        assert_eq!(app.message.as_deref(), Some("ANSI: render"));
+        app.apply(Action::CycleAnsi);
+        assert_eq!(app.message.as_deref(), Some("ANSI: strip"));
+        let buf = draw_buffer(&mut app, 80, 10);
+        assert!(buffer_text(&buf).iter().any(|r| r.contains("red and loud")));
+        assert_ne!(
+            cell_of(&buf, "red").fg,
+            red.unwrap(),
+            "strip paints nothing"
+        );
+
+        app.apply(Action::CycleAnsi);
+        let buf = draw_buffer(&mut app, 80, 10);
+        no_esc(&buf);
+        let rows = buffer_text(&buf);
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("^[[31mred^[[0m and ^[[1;4mloud")),
+            "{rows:#?}"
+        );
+        assert!(rows.iter().any(|r| r.contains("ansi:raw")));
+        app.apply(Action::CycleAnsi);
+        assert_eq!(app.message.as_deref(), Some("ANSI: auto (now render)"));
     }
 
     #[test]

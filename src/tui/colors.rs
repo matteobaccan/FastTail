@@ -5,6 +5,7 @@
 //! Colours: the theme's `Rgba` values mapped to ratatui colours, as 24-bit RGB when the
 //! terminal renders it and as the nearest of the 16 basic colours otherwise.
 
+use crate::ansi::{AnsiColor, AnsiStyle};
 use crate::color::Rgba;
 use crate::log_level::LogLevel;
 use crate::tail_engine::HighlightStyle;
@@ -207,6 +208,35 @@ impl Palette {
         }
         if rule.italic {
             style = style.add_modifier(Modifier::ITALIC);
+        }
+        style
+    }
+
+    /// Style of an ANSI-coloured run: its colours (the theme's palette for 0..16, as in
+    /// the GUI, with bold turning 0..8 bright) and its attributes, which the terminal
+    /// draws itself. Unset colours keep the row's own.
+    pub fn ansi_style(&self, a: &AnsiStyle) -> Style {
+        let fg = match a.fg {
+            Some(AnsiColor::Indexed(i)) if a.bold && i < 8 => Some(AnsiColor::Indexed(i + 8)),
+            other => other,
+        };
+        let mut style = Style::default();
+        if let Some(c) = fg {
+            style = style.fg(self.map(self.theme.ansi_color(c)));
+        }
+        if let Some(c) = a.bg {
+            style = style.bg(self.map(self.theme.ansi_color(c)));
+        }
+        for (on, m) in [
+            (a.bold, Modifier::BOLD),
+            (a.dim, Modifier::DIM),
+            (a.italic, Modifier::ITALIC),
+            (a.underline, Modifier::UNDERLINED),
+            (a.inverse, Modifier::REVERSED),
+        ] {
+            if on {
+                style = style.add_modifier(m);
+            }
         }
         style
     }
