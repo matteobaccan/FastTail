@@ -705,6 +705,11 @@ impl App {
 
     /// Handles a key; returns true when the screen changed.
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        // The Windows console also reports releases: only presses (and repeats) act,
+        // in every dialog alike, or a key would act twice.
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return false;
+        }
         if self.confirm_overwrite.is_some() {
             return self.on_confirm_key(key);
         }
@@ -5285,6 +5290,21 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.tabs[0].cursor_line(), Some(42));
+    }
+
+    #[test]
+    fn a_key_release_never_acts_twice_in_a_dialog() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        app.apply(Action::Settings);
+        let focus = app.settings_form.as_ref().unwrap().focus;
+        // Down pressed and released, as the Windows console reports it.
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let mut up_again = down;
+        up_again.kind = KeyEventKind::Release;
+        app.on_key(down);
+        assert!(!app.on_key(up_again));
+        assert_eq!(app.settings_form.as_ref().unwrap().focus, focus + 1);
     }
 
     #[test]
