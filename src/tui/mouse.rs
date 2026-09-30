@@ -35,6 +35,8 @@ pub struct HitMap {
     pub tab_titles: Vec<(Rect, usize)>,
     pub windows: Vec<WindowHit>,
     pub dialog: Option<DialogHit>,
+    /// Rows of a list inside the open dialog, and the list position each shows.
+    pub list_items: Vec<(Rect, usize)>,
 }
 
 /// What a cell of the screen is.
@@ -44,6 +46,8 @@ pub enum Target {
     DialogCancel,
     /// Inside a dialog, not on a button: nothing happens.
     DialogBody,
+    /// A row of the list in the open dialog (its position in the list).
+    ListItem(usize),
     /// Anywhere else while a dialog is open: closes it, like Esc.
     OutsideDialog,
     /// A title in the stream strip at the top.
@@ -70,6 +74,9 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
         }
         if d.cancel.is_some_and(|c| c.contains(p)) {
             return Target::DialogCancel;
+        }
+        if let Some((_, i)) = map.list_items.iter().find(|(r, _)| r.contains(p)) {
+            return Target::ListItem(*i);
         }
         return if d.outer.contains(p) {
             Target::DialogBody
@@ -137,6 +144,7 @@ mod tests {
                 },
             ],
             dialog: None,
+            list_items: Vec::new(),
         }
     }
 
@@ -169,6 +177,8 @@ mod tests {
         assert_eq!(hit_test(&map, 42, 6), Target::DialogOk);
         assert_eq!(hit_test(&map, 50, 6), Target::DialogCancel);
         assert_eq!(hit_test(&map, 20, 4), Target::DialogBody);
+        map.list_items.push((Rect::new(11, 4, 58, 1), 3));
+        assert_eq!(hit_test(&map, 20, 4), Target::ListItem(3));
         // A row of a window outside the dialog now closes the dialog instead.
         assert_eq!(hit_test(&map, 5, 2), Target::OutsideDialog);
         assert_eq!(hit_test(&map, 12, 0), Target::OutsideDialog);

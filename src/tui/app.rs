@@ -29,6 +29,7 @@ use crate::tui::form::{FieldKey, TextField};
 use crate::tui::hex;
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
+use crate::tui::picker::{refusal_text, EntryPicker};
 use crate::tui::view::{self, Paint};
 
 /// Columns moved by one horizontal scroll step.
@@ -66,7 +67,7 @@ impl Tab {
         if !matches!(engine.view_mode, ViewMode::Text | ViewMode::Hex) {
             engine.set_view_mode(ViewMode::Text);
         }
-        let title = title_of(&engine.path);
+        let title = stream_title(&engine);
         Self {
             engine,
             title,
@@ -161,10 +162,20 @@ impl Tab {
     }
 }
 
-fn title_of(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
+/// The title of a stream: its file name, `archive/entry` for an archive entry (the
+/// compressed stream's own title with a plain separator), `stdin`.
+fn stream_title(engine: &TailEngine) -> String {
+    if engine.is_stdin() {
+        return crate::stdin_source::STDIN_TITLE.to_string();
+    }
+    match &engine.compressed {
+        Some(c) => c.title().replace(" \u{203a} ", "/"),
+        None => engine
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| engine.path.display().to_string()),
+    }
 }
 
 /// Which field the prompt dialog edits.
@@ -177,6 +188,8 @@ pub enum PromptKind {
     Note(usize),
     /// Go to a line or a time.
     Goto,
+    /// A file, pattern or archive entry path to open.
+    OpenFile,
 }
 
 pub struct Prompt {
@@ -252,6 +265,10 @@ pub struct App {
     pub palette: Palette,
     pub prompt: Option<Prompt>,
     pub time_range: Option<TimeRangeDialog>,
+    pub picker: Option<EntryPicker>,
+    /// The configuration new streams are set up with (none in tests and benchmarks:
+    /// the defaults).
+    pub settings: Option<crate::tui::workspace::Settings>,
     pub message: Option<String>,
     pub show_help: bool,
     pub quit: bool,
@@ -283,6 +300,8 @@ impl App {
             palette,
             prompt: None,
             time_range: None,
+            picker: None,
+            settings: None,
             message: None,
             show_help: false,
             quit: false,
@@ -310,6 +329,7 @@ impl App {
         for tab in &mut self.tabs {
             tab.engine.poll_updates();
         }
+        let listed = self.picker.as_mut().is_some_and(|p| p.pull());
         for i in self.visible_tabs() {
             let tab = &mut self.tabs[i];
             if tab.pending_first_hit {
@@ -359,7 +379,7 @@ impl App {
         let sig = self.signature();
         let changed = sig != self.last_signature;
         self.last_signature = sig;
-        changed
+        changed || listed
     }
 
     /// Background work in flight: the loop then polls a little faster.
@@ -367,7 +387,7 @@ impl App {
         self.tabs.iter().any(|t| {
             t.engine.scan_progress().is_some()
                 || t.engine.compressed.as_ref().is_some_and(|c| c.is_running())
-        })
+        }) || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
     }
 
     fn signature(&self) -> Signature {
@@ -412,6 +432,9 @@ impl App {
 
     /// Handles a key; returns true when the screen changed.
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        if self.picker.is_some() {
+            return self.on_picker_key(key);
+        }
         if self.time_range.is_some() {
             return self.on_time_range_key(key);
         }
@@ -452,7 +475,10 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
-        if let Some(d) = self.time_range.as_mut() {
+        if let Some(p) = self.picker.as_mut() {
+            p.filter.insert(text);
+            p.filter_changed();
+        } else if let Some(d) = self.time_range.as_mut() {
             d.focused().insert(text);
         } else if let Some(p) = self.prompt.as_mut() {
             p.field.insert(text);
@@ -460,6 +486,106 @@ impl App {
             return false;
         }
         true
+    }
+
+    fn on_picker_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        let Some(p) = self.picker.as_mut() else {
+            return false;
+        };
+        let page = 10;
+        match key.code {
+            KeyCode::Up => p.move_by(-1),
+            KeyCode::Down => p.move_by(1),
+            KeyCode::PageUp => p.move_by(-page),
+            KeyCode::PageDown => p.move_by(page),
+            _ => match p.filter.on_key(key) {
+                FieldKey::Submit => self.open_picked(),
+                FieldKey::Cancel => self.close_picker(),
+                FieldKey::Edited => p.filter_changed(),
+                FieldKey::Other => return false,
+            },
+        }
+        true
+    }
+
+    fn close_picker(&mut self) {
+        if let Some(mut p) = self.picker.take() {
+            p.close();
+        }
+    }
+
+    /// Opens the selected entry of the picker; a refused one says why and stays.
+    fn open_picked(&mut self) {
+        let Some(p) = &self.picker else {
+            return;
+        };
+        let Some(entry) = p.chosen() else {
+            self.message = Some("No entry matches".into());
+            return;
+        };
+        if let Some(r) = &entry.refusal {
+            self.message = Some(format!("{}: {}", entry.name, refusal_text(r)));
+            return;
+        }
+        let path = crate::compressed::entry_path(&p.archive, &entry.name);
+        self.close_picker();
+        self.open_file(&path);
+    }
+
+    /// Opens `path` in a new stream, as the GUI's Open does: an already open stream is
+    /// shown instead, an archive with several entries opens the entry picker.
+    pub fn open_file(&mut self, path: &Path) {
+        use crate::workspace::{open_target, OpenOutcome};
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| crate::paths::paths_equal(&t.engine.path, path))
+        {
+            self.focus_tab(i);
+            return;
+        }
+        let default_config;
+        let config = match &self.settings {
+            Some(s) => &s.config,
+            None => {
+                default_config = crate::config::FastTailConfig::default();
+                &default_config
+            }
+        };
+        let shown = path.display();
+        match open_target(path, config, None) {
+            OpenOutcome::Opened(engine) => {
+                let mut engine = *engine;
+                if let Some(s) = &self.settings {
+                    s.prepare(&mut engine);
+                }
+                self.tabs.push(Tab::new(engine));
+                self.focus_tab(self.tabs.len() - 1);
+            }
+            OpenOutcome::OpenEntry(entry) => self.open_file(&entry),
+            OpenOutcome::Missing => self.message = Some(format!("{shown}: not found")),
+            OpenOutcome::Failed { error, .. } => self.message = Some(format!("{shown}: {error:?}")),
+            OpenOutcome::EmptyArchive(_) => {
+                self.message = Some(format!("{shown}: the archive holds no file"))
+            }
+            OpenOutcome::ChooseEntries {
+                archive,
+                entries,
+                partial,
+            } => self.picker = Some(EntryPicker::new(archive, entries, partial)),
+            OpenOutcome::ScanTar { archive, codec } => {
+                let scan = crate::compressed::TarScan::start(
+                    &archive,
+                    codec,
+                    crate::compressed::ScanLimits::default(),
+                );
+                self.picker = Some(EntryPicker::scanning(archive, scan));
+            }
+            OpenOutcome::ListFailed { error, .. } => {
+                self.message = Some(format!("{shown}: {error}"))
+            }
+        }
     }
 
     fn open_time_range(&mut self) {
@@ -528,6 +654,11 @@ impl App {
             }
             // A note bookmarks the line; an empty one removes the note, not the bookmark.
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
+            PromptKind::OpenFile => {
+                if !text.is_empty() {
+                    self.open_file(&absolute(&text));
+                }
+            }
             PromptKind::Goto if tab.is_hex() => match hex::parse_offset(&text) {
                 Some(offset) if tab.engine.file_size > 0 => {
                     let last = tab.engine.file_size as usize - 1;
@@ -563,7 +694,7 @@ impl App {
             PromptKind::Include => e.include_filter().to_string(),
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
-            PromptKind::Goto => String::new(),
+            PromptKind::Goto | PromptKind::OpenFile => String::new(),
         };
         self.prompt = Some(Prompt {
             kind,
@@ -618,6 +749,7 @@ impl App {
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::TimeRange => self.open_time_range(),
+            Action::OpenFile => self.open_prompt(PromptKind::OpenFile),
             Action::EditNote => match self.tabs[self.active].cursor_line() {
                 Some(line) => self.open_prompt(PromptKind::Note(line)),
                 None => self.message = Some("No row for a note".into()),
@@ -666,7 +798,11 @@ impl App {
     pub fn on_mouse(&mut self, ev: MouseEvent) -> bool {
         match ev.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                if self.prompt.is_some() || self.time_range.is_some() || self.show_help {
+                if self.prompt.is_some()
+                    || self.time_range.is_some()
+                    || self.picker.is_some()
+                    || self.show_help
+                {
                     return false;
                 }
                 let Some(tab) = mouse::window_at(&self.hits, ev.column, ev.row) else {
@@ -720,8 +856,16 @@ impl App {
     fn on_click(&mut self, ev: MouseEvent) -> bool {
         let target = mouse::hit_test(&self.hits, ev.column, ev.row);
         match target {
+            Target::ListItem(i) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.selected = i;
+                }
+                self.open_picked();
+            }
             Target::DialogOk => {
-                if self.time_range.is_some() {
+                if self.picker.is_some() {
+                    self.open_picked();
+                } else if self.time_range.is_some() {
                     self.submit_time_range();
                 } else if let Some(prompt) = self.prompt.take() {
                     self.submit_prompt(prompt);
@@ -731,6 +875,7 @@ impl App {
             Target::DialogCancel | Target::OutsideDialog => {
                 self.prompt = None;
                 self.time_range = None;
+                self.close_picker();
                 self.show_help = false;
             }
             Target::DialogBody | Target::Nothing => return false,
@@ -972,6 +1117,9 @@ impl App {
         if self.time_range.is_some() {
             self.draw_time_range(frame, main_area);
         }
+        if self.picker.is_some() {
+            self.draw_picker(frame, main_area);
+        }
     }
 
     /// The strip of stream titles, drawn span by span so each title's cells are known
@@ -1175,6 +1323,7 @@ impl App {
                 "Go to byte offset (decimal or 0x hex)"
             }
             PromptKind::Goto => "Go to line (N, +N, -N) or time (14:02)",
+            PromptKind::OpenFile => "Open file, pattern (*.log) or archive entry",
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
         let Some(p) = &self.prompt else {
@@ -1193,6 +1342,85 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    fn draw_picker(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(title) = self.picker.as_ref().map(|p| {
+            let name = p
+                .archive
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!("Open an entry of {name}")
+        }) else {
+            return;
+        };
+        let height = area.height.saturating_sub(2).clamp(8, 24);
+        let inner = self.dialog(frame, area, (72, height), &title, true);
+        let palette = self.palette;
+        let Some(p) = self.picker.as_mut() else {
+            return;
+        };
+        let dim = Style::default().fg(palette.dim());
+        // Filter line, the list, then a status line.
+        let (shown_filter, x) = p.filter.view(inner.width.saturating_sub(8) as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Filter ", dim),
+                Span::raw(view::sanitize(&shown_filter)),
+            ])),
+            Rect { height: 1, ..inner },
+        );
+        frame.set_cursor_position((inner.x + 7 + x as u16, inner.y));
+        let list = Rect {
+            y: inner.y + 1,
+            height: inner.height.saturating_sub(2),
+            ..inner
+        };
+        let shown = p.shown();
+        let rows = list.height as usize;
+        if p.selected < p.top {
+            p.top = p.selected;
+        } else if rows > 0 && p.selected >= p.top + rows {
+            p.top = p.selected + 1 - rows;
+        }
+        let mut lines = Vec::with_capacity(rows);
+        for (k, &i) in shown.iter().enumerate().skip(p.top).take(rows) {
+            let e = &p.entries[i];
+            let size = crate::tui::picker::human_size(e.size);
+            let (text, style) = match &e.refusal {
+                Some(r) => (format!("{}  ({})", e.name, refusal_text(r)), dim),
+                None => (format!("{}  {size}", e.name), Style::default()),
+            };
+            let style = if k == p.selected {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            };
+            let y = list.y + (k - p.top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(list.x, y, list.width, 1), k));
+            lines.push(Line::styled(view::sanitize(&text), style));
+        }
+        frame.render_widget(Paragraph::new(lines), list);
+        let status = match (&p.scan, &p.partial) {
+            (Some(scan), _) => format!(
+                "{} entries, reading the archive {:.0}%",
+                p.entries.len(),
+                scan.progress() * 100.0
+            ),
+            (None, Some(note)) => format!("{} of {} entries. {note}", shown.len(), p.entries.len()),
+            (None, None) => format!("{} of {} entries", shown.len(), p.entries.len()),
+        };
+        frame.render_widget(
+            Paragraph::new(Line::styled(status, dim)),
+            Rect {
+                y: list.bottom(),
+                height: 1,
+                ..inner
+            },
+        );
     }
 
     fn draw_time_range(&mut self, frame: &mut Frame, area: Rect) {
@@ -1278,6 +1506,7 @@ impl App {
             "m                note of the cursor row's bookmark",
             "Ctrl+K           cursor row in context (filters off), again back",
             "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
+            "o                open a file, pattern or archive entry",
             "t                time range: from / to (14:02, -15m, now)",
             "a                ANSI colours: auto, render, strip, raw (^[)",
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
@@ -1650,9 +1879,9 @@ fn group_digits(n: usize) -> String {
 
 /// Opens `path` through `workspace::open_target`, as the GUI does: a pattern, a plain
 /// file, a compressed file or an archive entry (`archive.zip/entry.log`), decompressed
-/// to a spool in the background; an archive with one file entry opens that entry. An
-/// archive with several entries has to be opened by entry path until the terminal's
-/// entry picker (task 3.7).
+/// to a spool in the background; an archive with one file entry opens that entry. At
+/// start an archive with several entries is reported: `o` opens it in the entry picker
+/// (see `App::open_file`).
 pub fn open_path(
     path: &Path,
     config: &crate::config::FastTailConfig,
@@ -2229,6 +2458,104 @@ mod tests {
         assert_eq!(app.prompt.as_ref().unwrap().field.text(), "slow disk  ");
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.tabs[0].engine.search_query, "slow disk");
+    }
+
+    /// `logs.tar.gz` holding `app.log`, `db.log` and `web.log`.
+    fn tar_gz(dir: &Path) -> PathBuf {
+        use std::io::Write as _;
+        let mut builder = tar::Builder::new(Vec::new());
+        for name in ["app.log", "db.log", "web.log"] {
+            let data = format!("{name} line 1\n{name} line 2\n");
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            builder
+                .append_data(&mut header, name, data.as_bytes())
+                .unwrap();
+        }
+        let tar = builder.into_inner().unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&tar).unwrap();
+        let path = dir.join("logs.tar.gz");
+        std::fs::write(&path, gz.finish().unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_entry_picker_filters_by_typing_and_opens_the_entry() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        let archive = tar_gz(dir.path());
+        app.open_file(&archive);
+        for _ in 0..200 {
+            app.tick();
+            if app.picker.as_ref().is_some_and(|p| p.scan.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let names = |app: &App| -> Vec<String> {
+            let p = app.picker.as_ref().expect("the picker");
+            p.shown()
+                .iter()
+                .map(|&i| p.entries[i].name.clone())
+                .collect()
+        };
+        assert_eq!(names(&app), ["app.log", "db.log", "web.log"]);
+        let screen = render(&mut app, 80, 24);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("Open an entry of logs.tar.gz")),
+            "{screen:#?}"
+        );
+        keys(&mut app, "db");
+        assert_eq!(names(&app), ["db.log"]);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.picker.is_none());
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active, 1);
+        assert_eq!(app.tabs[1].title, "logs.tar.gz/db.log");
+
+        // Opening it again shows the stream already open.
+        app.focus_tab(0);
+        app.open_file(&crate::compressed::entry_path(&archive, "db.log"));
+        assert_eq!((app.tabs.len(), app.active), (2, 1));
+
+        // A click on a list row opens that entry; Esc closes the picker.
+        app.open_file(&archive);
+        for _ in 0..200 {
+            app.tick();
+            if app.picker.as_ref().is_some_and(|p| p.scan.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        render(&mut app, 80, 24);
+        let (rect, _) = app.hits.list_items[2];
+        app.on_mouse(click(rect.x + 1, rect.y));
+        assert_eq!(app.tabs.last().unwrap().title, "logs.tar.gz/web.log");
+        app.open_file(&archive);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.picker.is_none());
+    }
+
+    #[test]
+    fn o_opens_a_typed_path_and_says_when_it_is_missing() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        std::fs::write(dir.path().join("b.log"), "b\n").unwrap();
+        app.apply(Action::OpenFile);
+        let b = dir.path().join("b.log");
+        app.on_paste(&b.display().to_string());
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!((app.active, app.tabs[1].title.as_str()), (1, "b.log"));
+        app.apply(Action::OpenFile);
+        app.on_paste(&dir.path().join("nope.log").display().to_string());
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.message.as_deref().unwrap().contains("not found"));
     }
 
     #[test]

@@ -61,6 +61,8 @@ pub enum Action {
     CycleAnsi,
     /// `t`: the time range dialog.
     TimeRange,
+    /// `o`: open a file by path.
+    OpenFile,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -128,6 +130,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('h') => Action::ToggleHex,
         KeyCode::Char('a') => Action::CycleAnsi,
         KeyCode::Char('t') => Action::TimeRange,
+        KeyCode::Char('o') => Action::OpenFile,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -165,6 +168,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('h'), none), Some(Action::ToggleHex));
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));
+        assert_eq!(k(KeyCode::Char('o'), none), Some(Action::OpenFile));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),
