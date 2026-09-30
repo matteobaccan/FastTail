@@ -16,7 +16,8 @@ use crate::collapse::CollapseMode;
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
 use crate::tail_engine::{TailEngine, ViewMode};
-use crate::time_range_text::side_readable;
+use crate::time_range_text::{self, side_readable, Side};
+use crate::tui::calendar::{self, Calendar};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -30,6 +31,7 @@ use crate::tui::hex;
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::picker::{refusal_text, EntryPicker};
+use crate::tui::settings::SettingsForm;
 use crate::tui::view::{self, Paint};
 
 /// Columns moved by one horizontal scroll step.
@@ -211,9 +213,30 @@ pub struct SessionDialog {
 pub struct TimeRangeDialog {
     pub from: TextField,
     pub to: TextField,
+    /// The side being edited: its field, its calendar and its time.
     pub on_to: bool,
+    pub zone: RangeZone,
+    pub calendar: Calendar,
+    /// In the time zone: the minutes are selected rather than the hours.
+    pub on_minutes: bool,
     pub invalid: bool,
+    /// What a bare `14:02` is read against: the log's first timestamp.
+    pub reference: i64,
 }
+
+/// The part of the time range dialog with the keyboard. `Tab` walks From, its
+/// calendar, its time, then To, its calendar, its time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeZone {
+    Field,
+    Calendar,
+    Time,
+}
+
+/// List positions of the time range dialog's clickable parts (see `mouse::Target`).
+const RANGE_FROM: usize = 0;
+const RANGE_TO: usize = 1;
+const RANGE_DAY: usize = 1_000_000;
 
 impl TimeRangeDialog {
     fn focused(&mut self) -> &mut TextField {
@@ -221,6 +244,74 @@ impl TimeRangeDialog {
             &mut self.to
         } else {
             &mut self.from
+        }
+    }
+
+    fn side(&self) -> Side {
+        if self.on_to {
+            Side::To
+        } else {
+            Side::From
+        }
+    }
+
+    fn side_text(&self) -> &str {
+        if self.on_to {
+            self.to.text()
+        } else {
+            self.from.text()
+        }
+    }
+
+    /// The calendar on the edited side's day, or on the log's first day.
+    fn sync_calendar(&mut self) {
+        let day = time_range_text::parse(self.side_text(), self.reference)
+            .map(time_range_text::day_of)
+            .unwrap_or_else(|| time_range_text::day_of(self.reference));
+        self.calendar = Calendar::new(day);
+    }
+
+    /// The day under the calendar cursor into the edited side, keeping its time.
+    fn pick_day(&mut self) {
+        let text =
+            time_range_text::pick_day(self.side_text(), self.reference, self.calendar.cursor);
+        *self.focused() = TextField::new(&text);
+        self.invalid = false;
+    }
+
+    /// Hours and minutes of the edited side moved by `hours` / `minutes` (wrapping
+    /// within the day), on the calendar's day when the side names none.
+    fn step_time(&mut self, hours: i64, minutes: i64) {
+        let (h, m, s) = time_range_text::clock_of(self.side_text(), self.reference, self.side());
+        let h = (h as i64 + hours).rem_euclid(24) as u32;
+        let m = (m as i64 + minutes).rem_euclid(60) as u32;
+        let text = time_range_text::with_clock(
+            self.side_text(),
+            self.reference,
+            self.calendar.cursor,
+            (h, m, s),
+        );
+        *self.focused() = TextField::new(&text);
+        self.invalid = false;
+    }
+
+    /// `Tab` / `Shift+Tab` through the six stops.
+    fn next_stop(&mut self, back: bool) {
+        let zone = match self.zone {
+            RangeZone::Field => 0,
+            RangeZone::Calendar => 1,
+            RangeZone::Time => 2,
+        };
+        let at = usize::from(self.on_to) * 3 + zone;
+        let next = if back { (at + 5) % 6 } else { (at + 1) % 6 };
+        self.on_to = next >= 3;
+        self.zone = match next % 3 {
+            0 => RangeZone::Field,
+            1 => RangeZone::Calendar,
+            _ => RangeZone::Time,
+        };
+        if self.zone == RangeZone::Calendar {
+            self.sync_calendar();
         }
     }
 }
@@ -276,6 +367,8 @@ pub struct App {
     pub time_range: Option<TimeRangeDialog>,
     pub picker: Option<EntryPicker>,
     pub sessions: Option<SessionDialog>,
+    /// The Settings dialog (`,`).
+    pub settings_form: Option<SettingsForm>,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
@@ -291,6 +384,10 @@ pub struct App {
     pub show_help: bool,
     /// First line of the help shown (it scrolls on a short screen).
     pub help_top: usize,
+    /// The help entry under the cursor, and the rows of its first column when it is
+    /// drawn in two (0 in one column).
+    pub help_sel: usize,
+    help_half: usize,
     pub quit: bool,
     /// Mouse capture is on (the help says how to select text natively).
     pub mouse: bool,
@@ -326,6 +423,7 @@ impl App {
             time_range: None,
             picker: None,
             sessions: None,
+            settings_form: None,
             confirm_overwrite: None,
             settings: None,
             autosave: false,
@@ -334,6 +432,8 @@ impl App {
             message: None,
             show_help: false,
             help_top: 0,
+            help_sel: 0,
+            help_half: 0,
             quit: false,
             mouse: true,
             idle_poll: Duration::from_millis(250),
@@ -479,6 +579,9 @@ impl App {
         if self.confirm_overwrite.is_some() {
             return self.on_confirm_key(key);
         }
+        if self.settings_form.is_some() {
+            return self.on_settings_key(key);
+        }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
         }
@@ -491,32 +594,68 @@ impl App {
         if self.prompt.is_some() {
             return self.on_prompt_key(key);
         }
+        if self.show_help && self.on_help_key(key) {
+            return true;
+        }
         let Some(action) = keys::map_key(key) else {
             return false;
         };
-        // The help dialog scrolls with the arrows and the page keys and closes on any
-        // other key; only `?` / F1 reopen it.
+        // Any other key closes the help (and acts); `?` / F1 only close it.
         if self.show_help {
-            match action {
-                Action::LineUp => self.help_top = self.help_top.saturating_sub(1),
-                Action::LineDown => self.help_top += 1,
-                Action::PageUp => self.help_top = self.help_top.saturating_sub(10),
-                Action::PageDown => self.help_top += 10,
-                _ => {
-                    self.show_help = false;
-                    self.help_top = 0;
-                    if action == Action::ToggleHelp {
-                        return true;
-                    }
-                }
-            }
-            if self.show_help {
+            self.show_help = false;
+            if action == Action::ToggleHelp {
                 return true;
             }
         }
         self.message = None;
         self.apply(action);
         true
+    }
+
+    /// The help's own keys: the cursor over the entries and `Enter` to run one. Returns
+    /// false for a key the help leaves to the view (it then closes the help).
+    fn on_help_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let sel = self.help_sel;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.help_sel = help_step(sel, -1),
+            KeyCode::Down | KeyCode::Char('j') => self.help_sel = help_step(sel, 1),
+            KeyCode::PageUp => {
+                self.help_sel = help_step(sel.saturating_sub(10).saturating_add(1), -1)
+            }
+            KeyCode::PageDown => self.help_sel = help_step((sel + 10).min(HELP.len()) - 1, 1),
+            KeyCode::Home => self.help_sel = help_step(HELP.len() - 1, 1),
+            KeyCode::End => self.help_sel = help_step(0, -1),
+            // Two columns: Left / Right jump to the other one.
+            KeyCode::Left | KeyCode::Right if self.help_half > 0 => {
+                let other = if sel >= self.help_half {
+                    sel - self.help_half
+                } else {
+                    (sel + self.help_half).min(HELP.len() - 1)
+                };
+                self.help_sel = if HELP[other].2.is_some() {
+                    other
+                } else {
+                    help_step(other, 1)
+                };
+            }
+            KeyCode::Enter => self.run_help_entry(sel),
+            KeyCode::Esc => self.show_help = false,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Closes the help and runs the command of entry `i`, if it has one.
+    fn run_help_entry(&mut self, i: usize) {
+        self.show_help = false;
+        if let Some(Some(action)) = HELP.get(i).map(|e| e.2) {
+            self.message = None;
+            self.apply(action);
+        }
     }
 
     fn on_prompt_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -538,7 +677,13 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
-        if let Some(d) = self.sessions.as_mut() {
+        if let Some(f) = self.settings_form.as_mut() {
+            if let Some(crate::tui::settings::Widget::Text(t)) =
+                f.fields.get_mut(f.focus).map(|x| &mut x.widget)
+            {
+                t.insert(text);
+            }
+        } else if let Some(d) = self.sessions.as_mut() {
             d.field.insert(text);
         } else if let Some(p) = self.picker.as_mut() {
             p.filter.insert(text);
@@ -582,6 +727,53 @@ impl App {
                 }
             }
         }
+    }
+
+    fn open_settings(&mut self) {
+        let form = SettingsForm::from_config(&self.settings_mut().config);
+        self.settings_form = Some(form);
+    }
+
+    fn on_settings_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(form) = self.settings_form.as_mut() else {
+            return false;
+        };
+        match form.on_key(key) {
+            FieldKey::Submit => self.submit_settings(),
+            FieldKey::Cancel => self.settings_form = None,
+            FieldKey::Edited => {}
+            FieldKey::Other => return false,
+        }
+        true
+    }
+
+    /// `[ OK ]` of Settings: every field valid, the values go into the configuration,
+    /// reach the running interface (theme, level colours, polling, each stream's
+    /// settings) and are saved. A field out of its range keeps the dialog open.
+    fn submit_settings(&mut self) {
+        let Some(form) = self.settings_form.as_mut() else {
+            return;
+        };
+        let settings = self.settings.get_or_insert_with(Default::default);
+        if let Err(problems) = form.apply(&mut settings.config) {
+            form.rejected = true;
+            let names: Vec<String> = problems
+                .iter()
+                .map(|(i, p)| format!("{}: {p}", form.fields[*i].label))
+                .collect();
+            self.message = Some(names.join("  |  "));
+            return;
+        }
+        self.settings_form = None;
+        let config = &settings.config;
+        self.palette.theme = config.theme;
+        self.palette.level_colors = config.level_colors;
+        self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
+        for tab in &mut self.tabs {
+            crate::workspace::apply_settings(&mut tab.engine, config);
+        }
+        self.message = Some("Settings saved".into());
+        self.save_config();
     }
 
     /// `Shift+T`: the next theme, in the order of the GUI's list, saved as the ini's
@@ -876,26 +1068,84 @@ impl App {
 
     fn open_time_range(&mut self) {
         let e = &self.tabs[self.active].engine;
-        self.time_range = Some(TimeRangeDialog {
+        let reference = e.time_reference();
+        let mut d = TimeRangeDialog {
             from: TextField::new(&e.time_from_text),
             to: TextField::new(&e.time_to_text),
             on_to: false,
+            zone: RangeZone::Field,
+            calendar: Calendar::new(time_range_text::day_of(reference)),
+            on_minutes: false,
             invalid: false,
-        });
+            reference,
+        };
+        d.sync_calendar();
+        self.time_range = Some(d);
     }
 
     fn on_time_range_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyEventKind};
         let Some(d) = self.time_range.as_mut() else {
             return false;
         };
-        match d.focused().on_key(key) {
-            FieldKey::Submit => self.submit_time_range(),
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        match key.code {
             // The previous range stays.
-            FieldKey::Cancel => self.time_range = None,
-            FieldKey::Edited => d.invalid = false,
-            FieldKey::Other => match key.code {
-                KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => d.on_to = !d.on_to,
+            KeyCode::Esc => {
+                self.time_range = None;
+                return true;
+            }
+            KeyCode::Tab => {
+                d.next_stop(false);
+                return true;
+            }
+            KeyCode::BackTab => {
+                d.next_stop(true);
+                return true;
+            }
+            _ => {}
+        }
+        match d.zone {
+            RangeZone::Field => match d.focused().on_key(key) {
+                FieldKey::Submit => self.submit_time_range(),
+                FieldKey::Cancel => self.time_range = None,
+                FieldKey::Edited => d.invalid = false,
+                FieldKey::Other => match key.code {
+                    KeyCode::Up | KeyCode::Down => {
+                        d.on_to = !d.on_to;
+                        d.sync_calendar();
+                    }
+                    _ => return false,
+                },
+            },
+            RangeZone::Calendar => match key.code {
+                KeyCode::Left => d.calendar.move_days(-1),
+                KeyCode::Right => d.calendar.move_days(1),
+                KeyCode::Up => d.calendar.move_days(-7),
+                KeyCode::Down => d.calendar.move_days(7),
+                KeyCode::PageUp => d.calendar.move_months(-1),
+                KeyCode::PageDown => d.calendar.move_months(1),
+                KeyCode::Char(' ') => d.pick_day(),
+                // Enter picks the day and applies the range.
+                KeyCode::Enter => {
+                    d.pick_day();
+                    self.submit_time_range();
+                }
+                _ => return false,
+            },
+            RangeZone::Time => match key.code {
+                KeyCode::Left | KeyCode::Right => d.on_minutes = !d.on_minutes,
+                KeyCode::Up if d.on_minutes => d.step_time(0, 1),
+                KeyCode::Down if d.on_minutes => d.step_time(0, -1),
+                KeyCode::PageUp if d.on_minutes => d.step_time(0, 10),
+                KeyCode::PageDown if d.on_minutes => d.step_time(0, -10),
+                KeyCode::Up => d.step_time(1, 0),
+                KeyCode::Down => d.step_time(-1, 0),
+                KeyCode::PageUp => d.step_time(6, 0),
+                KeyCode::PageDown => d.step_time(-6, 0),
+                KeyCode::Enter => self.submit_time_range(),
                 _ => return false,
             },
         }
@@ -1041,12 +1291,17 @@ impl App {
             Action::NextTab => self.focus_tab((self.active + 1) % n_tabs),
             Action::PrevTab => self.focus_tab((self.active + n_tabs - 1) % n_tabs),
             Action::GotoTab(i) => self.focus_tab(i),
-            Action::ToggleHelp => self.show_help = !self.show_help,
+            Action::ToggleHelp => {
+                self.show_help = !self.show_help;
+                self.help_sel = help_step(HELP.len() - 1, 1);
+                self.help_top = 0;
+            }
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
+            Action::Settings => self.open_settings(),
             Action::OpenFile => self.open_prompt(PromptKind::OpenFile),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -1102,6 +1357,7 @@ impl App {
                     || self.time_range.is_some()
                     || self.picker.is_some()
                     || self.sessions.is_some()
+                    || self.settings_form.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
@@ -1158,6 +1414,31 @@ impl App {
     fn on_click(&mut self, ev: MouseEvent) -> bool {
         let target = mouse::hit_test(&self.hits, ev.column, ev.row);
         match target {
+            Target::ListItem(i) if self.show_help => self.run_help_entry(i),
+            Target::Button(i) => {
+                if let Some((_, _, action)) = STATUS.get(i) {
+                    self.message = None;
+                    self.apply(*action);
+                }
+            }
+            Target::ListItem(i) if self.time_range.is_some() => {
+                if let Some(d) = self.time_range.as_mut() {
+                    if i >= RANGE_DAY {
+                        d.zone = RangeZone::Calendar;
+                        d.calendar.cursor = (i - RANGE_DAY) as i64;
+                        d.pick_day();
+                    } else {
+                        d.zone = RangeZone::Field;
+                        d.on_to = i == RANGE_TO;
+                        d.sync_calendar();
+                    }
+                }
+            }
+            Target::ListItem(i) if self.settings_form.is_some() => {
+                if let Some(f) = self.settings_form.as_mut() {
+                    f.focus = i;
+                }
+            }
             Target::ListItem(i) if self.sessions.is_some() => {
                 if let Some(d) = self.sessions.as_mut() {
                     d.selected = i;
@@ -1172,7 +1453,9 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if let Some(file) = self.confirm_overwrite.take() {
+                if self.settings_form.is_some() {
+                    self.submit_settings();
+                } else if let Some(file) = self.confirm_overwrite.take() {
                     self.save_session(&file);
                 } else if self.sessions.is_some() {
                     self.submit_sessions();
@@ -1189,6 +1472,7 @@ impl App {
                 self.prompt = None;
                 self.time_range = None;
                 self.sessions = None;
+                self.settings_form = None;
                 self.confirm_overwrite = None;
                 self.close_picker();
                 self.show_help = false;
@@ -1440,6 +1724,9 @@ impl App {
         if self.sessions.is_some() {
             self.draw_sessions(frame, main_area);
         }
+        if self.settings_form.is_some() {
+            self.draw_settings(frame, main_area);
+        }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
         }
@@ -1547,7 +1834,7 @@ impl App {
     }
 
     /// The bordered bar at the bottom: a message, or the main keys.
-    fn draw_status(&self, frame: &mut Frame, area: Rect) {
+    fn draw_status(&mut self, frame: &mut Frame, area: Rect) {
         let chrome = Chrome::Plain;
         let block = Block::bordered()
             .style(self.palette.window())
@@ -1565,14 +1852,36 @@ impl App {
             .cursor_line()
             .and_then(|l| tab.engine.bookmark_note(l))
             .map(|n| n.chars().take(NOTE_PREVIEW_CHARS).collect::<String>());
+        let inner = block.inner(area);
         let line = match (&self.message, note) {
             (Some(m), _) => Line::styled(m.clone(), Style::default().fg(self.palette.accent())),
             // The note of the cursor row's bookmark, when there is one.
-            (None, Some(n)) => Line::styled(format!("* {n}"), Style::default().fg(self.palette.accent())),
-            (None, None) => Line::styled(
-                "? help  q quit  Space follow  / search  n/N next  i/x filter  b mark  ]/[ marks  m note  h hex  y copy",
-                Style::default().fg(self.palette.dim()),
-            ),
+            (None, Some(n)) => {
+                Line::styled(format!("* {n}"), Style::default().fg(self.palette.accent()))
+            }
+            // The main commands as clickable `[ ]` buttons, as many as fit.
+            (None, None) => {
+                let bracket = Style::default().fg(self.palette.dim());
+                let key = Style::default()
+                    .fg(self.palette.accent())
+                    .add_modifier(Modifier::BOLD);
+                let mut spans = Vec::with_capacity(STATUS.len() * 4);
+                let mut x = inner.x;
+                for (i, (k, label, _)) in STATUS.iter().enumerate() {
+                    let w = (k.chars().count() + label.chars().count() + 3) as u16;
+                    if x + w > inner.right() {
+                        break;
+                    }
+                    self.hits.buttons.push((Rect::new(x, inner.y, w, 1), i));
+                    spans.push(Span::styled("[", bracket));
+                    spans.push(Span::styled(*k, key));
+                    spans.push(Span::raw(format!(" {label}")));
+                    spans.push(Span::styled("]", bracket));
+                    spans.push(Span::raw(" "));
+                    x += w + 1;
+                }
+                Line::from(spans)
+            }
         };
         frame.render_widget(Paragraph::new(line).block(block), area);
     }
@@ -1670,6 +1979,78 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    fn draw_settings(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(lines) = self.settings_form.as_ref().map(|f| f.lines()) else {
+            return;
+        };
+        let height = (lines.len() as u16 + 5).min(area.height);
+        let inner = self.dialog(
+            frame,
+            area,
+            (74, height),
+            "Settings - Tab/Up/Down move, Left/Right choose, Space ticks",
+            true,
+        );
+        let palette = self.palette;
+        let Some(form) = self.settings_form.as_mut() else {
+            return;
+        };
+        let rows = inner.height.saturating_sub(1) as usize;
+        // Keep the focused field on screen.
+        if let Some(at) = lines.iter().position(|(_, f)| *f == Some(form.focus)) {
+            if at < form.top {
+                form.top = at.saturating_sub(1);
+            } else if rows > 0 && at >= form.top + rows {
+                form.top = at + 1 - rows;
+            }
+        }
+        let problems = form.problems();
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let mut out = Vec::with_capacity(rows);
+        for (k, (text, field)) in lines.iter().enumerate().skip(form.top).take(rows) {
+            let y = inner.y + (k - form.top) as u16;
+            let line = match field {
+                None => Line::styled(
+                    text.clone(),
+                    Style::default()
+                        .fg(palette.accent())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Some(i) => {
+                    self.hits
+                        .list_items
+                        .push((Rect::new(inner.x, y, inner.width, 1), *i));
+                    let problem = problems.iter().find(|(p, _)| p == i).map(|(_, p)| p);
+                    let mut style = Style::default();
+                    if problem.is_some() && form.rejected {
+                        style = error;
+                    }
+                    if *i == form.focus {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
+                    let shown = match problem {
+                        Some(p) => format!("{text}  ({p})"),
+                        None => text.clone(),
+                    };
+                    Line::styled(view::sanitize(&shown), style)
+                }
+            };
+            out.push(line);
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                "Enter or [ OK ] applies and saves, Esc cancels",
+                Style::default().fg(palette.dim()),
+            )),
+            Rect {
+                y: inner.bottom().saturating_sub(1),
+                height: 1,
+                ..inner
+            },
+        );
     }
 
     fn draw_sessions(&mut self, frame: &mut Frame, area: Rect) {
@@ -1803,35 +2184,37 @@ impl App {
     }
 
     fn draw_time_range(&mut self, frame: &mut Frame, area: Rect) {
-        let inner = self.dialog(frame, area, (64, 9), "Time range", true);
+        let inner = self.dialog(frame, area, (64, 21), "Time range", true);
         let palette = self.palette;
         let Some(d) = &self.time_range else {
             return;
         };
-        let reference = self.tabs[self.active].engine.time_reference();
+        let reference = d.reference;
         const LABEL: u16 = 7;
         let width = inner.width.saturating_sub(LABEL) as usize;
-        let mut lines = Vec::with_capacity(6);
-        let mut cursor = (inner.x, inner.y);
-        for (row, (label, field, focused)) in [("From", &d.from, !d.on_to), ("To", &d.to, d.on_to)]
+        let dim = Style::default().fg(palette.dim());
+        let accent = Style::default()
+            .fg(palette.accent())
+            .add_modifier(Modifier::BOLD);
+        let mut lines = Vec::with_capacity(18);
+        let mut cursor = None;
+        for (row, (label, field, on)) in [("From", &d.from, !d.on_to), ("To", &d.to, d.on_to)]
             .into_iter()
             .enumerate()
         {
             let (shown, x) = field.view(width);
             let bad = !side_readable(field.text().trim(), reference);
-            let label_style = if focused {
-                Style::default()
-                    .fg(palette.accent())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(palette.dim())
-            };
-            let field_style = if bad {
+            let label_style = if on { accent } else { dim };
+            let mut field_style = if bad {
                 Style::default().fg(palette.level_color(LogLevel::Error))
             } else {
                 Style::default()
             }
             .add_modifier(Modifier::UNDERLINED);
+            if on && d.zone == RangeZone::Field {
+                field_style = field_style.add_modifier(Modifier::BOLD);
+                cursor = Some((inner.x + LABEL + x as u16, inner.y + row as u16));
+            }
             let pad = width.saturating_sub(unicode_width::UnicodeWidthStr::width(shown.as_str()));
             lines.push(Line::from(vec![
                 Span::styled(format!("{label:<w$}", w = LABEL as usize), label_style),
@@ -1840,15 +2223,82 @@ impl App {
                     field_style,
                 ),
             ]));
-            if focused {
-                cursor = (inner.x + LABEL + x as u16, inner.y + row as u16);
-            }
+            self.hits.list_items.push((
+                Rect::new(inner.x, inner.y + row as u16, inner.width, 1),
+                if row == 0 { RANGE_FROM } else { RANGE_TO },
+            ));
         }
-        let dim = Style::default().fg(palette.dim());
+        // The calendar and the time of the edited side.
+        let side = if d.on_to { "To" } else { "From" };
+        let picked = time_range_text::parse(d.side_text(), reference).map(time_range_text::day_of);
+        let cal_on = d.zone == RangeZone::Calendar;
         lines.push(Line::raw(""));
-        lines.push(Line::styled("2026-09-18 14:02:05, 14:02, -15m, now", dim));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{side}: "), accent),
+            Span::styled(
+                format!("\u{25c0} {} \u{25b6}", d.calendar.title()),
+                if cal_on { accent } else { Style::default() },
+            ),
+            Span::styled("  PgUp/PgDn month", dim),
+        ]));
+        lines.push(Line::styled("Mo Tu We Th Fr Sa Su", dim));
+        let first_week_row = inner.y + lines.len() as u16;
+        for (w, week) in d.calendar.weeks().iter().enumerate() {
+            let mut spans = Vec::with_capacity(7);
+            for (col, cell) in week.iter().enumerate() {
+                let text = match cell {
+                    Some(day) => format!("{:>2} ", calendar::day_of_month(*day)),
+                    None => "   ".into(),
+                };
+                let mut style = Style::default();
+                if let Some(day) = cell {
+                    if Some(*day) == picked {
+                        style = accent;
+                    }
+                    if *day == d.calendar.cursor {
+                        style = style.add_modifier(if cal_on {
+                            Modifier::REVERSED
+                        } else {
+                            Modifier::UNDERLINED
+                        });
+                    }
+                    self.hits.list_items.push((
+                        Rect::new(inner.x + col as u16 * 3, first_week_row + w as u16, 2, 1),
+                        RANGE_DAY + *day as usize,
+                    ));
+                }
+                spans.push(Span::styled(text, style));
+            }
+            lines.push(Line::from(spans));
+        }
+        while lines.len() < 12 {
+            lines.push(Line::raw(""));
+        }
+        let (h, m, _) = time_range_text::clock_of(d.side_text(), reference, d.side());
+        let time_on = d.zone == RangeZone::Time;
+        let part = |selected: bool| {
+            if time_on && selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else if time_on {
+                accent
+            } else {
+                Style::default()
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Time   ", if time_on { accent } else { dim }),
+            Span::styled(format!("{h:02}"), part(!d.on_minutes)),
+            Span::raw(":"),
+            Span::styled(format!("{m:02}"), part(d.on_minutes)),
+            Span::styled("   Up/Down change, Left/Right hours or minutes", dim),
+        ]));
+        lines.push(Line::raw(""));
         lines.push(Line::styled(
-            "An empty side is open. Tab switches side.",
+            "Type 2026-09-18 14:02, 14:02, -15m or now; empty side = open.",
+            dim,
+        ));
+        lines.push(Line::styled(
+            "Tab: field, calendar, time. Space picks a day, Enter applies.",
             dim,
         ));
         if d.invalid {
@@ -1858,7 +2308,9 @@ impl App {
             ));
         }
         frame.render_widget(Paragraph::new(lines), inner);
-        frame.set_cursor_position(cursor);
+        if let Some(c) = cursor {
+            frame.set_cursor_position(c);
+        }
     }
 
     fn draw_help(&mut self, frame: &mut Frame, area: Rect) {
@@ -1867,34 +2319,7 @@ impl App {
         } else {
             "Mouse off (--no-mouse): the terminal selects text"
         };
-        let text = [
-            "Up/Down j/k      move the cursor one row",
-            "PgUp/PgDn        move it one page (also Ctrl+B / Ctrl+F)",
-            "Shift+Up/Down    extend the selection from the cursor",
-            "Home g / End Shift+G  first / last row (the last one follows)",
-            "Left/Right 0     scroll sideways one cell / back to column 0",
-            "Space            toggle follow",
-            "/ n Shift+N Esc  search, next, previous, clear (also F3 / Shift+F3)",
-            "i  x             include / exclude filter",
-            "l                cycle the minimum level",
-            "c                cycle collapse: off, exact, numbers",
-            "s                split: side by side, stacked, off",
-            "Tab  Alt+1..9    next window or file / file N (Shift+Tab back)",
-            "b  Ctrl+F2       bookmark the cursor row, on or off",
-            "] F2 / [ Shift+F2  next / previous bookmark (wraps)",
-            "m                note of the cursor row's bookmark",
-            "Ctrl+K           cursor row in context (filters off), again back",
-            "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
-            "o                open a file, pattern or archive entry",
-            "Shift+O Shift+S  open a session / save the streams as a session",
-            "t                time range: from / to (14:02, -15m, now)",
-            "Shift+T          next theme: Tron, Matrix, Blade, Light, Commander",
-            "a                ANSI colours: auto, render, strip, raw (^[)",
-            "h                HEX view of the bytes (go to: 1024, 0x400), again back",
-            "y  Ctrl+C        copy the selection or the cursor row",
-            "                 (Ctrl+C quits when nothing is selected)",
-            "?  F1            this help",
-            "q                quit",
+        let notes = [
             "",
             "Wheel scrolls the window under the pointer; click focuses",
             "and selects a row, SHIFT + click or drag a range, double",
@@ -1902,46 +2327,74 @@ impl App {
             mouse_hint,
         ];
         // On a wide screen the keys go in two columns, so they all show at once; the
-        // mouse notes stay under them. Otherwise one column, which scrolls with Up /
-        // Down / PgUp / PgDn when the screen is too short for it.
+        // mouse notes stay under them. The cursor walks the entries that run a command.
         const COL: usize = 76;
-        let split = text.iter().position(|l| l.is_empty()).unwrap_or(text.len());
-        let (keys, notes) = text.split_at(split);
         let two = area.width as usize >= 2 * COL + 6;
-        let lines: Vec<String> = if two {
-            let half = keys.len().div_ceil(2);
-            let mut out: Vec<String> = (0..half)
-                .map(|i| {
-                    let right = keys.get(half + i).copied().unwrap_or("");
-                    format!("{:<COL$}  {right}", keys[i])
-                })
-                .collect();
-            out.extend(notes.iter().map(|l| l.to_string()));
-            out
+        let half = if two {
+            HELP.len().div_ceil(2)
         } else {
-            text.iter().map(|l| l.to_string()).collect()
+            HELP.len()
         };
+        self.help_half = if two { half } else { 0 };
+        let entry = |i: usize| -> String {
+            HELP.get(i)
+                .map(|(k, d, _)| format!("{k:<17}{d}"))
+                .unwrap_or_default()
+        };
+        let total = half + notes.len();
         let width = if two { 2 * COL as u16 + 4 } else { 78 };
-        let height = (lines.len() as u16 + 3).min(area.height);
+        let height = (total as u16 + 3).min(area.height);
         let rows = height.saturating_sub(3) as usize;
-        self.help_top = self.help_top.min(lines.len().saturating_sub(rows));
-        let more_below = self.help_top + rows < lines.len();
-        let title = if rows < lines.len() {
-            "Keys - Up/Down scroll, any other key closes"
-        } else {
-            "Keys - any key closes"
-        };
-        let inner = self.dialog(frame, area, (width, height), title, false);
-        frame.render_widget(
-            Paragraph::new(
-                lines
-                    .iter()
-                    .skip(self.help_top)
-                    .map(|l| Line::from(l.clone()))
-                    .collect::<Vec<_>>(),
-            ),
-            inner,
+        // Keep the selected entry's row on screen.
+        let sel_row = self.help_sel % half.max(1);
+        if sel_row < self.help_top {
+            self.help_top = sel_row;
+        } else if rows > 0 && sel_row >= self.help_top + rows {
+            self.help_top = sel_row + 1 - rows;
+        }
+        self.help_top = self.help_top.min(total.saturating_sub(rows));
+        let more_below = self.help_top + rows < total;
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, height),
+            "Keys - Up/Down choose, Enter runs, Esc closes",
+            false,
         );
+        let selected = Style::default().add_modifier(Modifier::REVERSED);
+        let info = Style::default().fg(self.palette.dim());
+        let mut lines = Vec::with_capacity(rows);
+        for row in self.help_top..(self.help_top + rows).min(total) {
+            let y = inner.y + (row - self.help_top) as u16;
+            if row >= half {
+                lines.push(Line::raw(notes[row - half].to_string()));
+                continue;
+            }
+            let mut spans = Vec::with_capacity(3);
+            let cols: &[usize] = if two { &[row, row + half] } else { &[row] };
+            for (c, &i) in cols.iter().enumerate() {
+                if i >= HELP.len() {
+                    continue;
+                }
+                let style = if i == self.help_sel {
+                    selected
+                } else if HELP[i].2.is_none() {
+                    info
+                } else {
+                    Style::default()
+                };
+                let x = inner.x + (c * (COL + 2)) as u16;
+                self.hits
+                    .list_items
+                    .push((Rect::new(x, y, COL as u16, 1), i));
+                if c > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(Span::styled(format!("{:<COL$}", entry(i)), style));
+            }
+            lines.push(Line::from(spans));
+        }
+        frame.render_widget(Paragraph::new(lines), inner);
         if more_below {
             // On the last row, left of the OK button: there is more under the fold.
             let hint = " \u{2193} more (Down) ";
@@ -1962,6 +2415,160 @@ impl App {
             );
         }
     }
+}
+
+/// The help: keys, what they do and the command `Enter` runs from the help (`None` for
+/// entries that only describe, which the cursor steps over).
+const HELP: &[(&str, &str, Option<Action>)] = &[
+    ("Up/Down j/k", "move the cursor one row", None),
+    ("PgUp/PgDn", "move it one page (also Ctrl+B / Ctrl+F)", None),
+    (
+        "Shift+Up/Down",
+        "extend the selection from the cursor",
+        None,
+    ),
+    ("Home g", "first row", Some(Action::Top)),
+    (
+        "End Shift+G",
+        "last row, and follow it",
+        Some(Action::Bottom),
+    ),
+    (
+        "Left/Right 0",
+        "scroll sideways one cell / back to column 0",
+        None,
+    ),
+    ("Space", "toggle follow", Some(Action::ToggleFollow)),
+    ("/", "search", Some(Action::StartSearch)),
+    (
+        "n Shift+N  F3",
+        "next / previous hit (Shift+F3 previous)",
+        Some(Action::SearchNext),
+    ),
+    (
+        "Esc",
+        "clear the search and the selection",
+        Some(Action::ClearSearch),
+    ),
+    ("i", "include filter", Some(Action::EditInclude)),
+    ("x", "exclude filter", Some(Action::EditExclude)),
+    ("l", "cycle the minimum level", Some(Action::CycleLevel)),
+    (
+        "c",
+        "cycle collapse: off, exact, numbers",
+        Some(Action::CycleCollapse),
+    ),
+    (
+        "s",
+        "split: side by side, stacked, off",
+        Some(Action::CycleSplit),
+    ),
+    (
+        "Tab  Alt+1..9",
+        "next window or file / file N (Shift+Tab back)",
+        Some(Action::NextTab),
+    ),
+    (
+        "b  Ctrl+F2",
+        "bookmark the cursor row, on or off",
+        Some(Action::ToggleBookmark),
+    ),
+    ("] F2", "next bookmark (wraps)", Some(Action::NextBookmark)),
+    (
+        "[ Shift+F2",
+        "previous bookmark (wraps)",
+        Some(Action::PrevBookmark),
+    ),
+    (
+        "m",
+        "note of the cursor row's bookmark",
+        Some(Action::EditNote),
+    ),
+    (
+        "Ctrl+K",
+        "cursor row in context (filters off), again back",
+        Some(Action::ToggleContext),
+    ),
+    (
+        "Ctrl+G  :",
+        "go to a line (N, +N, -N) or a time (14:02)",
+        Some(Action::GoTo),
+    ),
+    (
+        "o",
+        "open a file, pattern or archive entry",
+        Some(Action::OpenFile),
+    ),
+    ("Shift+O", "open a session", Some(Action::OpenSession)),
+    (
+        "Shift+S",
+        "save the streams as a session",
+        Some(Action::SaveSession),
+    ),
+    (
+        "t",
+        "time range: from / to, calendar and time",
+        Some(Action::TimeRange),
+    ),
+    (
+        ",",
+        "Settings: theme, language, view, refresh, sound",
+        Some(Action::Settings),
+    ),
+    (
+        "Shift+T",
+        "next theme: Tron, Matrix, Blade, Light, Commander",
+        Some(Action::CycleTheme),
+    ),
+    (
+        "a",
+        "ANSI colours: auto, render, strip, raw (^[)",
+        Some(Action::CycleAnsi),
+    ),
+    (
+        "h",
+        "HEX view of the bytes (go to: 1024, 0x400), again back",
+        Some(Action::ToggleHex),
+    ),
+    (
+        "y",
+        "copy the selection or the cursor row",
+        Some(Action::Copy),
+    ),
+    ("Ctrl+C", "copy, or quit when nothing is selected", None),
+    ("?  F1", "this help", None),
+    ("q", "quit", Some(Action::Quit)),
+];
+
+/// The buttons of the status bar: key, label, command; drawn as `[? help]`, as many as
+/// fit the width.
+const STATUS: &[(&str, &str, Action)] = &[
+    ("?", "help", Action::ToggleHelp),
+    ("/", "search", Action::StartSearch),
+    ("n", "next", Action::SearchNext),
+    ("i", "include", Action::EditInclude),
+    ("x", "exclude", Action::EditExclude),
+    ("t", "time", Action::TimeRange),
+    ("Space", "follow", Action::ToggleFollow),
+    ("b", "mark", Action::ToggleBookmark),
+    ("o", "open", Action::OpenFile),
+    (",", "settings", Action::Settings),
+    ("Shift+T", "theme", Action::CycleTheme),
+    ("q", "quit", Action::Quit),
+];
+
+/// The next entry of the help that runs a command, from `from` in `step` direction
+/// (wrapping); `from` itself when none.
+fn help_step(from: usize, step: isize) -> usize {
+    let n = HELP.len() as isize;
+    let mut i = from as isize;
+    for _ in 0..n {
+        i = (i + step).rem_euclid(n);
+        if HELP[i as usize].2.is_some() {
+            return i as usize;
+        }
+    }
+    from
 }
 
 /// Darkens the cells a dialog at `rect` shades: two columns on its right and one row
@@ -2125,7 +2732,12 @@ fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'st
     }
     tab.top = view::clamp_top(tab.top, height, rows);
     let range = view::visible_range(tab.top, height, rows);
-    let gutter = view::gutter_width(engine.total_lines());
+    // Settings > Line numbers off keeps only the mark column.
+    let gutter = if engine.show_line_numbers {
+        view::gutter_width(engine.total_lines())
+    } else {
+        0
+    };
     let query = engine.search_query.trim().to_string();
     let has_search = !query.is_empty() && engine.active_match_count() > 0;
     let mut lines = Vec::with_capacity(range.len());
@@ -2249,7 +2861,11 @@ pub fn render_row(
         ' '
     };
     spans.push(Span::styled(
-        format!("{:>gutter$}{mark}", line_idx + 1),
+        if gutter == 0 {
+            mark.to_string()
+        } else {
+            format!("{:>gutter$}{mark}", line_idx + 1)
+        },
         gutter_style,
     ));
     if let Some(c) = engine.collapsed_row(row).filter(|c| c.count > 1) {
@@ -2852,9 +3468,9 @@ mod tests {
         render(&mut app, 80, 20);
         app.apply(Action::TimeRange);
         keys(&mut app, "10:00:01");
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Down);
         keys(&mut app, "yesterday-ish");
-        let screen = render(&mut app, 80, 20);
+        let screen = render(&mut app, 80, 30);
         assert!(
             screen.iter().any(|l| l.contains("Time range")),
             "{screen:#?}"
@@ -3108,7 +3724,7 @@ mod tests {
     }
 
     #[test]
-    fn the_help_scrolls_on_a_short_screen_and_closes_on_another_key() {
+    fn the_help_is_a_menu_the_cursor_walks_and_enter_runs() {
         use crossterm::event::KeyCode;
         let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
         app.apply(Action::ToggleHelp);
@@ -3116,29 +3732,61 @@ mod tests {
         for key in ["F3", "Ctrl+G", "Shift+O", "Shift+T", "?  F1", "HEX", "ANSI"] {
             assert!(tall.iter().any(|l| l.contains(key)), "{key}: {tall:#?}");
         }
+        // The cursor starts on the first entry with a command and skips the others.
+        assert_eq!(HELP[app.help_sel].2, Some(Action::Top));
+        press(&mut app, KeyCode::Up);
+        assert_eq!(
+            HELP[app.help_sel].2,
+            Some(Action::Quit),
+            "wraps to the last"
+        );
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(HELP[app.help_sel].2, Some(Action::Bottom));
+
+        // Two columns on a wide screen; Right jumps to the other column.
         let wide = render(&mut app, 170, 30);
         assert!(
             wide.iter().any(|l| l.contains("move the cursor one row"))
                 && wide.iter().any(|l| l.contains("next theme")),
             "two columns show every key: {wide:#?}"
         );
-        assert!(!wide.iter().any(|l| l.contains("Up/Down scroll")));
+        press(&mut app, KeyCode::Right);
+        assert!(app.help_sel >= app.help_half);
+
+        // A short screen scrolls to keep the cursor visible.
+        press(&mut app, KeyCode::End);
         let short = render(&mut app, 80, 24);
-        assert!(
-            short.iter().any(|l| l.contains("Up/Down scroll")),
-            "{short:#?}"
-        );
-        assert!(
-            short.iter().any(|l| l.contains("more (Down)")),
-            "{short:#?}"
-        );
-        assert!(short.iter().any(|l| l.contains("move the cursor one row")));
-        press(&mut app, KeyCode::Down);
-        assert!(app.show_help, "the arrows scroll");
-        let scrolled = render(&mut app, 80, 24);
-        assert!(!scrolled
+        assert!(short.iter().any(|l| l.contains("quit")), "{short:#?}");
+        assert!(!short.iter().any(|l| l.contains("move the cursor one row")));
+
+        // Enter runs the chosen command: the search dialog opens.
+        let search = HELP
             .iter()
-            .any(|l| l.contains("move the cursor one row")));
+            .position(|e| e.2 == Some(Action::StartSearch))
+            .unwrap();
+        app.help_sel = search;
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.show_help);
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::Search)
+        );
+        app.prompt = None;
+
+        // A click on an entry runs it; another key closes the help and acts.
+        app.apply(Action::ToggleHelp);
+        render(&mut app, 100, 60);
+        let (rect, _) = *app
+            .hits
+            .list_items
+            .iter()
+            .find(|(_, i)| HELP[*i].2 == Some(Action::TimeRange))
+            .unwrap();
+        app.on_mouse(click(rect.x + 1, rect.y));
+        assert!(!app.show_help && app.time_range.is_some());
+        app.time_range = None;
+        app.apply(Action::ToggleHelp);
         press(&mut app, KeyCode::Char('x'));
         assert!(!app.show_help);
     }
@@ -3300,6 +3948,161 @@ mod tests {
         assert_eq!(app.palette.theme, CyberTheme::Commander, "the blue classic");
         app.apply(Action::CycleTheme);
         assert_eq!(app.palette.theme, CyberTheme::Tron, "back to the first");
+    }
+
+    #[test]
+    fn the_settings_dialog_applies_saves_and_refuses_a_value_out_of_range() {
+        use crossterm::event::KeyCode;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, LOG).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.apply(Action::Settings);
+        let screen = render(&mut app, 90, 40);
+        assert!(
+            screen.iter().any(|l| l.contains("Performance and refresh")),
+            "{screen:#?}"
+        );
+
+        // Theme: one to the right; Line numbers: off; Poll interval: out of range.
+        let focus = |app: &mut App, label: &str| {
+            let f = app.settings_form.as_mut().unwrap();
+            f.focus = f.fields.iter().position(|x| x.label == label).unwrap();
+        };
+        focus(&mut app, "Theme");
+        press(&mut app, KeyCode::Right);
+        focus(&mut app, "Line numbers");
+        press(&mut app, KeyCode::Char(' '));
+        focus(&mut app, "Poll interval (ms)");
+        app.on_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        ));
+        keys(&mut app, "7");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings_form.is_some(), "kept open");
+        assert!(app.message.as_deref().unwrap().contains("50 to 5000"));
+        assert_eq!(app.palette.theme, CyberTheme::Tron, "nothing applied");
+
+        keys(&mut app, "00");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings_form.is_none());
+        assert_eq!(app.palette.theme, CyberTheme::Matrix, "applied at once");
+        assert_eq!(app.idle_poll, Duration::from_millis(700));
+        assert!(!app.tabs[0].engine.show_line_numbers);
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.theme, CyberTheme::Matrix);
+        assert_eq!(saved.poll_interval_ms, 700);
+        assert!(!saved.show_line_numbers);
+        let screen = render(&mut app, 90, 20);
+        assert!(
+            screen.iter().any(|l| l.starts_with("\u{2551} 2026-09-28")),
+            "no line numbers, only the mark column: {screen:#?}"
+        );
+
+        // Esc discards.
+        app.apply(Action::Settings);
+        focus(&mut app, "Theme");
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.palette.theme, CyberTheme::Matrix);
+    }
+
+    #[test]
+    fn the_time_range_calendar_picks_a_day_and_the_time_steps() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("t.log", LOG)], false);
+        app.tick();
+        app.apply(Action::TimeRange);
+        // From: a typed day, Tab to its calendar (on that day), one day on, Space picks.
+        keys(&mut app, "2026-09-28");
+        press(&mut app, KeyCode::Tab);
+        let d = app.time_range.as_ref().unwrap();
+        assert_eq!(d.zone, RangeZone::Calendar);
+        assert_eq!(d.calendar.title(), "September 2026");
+        let first = d.calendar.cursor;
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.time_range.as_ref().unwrap().from.text(), "2026-09-29");
+        // Its time: Tab, hours up twice, then the minutes up once.
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Up);
+        assert_eq!(
+            app.time_range.as_ref().unwrap().from.text(),
+            "2026-09-29 02:01:00"
+        );
+        let screen = render(&mut app, 80, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("Mo Tu We Th Fr Sa Su")),
+            "{screen:#?}"
+        );
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("Time") && l.contains("02:01")));
+
+        // Tab on reaches To; a click on the From field goes back to it, and a click on
+        // a day picks it for that side.
+        press(&mut app, KeyCode::Tab);
+        assert!(app.time_range.as_ref().unwrap().on_to);
+        let (field, _) = *app
+            .hits
+            .list_items
+            .iter()
+            .find(|(_, i)| *i == RANGE_FROM)
+            .unwrap();
+        app.on_mouse(click(field.x + 8, field.y));
+        let d = app.time_range.as_ref().unwrap();
+        assert!(!d.on_to && d.zone == RangeZone::Field, "back on From");
+        render(&mut app, 80, 30);
+        let (day, _) = *app
+            .hits
+            .list_items
+            .iter()
+            .find(|(_, i)| *i == RANGE_DAY + first as usize)
+            .unwrap();
+        app.on_mouse(click(day.x, day.y));
+        assert_eq!(
+            app.time_range.as_ref().unwrap().from.text(),
+            "2026-09-28 02:01:00",
+            "the day changes, the time stays"
+        );
+    }
+
+    #[test]
+    fn the_status_bar_buttons_are_bracketed_and_clickable() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        let screen = render(&mut app, 120, 20);
+        let bar = &screen[screen.len() - 2];
+        assert!(
+            bar.contains("[? help]") && bar.contains("[/ search]"),
+            "{bar}"
+        );
+        let (rect, _) = *app
+            .hits
+            .buttons
+            .iter()
+            .find(|(_, i)| STATUS[*i].2 == Action::StartSearch)
+            .unwrap();
+        app.on_mouse(click(rect.x + 1, rect.y));
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::Search)
+        );
+        // Only the buttons that fit are drawn and clickable.
+        app.prompt = None;
+        render(&mut app, 50, 20);
+        assert!(app.hits.buttons.len() < STATUS.len());
+        assert!(app.hits.buttons.iter().all(|(r, _)| r.right() <= 49));
     }
 
     #[test]

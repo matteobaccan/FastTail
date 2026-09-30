@@ -8,6 +8,7 @@
 //! brings it to parity with the GUI.
 
 mod app;
+mod calendar;
 mod clipboard;
 mod colors;
 mod form;
@@ -15,6 +16,7 @@ mod hex;
 mod keys;
 mod mouse;
 mod picker;
+mod settings;
 mod view;
 mod workspace;
 
