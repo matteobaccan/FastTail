@@ -29,6 +29,7 @@ exclude = [
     "assets/**",
     "fasttail.ini",
     "renovate.json",
+    "AGENTS.md",
 ]
 
 [dependencies]
