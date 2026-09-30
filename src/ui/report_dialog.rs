@@ -209,7 +209,10 @@ impl ReportDialog {
                     .add_filter("Markdown (*.md)", &["md"])
                     .save_file();
                 if let Some(path) = target {
-                    self.status = Some(match std::fs::write(&path, markdown.as_bytes()) {
+                    use std::io::Write;
+                    let result = crate::paths::create_export_file(&path)
+                        .and_then(|mut f| f.write_all(markdown.as_bytes()));
+                    self.status = Some(match result {
                         Ok(()) => (
                             t(lang, "report_saved").replace("{path}", &path.display().to_string()),
                             false,
