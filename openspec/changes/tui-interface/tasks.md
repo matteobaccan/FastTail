@@ -34,6 +34,7 @@
 - [x] 3.9 256 KiB buffered output; redraw only on change; poll 100 ms / 50 ms
 - [x] 3.10 Theme look (maintainer request): theme backgrounds, text and borders at 256 colours and truecolor, dialog shadows, square dialog corners, `T` theme cycle saved as `theme`
 - [x] 3.11 Dock (maintainer request): `src/dock_layout.rs` reads and writes the GUI's `[dock] layout` without egui; the terminal draws the tree, tabs in the window border, `s` `|` `_` split, `Alt+X` close, `<` `>` move, `Ctrl+PgUp/PgDn` tabs, `Alt+arrows` and divider drag resize, title drag with edge / centre drop; saved after a change and in sessions
+- [x] 3.13 Floating windows and a help that fits (maintainer request after the 0.15.0 preview): `Alt+F` float / dock, title drag moves, bottom-right corner drag resizes, windows overlap in z-order with shadows, saved as the GUI's floating windows; the help over the whole screen in up to three columns with the mouse gestures as entries
 - [x] 3.12 Open dialog as a file browser (maintainer request): `..`, folders, files with size and date, drives on Windows, keys and mouse, name field that filters or takes a path, pattern or archive entry
 
 ## 4. Terminal interface: settings, editors, tools, lock

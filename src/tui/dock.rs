@@ -137,6 +137,14 @@ pub fn fraction_at(split: Rect, dir: Dir, col: u16, row: u16) -> f32 {
     first as f32 / len.max(1) as f32
 }
 
+/// Where a window's tabs live: a leaf of the dock tree, or a floating window (its
+/// position in `App::floats`, bottom to top).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    Dock(Vec<bool>),
+    Float(usize),
+}
+
 /// Where a window dropped on a leaf goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Zone {
@@ -146,6 +154,8 @@ pub enum Zone {
     Bottom,
     /// A tab of the leaf.
     Center,
+    /// Out of the dock, a floating window at the pointer.
+    Float,
 }
 
 impl Zone {
@@ -156,13 +166,14 @@ impl Zone {
             Zone::Right => Some((Dir::Horizontal, true)),
             Zone::Top => Some((Dir::Vertical, false)),
             Zone::Bottom => Some((Dir::Vertical, true)),
-            Zone::Center => None,
+            Zone::Center | Zone::Float => None,
         }
     }
 }
 
-/// The zone of `area` under (`col`, `row`): the nearest edge within a quarter of the
-/// window, else the centre.
+/// The zone of `area` under (`col`, `row`): the nearest edge within a fifth of the
+/// window, the middle (the central 30% each way) for a tab, the ring between them for a
+/// floating window.
 pub fn zone_at(area: Rect, col: u16, row: u16) -> Zone {
     let fx = (col.saturating_sub(area.x) as f32 + 0.5) / area.width.max(1) as f32;
     let fy = (row.saturating_sub(area.y) as f32 + 0.5) / area.height.max(1) as f32;
@@ -179,11 +190,36 @@ pub fn zone_at(area: Rect, col: u16, row: u16) -> Zone {
             best
         }
     });
-    if d < 0.25 {
+    if d < 0.2 {
         zone
-    } else {
+    } else if (fx - 0.5).abs() < 0.15 && (fy - 0.5).abs() < 0.15 {
         Zone::Center
+    } else {
+        Zone::Float
     }
+}
+
+/// Smallest floating window: a title, three rows and the bottom border.
+pub const MIN_FLOAT: (u16, u16) = (20, 5);
+
+/// A new floating window in `bounds`: 60% of it (at least 40 x 10 when there is room),
+/// its title under the pointer.
+pub fn float_rect_at(bounds: Rect, col: u16, row: u16) -> Rect {
+    let w = (bounds.width * 3 / 5).max(40).min(bounds.width);
+    let h = (bounds.height * 3 / 5).max(10).min(bounds.height);
+    let r = Rect::new(col.saturating_sub(w / 2), row, w, h);
+    clamp_into(r, bounds)
+}
+
+/// `r` moved (and shrunk if needed) to lie inside `bounds`.
+pub fn clamp_into(r: Rect, bounds: Rect) -> Rect {
+    let w = r.width.clamp(MIN_FLOAT.0.min(bounds.width), bounds.width);
+    let h = r
+        .height
+        .clamp(MIN_FLOAT.1.min(bounds.height), bounds.height);
+    let x = r.x.clamp(bounds.x, bounds.right().saturating_sub(w));
+    let y = r.y.clamp(bounds.y, bounds.bottom().saturating_sub(h));
+    Rect::new(x, y, w, h)
 }
 
 /// The part of `area` a drop on `zone` would fill, drawn while dragging.
@@ -210,6 +246,7 @@ pub fn zone_rect(area: Rect, zone: Zone) -> Rect {
             ..area
         },
         Zone::Center => area,
+        Zone::Float => float_rect_at(area, area.x + area.width / 2, area.y),
     }
 }
 
@@ -274,7 +311,28 @@ mod tests {
         assert_eq!(zone_at(area, 30, 10), Zone::Top);
         assert_eq!(zone_at(area, 30, 29), Zone::Bottom);
         assert_eq!(zone_at(area, 30, 20), Zone::Center);
+        // Between the edges and the middle: out of the dock.
+        assert_eq!(zone_at(area, 20, 15), Zone::Float);
         assert_eq!(zone_rect(area, Zone::Right), Rect::new(30, 10, 20, 20));
         assert_eq!(Zone::Bottom.split(), Some((Dir::Vertical, true)));
+        assert_eq!(Zone::Float.split(), None);
+    }
+
+    #[test]
+    fn floating_windows_stay_inside_the_screen() {
+        let screen = Rect::new(0, 1, 100, 30);
+        // Centred on the pointer, the title under it, 60% of the screen.
+        assert_eq!(float_rect_at(screen, 50, 5), Rect::new(20, 5, 60, 18));
+        // Near the bottom-right corner it is pushed back in.
+        assert_eq!(float_rect_at(screen, 99, 29), Rect::new(40, 13, 60, 18));
+        // A window larger than the screen shrinks; a tiny one grows to the minimum.
+        assert_eq!(
+            clamp_into(Rect::new(5, 0, 200, 50), screen),
+            Rect::new(0, 1, 100, 30)
+        );
+        assert_eq!(
+            clamp_into(Rect::new(5, 3, 2, 1), screen),
+            Rect::new(5, 3, 20, 5)
+        );
     }
 }

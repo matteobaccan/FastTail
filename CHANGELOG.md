@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Floating windows in the terminal interface.** `Alt+F` takes the focused window out of
+  the dock (or docks it back); a window's title dragged anywhere but onto another window's
+  edge or centre floats it too. A floating window lies over the others with a shadow:
+  drag its title to move it, drag its bottom-right corner (◢) to resize it, click it to
+  bring it to the front; `Alt+arrows` move it. They are saved as the GUI's floating
+  windows in `[dock] layout`, so each interface shows the other's.
+- **`[x]` on every terminal window.** Top right of each window, docked or floating: a
+  click closes the stream it shows, as `Ctrl+W` does (the window goes when it is empty).
+
 ### Changed
 
 - **Archive picker.** "All" is disabled when no listed entry can be opened, "None" when

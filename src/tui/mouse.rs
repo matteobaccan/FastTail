@@ -7,7 +7,7 @@
 
 use ratatui::layout::{Position, Rect};
 
-use crate::tui::dock::{DividerArea, LeafArea};
+use crate::tui::dock::{DividerArea, LeafArea, Place};
 
 /// A stream window as it was last drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,8 +45,14 @@ pub struct HitMap {
     pub leaves: Vec<LeafArea>,
     /// The dock's dividers, dragged to resize.
     pub dividers: Vec<DividerArea>,
-    /// The titles of a window's tabs in its top border: the leaf and the tab's place.
-    pub leaf_tabs: Vec<(Rect, Vec<bool>, usize)>,
+    /// The titles of a window's tabs in its top border: the window and the tab's place.
+    pub leaf_tabs: Vec<(Rect, Place, usize)>,
+    /// The floating windows as drawn, bottom to top, with their place in `App::floats`.
+    pub floats: Vec<(Rect, usize)>,
+    /// The area of the windows (between the tab strip and the status bar).
+    pub main: Rect,
+    /// The `[x]` of each stream window, top right: the window it closes a stream of.
+    pub close_buttons: Vec<(Rect, Place)>,
 }
 
 /// What a cell of the screen is.
@@ -68,6 +74,14 @@ pub enum Target {
     LeafTab(usize),
     /// A divider between two windows (its position in `HitMap::dividers`).
     Divider(usize),
+    /// The title row of a floating window (its position in `App::floats`): dragged, it
+    /// moves the window.
+    FloatTitle(usize),
+    /// The bottom-right corner of a floating window: dragged, it resizes the window.
+    FloatCorner(usize),
+    /// The `[x]` of a window (its position in `HitMap::close_buttons`): closes the
+    /// stream the window shows.
+    Close(usize),
     /// The top border of a window, where its `[#N]` title sits.
     WindowTitle(usize),
     /// A drawn row of a window (a view row of the engine).
@@ -106,6 +120,37 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
     if let Some((_, tab)) = map.tab_titles.iter().find(|(r, _)| r.contains(p)) {
         return Target::TabTitle(*tab);
     }
+    // Floating windows lie over the dock: the topmost under the pointer takes it.
+    if let Some((r, f)) = map.floats.iter().rev().find(|(r, _)| r.contains(p)) {
+        let close = map
+            .close_buttons
+            .iter()
+            .position(|(b, place)| *place == Place::Float(*f) && b.contains(p));
+        if let Some(i) = close {
+            return Target::Close(i);
+        }
+        let tab = map
+            .leaf_tabs
+            .iter()
+            .position(|(t, place, _)| *place == Place::Float(*f) && t.contains(p));
+        if let Some(i) = tab {
+            return Target::LeafTab(i);
+        }
+        if row == r.y {
+            return Target::FloatTitle(*f);
+        }
+        if row + 1 == r.bottom() && col + 2 >= r.right() {
+            return Target::FloatCorner(*f);
+        }
+        return window_target(map, p);
+    }
+    if let Some(i) = map
+        .close_buttons
+        .iter()
+        .position(|(b, place)| matches!(place, Place::Dock(_)) && b.contains(p))
+    {
+        return Target::Close(i);
+    }
     if let Some(i) = map.leaf_tabs.iter().position(|(r, _, _)| r.contains(p)) {
         return Target::LeafTab(i);
     }
@@ -113,7 +158,14 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
     if let Some(i) = map.dividers.iter().rposition(|d| d.handle.contains(p)) {
         return Target::Divider(i);
     }
-    for w in &map.windows {
+    window_target(map, p)
+}
+
+/// What a window shows at `p`: its title, a row, or the window. Windows drawn later lie
+/// on top, so they are tested first.
+fn window_target(map: &HitMap, p: Position) -> Target {
+    let row = p.y;
+    for w in map.windows.iter().rev() {
         if !w.outer.contains(p) {
             continue;
         }
@@ -140,6 +192,7 @@ pub fn window_at(map: &HitMap, col: u16, row: u16) -> Option<usize> {
     let p = Position::new(col, row);
     map.windows
         .iter()
+        .rev()
         .find(|w| w.outer.contains(p))
         .map(|w| w.tab)
 }
@@ -203,11 +256,46 @@ mod tests {
             split: Rect::new(0, 1, 80, 10),
             handle: Rect::new(39, 2, 2, 9),
         });
-        map.leaf_tabs.push((Rect::new(45, 1, 8, 1), vec![true], 1));
+        map.leaf_tabs
+            .push((Rect::new(45, 1, 8, 1), Place::Dock(vec![true]), 1));
         assert_eq!(hit_test(&map, 40, 5), Target::Divider(0));
         assert_eq!(hit_test(&map, 39, 5), Target::Divider(0));
         assert_eq!(hit_test(&map, 47, 1), Target::LeafTab(0));
         assert_eq!(hit_test(&map, 60, 1), Target::WindowTitle(1));
+    }
+
+    #[test]
+    fn a_floating_window_covers_the_windows_under_it() {
+        let mut map = split_map();
+        // A floating window drawn last, over both windows and their divider.
+        map.windows.push(WindowHit {
+            tab: 2,
+            outer: Rect::new(30, 3, 20, 6),
+            rows: Rect::new(31, 4, 18, 4),
+            first_row: 0,
+            row_count: 4,
+        });
+        map.floats.push((Rect::new(30, 3, 20, 6), 0));
+        map.dividers.push(DividerArea {
+            path: vec![],
+            dir: crate::dock_layout::Dir::Horizontal,
+            split: Rect::new(0, 1, 80, 10),
+            handle: Rect::new(39, 2, 2, 9),
+        });
+        map.close_buttons
+            .push((Rect::new(46, 3, 3, 1), Place::Float(0)));
+        map.close_buttons
+            .push((Rect::new(76, 1, 3, 1), Place::Dock(vec![true])));
+        assert_eq!(hit_test(&map, 47, 3), Target::Close(0));
+        assert_eq!(hit_test(&map, 77, 1), Target::Close(1));
+        assert_eq!(hit_test(&map, 35, 3), Target::FloatTitle(0));
+        assert_eq!(hit_test(&map, 49, 8), Target::FloatCorner(0));
+        assert_eq!(hit_test(&map, 48, 8), Target::FloatCorner(0));
+        assert_eq!(hit_test(&map, 40, 5), Target::Row { tab: 2, row: 1 });
+        assert_eq!(window_at(&map, 40, 5), Some(2));
+        // Outside it, the divider and the windows under it are reached as before.
+        assert_eq!(hit_test(&map, 40, 9), Target::Divider(0));
+        assert_eq!(hit_test(&map, 10, 4), Target::Row { tab: 0, row: 102 });
     }
 
     #[test]

@@ -28,7 +28,7 @@ use ratatui::Frame;
 
 use crate::tui::clipboard::{Clipboard, Copied};
 use crate::tui::colors::{Chrome, Palette};
-use crate::tui::dock::{self, Zone};
+use crate::tui::dock::{self, Place, Zone};
 use crate::tui::form::{FieldKey, TextField};
 use crate::tui::hex;
 use crate::tui::keys::{self, Action};
@@ -317,6 +317,18 @@ impl TimeRangeDialog {
     }
 }
 
+/// A floating window: one leaf of tabs lying over the dock, at `rect` (screen cells;
+/// kept inside the windows' area when drawn).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Float {
+    pub pane: Pane,
+    pub rect: Rect,
+}
+
+/// Points per cell when a floating window's place goes to (or comes from) the GUI's
+/// layout, which counts in points: about a monospace cell at the GUI's font size.
+const POINTS_PER_CELL: (f32, f32) = (8.0, 16.0);
+
 /// What the left button is dragging in the dock.
 #[derive(Debug, Clone, PartialEq)]
 enum DockDrag {
@@ -333,6 +345,10 @@ enum DockDrag {
         from: (u16, u16),
         drop: Option<(Vec<bool>, Zone, Rect)>,
     },
+    /// The topmost floating window, taken by its title `grab` cells from its corner.
+    FloatMove { grab: (u16, u16) },
+    /// The topmost floating window, taken by its bottom-right corner.
+    FloatResize,
 }
 
 /// What one window shows: the loop redraws only when a signature changes.
@@ -358,6 +374,7 @@ struct PaneSignature {
 struct Signature {
     active: usize,
     dock: Option<Pane>,
+    floats: Vec<Float>,
     panes: Vec<PaneSignature>,
     unseen_tabs: usize,
 }
@@ -375,6 +392,8 @@ pub struct App {
     /// The tree changed since it was last saved.
     dock_dirty: bool,
     dock_drag: Option<DockDrag>,
+    /// Floating windows over the dock, bottom to top (the GUI's floating windows).
+    pub floats: Vec<Float>,
     pub palette: Palette,
     pub prompt: Option<Prompt>,
     pub time_range: Option<TimeRangeDialog>,
@@ -443,6 +462,7 @@ impl App {
             dock_layout: None,
             dock_dirty: false,
             dock_drag: None,
+            floats: Vec::new(),
             palette,
             prompt: None,
             time_range: None,
@@ -476,8 +496,8 @@ impl App {
     /// Streams on screen, the focused one first.
     pub fn visible_tabs(&self) -> Vec<usize> {
         let mut out = vec![self.active];
-        for path in self.dock.leaf_paths() {
-            if let Some(i) = self.shown_in(&path) {
+        for place in self.places() {
+            if let Some(i) = self.shown_at(&place) {
                 if !out.contains(&i) {
                     out.push(i);
                 }
@@ -486,14 +506,71 @@ impl App {
         out
     }
 
+    /// Every window: the dock's leaves in order, then the floating ones bottom to top.
+    fn places(&self) -> Vec<Place> {
+        let mut out: Vec<Place> = self
+            .dock
+            .leaf_paths()
+            .into_iter()
+            .map(Place::Dock)
+            .collect();
+        out.extend((0..self.floats.len()).map(Place::Float));
+        out
+    }
+
+    /// The leaf of tabs at `place`.
+    fn leaf(&self, place: &Place) -> Option<&Pane> {
+        match place {
+            Place::Dock(path) => self.dock.get(path),
+            Place::Float(i) => self.floats.get(*i).map(|f| &f.pane),
+        }
+    }
+
     /// The stream the leaf at `path` shows (none for a GUI panel).
     fn shown_in(&self, path: &[bool]) -> Option<usize> {
-        match self.dock.get(path) {
+        self.shown_at(&Place::Dock(path.to_vec()))
+    }
+
+    /// The stream the window at `place` shows (none for a GUI panel).
+    fn shown_at(&self, place: &Place) -> Option<usize> {
+        match self.leaf(place) {
             Some(Pane::Leaf { tabs, active }) => tabs
                 .get(*active)
                 .and_then(DockTab::stream)
                 .and_then(|p| self.tab_index(p)),
             _ => None,
+        }
+    }
+
+    /// The window holding stream `path`.
+    fn place_of(&self, path: &Path) -> Option<Place> {
+        if let Some(i) = self
+            .floats
+            .iter()
+            .position(|f| f.pane.find_stream(path).is_some())
+        {
+            return Some(Place::Float(i));
+        }
+        self.dock.find_stream(path).map(Place::Dock)
+    }
+
+    /// The window of the focused stream.
+    fn focused_place(&self) -> Place {
+        self.place_of(&self.active_path())
+            .unwrap_or(Place::Dock(Vec::new()))
+    }
+
+    /// The streams of the floating windows.
+    fn float_streams(&self) -> Vec<PathBuf> {
+        self.floats.iter().flat_map(|f| f.pane.streams()).collect()
+    }
+
+    /// The windows' area of the last frame (a default before the first one).
+    fn main_area(&self) -> Rect {
+        if self.hits.main.area() > 0 {
+            self.hits.main
+        } else {
+            Rect::new(0, 1, 100, 30)
         }
     }
 
@@ -514,14 +591,56 @@ impl App {
     pub fn restore_dock(&mut self, layout: Option<&str>) {
         let open = self.open_paths();
         self.dock_layout = layout.and_then(DockLayout::parse);
-        self.dock = self
+        // The floating windows keep the open streams they hold (nothing is added).
+        self.floats = Vec::new();
+        let windows = self
+            .dock_layout
+            .as_ref()
+            .map(DockLayout::windows)
+            .unwrap_or_default();
+        for (k, (pane, place)) in windows.into_iter().enumerate() {
+            let Some(pane) = pane.reconcile(&open, &open) else {
+                continue;
+            };
+            let rect = match place {
+                Some((x, y, w, h)) => Rect::new(
+                    (x / POINTS_PER_CELL.0).round().max(0.0) as u16,
+                    (y / POINTS_PER_CELL.1).round().max(0.0) as u16,
+                    (w / POINTS_PER_CELL.0).round() as u16,
+                    (h / POINTS_PER_CELL.1).round() as u16,
+                ),
+                None => self.cascade(k),
+            };
+            self.floats.push(Float { pane, rect });
+        }
+        let floating = self.float_streams();
+        let docked: Vec<PathBuf> = open
+            .iter()
+            .filter(|p| !floating.iter().any(|f| crate::paths::paths_equal(f, p)))
+            .cloned()
+            .collect();
+        let main = self
             .dock_layout
             .as_ref()
             .and_then(DockLayout::main_pane)
-            .and_then(|p| p.reconcile(&open, &[]))
-            .unwrap_or_else(|| Pane::with_streams(&open));
+            .and_then(|p| p.reconcile(&open, &floating));
+        self.dock = match main {
+            Some(pane) => pane,
+            None if !docked.is_empty() => Pane::with_streams(&docked),
+            // Every stream floats: the dock takes the bottom window back.
+            None if !self.floats.is_empty() => self.floats.remove(0).pane,
+            None => Pane::with_streams(&open),
+        };
         self.focus_tab(self.active);
         self.dock_dirty = false;
+    }
+
+    /// The place of the `k`-th floating window with no place of its own: stepped down
+    /// and right from the middle of the windows' area.
+    fn cascade(&self, k: usize) -> Rect {
+        let main = self.main_area();
+        let step = (k as u16 % 8) * 2;
+        dock::float_rect_at(main, main.x + main.width / 2 + step, main.y + 2 + step / 2)
     }
 
     /// `--split`: the first two streams side by side (nothing when the restored layout
@@ -540,28 +659,36 @@ impl App {
     /// the layout it came from kept (their streams leave the main surface). `None`
     /// when no stream is left for the main surface.
     fn dock_ron(&self) -> Option<String> {
-        let mut pane = self.dock.clone();
-        for t in self.tabs.iter().filter(|t| t.engine.is_stdin()) {
-            pane = pane.remove_stream(&t.engine.path)?;
-        }
-        let open: Vec<PathBuf> = self
+        let stdin: Vec<PathBuf> = self
             .tabs
             .iter()
-            .filter(|t| !t.engine.is_stdin())
+            .filter(|t| t.engine.is_stdin())
             .map(|t| t.engine.path.clone())
             .collect();
-        let layout = match &self.dock_layout {
-            Some(saved) => {
-                let mut layout = saved.clone();
-                layout.retain_window_streams(&open);
-                for w in layout.window_streams() {
-                    pane = pane.remove_stream(&w)?;
-                }
-                layout.set_main_pane(&pane);
-                layout
-            }
+        let without_stdin =
+            |pane: Pane| stdin.iter().try_fold(pane, |pane, s| pane.remove_stream(s));
+        let pane = without_stdin(self.dock.clone())?;
+        let windows: Vec<(Pane, crate::dock_layout::Placement)> = self
+            .floats
+            .iter()
+            .filter_map(|f| {
+                let (px, py) = POINTS_PER_CELL;
+                let r = f.rect;
+                let place = (
+                    r.x as f32 * px,
+                    r.y as f32 * py,
+                    r.width as f32 * px,
+                    r.height as f32 * py,
+                );
+                Some((without_stdin(f.pane.clone())?, place))
+            })
+            .collect();
+        let mut layout = match &self.dock_layout {
+            Some(saved) => saved.clone(),
             None => DockLayout::from_pane(&pane),
         };
+        layout.set_main_pane(&pane);
+        layout.set_windows(&windows);
         Some(layout.to_ron())
     }
 
@@ -694,6 +821,7 @@ impl App {
         Signature {
             active: self.active,
             dock: Some(self.dock.clone()),
+            floats: self.floats.clone(),
             panes: self.visible_tabs().into_iter().map(pane).collect(),
             unseen_tabs: self
                 .tabs
@@ -1348,13 +1476,24 @@ impl App {
                         s.config.add_recent_file(&engine.path);
                     }
                 }
-                let leaf = self.focused_leaf();
+                let place = self.focused_place();
                 let path = engine.path.clone();
                 self.tabs.push(Tab::new(engine));
                 // The new stream is a tab of the focused window, as in the GUI.
-                let mut dock = self.dock.clone();
-                dock.add_tab(&leaf, DockTab::LogStream(path));
-                self.set_dock(dock);
+                match place {
+                    Place::Float(f) => {
+                        if let Pane::Leaf { tabs, active } = &mut self.floats[f].pane {
+                            tabs.push(DockTab::LogStream(path));
+                            *active = tabs.len() - 1;
+                        }
+                        self.dock_dirty = true;
+                    }
+                    Place::Dock(leaf) => {
+                        let mut dock = self.dock.clone();
+                        dock.add_tab(&leaf, DockTab::LogStream(path));
+                        self.set_dock(dock);
+                    }
+                }
                 self.focus_tab(self.tabs.len() - 1);
             }
             OpenOutcome::OpenEntry(entry) => self.open_file(&entry),
@@ -1568,11 +1707,23 @@ impl App {
         }
         self.active = i;
         let path = self.active_path();
+        // A stream of a floating window: shown there, the window raised to the top.
+        if let Some(Place::Float(f)) = self.place_of(&path) {
+            let before = self.floats.clone();
+            let mut float = self.floats.remove(f);
+            float.pane.show(&path);
+            self.floats.push(float);
+            if self.floats != before {
+                self.dock_dirty = true;
+            }
+            return;
+        }
         let mut dock = self.dock.clone();
         if !dock.show(&path) {
             let open = self.open_paths();
+            let floating = self.float_streams();
             dock = dock
-                .reconcile(&open, &[])
+                .reconcile(&open, &floating)
                 .unwrap_or_else(|| Pane::with_streams(&open));
             dock.show(&path);
         }
@@ -1581,9 +1732,9 @@ impl App {
 
     /// `Tab` with several windows: the stream of the next (or previous) window.
     fn cycle_pane(&mut self, forward: bool) {
-        let leaves = self.dock.leaf_paths();
+        let leaves = self.places();
         let n = leaves.len();
-        let here = self.focused_leaf();
+        let here = self.focused_place();
         let cur = leaves.iter().position(|l| *l == here).unwrap_or(0);
         for k in 1..=n {
             let at = if forward {
@@ -1592,8 +1743,8 @@ impl App {
                 (cur + n - k % n) % n
             };
             let shown = self
-                .shown_in(&leaves[at])
-                .or_else(|| match self.dock.get(&leaves[at]) {
+                .shown_at(&leaves[at])
+                .or_else(|| match self.leaf(&leaves[at]) {
                     Some(Pane::Leaf { tabs, .. }) => tabs
                         .iter()
                         .filter_map(DockTab::stream)
@@ -1613,6 +1764,10 @@ impl App {
         let n = self.tabs.len();
         if n < 2 {
             self.message = Some("A split needs two streams: o opens another".into());
+            return;
+        }
+        if let Place::Float(_) = self.focused_place() {
+            self.message = Some("A floating window: Alt+F docks it, then it splits".into());
             return;
         }
         let leaf = self.focused_leaf();
@@ -1649,7 +1804,7 @@ impl App {
         }
         let i = self.active;
         let path = self.active_path();
-        let leaf = self.focused_leaf();
+        let place = self.focused_place();
         if let Some(s) = self.settings.as_mut() {
             crate::workspace::save_changes(&mut self.tabs[i].engine, &mut s.config, false);
         }
@@ -1659,14 +1814,32 @@ impl App {
         self.last_click = None;
         self.dock_drag = None;
         let rest = self.open_paths();
-        let dock = self
-            .dock
-            .clone()
-            .remove_stream(&path)
-            .unwrap_or_else(|| Pane::with_streams(&rest));
-        self.set_dock(dock);
+        match place {
+            Place::Float(f) => {
+                match self.floats[f].pane.clone().remove_stream(&path) {
+                    Some(pane) => self.floats[f].pane = pane,
+                    None => {
+                        self.floats.remove(f);
+                    }
+                }
+                self.dock_dirty = true;
+            }
+            Place::Dock(_) => {
+                let dock = self
+                    .dock
+                    .clone()
+                    .remove_stream(&path)
+                    .unwrap_or_else(|| Pane::with_streams(&rest));
+                self.set_dock(dock);
+            }
+        }
+        let leaf = match &place {
+            Place::Float(f) if *f < self.floats.len() => place.clone(),
+            Place::Float(_) => Place::Dock(Vec::new()),
+            Place::Dock(_) => place.clone(),
+        };
         self.active = self
-            .shown_in(&leaf)
+            .shown_at(&leaf)
             .or_else(|| {
                 let first = self.dock.leaf_paths().into_iter().next()?;
                 self.shown_in(&first)
@@ -1679,6 +1852,10 @@ impl App {
 
     /// `Alt+X`: the focused window closes; its tabs join the window beside it.
     fn close_pane(&mut self) {
+        if let Place::Float(f) = self.focused_place() {
+            self.dock_float(f);
+            return;
+        }
         let leaf = self.focused_leaf();
         if leaf.is_empty() {
             self.message = Some("One window: nothing to close".into());
@@ -1691,6 +1868,26 @@ impl App {
 
     /// `Alt+arrows`: the nearest divider of the focused window moves by `delta`.
     fn resize_pane(&mut self, dir: Dir, delta: f32) {
+        // A floating window moves instead: 4 columns or 1 row a step.
+        if let Place::Float(f) = self.focused_place() {
+            let r = self.floats[f].rect;
+            let back = delta < 0.0;
+            let moved = match dir {
+                Dir::Horizontal if back => Rect {
+                    x: r.x.saturating_sub(4),
+                    ..r
+                },
+                Dir::Horizontal => Rect { x: r.x + 4, ..r },
+                Dir::Vertical if back => Rect {
+                    y: r.y.saturating_sub(1),
+                    ..r
+                },
+                Dir::Vertical => Rect { y: r.y + 1, ..r },
+            };
+            self.floats[f].rect = dock::clamp_into(moved, self.main_area());
+            self.dock_dirty = true;
+            return;
+        }
         let leaf = self.focused_leaf();
         let Some((split, _)) = self.dock.split_above(&leaf, dir) else {
             self.message = Some("No divider that way".into());
@@ -1706,6 +1903,10 @@ impl App {
 
     /// `<` / `>`: the focused stream becomes a tab of the previous / next window.
     fn move_to_pane(&mut self, forward: bool) {
+        if let Place::Float(_) = self.focused_place() {
+            self.message = Some("A floating window: Alt+F docks it".into());
+            return;
+        }
         let leaves = self.dock.leaf_paths();
         let n = leaves.len();
         if n < 2 {
@@ -1726,14 +1927,14 @@ impl App {
 
     /// `Ctrl+PgUp/PgDn`: the previous / next tab of the focused window.
     fn step_in_pane(&mut self, forward: bool) {
-        let leaf = self.focused_leaf();
-        self.show_leaf_tab(&leaf, None, forward);
+        let place = self.focused_place();
+        self.show_leaf_tab(&place, None, forward);
     }
 
     /// Shows tab `pos` of the leaf at `leaf` (or the next / previous one when `None`),
     /// focusing its stream.
-    fn show_leaf_tab(&mut self, leaf: &[bool], pos: Option<usize>, forward: bool) {
-        let Some(Pane::Leaf { tabs, active }) = self.dock.get(leaf).cloned() else {
+    fn show_leaf_tab(&mut self, place: &Place, pos: Option<usize>, forward: bool) {
+        let Some(Pane::Leaf { tabs, active }) = self.leaf(place).cloned() else {
             return;
         };
         let n = tabs.len();
@@ -1746,18 +1947,104 @@ impl App {
             None if forward => (active + 1) % n,
             None => (active + n - 1) % n,
         };
-        let mut dock = self.dock.clone();
-        if let Some(Pane::Leaf { active, .. }) = dock.get_mut(leaf) {
-            *active = next;
+        match place {
+            Place::Dock(leaf) => {
+                let mut dock = self.dock.clone();
+                if let Some(Pane::Leaf { active, .. }) = dock.get_mut(leaf) {
+                    *active = next;
+                }
+                self.set_dock(dock);
+            }
+            Place::Float(f) => {
+                if let Pane::Leaf { active, .. } = &mut self.floats[*f].pane {
+                    *active = next;
+                }
+                self.dock_dirty = true;
+            }
         }
-        self.set_dock(dock);
         if let Some(i) = tabs[next].stream().and_then(|p| self.tab_index(p)) {
-            self.active = i;
+            self.focus_tab(i);
         }
     }
 
+    /// `Alt+F`: the focused window floats over the dock, or a floating one docks back.
+    fn toggle_float(&mut self) {
+        match self.focused_place() {
+            Place::Float(f) => self.dock_float(f),
+            Place::Dock(_) => {
+                let rect = self.cascade(self.floats.len());
+                let path = self.active_path();
+                self.float_stream(&path, rect);
+            }
+        }
+    }
+
+    /// `stream` in a new floating window at `rect`, taken out of the window it was in.
+    /// The dock keeps at least one stream.
+    fn float_stream(&mut self, stream: &Path, rect: Rect) {
+        match self.place_of(stream) {
+            Some(Place::Float(f)) => match self.floats[f].pane.clone().remove_stream(stream) {
+                Some(pane) => self.floats[f].pane = pane,
+                None => {
+                    self.floats.remove(f);
+                }
+            },
+            _ => match self.dock.clone().remove_stream(stream) {
+                Some(dock) => self.set_dock(dock),
+                None => {
+                    self.message = Some(
+                        "The dock keeps one window: open another file (o) to float this one".into(),
+                    );
+                    return;
+                }
+            },
+        }
+        self.floats.push(Float {
+            pane: Pane::with_streams(&[stream.to_path_buf()]),
+            rect: dock::clamp_into(rect, self.main_area()),
+        });
+        self.dock_dirty = true;
+        if let Some(i) = self.tab_index(stream) {
+            self.focus_tab(i);
+        }
+    }
+
+    /// The floating window `f` docks back: its tabs join the first window of the dock.
+    fn dock_float(&mut self, f: usize) {
+        let float = self.floats.remove(f);
+        let first = self
+            .dock
+            .leaf_paths()
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let mut dock = self.dock.clone();
+        if let Pane::Leaf { tabs, .. } = float.pane {
+            for tab in tabs {
+                dock.add_tab(&first, tab);
+            }
+        }
+        self.set_dock(dock);
+        self.dock_dirty = true;
+        self.focus_tab(self.active);
+    }
+
     /// A stream dropped on the leaf at `leaf`: an edge splits it, the centre adds a tab.
-    fn drop_stream(&mut self, stream: &Path, leaf: &[bool], zone: Zone) {
+    fn drop_stream(&mut self, stream: &Path, leaf: &[bool], zone: Zone, preview: Rect) {
+        if zone == Zone::Float {
+            self.float_stream(stream, preview);
+            return;
+        }
+        // A tab dragged out of a floating window leaves it first.
+        if let Some(Place::Float(f)) = self.place_of(stream) {
+            match self.floats[f].pane.clone().remove_stream(stream) {
+                Some(pane) => self.floats[f].pane = pane,
+                None => {
+                    self.floats.remove(f);
+                }
+            }
+            self.dock_dirty = true;
+        }
         let dock = match zone.split() {
             Some((dir, after)) => self.dock.clone().split_with(leaf, dir, after, stream),
             None => self.dock.clone().move_stream(leaf, stream),
@@ -1788,7 +2075,7 @@ impl App {
             Action::Quit => self.quit = true,
             // With several windows `Tab` moves the focus between them; otherwise it
             // shows the next stream.
-            Action::NextTab | Action::PrevTab if self.dock.leaf_paths().len() > 1 => {
+            Action::NextTab | Action::PrevTab if self.places().len() > 1 => {
                 self.cycle_pane(action == Action::NextTab)
             }
             Action::NextTab => self.focus_tab((self.active + 1) % n_tabs),
@@ -1819,6 +2106,7 @@ impl App {
                 self.apply_counted(action, 1)
             }
             Action::ClosePane => self.close_pane(),
+            Action::ToggleFloat => self.toggle_float(),
             Action::CloseStream => self.close_stream(),
             Action::ResizeLeft => self.resize_pane(Dir::Horizontal, -RESIZE_STEP),
             Action::ResizeRight => self.resize_pane(Dir::Horizontal, RESIZE_STEP),
@@ -1937,10 +2225,10 @@ impl App {
                 match self.dock_drag.take() {
                     Some(DockDrag::Move {
                         stream,
-                        drop: Some((leaf, zone, _)),
+                        drop: Some((leaf, zone, preview)),
                         ..
                     }) => {
-                        self.drop_stream(&stream, &leaf, zone);
+                        self.drop_stream(&stream, &leaf, zone, preview);
                         true
                     }
                     Some(_) => true,
@@ -1972,19 +2260,59 @@ impl App {
             }
             Some(DockDrag::Move { stream, from, .. }) => {
                 let at = ratatui::layout::Position::new(col, row);
+                let main = self.main_area();
                 let drop = if (col, row) == from {
                     None
                 } else {
-                    self.hits
-                        .leaves
-                        .iter()
-                        .find(|l| l.area.contains(at))
-                        .map(|l| {
-                            let zone = dock::zone_at(l.area, col, row);
-                            (l.path.clone(), zone, dock::zone_rect(l.area, zone))
-                        })
+                    // Over a window: its zones; anywhere else: a floating window.
+                    let over = self.hits.leaves.iter().find(|l| l.area.contains(at));
+                    Some(match over {
+                        Some(l) => match dock::zone_at(l.area, col, row) {
+                            Zone::Float => (
+                                l.path.clone(),
+                                Zone::Float,
+                                dock::float_rect_at(main, col, row),
+                            ),
+                            zone => (l.path.clone(), zone, dock::zone_rect(l.area, zone)),
+                        },
+                        None => (Vec::new(), Zone::Float, dock::float_rect_at(main, col, row)),
+                    })
                 };
                 self.dock_drag = Some(DockDrag::Move { stream, from, drop });
+                true
+            }
+            // The floating window being dragged is the topmost (raised on the click).
+            Some(DockDrag::FloatMove { grab }) => {
+                let Some(f) = self.floats.last_mut() else {
+                    return false;
+                };
+                let moved = Rect {
+                    x: col.saturating_sub(grab.0),
+                    y: row.saturating_sub(grab.1),
+                    ..f.rect
+                };
+                let main = if self.hits.main.area() > 0 {
+                    self.hits.main
+                } else {
+                    moved
+                };
+                f.rect = dock::clamp_into(moved, main);
+                self.dock_dirty = true;
+                true
+            }
+            Some(DockDrag::FloatResize) => {
+                let main = self.main_area();
+                let Some(f) = self.floats.last_mut() else {
+                    return false;
+                };
+                let r = f.rect;
+                let sized = Rect {
+                    width: (col + 1).saturating_sub(r.x).max(dock::MIN_FLOAT.0),
+                    height: (row + 1).saturating_sub(r.y).max(dock::MIN_FLOAT.1),
+                    ..r
+                };
+                f.rect = dock::clamp_into(sized, main);
+                self.dock_dirty = true;
                 true
             }
             None => false,
@@ -2082,13 +2410,46 @@ impl App {
                 }
             }
             Target::LeafTab(i) => {
-                let Some((_, leaf, pos)) = self.hits.leaf_tabs.get(i).cloned() else {
+                let Some((_, place, pos)) = self.hits.leaf_tabs.get(i).cloned() else {
                     return false;
                 };
-                self.show_leaf_tab(&leaf, Some(pos), true);
-                if let Some(i) = self.shown_in(&leaf) {
+                self.show_leaf_tab(&place, Some(pos), true);
+                let place = self.focused_place();
+                if let Some(i) = self.shown_at(&place) {
                     self.start_move(i, ev);
                 }
+            }
+            // A floating window: raised and focused, then moved by its title or resized
+            // by its bottom-right corner.
+            // `[x]`: the stream the window shows closes, as with Ctrl+W.
+            Target::Close(i) => {
+                let Some((_, place)) = self.hits.close_buttons.get(i).cloned() else {
+                    return false;
+                };
+                if let Some(idx) = self.shown_at(&place) {
+                    self.focus_tab(idx);
+                    self.close_stream();
+                }
+            }
+            Target::FloatTitle(f) | Target::FloatCorner(f) => {
+                let Some(&(rect, _)) = self.hits.floats.iter().find(|(_, i)| *i == f) else {
+                    return false;
+                };
+                let shown = self.shown_at(&Place::Float(f));
+                match shown {
+                    Some(i) => self.focus_tab(i),
+                    None => {
+                        let float = self.floats.remove(f);
+                        self.floats.push(float);
+                    }
+                }
+                self.dock_drag = Some(if matches!(target, Target::FloatTitle(_)) {
+                    DockDrag::FloatMove {
+                        grab: (ev.column - rect.x, ev.row - rect.y),
+                    }
+                } else {
+                    DockDrag::FloatResize
+                });
             }
             // A title is also where a window is taken to be moved.
             Target::TabTitle(i) | Target::WindowTitle(i) => {
@@ -2287,7 +2648,9 @@ impl App {
         if strip > 0 {
             self.draw_tabs(frame, tabs_area);
         }
+        self.hits.main = main_area;
         self.draw_dock(frame, main_area);
+        self.draw_floats(frame, main_area);
         self.draw_status(frame, status_area);
         if self.show_help {
             // The whole screen: the keys need the room more than the windows do.
@@ -2351,16 +2714,56 @@ impl App {
             let Some(Pane::Leaf { tabs, active }) = self.dock.get(&leaf.path).cloned() else {
                 continue;
             };
-            match self.shown_in(&leaf.path) {
-                Some(idx) => self.draw_stream(frame, leaf.area, idx, &leaf.path, &tabs),
-                None => self.draw_panel(frame, leaf.area, &leaf.path, &tabs, active),
+            let place = Place::Dock(leaf.path.clone());
+            match self.shown_at(&place) {
+                Some(idx) => self.draw_stream(frame, leaf.area, idx, &place, &tabs),
+                None => self.draw_panel(frame, leaf.area, &place, &tabs, active),
             }
         }
+        self.hits.leaves = leaves;
+        self.hits.dividers = dividers;
+    }
+
+    /// The floating windows over the dock, bottom to top, each with a shadow and a grip
+    /// in its bottom-right corner; then, while a window is dragged, where it would go.
+    fn draw_floats(&mut self, frame: &mut Frame, area: Rect) {
+        for f in 0..self.floats.len() {
+            let r = dock::clamp_into(self.floats[f].rect, area);
+            let place = Place::Float(f);
+            let Pane::Leaf { tabs, active } = self.floats[f].pane.clone() else {
+                continue;
+            };
+            frame.render_widget(Clear, r);
+            match self.shown_at(&place) {
+                Some(idx) => self.draw_stream(frame, r, idx, &place, &tabs),
+                None => self.draw_panel(frame, r, &place, &tabs, active),
+            }
+            cast_shadow(frame.buffer_mut(), r, self.palette.shadow());
+            let grip = if self.palette.ascii { "#" } else { "\u{25e2}" };
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    grip,
+                    Style::default().fg(self.palette.accent()),
+                )),
+                Rect::new(
+                    r.right().saturating_sub(1),
+                    r.bottom().saturating_sub(1),
+                    1,
+                    1,
+                ),
+            );
+            self.hits.floats.push((r, f));
+        }
         if let Some(DockDrag::Move {
-            drop: Some((_, _, preview)),
+            drop: Some((_, zone, preview)),
             ..
         }) = &self.dock_drag
         {
+            let title = if *zone == Zone::Float {
+                " float here "
+            } else {
+                " drop here "
+            };
             let block = Block::bordered()
                 .border_set(self.palette.border_set(Chrome::Focused))
                 .border_style(
@@ -2368,11 +2771,9 @@ impl App {
                         .fg(self.palette.accent())
                         .add_modifier(Modifier::BOLD),
                 )
-                .title_top(Line::from(" drop here ").centered());
+                .title_top(Line::from(title).centered());
             frame.render_widget(block, *preview);
         }
-        self.hits.leaves = leaves;
-        self.hits.dividers = dividers;
     }
 
     /// The top-border title of a window: `[#N] name` alone, or every tab of its leaf
@@ -2380,7 +2781,7 @@ impl App {
     fn leaf_title(
         &mut self,
         area: Rect,
-        leaf: &[bool],
+        place: &Place,
         tabs: &[DockTab],
         shown: usize,
         style: Style,
@@ -2403,7 +2804,7 @@ impl App {
             if w > 0 {
                 self.hits
                     .leaf_tabs
-                    .push((Rect::new(x, area.y, w, 1), leaf.to_vec(), k));
+                    .push((Rect::new(x, area.y, w, 1), place.clone(), k));
             }
             x = x.saturating_add(span.width() as u16 + 1);
             spans.push(span);
@@ -2419,12 +2820,12 @@ impl App {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        leaf: &[bool],
+        place: &Place,
         tabs: &[DockTab],
         shown: usize,
     ) {
         let style = Style::default().fg(self.palette.dim());
-        let title = self.leaf_title(area, leaf, tabs, shown, style);
+        let title = self.leaf_title(area, place, tabs, shown, style);
         let block = Block::bordered()
             .style(self.palette.window())
             .border_set(self.palette.border_set(Chrome::Plain))
@@ -2448,7 +2849,7 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         idx: usize,
-        leaf: &[bool],
+        place: &Place,
         tabs: &[DockTab],
     ) {
         let palette = self.palette;
@@ -2465,11 +2866,18 @@ impl App {
         } else {
             Style::default().fg(palette.dim())
         };
-        let shown = match self.dock.get(leaf) {
+        let shown = match self.leaf(place) {
             Some(Pane::Leaf { active, .. }) => *active,
             _ => 0,
         };
-        let mut title = self.leaf_title(area, leaf, tabs, shown, title_style);
+        let mut title = self.leaf_title(area, place, tabs, shown, title_style);
+        // The `[x]` sits right-aligned in the top border, before the corner.
+        if area.width >= 8 {
+            self.hits.close_buttons.push((
+                Rect::new(area.right().saturating_sub(4), area.y, 3, 1),
+                place.clone(),
+            ));
+        }
         let tab = &mut self.tabs[idx];
         let e = &tab.engine;
         let follow = if e.follow_tail {
@@ -2482,11 +2890,18 @@ impl App {
         };
         title.push(follow);
         title.push(Span::raw(" "));
+        let close = Span::styled(
+            "[x]",
+            Style::default()
+                .fg(palette.accent())
+                .add_modifier(Modifier::BOLD),
+        );
         let block = Block::bordered()
             .style(palette.window())
             .border_set(palette.border_set(chrome))
             .border_style(palette.border_style(chrome))
             .title_top(Line::from(title))
+            .title_top(Line::from(close).right_aligned())
             .title_bottom(
                 Line::from(format!(" {} ", counts_text(e, tab.is_hex(), tab.hex_width)))
                     .style(title_style),
@@ -3274,7 +3689,12 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "previous / next tab of the window",
         Some(Action::NextInPane),
     ),
-    ("Alt+arrows", "move the window's divider", None),
+    (
+        "Alt+F",
+        "float the window, or dock it back",
+        Some(Action::ToggleFloat),
+    ),
+    ("Alt+arrows", "move the divider or a floating window", None),
     ("click", "focus a window, select a row, show a tab", None),
     (
         "Shift+click",
@@ -3283,12 +3703,14 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     ("double click", "toggle the row's bookmark", None),
     ("wheel", "scroll the window under the pointer", None),
-    ("drag divider", "resize the windows beside it", None),
+    ("[x]", "top right: close the window's stream", None),
     (
-        "drag title",
-        "onto a window: edge splits, centre = tab",
+        "drag corner",
+        "resize a floating window (bottom right)",
         None,
     ),
+    ("drag divider", "resize the windows beside it", None),
+    ("drag title", "edge splits, centre = tab, else floats", None),
     (
         "Tab  Alt+1..9",
         "next window or file / file N (Shift+Tab)",
@@ -5385,6 +5807,126 @@ mod tests {
             .as_deref()
             .unwrap()
             .starts_with("The only stream"));
+    }
+
+    #[test]
+    fn floating_windows_move_by_the_title_resize_by_the_corner_and_overlap() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, c) = (
+            dir.path().join("a.log"),
+            dir.path().join("b.log"),
+            dir.path().join("c.log"),
+        );
+        for f in [&a, &b, &c] {
+            std::fs::write(f, LOG).unwrap();
+        }
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone(), b.clone(), c.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        render(&mut app, 100, 30);
+
+        // Alt+F: a floats over the dock, which keeps b and c.
+        app.apply(Action::ToggleFloat);
+        assert_eq!(app.floats.len(), 1);
+        assert_eq!(app.dock.streams(), vec![b.clone(), c.clone()]);
+        let screen = render(&mut app, 100, 30);
+        let (r, _) = app.hits.floats[0];
+        let title: String = screen[r.y as usize]
+            .chars()
+            .skip(r.x as usize)
+            .take(12)
+            .collect();
+        assert!(title.contains("[#1] a.log"), "{screen:#?}");
+        assert!(screen[(r.bottom() - 1) as usize].contains('\u{25e2}'));
+
+        // Dragged by its title, 10 columns right and 2 rows down.
+        assert!(app.on_mouse(click(r.x + 3, r.y)));
+        assert!(app.on_mouse(drag(r.x + 13, r.y + 2)));
+        assert!(app.on_mouse(release(r.x + 13, r.y + 2)));
+        assert_eq!(
+            (app.floats[0].rect.x, app.floats[0].rect.y),
+            (r.x + 10, r.y + 2)
+        );
+        // Resized by its bottom-right corner to 30 x 8.
+        render(&mut app, 100, 30);
+        let (r, _) = app.hits.floats[0];
+        assert!(app.on_mouse(click(r.right() - 1, r.bottom() - 1)));
+        assert!(app.on_mouse(drag(r.x + 29, r.y + 7)));
+        assert!(app.on_mouse(release(r.x + 29, r.y + 7)));
+        assert_eq!(
+            (app.floats[0].rect.width, app.floats[0].rect.height),
+            (30, 8)
+        );
+
+        // It lies over the dock: a click on its rows focuses a, not the window under it.
+        render(&mut app, 100, 30);
+        let (r, _) = app.hits.floats[0];
+        app.focus_tab(1);
+        assert!(app.on_mouse(click(r.x + 2, r.y + 2)));
+        assert_eq!(app.active, 0);
+
+        // Saved as a floating window of the GUI's layout, and back at the next start.
+        app.save_config();
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        let layout = DockLayout::parse(saved.dock_layout.as_deref().unwrap()).unwrap();
+        assert_eq!(layout.windows().len(), 1);
+        let mut again = app_over(&ini);
+        again.restore_dock(saved.dock_layout.as_deref());
+        assert_eq!(again.floats, app.floats);
+        assert_eq!(again.dock.streams(), vec![b.clone(), c.clone()]);
+
+        // Alt+F on it docks it back; dragging a title out of the dock floats it again.
+        app.apply(Action::ToggleFloat);
+        assert!(app.floats.is_empty());
+        assert!(app.dock.find_stream(&a).is_some());
+        let screen = render(&mut app, 100, 30);
+        let col = screen[1]
+            .find("[#1] a.log")
+            .map(|i| screen[1][..i].chars().count());
+        let col = col.expect("a's title in the dock") as u16;
+        assert!(app.on_mouse(click(col + 2, 1)));
+        assert!(app.on_mouse(drag(30, 12)));
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("float here")),
+            "{screen:#?}"
+        );
+        assert!(app.on_mouse(release(30, 12)));
+        assert_eq!(app.floats.len(), 1);
+        assert!(app.dock.find_stream(&a).is_none());
+    }
+
+    #[test]
+    fn the_x_in_a_window_closes_its_stream() {
+        let files = [("a.log", LOG), ("b.log", LOG)];
+        let (mut app, _dir) = app_with(&files, false);
+        app.apply(Action::SplitRight);
+        let screen = render(&mut app, 80, 14);
+        // Each window has its [x], top right, before the corner.
+        let row: Vec<char> = screen[1].chars().collect();
+        assert_eq!(row[36..39].iter().collect::<String>(), "[x]", "{screen:#?}");
+        assert_eq!(row[76..79].iter().collect::<String>(), "[x]", "{screen:#?}");
+        // A click on b's [x] closes b; its window goes with it.
+        assert!(app.on_mouse(click(77, 1)));
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].title, "a.log");
+        assert_eq!(app.dock.leaf_paths(), vec![Vec::<bool>::new()]);
+        // The last stream stays, as with Ctrl+W (one stream: no strip, the window on row 0).
+        render(&mut app, 80, 14);
+        assert!(app.on_mouse(click(77, 0)));
+        assert_eq!(app.tabs.len(), 1);
+        let said = app.message.clone().unwrap_or_default();
+        assert!(
+            said.starts_with("The only stream"),
+            "{said:?} {:?}",
+            app.hits.close_buttons
+        );
     }
 
     #[test]
