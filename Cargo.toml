@@ -91,17 +91,37 @@ winreg = "0.56"
 # `--no-default-features --features tui` and compiles no GUI crate.
 default = ["gui", "tui"]
 gui = ["dep:eframe", "dep:egui", "dep:egui_dock", "dep:egui_commonmark", "dep:rfd"]
-tui = []
+tui = ["dep:ratatui", "dep:crossterm", "dep:arboard"]
 audio = ["dep:rodio"]
 
 [dependencies.rodio]
 version = "0.22"
 optional = true
 
+# Terminal interface (feature `tui`).
+[dependencies.ratatui]
+version = "0.30"
+optional = true
+
+[dependencies.crossterm]
+version = "0.29"
+optional = true
+
+# Clipboard of the terminal interface: the crate egui-winit already builds for the GUI.
+[dependencies.arboard]
+version = "3.6"
+optional = true
+default-features = false
+
 [[bin]]
 name = "fasttail"
 path = "src/main.rs"
 required-features = ["gui"]
+
+[[bin]]
+name = "fasttail-tui"
+path = "src/bin/fasttail-tui.rs"
+required-features = ["tui"]
 
 # The integration tests drive the GUI (egui contexts, dock) as well as the engine.
 [[test]]
