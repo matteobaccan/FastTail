@@ -3965,6 +3965,13 @@ impl TailEngine {
         })
     }
 
+    /// The line holding byte `offset` of the file (the last line past the end).
+    pub fn line_of_offset(&self, offset: u64) -> usize {
+        self.line_offsets
+            .partition_point(|&o| o <= offset)
+            .saturating_sub(1)
+    }
+
     /// The text of line `idx`, the one every text feature uses: without its escape
     /// sequences in render and strip modes, as stored in raw mode.
     pub fn get_line(&self, idx: usize) -> Option<Cow<'_, str>> {
