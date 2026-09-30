@@ -2888,6 +2888,7 @@ impl FastTailApp {
                                     has_session,
                                     egui::Button::new(t(lang, "session_save")),
                                 )
+                                .on_disabled_hover_text(t(lang, "session_no_named_session"))
                                 .clicked()
                             {
                                 session_action = Some(SessionAction::Save);
@@ -5607,11 +5608,10 @@ impl FastTailApp {
             A::Settings => self.config.settings_open = !self.config.settings_open,
             A::ColorFilters => self.config.filters_open = !self.config.filters_open,
             A::AlwaysOnTop => self.config.always_on_top = !self.config.always_on_top,
-            A::LockNow => {
-                if !self.config.lock_pin.is_empty() {
-                    self.lock();
-                }
+            A::LockNow if !self.config.lock_pin.is_empty() => {
+                self.lock();
             }
+            A::LockNow => {}
             A::GlobalFilterBar => {
                 self.config.global_filter.bar_open = !self.config.global_filter.bar_open
             }

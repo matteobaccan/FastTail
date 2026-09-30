@@ -388,24 +388,33 @@ impl ReportDialog {
                 // An invalid word in the tag filter would silently mean "all bookmarks".
                 let can_build = bookmarks > 0 && tags_valid;
                 ui.horizontal(|ui| {
+                    let copy_disabled_tip = if too_large {
+                        t(lang, "report_too_large")
+                    } else if bookmarks == 0 {
+                        t(lang, "report_no_bookmarks")
+                    } else {
+                        t(lang, "tip_report_tags")
+                    };
                     let copy = ui
                         .add_enabled(
                             can_build && !too_large,
                             egui::Button::new(format!("📋 {}", t(lang, "report_copy"))),
                         )
-                        .on_disabled_hover_text(if too_large {
-                            t(lang, "report_too_large")
-                        } else {
-                            t(lang, "tip_report_tags")
-                        });
+                        .on_disabled_hover_text(copy_disabled_tip);
                     if copy.clicked() {
                         self.start(engines, Output::Copy);
                     }
+                    let save_disabled_tip = if bookmarks == 0 {
+                        t(lang, "report_no_bookmarks")
+                    } else {
+                        t(lang, "tip_report_tags")
+                    };
                     if ui
                         .add_enabled(
                             can_build,
                             egui::Button::new(format!("💾 {}", t(lang, "report_save"))),
                         )
+                        .on_disabled_hover_text(save_disabled_tip)
                         .clicked()
                     {
                         match ready {

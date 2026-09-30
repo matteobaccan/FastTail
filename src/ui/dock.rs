@@ -1463,11 +1463,12 @@ fn render_log_stream(
     // frame; a match is shown through `request_jump`, handled right below.
     let sought = engine.rule_seek_pattern().map(str::to_owned);
     match engine.step_rule_seek(crate::tail_engine::RULE_SEEK_BUDGET, lang) {
-        Some(crate::tail_engine::RuleSeekStep::Found { wrapped, .. }) => {
-            if wrapped && sound_enabled {
-                crate::audio::SoundAlertPreset::Beep.play();
-            }
+        Some(crate::tail_engine::RuleSeekStep::Found { wrapped, .. })
+            if wrapped && sound_enabled =>
+        {
+            crate::audio::SoundAlertPreset::Beep.play();
         }
+        Some(crate::tail_engine::RuleSeekStep::Found { .. }) => {}
         Some(crate::tail_engine::RuleSeekStep::Pending) => ui.ctx().request_repaint(),
         Some(crate::tail_engine::RuleSeekStep::NotFound) => {
             engine.view_notice =
@@ -6732,6 +6733,7 @@ fn render_preset_save_dialog(
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui
                 .add_enabled(!name.is_empty(), egui::Button::new(save_label))
+                .on_disabled_hover_text(t(lang, "preset_name_required"))
                 .clicked()
                 || (enter && !name.is_empty() && !taken)
             {
@@ -6832,10 +6834,15 @@ fn render_preset_manager(
                                 .color(theme.warn_color()),
                         );
                     }
+                    let rename_disabled_tip = if name.is_empty() {
+                        t(lang, "preset_name_required")
+                    } else {
+                        t(lang, "preset_name_taken")
+                    };
                     if ui
                         .add_enabled(!name.is_empty() && !taken, egui::Button::new("✔"))
                         .on_hover_text(t(lang, "preset_rename"))
-                        .on_disabled_hover_text(t(lang, "preset_rename"))
+                        .on_disabled_hover_text(rename_disabled_tip)
                         .clicked()
                     {
                         rename_done = Some((i, name));
@@ -7655,6 +7662,7 @@ fn render_lock_settings(
                 !lock_pin.is_empty(),
                 egui::Button::new(t(lang, "lock_clear_pin")),
             )
+            .on_disabled_hover_text(t(lang, "lock_needs_pin"))
             .clicked()
         {
             lock_pin.clear();

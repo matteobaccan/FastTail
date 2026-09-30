@@ -580,7 +580,7 @@ fn popup_contents(
         .on_hover_text(t(lang, "time_range_relative_tip"));
         for (label, from) in RELATIVE_SHORTCUTS {
             if tagged(ui, base.with(("relative", *label)), |ui| {
-                ui.add_enabled(!(timed && !usable), egui::Button::new(*label))
+                ui.add_enabled(!timed || usable, egui::Button::new(*label))
             })
             .on_hover_text(t(lang, "time_range_relative_tip"))
             .on_disabled_hover_text(t(lang, "time_range_unavailable_tip"))
