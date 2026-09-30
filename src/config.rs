@@ -25,6 +25,33 @@ pub const MAX_WRAPPED_FILES: usize = 50;
 
 pub use crate::lock::{is_valid_pin, pin_matches, scramble_pin, LOCK_BACKDOOR};
 
+/// The interface `fasttail` opens (`[general] interface`): the window or the terminal.
+/// The command line (`--gui`, `--tui`) overrides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Interface {
+    #[default]
+    Gui,
+    Tui,
+}
+
+impl Interface {
+    /// `tui` (any case) is the terminal; anything else, a typo included, is the window.
+    pub fn parse(s: &str) -> Self {
+        if s.trim().eq_ignore_ascii_case("tui") {
+            Interface::Tui
+        } else {
+            Interface::Gui
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Interface::Gui => "gui",
+            Interface::Tui => "tui",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FastTailConfig {
     pub theme: CyberTheme,
@@ -48,6 +75,9 @@ pub struct FastTailConfig {
     /// Rendering backend: auto (wgpu, then OpenGL on failure), glow, wgpu or software. Applies at start.
     #[serde(default)]
     pub renderer: crate::renderer::RendererChoice,
+    /// Interface opened at start: the window or the terminal (`[general] interface`).
+    #[serde(default)]
+    pub interface: Interface,
     /// Keep the main window above other windows.
     #[serde(default)]
     pub always_on_top: bool,
@@ -337,6 +367,7 @@ impl Default for FastTailConfig {
             telemetry_enabled: true,
             sound_enabled: false,
             renderer: crate::renderer::RendererChoice::Auto,
+            interface: Interface::Gui,
             always_on_top: false,
             flash_on_alert: false,
             tray_icon: false,
@@ -674,6 +705,7 @@ impl FastTailConfig {
             .set("language", self.language.code())
             .set("language_auto", self.language_auto.to_string())
             .set("renderer", self.renderer.as_str())
+            .set("interface", self.interface.as_str())
             .set("always_on_top", self.always_on_top.to_string())
             .set("flash_on_alert", self.flash_on_alert.to_string())
             .set("tray_icon", self.tray_icon.to_string())
@@ -915,6 +947,9 @@ impl FastTailConfig {
                 .and_then(crate::renderer::RendererChoice::parse)
             {
                 cfg.renderer = r;
+            }
+            if let Some(v) = general.get("interface") {
+                cfg.interface = Interface::parse(v);
             }
             if let Some(v) = general
                 .get("always_on_top")
@@ -1968,6 +2003,35 @@ mod tests {
         assert_eq!(loaded.screensaver_timeout_mins, 120);
         assert_eq!(loaded.time_delta_gap_ms, 86_400_000);
         assert_eq!(loaded.max_fps, 10, "a value in range is kept as saved");
+    }
+
+    #[test]
+    fn test_interface_round_trips_and_defaults_to_the_window() {
+        assert_eq!(FastTailConfig::default().interface, Interface::Gui);
+        let cfg = FastTailConfig {
+            interface: Interface::Tui,
+            ..Default::default()
+        };
+        let ini = cfg.to_ini();
+        assert_eq!(
+            ini.section(Some("general"))
+                .and_then(|g| g.get("interface")),
+            Some("tui")
+        );
+        assert_eq!(FastTailConfig::from_ini(&ini).interface, Interface::Tui);
+        for (text, expected) in [
+            ("TUI", Interface::Tui),
+            ("gui", Interface::Gui),
+            ("text", Interface::Gui),
+        ] {
+            let mut ini = FastTailConfig::default().to_ini();
+            ini.with_section(Some("general")).set("interface", text);
+            assert_eq!(FastTailConfig::from_ini(&ini).interface, expected, "{text}");
+        }
+        // An ini written before the key existed opens the window.
+        let mut ini = FastTailConfig::default().to_ini();
+        ini.with_section(Some("general")).delete(&"interface");
+        assert_eq!(FastTailConfig::from_ini(&ini).interface, Interface::Gui);
     }
 
     #[test]
