@@ -278,14 +278,26 @@ impl ArchivePicker {
                         .desired_width(260.0),
                 );
                 let visible = self.visible();
-                if ui.button(t(lang, "zip_picker_all")).clicked() {
+                let has_openable = visible.iter().any(|&i| self.entries[i].refusal.is_none());
+                if ui
+                    .add_enabled(has_openable, egui::Button::new(t(lang, "zip_picker_all")))
+                    .on_disabled_hover_text(t(lang, "archive_no_openable"))
+                    .clicked()
+                {
                     for i in visible {
                         if self.entries[i].refusal.is_none() {
                             self.selected.insert(i);
                         }
                     }
                 }
-                if ui.button(t(lang, "zip_picker_none")).clicked() {
+                if ui
+                    .add_enabled(
+                        !self.selected.is_empty(),
+                        egui::Button::new(t(lang, "zip_picker_none")),
+                    )
+                    .on_disabled_hover_text(t(lang, "zip_picker_no_selection"))
+                    .clicked()
+                {
                     self.selected.clear();
                 }
             });
