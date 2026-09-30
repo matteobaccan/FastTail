@@ -7357,6 +7357,32 @@ impl TailEngine {
         }
     }
 
+    /// The line after (`forward`) or before line `from` whose cached level passes
+    /// `want` and that a row shows, wrapping around, and whether it wrapped. Lines whose
+    /// level is not cached yet are not considered; nothing is read from the file.
+    pub fn level_line_from(
+        &self,
+        from: usize,
+        forward: bool,
+        want: impl Fn(u8) -> bool,
+    ) -> Option<(usize, bool)> {
+        let n = self.levels.len();
+        if n == 0 {
+            return None;
+        }
+        let hit = |i: &usize| want(self.levels[*i]) && self.get_visible_row_of_line(*i).is_some();
+        let found = if forward {
+            (from.saturating_add(1)..n).find(hit)
+        } else {
+            (0..from.min(n)).rev().find(hit)
+        };
+        match found {
+            Some(line) => Some((line, false)),
+            None if forward => (0..=from.min(n - 1)).find(hit).map(|l| (l, true)),
+            None => (from.min(n)..n).rev().find(hit).map(|l| (l, true)),
+        }
+    }
+
     /// Bookmarks, manual or automatic, that pass the active filters, in file order.
     fn visible_bookmarks(&self) -> Vec<usize> {
         let mut all: Vec<usize> = self
