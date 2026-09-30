@@ -1543,7 +1543,7 @@ impl FastTailApp {
             .backdrop_color(egui::Color32::TRANSPARENT)
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
-                    .fill(theme.panel_bg())
+                    .fill(theme.panel_bg().into())
                     .stroke(Stroke::new(2.0, theme.border_color())),
             )
             .show(ctx, |ui| {
@@ -2437,7 +2437,7 @@ impl FastTailApp {
         egui::Panel::top("title_panel")
             .frame(
                 egui::Frame::new()
-                    .fill(self.config.theme.bg_color())
+                    .fill(self.config.theme.bg_color().into())
                     .inner_margin(Margin {
                         left: 8,
                         right: 8,
@@ -2466,7 +2466,7 @@ impl FastTailApp {
                         egui::Align2::CENTER_CENTER,
                         "F",
                         egui::FontId::monospace(12.0),
-                        self.config.theme.accent_color(),
+                        self.config.theme.accent_color().into(),
                     );
                     ui.add_space(4.0);
 
@@ -2754,7 +2754,7 @@ impl FastTailApp {
         egui::Panel::top("toolbar_panel")
             .frame(
                 egui::Frame::new()
-                    .fill(self.config.theme.panel_bg())
+                    .fill(self.config.theme.panel_bg().into())
                     .stroke(Stroke::new(
                         1.0,
                         self.config.theme.accent_color().gamma_multiply(0.25),
@@ -3138,7 +3138,7 @@ impl FastTailApp {
             egui::Panel::top("software_banner")
                 .frame(
                     egui::Frame::new()
-                        .fill(warn.gamma_multiply(0.18))
+                        .fill(warn.gamma_multiply(0.18).into())
                         .stroke(Stroke::new(1.0, warn.gamma_multiply(0.8)))
                         .inner_margin(Margin {
                             left: 12,
@@ -3209,7 +3209,7 @@ impl FastTailApp {
         egui::Panel::bottom("status_bar")
             .frame(
                 egui::Frame::new()
-                    .fill(current_theme.panel_bg())
+                    .fill(current_theme.panel_bg().into())
                     .stroke(Stroke::new(
                         1.0,
                         current_theme.accent_color().gamma_multiply(0.35),
@@ -3298,47 +3298,48 @@ impl FastTailApp {
 
         // 9. Styled Dock Area with Cyber Neon borders
         let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
-        dock_style.tab_bar.bg_fill = current_theme.bg_color();
-        dock_style.tab_bar.hline_color = current_theme.accent_color().gamma_multiply(0.35);
+        dock_style.tab_bar.bg_fill = current_theme.bg_color().into();
+        dock_style.tab_bar.hline_color = current_theme.accent_color().gamma_multiply(0.35).into();
         dock_style.tab_bar.height = 26.0;
 
         let active_tab_bg = current_theme.tab_active_bg();
         let inactive_tab_bg = current_theme.tab_inactive_bg();
 
-        dock_style.tab.active.bg_fill = active_tab_bg;
-        dock_style.tab.active.outline_color = current_theme.accent_color();
+        dock_style.tab.active.bg_fill = active_tab_bg.into();
+        dock_style.tab.active.outline_color = current_theme.accent_color().into();
         dock_style.tab.active.corner_radius = CornerRadius {
             nw: 6,
             ne: 6,
             sw: 0,
             se: 0,
         };
-        dock_style.tab.active.text_color = current_theme.accent_color();
+        dock_style.tab.active.text_color = current_theme.accent_color().into();
 
         dock_style.tab.focused = dock_style.tab.active.clone();
 
-        dock_style.tab.inactive.bg_fill = inactive_tab_bg;
-        dock_style.tab.inactive.outline_color = current_theme.border_color().gamma_multiply(0.2);
+        dock_style.tab.inactive.bg_fill = inactive_tab_bg.into();
+        dock_style.tab.inactive.outline_color =
+            current_theme.border_color().gamma_multiply(0.2).into();
         dock_style.tab.inactive.corner_radius = CornerRadius {
             nw: 6,
             ne: 6,
             sw: 0,
             se: 0,
         };
-        dock_style.tab.inactive.text_color = current_theme.text_dim();
+        dock_style.tab.inactive.text_color = current_theme.text_dim().into();
 
         dock_style.tab.tab_body.stroke =
             Stroke::new(1.5, current_theme.accent_color().gamma_multiply(0.7));
         dock_style.tab.tab_body.corner_radius = CornerRadius::same(6);
-        dock_style.tab.tab_body.bg_fill = current_theme.panel_bg();
+        dock_style.tab.tab_body.bg_fill = current_theme.panel_bg().into();
 
         dock_style.separator.width = 3.0;
-        dock_style.separator.color_idle = current_theme.accent_color().gamma_multiply(0.25);
-        dock_style.separator.color_hovered = current_theme.accent_color();
-        dock_style.separator.color_dragged = current_theme.accent_color();
+        dock_style.separator.color_idle = current_theme.accent_color().gamma_multiply(0.25).into();
+        dock_style.separator.color_hovered = current_theme.accent_color().into();
+        dock_style.separator.color_dragged = current_theme.accent_color().into();
 
-        dock_style.buttons.close_tab_color = current_theme.text_dim();
-        dock_style.buttons.close_tab_active_color = current_theme.warn_color();
+        dock_style.buttons.close_tab_color = current_theme.text_dim().into();
+        dock_style.buttons.close_tab_active_color = current_theme.warn_color().into();
 
         let mut test_screensaver = false;
         // The stream in the focused dock leaf is the "current window": it alone receives
@@ -3537,7 +3538,7 @@ impl FastTailApp {
         let mut palette_taken = false;
         if self.dock_state.iter_all_tabs().count() == 0 {
             egui::Frame::new()
-                .fill(self.config.theme.panel_bg())
+                .fill(self.config.theme.panel_bg().into())
                 .show(ui, |ui| {
                     ui.centered_and_justified(|ui| {
                         ui.vertical_centered(|ui| {
@@ -3843,7 +3844,7 @@ impl FastTailApp {
                 .default_pos(ctx.content_rect().center())
                 .frame(
                     egui::Frame::window(&ctx.style_of(ctx.theme()))
-                        .fill(theme.bg_color())
+                        .fill(theme.bg_color().into())
                         .stroke(Stroke::new(2.0_f32, theme.border_color())),
                 )
                 .show(&ctx, |ui| {
@@ -3942,7 +3943,7 @@ impl FastTailApp {
             .resizable(true)
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
-                    .fill(theme.panel_bg())
+                    .fill(theme.panel_bg().into())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
@@ -4400,7 +4401,7 @@ impl FastTailApp {
             .resizable(true)
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
-                    .fill(theme.panel_bg())
+                    .fill(theme.panel_bg().into())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
@@ -4475,7 +4476,7 @@ impl FastTailApp {
             .resizable(true)
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
-                    .fill(theme.panel_bg())
+                    .fill(theme.panel_bg().into())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
@@ -4628,7 +4629,7 @@ impl FastTailApp {
             .resizable(true)
             .frame(
                 egui::Frame::window(&ctx.style_of(ctx.theme()))
-                    .fill(theme.panel_bg())
+                    .fill(theme.panel_bg().into())
                     .stroke(Stroke::new(1.5_f32, theme.border_color())),
             );
 
@@ -5361,7 +5362,7 @@ impl FastTailApp {
 
 impl eframe::App for FastTailApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        self.config.theme.bg_color().to_normalized_gamma_f32()
+        Color32::from(self.config.theme.bg_color()).to_normalized_gamma_f32()
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

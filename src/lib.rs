@@ -10,6 +10,7 @@ pub mod baretail_bridge;
 pub mod bookmark_report;
 pub mod cli;
 pub mod collapse;
+pub mod color;
 pub mod compare;
 pub mod compressed;
 pub mod config;

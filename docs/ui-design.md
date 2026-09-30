@@ -43,7 +43,8 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 | `src/ui/timeline_strip.rs` | The 56 px timeline histogram above the rows. |
 | `src/ui/zip_picker.rs` | `ArchivePicker`, the entry picker for a zip or 7z that holds several files and for any tar archive (plain or compressed). |
 | `src/collapse.rs` | Not UI code, but it shapes the rows: detection of repeated entries (`CollapseMode`, `CollapseState`) and the row ↔ line mapping of a collapsed text view. |
-| `src/theme.rs` | `CyberTheme`: palettes, level, label and ANSI colours, and `apply()` to egui `Visuals`. |
+| `src/theme.rs` | Not UI code: `CyberTheme` palettes, level, label and ANSI colours as `Rgba` (`src/color.rs`, sRGB with premultiplied alpha, no GUI crate), shared with the terminal interface. |
+| `src/ui/theme.rs` | `Rgba` ↔ `egui::Color32` conversions (same bytes, no loss) and `CyberTheme::apply()` to egui `Visuals`. |
 | `src/renderer.rs` | Backend choice (`auto`, `glow`, `wgpu`, `software`) and the description of the active backend (`ActiveRenderer`). |
 | `src/screensaver.rs` | The Matrix "digital rain" screensaver, painted over the whole window. |
 
@@ -1031,7 +1032,7 @@ A unit test checks every colour at 4.5:1 or better against both `bg_color` and `
 
 ### 6.6 Applying the theme to egui
 
-`CyberTheme::apply(ctx)` starts from `Visuals::light()` or `Visuals::dark()` and sets:
+`CyberTheme::apply(ctx)` (`src/ui/theme.rs`) starts from `Visuals::light()` or `Visuals::dark()` and sets:
 
 - `panel_fill` = `panel_bg`. `window_fill` = `panel_bg` on Light, `bg_color` on the dark themes. `extreme_bg_color` = `bg_color`. `faint_bg_color` = gray 240 on Light, black α180 on the dark themes.
 - `noninteractive`: bg `panel_bg`, fg `text_primary`, stroke `border` × 0.4, radius 6.

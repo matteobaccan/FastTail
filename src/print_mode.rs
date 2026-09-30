@@ -890,19 +890,11 @@ struct Sgr {
     inverse: bool,
 }
 
-/// RGB of an egui colour, without naming its type (this module stays UI-free).
-macro_rules! rgb {
-    ($c:expr) => {{
-        let c = $c;
-        [c.r(), c.g(), c.b()]
-    }};
-}
-
 impl Sgr {
     fn of_rule(style: &HighlightStyle) -> Self {
         Self {
-            fg: Some(rgb!(style.fg)),
-            bg: Some(rgb!(style.bg)),
+            fg: Some(style.fg.rgb()),
+            bg: Some(style.bg.rgb()),
             bold: style.bold,
             italic: style.italic,
             ..Default::default()
@@ -917,8 +909,8 @@ impl Sgr {
             other => other,
         };
         Self {
-            fg: fg.map(|c| rgb!(theme.ansi_color(c))).or(base.fg),
-            bg: style.bg.map(|c| rgb!(theme.ansi_color(c))).or(base.bg),
+            fg: fg.map(|c| theme.ansi_color(c).rgb()).or(base.fg),
+            bg: style.bg.map(|c| theme.ansi_color(c).rgb()).or(base.bg),
             bold: style.bold || base.bold,
             dim: style.dim,
             italic: style.italic || base.italic,
@@ -1052,8 +1044,8 @@ impl<W: Write> Printer<W> {
         ) {
             (Some(rule), _) => Sgr::of_rule(rule),
             (None, Some(level)) => Sgr {
-                fg: Some(rgb!(level.fg)),
-                bg: (level.bg.a() > 0).then(|| rgb!(level.bg)),
+                fg: Some(level.fg.rgb()),
+                bg: (level.bg.a > 0).then(|| level.bg.rgb()),
                 bold: level.bold,
                 ..Default::default()
             },
@@ -1070,7 +1062,7 @@ impl<W: Write> Printer<W> {
                 SpanStyle::Ansi(ansi) => Sgr::of_ansi(&ansi, &base, palette.theme),
                 SpanStyle::Label(_) => base,
                 SpanStyle::Token(kind) => Sgr {
-                    fg: Some(rgb!(palette.theme.token_color(kind))),
+                    fg: Some(palette.theme.token_color(kind).rgb()),
                     ..base
                 },
             };
@@ -1683,7 +1675,7 @@ mod tests {
             lines[0],
             "\x1b[0;38;2;255;0;0;48;2;0;0;0mERROR payment timeout\x1b[0m"
         );
-        let error = rgb!(CyberTheme::Tron.level_color(LogLevel::Error));
+        let error = CyberTheme::Tron.level_color(LogLevel::Error).rgb();
         assert_eq!(
             lines[1],
             format!(
@@ -1691,7 +1683,7 @@ mod tests {
                 error[0], error[1], error[2]
             )
         );
-        let green = rgb!(CyberTheme::Tron.ansi_color(AnsiColor::Indexed(2)));
+        let green = CyberTheme::Tron.ansi_color(AnsiColor::Indexed(2)).rgb();
         assert_eq!(
             lines[2],
             format!(
@@ -1720,7 +1712,7 @@ mod tests {
         printer.line(&source, 2, "10.0.0.1 refused", false).unwrap();
         let out = String::from_utf8(printer.out).unwrap();
         let lines: Vec<&str> = out.lines().collect();
-        let ip = rgb!(CyberTheme::Tron.token_color(TokenKind::Ip));
+        let ip = CyberTheme::Tron.token_color(TokenKind::Ip).rgb();
         assert_eq!(
             lines[0],
             format!(

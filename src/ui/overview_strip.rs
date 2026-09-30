@@ -378,15 +378,15 @@ pub fn paint(
     // Automatic bookmarks at half strength, under the manual ones, so these stay visible
     // among a rule's many marks.
     let lanes: [(u8, f32, f32, Color32); 4] = [
-        (MARK_ERROR, 1.0, w * 0.45, error),
-        (MARK_HIT, w * 0.4, w, hit),
+        (MARK_ERROR, 1.0, w * 0.45, error.into()),
+        (MARK_HIT, w * 0.4, w, hit.into()),
         (
             MARK_AUTO_BOOKMARK,
             1.0,
             w * 0.35,
-            bookmark.gamma_multiply(0.5),
+            bookmark.gamma_multiply(0.5).into(),
         ),
-        (MARK_BOOKMARK, 1.0, w * 0.35, bookmark),
+        (MARK_BOOKMARK, 1.0, w * 0.35, bookmark.into()),
     ];
     for (flag, x0, x1, color) in lanes {
         let mut y = 0;

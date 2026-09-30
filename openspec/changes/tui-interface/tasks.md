@@ -4,7 +4,7 @@
 
 ## 1. Engine decoupling (first, own PR)
 
-- [ ] 1.1 `src/color.rs` with `Rgba`; `HighlightStyle`, rule colours, `CyberTheme` palette functions and every engine-facing colour use it; `From<Rgba> for egui::Color32` and `CyberTheme::apply(ctx)` under `gui`
+- [x] 1.1 `src/color.rs` with `Rgba`; `HighlightStyle`, rule colours, `CyberTheme` palette functions and every engine-facing colour use it; `From<Rgba> for egui::Color32` and `CyberTheme::apply(ctx)` under `gui`
 - [ ] 1.2 Move `markdown_cache` from `TailEngine` to the GUI's per-tab state in `ui/dock.rs`
 - [ ] 1.3 `external_tools::Shortcut` with a neutral `KeyName` and `Mods`; GUI mapping at the edge; `tool.N` ini round-trip test unchanged
 - [ ] 1.4 `src/workspace.rs`: `open_target`, `restore(config)`, `snapshot(engines)` (open files, `stream_N` state, bookmarks and notes, taken out of `save_dock_layout`), the go-to parser and the time-range text parser; the GUI calls them

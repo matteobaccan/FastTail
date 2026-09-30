@@ -2,16 +2,16 @@
 // Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
 // SPDX-License-Identifier: MIT
 
+use crate::color::Rgba;
 use crate::log_level::LogLevel;
-use egui::{Color32, Stroke, Style, Visuals};
 use serde::{Deserialize, Serialize};
 
 /// Style of a row coloured by its detected log level (see `CyberTheme::level_style`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LevelStyle {
-    pub fg: Color32,
-    /// `Color32::TRANSPARENT` when the row keeps the normal background.
-    pub bg: Color32,
+    pub fg: Rgba,
+    /// `Rgba::TRANSPARENT` when the row keeps the normal background.
+    pub bg: Rgba,
     pub bold: bool,
 }
 
@@ -33,119 +33,119 @@ impl CyberTheme {
         }
     }
 
-    pub fn bg_color(&self) -> Color32 {
+    pub fn bg_color(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(10, 15, 24),
-            CyberTheme::Matrix => Color32::from_rgb(3, 6, 3),
-            CyberTheme::Blade => Color32::from_rgb(18, 16, 20),
-            CyberTheme::Light => Color32::from_rgb(243, 245, 249),
+            CyberTheme::Tron => Rgba::from_rgb(10, 15, 24),
+            CyberTheme::Matrix => Rgba::from_rgb(3, 6, 3),
+            CyberTheme::Blade => Rgba::from_rgb(18, 16, 20),
+            CyberTheme::Light => Rgba::from_rgb(243, 245, 249),
         }
     }
 
-    pub fn panel_bg(&self) -> Color32 {
+    pub fn panel_bg(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(13, 20, 32),
-            CyberTheme::Matrix => Color32::from_rgb(6, 12, 6),
-            CyberTheme::Blade => Color32::from_rgb(26, 22, 28),
-            CyberTheme::Light => Color32::from_rgb(255, 255, 255),
+            CyberTheme::Tron => Rgba::from_rgb(13, 20, 32),
+            CyberTheme::Matrix => Rgba::from_rgb(6, 12, 6),
+            CyberTheme::Blade => Rgba::from_rgb(26, 22, 28),
+            CyberTheme::Light => Rgba::from_rgb(255, 255, 255),
         }
     }
 
     /// Background of the focused/active dock tab.
-    pub fn tab_active_bg(&self) -> Color32 {
+    pub fn tab_active_bg(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(18, 32, 50),
-            CyberTheme::Matrix => Color32::from_rgb(10, 26, 12),
-            CyberTheme::Blade => Color32::from_rgb(38, 28, 42),
-            CyberTheme::Light => Color32::from_rgb(255, 255, 255),
+            CyberTheme::Tron => Rgba::from_rgb(18, 32, 50),
+            CyberTheme::Matrix => Rgba::from_rgb(10, 26, 12),
+            CyberTheme::Blade => Rgba::from_rgb(38, 28, 42),
+            CyberTheme::Light => Rgba::from_rgb(255, 255, 255),
         }
     }
 
     /// Background of inactive dock tabs.
-    pub fn tab_inactive_bg(&self) -> Color32 {
+    pub fn tab_inactive_bg(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(8, 12, 18),
-            CyberTheme::Matrix => Color32::from_rgb(4, 8, 4),
-            CyberTheme::Blade => Color32::from_rgb(14, 12, 16),
-            CyberTheme::Light => Color32::from_rgb(234, 238, 244),
+            CyberTheme::Tron => Rgba::from_rgb(8, 12, 18),
+            CyberTheme::Matrix => Rgba::from_rgb(4, 8, 4),
+            CyberTheme::Blade => Rgba::from_rgb(14, 12, 16),
+            CyberTheme::Light => Rgba::from_rgb(234, 238, 244),
         }
     }
 
-    pub fn button_bg(&self) -> Color32 {
+    pub fn button_bg(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(12, 19, 30),
-            CyberTheme::Matrix => Color32::from_rgb(8, 18, 10),
-            CyberTheme::Blade => Color32::from_rgb(28, 20, 26),
-            CyberTheme::Light => Color32::from_rgb(240, 244, 250),
+            CyberTheme::Tron => Rgba::from_rgb(12, 19, 30),
+            CyberTheme::Matrix => Rgba::from_rgb(8, 18, 10),
+            CyberTheme::Blade => Rgba::from_rgb(28, 20, 26),
+            CyberTheme::Light => Rgba::from_rgb(240, 244, 250),
         }
     }
 
-    pub fn code_block_bg(&self) -> Color32 {
+    pub fn code_block_bg(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(18, 28, 44),
-            CyberTheme::Matrix => Color32::from_rgb(8, 16, 8),
-            CyberTheme::Blade => Color32::from_rgb(34, 28, 36),
-            CyberTheme::Light => Color32::from_rgb(238, 242, 248),
+            CyberTheme::Tron => Rgba::from_rgb(18, 28, 44),
+            CyberTheme::Matrix => Rgba::from_rgb(8, 16, 8),
+            CyberTheme::Blade => Rgba::from_rgb(34, 28, 36),
+            CyberTheme::Light => Rgba::from_rgb(238, 242, 248),
         }
     }
 
-    pub fn border_color(&self) -> Color32 {
+    pub fn border_color(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(0, 229, 255),
-            CyberTheme::Matrix => Color32::from_rgb(0, 255, 65),
-            CyberTheme::Blade => Color32::from_rgb(255, 140, 0),
-            CyberTheme::Light => Color32::from_rgb(0, 120, 215),
+            CyberTheme::Tron => Rgba::from_rgb(0, 229, 255),
+            CyberTheme::Matrix => Rgba::from_rgb(0, 255, 65),
+            CyberTheme::Blade => Rgba::from_rgb(255, 140, 0),
+            CyberTheme::Light => Rgba::from_rgb(0, 120, 215),
         }
     }
 
-    pub fn accent_color(&self) -> Color32 {
+    pub fn accent_color(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(0, 229, 255),
-            CyberTheme::Matrix => Color32::from_rgb(0, 255, 65),
-            CyberTheme::Blade => Color32::from_rgb(255, 140, 0),
-            CyberTheme::Light => Color32::from_rgb(0, 114, 206),
+            CyberTheme::Tron => Rgba::from_rgb(0, 229, 255),
+            CyberTheme::Matrix => Rgba::from_rgb(0, 255, 65),
+            CyberTheme::Blade => Rgba::from_rgb(255, 140, 0),
+            CyberTheme::Light => Rgba::from_rgb(0, 114, 206),
         }
     }
 
-    pub fn secondary_accent(&self) -> Color32 {
+    pub fn secondary_accent(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(0, 180, 216),
-            CyberTheme::Matrix => Color32::from_rgb(50, 205, 50),
-            CyberTheme::Blade => Color32::from_rgb(255, 0, 85),
-            CyberTheme::Light => Color32::from_rgb(0, 150, 136),
+            CyberTheme::Tron => Rgba::from_rgb(0, 180, 216),
+            CyberTheme::Matrix => Rgba::from_rgb(50, 205, 50),
+            CyberTheme::Blade => Rgba::from_rgb(255, 0, 85),
+            CyberTheme::Light => Rgba::from_rgb(0, 150, 136),
         }
     }
 
-    pub fn text_primary(&self) -> Color32 {
+    pub fn text_primary(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(224, 240, 255),
-            CyberTheme::Matrix => Color32::from_rgb(220, 255, 220),
-            CyberTheme::Blade => Color32::from_rgb(255, 243, 224),
-            CyberTheme::Light => Color32::from_rgb(24, 28, 36),
+            CyberTheme::Tron => Rgba::from_rgb(224, 240, 255),
+            CyberTheme::Matrix => Rgba::from_rgb(220, 255, 220),
+            CyberTheme::Blade => Rgba::from_rgb(255, 243, 224),
+            CyberTheme::Light => Rgba::from_rgb(24, 28, 36),
         }
     }
 
-    pub fn text_dim(&self) -> Color32 {
+    pub fn text_dim(&self) -> Rgba {
         match self {
-            CyberTheme::Tron => Color32::from_rgb(100, 140, 170),
-            CyberTheme::Matrix => Color32::from_rgb(130, 195, 130),
-            CyberTheme::Blade => Color32::from_rgb(175, 145, 135),
-            CyberTheme::Light => Color32::from_rgb(100, 116, 139),
+            CyberTheme::Tron => Rgba::from_rgb(100, 140, 170),
+            CyberTheme::Matrix => Rgba::from_rgb(130, 195, 130),
+            CyberTheme::Blade => Rgba::from_rgb(175, 145, 135),
+            CyberTheme::Light => Rgba::from_rgb(100, 116, 139),
         }
     }
 
-    pub fn error_color(&self) -> Color32 {
-        Color32::from_rgb(255, 51, 68)
+    pub fn error_color(&self) -> Rgba {
+        Rgba::from_rgb(255, 51, 68)
     }
 
-    pub fn warn_color(&self) -> Color32 {
+    pub fn warn_color(&self) -> Rgba {
         match self {
-            CyberTheme::Light => Color32::from_rgb(195, 105, 0),
-            _ => Color32::from_rgb(255, 187, 0),
+            CyberTheme::Light => Rgba::from_rgb(195, 105, 0),
+            _ => Rgba::from_rgb(255, 187, 0),
         }
     }
 
-    pub fn info_color(&self) -> Color32 {
+    pub fn info_color(&self) -> Rgba {
         self.accent_color()
     }
 
@@ -153,18 +153,18 @@ impl CyberTheme {
     /// rule matches it. INFO and unknown levels keep the plain text style (`None`).
     pub fn level_style(&self, level: LogLevel) -> Option<LevelStyle> {
         let is_light = *self == CyberTheme::Light;
-        let plain = Color32::TRANSPARENT;
+        let plain = Rgba::TRANSPARENT;
         match level {
             LogLevel::Fatal => Some(LevelStyle {
                 fg: if is_light {
-                    Color32::WHITE
+                    Rgba::WHITE
                 } else {
-                    Color32::from_rgb(255, 235, 238)
+                    Rgba::from_rgb(255, 235, 238)
                 },
                 bg: if is_light {
-                    Color32::from_rgb(200, 30, 45)
+                    Rgba::from_rgb(200, 30, 45)
                 } else {
-                    Color32::from_rgb(120, 16, 28)
+                    Rgba::from_rgb(120, 16, 28)
                 },
                 bold: true,
             }),
@@ -193,12 +193,12 @@ impl CyberTheme {
     }
 
     /// Colour of a level tag (selector entries, per-level counters).
-    pub fn level_color(&self, level: LogLevel) -> Color32 {
+    pub fn level_color(&self, level: LogLevel) -> Rgba {
         let is_light = *self == CyberTheme::Light;
         match level {
             LogLevel::Fatal | LogLevel::Error => {
                 if is_light {
-                    Color32::from_rgb(200, 30, 45)
+                    Rgba::from_rgb(200, 30, 45)
                 } else {
                     self.error_color()
                 }
@@ -208,7 +208,7 @@ impl CyberTheme {
             LogLevel::Debug => self.text_dim(),
             LogLevel::Trace => {
                 if is_light {
-                    Color32::from_rgb(148, 160, 176)
+                    Rgba::from_rgb(148, 160, 176)
                 } else {
                     self.text_dim().gamma_multiply(0.7)
                 }
@@ -220,7 +220,7 @@ impl CyberTheme {
     /// Foreground and background of quick label preset `n` (1..=9): red, orange, yellow,
     /// green, cyan, blue, violet, magenta, grey. Saturated on the dark themes, pastel on
     /// Light so the text stays readable.
-    pub fn label_style(&self, n: u8) -> (Color32, Color32) {
+    pub fn label_style(&self, n: u8) -> (Rgba, Rgba) {
         let i = (n.clamp(1, 9) - 1) as usize;
         if *self == CyberTheme::Light {
             const BG: [[u8; 3]; 9] = [
@@ -235,7 +235,7 @@ impl CyberTheme {
                 [220, 225, 230],
             ];
             let [r, g, b] = BG[i];
-            (Color32::from_rgb(24, 28, 36), Color32::from_rgb(r, g, b))
+            (Rgba::from_rgb(24, 28, 36), Rgba::from_rgb(r, g, b))
         } else {
             const BG: [[u8; 3]; 9] = [
                 [220, 50, 50],
@@ -250,18 +250,18 @@ impl CyberTheme {
             ];
             let [r, g, b] = BG[i];
             let fg = if i == 5 || i == 6 {
-                Color32::WHITE
+                Rgba::WHITE
             } else {
-                Color32::from_rgb(10, 10, 10)
+                Rgba::from_rgb(10, 10, 10)
             };
-            (fg, Color32::from_rgb(r, g, b))
+            (fg, Rgba::from_rgb(r, g, b))
         }
     }
 
     /// Foreground of an automatically highlighted token of `kind` (see `auto_highlight`):
     /// cyans and violet on Tron, greens and amber on Matrix, amber and magenta on Blade,
     /// dark blues and teal on Light, each at least 4.5:1 against the theme background.
-    pub fn token_color(&self, kind: crate::auto_highlight::TokenKind) -> Color32 {
+    pub fn token_color(&self, kind: crate::auto_highlight::TokenKind) -> Rgba {
         use crate::auto_highlight::TokenKind as K;
         let [r, g, b] = match (self, kind) {
             (CyberTheme::Tron, K::Ip) => [0, 210, 255],
@@ -285,14 +285,14 @@ impl CyberTheme {
             (CyberTheme::Light, K::Duration) => [0, 110, 100],
             (CyberTheme::Light, K::Path) => [60, 70, 110],
         };
-        Color32::from_rgb(r, g, b)
+        Rgba::from_rgb(r, g, b)
     }
 
     /// The 16 base ANSI colours (SGR 30-37 and 90-97, and the first 16 entries of the
     /// 256-colour table) for this theme. The dark themes lift black so it stays visible
     /// on their near-black backgrounds; Light darkens white, yellow and the bright colours
     /// so that every entry reads on its pale background (contrast checked in the tests).
-    pub fn ansi_palette(&self) -> [Color32; 16] {
+    pub fn ansi_palette(&self) -> [Rgba; 16] {
         const DARK: [[u8; 3]; 16] = [
             [96, 100, 112],
             [240, 82, 82],
@@ -334,19 +334,19 @@ impl CyberTheme {
         } else {
             &DARK
         };
-        table.map(|[r, g, b]| Color32::from_rgb(r, g, b))
+        table.map(|[r, g, b]| Rgba::from_rgb(r, g, b))
     }
 
     /// An ANSI colour: the theme palette for 0..16, the xterm table for the rest of the
     /// 256 colours, a 24-bit colour as given.
-    pub fn ansi_color(&self, color: crate::ansi::AnsiColor) -> Color32 {
+    pub fn ansi_color(&self, color: crate::ansi::AnsiColor) -> Rgba {
         match color {
             crate::ansi::AnsiColor::Indexed(i) if i < 16 => self.ansi_palette()[i as usize],
             crate::ansi::AnsiColor::Indexed(i) => {
                 let [r, g, b] = crate::ansi::xterm_color(i);
-                Color32::from_rgb(r, g, b)
+                Rgba::from_rgb(r, g, b)
             }
-            crate::ansi::AnsiColor::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+            crate::ansi::AnsiColor::Rgb(r, g, b) => Rgba::from_rgb(r, g, b),
         }
     }
 
@@ -358,9 +358,9 @@ impl CyberTheme {
     pub fn ansi_colors(
         &self,
         style: &crate::ansi::AnsiStyle,
-        base_fg: Color32,
-        base_bg: Color32,
-    ) -> (Color32, Color32) {
+        base_fg: Rgba,
+        base_bg: Rgba,
+    ) -> (Rgba, Rgba) {
         use crate::ansi::AnsiColor;
         let fg_color = match style.fg {
             Some(AnsiColor::Indexed(i)) if style.bold && i < 8 => Some(AnsiColor::Indexed(i + 8)),
@@ -372,16 +372,16 @@ impl CyberTheme {
             (None, Some(bg)) => readable_on(bg),
             (None, None) if style.bold => {
                 if *self == CyberTheme::Light {
-                    Color32::BLACK
+                    Rgba::BLACK
                 } else {
-                    Color32::WHITE
+                    Rgba::WHITE
                 }
             }
             (None, None) => base_fg,
         };
         let mut bg = bg.unwrap_or(base_bg);
         if style.inverse {
-            let behind = if bg == Color32::TRANSPARENT {
+            let behind = if bg == Rgba::TRANSPARENT {
                 self.panel_bg()
             } else {
                 bg
@@ -394,83 +394,10 @@ impl CyberTheme {
         }
         (fg, bg)
     }
-
-    pub fn apply(&self, ctx: &egui::Context) {
-        let is_light = *self == CyberTheme::Light;
-        let mut visuals = if is_light {
-            Visuals::light()
-        } else {
-            Visuals::dark()
-        };
-        let bg = self.bg_color();
-        let panel = self.panel_bg();
-        let border = self.border_color();
-        let text = self.text_primary();
-        let accent = self.accent_color();
-        let btn_bg = self.button_bg();
-
-        visuals.panel_fill = panel;
-        visuals.window_fill = if is_light { panel } else { bg };
-        visuals.extreme_bg_color = bg;
-        visuals.faint_bg_color = if is_light {
-            Color32::from_gray(240)
-        } else {
-            Color32::from_black_alpha(180)
-        };
-
-        visuals.widgets.noninteractive.bg_fill = panel;
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, text);
-        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, border.gamma_multiply(0.4));
-        visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
-
-        visuals.widgets.inactive.bg_fill = btn_bg;
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, text);
-        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border.gamma_multiply(0.35));
-        visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
-
-        visuals.widgets.hovered.bg_fill = if is_light {
-            Color32::from_rgb(228, 236, 248)
-        } else {
-            panel.linear_multiply(1.25)
-        };
-        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, accent);
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.5_f32, accent);
-        visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
-        visuals.widgets.hovered.expansion = 0.0;
-
-        visuals.widgets.active.bg_fill = accent.gamma_multiply(0.25);
-        visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, accent);
-        visuals.widgets.active.bg_stroke = Stroke::new(2.0_f32, accent);
-        visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
-        visuals.widgets.active.expansion = 0.0;
-
-        visuals.widgets.open.expansion = 0.0;
-
-        visuals.selection.bg_fill = accent.gamma_multiply(0.35);
-        visuals.selection.stroke = Stroke::new(1.0_f32, accent);
-
-        visuals.window_stroke = Stroke::new(1.5_f32, border);
-        visuals.window_corner_radius = egui::CornerRadius::same(8);
-        visuals.menu_corner_radius = egui::CornerRadius::same(6);
-
-        ctx.set_visuals(visuals.clone());
-        ctx.set_theme(if is_light {
-            egui::Theme::Light
-        } else {
-            egui::Theme::Dark
-        });
-
-        let style = Style {
-            visuals: visuals.clone(),
-            ..Default::default()
-        };
-        ctx.set_style_of(egui::Theme::Dark, style.clone());
-        ctx.set_style_of(egui::Theme::Light, style);
-    }
 }
 
 /// Relative luminance of a colour (WCAG 2), for the contrast choices above.
-fn luminance(c: Color32) -> f32 {
+fn luminance(c: Rgba) -> f32 {
     let lin = |v: u8| {
         let v = v as f32 / 255.0;
         if v <= 0.04045 {
@@ -479,21 +406,21 @@ fn luminance(c: Color32) -> f32 {
             ((v + 0.055) / 1.055).powf(2.4)
         }
     };
-    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
 }
 
 /// Contrast ratio between two colours (1 to 21).
-fn contrast(a: Color32, b: Color32) -> f32 {
+fn contrast(a: Rgba, b: Rgba) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 /// Black or white, whichever contrasts more with `bg`.
-fn readable_on(bg: Color32) -> Color32 {
-    if contrast(Color32::BLACK, bg) >= contrast(Color32::WHITE, bg) {
-        Color32::BLACK
+fn readable_on(bg: Rgba) -> Rgba {
+    if contrast(Rgba::BLACK, bg) >= contrast(Rgba::WHITE, bg) {
+        Rgba::BLACK
     } else {
-        Color32::WHITE
+        Rgba::WHITE
     }
 }
 
@@ -533,7 +460,7 @@ mod tests {
             CyberTheme::Blade,
             CyberTheme::Light,
         ] {
-            let colours: Vec<Color32> = TokenKind::ALL
+            let colours: Vec<Rgba> = TokenKind::ALL
                 .iter()
                 .map(|k| theme.token_color(*k))
                 .collect();
@@ -561,7 +488,7 @@ mod tests {
         let theme = CyberTheme::Tron;
         let pal = theme.ansi_palette();
         let base_fg = theme.text_primary();
-        let clear = Color32::TRANSPARENT;
+        let clear = Rgba::TRANSPARENT;
         let red = AnsiStyle {
             fg: Some(AnsiColor::Indexed(1)),
             ..Default::default()
@@ -588,7 +515,7 @@ mod tests {
         };
         assert_eq!(
             theme.ansi_colors(&on_white, base_fg, clear),
-            (Color32::BLACK, pal[15])
+            (Rgba::BLACK, pal[15])
         );
         let rgb = AnsiStyle {
             fg: Some(AnsiColor::Rgb(1, 2, 3)),
@@ -597,7 +524,7 @@ mod tests {
         };
         assert_eq!(
             theme.ansi_colors(&rgb, base_fg, clear),
-            (Color32::from_rgb(1, 2, 3), Color32::from_rgb(255, 0, 0))
+            (Rgba::from_rgb(1, 2, 3), Rgba::from_rgb(255, 0, 0))
         );
         // Underline or italic alone keep the row's colours.
         let underline = AnsiStyle {

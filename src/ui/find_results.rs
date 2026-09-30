@@ -42,7 +42,7 @@ fn group_header(
     g: usize,
     theme: &CyberTheme,
     lang: Language,
-) -> (String, Vec<(String, egui::Color32)>) {
+) -> (String, Vec<(String, crate::color::Rgba)>) {
     let group = &session.groups[g];
     let title = format!(
         "{} — {}",
@@ -188,7 +188,7 @@ pub fn render_find_results(
                 .hint_text(t(lang, hint))
                 .desired_width(150.0);
             if !ok {
-                edit = edit.text_color(theme.warn_color());
+                edit = edit.text_color(theme.warn_color().into());
             }
             let resp = ui.add(edit);
             let resp = if ok {

@@ -113,7 +113,7 @@ pub fn show(
             .layout_no_wrap(
                 format!("{longest} 9999"),
                 FontId::monospace(TITLE_SIZE),
-                accent,
+                accent.into(),
             )
             .size()
             .x
@@ -145,7 +145,7 @@ pub fn show(
                 Align2::CENTER_CENTER,
                 name,
                 font.clone(),
-                theme.text_dim(),
+                theme.text_dim().into(),
             );
         }
     });
@@ -196,7 +196,7 @@ pub fn show(
                     Align2::CENTER_CENTER,
                     cell_day.to_string(),
                     font.clone(),
-                    color,
+                    color.into(),
                 );
                 if resp.clicked() {
                     picked = Some(days);
