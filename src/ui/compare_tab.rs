@@ -359,7 +359,9 @@ pub fn render(
     let mut draw_row = |ui: &mut Ui, idx: usize| {
         let row = &diff.rows[idx];
         let bg = match row.kind {
-            _ if !wrap && current_row == Some(idx) => theme.accent_color().gamma_multiply(0.25),
+            _ if !wrap && current_row == Some(idx) => {
+                theme.accent_color().gamma_multiply(0.25).into()
+            }
             RowKind::Equal => Color32::TRANSPARENT,
             RowKind::Changed => changed_bg,
             RowKind::Removed => removed_bg,
@@ -403,7 +405,8 @@ pub fn render(
                                 .unwrap_or_default();
                             let tint = if is_left { token_left } else { token_right };
                             let width = if wrap { half } else { f32::INFINITY };
-                            let job = highlighted(text, &ranges, &font, text_color, tint, width);
+                            let job =
+                                highlighted(text, &ranges, &font, text_color.into(), tint, width);
                             let mut label = egui::Label::new(job).sense(egui::Sense::click());
                             if !wrap {
                                 label = label.truncate();

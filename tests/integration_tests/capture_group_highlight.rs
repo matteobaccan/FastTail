@@ -31,7 +31,9 @@ fn captures_only_paints_the_captured_group() {
     assert_eq!(ranges(&hl.spans), vec![(15, 19), (34, 36)]);
     assert_eq!(&line[15..19], "1234");
     match hl.spans[0].style {
-        SpanStyle::Rule(style) => assert_eq!(style.fg, egui::Color32::from_rgb(0, 255, 255)),
+        SpanStyle::Rule(style) => {
+            assert_eq!(style.fg, fasttail::color::Rgba::from_rgb(0, 255, 255))
+        }
         other => panic!("unexpected style {other:?}"),
     }
     assert!(
@@ -71,7 +73,7 @@ fn whole_row_rules_keep_colouring_the_row_and_the_fast_path_is_used() {
     assert!(hl.spans.is_empty());
     assert_eq!(
         hl.rest.map(|s| s.fg),
-        Some(egui::Color32::from_rgb(0, 255, 0))
+        Some(fasttail::color::Rgba::from_rgb(0, 255, 0))
     );
 }
 
@@ -87,7 +89,7 @@ fn first_rule_wins_per_byte() {
     assert_eq!(ranges(&hl.spans), vec![(4, 8)]);
     assert_eq!(
         hl.rest.map(|s| s.fg),
-        Some(egui::Color32::from_rgb(0, 255, 0))
+        Some(fasttail::color::Rgba::from_rgb(0, 255, 0))
     );
 
     // whole-row rule first: it claims every byte, later captures paint nothing
@@ -107,10 +109,10 @@ fn first_rule_wins_per_byte() {
     let hl = e.match_highlight_spans("req=01234 payment");
     assert_eq!(ranges(&hl.spans), vec![(4, 5), (5, 9)]);
     assert!(
-        matches!(hl.spans[0].style, SpanStyle::Rule(s) if s.fg == egui::Color32::from_rgb(2, 2, 2))
+        matches!(hl.spans[0].style, SpanStyle::Rule(s) if s.fg == fasttail::color::Rgba::from_rgb(2, 2, 2))
     );
     assert!(
-        matches!(hl.spans[1].style, SpanStyle::Rule(s) if s.fg == egui::Color32::from_rgb(1, 1, 1))
+        matches!(hl.spans[1].style, SpanStyle::Rule(s) if s.fg == fasttail::color::Rgba::from_rgb(1, 1, 1))
     );
 }
 
@@ -170,7 +172,7 @@ fn quick_labels_toggle_and_rank_below_rules() {
     assert!(hl.spans.is_empty());
     assert_eq!(
         hl.rest.map(|s| s.fg),
-        Some(egui::Color32::from_rgb(7, 7, 7))
+        Some(fasttail::color::Rgba::from_rgb(7, 7, 7))
     );
     // a captures rule claims its bytes first, the label gets the rest
     e.set_highlight_rules(vec![HighlightRule::captures(

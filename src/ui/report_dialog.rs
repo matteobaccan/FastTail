@@ -320,7 +320,7 @@ impl ReportDialog {
                             .hint_text("#deploy #oom")
                             .desired_width(200.0);
                         if !valid {
-                            field = field.text_color(theme.warn_color());
+                            field = field.text_color(theme.warn_color().into());
                         }
                         ui.add(field).on_hover_text(t(lang, "tip_report_tags"));
                         ui.end_row();

@@ -19,6 +19,7 @@
 //! the groups are flattened into rows, a header per stream and then its hits while the
 //! group is expanded, so one `show_rows` virtualizes across every group.
 
+use crate::color::Rgba;
 use crate::i18n::{t, Language};
 use crate::tail_engine::{find_case_insensitive, TailEngine};
 use crate::theme::CyberTheme;
@@ -267,7 +268,7 @@ impl<'a> HitList<'a> {
                     painter.rect_filled(
                         rect,
                         0.0,
-                        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 60),
+                        Color32::from_rgba_unmultiplied(c.r, c.g, c.b, 60),
                     );
                 }
                 if is_selected {
@@ -285,7 +286,7 @@ impl<'a> HitList<'a> {
                         egui::Align2::LEFT_TOP,
                         "▶",
                         font_id.clone(),
-                        theme.accent_color(),
+                        theme.accent_color().into(),
                     );
                 }
                 painter.text(
@@ -294,9 +295,9 @@ impl<'a> HitList<'a> {
                     format!("{:>7}│", line + 1),
                     font_id.clone(),
                     if is_current {
-                        theme.accent_color()
+                        theme.accent_color().into()
                     } else {
-                        theme.text_dim().gamma_multiply(0.7)
+                        theme.text_dim().gamma_multiply(0.7).into()
                     },
                 );
                 let text_x = rect.left() + 2.0 + marker_w + num_w;
@@ -417,7 +418,7 @@ pub struct HitGroup<'a> {
     /// Header text (stream name and match count).
     pub title: String,
     /// Notes after the title (progress, capped, stale...), each in its colour.
-    pub notes: Vec<(String, Color32)>,
+    pub notes: Vec<(String, Rgba)>,
     pub collapsed: bool,
     /// The rows are drawn faded (a stale group).
     pub dim: bool,
@@ -614,7 +615,7 @@ impl<'a> GroupedHitList<'a> {
                         painter.rect_filled(
                             rect,
                             0.0,
-                            Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 28),
+                            Color32::from_rgba_unmultiplied(c.r, c.g, c.b, 28),
                         );
                         let arrow = if group.collapsed { "▶" } else { "▼" };
                         let title_color = if group.dim {
@@ -631,16 +632,16 @@ impl<'a> GroupedHitList<'a> {
                         job.append(
                             &format!("{arrow} {}", group.title),
                             0.0,
-                            format(title_color),
+                            format(title_color.into()),
                         );
                         for (note, color) in &group.notes {
-                            job.append(&format!("  {note}"), 0.0, format(*color));
+                            job.append(&format!("  {note}"), 0.0, format((*color).into()));
                         }
                         let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
                         painter.galley(
                             egui::pos2(rect.left() + 2.0, text_top),
                             galley,
-                            title_color,
+                            title_color.into(),
                         );
                         Self::header_id(id, g)
                     }
@@ -654,7 +655,7 @@ impl<'a> GroupedHitList<'a> {
                             egui::Align2::LEFT_TOP,
                             format!("{:>7}│", line + 1),
                             font_id.clone(),
-                            theme.text_dim().gamma_multiply(0.7),
+                            theme.text_dim().gamma_multiply(0.7).into(),
                         );
                         paint_line_text(
                             ui,
@@ -788,9 +789,9 @@ fn paint_line_text(
     if style.dim {
         fg = fg.gamma_multiply(0.45);
     }
-    let job = row_job(text, style.query_lower, style.font_id, fg);
+    let job = row_job(text, style.query_lower, style.font_id, fg.into());
     let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
-    painter.galley(pos, galley, fg);
+    painter.galley(pos, galley, fg.into());
 }
 
 /// Layout of one listed line: the text in `fg`, the query occurrences on the search

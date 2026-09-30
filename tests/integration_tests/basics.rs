@@ -374,8 +374,8 @@ fn test_tail_engine_highlights_priority() {
         .match_highlight("CRITICAL ERROR in payment gateway")
         .unwrap();
     // Rule 1 has priority over Rule 2
-    assert_eq!(style1.fg, egui::Color32::from_rgb(255, 0, 0));
-    assert_eq!(style1.bg, egui::Color32::from_rgb(0, 0, 0));
+    assert_eq!(style1.fg, fasttail::color::Rgba::from_rgb(255, 0, 0));
+    assert_eq!(style1.bg, fasttail::color::Rgba::from_rgb(0, 0, 0));
     assert_eq!(style1.bold, false);
     assert_eq!(style1.italic, false);
 
@@ -388,8 +388,8 @@ fn test_tail_engine_highlights_priority() {
     let style2 = engine
         .match_highlight("CRITICAL ERROR in payment gateway")
         .unwrap();
-    assert_eq!(style2.fg, egui::Color32::from_rgb(255, 255, 0));
-    assert_eq!(style2.bg, egui::Color32::from_rgb(10, 10, 10));
+    assert_eq!(style2.fg, fasttail::color::Rgba::from_rgb(255, 255, 0));
+    assert_eq!(style2.bg, fasttail::color::Rgba::from_rgb(10, 10, 10));
 }
 
 #[test]
@@ -1515,7 +1515,7 @@ fn test_highlight_rule_bold_italic_and_reordering() {
     let style_first = engine
         .match_highlight("2026-09-16 [CRITICAL] Database connection failed")
         .unwrap();
-    assert_eq!(style_first.fg, egui::Color32::from_rgb(255, 0, 0));
+    assert_eq!(style_first.fg, fasttail::color::Rgba::from_rgb(255, 0, 0));
     assert!(style_first.bold, "Rule A must apply bold");
     assert!(!style_first.italic, "Rule A is not italic");
 
@@ -1528,7 +1528,10 @@ fn test_highlight_rule_bold_italic_and_reordering() {
     let style_reordered = engine
         .match_highlight("2026-09-16 [CRITICAL] Database connection failed")
         .unwrap();
-    assert_eq!(style_reordered.fg, egui::Color32::from_rgb(0, 0, 255));
+    assert_eq!(
+        style_reordered.fg,
+        fasttail::color::Rgba::from_rgb(0, 0, 255)
+    );
     assert!(!style_reordered.bold, "Rule B is not bold");
     assert!(style_reordered.italic, "Rule B must apply italic");
 }
@@ -2692,9 +2695,18 @@ fn test_html_in_markdown_mode_conversion() {
 #[test]
 fn test_light_theme_background_colors_and_visuals() {
     let theme = CyberTheme::Light;
-    assert_eq!(theme.bg_color(), egui::Color32::from_rgb(243, 245, 249));
-    assert_eq!(theme.panel_bg(), egui::Color32::from_rgb(255, 255, 255));
-    assert_eq!(theme.warn_color(), egui::Color32::from_rgb(195, 105, 0));
+    assert_eq!(
+        theme.bg_color(),
+        fasttail::color::Rgba::from_rgb(243, 245, 249)
+    );
+    assert_eq!(
+        theme.panel_bg(),
+        fasttail::color::Rgba::from_rgb(255, 255, 255)
+    );
+    assert_eq!(
+        theme.warn_color(),
+        fasttail::color::Rgba::from_rgb(195, 105, 0)
+    );
 
     let ctx = egui::Context::default();
     theme.apply(&ctx);

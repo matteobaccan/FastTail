@@ -6,6 +6,7 @@ use crate::ansi::{AnsiMode, AnsiStyle, StyleRun};
 use crate::audio::SoundAlertPreset;
 use crate::auto_highlight::{TokenKind, TokenKinds};
 use crate::collapse::{badge_text, CollapseMode, CollapseState, CollapsedRow, Detector};
+use crate::color::Rgba;
 use crate::context_lines::{
     ContextRanges, VisibleView, BACKGROUND_REBUILD_MATCHES, MAX_CONTEXT_LINES,
 };
@@ -18,7 +19,6 @@ use crate::scan_job::{
 use crate::time_histogram::TimeHistogram;
 use crate::wildcard::{resolve_newest, split_pattern};
 use crate::wrap_layout::{WrapAnchor, WrapScroll};
-use egui::Color32;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -93,10 +93,10 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HighlightStyle {
-    pub fg: Color32,
-    pub bg: Color32,
+    pub fg: Rgba,
+    pub bg: Rgba,
     pub bold: bool,
     pub italic: bool,
 }
@@ -454,8 +454,8 @@ impl HighlightRule {
 
     fn style(&self) -> HighlightStyle {
         HighlightStyle {
-            fg: Color32::from_rgb(self.fg_color[0], self.fg_color[1], self.fg_color[2]),
-            bg: Color32::from_rgb(self.bg_color[0], self.bg_color[1], self.bg_color[2]),
+            fg: Rgba::from_rgb(self.fg_color[0], self.fg_color[1], self.fg_color[2]),
+            bg: Rgba::from_rgb(self.bg_color[0], self.bg_color[1], self.bg_color[2]),
             bold: self.bold,
             italic: self.italic,
         }
@@ -8118,11 +8118,11 @@ mod tests {
     #[test]
     fn test_claim_span_deduction_and_overflow() {
         use super::{claim_span, HighlightSpan, HighlightStyle, SpanStyle};
-        use egui::Color32;
+        use crate::color::Rgba;
 
         let style_a = SpanStyle::Rule(HighlightStyle {
-            fg: Color32::RED,
-            bg: Color32::BLACK,
+            fg: Rgba::RED,
+            bg: Rgba::BLACK,
             bold: false,
             italic: false,
         });

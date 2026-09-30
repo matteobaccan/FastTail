@@ -5,6 +5,7 @@
 use crate::actions::ActionId;
 use crate::auto_highlight::{TokenKind, TokenKinds};
 use crate::collapse::CollapsedRow;
+use crate::color::Rgba;
 use crate::config::push_search_history;
 use crate::external_tools::{ExternalTool, ToolContext, ToolRunner};
 use crate::filter_preset::{FilterPreset, FilterState, PresetLabel};
@@ -792,10 +793,7 @@ fn row_tint(
         (theme.secondary_accent(), 28)
     };
     Some(Color32::from_rgba_unmultiplied(
-        base.r(),
-        base.g(),
-        base.b(),
-        alpha,
+        base.r, base.g, base.b, alpha,
     ))
 }
 
@@ -809,17 +807,17 @@ fn marker_glyph(
     context: bool,
 ) -> (&'static str, Color32) {
     if context {
-        ("◆", theme.warn_color())
+        ("◆", theme.warn_color().into())
     } else if is_active {
-        ("▶", theme.accent_color())
+        ("▶", theme.accent_color().into())
     } else if matches {
-        ("●", theme.warn_color())
+        ("●", theme.warn_color().into())
     } else {
         match bookmark {
-            BookmarkMark::Manual => ("★", theme.secondary_accent()),
-            BookmarkMark::Note => ("✏", theme.secondary_accent()),
-            BookmarkMark::Auto => ("☆", theme.secondary_accent()),
-            BookmarkMark::None => ("\u{2007}", theme.text_dim()), // figure space: a digit's advance
+            BookmarkMark::Manual => ("★", theme.secondary_accent().into()),
+            BookmarkMark::Note => ("✏", theme.secondary_accent().into()),
+            BookmarkMark::Auto => ("☆", theme.secondary_accent().into()),
+            BookmarkMark::None => ("\u{2007}", theme.text_dim().into()), // figure space: a digit's advance
         }
     }
 }
@@ -860,7 +858,7 @@ fn render_timeline_toggles(
     search_view: &mut SearchViewPrefs,
 ) {
     let accent = theme.accent_color();
-    if toggle_button(ui, theme, "📊", engine.timeline_open, accent)
+    if toggle_button(ui, theme, "📊", engine.timeline_open, accent.into())
         .on_hover_text(t(lang, "timeline_tip"))
         .clicked()
     {
@@ -868,9 +866,15 @@ fn render_timeline_toggles(
         engine.timeline_dirty = true;
     }
     if engine.timeline_open
-        && toggle_button(ui, theme, "🔍", search_view.timeline_search_lane, accent)
-            .on_hover_text(t(lang, "timeline_search_lane_tip"))
-            .clicked()
+        && toggle_button(
+            ui,
+            theme,
+            "🔍",
+            search_view.timeline_search_lane,
+            accent.into(),
+        )
+        .on_hover_text(t(lang, "timeline_search_lane_tip"))
+        .clicked()
     {
         search_view.timeline_search_lane = !search_view.timeline_search_lane;
     }
@@ -1073,7 +1077,7 @@ fn render_fields_selector(
             .hint_text(t(lang, "fields_regex_hint"))
             .desired_width(f32::INFINITY);
         if invalid {
-            edit = edit.text_color(theme.error_color());
+            edit = edit.text_color(theme.error_color().into());
         }
         let response = ui.add(edit);
         if let Some(error) = engine.field_error().filter(|_| is_regex) {
@@ -1519,7 +1523,7 @@ fn render_log_stream(
         if engine.is_compressed() {
             // A compressed stream is a static snapshot of the archive: nothing to follow.
             ui.add_enabled_ui(false, |ui| {
-                toggle_button(ui, theme, follow_label, false, theme.accent_color())
+                toggle_button(ui, theme, follow_label, false, theme.accent_color().into())
             })
             .inner
             .on_disabled_hover_text(t(lang, "compressed_follow_tip"));
@@ -1528,7 +1532,7 @@ fn render_log_stream(
             theme,
             follow_label,
             engine.follow_tail,
-            theme.accent_color(),
+            theme.accent_color().into(),
         )
         .on_hover_text(t(lang, "tip_follow_tail"))
         .clicked()
@@ -1551,7 +1555,7 @@ fn render_log_stream(
             theme,
             monitor_label,
             engine.is_watching,
-            theme.accent_color(),
+            theme.accent_color().into(),
         )
         .on_hover_text(t(lang, "tip_monitor"))
         .clicked()
@@ -1570,7 +1574,7 @@ fn render_log_stream(
         let is_hex = current_mode == crate::tail_engine::ViewMode::Hex;
         let is_md = current_mode == crate::tail_engine::ViewMode::Markdown;
 
-        if toggle_button(ui, theme, "🔤 TXT", is_txt, theme.accent_color())
+        if toggle_button(ui, theme, "🔤 TXT", is_txt, theme.accent_color().into())
             .on_hover_text(t(lang, "tip_mode_txt"))
             .clicked()
             || act(ActionId::ViewText)
@@ -1579,7 +1583,7 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
-        if toggle_button(ui, theme, "🔢 HEX", is_hex, theme.secondary_accent())
+        if toggle_button(ui, theme, "🔢 HEX", is_hex, theme.secondary_accent().into())
             .on_hover_text(t(lang, "tip_mode_hex"))
             .clicked()
             || act(ActionId::ViewHex)
@@ -1596,7 +1600,7 @@ fn render_log_stream(
         } else {
             t(lang, "tip_mode_md")
         };
-        if toggle_button(ui, theme, "📝 MD", is_md, theme.warn_color())
+        if toggle_button(ui, theme, "📝 MD", is_md, theme.warn_color().into())
             .on_hover_text(md_tip)
             .clicked()
             || act(ActionId::ViewMarkdown)
@@ -1616,9 +1620,15 @@ fn render_log_stream(
             // Line numbers toggle, for this stream only
             let show_lines = engine.show_line_numbers;
             let lines_label = if show_lines { "# 123" } else { "# ---" };
-            if toggle_button(ui, theme, lines_label, show_lines, theme.accent_color())
-                .on_hover_text(t(lang, "show_lines"))
-                .clicked()
+            if toggle_button(
+                ui,
+                theme,
+                lines_label,
+                show_lines,
+                theme.accent_color().into(),
+            )
+            .on_hover_text(t(lang, "show_lines"))
+            .clicked()
                 || act(ActionId::LineNumbers)
             {
                 engine.set_show_line_numbers(!show_lines);
@@ -1633,7 +1643,7 @@ fn render_log_stream(
                 t(lang, "tip_time_delta")
             };
             let show_delta = engine.show_time_delta;
-            if toggle_button(ui, theme, "Δt", show_delta, theme.accent_color())
+            if toggle_button(ui, theme, "Δt", show_delta, theme.accent_color().into())
                 .on_hover_text(delta_tip)
                 .clicked()
                 || act(ActionId::TimeDelta)
@@ -1644,12 +1654,17 @@ fn render_log_stream(
 
             // Line wrap toggle (per stream, Alt+W), meaningful in the text views only
             let alt_w = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::W);
-            let toggled =
-                toggle_button(ui, theme, "↩ Wrap", engine.wrap_lines, theme.accent_color())
-                    .on_hover_text(t(lang, "tip_wrap"))
-                    .clicked()
-                    || act(ActionId::Wrap)
-                    || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
+            let toggled = toggle_button(
+                ui,
+                theme,
+                "↩ Wrap",
+                engine.wrap_lines,
+                theme.accent_color().into(),
+            )
+            .on_hover_text(t(lang, "tip_wrap"))
+            .clicked()
+                || act(ActionId::Wrap)
+                || (is_focused && ui.input_mut(|i| i.consume_shortcut(&alt_w)));
             if toggled {
                 let row = top_row(engine);
                 engine.set_wrap_lines(!engine.wrap_lines, row);
@@ -1689,7 +1704,7 @@ fn render_log_stream(
                         theme,
                         &label,
                         engine.columns_shown(),
-                        theme.accent_color(),
+                        theme.accent_color().into(),
                     )
                     .on_hover_text(t(lang, "tip_fields_columns"))
                     .clicked()
@@ -2153,7 +2168,7 @@ fn render_log_stream(
             theme,
             "☰",
             search_view.search_pane,
-            theme.accent_color(),
+            theme.accent_color().into(),
         )
         .on_hover_text(t(lang, "tip_search_pane"))
         .clicked()
@@ -3332,14 +3347,14 @@ fn time_delta_cell(
     let dim = theme.text_dim().gamma_multiply(0.8);
     match engine.row_time_delta(row) {
         TimeDelta::Blank => None,
-        TimeDelta::Pending => Some(("…".to_string(), dim.gamma_multiply(0.6))),
-        TimeDelta::Anchor => Some(("⚓".to_string(), theme.accent_color())),
+        TimeDelta::Pending => Some(("…".to_string(), dim.gamma_multiply(0.6).into())),
+        TimeDelta::Anchor => Some(("⚓".to_string(), theme.accent_color().into())),
         TimeDelta::Millis(millis) => {
             let gap = gap_ms > 0
                 && engine.time_anchor().is_none()
                 && millis >= i64::try_from(gap_ms).unwrap_or(i64::MAX);
             let color = if gap { theme.accent_color() } else { dim };
-            Some((crate::timestamp::format_delta(millis), color))
+            Some((crate::timestamp::format_delta(millis), color.into()))
         }
     }
 }
@@ -3474,7 +3489,7 @@ fn render_search_pane(
         .size_range(MIN_SEARCH_PANE_HEIGHT..=max_height)
         .frame(
             egui::Frame::NONE
-                .fill(theme.panel_bg())
+                .fill(theme.panel_bg().into())
                 .inner_margin(egui::Margin::symmetric(4, 2)),
         )
         .show(ui, |ui| {
@@ -3740,11 +3755,14 @@ fn render_extended_rows(
                             } else if matches_search {
                                 (Color32::BLACK, Some(SEARCH_MATCH_BG))
                             } else if let Some(hl) = highlight {
-                                (hl.fg, (hl.bg != Color32::TRANSPARENT).then_some(hl.bg))
+                                (
+                                    hl.fg.into(),
+                                    (hl.bg != Rgba::TRANSPARENT).then_some(hl.bg.into()),
+                                )
                             } else if dim_row {
-                                (theme.text_dim(), None)
+                                (theme.text_dim().into(), None)
                             } else {
-                                (theme.text_primary(), None)
+                                (theme.text_primary().into(), None)
                             };
                             let style = CellStyle {
                                 font_id: &font_id,
@@ -3796,8 +3814,8 @@ fn render_extended_rows(
                             };
                             let base = egui::TextFormat {
                                 font_id: font_id.clone(),
-                                color: highlight.map(|h| h.fg).unwrap_or(plain),
-                                background: highlight.map(|h| h.bg).unwrap_or(Color32::TRANSPARENT),
+                                color: highlight.map(|h| h.fg).unwrap_or(plain).into(),
+                                background: highlight.map_or(Color32::TRANSPARENT, |h| h.bg.into()),
                                 italics: highlight.map(|h| h.italic).unwrap_or(false),
                                 ..Default::default()
                             };
@@ -3892,7 +3910,13 @@ fn render_extended_rows(
                 if let Some(token) = engine.selection_token() {
                     if memchr::memmem::find(shown.as_bytes(), token.as_bytes()).is_some() {
                         if let Some((galley, at)) = row_galley(label.clone()) {
-                            outline_token(ui.painter(), &galley, at, token, theme.accent_color());
+                            outline_token(
+                                ui.painter(),
+                                &galley,
+                                at,
+                                token,
+                                theme.accent_color().into(),
+                            );
                         }
                     }
                 }
@@ -3928,7 +3952,7 @@ fn render_extended_rows(
                             at,
                             sel,
                             ui.visuals().selection.bg_fill.gamma_multiply(0.55),
-                            theme.text_primary(),
+                            theme.text_primary().into(),
                         );
                     }
                 }
@@ -3990,7 +4014,7 @@ fn render_extended_rows(
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw_line) {
                         if let Ok(pretty) = serde_json::to_string_pretty(&val) {
                             egui::Frame::NONE
-                                .fill(theme.panel_bg().linear_multiply(1.3))
+                                .fill(Color32::from(theme.panel_bg()).linear_multiply(1.3))
                                 .stroke(Stroke::new(
                                     1.0_f32,
                                     theme.border_color().gamma_multiply(0.4),
@@ -4135,7 +4159,7 @@ fn draw_field_cells(
         if style.level_colors && LEVEL_KEYS.contains(&key.as_str()) {
             let level = crate::log_level::LogLevel::parse(value);
             if level != crate::log_level::LogLevel::Unknown {
-                color = theme.level_color(level);
+                color = theme.level_color(level).into();
             }
         }
         let clip = rect
@@ -4208,7 +4232,7 @@ fn render_field_header(
                 egui::Align2::LEFT_CENTER,
                 key,
                 font_id.clone(),
-                theme.accent_color(),
+                theme.accent_color().into(),
             );
         let resp = ui
             .interact(visible, id.with(("cell", i)), egui::Sense::click_and_drag())
@@ -4281,7 +4305,7 @@ fn render_field_header(
             egui::Align2::LEFT_CENTER,
             t(lang, "fields_message"),
             font_id,
-            theme.text_dim(),
+            theme.text_dim().into(),
         );
     }
     let rest = message.intersect(rect);
@@ -5029,7 +5053,7 @@ fn render_scope_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                 .hint_text("1200-5000")
                 .desired_width(150.0);
             if edit.lines_bad {
-                field = field.text_color(theme.warn_color());
+                field = field.text_color(theme.warn_color().into());
             }
             let resp = ui.add(field).on_hover_text(t(lang, "tip_scope_lines"));
             let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -5070,7 +5094,7 @@ fn render_scope_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                         .hint_text(t(lang, hint))
                         .desired_width(110.0);
                     if bad {
-                        field = field.text_color(theme.warn_color());
+                        field = field.text_color(theme.warn_color().into());
                     }
                     let resp = ui.add(field);
                     enter |= resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -5530,26 +5554,26 @@ fn span_layout_job(
             job.append(&text[pos..start], 0.0, base.clone());
         }
         let (fg, bg, italics, underline) = match sp.style {
-            SpanStyle::Rule(s) => (s.fg, s.bg, s.italic, false),
+            SpanStyle::Rule(s) => (s.fg.into(), s.bg.into(), s.italic, false),
             SpanStyle::Label(n) => {
                 let (fg, bg) = theme.label_style(n);
-                (fg, bg, false, false)
+                (fg.into(), bg.into(), false, false)
             }
             SpanStyle::Ansi(s) => {
                 // The wrapped view leaves the row colour to the painter (placeholder).
                 let base_fg = if base.color == Color32::PLACEHOLDER {
                     theme.text_primary()
                 } else {
-                    base.color
+                    base.color.into()
                 };
-                let (fg, bg) = theme.ansi_colors(&s, base_fg, base.background);
+                let (fg, bg) = theme.ansi_colors(&s, base_fg, base.background.into());
                 let plain = s.fg.is_none() && !s.bold && !s.dim && !s.inverse && s.bg.is_none();
-                let fg = if plain { base.color } else { fg };
-                (fg, bg, s.italic || base.italics, s.underline)
+                let fg = if plain { base.color } else { fg.into() };
+                (fg, bg.into(), s.italic || base.italics, s.underline)
             }
             // Automatic tokens change the foreground only.
             SpanStyle::Token(kind) => (
-                theme.token_color(kind),
+                theme.token_color(kind).into(),
                 base.background,
                 base.italics,
                 false,
@@ -5567,7 +5591,7 @@ fn span_layout_job(
                     Stroke::new(
                         1.0,
                         if fg == Color32::PLACEHOLDER {
-                            theme.text_primary()
+                            theme.text_primary().into()
                         } else {
                             fg
                         },
@@ -5911,7 +5935,7 @@ fn render_wrapped_rows(
                     egui::Align2::LEFT_TOP,
                     format!("{:>6} │", eng.shown_line_number(line)),
                     font_id.clone(),
-                    num_color,
+                    num_color.into(),
                 );
             }
             if let Some((text, color)) =
@@ -5930,11 +5954,14 @@ fn render_wrapped_rows(
             } else if matches_search {
                 (Color32::BLACK, Some(SEARCH_MATCH_BG))
             } else if let Some(hl) = r.highlight {
-                (hl.fg, Some(hl.bg).filter(|c| c.a() > 0))
+                (
+                    hl.fg.into(),
+                    Some(hl.bg).filter(|c| c.a > 0).map(Color32::from),
+                )
             } else if r.dimmed {
-                (theme.text_dim(), None)
+                (theme.text_dim().into(), None)
             } else {
-                (theme.text_primary(), None)
+                (theme.text_primary().into(), None)
             };
             if let Some(c) = r.collapsed {
                 let badge = collapse_badge_text(c, theme, font_size);
@@ -5944,9 +5971,9 @@ fn render_wrapped_rows(
                     badge.text(),
                     font_id.clone(),
                     if c.open {
-                        theme.text_dim()
+                        theme.text_dim().into()
                     } else {
-                        theme.warn_color()
+                        theme.warn_color().into()
                     },
                 );
             }
@@ -5963,7 +5990,13 @@ fn render_wrapped_rows(
             }
             painter.galley(text_pos, r.galley.clone(), color);
             if let Some(token) = eng.selection_token() {
-                outline_token(&painter, &r.galley, text_pos, token, theme.accent_color());
+                outline_token(
+                    &painter,
+                    &r.galley,
+                    text_pos,
+                    token,
+                    theme.accent_color().into(),
+                );
             }
             if let Some(pretty) = &r.pretty {
                 let frame = egui::Rect::from_min_size(
@@ -5973,14 +6006,14 @@ fn render_wrapped_rows(
                 painter.rect(
                     frame,
                     0.0,
-                    theme.panel_bg().linear_multiply(1.3),
+                    Color32::from(theme.panel_bg()).linear_multiply(1.3),
                     Stroke::new(1.0_f32, theme.border_color().gamma_multiply(0.4)),
                     egui::StrokeKind::Inside,
                 );
                 painter.galley(
                     frame.min + egui::vec2(6.0, 6.0),
                     pretty.clone(),
-                    theme.secondary_accent(),
+                    theme.secondary_accent().into(),
                 );
             }
 
@@ -6017,7 +6050,7 @@ fn render_wrapped_rows(
                     text_pos,
                     sel,
                     ui.visuals().selection.bg_fill.gamma_multiply(0.55),
-                    theme.text_primary(),
+                    theme.text_primary().into(),
                 );
             }
             row_context_menu(
@@ -6094,7 +6127,7 @@ fn render_wrapped_rows(
                     egui::Align2::LEFT_TOP,
                     label,
                     egui::FontId::monospace((font_size - 2.0).max(9.0)),
-                    theme.secondary_accent(),
+                    theme.secondary_accent().into(),
                 );
                 if btn.clicked() {
                     toggle_json = Some((line, r.expanded));

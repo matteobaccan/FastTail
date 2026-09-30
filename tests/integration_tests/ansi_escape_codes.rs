@@ -315,7 +315,7 @@ fn user_rules_and_labels_rank_above_ansi_colours() {
     assert!(hl.spans.is_empty());
     assert_eq!(
         hl.rest.map(|s| s.fg),
-        Some(egui::Color32::from_rgb(0, 255, 0))
+        Some(fasttail::color::Rgba::from_rgb(0, 255, 0))
     );
 
     // A capture inside a yellow ANSI span, and a quick label: both win on their bytes.

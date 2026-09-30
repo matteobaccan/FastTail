@@ -375,7 +375,7 @@ impl CommandPalette {
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style())
-                    .fill(theme.panel_bg())
+                    .fill(theme.panel_bg().into())
                     .stroke(Stroke::new(1.5, theme.accent_color()))
                     .inner_margin(8)
                     .show(ui, |ui| {
@@ -608,11 +608,15 @@ fn draw_row(ui: &mut egui::Ui, row: &Row, selected: bool, cfg: &FastTailConfig) 
         right -= 12.0;
     };
     if let Some(shortcut) = row.shortcut {
-        place(shortcut, accent, &painter);
+        place(shortcut, accent.into(), &painter);
     }
-    place(row.category, theme.text_dim(), &painter);
+    place(row.category, theme.text_dim().into(), &painter);
     if let Some(reason) = row.disabled {
-        place(reason, theme.warn_color().gamma_multiply(0.85), &painter);
+        place(
+            reason,
+            theme.warn_color().gamma_multiply(0.85).into(),
+            &painter,
+        );
     }
 
     let marker = match (row.checked, row.current) {
@@ -625,7 +629,7 @@ fn draw_row(ui: &mut egui::Ui, row: &Row, selected: bool, cfg: &FastTailConfig) 
     let mut job = egui::text::LayoutJob::simple_singleline(
         format!("{marker}{}", row.label),
         egui::FontId::monospace(12.5),
-        name_color,
+        name_color.into(),
     );
     job.wrap = egui::text::TextWrapping {
         max_width: (right - left).max(40.0),
@@ -637,7 +641,7 @@ fn draw_row(ui: &mut egui::Ui, row: &Row, selected: bool, cfg: &FastTailConfig) 
     painter.galley(
         egui::pos2(left, mid_y - galley.size().y / 2.0),
         galley,
-        name_color,
+        name_color.into(),
     );
     match row.disabled {
         Some(reason) => resp.on_hover_text(reason),

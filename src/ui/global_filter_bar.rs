@@ -108,7 +108,7 @@ pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Lang
                     .id(term_id(exclude, i))
                     .desired_width(140.0);
                 if invalid {
-                    edit = edit.text_color(theme.warn_color());
+                    edit = edit.text_color(theme.warn_color().into());
                 }
                 let resp = ui.add(edit);
                 if resp.changed() {

@@ -300,7 +300,7 @@ pub fn show(
             egui::Align2::LEFT_TOP,
             t(lang, "timeline_peak").replace("{n}", &cache.peak.to_string()),
             small.clone(),
-            theme.text_dim(),
+            theme.text_dim().into(),
         );
     }
 
@@ -334,7 +334,7 @@ pub fn show(
             egui::Align2::RIGHT_TOP,
             text,
             small,
-            theme.warn_color(),
+            theme.warn_color().into(),
         );
     }
 
