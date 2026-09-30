@@ -190,10 +190,19 @@ pub enum PromptKind {
     Goto,
     /// A file, pattern or archive entry path to open.
     OpenFile,
+    /// The file to save the open streams to as a session.
+    SaveSession,
 }
 
 pub struct Prompt {
     pub kind: PromptKind,
+    pub field: TextField,
+}
+
+/// The open-session dialog: the recent sessions and a field for a typed path.
+pub struct SessionDialog {
+    pub recent: Vec<PathBuf>,
+    pub selected: usize,
     pub field: TextField,
 }
 
@@ -266,6 +275,9 @@ pub struct App {
     pub prompt: Option<Prompt>,
     pub time_range: Option<TimeRangeDialog>,
     pub picker: Option<EntryPicker>,
+    pub sessions: Option<SessionDialog>,
+    /// A session file that exists, waiting for `[ OK ]` to be overwritten.
+    pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
     /// the defaults).
     pub settings: Option<crate::tui::workspace::Settings>,
@@ -301,6 +313,8 @@ impl App {
             prompt: None,
             time_range: None,
             picker: None,
+            sessions: None,
+            confirm_overwrite: None,
             settings: None,
             message: None,
             show_help: false,
@@ -432,6 +446,12 @@ impl App {
 
     /// Handles a key; returns true when the screen changed.
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        if self.confirm_overwrite.is_some() {
+            return self.on_confirm_key(key);
+        }
+        if self.sessions.is_some() {
+            return self.on_sessions_key(key);
+        }
         if self.picker.is_some() {
             return self.on_picker_key(key);
         }
@@ -475,7 +495,9 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
-        if let Some(p) = self.picker.as_mut() {
+        if let Some(d) = self.sessions.as_mut() {
+            d.field.insert(text);
+        } else if let Some(p) = self.picker.as_mut() {
             p.filter.insert(text);
             p.filter_changed();
         } else if let Some(d) = self.time_range.as_mut() {
@@ -486,6 +508,173 @@ impl App {
             return false;
         }
         true
+    }
+
+    /// The configuration of the run (the defaults when there is none, as in tests).
+    fn settings_mut(&mut self) -> &mut crate::tui::workspace::Settings {
+        self.settings.get_or_insert_with(Default::default)
+    }
+
+    fn open_sessions(&mut self) {
+        let recent = self.settings_mut().config.recent_sessions.clone();
+        self.sessions = Some(SessionDialog {
+            recent,
+            selected: 0,
+            field: TextField::default(),
+        });
+    }
+
+    fn on_sessions_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        let Some(d) = self.sessions.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Up => d.selected = d.selected.saturating_sub(1),
+            KeyCode::Down => d.selected = (d.selected + 1).min(d.recent.len().saturating_sub(1)),
+            _ => match d.field.on_key(key) {
+                FieldKey::Submit => self.submit_sessions(),
+                FieldKey::Cancel => self.sessions = None,
+                FieldKey::Edited => {}
+                FieldKey::Other => return false,
+            },
+        }
+        true
+    }
+
+    /// Loads the typed path, else the selected recent session.
+    fn submit_sessions(&mut self) {
+        let Some(d) = self.sessions.take() else {
+            return;
+        };
+        let typed = d.field.text().trim();
+        let file = if typed.is_empty() {
+            match d.recent.get(d.selected) {
+                Some(f) => f.clone(),
+                None => {
+                    self.message = Some("No recent session: type a path".into());
+                    return;
+                }
+            }
+        } else {
+            absolute(typed)
+        };
+        self.load_session(&file);
+    }
+
+    /// Replaces the open streams with the ones of the session `file`, as the GUI does:
+    /// their saved state applies, standard input stays, the session becomes the current
+    /// one and goes first in the recent sessions.
+    pub fn load_session(&mut self, file: &Path) {
+        let settings = self.settings_mut();
+        let plan = match crate::tui::workspace::session_plan(settings, file) {
+            Ok(plan) => plan,
+            Err(e) => {
+                self.message = Some(e);
+                return;
+            }
+        };
+        let (engines, errors) = crate::tui::workspace::open_plan(settings, &plan);
+        settings.config.current_session = Some(file.to_path_buf());
+        settings.config.add_recent_session(file);
+        let stdin = self.tabs.iter().position(|t| t.engine.is_stdin());
+        let stdin = stdin.map(|i| self.tabs.remove(i));
+        self.tabs = engines.into_iter().map(Tab::new).collect();
+        self.tabs.extend(stdin);
+        self.active = 0;
+        self.split = None;
+        let mut notes: Vec<String> = errors;
+        notes.extend(crate::tui::workspace::missing_notice(&plan.missing));
+        self.message = Some(if notes.is_empty() {
+            format!(
+                "Session {} loaded: {} streams",
+                crate::session::Session::name_of(file),
+                plan.paths.len()
+            )
+        } else {
+            notes.join("  |  ")
+        });
+        if self.tabs.is_empty() {
+            self.message = Some(format!(
+                "Session {} opened nothing",
+                crate::session::Session::name_of(file)
+            ));
+        }
+    }
+
+    /// Checks the path of "Save session as": the session suffix is added when missing,
+    /// the configuration file is refused, an existing file asks first.
+    fn submit_save_session(&mut self, typed: &str) {
+        if typed.is_empty() {
+            return;
+        }
+        let file = crate::session::Session::with_suffix(&absolute(typed));
+        let config_path = self.settings_mut().path.clone();
+        if crate::paths::paths_equal(&file, &config_path) {
+            self.message = Some(format!(
+                "{} is the configuration file: it cannot be a session",
+                file.display()
+            ));
+            return;
+        }
+        if file.exists() {
+            self.confirm_overwrite = Some(file);
+            return;
+        }
+        self.save_session(&file);
+    }
+
+    fn on_confirm_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                if let Some(file) = self.confirm_overwrite.take() {
+                    self.save_session(&file);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('n') => self.confirm_overwrite = None,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Writes the open streams and their state to `file` (no dock layout: the terminal
+    /// has none, and the GUI then opens the streams as tabs), makes it the current
+    /// session and puts it first in the recent sessions.
+    pub fn save_session(&mut self, file: &Path) {
+        let mut streams: Vec<crate::session::StreamEntry> = Vec::new();
+        for t in self.tabs.iter().filter(|t| !t.engine.is_stdin()) {
+            if !streams
+                .iter()
+                .any(|s| crate::paths::paths_equal(&s.path, &t.engine.path))
+            {
+                streams.push(crate::workspace::stream_entry(&t.engine));
+            }
+        }
+        let count = streams.len();
+        let session = crate::session::Session {
+            streams,
+            dock_layout: None,
+        };
+        if let Err(e) = session.save_to(file) {
+            self.message = Some(format!("Cannot save {}: {e}", file.display()));
+            return;
+        }
+        let config = &mut self.settings_mut().config;
+        config.current_session = Some(file.to_path_buf());
+        config.add_recent_session(file);
+        let stdin = if self.tabs.iter().any(|t| t.engine.is_stdin()) {
+            " (standard input is not saved)"
+        } else {
+            ""
+        };
+        self.message = Some(format!(
+            "Session saved to {}: {count} streams{stdin}",
+            file.display()
+        ));
     }
 
     fn on_picker_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -659,6 +848,7 @@ impl App {
                     self.open_file(&absolute(&text));
                 }
             }
+            PromptKind::SaveSession => self.submit_save_session(&text),
             PromptKind::Goto if tab.is_hex() => match hex::parse_offset(&text) {
                 Some(offset) if tab.engine.file_size > 0 => {
                     let last = tab.engine.file_size as usize - 1;
@@ -695,6 +885,16 @@ impl App {
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto | PromptKind::OpenFile => String::new(),
+            PromptKind::SaveSession => {
+                let current = self
+                    .settings
+                    .as_ref()
+                    .and_then(|s| s.config.current_session.clone());
+                current.map_or_else(
+                    || format!("session{}", crate::session::SESSION_SUFFIX),
+                    |f| f.display().to_string(),
+                )
+            }
         };
         self.prompt = Some(Prompt {
             kind,
@@ -750,6 +950,8 @@ impl App {
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::TimeRange => self.open_time_range(),
             Action::OpenFile => self.open_prompt(PromptKind::OpenFile),
+            Action::OpenSession => self.open_sessions(),
+            Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
             Action::EditNote => match self.tabs[self.active].cursor_line() {
                 Some(line) => self.open_prompt(PromptKind::Note(line)),
                 None => self.message = Some("No row for a note".into()),
@@ -801,6 +1003,8 @@ impl App {
                 if self.prompt.is_some()
                     || self.time_range.is_some()
                     || self.picker.is_some()
+                    || self.sessions.is_some()
+                    || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
                     return false;
@@ -856,6 +1060,13 @@ impl App {
     fn on_click(&mut self, ev: MouseEvent) -> bool {
         let target = mouse::hit_test(&self.hits, ev.column, ev.row);
         match target {
+            Target::ListItem(i) if self.sessions.is_some() => {
+                if let Some(d) = self.sessions.as_mut() {
+                    d.selected = i;
+                    d.field = TextField::default();
+                }
+                self.submit_sessions();
+            }
             Target::ListItem(i) => {
                 if let Some(p) = self.picker.as_mut() {
                     p.selected = i;
@@ -863,7 +1074,11 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if self.picker.is_some() {
+                if let Some(file) = self.confirm_overwrite.take() {
+                    self.save_session(&file);
+                } else if self.sessions.is_some() {
+                    self.submit_sessions();
+                } else if self.picker.is_some() {
                     self.open_picked();
                 } else if self.time_range.is_some() {
                     self.submit_time_range();
@@ -875,6 +1090,8 @@ impl App {
             Target::DialogCancel | Target::OutsideDialog => {
                 self.prompt = None;
                 self.time_range = None;
+                self.sessions = None;
+                self.confirm_overwrite = None;
                 self.close_picker();
                 self.show_help = false;
             }
@@ -1120,6 +1337,12 @@ impl App {
         if self.picker.is_some() {
             self.draw_picker(frame, main_area);
         }
+        if self.sessions.is_some() {
+            self.draw_sessions(frame, main_area);
+        }
+        if self.confirm_overwrite.is_some() {
+            self.draw_confirm(frame, main_area);
+        }
     }
 
     /// The strip of stream titles, drawn span by span so each title's cells are known
@@ -1324,6 +1547,7 @@ impl App {
             }
             PromptKind::Goto => "Go to line (N, +N, -N) or time (14:02)",
             PromptKind::OpenFile => "Open file, pattern (*.log) or archive entry",
+            PromptKind::SaveSession => "Save session as",
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
         let Some(p) = &self.prompt else {
@@ -1342,6 +1566,57 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    fn draw_sessions(&mut self, frame: &mut Frame, area: Rect) {
+        let rows = self.sessions.as_ref().map_or(0, |d| d.recent.len()) as u16;
+        let inner = self.dialog(frame, area, (72, rows.max(1) + 7), "Open session", true);
+        let palette = self.palette;
+        let Some(d) = &self.sessions else {
+            return;
+        };
+        let dim = Style::default().fg(palette.dim());
+        let (shown, x) = d.field.view(inner.width.saturating_sub(6) as usize);
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("Path ", dim),
+                Span::raw(view::sanitize(&shown)),
+            ]),
+            Line::styled("Recent sessions (Up/Down, Enter with an empty path):", dim),
+        ];
+        frame.set_cursor_position((inner.x + 5 + x as u16, inner.y));
+        if d.recent.is_empty() {
+            lines.push(Line::styled("  (none)", dim));
+        }
+        for (i, f) in d.recent.iter().enumerate() {
+            let name = crate::session::Session::name_of(f);
+            let text = view::sanitize(&format!("  {name}  {}", f.display()));
+            let style = if i == d.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let y = inner.y + 2 + i as u16;
+            if y < inner.bottom() {
+                self.hits
+                    .list_items
+                    .push((Rect::new(inner.x, y, inner.width, 1), i));
+            }
+            lines.push(Line::styled(text, style));
+        }
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    fn draw_confirm(&mut self, frame: &mut Frame, area: Rect) {
+        let inner = self.dialog(frame, area, (64, 6), "Overwrite?", true);
+        let Some(file) = &self.confirm_overwrite else {
+            return;
+        };
+        let text = vec![
+            Line::raw(view::sanitize(&format!("{} exists.", file.display()))),
+            Line::raw("Replace it with the open streams? (Enter / Esc)"),
+        ];
+        frame.render_widget(Paragraph::new(text), inner);
     }
 
     fn draw_picker(&mut self, frame: &mut Frame, area: Rect) {
@@ -1507,6 +1782,7 @@ impl App {
             "Ctrl+K           cursor row in context (filters off), again back",
             "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
             "o                open a file, pattern or archive entry",
+            "O  S             open a session / save the streams as a session",
             "t                time range: from / to (14:02, -15m, now)",
             "a                ANSI colours: auto, render, strip, raw (^[)",
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
@@ -2556,6 +2832,101 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.tabs.len(), 2);
         assert!(app.message.as_deref().unwrap().contains("not found"));
+    }
+
+    fn prompt_submit(app: &mut App, text: &str) {
+        let prompt = app.prompt.take().expect("a prompt");
+        app.submit_prompt(Prompt {
+            field: TextField::new(text),
+            ..prompt
+        });
+    }
+
+    #[test]
+    fn s_saves_a_session_asks_before_overwriting_and_refuses_the_ini() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        let ini = dir.path().join("fasttail.ini");
+        app.settings = Some(crate::tui::workspace::Settings {
+            path: ini.clone(),
+            ..Default::default()
+        });
+        app.tabs[0].engine.toggle_bookmark(1);
+        app.apply(Action::SaveSession);
+        assert_eq!(
+            app.prompt.as_ref().unwrap().field.text(),
+            "session.fasttail-session.ini"
+        );
+        let typed = dir.path().join("incident");
+        prompt_submit(&mut app, &typed.display().to_string());
+        let file = dir.path().join("incident.fasttail-session.ini");
+        assert!(file.is_file(), "{:?}", app.message);
+        let config = &app.settings.as_ref().unwrap().config;
+        assert_eq!(config.recent_sessions.first(), Some(&file));
+        assert_eq!(config.current_session.as_ref(), Some(&file));
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(!written.contains("dock_layout"), "{written}");
+
+        // The same path again: asked first; Esc keeps the file, Enter replaces it.
+        std::fs::write(&file, "old").unwrap();
+        app.apply(Action::SaveSession);
+        prompt_submit(&mut app, &file.display().to_string());
+        assert_eq!(app.confirm_overwrite.as_ref(), Some(&file));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+        app.apply(Action::SaveSession);
+        prompt_submit(&mut app, &file.display().to_string());
+        press(&mut app, KeyCode::Enter);
+        assert!(app.confirm_overwrite.is_none());
+        assert_ne!(std::fs::read_to_string(&file).unwrap(), "old");
+
+        // The active fasttail.ini is never a session.
+        app.apply(Action::SaveSession);
+        prompt_submit(&mut app, &ini.display().to_string());
+        assert!(!ini.exists());
+        assert!(app
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("configuration file"));
+    }
+
+    #[test]
+    fn o_loads_a_session_from_a_path_or_the_recent_list() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        app.tabs[0].engine.toggle_bookmark(2);
+        let file = dir.path().join("x.fasttail-session.ini");
+        app.save_session(&file);
+
+        let (mut other, _dir2) = app_with(&[("b.log", "b\n")], false);
+        other.apply(Action::OpenSession);
+        other.on_paste(&file.display().to_string());
+        press(&mut other, KeyCode::Enter);
+        assert!(other.sessions.is_none());
+        assert_eq!(other.tabs.len(), 1, "{:?}", other.message);
+        assert_eq!(other.tabs[0].title, "a.log");
+        assert!(
+            other.tabs[0].engine.is_bookmarked(2),
+            "its saved state applies"
+        );
+        let config = &other.settings.as_ref().unwrap().config;
+        assert_eq!(config.recent_sessions.first(), Some(&file));
+
+        // Empty path: Enter loads the selected recent session; a missing file says why.
+        other.apply(Action::OpenSession);
+        let screen = render(&mut other, 80, 20);
+        assert!(
+            screen.iter().any(|l| l.contains("Open session")),
+            "{screen:#?}"
+        );
+        press(&mut other, KeyCode::Enter);
+        assert_eq!(other.tabs.len(), 1);
+        other.apply(Action::OpenSession);
+        keys(&mut other, "missing.fasttail-session.ini");
+        press(&mut other, KeyCode::Enter);
+        assert!(other.message.as_deref().unwrap().contains("cannot load"));
+        assert_eq!(other.tabs.len(), 1, "the open streams stay");
     }
 
     #[test]
