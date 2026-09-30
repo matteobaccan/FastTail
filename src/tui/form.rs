@@ -89,7 +89,15 @@ impl TextField {
                 self.text.clear();
                 self.cursor = 0;
             }
-            KeyCode::Char(c) if !ctrl => self.insert(c.encode_utf8(&mut [0; 4])),
+            KeyCode::Char(c) if !ctrl => {
+                // SHIFT + a lowercase letter (the Windows console) is the capital.
+                let c = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                };
+                self.insert(c.encode_utf8(&mut [0; 4]))
+            }
             KeyCode::Backspace if self.cursor > 0 => {
                 self.cursor -= 1;
                 let at = self.at();
@@ -321,8 +329,15 @@ impl<T> ReorderList<T> {
         match key.code {
             KeyCode::Up if alt => self.swap_to(i.checked_sub(1)),
             KeyCode::Down if alt => self.swap_to((i < last).then_some(i + 1)),
+            // `K` / `J`, also as SHIFT + a lowercase letter (the Windows console).
             KeyCode::Char('K') => self.swap_to(i.checked_sub(1)),
             KeyCode::Char('J') => self.swap_to((i < last).then_some(i + 1)),
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.swap_to(i.checked_sub(1))
+            }
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.swap_to((i < last).then_some(i + 1))
+            }
             KeyCode::Up => self.selected = i.saturating_sub(1),
             KeyCode::Down => self.selected = (i + 1).min(last),
             KeyCode::Home => self.selected = 0,
@@ -447,6 +462,15 @@ mod tests {
         assert_eq!(f.on_key(key(KeyCode::Enter)), FieldKey::Submit);
         assert_eq!(f.on_key(key(KeyCode::Esc)), FieldKey::Cancel);
         assert_eq!(f.on_key(key(KeyCode::Tab)), FieldKey::Other);
+    }
+
+    #[test]
+    fn shift_with_a_lowercase_letter_types_the_capital() {
+        let mut f = TextField::default();
+        f.on_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::SHIFT));
+        f.on_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT));
+        f.on_key(key(KeyCode::Char('r')));
+        assert_eq!(f.text(), "ERr");
     }
 
     #[test]
