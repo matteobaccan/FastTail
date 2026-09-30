@@ -387,6 +387,7 @@ fn test_tab_lookup_tolerates_path_case_differences() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         use egui_dock::TabViewer;
@@ -503,6 +504,7 @@ fn test_f3_only_advances_the_focused_tab() {
                 filter_presets: &mut Vec::new(),
                 preset_events: &mut Default::default(),
                 palette_action: None,
+                markdown_caches: &mut Default::default(),
             };
             let mut viewer = FastTailTabViewer { ctx: dock_ctx };
             egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);

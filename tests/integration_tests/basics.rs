@@ -2495,6 +2495,72 @@ fn test_markdown_mode_detection_and_rendering() {
 }
 
 #[test]
+fn markdown_view_cache_lives_in_the_gui_keyed_by_stream_path() {
+    use egui_dock::DockState;
+    use fasttail::ui::dock::{DockContext, FastTailTab, FastTailTabViewer, MarkdownCaches};
+    let mut tmp = tempfile::Builder::new().suffix(".md").tempfile().unwrap();
+    writeln!(tmp, "# Title\n\nSome **bold** text").unwrap();
+    tmp.flush().unwrap();
+    let mut engines = vec![TailEngine::open(tmp.path()).unwrap()];
+    assert_eq!(
+        engines[0].view_mode,
+        fasttail::tail_engine::ViewMode::Markdown
+    );
+    let path = engines[0].path.clone();
+    let mut open_files = vec![path.clone()];
+    let mut dock: DockState<FastTailTab> =
+        DockState::new(vec![FastTailTab::LogStream(path.clone())]);
+    let mut caches = MarkdownCaches::new();
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let dock_ctx = DockContext {
+            engines: &mut engines,
+            open_files: &mut open_files,
+            theme: &mut CyberTheme::Tron,
+            language: &mut Language::En,
+            global_rules: &mut Vec::new(),
+            screensaver_enabled: &mut false,
+            screensaver_timeout_mins: &mut 5,
+            telemetry_enabled: &mut false,
+            sound_enabled: &mut false,
+            borderless: &mut false,
+            show_line_numbers: &mut true,
+            font_size: &mut 13.0,
+            level_colors: &mut true,
+            auto_highlight: &mut false,
+            auto_highlight_kinds: &mut fasttail::auto_highlight::TokenKinds::default(),
+            size_unit: &mut fasttail::tail_engine::SizeUnit::Bytes,
+            search_history: &mut Vec::new(),
+            tab_closed: &mut false,
+            test_screensaver: &mut false,
+            language_auto: &mut false,
+            lock_enabled: &mut false,
+            lock_pin: &mut String::new(),
+            lock_now: &mut false,
+            quick_labels: &mut Vec::new(),
+            labels_changed: &mut false,
+            external_tools: &mut Vec::new(),
+            tool_runner: &mut fasttail::external_tools::ToolRunner::default(),
+            focused_stream: Some(path.clone()),
+            search_view: &mut fasttail::ui::dock::SearchViewPrefs::default(),
+            time_delta: &mut fasttail::ui::dock::TimeDeltaPrefs::default(),
+            find_all: &mut fasttail::find_all::FindAllSession::default(),
+            scratchpad: &mut Default::default(),
+            compare: &mut None,
+            filter_presets: &mut Vec::new(),
+            preset_events: &mut Default::default(),
+            palette_action: None,
+            markdown_caches: &mut caches,
+        };
+        let mut viewer = FastTailTabViewer { ctx: dock_ctx };
+        egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
+    });
+    out.textures_delta.clear();
+    assert_eq!(caches.len(), 1);
+    assert!(caches.contains_key(&path));
+}
+
+#[test]
 fn test_f3_scroll_to_line_target_consistency() {
     let mut tmp = NamedTempFile::new().unwrap();
     for i in 0..100 {
@@ -2794,6 +2860,7 @@ fn test_ctrl_f_focus_and_search() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2849,6 +2916,7 @@ fn test_ctrl_f_focus_and_search() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2894,6 +2962,7 @@ fn test_ctrl_f_focus_and_search() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2940,6 +3009,7 @@ fn test_ctrl_f_focus_and_search() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -2996,6 +3066,7 @@ fn test_ctrl_f_focus_and_search() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -3045,6 +3116,7 @@ fn test_ctrl_f_focus_and_search() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);
@@ -3147,6 +3219,7 @@ fn test_search_query_is_per_tab() {
             filter_presets: &mut Vec::new(),
             preset_events: &mut Default::default(),
             palette_action: None,
+            markdown_caches: &mut Default::default(),
         };
         let mut viewer = FastTailTabViewer { ctx: dock_ctx };
         egui_dock::DockArea::new(&mut dock).show_inside(ui, &mut viewer);

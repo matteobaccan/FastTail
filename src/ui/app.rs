@@ -119,6 +119,8 @@ pub struct FastTailApp {
     /// The side marked for compare, and the compare shown in the Compare tab.
     pub compare_mark: Option<crate::ui::compare_tab::CompareSide>,
     pub compare: Option<crate::ui::compare_tab::CompareView>,
+    /// Markdown view caches of the open streams (see `dock::MarkdownCaches`).
+    markdown_caches: crate::ui::dock::MarkdownCaches,
     /// Entry picker of a zip holding several files or of a tar archive, while it is shown.
     pub archive_picker: Option<crate::ui::zip_picker::ArchivePicker>,
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
@@ -627,6 +629,7 @@ impl FastTailApp {
             scratch_jump: None,
             compare_mark: None,
             compare: None,
+            markdown_caches: Default::default(),
             tray: None,
             tray_failed: false,
             hidden_in_tray: false,
@@ -3533,6 +3536,7 @@ impl FastTailApp {
             filter_presets: &mut self.config.filter_presets,
             preset_events: &mut preset_events,
             palette_action: self.palette_action.as_ref().map(|p| (p.path.clone(), p.id)),
+            markdown_caches: &mut self.markdown_caches,
         };
 
         let mut palette_taken = false;
@@ -3798,6 +3802,13 @@ impl FastTailApp {
 
         if tab_closed {
             self.save_dock_layout();
+        }
+
+        // A closed stream's Markdown cache goes with it (a few entries: cheap per frame).
+        if !self.markdown_caches.is_empty() {
+            let engines = &self.engines;
+            self.markdown_caches
+                .retain(|path, _| engines.iter().any(|e| &e.path == path));
         }
 
         if labels_changed {
