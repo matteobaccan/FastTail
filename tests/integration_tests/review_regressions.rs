@@ -281,6 +281,7 @@ fn test_theme_exposes_tab_backgrounds() {
         CyberTheme::Matrix,
         CyberTheme::Blade,
         CyberTheme::Light,
+        CyberTheme::Commander,
     ] {
         assert_ne!(theme.tab_active_bg(), theme.tab_inactive_bg());
     }

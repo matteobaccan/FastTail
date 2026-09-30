@@ -454,6 +454,7 @@ mod tests {
             CyberTheme::Matrix,
             CyberTheme::Blade,
             CyberTheme::Light,
+            CyberTheme::Commander,
         ] {
             for depth in [
                 ColorDepth::TrueColor,

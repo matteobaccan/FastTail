@@ -584,14 +584,16 @@ impl App {
         }
     }
 
-    /// `T`: the next theme, in the order of the GUI's list, saved as the ini's `theme`.
+    /// `Shift+T`: the next theme, in the order of the GUI's list, saved as the ini's
+    /// `theme`.
     fn cycle_theme(&mut self) {
         use crate::theme::CyberTheme;
         let next = match self.palette.theme {
             CyberTheme::Tron => CyberTheme::Matrix,
             CyberTheme::Matrix => CyberTheme::Blade,
             CyberTheme::Blade => CyberTheme::Light,
-            CyberTheme::Light => CyberTheme::Tron,
+            CyberTheme::Light => CyberTheme::Commander,
+            CyberTheme::Commander => CyberTheme::Tron,
         };
         self.palette.theme = next;
         if let Some(s) = self.settings.as_mut() {
@@ -1869,10 +1871,10 @@ impl App {
             "Up/Down j/k      move the cursor one row",
             "PgUp/PgDn        move it one page (also Ctrl+B / Ctrl+F)",
             "Shift+Up/Down    extend the selection from the cursor",
-            "Home g / End G   first / last row (the last one follows)",
+            "Home g / End Shift+G  first / last row (the last one follows)",
             "Left/Right 0     scroll sideways one cell / back to column 0",
             "Space            toggle follow",
-            "/  n  N  Esc     search, next, previous, clear (also F3 / Shift+F3)",
+            "/ n Shift+N Esc  search, next, previous, clear (also F3 / Shift+F3)",
             "i  x             include / exclude filter",
             "l                cycle the minimum level",
             "c                cycle collapse: off, exact, numbers",
@@ -1884,9 +1886,9 @@ impl App {
             "Ctrl+K           cursor row in context (filters off), again back",
             "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
             "o                open a file, pattern or archive entry",
-            "O  S             open a session / save the streams as a session",
+            "Shift+O Shift+S  open a session / save the streams as a session",
             "t                time range: from / to (14:02, -15m, now)",
-            "T                next theme: Tron, Matrix, Blade, Light",
+            "Shift+T          next theme: Tron, Matrix, Blade, Light, Commander",
             "a                ANSI colours: auto, render, strip, raw (^[)",
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
             "y  Ctrl+C        copy the selection or the cursor row",
@@ -3111,7 +3113,7 @@ mod tests {
         let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
         app.apply(Action::ToggleHelp);
         let tall = render(&mut app, 100, 60);
-        for key in ["F3", "Ctrl+G", "O  S", "?  F1", "HEX", "ANSI"] {
+        for key in ["F3", "Ctrl+G", "Shift+O", "Shift+T", "?  F1", "HEX", "ANSI"] {
             assert!(tall.iter().any(|l| l.contains(key)), "{key}: {tall:#?}");
         }
         let wide = render(&mut app, 170, 30);
@@ -3295,6 +3297,8 @@ mod tests {
         for _ in 0..3 {
             app.apply(Action::CycleTheme);
         }
+        assert_eq!(app.palette.theme, CyberTheme::Commander, "the blue classic");
+        app.apply(Action::CycleTheme);
         assert_eq!(app.palette.theme, CyberTheme::Tron, "back to the first");
     }
 

@@ -513,11 +513,12 @@ pub const ENUM_SETTINGS: &[EnumSettingMeta] = &[
     },
 ];
 
-const THEMES: [CyberTheme; 4] = [
+const THEMES: [CyberTheme; 5] = [
     CyberTheme::Tron,
     CyberTheme::Matrix,
     CyberTheme::Blade,
     CyberTheme::Light,
+    CyberTheme::Commander,
 ];
 const SIZE_UNITS: [SizeUnit; 4] = [SizeUnit::Bytes, SizeUnit::MB, SizeUnit::GB, SizeUnit::Hex];
 

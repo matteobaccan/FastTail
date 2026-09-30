@@ -147,6 +147,7 @@ fn theme_of(name: Option<&str>, configured: CyberTheme) -> CyberTheme {
         Some("matrix") => CyberTheme::Matrix,
         Some("blade") => CyberTheme::Blade,
         Some("light") => CyberTheme::Light,
+        Some("commander") => CyberTheme::Commander,
         _ => configured,
     }
 }
