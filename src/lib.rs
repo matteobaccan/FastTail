@@ -37,6 +37,7 @@ pub mod stdin_source;
 pub mod tail_engine;
 pub mod theme;
 pub mod time_histogram;
+pub mod time_range_text;
 pub mod timestamp;
 pub mod tray;
 pub mod ui;
