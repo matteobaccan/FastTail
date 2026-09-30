@@ -220,3 +220,36 @@ fn restore_reopens_the_saved_open_files_with_their_state() {
     assert_eq!(restored.skipped, vec![gone, bundle]);
     assert_eq!(restored.engines[1].include_filter(), "two");
 }
+
+#[test]
+fn the_gui_restore_follows_open_files_changed_by_the_terminal() {
+    use fasttail::ui::dock::FastTailTab;
+    use fasttail::ui::FastTailApp;
+    let dir = tempfile::tempdir().unwrap();
+    let [a, b, c] = ["a.log", "b.log", "c.log"].map(|n| {
+        let p = dir.path().join(n);
+        std::fs::write(&p, "line\n").unwrap();
+        p
+    });
+    // The GUI saved a layout with a and b; the terminal then closed a and opened c.
+    let layout = egui_dock::DockState::new(vec![
+        FastTailTab::LogStream(a.clone()),
+        FastTailTab::LogStream(b.clone()),
+    ]);
+    let mut cfg = config(dir.path());
+    cfg.dock_layout = Some(ron::to_string(&layout).unwrap());
+    cfg.open_files = vec![b.clone(), c.clone()];
+
+    let app = FastTailApp::from_config(cfg);
+    let engines: Vec<_> = app.engines.iter().map(|e| e.path.clone()).collect();
+    assert_eq!(engines, vec![b.clone(), c.clone()]);
+    let tabs: Vec<_> = app
+        .dock_state
+        .iter_all_tabs()
+        .filter_map(|(_, t)| match t {
+            FastTailTab::LogStream(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tabs, vec![b, c], "a's tab is dropped, c gets one");
+}

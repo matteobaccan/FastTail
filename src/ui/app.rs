@@ -542,6 +542,14 @@ impl FastTailApp {
             .unwrap_or_else(|| DockState::new(vec![]));
         // A layout saved by 0.13.0 or earlier may hold an empty main surface.
         crate::ui::find_results::ensure_main_surface(&mut dock_state);
+        // The terminal interface keeps the open files but not the dock layout: the tabs of
+        // files it closed go here, the files it opened get a tab once the streams are
+        // restored (below).
+        let open = config.open_files.clone();
+        crate::ui::find_results::retain_tabs(&mut dock_state, |tab| match tab {
+            FastTailTab::LogStream(p) => open.iter().any(|o| paths_equal(o, p)),
+            _ => true,
+        });
 
         let mut floating_window_rects = std::collections::HashMap::new();
         for (surf_index, surface) in dock_state.iter_surfaces_indexed() {
@@ -633,6 +641,13 @@ impl FastTailApp {
             let wake = Self::make_wake(&app.egui_ctx);
             let restored = crate::workspace::open_all(&tabs, &app.config, Some(wake));
             app.engines.extend(restored.engines);
+            // Open files the layout has no tab for (opened in the terminal interface) join
+            // the main area.
+            for path in app.config.open_files.clone() {
+                if !tabs.iter().any(|t| paths_equal(t, &path)) {
+                    app.open_log_file(path);
+                }
+            }
         } else {
             // Clean dock layout: open previously saved files into dock
             for path in app.config.open_files.clone() {
