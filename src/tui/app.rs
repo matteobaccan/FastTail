@@ -110,6 +110,8 @@ pub enum PromptKind {
     Exclude,
     /// The note of the bookmark on this line.
     Note(usize),
+    /// Go to a line or a time.
+    Goto,
 }
 
 pub struct Prompt {
@@ -238,6 +240,15 @@ impl App {
                     self.message = Some(format!("Not found: {}", tab.engine.search_query));
                 }
             }
+            if let Some(result) = tab.engine.take_goto_time_result() {
+                self.message = goto_target(tab, result, "that time");
+            }
+            if let Some(line) = tab.engine.pending_jump.take() {
+                // The context view shows the line it was entered on.
+                if let Some(row) = tab.engine.get_visible_row_of_line(line) {
+                    tab.set_cursor(row);
+                }
+            }
             if let Some(line) = tab.engine.scroll_to_line.take() {
                 if let Some(row) = tab.engine.get_visible_row_of_line(line) {
                     // A jump (search hit, go-to) moves the cursor onto the line.
@@ -354,6 +365,16 @@ impl App {
             }
             // A note bookmarks the line; an empty one removes the note, not the bookmark.
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
+            PromptKind::Goto => {
+                let current = tab.cursor_line().unwrap_or(0);
+                let target = tab.engine.resolve_goto(&text, current);
+                if target.is_some_and(|t| t.waiting) {
+                    // The jump happens when the timing ends (see `tick`).
+                    self.message = Some("Timing the file to find that time...".into());
+                } else {
+                    self.message = goto_target(tab, target, &text);
+                }
+            }
         }
     }
 
@@ -372,6 +393,7 @@ impl App {
             PromptKind::Include => e.include_filter().to_string(),
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
+            PromptKind::Goto => String::new(),
         };
         self.prompt = Some(Prompt { kind, text });
     }
@@ -407,6 +429,7 @@ impl App {
             Action::ToggleHelp => self.show_help = !self.show_help,
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
+            Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::EditNote => match self.tabs[self.active].cursor_line() {
                 Some(line) => self.open_prompt(PromptKind::Note(line)),
                 None => self.message = Some("No row for a note".into()),
@@ -651,6 +674,11 @@ impl App {
                     self.message = Some("No search hits".into());
                 }
             }
+            Action::ToggleContext => toggle_context(tab, &mut self.message),
+            // In the context view, Esc returns to the filtered rows first.
+            Action::ClearSearch if tab.engine.context_line().is_some() => {
+                toggle_context(tab, &mut self.message)
+            }
             Action::ClearSearch => {
                 tab.engine.search_query.clear();
                 tab.engine.update_search("");
@@ -796,8 +824,21 @@ impl App {
                     .style(title_style)
                     .right_aligned(),
             );
-        let inner = block.inner(area);
+        let mut inner = block.inner(area);
         frame.render_widget(block, area);
+        if tab.engine.context_line().is_some() && inner.height > 1 {
+            // The context view: every line, the filters suspended until Ctrl+K or Esc.
+            let banner = Rect { height: 1, ..inner };
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    " In context: filters suspended. Ctrl+K or Esc returns",
+                    Style::default().fg(Color::Black).bg(palette.accent()),
+                )),
+                banner,
+            );
+            inner.y += 1;
+            inner.height -= 1;
+        }
         let (lines, row_count) = stream_rows(tab, &palette, inner.height as usize);
         self.hits.windows.push(WindowHit {
             tab: idx,
@@ -906,6 +947,7 @@ impl App {
             PromptKind::Include => "Include filter",
             PromptKind::Exclude => "Exclude filter",
             PromptKind::Note(_) => "Bookmark note",
+            PromptKind::Goto => "Go to line (N, +N, -N) or time (14:02)",
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
         let Some(p) = &self.prompt else {
@@ -945,6 +987,8 @@ impl App {
             "b  Ctrl+F2       bookmark the cursor row, on or off",
             "] F2 / [ Shift+F2  next / previous bookmark (wraps)",
             "m                note of the cursor row's bookmark",
+            "Ctrl+K           cursor row in context (filters off), again back",
+            "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
             "y  Ctrl+C        copy the selection or the cursor row",
             "                 (Ctrl+C quits when nothing is selected)",
             "q                quit",
@@ -1029,6 +1073,48 @@ fn view_state_text(e: &TailEngine) -> String {
         "no filter".into()
     } else {
         parts.join("  ")
+    }
+}
+
+/// Moves the cursor to a go-to target; the status message when there is one to show.
+fn goto_target(
+    tab: &mut Tab,
+    target: Option<crate::tail_engine::GotoTarget>,
+    typed: &str,
+) -> Option<String> {
+    let Some(t) = target else {
+        return Some(format!("Cannot go to \"{typed}\""));
+    };
+    // The exact line: a collapsed group hiding it opens.
+    tab.engine.reveal_line(t.line);
+    if let Some(row) = tab.engine.get_visible_row_of_line(t.line) {
+        tab.set_cursor(row);
+    }
+    t.hidden.then(|| {
+        format!(
+            "Line {} is hidden by the filters: showing {}",
+            t.requested + 1,
+            t.line + 1
+        )
+    })
+}
+
+/// Enters the context view on the cursor row, or leaves it with the cursor back on the
+/// line it was entered on.
+fn toggle_context(tab: &mut Tab, message: &mut Option<String>) {
+    if let Some(line) = tab.engine.context_line() {
+        tab.engine.leave_context();
+        if let Some(row) = tab.engine.get_visible_row_of_line(line) {
+            tab.set_cursor(row);
+        }
+        tab.engine.follow_tail = false;
+        return;
+    }
+    let Some(line) = tab.cursor_line() else {
+        return;
+    };
+    if !tab.engine.enter_context(line) {
+        *message = Some("Show in context needs an active filter".into());
     }
 }
 
@@ -1396,6 +1482,82 @@ mod tests {
         assert!(screen.iter().any(|l| l.contains("88*")), "{screen:#?}");
         app.apply(Action::ToggleBookmark);
         assert!(!app.tabs[0].engine.is_bookmarked(87));
+    }
+
+    fn errors_every_tenth(n: usize) -> String {
+        (1..=n)
+            .map(|i| {
+                let level = if i % 10 == 0 { "ERROR" } else { "INFO" };
+                format!("{level} line {i}\n")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ctrl_k_shows_the_cursor_row_in_context_and_esc_returns() {
+        let body = errors_every_tenth(200);
+        let (mut app, _dir) = app_with(&[("app.log", body.as_str())], false);
+        app.tabs[0].engine.set_include_filter("ERROR");
+        render(&mut app, 80, 20);
+        // ERROR lines are 10, 20, ...: row 4 is line 50 (index 49).
+        app.tabs[0].set_cursor(4);
+        assert_eq!(app.tabs[0].cursor_line(), Some(49));
+        app.apply(Action::ToggleContext);
+        let screen = render(&mut app, 80, 20);
+        assert!(app.tabs[0].engine.context_line().is_some());
+        assert_eq!(
+            app.tabs[0].cursor_line(),
+            Some(49),
+            "same line, every row shown"
+        );
+        assert_eq!(app.tabs[0].cursor, 49);
+        assert!(
+            screen.iter().any(|l| l.contains("filters suspended")),
+            "{screen:#?}"
+        );
+        app.apply(Action::ClearSearch);
+        render(&mut app, 80, 20);
+        assert!(app.tabs[0].engine.context_line().is_none());
+        assert_eq!(app.tabs[0].cursor_line(), Some(49), "back on the same line");
+        assert_eq!(app.tabs[0].cursor, 4, "among the ERROR rows");
+    }
+
+    #[test]
+    fn ctrl_k_without_a_filter_says_why() {
+        let (mut app, _dir) = app_with(&[("test.log", LOG)], false);
+        render(&mut app, 70, 12);
+        app.apply(Action::ToggleContext);
+        assert!(app.message.as_deref().unwrap().contains("filter"));
+    }
+
+    #[test]
+    fn go_to_moves_the_cursor_to_a_line_or_the_next_visible_one() {
+        let body = errors_every_tenth(200);
+        let (mut app, _dir) = app_with(&[("app.log", body.as_str())], false);
+        render(&mut app, 80, 20);
+        let go = |app: &mut App, text: &str| {
+            app.apply(Action::GoTo);
+            let prompt = app.prompt.take().expect("the go-to dialog");
+            assert_eq!(prompt.kind, PromptKind::Goto);
+            app.submit_prompt(Prompt {
+                text: text.into(),
+                ..prompt
+            });
+            app.tick();
+        };
+        go(&mut app, "120");
+        assert_eq!(app.tabs[0].cursor_line(), Some(119));
+        go(&mut app, "-19");
+        assert_eq!(app.tabs[0].cursor_line(), Some(100));
+        // Filtered to ERROR: line 45 is hidden, the next visible one is 50.
+        app.tabs[0].engine.set_include_filter("ERROR");
+        render(&mut app, 80, 20);
+        app.message = None;
+        go(&mut app, "45");
+        assert_eq!(app.tabs[0].cursor_line(), Some(49));
+        assert!(app.message.as_deref().unwrap().contains("hidden"));
+        go(&mut app, "nonsense");
+        assert!(app.message.as_deref().unwrap().contains("Cannot go to"));
     }
 
     #[test]

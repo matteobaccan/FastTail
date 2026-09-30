@@ -26,7 +26,7 @@
 - [x] 3.1 Move the prototype into the library module `tui` with `tui::run(args, config)`; `src/bin/fasttail-tui.rs` as a thin `main`; keep `--bench`, `--capture`, `--stats` hidden for tests and measurements
 - [x] 3.2 Open everything through `workspace::open_target`; workspace restore, `--fresh`, `--session`, command-line paths as in the GUI
 - [x] 3.3 Keyboard cursor row, `Shift+↑` / `Shift+↓` selection, row actions on selection or cursor; cell-width horizontal scroll
-- [ ] 3.4 Bookmarks (`b`, `Ctrl+F2`, `]` `[`, `F2` `Shift+F2`), note dialog (`m`), note in the status bar, `Ctrl+K` context view with banner, go-to dialog (`Ctrl+G`, `:`)
+- [x] 3.4 Bookmarks (`b`, `Ctrl+F2`, `]` `[`, `F2` `Shift+F2`), note dialog (`m`), note in the status bar, `Ctrl+K` context view with banner, go-to dialog (`Ctrl+G`, `:`)
 - [ ] 3.5 HEX view (`h`): width-driven bytes per row, visible rows only, byte hits painted, `n` / `N`, place kept both ways, offset go-to, follow
 - [ ] 3.6 ANSI rendering by mode (`a`), raw mode with `^[`, no escape sequence written from log text; precedence search over rule over ANSI
 - [ ] 3.7 Viewing dialogs on a shared form toolkit (text field, number field, check box, radio list, reorderable list, colour field): archive entry picker, time range (text fields), open file, open and save session (recent sessions updated, `fasttail.ini` refused), help listing every key
