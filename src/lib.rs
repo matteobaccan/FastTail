@@ -44,6 +44,8 @@ pub mod time_range_text;
 pub mod timestamp;
 #[cfg(feature = "gui")]
 pub mod tray;
+#[cfg(feature = "tui")]
+pub mod tui;
 #[cfg(feature = "gui")]
 pub mod ui;
 pub mod wildcard;
