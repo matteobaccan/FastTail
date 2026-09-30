@@ -86,8 +86,10 @@ plus binary. Maintainer: Matteo Baccan. Licence: MIT.
 **Nightly release (maintainer decision, 2026-09-30).** Every evening after 18:00 (Europe/Rome)
 a patch release is cut from `main` (`0.15.1`, `0.15.2`, ...) when something was merged since
 the last tag; nothing merged, no release. Steps 1 to 3 above are skipped for it (the
-maintainer tests the published build); step 4 applies (release PR, CI green, merge, tag
-`vx.y.z`), with the CHANGELOG `[Unreleased]` entries of the day as its section. A minor
+maintainer tests the published build); step 4 applies (release PR, CI green, merge), with the CHANGELOG `[Unreleased]` entries
+of the day as its section. The tag is automatic: `.github/workflows/release-tag.yml` tags
+`vx.y.z` when the version reaches `main` and starts `build.yml` on the tag (agent
+sessions cannot push tags). A minor
 version (`0.16.0`, ..., `0.20.0`) is cut only when a milestone of the plan is complete, with
 the full process. Work that is not ready stays out of `main` or is described in the
 CHANGELOG as a preview.
