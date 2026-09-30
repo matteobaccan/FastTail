@@ -143,6 +143,7 @@ impl ActiveRenderer {
     }
 
     /// Reads the backend from the eframe creation context.
+    #[cfg(feature = "gui")]
     pub fn from_creation_context(cc: &eframe::CreationContext<'_>) -> Self {
         let fallback = fallback_used();
         if let Some(state) = &cc.wgpu_render_state {

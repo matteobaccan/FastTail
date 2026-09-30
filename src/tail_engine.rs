@@ -1029,7 +1029,7 @@ pub(crate) fn find_case_insensitive_cb(
 /// Efficient case-insensitive substring search.
 /// Byte ranges of every non-overlapping, case-insensitive occurrence of `needle_lower`
 /// (already lower-cased) in `haystack`.
-pub(crate) fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(usize, usize)> {
+pub fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     find_case_insensitive_cb(haystack, needle_lower, |s, e| {
         out.push((s, e));

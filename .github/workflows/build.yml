@@ -86,6 +86,19 @@ jobs:
       - name: 📎 Clippy
         run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
 
+      # The terminal-only build (openspec/changes/tui-interface): it must compile and lint
+      # on its own, and no GUI crate may creep into it.
+      - name: 🖥️ Terminal-only build
+        shell: bash
+        run: |
+          cargo clippy --no-default-features --features tui --lib --target ${{ matrix.target }} -- -D warnings
+          gui=$(cargo tree --no-default-features --features tui -e normal --prefix none --target ${{ matrix.target }} | grep -E '^(egui|eframe|egui_dock|egui_commonmark|wgpu|winit|glow|rfd) ' || true)
+          if [ -n "$gui" ]; then
+            echo "GUI crates in the terminal-only build:"
+            echo "$gui"
+            exit 1
+          fi
+
       # A hung test fails the job in minutes instead of holding the runner for hours.
       - name: 🧪 Run test suite
         timeout-minutes: 5

@@ -31,6 +31,7 @@ pub mod paths;
 pub mod print_mode;
 pub mod renderer;
 pub mod scan_job;
+#[cfg(feature = "gui")]
 pub mod screensaver;
 pub mod session;
 pub mod settings_model;
@@ -41,7 +42,9 @@ pub mod theme;
 pub mod time_histogram;
 pub mod time_range_text;
 pub mod timestamp;
+#[cfg(feature = "gui")]
 pub mod tray;
+#[cfg(feature = "gui")]
 pub mod ui;
 pub mod wildcard;
 pub mod workspace;

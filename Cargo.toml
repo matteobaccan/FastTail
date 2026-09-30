@@ -34,10 +34,11 @@ exclude = [
 
 [dependencies]
 # UI Framework & Docking
-eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland", "links"] }
-egui = "0.36"
-egui_dock = { version = "0.21", features = ["serde"] }
-egui_commonmark = "0.25"
+# Optional: only the `gui` feature compiles them (see [features]).
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland", "links"], optional = true }
+egui = { version = "0.36", optional = true }
+egui_dock = { version = "0.21", features = ["serde"], optional = true }
+egui_commonmark = { version = "0.25", optional = true }
 memchr = "2"
 
 # File I/O & Streaming
@@ -74,7 +75,7 @@ toml = "1.0"
 rust-ini = "0.21"
 regex = "1.11"
 smallvec = "1.13"
-rfd = "0.17"
+rfd = { version = "0.17", optional = true }
 
 # Telemetry
 sysinfo = "0.39"
@@ -85,12 +86,34 @@ similar = "3"
 winreg = "0.56"
 
 [features]
-default = []
+# Both interfaces by default. `gui` is the egui window (`fasttail`); `tui` the terminal
+# interface (`fasttail-tui`, openspec/changes/tui-interface). A terminal-only build is
+# `--no-default-features --features tui` and compiles no GUI crate.
+default = ["gui", "tui"]
+gui = ["dep:eframe", "dep:egui", "dep:egui_dock", "dep:egui_commonmark", "dep:rfd"]
+tui = []
 audio = ["dep:rodio"]
 
 [dependencies.rodio]
 version = "0.22"
 optional = true
+
+[[bin]]
+name = "fasttail"
+path = "src/main.rs"
+required-features = ["gui"]
+
+# The integration tests drive the GUI (egui contexts, dock) as well as the engine.
+[[test]]
+name = "integration_tests"
+path = "tests/integration_tests/main.rs"
+required-features = ["gui"]
+
+# Runs the `fasttail` executable (print mode) and drives the app.
+[[test]]
+name = "print_mode"
+path = "tests/print_mode.rs"
+required-features = ["gui"]
 
 [dev-dependencies]
 tempfile = "3.17"

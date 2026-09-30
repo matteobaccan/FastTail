@@ -264,12 +264,17 @@ fn default_font_size() -> f32 {
     DEFAULT_FONT_SIZE
 }
 
+/// Height of the search results pane until the user drags it.
+pub const DEFAULT_SEARCH_PANE_HEIGHT: f32 = 180.0;
+/// Gap tint threshold of the time delta column until the user changes it.
+pub const DEFAULT_TIME_DELTA_GAP_MS: u64 = 1000;
+
 fn default_search_pane_height() -> f32 {
-    crate::ui::dock::DEFAULT_SEARCH_PANE_HEIGHT
+    DEFAULT_SEARCH_PANE_HEIGHT
 }
 
 fn default_time_delta_gap_ms() -> u64 {
-    crate::ui::dock::DEFAULT_TIME_DELTA_GAP_MS
+    DEFAULT_TIME_DELTA_GAP_MS
 }
 
 /// Height range accepted for the search results pane in `fasttail.ini`.
@@ -1657,7 +1662,7 @@ pub fn write_rule_set(path: &Path, rules: &[HighlightRule]) -> std::io::Result<(
     rule_set_to_ini(rules)
         .write_to(&mut buf)
         .map_err(std::io::Error::other)?;
-    let mut file = crate::ui::dock::create_export_file(path)?;
+    let mut file = crate::paths::create_export_file(path)?;
     file.write_all(&buf)?;
     file.flush()
 }
