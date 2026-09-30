@@ -220,18 +220,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
             Err(e) => notices.push(e),
         }
     }
-    if tabs.is_empty() {
-        for n in &notices {
-            eprintln!("fasttail-tui: {n}");
-        }
-        let origin = if settings.found {
-            format!("the workspace in {}", settings.path.display())
-        } else {
-            format!("no {} found", settings.path.display())
-        };
-        eprintln!("fasttail-tui: nothing to open ({origin})\n\n{USAGE}");
-        return 2;
-    }
+    // Nothing to open is an empty workspace, as in the GUI: `o` opens a file there.
     // The command-line filters and --no-follow apply to the streams named on the command
     // line and to standard input, as in the GUI; the restored ones keep their own state.
     for tab in &mut tabs {
@@ -413,7 +402,12 @@ where
         };
         if let Some(n) = scroll_left.as_mut() {
             // Measurement aid: once indexed, page down one page per tick.
-            if !loading && !app.tabs[app.active].engine.index_pending {
+            if !loading
+                && app
+                    .tabs
+                    .get(app.active)
+                    .is_none_or(|t| !t.engine.index_pending)
+            {
                 if *n == 0 {
                     app.quit = true;
                 } else {

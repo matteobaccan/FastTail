@@ -440,6 +440,9 @@ pub struct App {
     count: Option<u32>,
 }
 
+/// What an empty workspace says.
+const NO_FILE: &str = "No file open: o opens one, Ctrl+O a session, q quits";
+
 /// How often the configuration is saved while it changes, as in the GUI.
 const SAVE_EVERY: Duration = Duration::from_secs(2);
 
@@ -495,6 +498,9 @@ impl App {
 
     /// Streams on screen, the focused one first.
     pub fn visible_tabs(&self) -> Vec<usize> {
+        if self.tabs.is_empty() {
+            return Vec::new();
+        }
         let mut out = vec![self.active];
         for place in self.places() {
             if let Some(i) = self.shown_at(&place) {
@@ -624,13 +630,8 @@ impl App {
             .as_ref()
             .and_then(DockLayout::main_pane)
             .and_then(|p| p.reconcile(&open, &floating));
-        self.dock = match main {
-            Some(pane) => pane,
-            None if !docked.is_empty() => Pane::with_streams(&docked),
-            // Every stream floats: the dock takes the bottom window back.
-            None if !self.floats.is_empty() => self.floats.remove(0).pane,
-            None => Pane::with_streams(&open),
-        };
+        // Every stream floating (or none open) leaves the dock empty, as in the GUI.
+        self.dock = main.unwrap_or_else(|| Pane::with_streams(&docked));
         self.focus_tab(self.active);
         self.dock_dirty = false;
     }
@@ -656,9 +657,9 @@ impl App {
     }
 
     /// The tree as `[dock] layout`: standard input left out, the floating windows of
-    /// the layout it came from kept (their streams leave the main surface). `None`
-    /// when no stream is left for the main surface.
-    fn dock_ron(&self) -> Option<String> {
+    /// the layout it came from kept (their streams leave the main surface); an empty
+    /// dock is an empty main surface.
+    fn dock_ron(&self) -> String {
         let stdin: Vec<PathBuf> = self
             .tabs
             .iter()
@@ -667,7 +668,7 @@ impl App {
             .collect();
         let without_stdin =
             |pane: Pane| stdin.iter().try_fold(pane, |pane, s| pane.remove_stream(s));
-        let pane = without_stdin(self.dock.clone())?;
+        let pane = without_stdin(self.dock.clone()).unwrap_or_else(|| Pane::with_streams(&[]));
         let windows: Vec<(Pane, crate::dock_layout::Placement)> = self
             .floats
             .iter()
@@ -689,7 +690,7 @@ impl App {
         };
         layout.set_main_pane(&pane);
         layout.set_windows(&windows);
-        Some(layout.to_ron())
+        layout.to_ron()
     }
 
     fn set_dock(&mut self, dock: Pane) {
@@ -699,8 +700,12 @@ impl App {
         }
     }
 
+    /// The focused stream's path (empty with no stream open).
     fn active_path(&self) -> PathBuf {
-        self.tabs[self.active].engine.path.clone()
+        self.tabs
+            .get(self.active)
+            .map(|t| t.engine.path.clone())
+            .unwrap_or_default()
     }
 
     /// The path of the leaf of the focused stream.
@@ -922,6 +927,7 @@ impl App {
     /// `N` `e` `E` `w` `W`); any other action runs once.
     pub fn apply_counted(&mut self, action: Action, count: u32) {
         match action {
+            _ if self.tabs.is_empty() => self.apply(action),
             Action::NextError | Action::PrevError | Action::NextWarn | Action::PrevWarn => {
                 let errors = matches!(action, Action::NextError | Action::PrevError);
                 let forward = matches!(action, Action::NextError | Action::NextWarn);
@@ -1082,21 +1088,15 @@ impl App {
     /// configuration file (tests, benchmarks) nothing is written.
     pub fn save_config(&mut self) {
         self.last_save = Instant::now();
-        let layout = if self.dock_dirty {
-            self.dock_ron()
-        } else {
-            None
-        };
+        let layout = self.dock_dirty.then(|| self.dock_ron());
         let Some(settings) = self.settings.as_mut() else {
             return;
         };
         if settings.path.as_os_str().is_empty() {
             return;
         }
-        if self.dock_dirty {
-            if layout.is_some() {
-                settings.config.dock_layout = layout;
-            }
+        if let Some(layout) = layout {
+            settings.config.dock_layout = Some(layout);
             self.dock_dirty = false;
         }
         for tab in &mut self.tabs {
@@ -1331,7 +1331,7 @@ impl App {
         let count = streams.len();
         let session = crate::session::Session {
             streams,
-            dock_layout: self.dock_ron(),
+            dock_layout: Some(self.dock_ron()),
         };
         if let Err(e) = session.save_to(file) {
             self.message = Some(format!("Cannot save {}: {e}", file.display()));
@@ -1796,10 +1796,10 @@ impl App {
 
     /// `Ctrl+W`: the focused stream closes, as the GUI's tab ✕ does: its state is kept
     /// in the configuration, its window goes when it was its last tab, and the focus
-    /// moves to the stream shown in its place. The last stream stays.
+    /// moves to the stream shown in its place. After the last one the workspace is
+    /// empty.
     fn close_stream(&mut self) {
-        if self.tabs.len() < 2 {
-            self.message = Some("The only stream: o opens another, q quits".into());
+        if self.tabs.is_empty() {
             return;
         }
         let i = self.active;
@@ -1813,7 +1813,6 @@ impl App {
         self.drag = None;
         self.last_click = None;
         self.dock_drag = None;
-        let rest = self.open_paths();
         match place {
             Place::Float(f) => {
                 match self.floats[f].pane.clone().remove_stream(&path) {
@@ -1829,7 +1828,7 @@ impl App {
                     .dock
                     .clone()
                     .remove_stream(&path)
-                    .unwrap_or_else(|| Pane::with_streams(&rest));
+                    .unwrap_or_else(|| Pane::with_streams(&[]));
                 self.set_dock(dock);
             }
         }
@@ -1844,10 +1843,18 @@ impl App {
                 let first = self.dock.leaf_paths().into_iter().next()?;
                 self.shown_in(&first)
             })
+            .or_else(|| {
+                let last = self.floats.len().checked_sub(1)?;
+                self.shown_at(&Place::Float(last))
+            })
             .unwrap_or(0)
-            .min(self.tabs.len() - 1);
+            .min(self.tabs.len().saturating_sub(1));
         self.focus_tab(self.active);
-        self.message = Some(format!("Closed {}", tab.title));
+        self.message = Some(if self.tabs.is_empty() {
+            format!("Closed {}: no file open, o opens one", tab.title)
+        } else {
+            format!("Closed {}", tab.title)
+        });
     }
 
     /// `Alt+X`: the focused window closes; its tabs join the window beside it.
@@ -1979,8 +1986,8 @@ impl App {
         }
     }
 
-    /// `stream` in a new floating window at `rect`, taken out of the window it was in.
-    /// The dock keeps at least one stream.
+    /// `stream` in a new floating window at `rect`, taken out of the window it was in
+    /// (the dock may be left empty).
     fn float_stream(&mut self, stream: &Path, rect: Rect) {
         match self.place_of(stream) {
             Some(Place::Float(f)) => match self.floats[f].pane.clone().remove_stream(stream) {
@@ -1989,15 +1996,14 @@ impl App {
                     self.floats.remove(f);
                 }
             },
-            _ => match self.dock.clone().remove_stream(stream) {
-                Some(dock) => self.set_dock(dock),
-                None => {
-                    self.message = Some(
-                        "The dock keeps one window: open another file (o) to float this one".into(),
-                    );
-                    return;
-                }
-            },
+            _ => {
+                let dock = self
+                    .dock
+                    .clone()
+                    .remove_stream(stream)
+                    .unwrap_or_else(|| Pane::with_streams(&[]));
+                self.set_dock(dock);
+            }
         }
         self.floats.push(Float {
             pane: Pane::with_streams(&[stream.to_path_buf()]),
@@ -2009,9 +2015,15 @@ impl App {
         }
     }
 
-    /// The floating window `f` docks back: its tabs join the first window of the dock.
+    /// The floating window `f` docks back: its tabs join the first window of the dock
+    /// (an empty dock takes the window whole).
     fn dock_float(&mut self, f: usize) {
         let float = self.floats.remove(f);
+        if self.dock.streams().is_empty() {
+            self.set_dock(float.pane);
+            self.focus_tab(self.active);
+            return;
+        }
         let first = self
             .dock
             .leaf_paths()
@@ -2046,6 +2058,8 @@ impl App {
             self.dock_dirty = true;
         }
         let dock = match zone.split() {
+            // An empty dock takes the stream whole, wherever it is dropped.
+            _ if self.dock.streams().is_empty() => Pane::with_streams(&[stream.to_path_buf()]),
             Some((dir, after)) => self.dock.clone().split_with(leaf, dir, after, stream),
             None => self.dock.clone().move_stream(leaf, stream),
         };
@@ -2057,6 +2071,23 @@ impl App {
 
     pub fn apply(&mut self, action: Action) {
         let n_tabs = self.tabs.len();
+        // With no file open only what opens one (or leaves) acts.
+        if n_tabs == 0 {
+            match action {
+                Action::Quit | Action::CopyOrQuit => self.quit = true,
+                Action::ToggleHelp => {
+                    self.show_help = !self.show_help;
+                    self.help_sel = help_step(HELP.len() - 1, 1);
+                    self.help_top = 0;
+                }
+                Action::OpenFile => self.open_browser(),
+                Action::OpenSession => self.open_sessions(),
+                Action::Settings => self.open_settings(),
+                Action::CycleTheme => self.cycle_theme(),
+                _ => self.message = Some(NO_FILE.into()),
+            }
+            return;
+        }
         let row_action = matches!(
             action,
             Action::ToggleBookmark
@@ -2266,7 +2297,10 @@ impl App {
                 } else {
                     // Over a window: its zones; anywhere else: a floating window.
                     let over = self.hits.leaves.iter().find(|l| l.area.contains(at));
+                    let empty = self.dock.streams().is_empty();
                     Some(match over {
+                        // The empty dock is one drop zone.
+                        Some(l) if empty => (l.path.clone(), Zone::Center, l.area),
                         Some(l) => match dock::zone_at(l.area, col, row) {
                             Zone::Float => (
                                 l.path.clone(),
@@ -2710,6 +2744,23 @@ impl App {
     /// the pointer it would fill.
     fn draw_dock(&mut self, frame: &mut Frame, area: Rect) {
         let (leaves, dividers) = dock::layout(&self.dock, area);
+        if self.dock.streams().is_empty() {
+            // An empty dock: the background, a hint and one place to drop a window.
+            let hint = if self.tabs.is_empty() {
+                NO_FILE
+            } else {
+                "Alt+F on a floating window docks it here"
+            };
+            // On the bottom row, where a new floating window does not cover it.
+            let y = area.bottom().saturating_sub(1).max(area.y);
+            frame.render_widget(
+                Paragraph::new(Line::styled(hint, Style::default().fg(self.palette.dim())))
+                    .centered(),
+                Rect::new(area.x, y, area.width, 1.min(area.height)),
+            );
+            self.hits.leaves = leaves;
+            return;
+        }
         for leaf in &leaves {
             let Some(Pane::Leaf { tabs, active }) = self.dock.get(&leaf.path).cloned() else {
                 continue;
@@ -2955,11 +3006,11 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
             );
-        let tab = &self.tabs[self.active];
-        let note = tab
-            .cursor_line()
-            .and_then(|l| tab.engine.bookmark_note(l))
-            .map(|n| n.chars().take(NOTE_PREVIEW_CHARS).collect::<String>());
+        let note = self.tabs.get(self.active).and_then(|tab| {
+            tab.cursor_line()
+                .and_then(|l| tab.engine.bookmark_note(l))
+                .map(|n| n.chars().take(NOTE_PREVIEW_CHARS).collect::<String>())
+        });
         let inner = block.inner(area);
         let line = match (&self.message, note) {
             (Some(m), _) => Line::styled(m.clone(), Style::default().fg(self.palette.accent())),
@@ -5799,14 +5850,24 @@ mod tests {
         assert_eq!(app.active, 0);
         let screen = render(&mut app, 80, 14);
         assert!(screen[0].contains("[#1] c.log"), "{screen:#?}");
-        // The last stream stays.
+        // The last one closes too: an empty workspace, where o opens a file.
         app.apply(Action::CloseStream);
-        assert_eq!(app.tabs.len(), 1);
-        assert!(app
-            .message
-            .as_deref()
-            .unwrap()
-            .starts_with("The only stream"));
+        assert!(app.tabs.is_empty());
+        assert!(app.dock.streams().is_empty());
+        let screen = render(&mut app, 80, 14);
+        assert!(screen.iter().any(|l| l.contains(NO_FILE)), "{screen:#?}");
+        // Keys that need a stream say so instead of acting.
+        for action in [Action::LineDown, Action::NextError, Action::StartSearch] {
+            app.apply_counted(action, 3);
+            assert_eq!(app.message.as_deref(), Some(NO_FILE));
+        }
+        app.apply(Action::OpenFile);
+        assert!(app.browser.is_some());
+        app.browser = None;
+        app.open_file(&a);
+        assert_eq!(app.open_paths(), vec![a.clone()]);
+        assert_eq!(app.dock.streams(), vec![a]);
+        assert_eq!(app.active, 0);
     }
 
     #[test]
@@ -5917,16 +5978,72 @@ mod tests {
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.tabs[0].title, "a.log");
         assert_eq!(app.dock.leaf_paths(), vec![Vec::<bool>::new()]);
-        // The last stream stays, as with Ctrl+W (one stream: no strip, the window on row 0).
+        // The last stream closes too, as with Ctrl+W (one stream: no strip, the window
+        // on row 0).
         render(&mut app, 80, 14);
         assert!(app.on_mouse(click(77, 0)));
-        assert_eq!(app.tabs.len(), 1);
-        let said = app.message.clone().unwrap_or_default();
+        assert!(app.tabs.is_empty(), "{:?}", app.hits.close_buttons);
+        render(&mut app, 80, 14);
+        assert!(app.hits.close_buttons.is_empty());
+    }
+
+    #[test]
+    fn the_last_docked_window_floats_and_the_empty_dock_takes_it_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, LOG).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        render(&mut app, 100, 30);
+        // The only window floats: the dock is left empty, and the window is resized.
+        app.apply(Action::ToggleFloat);
+        assert_eq!(app.floats.len(), 1);
+        assert!(app.dock.streams().is_empty());
+        let screen = render(&mut app, 100, 30);
         assert!(
-            said.starts_with("The only stream"),
-            "{said:?} {:?}",
-            app.hits.close_buttons
+            screen.iter().any(|l| l.contains("docks it here")),
+            "{screen:#?}"
         );
+        let (r, _) = app.hits.floats[0];
+        assert!(app.on_mouse(click(r.right() - 1, r.bottom() - 1)));
+        assert!(app.on_mouse(drag(r.x + 29, r.y + 7)));
+        assert!(app.on_mouse(release(r.x + 29, r.y + 7)));
+        assert_eq!(
+            (app.floats[0].rect.width, app.floats[0].rect.height),
+            (30, 8)
+        );
+        // Saved with an empty main surface, and so restored.
+        app.save_config();
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        let mut again = app_over(&ini);
+        again.restore_dock(saved.dock_layout.as_deref());
+        assert_eq!(again.floats, app.floats);
+        assert!(again.dock.streams().is_empty());
+        // Its stream dragged (as a tab of the border is) anywhere on the empty dock
+        // docks there whole.
+        render(&mut app, 100, 30);
+        app.start_move(0, click(40, 3));
+        assert!(app.on_mouse(drag(90, 25)));
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("drop here")),
+            "{screen:#?}"
+        );
+        assert!(app.on_mouse(release(90, 25)));
+        assert!(app.floats.is_empty());
+        assert_eq!(app.dock.streams(), vec![a.clone()]);
+        // Alt+F then Alt+F again: floated and docked back whole.
+        app.apply(Action::ToggleFloat);
+        app.apply(Action::ToggleFloat);
+        assert!(app.floats.is_empty());
+        assert_eq!(app.dock, Pane::with_streams(&[a]));
     }
 
     #[test]
