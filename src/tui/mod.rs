@@ -16,6 +16,7 @@ mod view;
 mod workspace;
 
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::tail_engine::TailEngine;
@@ -28,14 +29,14 @@ use ratatui::Terminal;
 
 use app::{App, Split, SplitDir, Tab};
 use colors::{Palette, TermInfo};
-use workspace::{Plan, Settings};
+use workspace::Settings;
 
 const USAGE: &str = "\
 fasttail-tui - FastTail in the terminal
 
 USAGE:
-    fasttail-tui [OPTIONS]              the GUI's workspace from fasttail.ini
-    fasttail-tui [OPTIONS] PATH...      just these files (with their saved state)
+    fasttail-tui [OPTIONS]              the workspace saved in fasttail.ini
+    fasttail-tui [OPTIONS] PATH...      the workspace and these files
     command | fasttail-tui [OPTIONS] -
 
 fasttail.ini is read, never written: theme, highlight rules, global filter, poll
@@ -44,9 +45,10 @@ interval, open files and their filters, search, bookmarks, encoding and collapse
 OPTIONS:
     --config <FILE>      Use this configuration file (same as FASTTAIL_CONFIG)
     --session <FILE>     Open a named session (*.fasttail-session.ini)
-    --filter <TEXT>      Include filter for every file
-    --exclude <TEXT>     Exclude filter for every file
-    --no-follow          Start paused instead of following the end
+    --fresh              Start without the saved workspace
+    --filter <TEXT>      Include filter for the files named here
+    --exclude <TEXT>     Exclude filter for the files named here
+    --no-follow          Start the files named here paused
     --split              Start with the first two files side by side
     --search <TEXT>      Search the first file and jump to the first hit
     --theme <NAME>       tron, matrix, blade, light: overrides the ini's theme
@@ -84,6 +86,7 @@ struct Options {
     /// Capture with the search dialog open (for the docs), not advertised.
     capture_dialog: bool,
     help: bool,
+    fresh: bool,
     /// Measurement aids, not advertised: quit after this many seconds, and page down
     /// this many times once the first file is indexed.
     quit_after: Option<u64>,
@@ -104,6 +107,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--filter" => o.filter = Some(value(&mut args, &a)?),
             "--exclude" => o.exclude = Some(value(&mut args, &a)?),
             "--no-follow" => o.no_follow = true,
+            "--fresh" => o.fresh = true,
             "--split" => o.split = true,
             "--theme" => o.theme = Some(value(&mut args, &a)?),
             "--config" => o.config = Some(value(&mut args, &a)?),
@@ -177,24 +181,18 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     );
     palette.level_colors = settings.config.level_colors;
 
-    // What to open: a named session, the files named on the command line (with the
-    // state the ini keeps for them), or the GUI's workspace.
-    let plan = if let Some(file) = &opts.session {
-        match workspace::session_plan(&mut settings, &app::absolute(file)) {
+    // What to open, as in the GUI: a named session or the saved workspace (not with
+    // --fresh), then the files named on the command line.
+    let cli_paths: Vec<PathBuf> = opts.paths.iter().map(|p| app::absolute(p)).collect();
+    let session = opts.session.as_deref().map(app::absolute);
+    let plan =
+        match workspace::start_plan(&mut settings, session.as_deref(), opts.fresh, &cli_paths) {
             Ok(plan) => plan,
             Err(e) => {
                 eprintln!("fasttail-tui: {e}");
                 return 2;
             }
-        }
-    } else if !opts.paths.is_empty() {
-        Plan {
-            paths: opts.paths.iter().map(|p| app::absolute(p)).collect(),
-            missing: Vec::new(),
-        }
-    } else {
-        workspace::workspace_plan(&settings)
-    };
+        };
     let (engines, errors) = workspace::open_plan(&settings, &plan);
     let mut tabs: Vec<Tab> = engines.into_iter().map(Tab::new).collect();
     let mut notices: Vec<String> = errors;
@@ -223,7 +221,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
         eprintln!("fasttail-tui: nothing to open ({origin})\n\n{USAGE}");
         return 2;
     }
+    // The command-line filters and --no-follow apply to the streams named on the command
+    // line and to standard input, as in the GUI; the restored ones keep their own state.
     for tab in &mut tabs {
+        let named = tab.engine.is_stdin()
+            || cli_paths
+                .iter()
+                .any(|p| crate::paths::paths_equal(p, &tab.engine.path));
+        if !named {
+            continue;
+        }
         if let Some(f) = &opts.filter {
             tab.engine.set_include_filter(f);
         }
@@ -232,6 +239,16 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
         }
         if opts.no_follow {
             tab.engine.follow_tail = false;
+        }
+    }
+    // The first stream named on the command line has the focus (standard input wins).
+    if !opts.stdin && !piped {
+        if let Some(i) = tabs.iter().position(|t| {
+            cli_paths
+                .iter()
+                .any(|p| crate::paths::paths_equal(p, &t.engine.path))
+        }) {
+            focus = i;
         }
     }
 
