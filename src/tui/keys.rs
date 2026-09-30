@@ -51,6 +51,10 @@ pub enum Action {
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.
     EditNote,
+    /// CTRL + K: the cursor row in context (filters suspended), and back.
+    ToggleContext,
+    /// CTRL + G, `:`: go to a line (`N`, `+N`, `-N`) or a time (`14:02`).
+    GoTo,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -67,6 +71,8 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
             KeyCode::Char('b') => Some(Action::PageUp),
             KeyCode::Char('f') => Some(Action::PageDown),
             KeyCode::F(2) => Some(Action::ToggleBookmark),
+            KeyCode::Char('k') => Some(Action::ToggleContext),
+            KeyCode::Char('g') => Some(Action::GoTo),
             _ => None,
         };
     }
@@ -112,6 +118,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char(']') | KeyCode::F(2) => Action::NextBookmark,
         KeyCode::Char('[') => Action::PrevBookmark,
         KeyCode::Char('m') => Action::EditNote,
+        KeyCode::Char(':') => Action::GoTo,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -183,6 +190,15 @@ mod tests {
             Some(Action::PrevBookmark)
         );
         assert_eq!(k(KeyCode::Char('m'), none), Some(Action::EditNote));
+        let ctrl = KeyModifiers::CONTROL;
+        assert_eq!(k(KeyCode::Char('k'), ctrl), Some(Action::ToggleContext));
+        assert_eq!(k(KeyCode::Char('g'), ctrl), Some(Action::GoTo));
+        assert_eq!(k(KeyCode::Char(':'), none), Some(Action::GoTo));
+        assert_eq!(
+            k(KeyCode::Char('g'), none),
+            Some(Action::Top),
+            "plain g is still top"
+        );
     }
 
     #[test]
