@@ -384,6 +384,10 @@ pub struct App {
     pub show_help: bool,
     /// First line of the help shown (it scrolls on a short screen).
     pub help_top: usize,
+    /// The help entry under the cursor, and the rows of its first column when it is
+    /// drawn in two (0 in one column).
+    pub help_sel: usize,
+    help_half: usize,
     pub quit: bool,
     /// Mouse capture is on (the help says how to select text natively).
     pub mouse: bool,
@@ -428,6 +432,8 @@ impl App {
             message: None,
             show_help: false,
             help_top: 0,
+            help_sel: 0,
+            help_half: 0,
             quit: false,
             mouse: true,
             idle_poll: Duration::from_millis(250),
@@ -588,32 +594,68 @@ impl App {
         if self.prompt.is_some() {
             return self.on_prompt_key(key);
         }
+        if self.show_help && self.on_help_key(key) {
+            return true;
+        }
         let Some(action) = keys::map_key(key) else {
             return false;
         };
-        // The help dialog scrolls with the arrows and the page keys and closes on any
-        // other key; only `?` / F1 reopen it.
+        // Any other key closes the help (and acts); `?` / F1 only close it.
         if self.show_help {
-            match action {
-                Action::LineUp => self.help_top = self.help_top.saturating_sub(1),
-                Action::LineDown => self.help_top += 1,
-                Action::PageUp => self.help_top = self.help_top.saturating_sub(10),
-                Action::PageDown => self.help_top += 10,
-                _ => {
-                    self.show_help = false;
-                    self.help_top = 0;
-                    if action == Action::ToggleHelp {
-                        return true;
-                    }
-                }
-            }
-            if self.show_help {
+            self.show_help = false;
+            if action == Action::ToggleHelp {
                 return true;
             }
         }
         self.message = None;
         self.apply(action);
         true
+    }
+
+    /// The help's own keys: the cursor over the entries and `Enter` to run one. Returns
+    /// false for a key the help leaves to the view (it then closes the help).
+    fn on_help_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let sel = self.help_sel;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.help_sel = help_step(sel, -1),
+            KeyCode::Down | KeyCode::Char('j') => self.help_sel = help_step(sel, 1),
+            KeyCode::PageUp => {
+                self.help_sel = help_step(sel.saturating_sub(10).saturating_add(1), -1)
+            }
+            KeyCode::PageDown => self.help_sel = help_step((sel + 10).min(HELP.len()) - 1, 1),
+            KeyCode::Home => self.help_sel = help_step(HELP.len() - 1, 1),
+            KeyCode::End => self.help_sel = help_step(0, -1),
+            // Two columns: Left / Right jump to the other one.
+            KeyCode::Left | KeyCode::Right if self.help_half > 0 => {
+                let other = if sel >= self.help_half {
+                    sel - self.help_half
+                } else {
+                    (sel + self.help_half).min(HELP.len() - 1)
+                };
+                self.help_sel = if HELP[other].2.is_some() {
+                    other
+                } else {
+                    help_step(other, 1)
+                };
+            }
+            KeyCode::Enter => self.run_help_entry(sel),
+            KeyCode::Esc => self.show_help = false,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Closes the help and runs the command of entry `i`, if it has one.
+    fn run_help_entry(&mut self, i: usize) {
+        self.show_help = false;
+        if let Some(Some(action)) = HELP.get(i).map(|e| e.2) {
+            self.message = None;
+            self.apply(action);
+        }
     }
 
     fn on_prompt_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -1249,7 +1291,11 @@ impl App {
             Action::NextTab => self.focus_tab((self.active + 1) % n_tabs),
             Action::PrevTab => self.focus_tab((self.active + n_tabs - 1) % n_tabs),
             Action::GotoTab(i) => self.focus_tab(i),
-            Action::ToggleHelp => self.show_help = !self.show_help,
+            Action::ToggleHelp => {
+                self.show_help = !self.show_help;
+                self.help_sel = help_step(HELP.len() - 1, 1);
+                self.help_top = 0;
+            }
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
@@ -1368,6 +1414,13 @@ impl App {
     fn on_click(&mut self, ev: MouseEvent) -> bool {
         let target = mouse::hit_test(&self.hits, ev.column, ev.row);
         match target {
+            Target::ListItem(i) if self.show_help => self.run_help_entry(i),
+            Target::Button(i) => {
+                if let Some((_, _, action)) = STATUS.get(i) {
+                    self.message = None;
+                    self.apply(*action);
+                }
+            }
             Target::ListItem(i) if self.time_range.is_some() => {
                 if let Some(d) = self.time_range.as_mut() {
                     if i >= RANGE_DAY {
@@ -1781,7 +1834,7 @@ impl App {
     }
 
     /// The bordered bar at the bottom: a message, or the main keys.
-    fn draw_status(&self, frame: &mut Frame, area: Rect) {
+    fn draw_status(&mut self, frame: &mut Frame, area: Rect) {
         let chrome = Chrome::Plain;
         let block = Block::bordered()
             .style(self.palette.window())
@@ -1799,14 +1852,36 @@ impl App {
             .cursor_line()
             .and_then(|l| tab.engine.bookmark_note(l))
             .map(|n| n.chars().take(NOTE_PREVIEW_CHARS).collect::<String>());
+        let inner = block.inner(area);
         let line = match (&self.message, note) {
             (Some(m), _) => Line::styled(m.clone(), Style::default().fg(self.palette.accent())),
             // The note of the cursor row's bookmark, when there is one.
-            (None, Some(n)) => Line::styled(format!("* {n}"), Style::default().fg(self.palette.accent())),
-            (None, None) => Line::styled(
-                "? help  q quit  Space follow  / search  n/N next  i/x filter  b mark  ]/[ marks  m note  h hex  y copy",
-                Style::default().fg(self.palette.dim()),
-            ),
+            (None, Some(n)) => {
+                Line::styled(format!("* {n}"), Style::default().fg(self.palette.accent()))
+            }
+            // The main commands as clickable `[ ]` buttons, as many as fit.
+            (None, None) => {
+                let bracket = Style::default().fg(self.palette.dim());
+                let key = Style::default()
+                    .fg(self.palette.accent())
+                    .add_modifier(Modifier::BOLD);
+                let mut spans = Vec::with_capacity(STATUS.len() * 4);
+                let mut x = inner.x;
+                for (i, (k, label, _)) in STATUS.iter().enumerate() {
+                    let w = (k.chars().count() + label.chars().count() + 3) as u16;
+                    if x + w > inner.right() {
+                        break;
+                    }
+                    self.hits.buttons.push((Rect::new(x, inner.y, w, 1), i));
+                    spans.push(Span::styled("[", bracket));
+                    spans.push(Span::styled(*k, key));
+                    spans.push(Span::raw(format!(" {label}")));
+                    spans.push(Span::styled("]", bracket));
+                    spans.push(Span::raw(" "));
+                    x += w + 1;
+                }
+                Line::from(spans)
+            }
         };
         frame.render_widget(Paragraph::new(line).block(block), area);
     }
@@ -2244,35 +2319,7 @@ impl App {
         } else {
             "Mouse off (--no-mouse): the terminal selects text"
         };
-        let text = [
-            "Up/Down j/k      move the cursor one row",
-            "PgUp/PgDn        move it one page (also Ctrl+B / Ctrl+F)",
-            "Shift+Up/Down    extend the selection from the cursor",
-            "Home g / End Shift+G  first / last row (the last one follows)",
-            "Left/Right 0     scroll sideways one cell / back to column 0",
-            "Space            toggle follow",
-            "/ n Shift+N Esc  search, next, previous, clear (also F3 / Shift+F3)",
-            "i  x             include / exclude filter",
-            "l                cycle the minimum level",
-            "c                cycle collapse: off, exact, numbers",
-            "s                split: side by side, stacked, off",
-            "Tab  Alt+1..9    next window or file / file N (Shift+Tab back)",
-            "b  Ctrl+F2       bookmark the cursor row, on or off",
-            "] F2 / [ Shift+F2  next / previous bookmark (wraps)",
-            "m                note of the cursor row's bookmark",
-            "Ctrl+K           cursor row in context (filters off), again back",
-            "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
-            "o                open a file, pattern or archive entry",
-            "Shift+O Shift+S  open a session / save the streams as a session",
-            "t                time range: from / to (14:02, -15m, now)",
-            ",                Settings: theme, language, view, refresh, sound",
-            "Shift+T          next theme: Tron, Matrix, Blade, Light, Commander",
-            "a                ANSI colours: auto, render, strip, raw (^[)",
-            "h                HEX view of the bytes (go to: 1024, 0x400), again back",
-            "y  Ctrl+C        copy the selection or the cursor row",
-            "                 (Ctrl+C quits when nothing is selected)",
-            "?  F1            this help",
-            "q                quit",
+        let notes = [
             "",
             "Wheel scrolls the window under the pointer; click focuses",
             "and selects a row, SHIFT + click or drag a range, double",
@@ -2280,46 +2327,74 @@ impl App {
             mouse_hint,
         ];
         // On a wide screen the keys go in two columns, so they all show at once; the
-        // mouse notes stay under them. Otherwise one column, which scrolls with Up /
-        // Down / PgUp / PgDn when the screen is too short for it.
+        // mouse notes stay under them. The cursor walks the entries that run a command.
         const COL: usize = 76;
-        let split = text.iter().position(|l| l.is_empty()).unwrap_or(text.len());
-        let (keys, notes) = text.split_at(split);
         let two = area.width as usize >= 2 * COL + 6;
-        let lines: Vec<String> = if two {
-            let half = keys.len().div_ceil(2);
-            let mut out: Vec<String> = (0..half)
-                .map(|i| {
-                    let right = keys.get(half + i).copied().unwrap_or("");
-                    format!("{:<COL$}  {right}", keys[i])
-                })
-                .collect();
-            out.extend(notes.iter().map(|l| l.to_string()));
-            out
+        let half = if two {
+            HELP.len().div_ceil(2)
         } else {
-            text.iter().map(|l| l.to_string()).collect()
+            HELP.len()
         };
+        self.help_half = if two { half } else { 0 };
+        let entry = |i: usize| -> String {
+            HELP.get(i)
+                .map(|(k, d, _)| format!("{k:<17}{d}"))
+                .unwrap_or_default()
+        };
+        let total = half + notes.len();
         let width = if two { 2 * COL as u16 + 4 } else { 78 };
-        let height = (lines.len() as u16 + 3).min(area.height);
+        let height = (total as u16 + 3).min(area.height);
         let rows = height.saturating_sub(3) as usize;
-        self.help_top = self.help_top.min(lines.len().saturating_sub(rows));
-        let more_below = self.help_top + rows < lines.len();
-        let title = if rows < lines.len() {
-            "Keys - Up/Down scroll, any other key closes"
-        } else {
-            "Keys - any key closes"
-        };
-        let inner = self.dialog(frame, area, (width, height), title, false);
-        frame.render_widget(
-            Paragraph::new(
-                lines
-                    .iter()
-                    .skip(self.help_top)
-                    .map(|l| Line::from(l.clone()))
-                    .collect::<Vec<_>>(),
-            ),
-            inner,
+        // Keep the selected entry's row on screen.
+        let sel_row = self.help_sel % half.max(1);
+        if sel_row < self.help_top {
+            self.help_top = sel_row;
+        } else if rows > 0 && sel_row >= self.help_top + rows {
+            self.help_top = sel_row + 1 - rows;
+        }
+        self.help_top = self.help_top.min(total.saturating_sub(rows));
+        let more_below = self.help_top + rows < total;
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, height),
+            "Keys - Up/Down choose, Enter runs, Esc closes",
+            false,
         );
+        let selected = Style::default().add_modifier(Modifier::REVERSED);
+        let info = Style::default().fg(self.palette.dim());
+        let mut lines = Vec::with_capacity(rows);
+        for row in self.help_top..(self.help_top + rows).min(total) {
+            let y = inner.y + (row - self.help_top) as u16;
+            if row >= half {
+                lines.push(Line::raw(notes[row - half].to_string()));
+                continue;
+            }
+            let mut spans = Vec::with_capacity(3);
+            let cols: &[usize] = if two { &[row, row + half] } else { &[row] };
+            for (c, &i) in cols.iter().enumerate() {
+                if i >= HELP.len() {
+                    continue;
+                }
+                let style = if i == self.help_sel {
+                    selected
+                } else if HELP[i].2.is_none() {
+                    info
+                } else {
+                    Style::default()
+                };
+                let x = inner.x + (c * (COL + 2)) as u16;
+                self.hits
+                    .list_items
+                    .push((Rect::new(x, y, COL as u16, 1), i));
+                if c > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(Span::styled(format!("{:<COL$}", entry(i)), style));
+            }
+            lines.push(Line::from(spans));
+        }
+        frame.render_widget(Paragraph::new(lines), inner);
         if more_below {
             // On the last row, left of the OK button: there is more under the fold.
             let hint = " \u{2193} more (Down) ";
@@ -2340,6 +2415,160 @@ impl App {
             );
         }
     }
+}
+
+/// The help: keys, what they do and the command `Enter` runs from the help (`None` for
+/// entries that only describe, which the cursor steps over).
+const HELP: &[(&str, &str, Option<Action>)] = &[
+    ("Up/Down j/k", "move the cursor one row", None),
+    ("PgUp/PgDn", "move it one page (also Ctrl+B / Ctrl+F)", None),
+    (
+        "Shift+Up/Down",
+        "extend the selection from the cursor",
+        None,
+    ),
+    ("Home g", "first row", Some(Action::Top)),
+    (
+        "End Shift+G",
+        "last row, and follow it",
+        Some(Action::Bottom),
+    ),
+    (
+        "Left/Right 0",
+        "scroll sideways one cell / back to column 0",
+        None,
+    ),
+    ("Space", "toggle follow", Some(Action::ToggleFollow)),
+    ("/", "search", Some(Action::StartSearch)),
+    (
+        "n Shift+N  F3",
+        "next / previous hit (Shift+F3 previous)",
+        Some(Action::SearchNext),
+    ),
+    (
+        "Esc",
+        "clear the search and the selection",
+        Some(Action::ClearSearch),
+    ),
+    ("i", "include filter", Some(Action::EditInclude)),
+    ("x", "exclude filter", Some(Action::EditExclude)),
+    ("l", "cycle the minimum level", Some(Action::CycleLevel)),
+    (
+        "c",
+        "cycle collapse: off, exact, numbers",
+        Some(Action::CycleCollapse),
+    ),
+    (
+        "s",
+        "split: side by side, stacked, off",
+        Some(Action::CycleSplit),
+    ),
+    (
+        "Tab  Alt+1..9",
+        "next window or file / file N (Shift+Tab back)",
+        Some(Action::NextTab),
+    ),
+    (
+        "b  Ctrl+F2",
+        "bookmark the cursor row, on or off",
+        Some(Action::ToggleBookmark),
+    ),
+    ("] F2", "next bookmark (wraps)", Some(Action::NextBookmark)),
+    (
+        "[ Shift+F2",
+        "previous bookmark (wraps)",
+        Some(Action::PrevBookmark),
+    ),
+    (
+        "m",
+        "note of the cursor row's bookmark",
+        Some(Action::EditNote),
+    ),
+    (
+        "Ctrl+K",
+        "cursor row in context (filters off), again back",
+        Some(Action::ToggleContext),
+    ),
+    (
+        "Ctrl+G  :",
+        "go to a line (N, +N, -N) or a time (14:02)",
+        Some(Action::GoTo),
+    ),
+    (
+        "o",
+        "open a file, pattern or archive entry",
+        Some(Action::OpenFile),
+    ),
+    ("Shift+O", "open a session", Some(Action::OpenSession)),
+    (
+        "Shift+S",
+        "save the streams as a session",
+        Some(Action::SaveSession),
+    ),
+    (
+        "t",
+        "time range: from / to, calendar and time",
+        Some(Action::TimeRange),
+    ),
+    (
+        ",",
+        "Settings: theme, language, view, refresh, sound",
+        Some(Action::Settings),
+    ),
+    (
+        "Shift+T",
+        "next theme: Tron, Matrix, Blade, Light, Commander",
+        Some(Action::CycleTheme),
+    ),
+    (
+        "a",
+        "ANSI colours: auto, render, strip, raw (^[)",
+        Some(Action::CycleAnsi),
+    ),
+    (
+        "h",
+        "HEX view of the bytes (go to: 1024, 0x400), again back",
+        Some(Action::ToggleHex),
+    ),
+    (
+        "y",
+        "copy the selection or the cursor row",
+        Some(Action::Copy),
+    ),
+    ("Ctrl+C", "copy, or quit when nothing is selected", None),
+    ("?  F1", "this help", None),
+    ("q", "quit", Some(Action::Quit)),
+];
+
+/// The buttons of the status bar: key, label, command; drawn as `[? help]`, as many as
+/// fit the width.
+const STATUS: &[(&str, &str, Action)] = &[
+    ("?", "help", Action::ToggleHelp),
+    ("/", "search", Action::StartSearch),
+    ("n", "next", Action::SearchNext),
+    ("i", "include", Action::EditInclude),
+    ("x", "exclude", Action::EditExclude),
+    ("t", "time", Action::TimeRange),
+    ("Space", "follow", Action::ToggleFollow),
+    ("b", "mark", Action::ToggleBookmark),
+    ("o", "open", Action::OpenFile),
+    (",", "settings", Action::Settings),
+    ("Shift+T", "theme", Action::CycleTheme),
+    ("q", "quit", Action::Quit),
+];
+
+/// The next entry of the help that runs a command, from `from` in `step` direction
+/// (wrapping); `from` itself when none.
+fn help_step(from: usize, step: isize) -> usize {
+    let n = HELP.len() as isize;
+    let mut i = from as isize;
+    for _ in 0..n {
+        i = (i + step).rem_euclid(n);
+        if HELP[i as usize].2.is_some() {
+            return i as usize;
+        }
+    }
+    from
 }
 
 /// Darkens the cells a dialog at `rect` shades: two columns on its right and one row
@@ -3495,7 +3724,7 @@ mod tests {
     }
 
     #[test]
-    fn the_help_scrolls_on_a_short_screen_and_closes_on_another_key() {
+    fn the_help_is_a_menu_the_cursor_walks_and_enter_runs() {
         use crossterm::event::KeyCode;
         let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
         app.apply(Action::ToggleHelp);
@@ -3503,29 +3732,61 @@ mod tests {
         for key in ["F3", "Ctrl+G", "Shift+O", "Shift+T", "?  F1", "HEX", "ANSI"] {
             assert!(tall.iter().any(|l| l.contains(key)), "{key}: {tall:#?}");
         }
+        // The cursor starts on the first entry with a command and skips the others.
+        assert_eq!(HELP[app.help_sel].2, Some(Action::Top));
+        press(&mut app, KeyCode::Up);
+        assert_eq!(
+            HELP[app.help_sel].2,
+            Some(Action::Quit),
+            "wraps to the last"
+        );
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(HELP[app.help_sel].2, Some(Action::Bottom));
+
+        // Two columns on a wide screen; Right jumps to the other column.
         let wide = render(&mut app, 170, 30);
         assert!(
             wide.iter().any(|l| l.contains("move the cursor one row"))
                 && wide.iter().any(|l| l.contains("next theme")),
             "two columns show every key: {wide:#?}"
         );
-        assert!(!wide.iter().any(|l| l.contains("Up/Down scroll")));
+        press(&mut app, KeyCode::Right);
+        assert!(app.help_sel >= app.help_half);
+
+        // A short screen scrolls to keep the cursor visible.
+        press(&mut app, KeyCode::End);
         let short = render(&mut app, 80, 24);
-        assert!(
-            short.iter().any(|l| l.contains("Up/Down scroll")),
-            "{short:#?}"
-        );
-        assert!(
-            short.iter().any(|l| l.contains("more (Down)")),
-            "{short:#?}"
-        );
-        assert!(short.iter().any(|l| l.contains("move the cursor one row")));
-        press(&mut app, KeyCode::Down);
-        assert!(app.show_help, "the arrows scroll");
-        let scrolled = render(&mut app, 80, 24);
-        assert!(!scrolled
+        assert!(short.iter().any(|l| l.contains("quit")), "{short:#?}");
+        assert!(!short.iter().any(|l| l.contains("move the cursor one row")));
+
+        // Enter runs the chosen command: the search dialog opens.
+        let search = HELP
             .iter()
-            .any(|l| l.contains("move the cursor one row")));
+            .position(|e| e.2 == Some(Action::StartSearch))
+            .unwrap();
+        app.help_sel = search;
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.show_help);
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::Search)
+        );
+        app.prompt = None;
+
+        // A click on an entry runs it; another key closes the help and acts.
+        app.apply(Action::ToggleHelp);
+        render(&mut app, 100, 60);
+        let (rect, _) = *app
+            .hits
+            .list_items
+            .iter()
+            .find(|(_, i)| HELP[*i].2 == Some(Action::TimeRange))
+            .unwrap();
+        app.on_mouse(click(rect.x + 1, rect.y));
+        assert!(!app.show_help && app.time_range.is_some());
+        app.time_range = None;
+        app.apply(Action::ToggleHelp);
         press(&mut app, KeyCode::Char('x'));
         assert!(!app.show_help);
     }
@@ -3815,6 +4076,33 @@ mod tests {
             "2026-09-28 02:01:00",
             "the day changes, the time stays"
         );
+    }
+
+    #[test]
+    fn the_status_bar_buttons_are_bracketed_and_clickable() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        let screen = render(&mut app, 120, 20);
+        let bar = &screen[screen.len() - 2];
+        assert!(
+            bar.contains("[? help]") && bar.contains("[/ search]"),
+            "{bar}"
+        );
+        let (rect, _) = *app
+            .hits
+            .buttons
+            .iter()
+            .find(|(_, i)| STATUS[*i].2 == Action::StartSearch)
+            .unwrap();
+        app.on_mouse(click(rect.x + 1, rect.y));
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::Search)
+        );
+        // Only the buttons that fit are drawn and clickable.
+        app.prompt = None;
+        render(&mut app, 50, 20);
+        assert!(app.hits.buttons.len() < STATUS.len());
+        assert!(app.hits.buttons.iter().all(|(r, _)| r.right() <= 49));
     }
 
     #[test]

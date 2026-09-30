@@ -37,6 +37,8 @@ pub struct HitMap {
     pub dialog: Option<DialogHit>,
     /// Rows of a list inside the open dialog, and the list position each shows.
     pub list_items: Vec<(Rect, usize)>,
+    /// The `[ ... ]` buttons of the status bar, and their position in its list.
+    pub buttons: Vec<(Rect, usize)>,
 }
 
 /// What a cell of the screen is.
@@ -48,6 +50,8 @@ pub enum Target {
     DialogBody,
     /// A row of the list in the open dialog (its position in the list).
     ListItem(usize),
+    /// A `[ ... ]` button of the status bar (its position in the bar).
+    Button(usize),
     /// Anywhere else while a dialog is open: closes it, like Esc.
     OutsideDialog,
     /// A title in the stream strip at the top.
@@ -83,6 +87,9 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
         } else {
             Target::OutsideDialog
         };
+    }
+    if let Some((_, i)) = map.buttons.iter().find(|(r, _)| r.contains(p)) {
+        return Target::Button(*i);
     }
     if let Some((_, tab)) = map.tab_titles.iter().find(|(r, _)| r.contains(p)) {
         return Target::TabTitle(*tab);
@@ -145,6 +152,7 @@ mod tests {
             ],
             dialog: None,
             list_items: Vec::new(),
+            buttons: vec![(Rect::new(2, 30, 8, 1), 4)],
         }
     }
 
@@ -152,6 +160,7 @@ mod tests {
     fn titles_rows_and_borders() {
         let map = split_map();
         assert_eq!(hit_test(&map, 12, 0), Target::TabTitle(1));
+        assert_eq!(hit_test(&map, 5, 30), Target::Button(4));
         assert_eq!(hit_test(&map, 5, 1), Target::WindowTitle(0));
         assert_eq!(hit_test(&map, 50, 1), Target::WindowTitle(1));
         // The third drawn row of the left window is view row 102.
