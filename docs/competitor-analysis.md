@@ -237,6 +237,10 @@ as a preview in every archive (dock, dialogs, themes, mouse, file browser; edito
 hand-off and translations still missing). From then on a patch release (`0.15.x`) is cut
 every evening after 18:00 when something was merged (AGENTS.md, release process).
 
+| Change | Gaps | Effort |
+|---|---|---|
+| `release-packages` — `.deb` / `.rpm` / AppImage (Linux x86_64 and ARM64), `.msi` (Windows), universal `.dmg` and Intel archive (macOS), each install-tested in CI | RustDesk-style platform coverage (maintainer request) | M |
+
 ### 0.20.0 — terminal interface (next)
 
 After 0.14.0 the maintainer moved the terminal interface forward: 0.20.0 holds only
