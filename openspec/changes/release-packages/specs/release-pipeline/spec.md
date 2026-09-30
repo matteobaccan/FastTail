@@ -24,11 +24,15 @@ Each build job SHALL package its binaries before upload: Linux and macOS as `fas
 - **THEN** every build job fails before uploading, and no release is created.
 
 ### Requirement: Release Published Non-Draft with All Assets
-The `release` job SHALL depend on both `test` and `build`, SHALL upload every archive and package produced by the matrix, and SHALL leave the GitHub release published (not draft). The release body SHALL be the `CHANGELOG.md` section whose heading matches the tag version (`v0.3.0` -> `## [0.3.0]`), followed by the GitHub-generated notes (merged pull requests, new contributors, compare link); a tag without a matching section SHALL still publish with the generated notes only.
+The `release` job SHALL depend on both `test` and `build`, SHALL upload every archive and package produced by the matrix, and SHALL leave the GitHub release published (not draft). The release body SHALL start with a downloads grid, one row per architecture (x86-64, ARM64) and one column per system (Windows, Linux, macOS), each cell linking every published asset for that architecture and system by its kind (MSI, ZIP, DEB, RPM, AppImage, tar.gz, DMG) and "—" where there is none, followed by a note that every download holds both executables, the link to the Windows symbols and how to pass the unsigned-build prompts; the grid SHALL be generated from the assets actually published (`.github/scripts/downloads_table.py`). Then comes the `CHANGELOG.md` section whose heading matches the tag version (`v0.3.0` -> `## [0.3.0]`), followed by the GitHub-generated notes (merged pull requests, new contributors, compare link); a tag without a matching section SHALL still publish with the grid and the generated notes only.
 
 #### Scenario: Successful tag pipeline
 - **WHEN** all `test` and `build` jobs of a `v*` tag succeed
 - **THEN** a published release for that tag exists with 14 assets: the five archives, the macOS x86_64 archive, the Windows symbols archive, two `.deb`, two `.rpm`, the `.msi`, the `.dmg` and two AppImages.
+
+#### Scenario: Downloads grid follows the assets
+- **WHEN** the 0.15.0 release publishes the Windows ZIP, the Linux x86_64 and ARM64 archives and the macOS ARM64 archive
+- **THEN** the body starts with a grid whose x86-64 row links the ZIP and the Linux archive and shows "—" for macOS, and whose ARM64 row links the Linux and macOS archives and shows "—" for Windows; once the packages exist, the same cells also link the MSI, DEB, RPM, AppImage and DMG.
 
 #### Scenario: Test failure blocks release
 - **WHEN** the `test` job fails on a tag run

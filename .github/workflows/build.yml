@@ -293,9 +293,19 @@ jobs:
           find release-artifacts -type f -exec cp {} final-release/ \;
           ls -la final-release
 
+      # A downloads grid (architecture x system, one link per asset found) goes above the
+      # CHANGELOG section, as RustDesk and other multi-platform projects do.
+      - name: 🧮 Downloads grid
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/downloads_table.py final-release "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" > downloads.md
+          { cat downloads.md; echo "## What's new"; cat release-notes.md; } > release-body.md
+          echo "--- release-body.md ---"; cat release-body.md
+
       - name: 🚀 Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: final-release/*
-          body_path: release-notes.md
+          body_path: release-body.md
           generate_release_notes: true

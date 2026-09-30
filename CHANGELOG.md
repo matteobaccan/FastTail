@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Highlighting.** A highlight span that overlaps no span already claimed on the row is
   added directly, without the subtraction pass (#203).
 
+- **Release page.** Each release starts with a downloads grid (architecture by system,
+  one link per file), generated from the files the release publishes.
+
 ### Fixed
 
 - **Bookmark report export.** Saving the report refuses a directory or another
