@@ -91,7 +91,7 @@ winreg = "0.56"
 # `--no-default-features --features tui` and compiles no GUI crate.
 default = ["gui", "tui"]
 gui = ["dep:eframe", "dep:egui", "dep:egui_dock", "dep:egui_commonmark", "dep:rfd"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:arboard"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:arboard", "dep:unicode-width"]
 audio = ["dep:rodio"]
 
 [dependencies.rodio]
@@ -112,6 +112,12 @@ optional = true
 version = "3.6"
 optional = true
 default-features = false
+
+# Cell width of wide characters for the terminal's sideways scroll: the version ratatui
+# already builds.
+[dependencies.unicode-width]
+version = "0.2"
+optional = true
 
 [[bin]]
 name = "fasttail"

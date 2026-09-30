@@ -28,7 +28,8 @@ use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::view;
 
 /// Columns moved by one horizontal scroll step.
-const HSCROLL_STEP: usize = 8;
+/// Cells one `←` / `→` scrolls sideways.
+const HSCROLL_STEP: usize = 1;
 
 /// One open stream and the view state the terminal keeps for it.
 pub struct Tab {
@@ -36,8 +37,11 @@ pub struct Tab {
     pub title: String,
     /// First row on screen (a row of the engine's filtered, collapsed view).
     pub top: usize,
-    /// Characters hidden on the left (horizontal scroll).
+    /// Terminal cells hidden on the left (horizontal scroll).
     pub hscroll: usize,
+    /// The keyboard cursor: a row of the view, drawn reversed. Row actions act on it when
+    /// nothing is selected. In follow mode it stays on the last row.
+    pub cursor: usize,
     /// Text rows of its window at the last draw (the page size).
     pub height: usize,
     /// Waiting for the first hit of a search that runs in the background.
@@ -58,9 +62,34 @@ impl Tab {
             title,
             top: 0,
             hscroll: 0,
+            cursor: 0,
             height: 20,
             pending_first_hit: false,
             seen_lines: 0,
+        }
+    }
+
+    /// Moves the cursor to `row` (clamped to the view) and scrolls the window to keep it
+    /// visible. Any move pauses follow; `Bottom` turns it back on.
+    pub fn set_cursor(&mut self, row: usize) {
+        let rows = self.engine.visible_line_count();
+        self.engine.follow_tail = false;
+        self.cursor = row.min(rows.saturating_sub(1));
+        self.top = view::reveal(self.top, self.height.max(1), rows, self.cursor);
+    }
+
+    /// The line under the cursor (the first line of a collapsed group).
+    pub fn cursor_line(&self) -> Option<usize> {
+        self.engine.get_actual_line_idx(self.cursor)
+    }
+
+    /// In follow mode the cursor sits on the last row, which moves as lines arrive.
+    fn pin_cursor(&mut self) {
+        let rows = self.engine.visible_line_count();
+        if self.engine.follow_tail {
+            self.cursor = rows.saturating_sub(1);
+        } else if rows > 0 && self.cursor >= rows {
+            self.cursor = rows - 1;
         }
     }
 }
@@ -207,9 +236,8 @@ impl App {
             }
             if let Some(line) = tab.engine.scroll_to_line.take() {
                 if let Some(row) = tab.engine.get_visible_row_of_line(line) {
-                    tab.engine.follow_tail = false;
-                    let rows = tab.engine.visible_line_count();
-                    tab.top = view::reveal(tab.top, tab.height, rows, row);
+                    // A jump (search hit, go-to) moves the cursor onto the line.
+                    tab.set_cursor(row);
                 }
             }
             tab.seen_lines = tab.engine.total_lines();
@@ -382,14 +410,23 @@ impl App {
         }
     }
 
+    /// Copies the selection, or the cursor row when nothing is selected.
     fn copy_selection(&mut self) {
-        let engine = &self.tabs[self.active].engine;
-        let Some(text) = engine
-            .has_selection()
-            .then(|| engine.copy_selection_text())
-            .flatten()
-        else {
-            self.message = Some("Nothing selected: click a row, SHIFT + click or drag".into());
+        let tab = &mut self.tabs[self.active];
+        let text = if tab.engine.has_selection() {
+            tab.engine.copy_selection_text()
+        } else {
+            // The cursor row as a one-row selection, so a collapsed group copies whole.
+            let line = tab.cursor_line();
+            line.and_then(|line| {
+                tab.engine.select_row(line);
+                let text = tab.engine.copy_selection_text();
+                tab.engine.clear_selection();
+                text
+            })
+        };
+        let Some(text) = text else {
+            self.message = Some("Nothing to copy".into());
             return;
         };
         let lines = text.lines().count();
@@ -489,6 +526,11 @@ impl App {
                 } else {
                     e.select_row(line);
                 }
+                // The clicked row takes the cursor, without scrolling the window.
+                let t = &mut self.tabs[tab];
+                t.engine.follow_tail = false;
+                t.cursor = row;
+                let e = &mut t.engine;
                 if double {
                     e.toggle_bookmark(line);
                     self.last_click = None;
@@ -527,18 +569,38 @@ impl App {
         if tab.engine.follow_tail {
             tab.top = view::follow_top(rows, page);
         }
-        let scroll = |tab: &mut Tab, top: usize| {
-            tab.engine.follow_tail = false;
-            tab.top = view::clamp_top(top, page, rows);
-        };
+        tab.pin_cursor();
+        let cursor = tab.cursor;
         match action {
-            Action::ToggleFollow => tab.engine.follow_tail = !tab.engine.follow_tail,
-            Action::Bottom => tab.engine.follow_tail = true,
-            Action::Top => scroll(tab, 0),
-            Action::LineUp => scroll(tab, tab.top.saturating_sub(1)),
-            Action::LineDown => scroll(tab, tab.top + 1),
-            Action::PageUp => scroll(tab, tab.top.saturating_sub(page)),
-            Action::PageDown => scroll(tab, tab.top + page),
+            Action::ToggleFollow => {
+                tab.engine.follow_tail = !tab.engine.follow_tail;
+                tab.pin_cursor();
+            }
+            Action::Bottom => {
+                tab.engine.follow_tail = true;
+                tab.pin_cursor();
+            }
+            Action::Top => tab.set_cursor(0),
+            Action::LineUp => tab.set_cursor(cursor.saturating_sub(1)),
+            Action::LineDown => tab.set_cursor(cursor + 1),
+            Action::PageUp => tab.set_cursor(cursor.saturating_sub(page)),
+            Action::PageDown => tab.set_cursor(cursor + page),
+            Action::SelectUp | Action::SelectDown => {
+                if tab.engine.selection_anchor.is_none() {
+                    if let Some(line) = tab.cursor_line() {
+                        tab.engine.select_row(line);
+                    }
+                }
+                let to = if action == Action::SelectUp {
+                    cursor.saturating_sub(1)
+                } else {
+                    cursor + 1
+                };
+                tab.set_cursor(to);
+                if let Some(line) = tab.cursor_line() {
+                    tab.engine.extend_selection_to(line);
+                }
+            }
             Action::ScrollLeft => tab.hscroll = tab.hscroll.saturating_sub(HSCROLL_STEP),
             Action::ScrollRight => tab.hscroll += HSCROLL_STEP,
             Action::ScrollHome => tab.hscroll = 0,
@@ -823,10 +885,11 @@ impl App {
             "Mouse off (--no-mouse): the terminal selects text"
         };
         let text = [
-            "Up/Down j/k      scroll one line",
-            "PgUp/PgDn        scroll one page (also Ctrl+B / Ctrl+F)",
-            "Home g / End G   top / bottom (bottom follows)",
-            "Left/Right 0     horizontal scroll / back to column 0",
+            "Up/Down j/k      move the cursor one row",
+            "PgUp/PgDn        move it one page (also Ctrl+B / Ctrl+F)",
+            "Shift+Up/Down    extend the selection from the cursor",
+            "Home g / End G   first / last row (the last one follows)",
+            "Left/Right 0     scroll sideways one cell / back to column 0",
             "Space            toggle follow",
             "/  n  N  Esc     search, next, previous, clear",
             "i  x             include / exclude filter",
@@ -834,7 +897,8 @@ impl App {
             "c                cycle collapse: off, exact, numbers",
             "s                split: side by side, stacked, off",
             "Tab  Alt+1..9    next window or file / file N",
-            "y  Ctrl+C        copy the selected rows (Ctrl+C quits if none)",
+            "y  Ctrl+C        copy the selection or the cursor row",
+            "                 (Ctrl+C quits when nothing is selected)",
             "q                quit",
             "",
             "Wheel scrolls the window under the pointer; click focuses",
@@ -924,6 +988,7 @@ fn view_state_text(e: &TailEngine) -> String {
 /// Also returns how many rows were drawn, for the mouse.
 fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'static>>, usize) {
     tab.height = height;
+    tab.pin_cursor();
     let engine = &tab.engine;
     let rows = engine.visible_line_count();
     if engine.follow_tail {
@@ -939,7 +1004,7 @@ fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'st
         let Some(line_idx) = engine.get_actual_line_idx(row) else {
             break;
         };
-        lines.push(render_row(
+        let line = render_row(
             engine,
             palette,
             row,
@@ -948,7 +1013,12 @@ fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'st
             &query,
             has_search,
             tab.hscroll,
-        ));
+        );
+        lines.push(if row == tab.cursor {
+            line.patch_style(Style::default().add_modifier(Modifier::REVERSED))
+        } else {
+            line
+        });
     }
     let drawn = lines.len();
     if lines.is_empty() {
@@ -1028,7 +1098,7 @@ pub fn render_row(
     } else {
         palette.hit()
     };
-    for (s, is_hit) in view::skip_chars(segs, hscroll) {
+    for (s, is_hit) in view::skip_cells(segs, hscroll) {
         spans.push(Span::styled(s, if is_hit { hit_style } else { base }));
     }
     let line = Line::from(spans);
@@ -1168,6 +1238,68 @@ mod tests {
     const LOG: &str = "2026-09-28 10:00:00 INFO start\n\
                        2026-09-28 10:00:01 WARN slow disk\n\
                        2026-09-28 10:00:02 ERROR failed\n";
+
+    fn numbered(n: usize) -> String {
+        (1..=n).map(|i| format!("line {i}\n")).collect()
+    }
+
+    #[test]
+    fn the_cursor_pages_pauses_follow_and_g_follows_again() {
+        let body = numbered(10_000);
+        let (mut app, _dir) = app_with(&[("big.log", body.as_str())], false);
+        // A 40-row window: 44 terminal rows minus the borders and the status bar.
+        render(&mut app, 80, 46);
+        let height = app.tabs[0].height;
+        app.tabs[0].engine.follow_tail = false;
+        app.tabs[0].top = 0;
+        app.tabs[0].set_cursor(height - 1);
+        app.apply(Action::PageDown);
+        let tab = &app.tabs[0];
+        assert_eq!(tab.cursor, 2 * height - 1, "one page further");
+        assert!(
+            tab.cursor >= tab.top && tab.cursor < tab.top + height,
+            "visible"
+        );
+        assert!(!tab.engine.follow_tail);
+        app.apply(Action::LineUp);
+        assert_eq!(app.tabs[0].cursor, 2 * height - 2);
+
+        app.apply(Action::Bottom);
+        assert!(app.tabs[0].engine.follow_tail);
+        assert_eq!(app.tabs[0].cursor, 9_999, "on the last row");
+        app.apply(Action::LineUp);
+        assert!(!app.tabs[0].engine.follow_tail, "moving up pauses follow");
+        app.apply(Action::Top);
+        assert_eq!((app.tabs[0].cursor, app.tabs[0].top), (0, 0));
+    }
+
+    #[test]
+    fn shift_arrows_select_from_the_cursor_which_is_drawn_reversed() {
+        let (mut app, _dir) = app_with(&[("test.log", LOG)], false);
+        render(&mut app, 70, 12);
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::SelectDown);
+        app.apply(Action::SelectDown);
+        let e = &app.tabs[0].engine;
+        assert!(e.is_selected(0) && e.is_selected(1) && e.is_selected(2));
+        assert_eq!(app.tabs[0].cursor, 2);
+        app.apply(Action::ClearSearch);
+        assert!(
+            !app.tabs[0].engine.has_selection(),
+            "Esc clears the selection"
+        );
+
+        // Nothing selected: the cursor row is the one a row action takes.
+        app.tabs[0].set_cursor(1);
+        assert_eq!(app.tabs[0].cursor_line(), Some(1));
+        let mut terminal = Terminal::new(TestBackend::new(70, 12)).unwrap();
+        app.tick();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let reversed = |y: u16| buf[(5, y)].modifier.contains(Modifier::REVERSED);
+        // Rows 1-3 of the screen hold lines 1-3; the cursor is on the second.
+        assert!(!reversed(1) && reversed(2) && !reversed(3));
+    }
 
     #[test]
     fn stream_window_has_borders_title_and_counts() {
