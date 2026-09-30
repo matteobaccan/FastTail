@@ -147,15 +147,11 @@ impl TextField {
     }
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
-#[allow(dead_code)]
 /// A press of the key, not a release (the Windows console reports both).
 fn pressed(key: &KeyEvent) -> bool {
     key.kind != KeyEventKind::Release
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
-#[allow(dead_code)]
 /// A whole number typed in a text field and checked against a range; `↑` / `↓` step it
 /// by one inside the range.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +160,6 @@ pub struct NumberField {
     pub range: RangeInclusive<u64>,
 }
 
-#[allow(dead_code)]
 impl NumberField {
     pub fn new(value: u64, range: RangeInclusive<u64>) -> Self {
         Self {
@@ -218,15 +213,12 @@ impl NumberField {
     }
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
-#[allow(dead_code)]
 /// An on / off switch: `Space` toggles it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CheckBox {
     pub on: bool,
 }
 
-#[allow(dead_code)]
 impl CheckBox {
     pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
         if pressed(&key) && key.code == KeyCode::Char(' ') {
@@ -243,8 +235,6 @@ impl CheckBox {
     }
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
-#[allow(dead_code)]
 /// One choice among a few, shown on a line: `←` `→` (or `↑` `↓`) move it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RadioList {
@@ -252,7 +242,6 @@ pub struct RadioList {
     pub selected: usize,
 }
 
-#[allow(dead_code)]
 impl RadioList {
     pub fn new(options: &[&str], selected: usize) -> Self {
         Self {
@@ -287,7 +276,7 @@ impl RadioList {
     }
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+// Used by the editor dialogs (tasks 4.2 to 4.4).
 #[allow(dead_code)]
 /// An ordered list with a selected row: `↑` `↓` select, `Alt+↑` / `Alt+↓` (or `K` / `J`)
 /// move the selected item, `Delete` removes it. The order is the priority, as in the
@@ -359,7 +348,7 @@ impl<T> ReorderList<T> {
     }
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+// Used by the editor dialogs (tasks 4.2 to 4.4).
 #[allow(dead_code)]
 /// A colour typed as `#RRGGBB` (or `RRGGBB`), or picked from `swatches` with `[` / `]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -408,14 +397,14 @@ impl ColourField {
     }
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+// Used by the editor dialogs (tasks 4.2 to 4.4).
 #[allow(dead_code)]
 /// `#rrggbb` of a colour, upper case.
 pub fn hex(rgb: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
 }
 
-// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+// Used by the editor dialogs (tasks 4.2 to 4.4).
 #[allow(dead_code)]
 /// `#RRGGBB` or `RRGGBB`, any case.
 pub fn parse_hex(text: &str) -> Option<[u8; 3]> {

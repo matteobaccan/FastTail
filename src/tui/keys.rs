@@ -68,6 +68,8 @@ pub enum Action {
     SaveSession,
     /// `T`: the next theme.
     CycleTheme,
+    /// `,`: the Settings dialog.
+    Settings,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -147,6 +149,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('O') => Action::OpenSession,
         KeyCode::Char('S') => Action::SaveSession,
         KeyCode::Char('T') => Action::CycleTheme,
+        KeyCode::Char(',') => Action::Settings,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -194,6 +197,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('O'), shift), Some(Action::OpenSession));
         assert_eq!(k(KeyCode::Char('S'), shift), Some(Action::SaveSession));
         assert_eq!(k(KeyCode::Char('T'), shift), Some(Action::CycleTheme));
+        assert_eq!(k(KeyCode::Char(','), none), Some(Action::Settings));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),

@@ -30,6 +30,7 @@ use crate::tui::hex;
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::picker::{refusal_text, EntryPicker};
+use crate::tui::settings::SettingsForm;
 use crate::tui::view::{self, Paint};
 
 /// Columns moved by one horizontal scroll step.
@@ -276,6 +277,8 @@ pub struct App {
     pub time_range: Option<TimeRangeDialog>,
     pub picker: Option<EntryPicker>,
     pub sessions: Option<SessionDialog>,
+    /// The Settings dialog (`,`).
+    pub settings_form: Option<SettingsForm>,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
@@ -326,6 +329,7 @@ impl App {
             time_range: None,
             picker: None,
             sessions: None,
+            settings_form: None,
             confirm_overwrite: None,
             settings: None,
             autosave: false,
@@ -479,6 +483,9 @@ impl App {
         if self.confirm_overwrite.is_some() {
             return self.on_confirm_key(key);
         }
+        if self.settings_form.is_some() {
+            return self.on_settings_key(key);
+        }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
         }
@@ -538,7 +545,13 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
-        if let Some(d) = self.sessions.as_mut() {
+        if let Some(f) = self.settings_form.as_mut() {
+            if let Some(crate::tui::settings::Widget::Text(t)) =
+                f.fields.get_mut(f.focus).map(|x| &mut x.widget)
+            {
+                t.insert(text);
+            }
+        } else if let Some(d) = self.sessions.as_mut() {
             d.field.insert(text);
         } else if let Some(p) = self.picker.as_mut() {
             p.filter.insert(text);
@@ -582,6 +595,53 @@ impl App {
                 }
             }
         }
+    }
+
+    fn open_settings(&mut self) {
+        let form = SettingsForm::from_config(&self.settings_mut().config);
+        self.settings_form = Some(form);
+    }
+
+    fn on_settings_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(form) = self.settings_form.as_mut() else {
+            return false;
+        };
+        match form.on_key(key) {
+            FieldKey::Submit => self.submit_settings(),
+            FieldKey::Cancel => self.settings_form = None,
+            FieldKey::Edited => {}
+            FieldKey::Other => return false,
+        }
+        true
+    }
+
+    /// `[ OK ]` of Settings: every field valid, the values go into the configuration,
+    /// reach the running interface (theme, level colours, polling, each stream's
+    /// settings) and are saved. A field out of its range keeps the dialog open.
+    fn submit_settings(&mut self) {
+        let Some(form) = self.settings_form.as_mut() else {
+            return;
+        };
+        let settings = self.settings.get_or_insert_with(Default::default);
+        if let Err(problems) = form.apply(&mut settings.config) {
+            form.rejected = true;
+            let names: Vec<String> = problems
+                .iter()
+                .map(|(i, p)| format!("{}: {p}", form.fields[*i].label))
+                .collect();
+            self.message = Some(names.join("  |  "));
+            return;
+        }
+        self.settings_form = None;
+        let config = &settings.config;
+        self.palette.theme = config.theme;
+        self.palette.level_colors = config.level_colors;
+        self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
+        for tab in &mut self.tabs {
+            crate::workspace::apply_settings(&mut tab.engine, config);
+        }
+        self.message = Some("Settings saved".into());
+        self.save_config();
     }
 
     /// `Shift+T`: the next theme, in the order of the GUI's list, saved as the ini's
@@ -1047,6 +1107,7 @@ impl App {
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
+            Action::Settings => self.open_settings(),
             Action::OpenFile => self.open_prompt(PromptKind::OpenFile),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -1102,6 +1163,7 @@ impl App {
                     || self.time_range.is_some()
                     || self.picker.is_some()
                     || self.sessions.is_some()
+                    || self.settings_form.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
@@ -1158,6 +1220,11 @@ impl App {
     fn on_click(&mut self, ev: MouseEvent) -> bool {
         let target = mouse::hit_test(&self.hits, ev.column, ev.row);
         match target {
+            Target::ListItem(i) if self.settings_form.is_some() => {
+                if let Some(f) = self.settings_form.as_mut() {
+                    f.focus = i;
+                }
+            }
             Target::ListItem(i) if self.sessions.is_some() => {
                 if let Some(d) = self.sessions.as_mut() {
                     d.selected = i;
@@ -1172,7 +1239,9 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if let Some(file) = self.confirm_overwrite.take() {
+                if self.settings_form.is_some() {
+                    self.submit_settings();
+                } else if let Some(file) = self.confirm_overwrite.take() {
                     self.save_session(&file);
                 } else if self.sessions.is_some() {
                     self.submit_sessions();
@@ -1189,6 +1258,7 @@ impl App {
                 self.prompt = None;
                 self.time_range = None;
                 self.sessions = None;
+                self.settings_form = None;
                 self.confirm_overwrite = None;
                 self.close_picker();
                 self.show_help = false;
@@ -1440,6 +1510,9 @@ impl App {
         if self.sessions.is_some() {
             self.draw_sessions(frame, main_area);
         }
+        if self.settings_form.is_some() {
+            self.draw_settings(frame, main_area);
+        }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
         }
@@ -1672,6 +1745,78 @@ impl App {
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
     }
 
+    fn draw_settings(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(lines) = self.settings_form.as_ref().map(|f| f.lines()) else {
+            return;
+        };
+        let height = (lines.len() as u16 + 5).min(area.height);
+        let inner = self.dialog(
+            frame,
+            area,
+            (74, height),
+            "Settings - Tab/Up/Down move, Left/Right choose, Space ticks",
+            true,
+        );
+        let palette = self.palette;
+        let Some(form) = self.settings_form.as_mut() else {
+            return;
+        };
+        let rows = inner.height.saturating_sub(1) as usize;
+        // Keep the focused field on screen.
+        if let Some(at) = lines.iter().position(|(_, f)| *f == Some(form.focus)) {
+            if at < form.top {
+                form.top = at.saturating_sub(1);
+            } else if rows > 0 && at >= form.top + rows {
+                form.top = at + 1 - rows;
+            }
+        }
+        let problems = form.problems();
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let mut out = Vec::with_capacity(rows);
+        for (k, (text, field)) in lines.iter().enumerate().skip(form.top).take(rows) {
+            let y = inner.y + (k - form.top) as u16;
+            let line = match field {
+                None => Line::styled(
+                    text.clone(),
+                    Style::default()
+                        .fg(palette.accent())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Some(i) => {
+                    self.hits
+                        .list_items
+                        .push((Rect::new(inner.x, y, inner.width, 1), *i));
+                    let problem = problems.iter().find(|(p, _)| p == i).map(|(_, p)| p);
+                    let mut style = Style::default();
+                    if problem.is_some() && form.rejected {
+                        style = error;
+                    }
+                    if *i == form.focus {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
+                    let shown = match problem {
+                        Some(p) => format!("{text}  ({p})"),
+                        None => text.clone(),
+                    };
+                    Line::styled(view::sanitize(&shown), style)
+                }
+            };
+            out.push(line);
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                "Enter or [ OK ] applies and saves, Esc cancels",
+                Style::default().fg(palette.dim()),
+            )),
+            Rect {
+                y: inner.bottom().saturating_sub(1),
+                height: 1,
+                ..inner
+            },
+        );
+    }
+
     fn draw_sessions(&mut self, frame: &mut Frame, area: Rect) {
         let rows = self.sessions.as_ref().map_or(0, |d| d.recent.len()) as u16;
         let inner = self.dialog(frame, area, (72, rows.max(1) + 7), "Open session", true);
@@ -1888,6 +2033,7 @@ impl App {
             "o                open a file, pattern or archive entry",
             "Shift+O Shift+S  open a session / save the streams as a session",
             "t                time range: from / to (14:02, -15m, now)",
+            ",                Settings: theme, language, view, refresh, sound",
             "Shift+T          next theme: Tron, Matrix, Blade, Light, Commander",
             "a                ANSI colours: auto, render, strip, raw (^[)",
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
@@ -2125,7 +2271,12 @@ fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'st
     }
     tab.top = view::clamp_top(tab.top, height, rows);
     let range = view::visible_range(tab.top, height, rows);
-    let gutter = view::gutter_width(engine.total_lines());
+    // Settings > Line numbers off keeps only the mark column.
+    let gutter = if engine.show_line_numbers {
+        view::gutter_width(engine.total_lines())
+    } else {
+        0
+    };
     let query = engine.search_query.trim().to_string();
     let has_search = !query.is_empty() && engine.active_match_count() > 0;
     let mut lines = Vec::with_capacity(range.len());
@@ -2249,7 +2400,11 @@ pub fn render_row(
         ' '
     };
     spans.push(Span::styled(
-        format!("{:>gutter$}{mark}", line_idx + 1),
+        if gutter == 0 {
+            mark.to_string()
+        } else {
+            format!("{:>gutter$}{mark}", line_idx + 1)
+        },
         gutter_style,
     ));
     if let Some(c) = engine.collapsed_row(row).filter(|c| c.count > 1) {
@@ -3300,6 +3455,71 @@ mod tests {
         assert_eq!(app.palette.theme, CyberTheme::Commander, "the blue classic");
         app.apply(Action::CycleTheme);
         assert_eq!(app.palette.theme, CyberTheme::Tron, "back to the first");
+    }
+
+    #[test]
+    fn the_settings_dialog_applies_saves_and_refuses_a_value_out_of_range() {
+        use crossterm::event::KeyCode;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, LOG).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.apply(Action::Settings);
+        let screen = render(&mut app, 90, 40);
+        assert!(
+            screen.iter().any(|l| l.contains("Performance and refresh")),
+            "{screen:#?}"
+        );
+
+        // Theme: one to the right; Line numbers: off; Poll interval: out of range.
+        let focus = |app: &mut App, label: &str| {
+            let f = app.settings_form.as_mut().unwrap();
+            f.focus = f.fields.iter().position(|x| x.label == label).unwrap();
+        };
+        focus(&mut app, "Theme");
+        press(&mut app, KeyCode::Right);
+        focus(&mut app, "Line numbers");
+        press(&mut app, KeyCode::Char(' '));
+        focus(&mut app, "Poll interval (ms)");
+        app.on_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        ));
+        keys(&mut app, "7");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings_form.is_some(), "kept open");
+        assert!(app.message.as_deref().unwrap().contains("50 to 5000"));
+        assert_eq!(app.palette.theme, CyberTheme::Tron, "nothing applied");
+
+        keys(&mut app, "00");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings_form.is_none());
+        assert_eq!(app.palette.theme, CyberTheme::Matrix, "applied at once");
+        assert_eq!(app.idle_poll, Duration::from_millis(700));
+        assert!(!app.tabs[0].engine.show_line_numbers);
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.theme, CyberTheme::Matrix);
+        assert_eq!(saved.poll_interval_ms, 700);
+        assert!(!saved.show_line_numbers);
+        let screen = render(&mut app, 90, 20);
+        assert!(
+            screen.iter().any(|l| l.starts_with("\u{2551} 2026-09-28")),
+            "no line numbers, only the mark column: {screen:#?}"
+        );
+
+        // Esc discards.
+        app.apply(Action::Settings);
+        focus(&mut app, "Theme");
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.palette.theme, CyberTheme::Matrix);
     }
 
     #[test]
