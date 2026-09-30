@@ -199,6 +199,28 @@ Example: `fasttail --fresh --filter ERROR app.log err.log`.
 
 Without `--print`, `--since` and `--until` fill the time range of the streams opened from the command line (the stdin stream included) as if typed in the popup; a relative time (`-3h`) is kept as typed, so the window slides with the clock like one typed in the popup. A time FastTail cannot read is a usage error (exit code 2).
 
+### Terminal interface (preview)
+
+`fasttail-tui` shows the same streams in a terminal: over SSH, on a server without a
+desktop, or in Windows Terminal. It uses the same engine and the same `fasttail.ini` (the
+workspace, the dock layout, sessions, bookmarks, filters and theme), writing back only
+what it changes, so the window and the terminal can take turns on one configuration.
+
+```bash
+fasttail-tui app.log err.log          # two streams, as tabs of one window
+fasttail-tui --split app.log err.log  # side by side
+some-command | fasttail-tui           # standard input
+fasttail-tui --ascii --no-mouse app.log
+```
+
+`?` or `F1` lists every key as a menu (`Enter` runs one); the status bar shows the main
+commands as `[ ]` buttons for the mouse. Windows follow the GUI's dock: `s` or `|` opens
+a window beside, `_` below, `<` `>` move a stream between windows, `Alt+arrows` or a
+dragged divider resize, a title dragged onto a window's edge splits it and onto its
+centre adds a tab. `o` opens a file through a folder browser, `,` the Settings, `Shift+T`
+the next theme. The preview lacks the rule editor, filter presets, the global filter,
+external tools, the PIN lock and translations; they come with 0.20.0.
+
 ### Print mode (no window)
 `fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme, the level colours, the highlight rules and automatic highlighting). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.
 
@@ -430,11 +452,14 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 
 | Platform | Asset | Contents |
 |---|---|---|
-| Windows x86_64 | `fasttail-windows-x86_64-<version>.zip` | `fasttail.exe`, `LICENSE`, `README.md` |
-| Windows x86_64 debug symbols | `fasttail-windows-x86_64-symbols-<version>.zip` | `fasttail.pdb` (only needed to read a crash dump) |
-| Linux x86_64 | `fasttail-linux-x86_64-<version>.tar.gz` | `fasttail`, `LICENSE`, `README.md` |
-| Linux ARM64 | `fasttail-linux-arm64-<version>.tar.gz` | `fasttail`, `LICENSE`, `README.md` |
-| macOS Apple Silicon | `fasttail-macos-arm64-<version>.tar.gz` | `fasttail`, `LICENSE`, `README.md` |
+| Windows x86_64 | `fasttail-windows-x86_64-<version>.zip` | `fasttail.exe`, `fasttail-tui.exe`, `LICENSE`, `README.md` |
+| Windows x86_64 debug symbols | `fasttail-windows-x86_64-symbols-<version>.zip` | `fasttail.pdb`, `fasttail_tui.pdb` (only needed to read a crash dump) |
+| Linux x86_64 | `fasttail-linux-x86_64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
+| Linux ARM64 | `fasttail-linux-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
+| macOS Apple Silicon | `fasttail-macos-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
+
+`fasttail-tui` is the terminal interface (a preview since 0.15.0, see below); `fasttail` is
+the window.
 
 ```bash
 # Linux / macOS

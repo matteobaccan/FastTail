@@ -63,7 +63,7 @@
 ## 6. Release pipeline
 
 - [ ] 6.1 `test` job: `cargo check --no-default-features --features tui --bin fasttail-tui` on Linux and Windows
-- [ ] 6.2 Windows build: `cargo build --release --bins`; zip with `fasttail.exe` and `fasttail-tui.exe`; symbols zip with both PDBs
+- [ ] 6.2 (0.15.0 ships both executables in every archive and both PDBs in the symbols zip; the rest below is open) Windows build: `cargo build --release --bins`; zip with `fasttail.exe` and `fasttail-tui.exe`; symbols zip with both PDBs
 - [ ] 6.3 Linux x86_64 and ARM64: second build `--no-default-features --features tui --bin fasttail-tui`, `cargo tree` check for GUI crates, `fasttail-tui-linux-<arch>-<version>.tar.gz` with `LICENSE` and `README.md`; the release job uploads both
 - [ ] 6.4 Every build job prints the byte sizes of its executables and archives; compare with the previous release against the budget table in design.md
 
