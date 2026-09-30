@@ -3363,7 +3363,8 @@ impl FastTailApp {
                 .enumerate()
                 .find_map(|(n, tool)| {
                     let sc = tool.parsed_shortcut()?;
-                    i.consume_key(sc.modifiers(), sc.key).then_some(n)
+                    let (mods, key) = crate::ui::keys::egui_shortcut(sc);
+                    i.consume_key(mods, key).then_some(n)
                 })
         });
         if let Some(n) = tool_shortcut {
