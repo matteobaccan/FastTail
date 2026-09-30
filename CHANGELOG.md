@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-30
+
+Terminal interface windows: floating windows that move, resize and overlap, `[x]` to
+close, an empty workspace, and a help that shows every key. The terminal interface is
+still a preview (editors, lock, hand-off and translations come with 0.20.0).
+
 ### Added
 
 - **Floating windows in the terminal interface.** `Alt+F` takes the focused window out of
@@ -29,7 +35,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   nothing is selected, each with a tooltip saying why (#200).
 - **Highlighting.** A highlight span that overlaps no span already claimed on the row is
   added directly, without the subtraction pass (#203).
-
 - **Release page.** Each release starts with a downloads grid (architecture by system,
   one link per file), generated from the files the release publishes.
 
@@ -1225,6 +1230,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.16.0]: https://github.com/matteobaccan/FastTail/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/matteobaccan/FastTail/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/matteobaccan/FastTail/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/matteobaccan/FastTail/compare/v0.12.0...v0.13.0
