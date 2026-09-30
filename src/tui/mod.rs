@@ -10,6 +10,7 @@
 mod app;
 mod clipboard;
 mod colors;
+mod hex;
 mod keys;
 mod mouse;
 mod view;

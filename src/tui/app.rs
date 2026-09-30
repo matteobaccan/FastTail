@@ -23,6 +23,7 @@ use ratatui::Frame;
 
 use crate::tui::clipboard::{Clipboard, Copied};
 use crate::tui::colors::{Chrome, Palette};
+use crate::tui::hex;
 use crate::tui::keys::{self, Action, PromptKey};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::view;
@@ -46,6 +47,9 @@ pub struct Tab {
     pub cursor: usize,
     /// Text rows of its window at the last draw (the page size).
     pub height: usize,
+    /// Bytes per row of the HEX view, from the window width at the last draw. In the HEX
+    /// view `top` and `cursor` count these rows.
+    pub hex_width: usize,
     /// Waiting for the first hit of a search that runs in the background.
     pending_first_hit: bool,
     /// Lines already seen while this stream was on screen, for the "new lines" mark.
@@ -54,8 +58,9 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(mut engine: TailEngine) -> Self {
-        // HEX and Markdown are GUI views: the terminal always shows the lines.
-        if engine.view_mode != ViewMode::Text {
+        // Markdown is a GUI view: the terminal shows the lines (or the HEX a binary
+        // file opened in).
+        if !matches!(engine.view_mode, ViewMode::Text | ViewMode::Hex) {
             engine.set_view_mode(ViewMode::Text);
         }
         let title = title_of(&engine.path);
@@ -66,6 +71,7 @@ impl Tab {
             hscroll: 0,
             cursor: 0,
             height: 20,
+            hex_width: 16,
             pending_first_hit: false,
             seen_lines: 0,
         }
@@ -74,20 +80,76 @@ impl Tab {
     /// Moves the cursor to `row` (clamped to the view) and scrolls the window to keep it
     /// visible. Any move pauses follow; `Bottom` turns it back on.
     pub fn set_cursor(&mut self, row: usize) {
-        let rows = self.engine.visible_line_count();
+        let rows = self.row_count();
         self.engine.follow_tail = false;
         self.cursor = row.min(rows.saturating_sub(1));
         self.top = view::reveal(self.top, self.height.max(1), rows, self.cursor);
     }
 
-    /// The line under the cursor (the first line of a collapsed group).
+    /// The line under the cursor (the first line of a collapsed group); none in HEX.
     pub fn cursor_line(&self) -> Option<usize> {
+        if self.is_hex() {
+            return None;
+        }
         self.engine.get_actual_line_idx(self.cursor)
+    }
+
+    pub fn is_hex(&self) -> bool {
+        self.engine.view_mode == ViewMode::Hex
+    }
+
+    /// Rows of the view: HEX rows, or the filtered and collapsed lines.
+    pub fn row_count(&self) -> usize {
+        if self.is_hex() {
+            self.engine.total_hex_rows(self.hex_width)
+        } else {
+            self.engine.visible_line_count()
+        }
+    }
+
+    /// Switches between the lines and the HEX view keeping the place: the HEX row
+    /// holding the first byte of the cursor line, or the line holding the first byte of
+    /// the cursor row (the next visible one when the filters hide it). Follow stays.
+    fn toggle_hex(&mut self) {
+        let follow = self.engine.follow_tail;
+        let n = self.hex_width.max(1);
+        if self.is_hex() {
+            let offset = (self.cursor * n) as u64;
+            self.engine.set_view_mode(ViewMode::Text);
+            if !follow {
+                let line = self.engine.line_of_offset(offset);
+                self.set_cursor(self.engine.row_of_line_or_next(line));
+            }
+        } else {
+            let offset = self
+                .cursor_line()
+                .and_then(|l| self.engine.line_offsets.get(l).copied())
+                .unwrap_or(0);
+            self.engine.set_view_mode(ViewMode::Hex);
+            // The engine would carry the current text hit over; the place is the cursor.
+            self.engine.scroll_to_byte = None;
+            if !follow {
+                self.set_cursor(offset as usize / n);
+            }
+        }
+        self.engine.follow_tail = follow;
+        self.pin_cursor();
+    }
+
+    /// Adopts the bytes per row a window `width` cells wide allows, keeping the cursor
+    /// and the top on the same bytes.
+    fn fit_hex_width(&mut self, width: usize) {
+        let n = hex::bytes_per_row(width, hex::offset_digits(self.engine.file_size));
+        if n != self.hex_width {
+            self.cursor = self.cursor * self.hex_width / n;
+            self.top = self.top * self.hex_width / n;
+            self.hex_width = n;
+        }
     }
 
     /// In follow mode the cursor sits on the last row, which moves as lines arrive.
     fn pin_cursor(&mut self) {
-        let rows = self.engine.visible_line_count();
+        let rows = self.row_count();
         if self.engine.follow_tail {
             self.cursor = rows.saturating_sub(1);
         } else if rows > 0 && self.cursor >= rows {
@@ -148,6 +210,7 @@ struct PaneSignature {
     follow: bool,
     collapse_pending: bool,
     decompressed: Option<u16>,
+    hex: Option<(usize, Option<(usize, usize)>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -229,11 +292,17 @@ impl App {
                     tab.pending_first_hit = false;
                     // The engine may already have made the first hit current: show it
                     // rather than stepping past it.
-                    match tab.engine.current_search_line() {
-                        Some(line) => tab.engine.scroll_to_line = Some(line),
-                        None => {
-                            tab.engine.search_next(false);
-                        }
+                    let current = if tab.is_hex() {
+                        tab.engine
+                            .current_search_byte()
+                            .map(|(off, _)| tab.engine.scroll_to_byte = Some(off))
+                    } else {
+                        tab.engine
+                            .current_search_line()
+                            .map(|line| tab.engine.scroll_to_line = Some(line))
+                    };
+                    if current.is_none() {
+                        tab.engine.search_next(false);
                     }
                 } else if tab.engine.scan_progress().is_none() {
                     tab.pending_first_hit = false;
@@ -253,6 +322,11 @@ impl App {
                 if let Some(row) = tab.engine.get_visible_row_of_line(line) {
                     // A jump (search hit, go-to) moves the cursor onto the line.
                     tab.set_cursor(row);
+                }
+            }
+            if let Some(offset) = tab.engine.scroll_to_byte.take() {
+                if tab.is_hex() {
+                    tab.set_cursor(offset / tab.hex_width.max(1));
                 }
             }
             tab.seen_lines = tab.engine.total_lines();
@@ -293,6 +367,9 @@ impl App {
                     .as_ref()
                     .filter(|c| c.is_running())
                     .map(|c| (c.progress() * 1000.0) as u16),
+                hex: self.tabs[i]
+                    .is_hex()
+                    .then(|| (e.search_byte_matches.len(), e.current_search_byte())),
             }
         };
         Signature {
@@ -365,6 +442,13 @@ impl App {
             }
             // A note bookmarks the line; an empty one removes the note, not the bookmark.
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
+            PromptKind::Goto if tab.is_hex() => match hex::parse_offset(&text) {
+                Some(offset) if tab.engine.file_size > 0 => {
+                    let last = tab.engine.file_size as usize - 1;
+                    tab.set_cursor(offset.min(last) / tab.hex_width.max(1));
+                }
+                _ => self.message = Some(format!("Cannot go to \"{text}\"")),
+            },
             PromptKind::Goto => {
                 let current = tab.cursor_line().unwrap_or(0);
                 let target = tab.engine.resolve_goto(&text, current);
@@ -414,6 +498,20 @@ impl App {
 
     pub fn apply(&mut self, action: Action) {
         let n_tabs = self.tabs.len();
+        let row_action = matches!(
+            action,
+            Action::ToggleBookmark
+                | Action::NextBookmark
+                | Action::PrevBookmark
+                | Action::EditNote
+                | Action::ToggleContext
+                | Action::SelectUp
+                | Action::SelectDown
+        );
+        if row_action && self.tabs[self.active].is_hex() {
+            self.message = Some("The HEX view shows bytes, not lines: h returns to them".into());
+            return;
+        }
         match action {
             Action::Quit => self.quit = true,
             // In a split `Tab` moves the focus between the two windows; otherwise it
@@ -485,7 +583,7 @@ impl App {
                     return false;
                 };
                 let t = &mut self.tabs[tab];
-                let rows = t.engine.visible_line_count();
+                let rows = t.row_count();
                 if t.engine.follow_tail {
                     t.top = view::follow_top(rows, t.height);
                 }
@@ -501,7 +599,7 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => self.on_click(ev),
             MouseEventKind::Drag(MouseButton::Left) => {
-                let Some(tab) = self.drag else {
+                let Some(tab) = self.drag.filter(|&t| !self.tabs[t].is_hex()) else {
                     return false;
                 };
                 match mouse::hit_test(&self.hits, ev.column, ev.row) {
@@ -544,6 +642,13 @@ impl App {
             }
             Target::DialogBody | Target::Nothing => return false,
             Target::TabTitle(i) | Target::WindowTitle(i) | Target::Window(i) => self.focus_tab(i),
+            Target::Row { tab, row } if self.tabs[tab].is_hex() => {
+                // A HEX row takes the cursor; there is nothing to select or bookmark.
+                self.focus_tab(tab);
+                let t = &mut self.tabs[tab];
+                t.engine.follow_tail = false;
+                t.cursor = row;
+            }
             Target::Row { tab, row } => {
                 self.focus_tab(tab);
                 self.drag = Some(tab);
@@ -598,7 +703,7 @@ impl App {
     fn apply_to_tab(&mut self, action: Action) {
         let tab = &mut self.tabs[self.active];
         let page = tab.height.max(1);
-        let rows = tab.engine.visible_line_count();
+        let rows = tab.row_count();
         // In follow mode the window sits on the last page whatever `top` says.
         if tab.engine.follow_tail {
             tab.top = view::follow_top(rows, page);
@@ -675,6 +780,7 @@ impl App {
                 }
             }
             Action::ToggleContext => toggle_context(tab, &mut self.message),
+            Action::ToggleHex => tab.toggle_hex(),
             // In the context view, Esc returns to the filtered rows first.
             Action::ClearSearch if tab.engine.context_line().is_some() => {
                 toggle_context(tab, &mut self.message)
@@ -818,9 +924,12 @@ impl App {
                 follow,
                 Span::raw(" "),
             ]))
-            .title_bottom(Line::from(format!(" {} ", counts_text(e))).style(title_style))
             .title_bottom(
-                Line::from(format!(" {} ", view_state_text(e)))
+                Line::from(format!(" {} ", counts_text(e, tab.is_hex(), tab.hex_width)))
+                    .style(title_style),
+            )
+            .title_bottom(
+                Line::from(format!(" {} ", view_state_text(e, tab.is_hex())))
                     .style(title_style)
                     .right_aligned(),
             );
@@ -839,7 +948,11 @@ impl App {
             inner.y += 1;
             inner.height -= 1;
         }
-        let (lines, row_count) = stream_rows(tab, &palette, inner.height as usize);
+        let (lines, row_count) = if tab.is_hex() {
+            hex_rows(tab, &palette, inner.width as usize, inner.height as usize)
+        } else {
+            stream_rows(tab, &palette, inner.height as usize)
+        };
         self.hits.windows.push(WindowHit {
             tab: idx,
             outer: area,
@@ -873,7 +986,7 @@ impl App {
             // The note of the cursor row's bookmark, when there is one.
             (None, Some(n)) => Line::styled(format!("* {n}"), Style::default().fg(self.palette.accent())),
             (None, None) => Line::styled(
-                "? help  q quit  Space follow  / search  n/N next  i/x filter  b mark  ]/[ marks  m note  y copy",
+                "? help  q quit  Space follow  / search  n/N next  i/x filter  b mark  ]/[ marks  m note  h hex  y copy",
                 Style::default().fg(self.palette.dim()),
             ),
         };
@@ -947,6 +1060,9 @@ impl App {
             PromptKind::Include => "Include filter",
             PromptKind::Exclude => "Exclude filter",
             PromptKind::Note(_) => "Bookmark note",
+            PromptKind::Goto if self.tabs[self.active].is_hex() => {
+                "Go to byte offset (decimal or 0x hex)"
+            }
             PromptKind::Goto => "Go to line (N, +N, -N) or time (14:02)",
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
@@ -989,6 +1105,7 @@ impl App {
             "m                note of the cursor row's bookmark",
             "Ctrl+K           cursor row in context (filters off), again back",
             "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
+            "h                HEX view of the bytes (go to: 1024, 0x400), again back",
             "y  Ctrl+C        copy the selection or the cursor row",
             "                 (Ctrl+C quits when nothing is selected)",
             "q                quit",
@@ -1013,12 +1130,20 @@ impl App {
 }
 
 /// Bottom-left of a window: rows and lines, and the background work in progress.
-fn counts_text(e: &TailEngine) -> String {
-    let mut s = format!(
-        "{}/{} lines",
-        group_digits(e.visible_line_count()),
-        group_digits(e.total_lines())
-    );
+fn counts_text(e: &TailEngine, hex: bool, hex_width: usize) -> String {
+    let mut s = if hex {
+        format!(
+            "{} bytes, {} rows of {hex_width}",
+            group_digits(e.file_size as usize),
+            group_digits(e.total_hex_rows(hex_width))
+        )
+    } else {
+        format!(
+            "{}/{} lines",
+            group_digits(e.visible_line_count()),
+            group_digits(e.total_lines())
+        )
+    };
     if let Some((kind, p, hits)) = e.scan_progress() {
         let name = match kind {
             ScanKind::Index => "indexing",
@@ -1041,7 +1166,18 @@ fn counts_text(e: &TailEngine) -> String {
 }
 
 /// Bottom-right of a window: filters, level, collapse and the search position.
-fn view_state_text(e: &TailEngine) -> String {
+fn view_state_text(e: &TailEngine, hex: bool) -> String {
+    if hex {
+        // Filters, level and collapse do not apply to the bytes.
+        let query = e.search_query.trim();
+        if query.is_empty() {
+            return "HEX".into();
+        }
+        let current = e
+            .current_match_idx
+            .map_or("-".to_string(), |i| (i + 1).to_string());
+        return format!("HEX  /{query} {current}/{}", e.search_byte_matches.len());
+    }
     let mut parts = Vec::new();
     let inc = e.include_filter();
     let exc = e.exclude_filter();
@@ -1163,6 +1299,64 @@ fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'st
         };
         lines.push(Line::styled(text, Style::default().fg(palette.dim())));
     }
+    (lines, drawn)
+}
+
+/// The HEX rows of a window `width` x `height`: only the bytes of these rows are read,
+/// in one go. Also returns how many rows were drawn, for the mouse.
+fn hex_rows(
+    tab: &mut Tab,
+    palette: &Palette,
+    width: usize,
+    height: usize,
+) -> (Vec<Line<'static>>, usize) {
+    tab.height = height;
+    tab.fit_hex_width(width);
+    tab.pin_cursor();
+    let n = tab.hex_width;
+    let rows = tab.row_count();
+    if tab.engine.follow_tail {
+        tab.top = view::follow_top(rows, height);
+    }
+    tab.top = view::clamp_top(tab.top, height, rows);
+    let range = view::visible_range(tab.top, height, rows);
+    let engine = &tab.engine;
+    if range.is_empty() {
+        let text = "(empty file, or still loading)";
+        return (
+            vec![Line::styled(text, Style::default().fg(palette.dim()))],
+            0,
+        );
+    }
+    let first = range.start * n;
+    let bytes = engine.get_bytes(first, range.len() * n).unwrap_or_default();
+    let digits = hex::offset_digits(engine.file_size);
+    let styles = hex::Styles {
+        text: Style::default(),
+        offset: Style::default().fg(palette.dim()),
+        hit: palette.hit(),
+        current: palette.active_hit(),
+    };
+    let current = engine.current_search_byte();
+    let mut lines = Vec::with_capacity(range.len());
+    for (i, chunk) in bytes.chunks(n).enumerate() {
+        let row = range.start + i;
+        let line = hex::render_row(
+            first + i * n,
+            chunk,
+            n,
+            digits,
+            &engine.search_byte_matches,
+            current,
+            &styles,
+        );
+        lines.push(if row == tab.cursor {
+            line.patch_style(Style::default().add_modifier(Modifier::REVERSED))
+        } else {
+            line
+        });
+    }
+    let drawn = lines.len();
     (lines, drawn)
 }
 
@@ -1558,6 +1752,131 @@ mod tests {
         assert!(app.message.as_deref().unwrap().contains("hidden"));
         go(&mut app, "nonsense");
         assert!(app.message.as_deref().unwrap().contains("Cannot go to"));
+    }
+
+    fn go_to(app: &mut App, text: &str) {
+        app.apply(Action::GoTo);
+        let prompt = app.prompt.take().expect("the go-to dialog");
+        app.submit_prompt(Prompt {
+            text: text.into(),
+            ..prompt
+        });
+        app.tick();
+    }
+
+    #[test]
+    fn h_shows_the_bytes_and_keeps_the_place_both_ways() {
+        let body = numbered(300);
+        let (mut app, _dir) = app_with(&[("n.log", body.as_str())], false);
+        render(&mut app, 80, 20);
+        let row = app.tabs[0].engine.get_visible_row_of_line(149).unwrap();
+        app.tabs[0].set_cursor(row);
+        let offset = app.tabs[0].engine.line_offsets[149] as usize;
+        app.apply(Action::ToggleHex);
+        let screen = render(&mut app, 80, 20);
+        let tab = &app.tabs[0];
+        assert!(tab.is_hex());
+        assert_eq!(tab.hex_width, 16, "80 columns fit 16 bytes a row");
+        assert_eq!(
+            tab.cursor,
+            offset / 16,
+            "the row of the cursor line's first byte"
+        );
+        let label = format!("{:08X}  ", tab.cursor * 16);
+        assert!(
+            screen.iter().any(|l| l.contains(&label) && l.contains('|')),
+            "{screen:#?}"
+        );
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("rows of 16") && l.contains("HEX")));
+
+        // Three rows down and back: the line holding the cursor row's first byte.
+        for _ in 0..3 {
+            app.apply(Action::LineDown);
+        }
+        let back = app.tabs[0].cursor * 16;
+        app.apply(Action::ToggleHex);
+        let tab = &app.tabs[0];
+        assert!(!tab.is_hex());
+        assert_eq!(
+            tab.cursor_line(),
+            Some(tab.engine.line_of_offset(back as u64))
+        );
+
+        // A wider window takes more bytes a row, the cursor stays on the same bytes.
+        app.apply(Action::ToggleHex);
+        render(&mut app, 80, 20);
+        let before = app.tabs[0].cursor * 16;
+        render(&mut app, 120, 20);
+        assert_eq!(app.tabs[0].hex_width, 24);
+        assert_eq!(app.tabs[0].cursor, before / 24);
+    }
+
+    #[test]
+    fn hex_search_walks_the_byte_hits_and_row_actions_say_why_not() {
+        let body = numbered(300);
+        let (mut app, _dir) = app_with(&[("n.log", body.as_str())], false);
+        render(&mut app, 80, 20);
+        app.apply(Action::ToggleHex);
+        app.search("line 25");
+        render(&mut app, 80, 20);
+        let (off, _) = app.tabs[0].engine.current_search_byte().unwrap();
+        assert_eq!(off, body.find("line 25").unwrap());
+        assert_eq!(app.tabs[0].cursor, off / 16);
+        app.apply(Action::SearchNext);
+        let screen = render(&mut app, 80, 20);
+        let (off, _) = app.tabs[0].engine.current_search_byte().unwrap();
+        assert_eq!(off, body.find("line 250").unwrap());
+        assert_eq!(app.tabs[0].cursor, off / 16);
+        assert!(
+            screen.iter().any(|l| l.contains("/line 25 2/11")),
+            "{screen:#?}"
+        );
+
+        app.apply(Action::ToggleBookmark);
+        assert!(app.message.as_deref().unwrap().contains("HEX view"));
+        // The filters do not apply to the bytes.
+        app.tabs[0].engine.set_include_filter("line 1");
+        render(&mut app, 80, 20);
+        assert_eq!(app.tabs[0].row_count(), body.len().div_ceil(16));
+    }
+
+    #[test]
+    fn hex_go_to_takes_a_byte_offset_and_follow_keeps_the_last_row() {
+        let body = numbered(300);
+        let (mut app, _dir) = app_with(&[("n.log", body.as_str())], false);
+        render(&mut app, 80, 20);
+        app.apply(Action::Bottom);
+        app.apply(Action::ToggleHex);
+        let screen = render(&mut app, 80, 20);
+        let rows = body.len().div_ceil(16);
+        assert!(app.tabs[0].engine.follow_tail, "follow stays on");
+        assert_eq!(app.tabs[0].cursor, rows - 1);
+        let last = format!("{:08X}  ", (rows - 1) * 16);
+        assert!(screen.iter().any(|l| l.contains(&last)), "{screen:#?}");
+
+        go_to(&mut app, "0x100");
+        assert_eq!(app.tabs[0].cursor, 16);
+        assert!(!app.tabs[0].engine.follow_tail);
+        go_to(&mut app, "1000");
+        assert_eq!(app.tabs[0].cursor, 1000 / 16);
+        go_to(&mut app, "99999999");
+        assert_eq!(app.tabs[0].cursor, rows - 1, "clamped to the last byte");
+        go_to(&mut app, "zz");
+        assert!(app.message.as_deref().unwrap().contains("Cannot go to"));
+    }
+
+    #[test]
+    fn a_binary_file_opens_in_the_hex_view() {
+        let body = "\u{0}\u{1}\u{2}binary\u{0}\u{0}".repeat(64);
+        let (mut app, _dir) = app_with(&[("blob.bin", body.as_str())], false);
+        let screen = render(&mut app, 80, 20);
+        assert!(app.tabs[0].is_hex());
+        assert!(
+            screen.iter().any(|l| l.contains("00 01 02 62 69 6E")),
+            "{screen:#?}"
+        );
     }
 
     #[test]
