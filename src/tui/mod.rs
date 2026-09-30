@@ -433,7 +433,7 @@ where
             break;
         }
         // Waits for input at most one tick; then the engines are polled again.
-        if event::poll(app::poll_timeout(app.busy(), app.idle_poll))? {
+        if event::poll(app::poll_timeout(app.busy()))? {
             // Drain everything that queued up, then draw once.
             loop {
                 match event::read()? {
