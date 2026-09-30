@@ -1899,25 +1899,66 @@ impl App {
             "click toggles a bookmark.",
             mouse_hint,
         ];
-        // Taller than the screen: Up / Down / PgUp / PgDn scroll it.
-        let height = (text.len() as u16 + 3).min(area.height);
+        // On a wide screen the keys go in two columns, so they all show at once; the
+        // mouse notes stay under them. Otherwise one column, which scrolls with Up /
+        // Down / PgUp / PgDn when the screen is too short for it.
+        const COL: usize = 76;
+        let split = text.iter().position(|l| l.is_empty()).unwrap_or(text.len());
+        let (keys, notes) = text.split_at(split);
+        let two = area.width as usize >= 2 * COL + 6;
+        let lines: Vec<String> = if two {
+            let half = keys.len().div_ceil(2);
+            let mut out: Vec<String> = (0..half)
+                .map(|i| {
+                    let right = keys.get(half + i).copied().unwrap_or("");
+                    format!("{:<COL$}  {right}", keys[i])
+                })
+                .collect();
+            out.extend(notes.iter().map(|l| l.to_string()));
+            out
+        } else {
+            text.iter().map(|l| l.to_string()).collect()
+        };
+        let width = if two { 2 * COL as u16 + 4 } else { 78 };
+        let height = (lines.len() as u16 + 3).min(area.height);
         let rows = height.saturating_sub(3) as usize;
-        self.help_top = self.help_top.min(text.len().saturating_sub(rows));
-        let title = if rows < text.len() {
+        self.help_top = self.help_top.min(lines.len().saturating_sub(rows));
+        let more_below = self.help_top + rows < lines.len();
+        let title = if rows < lines.len() {
             "Keys - Up/Down scroll, any other key closes"
         } else {
             "Keys - any key closes"
         };
-        let inner = self.dialog(frame, area, (78, height), title, false);
+        let inner = self.dialog(frame, area, (width, height), title, false);
         frame.render_widget(
             Paragraph::new(
-                text.iter()
+                lines
+                    .iter()
                     .skip(self.help_top)
-                    .map(|l| Line::from(*l))
+                    .map(|l| Line::from(l.clone()))
                     .collect::<Vec<_>>(),
             ),
             inner,
         );
+        if more_below {
+            // On the last row, left of the OK button: there is more under the fold.
+            let hint = " \u{2193} more (Down) ";
+            let at = Rect {
+                y: inner.bottom().saturating_sub(1),
+                height: 1,
+                width: hint.chars().count() as u16,
+                ..inner
+            };
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    hint,
+                    Style::default()
+                        .fg(self.palette.accent())
+                        .add_modifier(Modifier::BOLD),
+                )),
+                at.intersection(inner),
+            );
+        }
     }
 }
 
@@ -3073,9 +3114,20 @@ mod tests {
         for key in ["F3", "Ctrl+G", "O  S", "?  F1", "HEX", "ANSI"] {
             assert!(tall.iter().any(|l| l.contains(key)), "{key}: {tall:#?}");
         }
+        let wide = render(&mut app, 170, 30);
+        assert!(
+            wide.iter().any(|l| l.contains("move the cursor one row"))
+                && wide.iter().any(|l| l.contains("next theme")),
+            "two columns show every key: {wide:#?}"
+        );
+        assert!(!wide.iter().any(|l| l.contains("Up/Down scroll")));
         let short = render(&mut app, 80, 24);
         assert!(
             short.iter().any(|l| l.contains("Up/Down scroll")),
+            "{short:#?}"
+        );
+        assert!(
+            short.iter().any(|l| l.contains("more (Down)")),
             "{short:#?}"
         );
         assert!(short.iter().any(|l| l.contains("move the cursor one row")));
