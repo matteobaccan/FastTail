@@ -10,9 +10,10 @@ use crate::i18n::t;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
 use crate::session::{LoadedSession, Session, StreamEntry};
-use crate::tail_engine::{FileEncoding, QuickLabel, TailEngine};
+use crate::tail_engine::{QuickLabel, TailEngine};
 use crate::theme::CyberTheme;
 use crate::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
+use crate::workspace::OpenOutcome;
 use eframe::egui;
 use egui::{Color32, CornerRadius, Key, Margin, RichText, Stroke, ViewportCommand};
 use egui_dock::{DockArea, DockState};
@@ -672,25 +673,16 @@ impl FastTailApp {
                 }
             }
             for path in tabs_to_open {
-                let is_pattern = crate::wildcard::is_pattern_path(&path);
-                if !is_pattern && !crate::compressed::source_exists(&path) {
-                    continue;
-                }
                 // A pattern tab resolves to the newest match again at every start; a
-                // compressed one is decompressed again in the background.
-                let opened = app.open_engine(&path);
-                if let Some(Ok(mut engine)) = opened {
-                    engine.size_check_interval =
-                        std::time::Duration::from_millis(app.config.size_check_interval_ms as u64);
-                    engine
-                        .set_markdown_max_bytes((app.config.markdown_max_mb as u64) * 1024 * 1024);
-                    engine.auto_bookmark_max = app.config.auto_bookmark_max;
-                    engine.set_highlight_rules(app.config.highlight_rules.clone());
-                    engine.size_unit = app.config.size_unit;
-                    apply_view_defaults(&mut engine, &app.config);
-                    engine.wrap_lines = app.config.wrap_for(&path);
-                    restore_bookmarks(&mut engine, &app.config, &path);
-                    apply_stream_state(&mut engine, &app.config);
+                // compressed one is decompressed again in the background. Archives,
+                // missing and unreadable files are skipped.
+                let wake = Self::make_wake(&app.egui_ctx);
+                if let OpenOutcome::Opened(engine) =
+                    crate::workspace::open_target(&path, &app.config, Some(wake))
+                {
+                    let mut engine = *engine;
+                    crate::workspace::apply_settings(&mut engine, &app.config);
+                    crate::workspace::restore_stream(&mut engine, &app.config, &path);
                     app.engines.push(engine);
                 }
             }
@@ -1813,14 +1805,8 @@ impl FastTailApp {
                 return;
             }
         };
-        engine.size_check_interval =
-            std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
-        engine.set_markdown_max_bytes((self.config.markdown_max_mb as u64) * 1024 * 1024);
-        engine.auto_bookmark_max = self.config.auto_bookmark_max;
-        engine.set_highlight_rules(self.config.highlight_rules.clone());
+        crate::workspace::apply_settings(&mut engine, &self.config);
         engine.set_quick_labels(&self.quick_labels);
-        engine.size_unit = self.config.size_unit;
-        apply_view_defaults(&mut engine, &self.config);
         let options = self.stdin_options.clone();
         if let Some(f) = &options.filter {
             engine.set_include_filter(f);
@@ -1883,89 +1869,6 @@ impl FastTailApp {
         std::sync::Arc::new(move || ctx.request_repaint()) as crate::tail_engine::WakeFn
     }
 
-    /// Opens the engine for `path`: a pattern stream, a decompressed file or archive
-    /// entry, or a plain file. `None` for a zip or tar archive, whose entries are chosen
-    /// first.
-    fn open_engine(&self, path: &Path) -> Option<Result<TailEngine, crate::compressed::OpenError>> {
-        let target = if crate::wildcard::is_pattern_path(path) {
-            crate::compressed::Target::Plain
-        } else {
-            crate::compressed::classify(path)
-        };
-        self.open_engine_for(path, &target)
-    }
-
-    /// `open_engine` for a `path` already classified as `target` (the classification may
-    /// peek at decompressed bytes: it is done once per open).
-    fn open_engine_for(
-        &self,
-        path: &Path,
-        target: &crate::compressed::Target,
-    ) -> Option<Result<TailEngine, crate::compressed::OpenError>> {
-        use crate::compressed::{OpenError, Target};
-        let wake = Self::make_wake(&self.egui_ctx);
-        if crate::wildcard::is_pattern_path(path) {
-            return Some(TailEngine::open_pattern_with_wake(path, wake).map_err(OpenError::Io));
-        }
-        let settings = self.config.compressed_settings();
-        match target {
-            Target::Plain => Some(TailEngine::open_with_wake(path, wake).map_err(OpenError::Io)),
-            Target::Compressed(_) => Some(crate::compressed::open_engine(
-                path,
-                None,
-                &settings,
-                Some(wake),
-            )),
-            Target::Entry { archive, entry, .. } => Some(crate::compressed::open_engine(
-                archive,
-                Some(entry),
-                &settings,
-                Some(wake),
-            )),
-            Target::ZipArchive
-            | Target::EmptyZip
-            | Target::TarArchive(_)
-            | Target::SevenZArchive => None,
-        }
-    }
-
-    /// An archive was opened (`open_engine` gave `None` for `target`): an empty zip is
-    /// reported, a zip or a 7z goes through `open_listed_archive`, and a tar opens the
-    /// entry picker at once while its headers are scanned in the background.
-    fn open_archive(&mut self, archive: PathBuf, target: crate::compressed::Target) {
-        use crate::compressed::Target;
-        match target {
-            Target::EmptyZip => {
-                self.open_notice = Some(format!(
-                    "{}: {}",
-                    archive.display(),
-                    t(self.config.language, "zip_empty")
-                ));
-            }
-            Target::TarArchive(codec) => {
-                let scan = crate::compressed::TarScan::start(
-                    &archive,
-                    codec,
-                    crate::compressed::ScanLimits::default(),
-                );
-                self.archive_picker = Some(crate::ui::zip_picker::ArchivePicker::scanning(
-                    archive, scan,
-                ));
-            }
-            Target::SevenZArchive => match crate::compressed::list_7z_entries(&archive) {
-                Ok(listing) => self.open_listed_archive(archive, listing.entries, listing.partial),
-                Err(err) => {
-                    let reason = crate::ui::zip_picker::io_error_text(self.config.language, &err);
-                    self.open_notice = Some(format!("{}: {reason}", archive.display()));
-                }
-            },
-            _ => match crate::compressed::list_zip_entries(&archive) {
-                Ok(entries) => self.open_listed_archive(archive, entries, false),
-                Err(err) => self.open_notice = Some(format!("{}: {err}", archive.display())),
-            },
-        }
-    }
-
     /// Pulls the rows a tar scan found into the picker and acts on its end: a scan that
     /// ends with a single openable entry opens it and closes the picker. `ArchivePicker::show`
     /// syncs its own rows every frame; tests call this to drive a scan to its end.
@@ -1994,32 +1897,6 @@ impl FastTailApp {
                 }
             }
             PickerOutcome::Cancel => self.archive_picker = None,
-        }
-    }
-
-    /// A zip or 7z archive was listed: one file entry opens directly, several open the
-    /// entry picker, none is reported. A `partial` list always goes to the picker, which
-    /// says so.
-    fn open_listed_archive(
-        &mut self,
-        archive: PathBuf,
-        entries: Vec<crate::compressed::ArchiveEntryInfo>,
-        partial: bool,
-    ) {
-        let lang = self.config.language;
-        match entries.as_slice() {
-            [] if !partial => {
-                self.open_notice = Some(format!("{}: {}", archive.display(), t(lang, "zip_empty")));
-            }
-            [only] if only.refusal.is_none() && !partial => {
-                let path = crate::compressed::entry_path(&archive, &only.name);
-                self.open_log_file(path);
-            }
-            _ => {
-                let mut picker = crate::ui::zip_picker::ArchivePicker::new(archive, entries);
-                picker.partial = partial;
-                self.archive_picker = Some(picker);
-            }
         }
     }
 
@@ -2056,60 +1933,78 @@ impl FastTailApp {
             }
         }
 
-        let target = if is_pattern {
-            crate::compressed::Target::Plain
-        } else {
-            crate::compressed::classify(&path)
-        };
-        let opened = match self.open_engine_for(&path, &target) {
-            Some(opened) => opened,
-            None => {
-                self.open_archive(path, target);
+        let lang = self.config.language;
+        let wake = Self::make_wake(&self.egui_ctx);
+        let mut engine = match crate::workspace::open_target(&path, &self.config, Some(wake)) {
+            OpenOutcome::Opened(engine) => *engine,
+            OpenOutcome::Missing => return,
+            // A plain file that fails to open is skipped silently, as it always was; a
+            // compressed one says why.
+            OpenOutcome::Failed { error, report } => {
+                if report {
+                    self.open_notice = Some(self.open_error_text(&path, &error));
+                }
+                return;
+            }
+            OpenOutcome::OpenEntry(entry) => return self.open_log_file(entry),
+            OpenOutcome::EmptyArchive(archive) => {
+                self.open_notice = Some(format!("{}: {}", archive.display(), t(lang, "zip_empty")));
+                return;
+            }
+            OpenOutcome::ChooseEntries {
+                archive,
+                entries,
+                partial,
+            } => {
+                let mut picker = crate::ui::zip_picker::ArchivePicker::new(archive, entries);
+                picker.partial = partial;
+                self.archive_picker = Some(picker);
+                return;
+            }
+            // A tar opens the entry picker at once while its headers are scanned in the
+            // background.
+            OpenOutcome::ScanTar { archive, codec } => {
+                let scan = crate::compressed::TarScan::start(
+                    &archive,
+                    codec,
+                    crate::compressed::ScanLimits::default(),
+                );
+                self.archive_picker = Some(crate::ui::zip_picker::ArchivePicker::scanning(
+                    archive, scan,
+                ));
+                return;
+            }
+            OpenOutcome::ListFailed { archive, error } => {
+                let reason = crate::ui::zip_picker::io_error_text(lang, &error);
+                self.open_notice = Some(format!("{}: {reason}", archive.display()));
                 return;
             }
         };
-        if let Err(err) = &opened {
-            // A plain file that fails to open is skipped silently, as it always was; a
-            // compressed one says why.
-            if target != crate::compressed::Target::Plain {
-                self.open_notice = Some(self.open_error_text(&path, err));
-            }
+        crate::workspace::apply_settings(&mut engine, &self.config);
+        engine.set_quick_labels(&self.quick_labels);
+        crate::workspace::restore_stream(&mut engine, &self.config, &path);
+        self.engines.push(engine);
+
+        crate::audio::play_sound(
+            crate::audio::CyberSound::BlipAttach,
+            self.config.sound_enabled,
+        );
+
+        // Add to open_files
+        if !self.config.open_files.iter().any(|p| paths_equal(p, &path)) {
+            self.config.open_files.push(path.clone());
         }
-        if let Ok(mut engine) = opened {
-            engine.size_check_interval =
-                std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
-            engine.set_markdown_max_bytes((self.config.markdown_max_mb as u64) * 1024 * 1024);
-            engine.auto_bookmark_max = self.config.auto_bookmark_max;
-            engine.set_highlight_rules(self.config.highlight_rules.clone());
-            engine.set_quick_labels(&self.quick_labels);
-            engine.size_unit = self.config.size_unit;
-            apply_view_defaults(&mut engine, &self.config);
-            restore_bookmarks(&mut engine, &self.config, &path);
-            engine.wrap_lines = self.config.wrap_for(&path);
-            apply_stream_state(&mut engine, &self.config);
-            self.engines.push(engine);
 
-            crate::audio::play_sound(
-                crate::audio::CyberSound::BlipAttach,
-                self.config.sound_enabled,
-            );
-
-            // Add to open_files
-            if !self.config.open_files.iter().any(|p| paths_equal(p, &path)) {
-                self.config.open_files.push(path.clone());
-            }
-
-            // Keep recent files in MRU order (most recent at top, max 15)
-            self.config.recent_files.retain(|p| !paths_equal(p, &path));
-            self.config.recent_files.insert(0, path.clone());
-            if self.config.recent_files.len() > 15 {
-                self.config.recent_files.truncate(15);
-            }
-            let _ = self.config.save();
-
-            self.add_stream_tab(path);
-            self.save_dock_layout();
+        // Keep recent files in MRU order (most recent at top, max 15)
+        self.config.recent_files.retain(|p| !paths_equal(p, &path));
+        self.config.recent_files.insert(0, path.clone());
+        if self.config.recent_files.len() > 15 {
+            self.config.recent_files.truncate(15);
         }
+        let _ = self.config.save();
+
+        self.add_stream_tab(path);
+        self.save_dock_layout();
     }
 
     /// Compiles the global filter as it stands and saves it; the streams pick the new set
@@ -5794,107 +5689,6 @@ fn stream_entry_of(engine: &TailEngine) -> StreamEntry {
         fields_view: engine.fields_view(),
         fields_columns: engine.chosen_field_columns().to_vec(),
         fields_widths: engine.field_widths().clone(),
-    }
-}
-
-/// Starts a stream's line-number and time delta columns from the `[general]` defaults;
-/// `apply_stream_state` then applies what the stream saved.
-fn apply_view_defaults(engine: &mut TailEngine, cfg: &FastTailConfig) {
-    engine.show_line_numbers = cfg.show_line_numbers;
-    engine.show_time_delta = cfg.show_time_delta;
-}
-
-/// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
-/// its bookmarks wait until the index covers them (see `TailEngine::poll_compressed`).
-fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
-    if let Some(c) = engine.compressed.as_mut() {
-        if let Some((_, lines, notes)) = cfg.saved_bookmarks(path) {
-            c.pending_bookmarks = lines.clone();
-            c.pending_bookmark_notes = notes.clone();
-        }
-    } else if let Some((lines, notes)) = cfg.bookmarks_with_notes_for(path, engine.total_lines()) {
-        engine.set_bookmarks_with_notes(lines, notes);
-    }
-}
-
-/// Applies the persisted filters, search query, encoding and ANSI mode of the engine's
-/// path (wrap and bookmarks are applied by the caller from their own sections).
-fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
-    let Some(entry) = cfg.stream_state_for(&engine.path).cloned() else {
-        return;
-    };
-    engine.timeline_open = entry.timeline;
-    engine.show_line_numbers = entry.line_numbers.unwrap_or(cfg.show_line_numbers);
-    engine.show_time_delta = entry.time_delta.unwrap_or(cfg.show_time_delta);
-    if let Some(zone) = entry
-        .time_source_zone
-        .as_deref()
-        .and_then(crate::timestamp::SourceZone::from_config)
-    {
-        engine.set_time_source_zone(zone);
-    }
-    if let Some(display) = entry
-        .time_display
-        .as_deref()
-        .and_then(crate::timestamp::TimeDisplay::from_config)
-    {
-        engine.set_time_display(display);
-    }
-    engine.view_columns_dirty = false;
-    if let Some(choice) = entry.fields_parser.as_deref().and_then(|name| {
-        crate::fields::ParserChoice::from_name(name, entry.fields_regex.as_deref().unwrap_or(""))
-    }) {
-        engine.set_field_choice(choice);
-    }
-    engine.set_fields_view(entry.fields_view);
-    engine.set_field_columns(entry.fields_columns.clone());
-    for (key, cells) in &entry.fields_widths {
-        engine.set_field_width(key, *cells);
-    }
-    engine.fields_dirty = false;
-    // First, so the filters and the search below run once, on the right text.
-    if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
-        engine.set_ansi_mode(mode);
-        engine.ansi_dirty = false;
-    }
-    if let Some(enc) = entry.encoding.as_deref().and_then(FileEncoding::from_name) {
-        if enc != engine.encoding {
-            // Re-decoding rebuilds the index and drops bookmarks: restore them after.
-            let bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
-            let notes = engine.bookmark_notes.clone();
-            engine.set_encoding(enc);
-            if !bookmarks.is_empty() && bookmarks.iter().all(|&l| l < engine.total_lines()) {
-                engine.set_bookmarks_with_notes(bookmarks, notes);
-            }
-        }
-    }
-    let terms = |first: &String, extra: &[String]| -> Vec<String> {
-        std::iter::once(first.clone())
-            .chain(extra.iter().cloned())
-            .collect()
-    };
-    let include = terms(&entry.include_filter, &entry.include_extra);
-    let exclude = terms(&entry.exclude_filter, &entry.exclude_extra);
-    if include.iter().chain(&exclude).any(|t| !t.is_empty()) {
-        engine.set_filter_terms(include, exclude);
-    }
-    if !entry.search_query.is_empty() {
-        engine.search_query = entry.search_query.clone();
-        engine.update_search(&entry.search_query);
-    }
-    // Context lines come from the matches: after the filters, before the groups.
-    if entry.context_lines > 0 {
-        engine.set_context_lines(entry.context_lines);
-        engine.context_lines_dirty = false;
-    }
-    // Last, so the groups are detected once, over the filtered lines.
-    if let Some(mode) = entry
-        .collapse
-        .as_deref()
-        .and_then(crate::collapse::CollapseMode::from_name)
-    {
-        engine.set_collapse_mode(mode);
-        engine.collapse_mode_dirty = false;
     }
 }
 
