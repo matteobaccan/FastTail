@@ -88,6 +88,7 @@ impl Harness {
                 filter_presets: &mut Vec::new(),
                 preset_events: &mut Default::default(),
                 palette_action: None,
+                markdown_caches: &mut Default::default(),
             };
             let mut viewer = FastTailTabViewer { ctx: dock_ctx };
             egui_dock::DockArea::new(&mut self.dock).show_inside(ui, &mut viewer);

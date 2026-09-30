@@ -103,6 +103,7 @@ fn dock_context<'a>(
         filter_presets: leak(Vec::new()),
         preset_events: leak(Default::default()),
         palette_action: None,
+        markdown_caches: leak(Default::default()),
     }
 }
 

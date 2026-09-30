@@ -116,7 +116,12 @@ pub struct DockContext<'a> {
     /// A stream action run from the command palette and the stream it targets (the one
     /// focused when the palette opened); taken by that stream when it is drawn.
     pub palette_action: Option<(PathBuf, ActionId)>,
+    pub markdown_caches: &'a mut MarkdownCaches,
 }
+
+/// Layout caches of the Markdown view (images, links, code blocks), one per stream path.
+/// GUI state: the engine stays free of egui.
+pub type MarkdownCaches = std::collections::HashMap<PathBuf, egui_commonmark::CommonMarkCache>;
 
 /// Requests from the presets menus and the term buttons, handled by the app after the
 /// dock is drawn (the dock itself handles "apply to all open streams").
@@ -514,6 +519,7 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         self.ctx.filter_presets,
                         self.ctx.preset_events,
                         palette_action,
+                        self.ctx.markdown_caches,
                     );
                     engine.search_query = search_query;
                 } else {
@@ -1348,6 +1354,7 @@ fn render_log_stream(
     filter_presets: &mut Vec<FilterPreset>,
     preset_events: &mut PresetEvents,
     palette_action: Option<ActionId>,
+    markdown_caches: &mut MarkdownCaches,
 ) {
     // A command palette action runs through the same code as its button, menu item or
     // key, so both have exactly the same effect.
@@ -2775,7 +2782,7 @@ fn render_log_stream(
     let search_active = !engine.last_searched_query.is_empty();
     if engine.view_mode == crate::tail_engine::ViewMode::Markdown {
         if !search_active {
-            render_markdown_stream(ui, engine, theme, lang);
+            render_markdown_stream(ui, engine, theme, lang, markdown_caches);
             return;
         }
         ui.label(
@@ -8135,6 +8142,7 @@ fn render_markdown_stream(
     engine: &mut TailEngine,
     theme: &CyberTheme,
     lang: Language,
+    markdown_caches: &mut MarkdownCaches,
 ) {
     if engine.total_lines() == 0 {
         ui.centered_and_justified(|ui| {
@@ -8170,11 +8178,17 @@ fn render_markdown_stream(
         ui.label(converted);
     };
 
+    if !markdown_caches.contains_key(&engine.path) {
+        markdown_caches.insert(engine.path.clone(), Default::default());
+    }
+    let cache = markdown_caches
+        .get_mut(&engine.path)
+        .expect("inserted above");
     let scroll_output = scroll_area.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
         egui_commonmark::CommonMarkViewer::new()
             .render_html_fn(Some(&html_renderer))
-            .show(ui, &mut engine.markdown_cache, text);
+            .show(ui, cache, text);
     });
 
     engine.current_scroll_y = scroll_output.state.offset.y;
