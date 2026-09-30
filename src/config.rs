@@ -440,9 +440,15 @@ impl Default for FastTailConfig {
 
 /// The bytes this process last read from or wrote to each configuration file, so that a
 /// save writes only this instance's own changes (see `FastTailConfig::write_own_change`).
+/// Recent files kept in `[recent_files]`.
+pub const MAX_RECENT_FILES: usize = 15;
+
 static SYNCED: Mutex<BTreeMap<PathBuf, Vec<u8>>> = Mutex::new(BTreeMap::new());
 
-fn remember_synced(path: &Path, bytes: Vec<u8>) {
+/// Records `bytes` as what this instance last read from or wrote to `path`: a later
+/// `save_to` writes only when its own state differs from them. Every loader of the file
+/// calls it (the GUI's `load`, the terminal's `Settings::read`).
+pub fn remember_synced(path: &Path, bytes: Vec<u8>) {
     SYNCED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -620,6 +626,14 @@ impl FastTailConfig {
     pub fn retain_stream_state_of(&mut self, open: &[PathBuf]) {
         self.streams
             .retain(|s| open.iter().any(|p| crate::paths::paths_equal(p, &s.path)));
+    }
+
+    /// Records `path` at the front of the recent files (most recent first, at most 15).
+    pub fn add_recent_file(&mut self, path: &Path) {
+        self.recent_files
+            .retain(|p| !crate::paths::paths_equal(p, path));
+        self.recent_files.insert(0, path.to_path_buf());
+        self.recent_files.truncate(MAX_RECENT_FILES);
     }
 
     /// Records `file` at the front of the recent sessions list (capped).

@@ -281,6 +281,12 @@ pub struct App {
     /// The configuration new streams are set up with (none in tests and benchmarks:
     /// the defaults).
     pub settings: Option<crate::tui::workspace::Settings>,
+    /// Saves the configuration every `SAVE_EVERY` when it changed (the interactive run;
+    /// not captures, benchmarks or tests).
+    pub autosave: bool,
+    last_save: Instant,
+    /// The last save error shown, so a failing save is reported once, not every 2 s.
+    save_error: Option<String>,
     pub message: Option<String>,
     pub show_help: bool,
     /// First line of the help shown (it scrolls on a short screen).
@@ -301,6 +307,9 @@ pub struct App {
     last_signature: Signature,
 }
 
+/// How often the configuration is saved while it changes, as in the GUI.
+const SAVE_EVERY: Duration = Duration::from_secs(2);
+
 /// Two clicks on the same row within this time are a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Rows moved by one wheel step, as in the GUI.
@@ -319,6 +328,9 @@ impl App {
             sessions: None,
             confirm_overwrite: None,
             settings: None,
+            autosave: false,
+            last_save: Instant::now(),
+            save_error: None,
             message: None,
             show_help: false,
             help_top: 0,
@@ -403,6 +415,9 @@ impl App {
                 }
             }
             tab.seen_lines = tab.engine.total_lines();
+        }
+        if self.autosave && self.last_save.elapsed() >= SAVE_EVERY {
+            self.save_config();
         }
         let sig = self.signature();
         let changed = sig != self.last_signature;
@@ -538,6 +553,37 @@ impl App {
         true
     }
 
+    /// Records the workspace in the configuration and writes it when it differs from
+    /// what this run last loaded or wrote, as the GUI does: the open files in window
+    /// order, each stream's state, bookmarks and notes (standard input left out); every
+    /// key the terminal does not edit is written back as it was read. Without a
+    /// configuration file (tests, benchmarks) nothing is written.
+    pub fn save_config(&mut self) {
+        self.last_save = Instant::now();
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        if settings.path.as_os_str().is_empty() {
+            return;
+        }
+        for tab in &mut self.tabs {
+            crate::workspace::save_changes(&mut tab.engine, &mut settings.config, false);
+        }
+        let order: Vec<PathBuf> = self.tabs.iter().map(|t| t.engine.path.clone()).collect();
+        crate::workspace::snapshot(&order, self.tabs.iter().map(|t| &t.engine))
+            .write_into(&mut settings.config);
+        match settings.save() {
+            Ok(_) => self.save_error = None,
+            Err(e) => {
+                let text = format!("Cannot save {}: {e}", settings.path.display());
+                if self.save_error.as_ref() != Some(&text) {
+                    self.message = Some(text.clone());
+                    self.save_error = Some(text);
+                }
+            }
+        }
+    }
+
     /// The configuration of the run (the defaults when there is none, as in tests).
     fn settings_mut(&mut self) -> &mut crate::tui::workspace::Settings {
         self.settings.get_or_insert_with(Default::default)
@@ -628,6 +674,7 @@ impl App {
                 crate::session::Session::name_of(file)
             ));
         }
+        self.save_config();
     }
 
     /// Checks the path of "Save session as": the session suffix is added when missing,
@@ -703,6 +750,7 @@ impl App {
             "Session saved to {}: {count} streams{stdin}",
             file.display()
         ));
+        self.save_config();
     }
 
     fn on_picker_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -774,8 +822,11 @@ impl App {
         match open_target(path, config, None) {
             OpenOutcome::Opened(engine) => {
                 let mut engine = *engine;
-                if let Some(s) = &self.settings {
+                if let Some(s) = self.settings.as_mut() {
                     s.prepare(&mut engine);
+                    if !engine.is_stdin() {
+                        s.config.add_recent_file(&engine.path);
+                    }
                 }
                 self.tabs.push(Tab::new(engine));
                 self.focus_tab(self.tabs.len() - 1);
@@ -2921,10 +2972,12 @@ mod tests {
         assert!(app.confirm_overwrite.is_none());
         assert_ne!(std::fs::read_to_string(&file).unwrap(), "old");
 
-        // The active fasttail.ini is never a session.
+        // The active fasttail.ini is never a session (the session saves above also
+        // saved it, as a configuration).
+        let config_bytes = std::fs::read(&ini).unwrap();
         app.apply(Action::SaveSession);
         prompt_submit(&mut app, &ini.display().to_string());
-        assert!(!ini.exists());
+        assert_eq!(std::fs::read(&ini).unwrap(), config_bytes);
         assert!(app
             .message
             .as_deref()
@@ -3014,6 +3067,96 @@ mod tests {
         app.idle_poll = Duration::ZERO;
         app.tick();
         assert_eq!(app.tabs[0].engine.total_lines(), before + 1);
+    }
+
+    /// A terminal run over `ini`, as `tui::run` builds it.
+    fn app_over(ini: &Path) -> App {
+        let settings = crate::tui::workspace::Settings::read(ini);
+        let plan = crate::tui::workspace::workspace_plan(&settings);
+        let (engines, errors) = crate::tui::workspace::open_plan(&settings, &plan);
+        assert!(errors.is_empty(), "{errors:?}");
+        let palette = Palette::new(CyberTheme::Tron, ColorDepth::TrueColor, false);
+        let mut app = App::new(engines.into_iter().map(Tab::new).collect(), palette);
+        app.settings = Some(settings);
+        app
+    }
+
+    #[test]
+    fn an_idle_terminal_never_rewrites_what_a_gui_saved_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, LOG).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        let gui = crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        };
+        gui.save_to(&ini).unwrap();
+        let mut app = app_over(&ini);
+        app.save_config();
+        app.save_config();
+
+        // The GUI saves other state; the terminal, unchanged, leaves the file alone.
+        let gui_bytes = b"[general]\ntheme=Matrix\n".to_vec();
+        std::fs::write(&ini, &gui_bytes).unwrap();
+        app.save_config();
+        assert_eq!(std::fs::read(&ini).unwrap(), gui_bytes);
+
+        // Its own change is written: the last instance that writes defines the file.
+        let b = dir.path().join("b.log");
+        std::fs::write(&b, "b\n").unwrap();
+        app.open_file(&b);
+        app.save_config();
+        let text = std::fs::read_to_string(&ini).unwrap();
+        assert!(text.contains("b.log"), "{text}");
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.open_files, vec![a, b.clone()]);
+        assert_eq!(saved.recent_files.first(), Some(&b));
+    }
+
+    #[test]
+    fn a_terminal_save_carries_the_gui_only_keys_through_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, LOG).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        let gui = crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            font_size: 17.0,
+            max_fps: 90,
+            renderer: crate::renderer::RendererChoice::Glow,
+            zoom_factor: 1.25,
+            dock_layout: Some("(gui dock layout)".into()),
+            ..Default::default()
+        };
+        gui.save_to(&ini).unwrap();
+        let before = std::fs::read_to_string(&ini).unwrap();
+        let gui_lines: Vec<&str> = before
+            .lines()
+            .filter(|l| {
+                [
+                    "font_size=",
+                    "max_fps=",
+                    "renderer=",
+                    "zoom_factor=",
+                    "layout=",
+                ]
+                .iter()
+                .any(|k| l.starts_with(k))
+            })
+            .collect();
+        assert_eq!(gui_lines.len(), 5, "{before}");
+
+        let mut app = app_over(&ini);
+        app.tabs[0].engine.toggle_bookmark(1);
+        app.save_config();
+        let after = std::fs::read_to_string(&ini).unwrap();
+        assert_ne!(after, before, "the bookmark is saved");
+        for line in gui_lines {
+            assert!(after.lines().any(|l| l == line), "{line} lost:\n{after}");
+        }
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.bookmarks_for(&a, 3), Some(vec![1]));
     }
 
     #[test]

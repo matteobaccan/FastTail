@@ -178,7 +178,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
         );
         return bench(file, palette);
     }
-    // Read-only: nothing below writes the ini back.
+    // Read like the GUI does; the run writes it back only with its own changes.
     let mut settings = Settings::locate();
     let mut palette = Palette::new(
         theme_of(opts.theme.as_deref(), settings.config.theme),
@@ -284,7 +284,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
         return 0;
     }
     let mut stats = FrameStats::default();
+    // The interactive run saves fasttail.ini as the GUI does: every 2 s when it changed,
+    // and once more on the way out.
+    app.autosave = true;
     let result = run_terminal(&mut app, &mut stats, &opts);
+    app.save_config();
     if let Some(file) = &opts.stats {
         let _ = std::fs::write(file, stats.report(palette));
     }

@@ -16,9 +16,9 @@
 
 ## 2. Configuration shared and written by both interfaces
 
-- [ ] 2.1 Own-change saves: the GUI part shipped in 0.13.0 (#144); here the terminal applies the same rule (keeps the bytes it last loaded or wrote, writes only when its serialised state differs); test that a GUI and a terminal with different state do not rewrite the file while idle
+- [x] 2.1 Own-change saves: the GUI part shipped in 0.13.0 (#144); here the terminal applies the same rule (keeps the bytes it last loaded or wrote, writes only when its serialised state differs); test that a GUI and a terminal with different state do not rewrite the file while idle
 - [x] 2.2 GUI restore reconciles a dock layout whose tabs differ from `open_files` (drop closed files, add new ones to the main area); test with a layout written before the terminal changed the open files
-- [ ] 2.3 Terminal load and save through `FastTailConfig` with the user-directory fallback; 2 s save when changed, on dialog confirmation, on session operations, on exit; standard-input streams not saved; GUI-only keys carried through unchanged (test: dock layout, `font_size`, `max_fps`, `renderer`, `zoom_factor` byte-identical after a terminal save)
+- [x] 2.3 Terminal load and save through `FastTailConfig` with the user-directory fallback; 2 s save when changed, on dialog confirmation, on session operations, on exit; standard-input streams not saved; GUI-only keys carried through unchanged (test: dock layout, `font_size`, `max_fps`, `renderer`, `zoom_factor` byte-identical after a terminal save)
 - [x] 2.4 `interface=gui|tui` in `[general]` (load, save, default `gui`)
 
 ## 3. Terminal interface: viewing
