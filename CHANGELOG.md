@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Archive picker.** "All" is disabled when no listed entry can be opened, "None" when
+  nothing is selected, each with a tooltip saying why (#200).
+- **Highlighting.** A highlight span that overlaps no span already claimed on the row is
+  added directly, without the subtraction pass (#203).
+
+### Fixed
+
+- **Bookmark report export.** Saving the report refuses a directory or another
+  non-regular file instead of writing through it, as the other exports do (#201).
+
 ## [0.15.0] - 2026-09-30
 
 ### Added

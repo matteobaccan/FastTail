@@ -1163,8 +1163,12 @@ type Pieces = smallvec::SmallVec<[(usize, usize); 8]>;
 /// Adds `[start, end)` minus the bytes already claimed by `spans`; returns `true` once the
 /// cap of `MAX_ROW_SPANS` is reached.
 fn claim_span(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) -> bool {
-    // Fast path: if no spans exist yet, push directly without any piece vector allocation.
-    if spans.is_empty() {
+    if start >= end {
+        return spans.len() >= MAX_ROW_SPANS;
+    }
+    // Fast path: no span yet, or none overlapping `[start, end)` (the common case: runs,
+    // labels and tokens rarely overlap): push it whole, without the piece lists.
+    if spans.iter().all(|sp| end <= sp.start || start >= sp.end) {
         spans.push(HighlightSpan { start, end, style });
         return spans.len() >= MAX_ROW_SPANS;
     }
@@ -8133,6 +8137,57 @@ impl TailEngine {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn claim_span_fast_path_matches_the_subtraction() {
+        use super::{claim_span, HighlightSpan, SpanStyle};
+        // The subtraction alone, as `claim_span` computed it before the fast path.
+        fn reference(spans: &mut Vec<HighlightSpan>, start: usize, end: usize, style: SpanStyle) {
+            let mut pieces = vec![(start, end)];
+            for sp in spans.clone() {
+                let mut next = Vec::new();
+                for (s, e) in pieces {
+                    if e <= sp.start || s >= sp.end {
+                        next.push((s, e));
+                    } else {
+                        if s < sp.start {
+                            next.push((s, sp.start));
+                        }
+                        if e > sp.end {
+                            next.push((sp.end, e));
+                        }
+                    }
+                }
+                pieces = next;
+            }
+            for (s, e) in pieces {
+                if s < e {
+                    spans.push(HighlightSpan {
+                        start: s,
+                        end: e,
+                        style,
+                    });
+                }
+            }
+        }
+        let style = SpanStyle::Label(0);
+        let claims = [
+            (10, 20),
+            (30, 40),
+            (0, 5),
+            (15, 35),
+            (5, 10),
+            (40, 40),
+            (38, 50),
+            (0, 60),
+        ];
+        let (mut fast, mut slow) = (Vec::new(), Vec::new());
+        for (s, e) in claims {
+            claim_span(&mut fast, s, e, style);
+            reference(&mut slow, s, e, style);
+            assert_eq!(fast, slow, "after claiming {s}..{e}");
+        }
+    }
     use super::{contains_case_insensitive, counted_hits_from, find_case_insensitive};
 
     #[test]
