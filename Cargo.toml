@@ -78,7 +78,7 @@ rfd = "0.17"
 
 # Telemetry
 sysinfo = "0.39"
-similar = "2"
+similar = "3"
 
 # Windows Specific
 [target.'cfg(windows)'.dependencies]
