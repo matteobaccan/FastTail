@@ -228,3 +228,5 @@ mod rule_navigation;
 mod time_display;
 
 mod search_scope;
+
+mod workspace;
