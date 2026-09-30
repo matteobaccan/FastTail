@@ -17,6 +17,8 @@ use ratatui::symbols::border;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorDepth {
     TrueColor,
+    /// The xterm 256-colour table: the 6x6x6 cube and the grey ramp are used.
+    Ansi256,
     Ansi16,
 }
 
@@ -24,7 +26,7 @@ pub enum ColorDepth {
 /// decision itself stays a pure function.
 #[derive(Debug, Default, Clone)]
 pub struct TermInfo {
-    /// `FASTTAIL_TUI_COLORS`: `16` or `truecolor` forces the depth.
+    /// `FASTTAIL_TUI_COLORS`: `16`, `256` or `truecolor` forces the depth.
     pub forced: Option<String>,
     pub colorterm: Option<String>,
     pub term: Option<String>,
@@ -68,10 +70,10 @@ impl TermInfo {
 
     pub fn depth(&self) -> ColorDepth {
         if let Some(forced) = &self.forced {
-            return if forced.trim() == "16" {
-                ColorDepth::Ansi16
-            } else {
-                ColorDepth::TrueColor
+            return match forced.trim() {
+                "16" => ColorDepth::Ansi16,
+                "256" => ColorDepth::Ansi256,
+                _ => ColorDepth::TrueColor,
             };
         }
         let lower = |v: &Option<String>| v.as_deref().unwrap_or("").to_ascii_lowercase();
@@ -92,6 +94,9 @@ impl TermInfo {
         let term = lower(&self.term);
         if term.contains("truecolor") || term.contains("24bit") || term.contains("direct") {
             return ColorDepth::TrueColor;
+        }
+        if term.contains("256color") {
+            return ColorDepth::Ansi256;
         }
         ColorDepth::Ansi16
     }
@@ -135,6 +140,38 @@ pub fn nearest_ansi16(rgb: [u8; 3]) -> Color {
         .unwrap_or(Color::Reset)
 }
 
+/// The entry of the xterm 256-colour table closest to `rgb`, among the 6x6x6 cube
+/// (16..=231) and the grey ramp (232..=255). The first 16 entries are left out: their
+/// shades are whatever the terminal's own palette says.
+pub fn nearest_ansi256(rgb: [u8; 3]) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let dist = |c: [u8; 3]| -> u32 {
+        (0..3)
+            .map(|i| {
+                let d = rgb[i] as i32 - c[i] as i32;
+                (d * d) as u32
+            })
+            .sum()
+    };
+    let level = |v: u8| {
+        (0..6)
+            .min_by_key(|&i| (LEVELS[i] as i32 - v as i32).unsigned_abs())
+            .unwrap_or(0)
+    };
+    let (r, g, b) = (level(rgb[0]), level(rgb[1]), level(rgb[2]));
+    let cube = 16 + 36 * r + 6 * g + b;
+    let cube_rgb = [LEVELS[r], LEVELS[g], LEVELS[b]];
+    // The grey ramp: 8, 18, ..., 238.
+    let avg = (rgb[0] as u32 + rgb[1] as u32 + rgb[2] as u32) / 3;
+    let step = (avg.saturating_sub(3) / 10).min(23) as u8;
+    let grey = 8 + 10 * step;
+    if dist([grey; 3]) < dist(cube_rgb) {
+        232 + step
+    } else {
+        cube as u8
+    }
+}
+
 /// `color` for a terminal of `depth`; a fully transparent colour means "the terminal's
 /// default".
 pub fn map_color(color: Rgba, depth: ColorDepth) -> Color {
@@ -144,6 +181,7 @@ pub fn map_color(color: Rgba, depth: ColorDepth) -> Color {
     let rgb = [color.r, color.g, color.b];
     match depth {
         ColorDepth::TrueColor => Color::Rgb(rgb[0], rgb[1], rgb[2]),
+        ColorDepth::Ansi256 => Color::Indexed(nearest_ansi256(rgb)),
         ColorDepth::Ansi16 => nearest_ansi16(rgb),
     }
 }
@@ -312,6 +350,7 @@ impl Palette {
     pub fn selection(&self) -> Style {
         let bg = match self.depth {
             ColorDepth::TrueColor => Color::Rgb(38, 62, 102),
+            ColorDepth::Ansi256 => Color::Indexed(nearest_ansi256([38, 62, 102])),
             ColorDepth::Ansi16 => Color::Blue,
         };
         Style::default().bg(bg)
@@ -366,7 +405,11 @@ mod tests {
             CyberTheme::Blade,
             CyberTheme::Light,
         ] {
-            for depth in [ColorDepth::TrueColor, ColorDepth::Ansi16] {
+            for depth in [
+                ColorDepth::TrueColor,
+                ColorDepth::Ansi256,
+                ColorDepth::Ansi16,
+            ] {
                 let p = Palette::new(theme, depth, false);
                 for level in LogLevel::ALL {
                     let _ = p.level_style(level);
@@ -394,7 +437,38 @@ mod tests {
             term: Some("xterm-256color".into()),
             ..TermInfo::default()
         };
-        assert_eq!(xterm.depth(), ColorDepth::Ansi16);
+        assert_eq!(xterm.depth(), ColorDepth::Ansi256);
+        let forced = TermInfo {
+            forced: Some("256".into()),
+            colorterm: Some("truecolor".into()),
+            ..TermInfo::default()
+        };
+        assert_eq!(forced.depth(), ColorDepth::Ansi256, "the override wins");
+    }
+
+    #[test]
+    fn the_256_colour_cube_and_grey_ramp_take_the_nearest_entry() {
+        // Exact cube and ramp entries map to themselves.
+        for i in 16..=255u8 {
+            let [r, g, b] = crate::ansi::xterm_color(i);
+            let got = nearest_ansi256([r, g, b]);
+            assert_eq!(
+                crate::ansi::xterm_color(got),
+                [r, g, b],
+                "entry {i} -> {got}"
+            );
+        }
+        assert_eq!(nearest_ansi256([255, 0, 0]), 196);
+        assert_eq!(nearest_ansi256([0, 0, 0]), 16);
+        assert_eq!(
+            nearest_ansi256([128, 128, 128]),
+            244,
+            "a grey takes the ramp"
+        );
+        assert_eq!(
+            map_color(Rgba::from_rgb(255, 51, 68), ColorDepth::Ansi256),
+            Color::Indexed(203)
+        );
     }
 
     #[test]
