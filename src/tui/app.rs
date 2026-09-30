@@ -283,6 +283,8 @@ pub struct App {
     pub settings: Option<crate::tui::workspace::Settings>,
     pub message: Option<String>,
     pub show_help: bool,
+    /// First line of the help shown (it scrolls on a short screen).
+    pub help_top: usize,
     pub quit: bool,
     /// Mouse capture is on (the help says how to select text natively).
     pub mouse: bool,
@@ -318,6 +320,7 @@ impl App {
             settings: None,
             message: None,
             show_help: false,
+            help_top: 0,
             quit: false,
             mouse: true,
             idle_poll: Duration::from_millis(250),
@@ -464,10 +467,23 @@ impl App {
         let Some(action) = keys::map_key(key) else {
             return false;
         };
-        // The help dialog closes on any key, and only `?` / F1 reopen it.
+        // The help dialog scrolls with the arrows and the page keys and closes on any
+        // other key; only `?` / F1 reopen it.
         if self.show_help {
-            self.show_help = false;
-            if action == Action::ToggleHelp {
+            match action {
+                Action::LineUp => self.help_top = self.help_top.saturating_sub(1),
+                Action::LineDown => self.help_top += 1,
+                Action::PageUp => self.help_top = self.help_top.saturating_sub(10),
+                Action::PageDown => self.help_top += 10,
+                _ => {
+                    self.show_help = false;
+                    self.help_top = 0;
+                    if action == Action::ToggleHelp {
+                        return true;
+                    }
+                }
+            }
+            if self.show_help {
                 return true;
             }
         }
@@ -1770,12 +1786,12 @@ impl App {
             "Home g / End G   first / last row (the last one follows)",
             "Left/Right 0     scroll sideways one cell / back to column 0",
             "Space            toggle follow",
-            "/  n  N  Esc     search, next, previous, clear",
+            "/  n  N  Esc     search, next, previous, clear (also F3 / Shift+F3)",
             "i  x             include / exclude filter",
             "l                cycle the minimum level",
             "c                cycle collapse: off, exact, numbers",
             "s                split: side by side, stacked, off",
-            "Tab  Alt+1..9    next window or file / file N",
+            "Tab  Alt+1..9    next window or file / file N (Shift+Tab back)",
             "b  Ctrl+F2       bookmark the cursor row, on or off",
             "] F2 / [ Shift+F2  next / previous bookmark (wraps)",
             "m                note of the cursor row's bookmark",
@@ -1788,6 +1804,7 @@ impl App {
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
             "y  Ctrl+C        copy the selection or the cursor row",
             "                 (Ctrl+C quits when nothing is selected)",
+            "?  F1            this help",
             "q                quit",
             "",
             "Wheel scrolls the window under the pointer; click focuses",
@@ -1795,15 +1812,23 @@ impl App {
             "click toggles a bookmark.",
             mouse_hint,
         ];
-        let inner = self.dialog(
-            frame,
-            area,
-            (66, text.len() as u16 + 3),
-            "Keys - any key closes",
-            false,
-        );
+        // Taller than the screen: Up / Down / PgUp / PgDn scroll it.
+        let height = (text.len() as u16 + 3).min(area.height);
+        let rows = height.saturating_sub(3) as usize;
+        self.help_top = self.help_top.min(text.len().saturating_sub(rows));
+        let title = if rows < text.len() {
+            "Keys - Up/Down scroll, any other key closes"
+        } else {
+            "Keys - any key closes"
+        };
+        let inner = self.dialog(frame, area, (78, height), title, false);
         frame.render_widget(
-            Paragraph::new(text.iter().map(|l| Line::from(*l)).collect::<Vec<_>>()),
+            Paragraph::new(
+                text.iter()
+                    .skip(self.help_top)
+                    .map(|l| Line::from(*l))
+                    .collect::<Vec<_>>(),
+            ),
             inner,
         );
     }
@@ -2927,6 +2952,31 @@ mod tests {
         press(&mut other, KeyCode::Enter);
         assert!(other.message.as_deref().unwrap().contains("cannot load"));
         assert_eq!(other.tabs.len(), 1, "the open streams stay");
+    }
+
+    #[test]
+    fn the_help_scrolls_on_a_short_screen_and_closes_on_another_key() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        app.apply(Action::ToggleHelp);
+        let tall = render(&mut app, 100, 60);
+        for key in ["F3", "Ctrl+G", "O  S", "?  F1", "HEX", "ANSI"] {
+            assert!(tall.iter().any(|l| l.contains(key)), "{key}: {tall:#?}");
+        }
+        let short = render(&mut app, 80, 24);
+        assert!(
+            short.iter().any(|l| l.contains("Up/Down scroll")),
+            "{short:#?}"
+        );
+        assert!(short.iter().any(|l| l.contains("move the cursor one row")));
+        press(&mut app, KeyCode::Down);
+        assert!(app.show_help, "the arrows scroll");
+        let scrolled = render(&mut app, 80, 24);
+        assert!(!scrolled
+            .iter()
+            .any(|l| l.contains("move the cursor one row")));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(!app.show_help);
     }
 
     #[test]

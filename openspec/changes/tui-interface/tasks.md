@@ -29,7 +29,7 @@
 - [x] 3.4 Bookmarks (`b`, `Ctrl+F2`, `]` `[`, `F2` `Shift+F2`), note dialog (`m`), note in the status bar, `Ctrl+K` context view with banner, go-to dialog (`Ctrl+G`, `:`)
 - [x] 3.5 HEX view (`h`): width-driven bytes per row, visible rows only, byte hits painted, `n` / `N`, place kept both ways, offset go-to, follow
 - [x] 3.6 ANSI rendering by mode (`a`), raw mode with `^[`, no escape sequence written from log text; precedence search over rule over ANSI
-- [ ] 3.7 Viewing dialogs on a shared form toolkit (text field, number field, check box, radio list, reorderable list, colour field): archive entry picker, time range (text fields), open file, open and save session (recent sessions updated, `fasttail.ini` refused), help listing every key
+- [x] 3.7 Viewing dialogs on a shared form toolkit (text field, number field, check box, radio list, reorderable list, colour field): archive entry picker, time range (text fields), open file, open and save session (recent sessions updated, `fasttail.ini` refused), help listing every key
 - [ ] 3.8 Colour depth detection with the 256-colour cube; ASCII fallback; alternate screen; key-press filtering on Windows; terminal restore on exit and panic; mintty message and exit code 1
 - [ ] 3.9 256 KiB buffered output; redraw only on change; poll 100 ms / 50 ms
 

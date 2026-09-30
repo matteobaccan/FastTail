@@ -4,7 +4,12 @@
 
 //! The form toolkit of the terminal dialogs. A text field edits one line: `←` `→`,
 //! `Home` `End`, `Backspace`, `Delete`, `Ctrl+U` to clear and paste, and scrolls sideways
-//! to keep its cursor in view. Widths are counted in terminal cells.
+//! to keep its cursor in view. Widths are counted in terminal cells. On top of it: a
+//! number field bound to a range, a check box, a radio list, a reorderable list and a
+//! colour field (`#RRGGBB` or a swatch). Each takes a key and says what it did; the
+//! dialogs draw them.
+
+use std::ops::RangeInclusive;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use unicode_width::UnicodeWidthChar;
@@ -134,6 +139,280 @@ impl TextField {
     }
 }
 
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// A press of the key, not a release (the Windows console reports both).
+fn pressed(key: &KeyEvent) -> bool {
+    key.kind != KeyEventKind::Release
+}
+
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// A whole number typed in a text field and checked against a range; `↑` / `↓` step it
+/// by one inside the range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberField {
+    pub field: TextField,
+    pub range: RangeInclusive<u64>,
+}
+
+#[allow(dead_code)]
+impl NumberField {
+    pub fn new(value: u64, range: RangeInclusive<u64>) -> Self {
+        Self {
+            field: TextField::new(&value.to_string()),
+            range,
+        }
+    }
+
+    /// The value, or the message the dialog shows next to the field: the range, as
+    /// the GUI Settings shows it.
+    pub fn value(&self) -> Result<u64, String> {
+        let (lo, hi) = (*self.range.start(), *self.range.end());
+        match self.field.text().trim().parse::<u64>() {
+            Ok(v) if self.range.contains(&v) => Ok(v),
+            _ => Err(format!("{lo} to {hi}")),
+        }
+    }
+
+    pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
+        if !pressed(&key) {
+            return FieldKey::Other;
+        }
+        let step = |v: u64, up: bool| {
+            let (lo, hi) = (*self.range.start(), *self.range.end());
+            if up {
+                v.saturating_add(1).clamp(lo, hi)
+            } else {
+                v.saturating_sub(1).clamp(lo, hi)
+            }
+        };
+        match key.code {
+            KeyCode::Up | KeyCode::Down => {
+                let current = self
+                    .field
+                    .text()
+                    .trim()
+                    .parse::<u64>()
+                    .unwrap_or(*self.range.start());
+                let v = step(current, key.code == KeyCode::Up);
+                self.field = TextField::new(&v.to_string());
+                FieldKey::Edited
+            }
+            // Only digits are typed; the editing keys work as in any field.
+            KeyCode::Char(c)
+                if !c.is_ascii_digit() && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                FieldKey::Other
+            }
+            _ => self.field.on_key(key),
+        }
+    }
+}
+
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// An on / off switch: `Space` toggles it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CheckBox {
+    pub on: bool,
+}
+
+#[allow(dead_code)]
+impl CheckBox {
+    pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
+        if pressed(&key) && key.code == KeyCode::Char(' ') {
+            self.on = !self.on;
+            FieldKey::Edited
+        } else {
+            FieldKey::Other
+        }
+    }
+
+    /// `[x] label` or `[ ] label`.
+    pub fn text(&self, label: &str) -> String {
+        format!("[{}] {label}", if self.on { 'x' } else { ' ' })
+    }
+}
+
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// One choice among a few, shown on a line: `←` `→` (or `↑` `↓`) move it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RadioList {
+    pub options: Vec<String>,
+    pub selected: usize,
+}
+
+#[allow(dead_code)]
+impl RadioList {
+    pub fn new(options: &[&str], selected: usize) -> Self {
+        Self {
+            options: options.iter().map(|o| o.to_string()).collect(),
+            selected: selected.min(options.len().saturating_sub(1)),
+        }
+    }
+
+    pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
+        if !pressed(&key) || self.options.is_empty() {
+            return FieldKey::Other;
+        }
+        let last = self.options.len() - 1;
+        self.selected = match key.code {
+            KeyCode::Left | KeyCode::Up => self.selected.saturating_sub(1),
+            KeyCode::Right | KeyCode::Down => (self.selected + 1).min(last),
+            KeyCode::Home => 0,
+            KeyCode::End => last,
+            _ => return FieldKey::Other,
+        };
+        FieldKey::Edited
+    }
+
+    /// `(o) first  ( ) second`.
+    pub fn text(&self) -> String {
+        self.options
+            .iter()
+            .enumerate()
+            .map(|(i, o)| format!("({}) {o}", if i == self.selected { 'o' } else { ' ' }))
+            .collect::<Vec<_>>()
+            .join("  ")
+    }
+}
+
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// An ordered list with a selected row: `↑` `↓` select, `Alt+↑` / `Alt+↓` (or `K` / `J`)
+/// move the selected item, `Delete` removes it. The order is the priority, as in the
+/// rule list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReorderList<T> {
+    pub items: Vec<T>,
+    pub selected: usize,
+}
+
+#[allow(dead_code)]
+impl<T> ReorderList<T> {
+    pub fn new(items: Vec<T>) -> Self {
+        Self { items, selected: 0 }
+    }
+
+    pub fn selected_item(&self) -> Option<&T> {
+        self.items.get(self.selected)
+    }
+
+    /// Adds `item` after the selected one and selects it.
+    pub fn insert(&mut self, item: T) {
+        let at = if self.items.is_empty() {
+            0
+        } else {
+            self.selected + 1
+        };
+        self.items.insert(at, item);
+        self.selected = at;
+    }
+
+    pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
+        if !pressed(&key) || self.items.is_empty() {
+            return FieldKey::Other;
+        }
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let last = self.items.len() - 1;
+        let i = self.selected;
+        match key.code {
+            KeyCode::Up if alt => self.swap_to(i.checked_sub(1)),
+            KeyCode::Down if alt => self.swap_to((i < last).then_some(i + 1)),
+            KeyCode::Char('K') => self.swap_to(i.checked_sub(1)),
+            KeyCode::Char('J') => self.swap_to((i < last).then_some(i + 1)),
+            KeyCode::Up => self.selected = i.saturating_sub(1),
+            KeyCode::Down => self.selected = (i + 1).min(last),
+            KeyCode::Home => self.selected = 0,
+            KeyCode::End => self.selected = last,
+            KeyCode::Delete => {
+                self.items.remove(i);
+                self.selected = i.min(self.items.len().saturating_sub(1));
+            }
+            _ => return FieldKey::Other,
+        }
+        FieldKey::Edited
+    }
+
+    fn swap_to(&mut self, to: Option<usize>) {
+        if let Some(to) = to {
+            self.items.swap(self.selected, to);
+            self.selected = to;
+        }
+    }
+}
+
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// A colour typed as `#RRGGBB` (or `RRGGBB`), or picked from `swatches` with `[` / `]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColourField {
+    pub field: TextField,
+    pub swatches: Vec<[u8; 3]>,
+    /// The swatch picked last, for `[` / `]` to move from.
+    swatch: Option<usize>,
+}
+
+#[allow(dead_code)]
+impl ColourField {
+    pub fn new(rgb: [u8; 3], swatches: Vec<[u8; 3]>) -> Self {
+        Self {
+            field: TextField::new(&hex(rgb)),
+            swatch: swatches.iter().position(|&s| s == rgb),
+            swatches,
+        }
+    }
+
+    /// The colour, or `None` while the text is not `#RRGGBB`.
+    pub fn value(&self) -> Option<[u8; 3]> {
+        parse_hex(self.field.text())
+    }
+
+    pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
+        if !pressed(&key) {
+            return FieldKey::Other;
+        }
+        let n = self.swatches.len();
+        let pick = match key.code {
+            KeyCode::Char(']') if n > 0 => Some(self.swatch.map_or(0, |i| (i + 1) % n)),
+            KeyCode::Char('[') if n > 0 => Some(self.swatch.map_or(n - 1, |i| (i + n - 1) % n)),
+            _ => None,
+        };
+        if let Some(i) = pick {
+            self.swatch = Some(i);
+            self.field = TextField::new(&hex(self.swatches[i]));
+            return FieldKey::Edited;
+        }
+        let done = self.field.on_key(key);
+        if done == FieldKey::Edited {
+            self.swatch = None;
+        }
+        done
+    }
+}
+
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// `#rrggbb` of a colour, upper case.
+pub fn hex(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
+// Used by the Settings and editor dialogs (tasks 4.1 to 4.4).
+#[allow(dead_code)]
+/// `#RRGGBB` or `RRGGBB`, any case.
+pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
+    let t = text.trim();
+    let t = t.strip_prefix('#').unwrap_or(t);
+    if t.len() != 6 || !t.is_ascii() {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&t[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +479,85 @@ mod tests {
         let f = TextField::new("日本語");
         assert_eq!(f.view(10), ("日本語".to_string(), 6));
         assert_eq!(f.view(4), ("語".to_string(), 2));
+    }
+
+    fn mods(code: KeyCode, m: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, m)
+    }
+
+    #[test]
+    fn a_number_field_takes_digits_steps_and_says_its_range() {
+        let mut n = NumberField::new(250, 50..=5000);
+        assert_eq!(n.value(), Ok(250));
+        assert_eq!(n.on_key(key(KeyCode::Char('x'))), FieldKey::Other);
+        n.on_key(key(KeyCode::Up));
+        assert_eq!(n.value(), Ok(251));
+        n.on_key(mods(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        typed_number(&mut n, "9");
+        assert_eq!(n.value(), Err("50 to 5000".to_string()));
+        n.on_key(key(KeyCode::Down));
+        assert_eq!(n.value(), Ok(50), "a step brings it into the range");
+        let mut top = NumberField::new(5000, 50..=5000);
+        top.on_key(key(KeyCode::Up));
+        assert_eq!(top.value(), Ok(5000));
+    }
+
+    fn typed_number(n: &mut NumberField, s: &str) {
+        for c in s.chars() {
+            n.on_key(key(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn check_box_and_radio_list() {
+        let mut c = CheckBox::default();
+        assert_eq!(c.text("Sound"), "[ ] Sound");
+        assert_eq!(c.on_key(key(KeyCode::Char(' '))), FieldKey::Edited);
+        assert_eq!(c.text("Sound"), "[x] Sound");
+        assert_eq!(c.on_key(key(KeyCode::Enter)), FieldKey::Other);
+
+        let mut r = RadioList::new(&["gui", "tui"], 0);
+        assert_eq!(r.text(), "(o) gui  ( ) tui");
+        r.on_key(key(KeyCode::Right));
+        r.on_key(key(KeyCode::Right));
+        assert_eq!(r.selected, 1, "stops at the last");
+        r.on_key(key(KeyCode::Home));
+        assert_eq!(r.selected, 0);
+    }
+
+    #[test]
+    fn a_reorder_list_moves_items_and_keeps_the_selection_on_them() {
+        let mut l = ReorderList::new(vec!["a", "b", "c"]);
+        l.on_key(key(KeyCode::Down));
+        l.on_key(mods(KeyCode::Down, KeyModifiers::ALT));
+        assert_eq!((l.items.as_slice(), l.selected), (&["a", "c", "b"][..], 2));
+        l.on_key(key(KeyCode::Char('K')));
+        l.on_key(key(KeyCode::Char('K')));
+        l.on_key(key(KeyCode::Char('K')));
+        assert_eq!((l.items.as_slice(), l.selected), (&["b", "a", "c"][..], 0));
+        l.on_key(key(KeyCode::Delete));
+        assert_eq!((l.items.as_slice(), l.selected), (&["a", "c"][..], 0));
+        l.insert("z");
+        assert_eq!((l.items.as_slice(), l.selected), (&["a", "z", "c"][..], 1));
+        assert_eq!(l.selected_item(), Some(&"z"));
+    }
+
+    #[test]
+    fn a_colour_is_typed_as_hex_or_picked_from_the_swatches() {
+        assert_eq!(parse_hex("#ff8000"), Some([255, 128, 0]));
+        assert_eq!(parse_hex("FF8000"), Some([255, 128, 0]));
+        assert_eq!(parse_hex("#ff80"), None);
+        assert_eq!(parse_hex("#gg8000"), None);
+        let swatches = vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]];
+        let mut c = ColourField::new([0, 255, 0], swatches);
+        assert_eq!(c.field.text(), "#00FF00");
+        c.on_key(key(KeyCode::Char(']')));
+        assert_eq!(c.value(), Some([0, 0, 255]));
+        c.on_key(key(KeyCode::Char(']')));
+        assert_eq!(c.value(), Some([255, 0, 0]), "wraps");
+        c.on_key(key(KeyCode::Backspace));
+        assert_eq!(c.value(), None, "#FF000 is not a colour");
+        c.on_key(key(KeyCode::Char('1')));
+        assert_eq!(c.value(), Some([255, 0, 1]));
     }
 }
