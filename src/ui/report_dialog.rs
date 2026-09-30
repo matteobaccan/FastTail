@@ -209,7 +209,10 @@ impl ReportDialog {
                     .add_filter("Markdown (*.md)", &["md"])
                     .save_file();
                 if let Some(path) = target {
-                    self.status = Some(match std::fs::write(&path, markdown.as_bytes()) {
+                    use std::io::Write;
+                    let result = crate::paths::create_export_file(&path)
+                        .and_then(|mut f| f.write_all(markdown.as_bytes()));
+                    self.status = Some(match result {
                         Ok(()) => (
                             t(lang, "report_saved").replace("{path}", &path.display().to_string()),
                             false,
@@ -443,5 +446,19 @@ impl ReportDialog {
         config.report_auto = self.include_auto;
         config.report_order_time = self.order_time;
         open && !close
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_report_export_file_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_target = temp_dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        let err = crate::paths::create_export_file(&dir_target)
+            .expect_err("export file creation should fail on a directory");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }
