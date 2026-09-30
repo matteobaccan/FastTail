@@ -148,6 +148,23 @@ pub struct WindowState {
     pub minimized: bool,
 }
 
+impl WindowState {
+    /// Where the window is, in points: its last drawn rectangle, else the position and
+    /// size it was given; `None` when neither is usable.
+    fn placement(&self) -> Option<Placement> {
+        let usable = |x: f32, y: f32, w: f32, h: f32| {
+            (x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0)
+                .then_some((x, y, w, h))
+        };
+        self.screen_rect
+            .and_then(|r| usable(r.min.x, r.min.y, r.max.x - r.min.x, r.max.y - r.min.y))
+            .or_else(|| {
+                let (p, s) = (self.next_position?, self.next_size?);
+                usable(p.x, p.y, s.x, s.y)
+            })
+    }
+}
+
 impl Default for WindowState {
     fn default() -> Self {
         Self {
@@ -168,6 +185,9 @@ pub enum Surface {
     Main(Tree),
     Window(Tree, WindowState),
 }
+
+/// Where a floating window sits, in points: `(x, y, width, height)`.
+pub type Placement = (f32, f32, f32, f32);
 
 /// The whole dock: the main surface first, then the floating windows.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -214,6 +234,42 @@ impl Layout {
             Some(main) => *main = Surface::Main(tree),
             None => self.surfaces.insert(0, Surface::Main(tree)),
         }
+    }
+
+    /// The floating windows, bottom to top: each as one leaf of tabs (a window the GUI
+    /// split is flattened) with its screen rectangle in points `(x, y, width, height)`
+    /// when the layout has a usable one.
+    pub fn windows(&self) -> Vec<(Pane, Option<Placement>)> {
+        self.surfaces
+            .iter()
+            .filter_map(|s| match s {
+                Surface::Window(tree, state) => {
+                    let pane = Pane::from_tree(tree)?.flattened();
+                    Some((pane, state.placement()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Replaces the floating windows with `windows` (bottom to top), each placed at its
+    /// rectangle in points.
+    pub fn set_windows(&mut self, windows: &[(Pane, Placement)]) {
+        self.surfaces.retain(|s| !matches!(s, Surface::Window(..)));
+        for (pane, (x, y, w, h)) in windows {
+            let state = WindowState {
+                screen_rect: Some(Rect {
+                    min: Pos { x: *x, y: *y },
+                    max: Pos { x: x + w, y: y + h },
+                }),
+                next_position: Some(Pos { x: *x, y: *y }),
+                next_size: Some(Pos { x: *w, y: *h }),
+                new: false,
+                ..WindowState::default()
+            };
+            self.surfaces.push(Surface::Window(pane.to_tree(), state));
+        }
+        self.focused_surface = None;
     }
 
     /// The streams of the floating windows, in order.
@@ -680,6 +736,22 @@ impl Pane {
             })
     }
 
+    /// The tree as one leaf with every tab, showing what its first leaf showed.
+    pub fn flattened(&self) -> Pane {
+        let mut tabs = Vec::new();
+        let mut shown = None;
+        self.walk(&mut |leaf, active| {
+            if shown.is_none() {
+                shown = Some(tabs.len() + active);
+            }
+            tabs.extend_from_slice(leaf);
+        });
+        Pane::Leaf {
+            active: shown.unwrap_or(0).min(tabs.len().saturating_sub(1)),
+            tabs,
+        }
+    }
+
     fn first_leaf_mut(&mut self) -> Option<&mut Pane> {
         match self {
             Pane::Leaf { .. } => Some(self),
@@ -830,6 +902,37 @@ mod tests {
     }
 
     #[test]
+    fn floating_windows_are_read_flattened_and_written_back_with_their_place() {
+        let (a, b, c) = (p("a.log"), p("b.log"), p("c.log"));
+        let mut layout = Layout::from_pane(&Pane::with_streams(std::slice::from_ref(&a)));
+        let split = Pane::Split {
+            dir: Dir::Vertical,
+            fraction: 0.5,
+            first: Box::new(Pane::with_streams(std::slice::from_ref(&b))),
+            second: Box::new(Pane::with_streams(std::slice::from_ref(&c))),
+        };
+        layout.set_windows(&[(split, (80.0, 32.0, 400.0, 160.0))]);
+        let text = layout.to_ron();
+        let back = Layout::parse(&text).unwrap();
+        let windows = back.windows();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].0.streams(), vec![b.clone(), c.clone()]);
+        assert!(matches!(windows[0].0, Pane::Leaf { active: 0, .. }));
+        assert_eq!(windows[0].1, Some((80.0, 32.0, 400.0, 160.0)));
+        assert_eq!(back.main_pane(), Some(Pane::with_streams(&[a])));
+        // A window never drawn has no usable place.
+        let mut fresh = Layout::from_pane(&Pane::with_streams(&[b]));
+        fresh.surfaces.push(Surface::Window(
+            Pane::with_streams(&[c]).to_tree(),
+            WindowState::default(),
+        ));
+        assert_eq!(fresh.windows()[0].1, None);
+        // Setting no windows drops them.
+        layout.set_windows(&[]);
+        assert!(layout.windows().is_empty());
+    }
+
+    #[test]
     fn unknown_text_is_not_a_layout() {
         assert!(Layout::parse("not ron").is_none());
         assert!(Layout::parse("(surfaces:[Main((nodes:[Leaf((tabs:[Nope]))]))])").is_none());
@@ -859,5 +962,21 @@ mod tests {
         changed.set_main_pane(&Pane::with_streams(&[p("x.log")]));
         let back: DockState<FastTailTab> = ron::from_str(&changed.to_ron()).expect("GUI reads it");
         assert_eq!(back.iter_all_tabs().count(), 1);
+        // So is a floating window the terminal adds, with its place.
+        changed.set_windows(&[(
+            Pane::with_streams(&[p("y.log")]),
+            (100.0, 50.0, 480.0, 240.0),
+        )]);
+        let back: DockState<FastTailTab> = ron::from_str(&changed.to_ron()).expect("GUI reads it");
+        assert_eq!(back.iter_all_tabs().count(), 2);
+        let rects: Vec<_> = back
+            .iter_surfaces()
+            .filter_map(|s| match s {
+                egui_dock::Surface::Window(_, ws) => Some(ws.rect()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].min, egui::pos2(100.0, 50.0));
     }
 }

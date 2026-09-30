@@ -46,6 +46,8 @@ pub enum Action {
     ClosePane,
     /// CTRL + W: the focused stream closes (its window too when it was its last tab).
     CloseStream,
+    /// ALT + F: the focused window floats over the dock, or a floating one docks back.
+    ToggleFloat,
     /// ALT + arrows: the nearest divider of the focused window moves that way.
     ResizeLeft,
     ResizeRight,
@@ -128,6 +130,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         return match key.code {
             KeyCode::Char(c @ '1'..='9') => Some(Action::GotoTab(c as usize - '1' as usize)),
             KeyCode::Char('x') => Some(Action::ClosePane),
+            KeyCode::Char('f') => Some(Action::ToggleFloat),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -327,6 +330,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('_'), shift), Some(Action::SplitDown));
         assert_eq!(k(KeyCode::Char('w'), ctrl), Some(Action::CloseStream));
         assert_eq!(k(KeyCode::Char('x'), alt), Some(Action::ClosePane));
+        assert_eq!(k(KeyCode::Char('f'), alt), Some(Action::ToggleFloat));
         assert_eq!(k(KeyCode::Char('e'), none), Some(Action::NextError));
         assert_eq!(k(KeyCode::Char('E'), shift), Some(Action::PrevError));
         assert_eq!(k(KeyCode::Char('w'), none), Some(Action::NextWarn));

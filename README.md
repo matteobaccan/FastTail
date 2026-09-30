@@ -217,7 +217,9 @@ fasttail-tui --ascii --no-mouse app.log
 commands as `[ ]` buttons for the mouse. Windows follow the GUI's dock: `s` or `|` opens
 a window beside, `_` below, `<` `>` move a stream between windows, `Alt+arrows` or a
 dragged divider resize, a title dragged onto a window's edge splits it and onto its
-centre adds a tab. `o` opens a file through a folder browser, `,` the Settings, `Shift+T`
+centre adds a tab, and dropped anywhere else it becomes a floating window (`Alt+F` does
+the same, and docks it back). A floating window lies over the others: drag its title to
+move it and its bottom-right corner to resize it. `o` opens a file through a folder browser, `,` the Settings, `Shift+T`
 the next theme. The preview lacks the rule editor, filter presets, the global filter,
 external tools, the PIN lock and translations; they come with 0.20.0.
 
