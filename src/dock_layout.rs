@@ -436,6 +436,210 @@ impl Pane {
         }
     }
 
+    /// The paths of the leaves, in order (`false` is a split's first child).
+    pub fn leaf_paths(&self) -> Vec<Vec<bool>> {
+        fn go(p: &Pane, at: &mut Vec<bool>, out: &mut Vec<Vec<bool>>) {
+            match p {
+                Pane::Leaf { .. } => out.push(at.clone()),
+                Pane::Split { first, second, .. } => {
+                    at.push(false);
+                    go(first, at, out);
+                    at.pop();
+                    at.push(true);
+                    go(second, at, out);
+                    at.pop();
+                }
+            }
+        }
+        let mut out = Vec::new();
+        go(self, &mut Vec::new(), &mut out);
+        out
+    }
+
+    /// The node at `path`.
+    pub fn get(&self, path: &[bool]) -> Option<&Pane> {
+        match (self, path.split_first()) {
+            (_, None) => Some(self),
+            (Pane::Split { first, second, .. }, Some((&b, rest))) => {
+                if b { second } else { first }.get(rest)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn get_mut(&mut self, path: &[bool]) -> Option<&mut Pane> {
+        match (self, path.split_first()) {
+            (me, None) => Some(me),
+            (Pane::Split { first, second, .. }, Some((&b, rest))) => {
+                if b { second } else { first }.get_mut(rest)
+            }
+            _ => None,
+        }
+    }
+
+    /// The path of the leaf holding stream `stream`.
+    pub fn find_stream(&self, stream: &Path) -> Option<Vec<bool>> {
+        self.leaf_paths().into_iter().find(|path| {
+            matches!(self.get(path), Some(Pane::Leaf { tabs, .. })
+                if tabs.iter().any(|t| t.stream().is_some_and(|p| paths_equal(p, stream))))
+        })
+    }
+
+    /// Makes `stream` the shown tab of its leaf; false when it is in none.
+    pub fn show(&mut self, stream: &Path) -> bool {
+        let Some(path) = self.find_stream(stream) else {
+            return false;
+        };
+        if let Some(Pane::Leaf { tabs, active }) = self.get_mut(&path) {
+            if let Some(i) = tabs
+                .iter()
+                .position(|t| t.stream().is_some_and(|p| paths_equal(p, stream)))
+            {
+                *active = i;
+            }
+        }
+        true
+    }
+
+    /// Adds `tab` to the leaf at `path` and shows it.
+    pub fn add_tab(&mut self, path: &[bool], tab: Tab) {
+        if let Some(Pane::Leaf { tabs, active }) = self.get_mut(path) {
+            tabs.push(tab);
+            *active = tabs.len() - 1;
+        }
+    }
+
+    /// Takes `stream` out of the tree; a leaf left without tabs goes, its sibling taking
+    /// the split's place. `None` when the tree is left empty.
+    pub fn remove_stream(self, stream: &Path) -> Option<Pane> {
+        self.reconcile_with(&|t: &Tab| !t.stream().is_some_and(|p| paths_equal(p, stream)))
+    }
+
+    fn reconcile_with(self, keep: &dyn Fn(&Tab) -> bool) -> Option<Pane> {
+        match self {
+            Pane::Leaf { tabs, active } => {
+                let before = tabs.len();
+                let kept: Vec<Tab> = tabs.into_iter().filter(|t| keep(t)).collect();
+                let removed_before = before - kept.len();
+                (!kept.is_empty()).then(|| Pane::Leaf {
+                    active: active
+                        .saturating_sub(removed_before.min(active))
+                        .min(kept.len() - 1),
+                    tabs: kept,
+                })
+            }
+            Pane::Split {
+                dir,
+                fraction,
+                first,
+                second,
+            } => match (first.reconcile_with(keep), second.reconcile_with(keep)) {
+                (Some(a), Some(b)) => Some(Pane::Split {
+                    dir,
+                    fraction,
+                    first: Box::new(a),
+                    second: Box::new(b),
+                }),
+                (Some(one), None) | (None, Some(one)) => Some(one),
+                (None, None) => None,
+            },
+        }
+    }
+
+    /// Puts `stream` in a new leaf beside the leaf at `target`: after it (right or
+    /// below) when `after`, else before; the stream leaves the leaf it was in. Nothing
+    /// changes when that would leave `target` itself empty.
+    pub fn split_with(self, target: &[bool], dir: Dir, after: bool, stream: &Path) -> Pane {
+        let target_tabs = match self.get(target) {
+            Some(Pane::Leaf { tabs, .. }) => tabs.clone(),
+            _ => return self,
+        };
+        let only_there = target_tabs.len() == 1
+            && target_tabs[0]
+                .stream()
+                .is_some_and(|p| paths_equal(p, stream));
+        if only_there {
+            return self;
+        }
+        // Mark the target leaf, take the stream out, then find the mark again.
+        let mark = Tab::LogStream(PathBuf::from("\u{0}dock-target"));
+        let mut tree = self;
+        tree.add_tab(target, mark.clone());
+        let Some(mut tree) = tree.remove_stream(stream) else {
+            return Pane::with_streams(&[stream.to_path_buf()]);
+        };
+        let at = tree
+            .leaf_paths()
+            .into_iter()
+            .find(|path| matches!(tree.get(path), Some(Pane::Leaf { tabs, .. }) if tabs.contains(&mark)))
+            .unwrap_or_default();
+        if let Some(node) = tree.get_mut(&at) {
+            let mut old = std::mem::replace(node, Pane::with_streams(&[]));
+            if let Pane::Leaf { tabs, active } = &mut old {
+                tabs.retain(|t| *t != mark);
+                *active = (*active).min(tabs.len().saturating_sub(1));
+            }
+            let new = Pane::with_streams(&[stream.to_path_buf()]);
+            let (first, second) = if after { (old, new) } else { (new, old) };
+            *node = Pane::Split {
+                dir,
+                fraction: 0.5,
+                first: Box::new(first),
+                second: Box::new(second),
+            };
+        }
+        tree
+    }
+
+    /// Closes the leaf at `path`: its tabs join the first leaf of its sibling, which
+    /// takes the split's place. The root leaf cannot be closed.
+    pub fn close_leaf(self, path: &[bool]) -> Pane {
+        let Some((&last, parent)) = path.split_last() else {
+            return self;
+        };
+        let mut tree = self;
+        let Some(Pane::Split { first, second, .. }) = tree.get_mut(parent) else {
+            return tree;
+        };
+        let (gone, stay) = if last {
+            (second.as_ref().clone(), first.as_ref().clone())
+        } else {
+            (first.as_ref().clone(), second.as_ref().clone())
+        };
+        let mut stay = stay;
+        let moved: Vec<Tab> = match &gone {
+            Pane::Leaf { tabs, .. } => tabs.clone(),
+            _ => return tree,
+        };
+        if let Some(Pane::Leaf { tabs, .. }) = stay.first_leaf_mut() {
+            tabs.extend(moved);
+        }
+        if let Some(node) = tree.get_mut(parent) {
+            *node = stay;
+        }
+        tree
+    }
+
+    /// Sets the share of the first child of the split at `path` (kept within 10-90%).
+    pub fn set_fraction(&mut self, path: &[bool], value: f32) {
+        if let Some(Pane::Split { fraction, .. }) = self.get_mut(path) {
+            *fraction = value.clamp(0.1, 0.9);
+        }
+    }
+
+    /// The nearest split above the leaf at `path` that divides in `dir`, and whether
+    /// the leaf is in its first child.
+    pub fn split_above(&self, path: &[bool], dir: Dir) -> Option<(Vec<bool>, bool)> {
+        (0..path.len())
+            .rev()
+            .find_map(|n| match self.get(&path[..n]) {
+                Some(Pane::Split { dir: d, .. }) if *d == dir => {
+                    Some((path[..n].to_vec(), !path[n]))
+                }
+                _ => None,
+            })
+    }
+
     fn first_leaf_mut(&mut self) -> Option<&mut Pane> {
         match self {
             Pane::Leaf { .. } => Some(self),
@@ -510,6 +714,45 @@ mod tests {
         assert!(Pane::with_streams(&[p("a.log")])
             .reconcile(&[], &[])
             .is_none());
+    }
+
+    #[test]
+    fn leaves_are_found_split_moved_closed_and_resized() {
+        let a = p("a.log");
+        let b = p("b.log");
+        let c = p("c.log");
+        let tree = Pane::with_streams(&[a.clone(), b.clone(), c.clone()]);
+        assert_eq!(tree.find_stream(&b), Some(vec![]));
+        // b to a new pane on the right of the only leaf.
+        let tree = tree.split_with(&[], Dir::Horizontal, true, &b);
+        assert_eq!(tree.leaf_paths(), vec![vec![false], vec![true]]);
+        assert_eq!(tree.find_stream(&b), Some(vec![true]));
+        assert_eq!(tree.streams(), vec![a.clone(), c.clone(), b.clone()]);
+        // c below b.
+        let tree = tree.split_with(&[true], Dir::Vertical, true, &c);
+        assert_eq!(tree.find_stream(&c), Some(vec![true, true]));
+        assert_eq!(
+            tree.split_above(&[true, true], Dir::Vertical),
+            Some((vec![true], false))
+        );
+        assert_eq!(
+            tree.split_above(&[true, true], Dir::Horizontal),
+            Some((vec![], false))
+        );
+        let mut tree = tree;
+        tree.set_fraction(&[], 0.99);
+        assert!(matches!(tree, Pane::Split { fraction, .. } if fraction == 0.9));
+        // Splitting a leaf with its only stream changes nothing.
+        let same = tree.clone().split_with(&[false], Dir::Vertical, true, &a);
+        assert_eq!(same, tree);
+        // Closing b's pane: b joins c's leaf.
+        let mut tree = tree.close_leaf(&[true, false]);
+        assert_eq!(tree.find_stream(&b), tree.find_stream(&c));
+        assert!(tree.show(&b));
+        // Removing streams collapses the tree down to one leaf.
+        let tree = tree.remove_stream(&b).unwrap().remove_stream(&c).unwrap();
+        assert_eq!(tree, Pane::with_streams(std::slice::from_ref(&a)));
+        assert!(tree.remove_stream(&a).is_none());
     }
 
     #[test]
