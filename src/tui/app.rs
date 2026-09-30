@@ -16,7 +16,8 @@ use crate::collapse::CollapseMode;
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
 use crate::tail_engine::{TailEngine, ViewMode};
-use crate::time_range_text::side_readable;
+use crate::time_range_text::{self, side_readable, Side};
+use crate::tui::calendar::{self, Calendar};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -212,9 +213,30 @@ pub struct SessionDialog {
 pub struct TimeRangeDialog {
     pub from: TextField,
     pub to: TextField,
+    /// The side being edited: its field, its calendar and its time.
     pub on_to: bool,
+    pub zone: RangeZone,
+    pub calendar: Calendar,
+    /// In the time zone: the minutes are selected rather than the hours.
+    pub on_minutes: bool,
     pub invalid: bool,
+    /// What a bare `14:02` is read against: the log's first timestamp.
+    pub reference: i64,
 }
+
+/// The part of the time range dialog with the keyboard. `Tab` walks From, its
+/// calendar, its time, then To, its calendar, its time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeZone {
+    Field,
+    Calendar,
+    Time,
+}
+
+/// List positions of the time range dialog's clickable parts (see `mouse::Target`).
+const RANGE_FROM: usize = 0;
+const RANGE_TO: usize = 1;
+const RANGE_DAY: usize = 1_000_000;
 
 impl TimeRangeDialog {
     fn focused(&mut self) -> &mut TextField {
@@ -222,6 +244,74 @@ impl TimeRangeDialog {
             &mut self.to
         } else {
             &mut self.from
+        }
+    }
+
+    fn side(&self) -> Side {
+        if self.on_to {
+            Side::To
+        } else {
+            Side::From
+        }
+    }
+
+    fn side_text(&self) -> &str {
+        if self.on_to {
+            self.to.text()
+        } else {
+            self.from.text()
+        }
+    }
+
+    /// The calendar on the edited side's day, or on the log's first day.
+    fn sync_calendar(&mut self) {
+        let day = time_range_text::parse(self.side_text(), self.reference)
+            .map(time_range_text::day_of)
+            .unwrap_or_else(|| time_range_text::day_of(self.reference));
+        self.calendar = Calendar::new(day);
+    }
+
+    /// The day under the calendar cursor into the edited side, keeping its time.
+    fn pick_day(&mut self) {
+        let text =
+            time_range_text::pick_day(self.side_text(), self.reference, self.calendar.cursor);
+        *self.focused() = TextField::new(&text);
+        self.invalid = false;
+    }
+
+    /// Hours and minutes of the edited side moved by `hours` / `minutes` (wrapping
+    /// within the day), on the calendar's day when the side names none.
+    fn step_time(&mut self, hours: i64, minutes: i64) {
+        let (h, m, s) = time_range_text::clock_of(self.side_text(), self.reference, self.side());
+        let h = (h as i64 + hours).rem_euclid(24) as u32;
+        let m = (m as i64 + minutes).rem_euclid(60) as u32;
+        let text = time_range_text::with_clock(
+            self.side_text(),
+            self.reference,
+            self.calendar.cursor,
+            (h, m, s),
+        );
+        *self.focused() = TextField::new(&text);
+        self.invalid = false;
+    }
+
+    /// `Tab` / `Shift+Tab` through the six stops.
+    fn next_stop(&mut self, back: bool) {
+        let zone = match self.zone {
+            RangeZone::Field => 0,
+            RangeZone::Calendar => 1,
+            RangeZone::Time => 2,
+        };
+        let at = usize::from(self.on_to) * 3 + zone;
+        let next = if back { (at + 5) % 6 } else { (at + 1) % 6 };
+        self.on_to = next >= 3;
+        self.zone = match next % 3 {
+            0 => RangeZone::Field,
+            1 => RangeZone::Calendar,
+            _ => RangeZone::Time,
+        };
+        if self.zone == RangeZone::Calendar {
+            self.sync_calendar();
         }
     }
 }
@@ -936,26 +1026,84 @@ impl App {
 
     fn open_time_range(&mut self) {
         let e = &self.tabs[self.active].engine;
-        self.time_range = Some(TimeRangeDialog {
+        let reference = e.time_reference();
+        let mut d = TimeRangeDialog {
             from: TextField::new(&e.time_from_text),
             to: TextField::new(&e.time_to_text),
             on_to: false,
+            zone: RangeZone::Field,
+            calendar: Calendar::new(time_range_text::day_of(reference)),
+            on_minutes: false,
             invalid: false,
-        });
+            reference,
+        };
+        d.sync_calendar();
+        self.time_range = Some(d);
     }
 
     fn on_time_range_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyEventKind};
         let Some(d) = self.time_range.as_mut() else {
             return false;
         };
-        match d.focused().on_key(key) {
-            FieldKey::Submit => self.submit_time_range(),
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        match key.code {
             // The previous range stays.
-            FieldKey::Cancel => self.time_range = None,
-            FieldKey::Edited => d.invalid = false,
-            FieldKey::Other => match key.code {
-                KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => d.on_to = !d.on_to,
+            KeyCode::Esc => {
+                self.time_range = None;
+                return true;
+            }
+            KeyCode::Tab => {
+                d.next_stop(false);
+                return true;
+            }
+            KeyCode::BackTab => {
+                d.next_stop(true);
+                return true;
+            }
+            _ => {}
+        }
+        match d.zone {
+            RangeZone::Field => match d.focused().on_key(key) {
+                FieldKey::Submit => self.submit_time_range(),
+                FieldKey::Cancel => self.time_range = None,
+                FieldKey::Edited => d.invalid = false,
+                FieldKey::Other => match key.code {
+                    KeyCode::Up | KeyCode::Down => {
+                        d.on_to = !d.on_to;
+                        d.sync_calendar();
+                    }
+                    _ => return false,
+                },
+            },
+            RangeZone::Calendar => match key.code {
+                KeyCode::Left => d.calendar.move_days(-1),
+                KeyCode::Right => d.calendar.move_days(1),
+                KeyCode::Up => d.calendar.move_days(-7),
+                KeyCode::Down => d.calendar.move_days(7),
+                KeyCode::PageUp => d.calendar.move_months(-1),
+                KeyCode::PageDown => d.calendar.move_months(1),
+                KeyCode::Char(' ') => d.pick_day(),
+                // Enter picks the day and applies the range.
+                KeyCode::Enter => {
+                    d.pick_day();
+                    self.submit_time_range();
+                }
+                _ => return false,
+            },
+            RangeZone::Time => match key.code {
+                KeyCode::Left | KeyCode::Right => d.on_minutes = !d.on_minutes,
+                KeyCode::Up if d.on_minutes => d.step_time(0, 1),
+                KeyCode::Down if d.on_minutes => d.step_time(0, -1),
+                KeyCode::PageUp if d.on_minutes => d.step_time(0, 10),
+                KeyCode::PageDown if d.on_minutes => d.step_time(0, -10),
+                KeyCode::Up => d.step_time(1, 0),
+                KeyCode::Down => d.step_time(-1, 0),
+                KeyCode::PageUp => d.step_time(6, 0),
+                KeyCode::PageDown => d.step_time(-6, 0),
+                KeyCode::Enter => self.submit_time_range(),
                 _ => return false,
             },
         }
@@ -1220,6 +1368,19 @@ impl App {
     fn on_click(&mut self, ev: MouseEvent) -> bool {
         let target = mouse::hit_test(&self.hits, ev.column, ev.row);
         match target {
+            Target::ListItem(i) if self.time_range.is_some() => {
+                if let Some(d) = self.time_range.as_mut() {
+                    if i >= RANGE_DAY {
+                        d.zone = RangeZone::Calendar;
+                        d.calendar.cursor = (i - RANGE_DAY) as i64;
+                        d.pick_day();
+                    } else {
+                        d.zone = RangeZone::Field;
+                        d.on_to = i == RANGE_TO;
+                        d.sync_calendar();
+                    }
+                }
+            }
             Target::ListItem(i) if self.settings_form.is_some() => {
                 if let Some(f) = self.settings_form.as_mut() {
                     f.focus = i;
@@ -1948,35 +2109,37 @@ impl App {
     }
 
     fn draw_time_range(&mut self, frame: &mut Frame, area: Rect) {
-        let inner = self.dialog(frame, area, (64, 9), "Time range", true);
+        let inner = self.dialog(frame, area, (64, 21), "Time range", true);
         let palette = self.palette;
         let Some(d) = &self.time_range else {
             return;
         };
-        let reference = self.tabs[self.active].engine.time_reference();
+        let reference = d.reference;
         const LABEL: u16 = 7;
         let width = inner.width.saturating_sub(LABEL) as usize;
-        let mut lines = Vec::with_capacity(6);
-        let mut cursor = (inner.x, inner.y);
-        for (row, (label, field, focused)) in [("From", &d.from, !d.on_to), ("To", &d.to, d.on_to)]
+        let dim = Style::default().fg(palette.dim());
+        let accent = Style::default()
+            .fg(palette.accent())
+            .add_modifier(Modifier::BOLD);
+        let mut lines = Vec::with_capacity(18);
+        let mut cursor = None;
+        for (row, (label, field, on)) in [("From", &d.from, !d.on_to), ("To", &d.to, d.on_to)]
             .into_iter()
             .enumerate()
         {
             let (shown, x) = field.view(width);
             let bad = !side_readable(field.text().trim(), reference);
-            let label_style = if focused {
-                Style::default()
-                    .fg(palette.accent())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(palette.dim())
-            };
-            let field_style = if bad {
+            let label_style = if on { accent } else { dim };
+            let mut field_style = if bad {
                 Style::default().fg(palette.level_color(LogLevel::Error))
             } else {
                 Style::default()
             }
             .add_modifier(Modifier::UNDERLINED);
+            if on && d.zone == RangeZone::Field {
+                field_style = field_style.add_modifier(Modifier::BOLD);
+                cursor = Some((inner.x + LABEL + x as u16, inner.y + row as u16));
+            }
             let pad = width.saturating_sub(unicode_width::UnicodeWidthStr::width(shown.as_str()));
             lines.push(Line::from(vec![
                 Span::styled(format!("{label:<w$}", w = LABEL as usize), label_style),
@@ -1985,15 +2148,82 @@ impl App {
                     field_style,
                 ),
             ]));
-            if focused {
-                cursor = (inner.x + LABEL + x as u16, inner.y + row as u16);
-            }
+            self.hits.list_items.push((
+                Rect::new(inner.x, inner.y + row as u16, inner.width, 1),
+                if row == 0 { RANGE_FROM } else { RANGE_TO },
+            ));
         }
-        let dim = Style::default().fg(palette.dim());
+        // The calendar and the time of the edited side.
+        let side = if d.on_to { "To" } else { "From" };
+        let picked = time_range_text::parse(d.side_text(), reference).map(time_range_text::day_of);
+        let cal_on = d.zone == RangeZone::Calendar;
         lines.push(Line::raw(""));
-        lines.push(Line::styled("2026-09-18 14:02:05, 14:02, -15m, now", dim));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{side}: "), accent),
+            Span::styled(
+                format!("\u{25c0} {} \u{25b6}", d.calendar.title()),
+                if cal_on { accent } else { Style::default() },
+            ),
+            Span::styled("  PgUp/PgDn month", dim),
+        ]));
+        lines.push(Line::styled("Mo Tu We Th Fr Sa Su", dim));
+        let first_week_row = inner.y + lines.len() as u16;
+        for (w, week) in d.calendar.weeks().iter().enumerate() {
+            let mut spans = Vec::with_capacity(7);
+            for (col, cell) in week.iter().enumerate() {
+                let text = match cell {
+                    Some(day) => format!("{:>2} ", calendar::day_of_month(*day)),
+                    None => "   ".into(),
+                };
+                let mut style = Style::default();
+                if let Some(day) = cell {
+                    if Some(*day) == picked {
+                        style = accent;
+                    }
+                    if *day == d.calendar.cursor {
+                        style = style.add_modifier(if cal_on {
+                            Modifier::REVERSED
+                        } else {
+                            Modifier::UNDERLINED
+                        });
+                    }
+                    self.hits.list_items.push((
+                        Rect::new(inner.x + col as u16 * 3, first_week_row + w as u16, 2, 1),
+                        RANGE_DAY + *day as usize,
+                    ));
+                }
+                spans.push(Span::styled(text, style));
+            }
+            lines.push(Line::from(spans));
+        }
+        while lines.len() < 12 {
+            lines.push(Line::raw(""));
+        }
+        let (h, m, _) = time_range_text::clock_of(d.side_text(), reference, d.side());
+        let time_on = d.zone == RangeZone::Time;
+        let part = |selected: bool| {
+            if time_on && selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else if time_on {
+                accent
+            } else {
+                Style::default()
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Time   ", if time_on { accent } else { dim }),
+            Span::styled(format!("{h:02}"), part(!d.on_minutes)),
+            Span::raw(":"),
+            Span::styled(format!("{m:02}"), part(d.on_minutes)),
+            Span::styled("   Up/Down change, Left/Right hours or minutes", dim),
+        ]));
+        lines.push(Line::raw(""));
         lines.push(Line::styled(
-            "An empty side is open. Tab switches side.",
+            "Type 2026-09-18 14:02, 14:02, -15m or now; empty side = open.",
+            dim,
+        ));
+        lines.push(Line::styled(
+            "Tab: field, calendar, time. Space picks a day, Enter applies.",
             dim,
         ));
         if d.invalid {
@@ -2003,7 +2233,9 @@ impl App {
             ));
         }
         frame.render_widget(Paragraph::new(lines), inner);
-        frame.set_cursor_position(cursor);
+        if let Some(c) = cursor {
+            frame.set_cursor_position(c);
+        }
     }
 
     fn draw_help(&mut self, frame: &mut Frame, area: Rect) {
@@ -3007,9 +3239,9 @@ mod tests {
         render(&mut app, 80, 20);
         app.apply(Action::TimeRange);
         keys(&mut app, "10:00:01");
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Down);
         keys(&mut app, "yesterday-ish");
-        let screen = render(&mut app, 80, 20);
+        let screen = render(&mut app, 80, 30);
         assert!(
             screen.iter().any(|l| l.contains("Time range")),
             "{screen:#?}"
@@ -3520,6 +3752,69 @@ mod tests {
         press(&mut app, KeyCode::Right);
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.palette.theme, CyberTheme::Matrix);
+    }
+
+    #[test]
+    fn the_time_range_calendar_picks_a_day_and_the_time_steps() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("t.log", LOG)], false);
+        app.tick();
+        app.apply(Action::TimeRange);
+        // From: a typed day, Tab to its calendar (on that day), one day on, Space picks.
+        keys(&mut app, "2026-09-28");
+        press(&mut app, KeyCode::Tab);
+        let d = app.time_range.as_ref().unwrap();
+        assert_eq!(d.zone, RangeZone::Calendar);
+        assert_eq!(d.calendar.title(), "September 2026");
+        let first = d.calendar.cursor;
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.time_range.as_ref().unwrap().from.text(), "2026-09-29");
+        // Its time: Tab, hours up twice, then the minutes up once.
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Up);
+        assert_eq!(
+            app.time_range.as_ref().unwrap().from.text(),
+            "2026-09-29 02:01:00"
+        );
+        let screen = render(&mut app, 80, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("Mo Tu We Th Fr Sa Su")),
+            "{screen:#?}"
+        );
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("Time") && l.contains("02:01")));
+
+        // Tab on reaches To; a click on the From field goes back to it, and a click on
+        // a day picks it for that side.
+        press(&mut app, KeyCode::Tab);
+        assert!(app.time_range.as_ref().unwrap().on_to);
+        let (field, _) = *app
+            .hits
+            .list_items
+            .iter()
+            .find(|(_, i)| *i == RANGE_FROM)
+            .unwrap();
+        app.on_mouse(click(field.x + 8, field.y));
+        let d = app.time_range.as_ref().unwrap();
+        assert!(!d.on_to && d.zone == RangeZone::Field, "back on From");
+        render(&mut app, 80, 30);
+        let (day, _) = *app
+            .hits
+            .list_items
+            .iter()
+            .find(|(_, i)| *i == RANGE_DAY + first as usize)
+            .unwrap();
+        app.on_mouse(click(day.x, day.y));
+        assert_eq!(
+            app.time_range.as_ref().unwrap().from.text(),
+            "2026-09-28 02:01:00",
+            "the day changes, the time stays"
+        );
     }
 
     #[test]

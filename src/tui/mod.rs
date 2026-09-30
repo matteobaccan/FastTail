@@ -8,6 +8,7 @@
 //! brings it to parity with the GUI.
 
 mod app;
+mod calendar;
 mod clipboard;
 mod colors;
 mod form;
