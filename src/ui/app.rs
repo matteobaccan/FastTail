@@ -3535,6 +3535,10 @@ impl FastTailApp {
             if crate::workspace::save_changes(eng, &mut self.config, pointer_down) {
                 bookmarks_changed = true;
             }
+            // The engine only queues its sounds (search wrap-around, rule alerts).
+            for sound in eng.take_sounds() {
+                sound.play();
+            }
             if !eng.displayed && eng.unseen_severity >= 2 {
                 critical_in_background = true;
             }

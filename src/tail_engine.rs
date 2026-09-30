@@ -385,6 +385,8 @@ pub const MAX_NOTE_CHARS: usize = 200;
 pub const DEFAULT_AUTO_BOOKMARK_MAX: usize = 10_000;
 pub const MIN_AUTO_BOOKMARK_MAX: usize = 100;
 pub const MAX_AUTO_BOOKMARK_MAX: usize = 100_000;
+/// Sounds kept for a front end that does not play them (see `TailEngine::take_sounds`).
+pub const MAX_PENDING_SOUNDS: usize = 8;
 
 /// A bookmark note as it is kept: line breaks and tabs become spaces, the ends are
 /// trimmed, and at most `MAX_NOTE_CHARS` characters are kept.
@@ -1690,6 +1692,9 @@ pub struct TailEngine {
     pub max_line_bytes: usize,
     pub max_detected_width: f32,
     pub last_sound_alert_time: Instant,
+    /// Sounds the engine asked for and the front end has not played yet (see
+    /// `take_sounds`).
+    pending_sounds: Vec<SoundAlertPreset>,
     /// Patterns of the highlight rules that have an external tool bound to them; set by
     /// the app from the tools list. Matches on appended lines are queued in
     /// `pending_tool_hits` as `(rule pattern, line index)` for the app to run, capped at
@@ -2296,6 +2301,7 @@ impl TailEngine {
             max_line_bytes: 0,
             max_detected_width: 0.0,
             last_sound_alert_time: Instant::now(),
+            pending_sounds: Vec::new(),
             tool_bound_rules: HashSet::new(),
             pending_tool_hits: Vec::new(),
             _watcher: watcher,
@@ -3824,6 +3830,20 @@ impl TailEngine {
         }
     }
 
+    /// Queues a sound for the front end: the search wrap-around beep, a rule's sound
+    /// alert. The engine plays nothing itself; the GUI plays the preset and the terminal
+    /// rings its bell. A queue nobody drains stops at `MAX_PENDING_SOUNDS`.
+    fn queue_sound(&mut self, preset: SoundAlertPreset) {
+        if preset != SoundAlertPreset::None && self.pending_sounds.len() < MAX_PENDING_SOUNDS {
+            self.pending_sounds.push(preset);
+        }
+    }
+
+    /// The sounds queued since the last call, oldest first.
+    pub fn take_sounds(&mut self) -> Vec<SoundAlertPreset> {
+        std::mem::take(&mut self.pending_sounds)
+    }
+
     pub fn check_sound_alerts(&mut self, start_idx: usize) {
         if self.last_sound_alert_time.elapsed().as_millis() < 250 {
             return;
@@ -3838,7 +3858,8 @@ impl TailEngine {
                 for ch in &self.compiled_highlights {
                     if ch.enabled && ch.sound_alert != SoundAlertPreset::None && ch.is_match(&line)
                     {
-                        ch.sound_alert.play();
+                        let preset = ch.sound_alert;
+                        self.queue_sound(preset);
                         self.last_sound_alert_time = Instant::now();
                         self.sound_alerts += 1;
                         return;
@@ -6943,7 +6964,7 @@ impl TailEngine {
             line
         };
         if beep {
-            crate::audio::SoundAlertPreset::Beep.play();
+            self.queue_sound(SoundAlertPreset::Beep);
         }
         target
     }

@@ -3506,3 +3506,41 @@ fn tray_options_round_trip_and_default_off() {
     let back = FastTailConfig::from_ini(&on.to_ini());
     assert!(back.tray_icon && back.minimize_to_tray && back.close_to_tray);
 }
+
+#[test]
+fn the_engine_queues_its_sounds_for_the_front_end() {
+    use fasttail::audio::SoundAlertPreset;
+    let mut tmp = NamedTempFile::new().unwrap();
+    writeln!(tmp, "one hit\ntwo\nthree hit").unwrap();
+    tmp.flush().unwrap();
+    let mut engine = TailEngine::open(tmp.path()).unwrap();
+    engine.update_search("hit");
+    assert_eq!(engine.search_matches, vec![0, 2]);
+    // The search selects the first hit: one step reaches the last, the next wraps.
+    engine.search_next(true);
+    assert!(engine.take_sounds().is_empty(), "no wrap yet");
+    engine.search_next(true);
+    assert_eq!(
+        engine.take_sounds(),
+        vec![SoundAlertPreset::Beep],
+        "wrapped"
+    );
+    engine.search_next(false);
+    engine.search_next(false);
+    assert!(engine.take_sounds().is_empty(), "sound off: nothing queued");
+
+    let mut rule = fasttail::tail_engine::HighlightRule::new("ALARM", [0; 3], [0; 3], false);
+    rule.sound_alert = SoundAlertPreset::Chime;
+    engine.set_highlight_rules(vec![rule]);
+    engine.last_sound_alert_time = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    writeln!(tmp, "ALARM now").unwrap();
+    tmp.flush().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut sounds = Vec::new();
+    while sounds.is_empty() && std::time::Instant::now() < deadline {
+        engine.poll_updates();
+        sounds = engine.take_sounds();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(sounds, vec![SoundAlertPreset::Chime]);
+}
