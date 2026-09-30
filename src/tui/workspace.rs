@@ -20,7 +20,6 @@ use crate::tail_engine::TailEngine;
 pub struct Settings {
     pub config: FastTailConfig,
     pub path: PathBuf,
-    pub found: bool,
     /// The global filter compiled once for every stream (`None` when off).
     pub global: Option<Arc<FilterSpec>>,
     /// Entries of `[open_files]` that no longer exist: the config reader drops them
@@ -71,7 +70,6 @@ impl Settings {
         Self {
             config,
             path: path.to_path_buf(),
-            found,
             global,
             missing_open_files,
         }
@@ -309,7 +307,7 @@ mod tests {
         let before = std::fs::read(&ini).unwrap();
 
         let settings = Settings::read(&ini);
-        assert!(settings.found);
+        assert_eq!(settings.path, ini);
         assert_eq!(settings.config.theme, CyberTheme::Matrix);
         let plan = workspace_plan(&settings);
         assert_eq!(plan.paths.len(), 2);

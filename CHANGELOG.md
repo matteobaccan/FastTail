@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   windows in `[dock] layout`, so each interface shows the other's.
 - **`[x]` on every terminal window.** Top right of each window, docked or floating: a
   click closes the stream it shows, as `Ctrl+W` does (the window goes when it is empty).
+- **Empty terminal workspace.** The last stream can be closed too, and `fasttail-tui` with
+  nothing to open starts empty instead of exiting: `o` opens a file, `Ctrl+O` a session.
+  The last docked window can float as well, leaving the dock empty; `Alt+F` docks a
+  floating window back into it.
 
 ### Changed
 

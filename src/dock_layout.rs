@@ -978,5 +978,11 @@ mod tests {
             .collect();
         assert_eq!(rects.len(), 1);
         assert_eq!(rects[0].min, egui::pos2(100.0, 50.0));
+        // And an empty main surface, every stream floating.
+        changed.set_main_pane(&Pane::with_streams(&[]));
+        let back: DockState<FastTailTab> = ron::from_str(&changed.to_ron()).expect("GUI reads it");
+        assert_eq!(back.iter_all_tabs().count(), 1);
+        assert_eq!(back.main_surface().num_tabs(), 0);
+        assert_eq!(Layout::parse(&changed.to_ron()).unwrap().main_pane(), None);
     }
 }
