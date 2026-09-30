@@ -11,6 +11,7 @@ mod app;
 mod calendar;
 mod clipboard;
 mod colors;
+mod dock;
 mod form;
 mod hex;
 mod keys;
@@ -35,7 +36,7 @@ use crossterm::{cursor, execute};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::Terminal;
 
-use app::{App, Split, SplitDir, Tab};
+use app::{App, Tab};
 use colors::{Palette, TermInfo};
 use workspace::Settings;
 
@@ -270,11 +271,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     if !notices.is_empty() {
         app.message = Some(notices.join("  |  "));
     }
-    if opts.split && app.tabs.len() > 1 {
-        app.split = Some(Split {
-            dir: SplitDir::SideBySide,
-            other: 1,
-        });
+    let layout = app
+        .settings
+        .as_ref()
+        .and_then(|s| s.config.dock_layout.clone());
+    app.restore_dock(layout.as_deref());
+    if opts.split {
+        app.split_first_two();
     }
     if let Some(text) = &opts.search {
         app.search(text);

@@ -139,6 +139,9 @@ impl Settings {
 pub struct Plan {
     pub paths: Vec<PathBuf>,
     pub missing: Vec<PathBuf>,
+    /// The session's `[dock] layout` (none for the default workspace, whose layout is
+    /// the configuration's).
+    pub dock_layout: Option<String>,
 }
 
 /// The streams of the GUI's default workspace (`open_files`, in its tab order), keeping
@@ -166,6 +169,7 @@ pub fn session_plan(settings: &mut Settings, file: &Path) -> Result<Plan, String
     Ok(Plan {
         paths: loaded.session.streams.into_iter().map(|s| s.path).collect(),
         missing: loaded.missing,
+        dock_layout: loaded.session.dock_layout,
     })
 }
 

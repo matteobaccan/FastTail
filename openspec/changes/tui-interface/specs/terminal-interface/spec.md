@@ -90,11 +90,19 @@ The engine, configuration, session, compressed-file, filter, theme palette, exte
 - **THEN** the terminal dialog marks the field with the same range the GUI Settings shows, and nothing is saved.
 
 ### Requirement: Stream Windows and Layout
-Each stream SHALL be drawn as a bordered window whose top border shows `[#N]`, the file name and FOLLOW or PAUSED, and whose bottom border shows the visible and total line counts and any background job with its percentage on the left, and the active filters, level, collapse, time range and search position (`/text i/n`) on the right. The focused window SHALL use a double border in the theme's accent colour, the others a single border. With two or more streams a strip of their names SHALL be shown, marking with `+` a hidden stream that received lines. `s` SHALL cycle one window, two side by side and two stacked; `Tab` / `Shift+Tab` SHALL move the focus between windows and then between streams; `Alt+1..9` SHALL show stream 1 to 9. A status bar SHALL list the main keys and show messages. `--ascii`, `FASTTAIL_TUI_ASCII`, or a Windows console without virtual-terminal support SHALL draw every border with `+`, `-` and `|` (the focused window with `=`). A terminal resize SHALL redraw at the new size within 100 ms. At least 40 columns by 10 rows SHALL be usable; below that a one-line message SHALL ask for a larger terminal.
+Each stream SHALL be drawn as a bordered window whose top border shows `[#N]`, the file name and FOLLOW or PAUSED, and whose bottom border shows the visible and total line counts and any background job with its percentage on the left, and the active filters, level, collapse, time range and search position (`/text i/n`) on the right. The focused window SHALL use a double border in the theme's accent colour, the others a single border. With two or more streams a strip of their names SHALL be shown, marking with `+` a hidden stream that received lines. The windows SHALL be arranged as the GUI's dock, read from and saved to the same `[dock] layout` of `fasttail.ini` and of session files: a tree of side-by-side and stacked splits whose windows hold one or more streams as tabs, listed in the window's top border with the shown one marked. GUI panels in the layout (Filters, Settings, ...) SHALL be kept and drawn as placeholder tabs, and the GUI's floating windows SHALL be kept when the terminal saves the layout, which it SHALL do only after the user changed it. `s` or `|` SHALL open a new window beside the focused one and `_` below it, holding the next stream (the next tab of the focused window, else the next stream by number); `Ctrl+W` SHALL close the focused window, its tabs joining the window beside it; `<` / `>` SHALL move the focused stream to the previous / next window; `Ctrl+PgUp` / `Ctrl+PgDn` SHALL show the previous / next tab of the window; `Alt+arrows` SHALL move the nearest divider by 5%. Dragging a divider with the mouse SHALL resize the split, and dragging a window title or tab onto a window SHALL split that window on the edge under the pointer (its outer quarter) or add the stream as a tab (its centre), outlining the target while dragging. `Tab` / `Shift+Tab` SHALL move the focus between windows (with one window, between streams); `Alt+1..9` SHALL show stream 1 to 9. A status bar SHALL list the main keys and show messages. `--ascii`, `FASTTAIL_TUI_ASCII`, or a Windows console without virtual-terminal support SHALL draw every border with `+`, `-` and `|` (the focused window with `=`). A terminal resize SHALL redraw at the new size within 100 ms. At least 40 columns by 10 rows SHALL be usable; below that a one-line message SHALL ask for a larger terminal.
 
 #### Scenario: Focused window of a split
 - **WHEN** two files are open with `--split` and the user presses `Tab`
 - **THEN** the right window gets the double border and the left one a single border, and `Space` then toggles follow of the right stream only.
+
+#### Scenario: Dock layout shared with the GUI
+- **WHEN** the GUI saved `a.log` on the left and `b.log` over `c.log` on the right, and the user starts the terminal interface
+- **THEN** the same three windows are drawn with the same proportions, and after the user drags the vertical divider and quits, the GUI opens with the divider where the terminal left it.
+
+#### Scenario: Moving a window with the mouse
+- **WHEN** the user drags the title of the `b.log` window onto the left edge of the `a.log` window and releases the button
+- **THEN** `b.log` gets its own window left of `a.log`, the window it left closes if it held nothing else, and the layout is saved.
 
 #### Scenario: ASCII borders
 - **WHEN** the user runs `fasttail-tui --ascii app.log`
@@ -301,7 +309,7 @@ The terminal interface SHALL load and save `fasttail.ini` (or the file given by 
 - **THEN** `fasttail.ini` keeps its bytes and its modification time.
 
 ### Requirement: Terminal Sessions
-`O` and `--session <file>` SHALL load a `*.fasttail-session.ini` session, replacing the open streams. `S` SHALL save the open streams and their state to a session file chosen by path, adding `.fasttail-session.ini` when missing, without a dock layout, asking before overwriting an existing file, refusing the path of the active `fasttail.ini`, and adding it to the recent sessions as the GUI does.
+`O` and `--session <file>` SHALL load a `*.fasttail-session.ini` session, replacing the open streams. `S` SHALL save the open streams and their state to a session file chosen by path, with the dock layout, adding `.fasttail-session.ini` when missing, asking before overwriting an existing file, refusing the path of the active `fasttail.ini`, and adding it to the recent sessions as the GUI does.
 
 #### Scenario: Saving a session for the GUI
 - **WHEN** the user bookmarks line 77 of `app.log` in the terminal, presses `S` and saves as `incident`
@@ -359,7 +367,7 @@ The terminal interface SHALL poll input with a 100 ms timeout (50 ms while a bac
 - **THEN** the process uses at most 120 ms of CPU in those 12 s.
 
 ### Requirement: Terminal Interface Scope Limits
-The terminal interface SHALL open Markdown files as text and SHALL NOT offer a rendered Markdown view or the screensaver. In 0.20.0 it SHALL NOT offer Find results across streams, line wrap, the timeline histogram or the overview strip, and SHALL show at most two stream windows at a time. It SHALL NOT offer renderer, GPU, frame-rate, zoom, font, always-on-top, borderless or window settings, and SHALL keep their `fasttail.ini` keys as it read them.
+The terminal interface SHALL open Markdown files as text and SHALL NOT offer a rendered Markdown view or the screensaver. In 0.20.0 it SHALL NOT offer Find results across streams, line wrap, the timeline histogram or the overview strip. It SHALL NOT offer renderer, GPU, frame-rate, zoom, font, always-on-top, borderless or window settings, and SHALL keep their `fasttail.ini` keys as it read them.
 
 #### Scenario: Markdown file
 - **WHEN** the user opens `README.md` in the terminal interface

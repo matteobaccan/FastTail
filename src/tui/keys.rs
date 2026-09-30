@@ -37,8 +37,24 @@ pub enum Action {
     EditExclude,
     CycleCollapse,
     CycleLevel,
-    /// One window, two side by side, two stacked.
-    CycleSplit,
+    /// `s` `|`: the focused window splits side by side; `_`: stacked. A window with
+    /// several tabs gives its shown one to the new window, a window with one takes the
+    /// next stream.
+    SplitRight,
+    SplitDown,
+    /// CTRL + W: the focused window closes, its tabs joining the window beside it.
+    ClosePane,
+    /// ALT + arrows: the nearest divider of the focused window moves that way.
+    ResizeLeft,
+    ResizeRight,
+    ResizeUp,
+    ResizeDown,
+    /// `<` / `>`: the focused stream moves to the previous / next window as a tab.
+    MovePrevPane,
+    MoveNextPane,
+    /// CTRL + PGUP / PGDN: the previous / next tab of the focused window.
+    PrevInPane,
+    NextInPane,
     ToggleHelp,
     /// `y`: copies the selected rows.
     Copy,
@@ -95,12 +111,19 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::F(2) => Some(Action::ToggleBookmark),
             KeyCode::Char('k') => Some(Action::ToggleContext),
             KeyCode::Char('g') => Some(Action::GoTo),
+            KeyCode::Char('w') => Some(Action::ClosePane),
+            KeyCode::PageUp => Some(Action::PrevInPane),
+            KeyCode::PageDown => Some(Action::NextInPane),
             _ => None,
         };
     }
     if alt {
         return match key.code {
             KeyCode::Char(c @ '1'..='9') => Some(Action::GotoTab(c as usize - '1' as usize)),
+            KeyCode::Left => Some(Action::ResizeLeft),
+            KeyCode::Right => Some(Action::ResizeRight),
+            KeyCode::Up => Some(Action::ResizeUp),
+            KeyCode::Down => Some(Action::ResizeDown),
             _ => None,
         };
     }
@@ -135,7 +158,10 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('x') => Action::EditExclude,
         KeyCode::Char('c') => Action::CycleCollapse,
         KeyCode::Char('l') => Action::CycleLevel,
-        KeyCode::Char('s') => Action::CycleSplit,
+        KeyCode::Char('s') | KeyCode::Char('|') => Action::SplitRight,
+        KeyCode::Char('_') => Action::SplitDown,
+        KeyCode::Char('<') => Action::MovePrevPane,
+        KeyCode::Char('>') => Action::MoveNextPane,
         KeyCode::Char('y') => Action::Copy,
         KeyCode::Char('b') => Action::ToggleBookmark,
         KeyCode::Char(']') | KeyCode::F(2) => Action::NextBookmark,
@@ -277,5 +303,22 @@ mod tests {
         let mut key = press(KeyCode::Char('q'), KeyModifiers::NONE);
         key.kind = KeyEventKind::Release;
         assert_eq!(map_key(key), None);
+    }
+
+    #[test]
+    fn dock_keys() {
+        let k = |code, m| map_key(press(code, m));
+        let (none, shift) = (KeyModifiers::NONE, KeyModifiers::SHIFT);
+        let (ctrl, alt) = (KeyModifiers::CONTROL, KeyModifiers::ALT);
+        assert_eq!(k(KeyCode::Char('s'), none), Some(Action::SplitRight));
+        assert_eq!(k(KeyCode::Char('|'), shift), Some(Action::SplitRight));
+        assert_eq!(k(KeyCode::Char('_'), shift), Some(Action::SplitDown));
+        assert_eq!(k(KeyCode::Char('w'), ctrl), Some(Action::ClosePane));
+        assert_eq!(k(KeyCode::Left, alt), Some(Action::ResizeLeft));
+        assert_eq!(k(KeyCode::Down, alt), Some(Action::ResizeDown));
+        assert_eq!(k(KeyCode::Char('<'), none), Some(Action::MovePrevPane));
+        assert_eq!(k(KeyCode::Char('>'), shift), Some(Action::MoveNextPane));
+        assert_eq!(k(KeyCode::PageDown, ctrl), Some(Action::NextInPane));
+        assert_eq!(k(KeyCode::PageUp, ctrl), Some(Action::PrevInPane));
     }
 }

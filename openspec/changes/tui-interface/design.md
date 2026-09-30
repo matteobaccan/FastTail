@@ -214,8 +214,15 @@ built into both front ends, and without a file lock two merges can still interle
 the desk, terminal over SSH" case from starting at all.
 
 Sessions work as in the GUI: `--session`, open session (recent list or path), save
-session and save as (with no `[dock]` section; the GUI opens such a file with its
-default layout), `recent_sessions` updated.
+session and save as (with the dock layout), `recent_sessions` updated.
+
+The windows follow the GUI's dock: `src/dock_layout.rs` reads and writes the `egui_dock`
+RON of `[dock] layout` without egui (mirror types, a GUI layout comes back byte for
+byte) and gives the terminal a `Pane` tree of splits and leaves of tabs. The terminal
+lays the tree out in cells (`tui/dock.rs`), draws each leaf as a window with its tabs in
+the top border, and changes it with keys and the mouse (dividers, title drag with edge
+and centre drop zones). The GUI's floating windows and panels are kept; the layout is
+written back only after a change, like every other key.
 
 ### 6. Scope of 0.20.0
 
@@ -242,8 +249,10 @@ default layout), `recent_sessions` updated.
 Cursor and scrolling: `↑` `↓` / `j` `k` move the cursor row; `PgUp` `PgDn` /
 `Ctrl+B` `Ctrl+F` by a page; `Home` / `g` first row, `End` / `G` last row with follow
 on; `←` `→` / `0` sideways. `Space` follow, `/` search, `n` `N` and `F3` `Shift+F3`
-next / previous hit, `i` `x` include / exclude, `l` level, `c` collapse, `s` split,
-`Tab` next window or stream, `Alt+1..9` stream, `y` or `Ctrl+C` copy, `b` or `Ctrl+F2`
+next / previous hit, `i` `x` include / exclude, `l` level, `c` collapse, `s` `|` `_` new window
+beside / below, `Ctrl+W` close window, `<` `>` move the stream to another window,
+`Ctrl+PgUp` `Ctrl+PgDn` tab of the window, `Alt+arrows` divider, `Tab` next window or
+stream, `Alt+1..9` stream, `y` or `Ctrl+C` copy, `b` or `Ctrl+F2`
 bookmark, `]` `[` or `F2` `Shift+F2` next / previous bookmark, `m` note, `Ctrl+K` show
 in context, `Ctrl+G` or `:` go to, `h` HEX view, `a` ANSI mode, `t` time range, `f`
 global filter on / off, `F` global filter editor, `p` presets, `r` rule editor, `!`

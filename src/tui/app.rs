@@ -13,6 +13,7 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::ansi::{AnsiMode, StyleRun};
 use crate::collapse::CollapseMode;
+use crate::dock_layout::{Dir, Layout as DockLayout, Pane, Tab as DockTab};
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
 use crate::tail_engine::{TailEngine, ViewMode};
@@ -26,6 +27,7 @@ use ratatui::Frame;
 
 use crate::tui::clipboard::{Clipboard, Copied};
 use crate::tui::colors::{Chrome, Palette};
+use crate::tui::dock::{self, Zone};
 use crate::tui::form::{FieldKey, TextField};
 use crate::tui::hex;
 use crate::tui::keys::{self, Action};
@@ -316,18 +318,22 @@ impl TimeRangeDialog {
     }
 }
 
-/// How the screen is divided between streams.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SplitDir {
-    SideBySide,
-    Stacked,
-}
-
-/// Two windows on screen: the focused stream (`App::active`) and `other`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Split {
-    pub dir: SplitDir,
-    pub other: usize,
+/// What the left button is dragging in the dock.
+#[derive(Debug, Clone, PartialEq)]
+enum DockDrag {
+    /// The divider of the split at `path`, which covers `split`.
+    Divider {
+        path: Vec<bool>,
+        dir: Dir,
+        split: Rect,
+    },
+    /// A stream taken by its title at `from`; `drop` is the leaf, zone and preview
+    /// under the pointer once it has moved.
+    Move {
+        stream: PathBuf,
+        from: (u16, u16),
+        drop: Option<(Vec<bool>, Zone, Rect)>,
+    },
 }
 
 /// What one window shows: the loop redraws only when a signature changes.
@@ -352,7 +358,7 @@ struct PaneSignature {
 #[derive(Debug, Clone, PartialEq, Default)]
 struct Signature {
     active: usize,
-    split: Option<Split>,
+    dock: Option<Pane>,
     panes: Vec<PaneSignature>,
     unseen_tabs: usize,
 }
@@ -361,7 +367,15 @@ pub struct App {
     pub tabs: Vec<Tab>,
     /// The stream with the keyboard focus.
     pub active: usize,
-    pub split: Option<Split>,
+    /// The windows on screen, as the GUI's dock: a tree whose leaves hold the streams'
+    /// paths (and the GUI's own panels, drawn as placeholders).
+    pub dock: Pane,
+    /// The `[dock] layout` read at start or from a session: its floating windows are
+    /// kept when the tree is saved back.
+    dock_layout: Option<DockLayout>,
+    /// The tree changed since it was last saved.
+    dock_dirty: bool,
+    dock_drag: Option<DockDrag>,
     pub palette: Palette,
     pub prompt: Option<Prompt>,
     pub time_range: Option<TimeRangeDialog>,
@@ -411,13 +425,19 @@ const SAVE_EVERY: Duration = Duration::from_secs(2);
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Rows moved by one wheel step, as in the GUI.
 const WHEEL_ROWS: usize = 3;
+/// Share of a split one `Alt+arrow` moves its divider.
+const RESIZE_STEP: f32 = 0.05;
 
 impl App {
     pub fn new(tabs: Vec<Tab>, palette: Palette) -> Self {
+        let paths: Vec<PathBuf> = tabs.iter().map(|t| t.engine.path.clone()).collect();
         Self {
             tabs,
             active: 0,
-            split: None,
+            dock: Pane::with_streams(&paths),
+            dock_layout: None,
+            dock_dirty: false,
+            dock_drag: None,
             palette,
             prompt: None,
             time_range: None,
@@ -448,10 +468,112 @@ impl App {
 
     /// Streams on screen, the focused one first.
     pub fn visible_tabs(&self) -> Vec<usize> {
-        match self.split {
-            Some(s) => vec![self.active, s.other],
-            None => vec![self.active],
+        let mut out = vec![self.active];
+        for path in self.dock.leaf_paths() {
+            if let Some(i) = self.shown_in(&path) {
+                if !out.contains(&i) {
+                    out.push(i);
+                }
+            }
         }
+        out
+    }
+
+    /// The stream the leaf at `path` shows (none for a GUI panel).
+    fn shown_in(&self, path: &[bool]) -> Option<usize> {
+        match self.dock.get(path) {
+            Some(Pane::Leaf { tabs, active }) => tabs
+                .get(*active)
+                .and_then(DockTab::stream)
+                .and_then(|p| self.tab_index(p)),
+            _ => None,
+        }
+    }
+
+    /// The stream open on `path`.
+    fn tab_index(&self, path: &Path) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| crate::paths::paths_equal(&t.engine.path, path))
+    }
+
+    fn open_paths(&self) -> Vec<PathBuf> {
+        self.tabs.iter().map(|t| t.engine.path.clone()).collect()
+    }
+
+    /// Takes the tree of `layout` (`[dock] layout`, the configuration's or a
+    /// session's), in step with the open streams as the GUI does; without one every
+    /// stream is a tab of one window.
+    pub fn restore_dock(&mut self, layout: Option<&str>) {
+        let open = self.open_paths();
+        self.dock_layout = layout.and_then(DockLayout::parse);
+        self.dock = self
+            .dock_layout
+            .as_ref()
+            .and_then(DockLayout::main_pane)
+            .and_then(|p| p.reconcile(&open, &[]))
+            .unwrap_or_else(|| Pane::with_streams(&open));
+        self.focus_tab(self.active);
+        self.dock_dirty = false;
+    }
+
+    /// `--split`: the first two streams side by side (nothing when the restored layout
+    /// already has several windows).
+    pub fn split_first_two(&mut self) {
+        if self.tabs.len() > 1 && self.dock.leaf_paths().len() == 1 {
+            let second = self.tabs[1].engine.path.clone();
+            self.dock = self
+                .dock
+                .clone()
+                .split_with(&[], Dir::Horizontal, true, &second);
+        }
+    }
+
+    /// The tree as `[dock] layout`: standard input left out, the floating windows of
+    /// the layout it came from kept (their streams leave the main surface). `None`
+    /// when no stream is left for the main surface.
+    fn dock_ron(&self) -> Option<String> {
+        let mut pane = self.dock.clone();
+        for t in self.tabs.iter().filter(|t| t.engine.is_stdin()) {
+            pane = pane.remove_stream(&t.engine.path)?;
+        }
+        let open: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter(|t| !t.engine.is_stdin())
+            .map(|t| t.engine.path.clone())
+            .collect();
+        let layout = match &self.dock_layout {
+            Some(saved) => {
+                let mut layout = saved.clone();
+                layout.retain_window_streams(&open);
+                for w in layout.window_streams() {
+                    pane = pane.remove_stream(&w)?;
+                }
+                layout.set_main_pane(&pane);
+                layout
+            }
+            None => DockLayout::from_pane(&pane),
+        };
+        Some(layout.to_ron())
+    }
+
+    fn set_dock(&mut self, dock: Pane) {
+        if dock != self.dock {
+            self.dock = dock;
+            self.dock_dirty = true;
+        }
+    }
+
+    fn active_path(&self) -> PathBuf {
+        self.tabs[self.active].engine.path.clone()
+    }
+
+    /// The path of the leaf of the focused stream.
+    fn focused_leaf(&self) -> Vec<bool> {
+        self.dock
+            .find_stream(&self.active_path())
+            .unwrap_or_default()
     }
 
     /// Polls every engine (hidden streams keep tailing), applies what the engines ask the
@@ -564,7 +686,7 @@ impl App {
         };
         Signature {
             active: self.active,
-            split: self.split,
+            dock: Some(self.dock.clone()),
             panes: self.visible_tabs().into_iter().map(pane).collect(),
             unseen_tabs: self
                 .tabs
@@ -705,11 +827,22 @@ impl App {
     /// configuration file (tests, benchmarks) nothing is written.
     pub fn save_config(&mut self) {
         self.last_save = Instant::now();
+        let layout = if self.dock_dirty {
+            self.dock_ron()
+        } else {
+            None
+        };
         let Some(settings) = self.settings.as_mut() else {
             return;
         };
         if settings.path.as_os_str().is_empty() {
             return;
+        }
+        if self.dock_dirty {
+            if layout.is_some() {
+                settings.config.dock_layout = layout;
+            }
+            self.dock_dirty = false;
         }
         for tab in &mut self.tabs {
             crate::workspace::save_changes(&mut tab.engine, &mut settings.config, false);
@@ -866,7 +999,9 @@ impl App {
         self.tabs = engines.into_iter().map(Tab::new).collect();
         self.tabs.extend(stdin);
         self.active = 0;
-        self.split = None;
+        self.restore_dock(plan.dock_layout.as_deref());
+        // The session's layout becomes the configuration's, as in the GUI.
+        self.dock_dirty = true;
         let mut notes: Vec<String> = errors;
         notes.extend(crate::tui::workspace::missing_notice(&plan.missing));
         self.message = Some(if notes.is_empty() {
@@ -926,9 +1061,8 @@ impl App {
         true
     }
 
-    /// Writes the open streams and their state to `file` (no dock layout: the terminal
-    /// has none, and the GUI then opens the streams as tabs), makes it the current
-    /// session and puts it first in the recent sessions.
+    /// Writes the open streams, their state and the dock layout to `file`, makes it the
+    /// current session and puts it first in the recent sessions.
     pub fn save_session(&mut self, file: &Path) {
         let mut streams: Vec<crate::session::StreamEntry> = Vec::new();
         for t in self.tabs.iter().filter(|t| !t.engine.is_stdin()) {
@@ -942,7 +1076,7 @@ impl App {
         let count = streams.len();
         let session = crate::session::Session {
             streams,
-            dock_layout: None,
+            dock_layout: self.dock_ron(),
         };
         if let Err(e) = session.save_to(file) {
             self.message = Some(format!("Cannot save {}: {e}", file.display()));
@@ -1038,7 +1172,13 @@ impl App {
                         s.config.add_recent_file(&engine.path);
                     }
                 }
+                let leaf = self.focused_leaf();
+                let path = engine.path.clone();
                 self.tabs.push(Tab::new(engine));
+                // The new stream is a tab of the focused window, as in the GUI.
+                let mut dock = self.dock.clone();
+                dock.add_tab(&leaf, DockTab::LogStream(path));
+                self.set_dock(dock);
                 self.focus_tab(self.tabs.len() - 1);
             }
             OpenOutcome::OpenEntry(entry) => self.open_file(&entry),
@@ -1249,18 +1389,174 @@ impl App {
         });
     }
 
-    /// Puts stream `i` in the focused window; in a split, choosing the stream of the
-    /// other window swaps the two.
+    /// Focuses stream `i`, shown in its window (a stream the tree lacks joins the first
+    /// window).
     fn focus_tab(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
         }
-        if let Some(s) = self.split.as_mut() {
-            if s.other == i {
-                s.other = self.active;
+        self.active = i;
+        let path = self.active_path();
+        let mut dock = self.dock.clone();
+        if !dock.show(&path) {
+            let open = self.open_paths();
+            dock = dock
+                .reconcile(&open, &[])
+                .unwrap_or_else(|| Pane::with_streams(&open));
+            dock.show(&path);
+        }
+        self.set_dock(dock);
+    }
+
+    /// `Tab` with several windows: the stream of the next (or previous) window.
+    fn cycle_pane(&mut self, forward: bool) {
+        let leaves = self.dock.leaf_paths();
+        let n = leaves.len();
+        let here = self.focused_leaf();
+        let cur = leaves.iter().position(|l| *l == here).unwrap_or(0);
+        for k in 1..=n {
+            let at = if forward {
+                (cur + k) % n
+            } else {
+                (cur + n - k % n) % n
+            };
+            let shown = self
+                .shown_in(&leaves[at])
+                .or_else(|| match self.dock.get(&leaves[at]) {
+                    Some(Pane::Leaf { tabs, .. }) => tabs
+                        .iter()
+                        .filter_map(DockTab::stream)
+                        .find_map(|p| self.tab_index(p)),
+                    _ => None,
+                });
+            if let Some(i) = shown {
+                self.focus_tab(i);
+                return;
             }
         }
-        self.active = i;
+    }
+
+    /// `s` / `_`: a new window beside (or below) the focused one with the next stream:
+    /// the next tab of the focused window, else the next stream by number.
+    fn split_focused(&mut self, dir: Dir) {
+        let n = self.tabs.len();
+        if n < 2 {
+            self.message = Some("A split needs two streams: o opens another".into());
+            return;
+        }
+        let leaf = self.focused_leaf();
+        let me = self.active_path();
+        let in_leaf: Vec<PathBuf> = match self.dock.get(&leaf) {
+            Some(Pane::Leaf { tabs, .. }) => tabs
+                .iter()
+                .filter_map(|t| t.stream().map(Path::to_path_buf))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let same = |p: &PathBuf| crate::paths::paths_equal(p, &me);
+        let pos = in_leaf.iter().position(same).unwrap_or(0);
+        let other = in_leaf
+            .iter()
+            .cycle()
+            .skip(pos + 1)
+            .take(in_leaf.len())
+            .find(|p| !same(p))
+            .cloned()
+            .unwrap_or_else(|| self.tabs[(self.active + 1) % n].engine.path.clone());
+        let dock = self.dock.clone().split_with(&leaf, dir, true, &other);
+        self.set_dock(dock);
+        self.focus_tab(self.active);
+    }
+
+    /// `Ctrl+W`: the focused window closes; its tabs join the window beside it.
+    fn close_pane(&mut self) {
+        let leaf = self.focused_leaf();
+        if leaf.is_empty() {
+            self.message = Some("One window: nothing to close".into());
+            return;
+        }
+        let dock = self.dock.clone().close_leaf(&leaf);
+        self.set_dock(dock);
+        self.focus_tab(self.active);
+    }
+
+    /// `Alt+arrows`: the nearest divider of the focused window moves by `delta`.
+    fn resize_pane(&mut self, dir: Dir, delta: f32) {
+        let leaf = self.focused_leaf();
+        let Some((split, _)) = self.dock.split_above(&leaf, dir) else {
+            self.message = Some("No divider that way".into());
+            return;
+        };
+        if let Some(Pane::Split { fraction, .. }) = self.dock.get(&split) {
+            let value = fraction + delta;
+            let mut dock = self.dock.clone();
+            dock.set_fraction(&split, value);
+            self.set_dock(dock);
+        }
+    }
+
+    /// `<` / `>`: the focused stream becomes a tab of the previous / next window.
+    fn move_to_pane(&mut self, forward: bool) {
+        let leaves = self.dock.leaf_paths();
+        let n = leaves.len();
+        if n < 2 {
+            self.message = Some("One window: s splits it".into());
+            return;
+        }
+        let here = self.focused_leaf();
+        let cur = leaves.iter().position(|l| *l == here).unwrap_or(0);
+        let target = &leaves[if forward {
+            (cur + 1) % n
+        } else {
+            (cur + n - 1) % n
+        }];
+        let dock = self.dock.clone().move_stream(target, &self.active_path());
+        self.set_dock(dock);
+        self.focus_tab(self.active);
+    }
+
+    /// `Ctrl+PgUp/PgDn`: the previous / next tab of the focused window.
+    fn step_in_pane(&mut self, forward: bool) {
+        let leaf = self.focused_leaf();
+        self.show_leaf_tab(&leaf, None, forward);
+    }
+
+    /// Shows tab `pos` of the leaf at `leaf` (or the next / previous one when `None`),
+    /// focusing its stream.
+    fn show_leaf_tab(&mut self, leaf: &[bool], pos: Option<usize>, forward: bool) {
+        let Some(Pane::Leaf { tabs, active }) = self.dock.get(leaf).cloned() else {
+            return;
+        };
+        let n = tabs.len();
+        let next = match pos {
+            Some(p) => p.min(n - 1),
+            None if n < 2 => {
+                self.message = Some("One tab in this window".into());
+                return;
+            }
+            None if forward => (active + 1) % n,
+            None => (active + n - 1) % n,
+        };
+        let mut dock = self.dock.clone();
+        if let Some(Pane::Leaf { active, .. }) = dock.get_mut(leaf) {
+            *active = next;
+        }
+        self.set_dock(dock);
+        if let Some(i) = tabs[next].stream().and_then(|p| self.tab_index(p)) {
+            self.active = i;
+        }
+    }
+
+    /// A stream dropped on the leaf at `leaf`: an edge splits it, the centre adds a tab.
+    fn drop_stream(&mut self, stream: &Path, leaf: &[bool], zone: Zone) {
+        let dock = match zone.split() {
+            Some((dir, after)) => self.dock.clone().split_with(leaf, dir, after, stream),
+            None => self.dock.clone().move_stream(leaf, stream),
+        };
+        self.set_dock(dock);
+        if let Some(i) = self.tab_index(stream) {
+            self.focus_tab(i);
+        }
     }
 
     pub fn apply(&mut self, action: Action) {
@@ -1281,12 +1577,10 @@ impl App {
         }
         match action {
             Action::Quit => self.quit = true,
-            // In a split `Tab` moves the focus between the two windows; otherwise it
+            // With several windows `Tab` moves the focus between them; otherwise it
             // shows the next stream.
-            Action::NextTab | Action::PrevTab if self.split.is_some() => {
-                if let Some(s) = self.split.as_mut() {
-                    std::mem::swap(&mut self.active, &mut s.other);
-                }
+            Action::NextTab | Action::PrevTab if self.dock.leaf_paths().len() > 1 => {
+                self.cycle_pane(action == Action::NextTab)
             }
             Action::NextTab => self.focus_tab((self.active + 1) % n_tabs),
             Action::PrevTab => self.focus_tab((self.active + n_tabs - 1) % n_tabs),
@@ -1310,7 +1604,17 @@ impl App {
                 None => self.message = Some("No row for a note".into()),
             },
             Action::EditExclude => self.open_prompt(PromptKind::Exclude),
-            Action::CycleSplit => self.cycle_split(),
+            Action::SplitRight => self.split_focused(Dir::Horizontal),
+            Action::SplitDown => self.split_focused(Dir::Vertical),
+            Action::ClosePane => self.close_pane(),
+            Action::ResizeLeft => self.resize_pane(Dir::Horizontal, -RESIZE_STEP),
+            Action::ResizeRight => self.resize_pane(Dir::Horizontal, RESIZE_STEP),
+            Action::ResizeUp => self.resize_pane(Dir::Vertical, -RESIZE_STEP),
+            Action::ResizeDown => self.resize_pane(Dir::Vertical, RESIZE_STEP),
+            Action::MovePrevPane => self.move_to_pane(false),
+            Action::MoveNextPane => self.move_to_pane(true),
+            Action::PrevInPane => self.step_in_pane(false),
+            Action::NextInPane => self.step_in_pane(true),
             Action::CopyOrQuit if !self.tabs[self.active].engine.has_selection() => {
                 self.quit = true
             }
@@ -1382,6 +1686,9 @@ impl App {
                 true
             }
             MouseEventKind::Down(MouseButton::Left) => self.on_click(ev),
+            MouseEventKind::Drag(MouseButton::Left) if self.dock_drag.is_some() => {
+                self.on_dock_drag(ev.column, ev.row)
+            }
             MouseEventKind::Drag(MouseButton::Left) => {
                 let Some(tab) = self.drag.filter(|&t| !self.tabs[t].is_hex()) else {
                     return false;
@@ -1405,9 +1712,60 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag = None;
-                false
+                match self.dock_drag.take() {
+                    Some(DockDrag::Move {
+                        stream,
+                        drop: Some((leaf, zone, _)),
+                        ..
+                    }) => {
+                        self.drop_stream(&stream, &leaf, zone);
+                        true
+                    }
+                    Some(_) => true,
+                    None => false,
+                }
             }
             _ => false,
+        }
+    }
+
+    fn start_move(&mut self, tab: usize, ev: MouseEvent) {
+        self.dock_drag = Some(DockDrag::Move {
+            stream: self.tabs[tab].engine.path.clone(),
+            from: (ev.column, ev.row),
+            drop: None,
+        });
+    }
+
+    /// A drag of a divider (the split follows the pointer) or of a window (the drop
+    /// zone under the pointer is shown).
+    fn on_dock_drag(&mut self, col: u16, row: u16) -> bool {
+        match self.dock_drag.clone() {
+            Some(DockDrag::Divider { path, dir, split }) => {
+                let mut dock = self.dock.clone();
+                dock.set_fraction(&path, dock::fraction_at(split, dir, col, row));
+                let changed = dock != self.dock;
+                self.set_dock(dock);
+                changed
+            }
+            Some(DockDrag::Move { stream, from, .. }) => {
+                let at = ratatui::layout::Position::new(col, row);
+                let drop = if (col, row) == from {
+                    None
+                } else {
+                    self.hits
+                        .leaves
+                        .iter()
+                        .find(|l| l.area.contains(at))
+                        .map(|l| {
+                            let zone = dock::zone_at(l.area, col, row);
+                            (l.path.clone(), zone, dock::zone_rect(l.area, zone))
+                        })
+                };
+                self.dock_drag = Some(DockDrag::Move { stream, from, drop });
+                true
+            }
+            None => false,
         }
     }
 
@@ -1478,7 +1836,30 @@ impl App {
                 self.show_help = false;
             }
             Target::DialogBody | Target::Nothing => return false,
-            Target::TabTitle(i) | Target::WindowTitle(i) | Target::Window(i) => self.focus_tab(i),
+            Target::Divider(i) => {
+                if let Some(d) = self.hits.dividers.get(i) {
+                    self.dock_drag = Some(DockDrag::Divider {
+                        path: d.path.clone(),
+                        dir: d.dir,
+                        split: d.split,
+                    });
+                }
+            }
+            Target::LeafTab(i) => {
+                let Some((_, leaf, pos)) = self.hits.leaf_tabs.get(i).cloned() else {
+                    return false;
+                };
+                self.show_leaf_tab(&leaf, Some(pos), true);
+                if let Some(i) = self.shown_in(&leaf) {
+                    self.start_move(i, ev);
+                }
+            }
+            // A title is also where a window is taken to be moved.
+            Target::TabTitle(i) | Target::WindowTitle(i) => {
+                self.focus_tab(i);
+                self.start_move(i, ev);
+            }
+            Target::Window(i) => self.focus_tab(i),
             Target::Row { tab, row } if self.tabs[tab].is_hex() => {
                 // A HEX row takes the cursor; there is nothing to select or bookmark.
                 self.focus_tab(tab);
@@ -1516,25 +1897,6 @@ impl App {
             }
         }
         true
-    }
-
-    fn cycle_split(&mut self) {
-        if self.tabs.len() < 2 {
-            self.message = Some("Split needs two files".into());
-            return;
-        }
-        let other = (self.active + 1) % self.tabs.len();
-        self.split = match self.split.map(|s| s.dir) {
-            None => Some(Split {
-                dir: SplitDir::SideBySide,
-                other,
-            }),
-            Some(SplitDir::SideBySide) => self.split.map(|s| Split {
-                dir: SplitDir::Stacked,
-                ..s
-            }),
-            Some(SplitDir::Stacked) => None,
-        };
     }
 
     fn apply_to_tab(&mut self, action: Action) {
@@ -1689,25 +2051,7 @@ impl App {
         if strip > 0 {
             self.draw_tabs(frame, tabs_area);
         }
-        match self.split {
-            None => self.draw_stream(frame, main_area, self.active, true),
-            Some(s) => {
-                let layout = match s.dir {
-                    SplitDir::SideBySide => Layout::horizontal([Constraint::Fill(1); 2]),
-                    SplitDir::Stacked => Layout::vertical([Constraint::Fill(1); 2]),
-                };
-                let [first, second] = layout.areas(main_area);
-                // The windows keep their places when the focus moves: the lower-numbered
-                // stream is on the left (or on top).
-                let (a, b) = if self.active < s.other {
-                    (self.active, s.other)
-                } else {
-                    (s.other, self.active)
-                };
-                self.draw_stream(frame, first, a, a == self.active);
-                self.draw_stream(frame, second, b, b == self.active);
-            }
-        }
+        self.draw_dock(frame, main_area);
         self.draw_status(frame, status_area);
         if self.show_help {
             self.draw_help(frame, main_area);
@@ -1759,15 +2103,133 @@ impl App {
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
+    /// The dock's windows, and while a window is dragged the part of the window under
+    /// the pointer it would fill.
+    fn draw_dock(&mut self, frame: &mut Frame, area: Rect) {
+        let (leaves, dividers) = dock::layout(&self.dock, area);
+        for leaf in &leaves {
+            let Some(Pane::Leaf { tabs, active }) = self.dock.get(&leaf.path).cloned() else {
+                continue;
+            };
+            match self.shown_in(&leaf.path) {
+                Some(idx) => self.draw_stream(frame, leaf.area, idx, &leaf.path, &tabs),
+                None => self.draw_panel(frame, leaf.area, &leaf.path, &tabs, active),
+            }
+        }
+        if let Some(DockDrag::Move {
+            drop: Some((_, _, preview)),
+            ..
+        }) = &self.dock_drag
+        {
+            let block = Block::bordered()
+                .border_set(self.palette.border_set(Chrome::Focused))
+                .border_style(
+                    Style::default()
+                        .fg(self.palette.accent())
+                        .add_modifier(Modifier::BOLD),
+                )
+                .title_top(Line::from(" drop here ").centered());
+            frame.render_widget(block, *preview);
+        }
+        self.hits.leaves = leaves;
+        self.hits.dividers = dividers;
+    }
+
+    /// The top-border title of a window: `[#N] name` alone, or every tab of its leaf
+    /// with the shown one marked, each clickable (and draggable).
+    fn leaf_title(
+        &mut self,
+        area: Rect,
+        leaf: &[bool],
+        tabs: &[DockTab],
+        shown: usize,
+        style: Style,
+    ) -> Vec<Span<'static>> {
+        let name = |me: &Self, k: usize| match tabs[k].stream().and_then(|p| me.tab_index(p)) {
+            Some(i) if k == shown => format!(" [#{}] {} ", i + 1, me.tabs[i].title),
+            Some(i) => format!(" {}:{} ", i + 1, me.tabs[i].title),
+            None => format!(" {} ", panel_name(&tabs[k])),
+        };
+        if tabs.len() < 2 {
+            return vec![Span::styled(name(self, shown), style)];
+        }
+        let dim = Style::default().fg(self.palette.dim());
+        let mut spans = Vec::with_capacity(tabs.len() * 2);
+        let right = area.right().saturating_sub(1);
+        let mut x = area.x + 1;
+        for k in 0..tabs.len() {
+            let span = Span::styled(name(self, k), if k == shown { style } else { dim });
+            let w = (span.width() as u16).min(right.saturating_sub(x));
+            if w > 0 {
+                self.hits
+                    .leaf_tabs
+                    .push((Rect::new(x, area.y, w, 1), leaf.to_vec(), k));
+            }
+            x = x.saturating_add(span.width() as u16 + 1);
+            spans.push(span);
+            spans.push(Span::styled("|", dim));
+        }
+        spans.pop();
+        spans
+    }
+
+    /// A leaf showing one of the GUI's panels (Filters, Settings...): its tabs, and a
+    /// line saying the panel lives in the GUI.
+    fn draw_panel(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        leaf: &[bool],
+        tabs: &[DockTab],
+        shown: usize,
+    ) {
+        let style = Style::default().fg(self.palette.dim());
+        let title = self.leaf_title(area, leaf, tabs, shown, style);
+        let block = Block::bordered()
+            .style(self.palette.window())
+            .border_set(self.palette.border_set(Chrome::Plain))
+            .border_style(self.palette.border_style(Chrome::Plain))
+            .title_top(Line::from(title));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                " A panel of the GUI. Ctrl+PgUp/PgDn: the other tabs of this window",
+                style,
+            )),
+            inner,
+        );
+    }
+
     /// One stream window: title and follow state in the top border, counts and progress
     /// bottom left, filters and search bottom right, the rows inside.
-    fn draw_stream(&mut self, frame: &mut Frame, area: Rect, idx: usize, focused: bool) {
+    fn draw_stream(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        idx: usize,
+        leaf: &[bool],
+        tabs: &[DockTab],
+    ) {
         let palette = self.palette;
+        let focused = idx == self.active;
         let chrome = if focused {
             Chrome::Focused
         } else {
             Chrome::Plain
         };
+        let title_style = if focused {
+            Style::default()
+                .fg(palette.accent())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.dim())
+        };
+        let shown = match self.dock.get(leaf) {
+            Some(Pane::Leaf { active, .. }) => *active,
+            _ => 0,
+        };
+        let mut title = self.leaf_title(area, leaf, tabs, shown, title_style);
         let tab = &mut self.tabs[idx];
         let e = &tab.engine;
         let follow = if e.follow_tail {
@@ -1778,22 +2240,13 @@ impl App {
         } else {
             Span::styled(" PAUSED ", Style::default().fg(palette.dim()))
         };
-        let title_style = if focused {
-            Style::default()
-                .fg(palette.accent())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.dim())
-        };
+        title.push(follow);
+        title.push(Span::raw(" "));
         let block = Block::bordered()
             .style(palette.window())
             .border_set(palette.border_set(chrome))
             .border_style(palette.border_style(chrome))
-            .title_top(Line::from(vec![
-                Span::styled(format!(" [#{}] {} ", idx + 1, tab.title), title_style),
-                follow,
-                Span::raw(" "),
-            ]))
+            .title_top(Line::from(title))
             .title_bottom(
                 Line::from(format!(" {} ", counts_text(e, tab.is_hex(), tab.hex_width)))
                     .style(title_style),
@@ -2459,9 +2912,30 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::CycleCollapse),
     ),
     (
-        "s",
-        "split: side by side, stacked, off",
-        Some(Action::CycleSplit),
+        "s |  _",
+        "new window beside / below, with the next stream",
+        Some(Action::SplitRight),
+    ),
+    (
+        "Ctrl+W",
+        "close the window (its tabs join the next)",
+        Some(Action::ClosePane),
+    ),
+    (
+        "< >",
+        "move the stream to the previous / next window",
+        Some(Action::MoveNextPane),
+    ),
+    (
+        "Ctrl+PgUp/PgDn",
+        "previous / next tab of the window",
+        Some(Action::NextInPane),
+    ),
+    ("Alt+arrows", "move the window's divider", None),
+    (
+        "mouse",
+        "drag a divider: resize; a title: move (edge splits)",
+        None,
     ),
     (
         "Tab  Alt+1..9",
@@ -2539,6 +3013,22 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ("?  F1", "this help", None),
     ("q", "quit", Some(Action::Quit)),
 ];
+
+/// The name of a tab that is not an open stream: a GUI panel, or a file this run does
+/// not have open.
+fn panel_name(tab: &DockTab) -> String {
+    match tab {
+        DockTab::LogStream(p) => p
+            .file_name()
+            .map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into()),
+        DockTab::Filters => "Filters".into(),
+        DockTab::Highlights => "Highlights".into(),
+        DockTab::Settings => "Settings".into(),
+        DockTab::FindResults => "Find results".into(),
+        DockTab::Scratchpad => "Scratchpad".into(),
+        DockTab::Compare => "Compare".into(),
+    }
+}
 
 /// The buttons of the status bar: key, label, command; drawn as `[? help]`, as many as
 /// fit the width.
@@ -4127,7 +4617,7 @@ mod tests {
     #[test]
     fn ascii_mode_split_and_prompt_dialog() {
         let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], true);
-        app.apply(Action::CycleSplit);
+        app.apply(Action::SplitRight);
         let screen = render(&mut app, 80, 14);
         // Tab strip on row 0, then two windows side by side, the focused one with `=`.
         let (left, right) = screen[1].split_at(40);
@@ -4176,7 +4666,7 @@ mod tests {
     #[test]
     fn clicking_the_second_window_of_a_split_focuses_it() {
         let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
-        app.apply(Action::CycleSplit);
+        app.apply(Action::SplitRight);
         render(&mut app, 80, 14);
         assert_eq!(app.active, 0);
         // Somewhere on the right window's rows.
@@ -4199,7 +4689,7 @@ mod tests {
             .map(|i| format!("2026-09-28 10:00:00 INFO line {i}\n"))
             .collect();
         let (mut app, _dir) = app_with(&[("a.log", &body), ("b.log", &body)], false);
-        app.apply(Action::CycleSplit);
+        app.apply(Action::SplitRight);
         render(&mut app, 80, 14);
         // Both windows follow the end: the wheel over the right one pauses only it.
         assert!(app.on_mouse(mouse(MouseEventKind::ScrollUp, 60, 5, false)));
@@ -4238,5 +4728,146 @@ mod tests {
         assert!(app.on_mouse(click(0, 0)));
         assert!(app.prompt.is_none());
         assert_eq!(app.tabs[0].engine.include_filter(), "");
+    }
+
+    fn drag(column: u16, row: u16) -> MouseEvent {
+        mouse(MouseEventKind::Drag(MouseButton::Left), column, row, false)
+    }
+
+    fn release(column: u16, row: u16) -> MouseEvent {
+        mouse(MouseEventKind::Up(MouseButton::Left), column, row, false)
+    }
+
+    fn path_of(app: &App, i: usize) -> PathBuf {
+        app.tabs[i].engine.path.clone()
+    }
+
+    #[test]
+    fn a_dragged_divider_resizes_and_a_dragged_title_moves_the_window() {
+        let files = [("a.log", LOG), ("b.log", LOG), ("c.log", LOG)];
+        let (mut app, _dir) = app_with(&files, false);
+        // One window with three tabs; `s` puts the next one, b, on the right.
+        app.apply(Action::SplitRight);
+        let (a, b, c) = (path_of(&app, 0), path_of(&app, 1), path_of(&app, 2));
+        assert_eq!(app.dock.find_stream(&a), Some(vec![false]));
+        assert_eq!(app.dock.find_stream(&c), Some(vec![false]));
+        assert_eq!(app.dock.find_stream(&b), Some(vec![true]));
+        let screen = render(&mut app, 80, 14);
+        assert!(screen[1].contains("[#1] a.log") && screen[1].contains("3:c.log"));
+
+        // The divider between the windows, dragged 8 columns right: 48 of 80.
+        app.on_mouse(click(39, 5));
+        assert!(app.dock_drag.is_some());
+        assert!(app.on_mouse(drag(47, 5)));
+        assert!(app.on_mouse(release(47, 5)));
+        assert!(matches!(app.dock, Pane::Split { fraction, .. } if fraction == 0.6));
+        let screen = render(&mut app, 80, 14);
+        let row: Vec<char> = screen[5].chars().collect();
+        assert_eq!((row[47], row[48]), ('║', '│'), "{screen:#?}");
+
+        // b's title dropped on the left edge of the other window: b goes left of it.
+        assert!(app.on_mouse(click(70, 1)));
+        assert_eq!(app.active, 1);
+        assert!(app.on_mouse(drag(5, 8)));
+        let screen = render(&mut app, 80, 14);
+        assert!(
+            screen.iter().any(|l| l.contains("drop here")),
+            "{screen:#?}"
+        );
+        assert!(app.on_mouse(release(5, 8)));
+        assert_eq!(app.dock.find_stream(&b), Some(vec![false]));
+        assert_eq!(app.dock.find_stream(&a), Some(vec![true]));
+        assert!(app.dock_dirty);
+
+        // A click on c's tab in the border of the right window shows and focuses it.
+        let screen = render(&mut app, 80, 14);
+        let Some(col) = screen[1].find("3:c.log") else {
+            panic!("{screen:#?}");
+        };
+        let col = screen[1][..col].chars().count() as u16;
+        assert!(app.on_mouse(click(col + 1, 1)));
+        assert!(app.on_mouse(release(col + 1, 1)));
+        assert_eq!(app.active, 2);
+        let screen = render(&mut app, 80, 14);
+        assert!(screen[1].contains("[#3] c.log"), "{screen:#?}");
+    }
+
+    #[test]
+    fn keys_split_move_resize_and_close_windows() {
+        let files = [("a.log", LOG), ("b.log", LOG), ("c.log", LOG)];
+        let (mut app, _dir) = app_with(&files, false);
+        let (a, b, c) = (path_of(&app, 0), path_of(&app, 1), path_of(&app, 2));
+        app.apply(Action::ResizeLeft);
+        assert_eq!(app.message.as_deref(), Some("No divider that way"));
+        // `_`: b below.
+        app.apply(Action::SplitDown);
+        assert!(matches!(
+            app.dock,
+            Pane::Split {
+                dir: Dir::Vertical,
+                ..
+            }
+        ));
+        app.apply(Action::ResizeDown);
+        assert!(matches!(app.dock, Pane::Split { fraction, .. } if (fraction - 0.55).abs() < 1e-6));
+        // `>`: a joins b's window as its shown tab.
+        app.apply(Action::MoveNextPane);
+        assert_eq!(app.dock.find_stream(&a), Some(vec![true]));
+        assert_eq!(app.dock.find_stream(&c), Some(vec![false]));
+        assert_eq!(app.shown_in(&[true]), Some(0));
+        // Ctrl+PgDn shows the other tab of the window, b.
+        app.apply(Action::NextInPane);
+        assert_eq!(app.active, 1);
+        // Tab goes to the other window.
+        app.apply(Action::NextTab);
+        assert_eq!(app.active, 2);
+        // Ctrl+W: c's window closes, c joins the remaining one.
+        app.apply(Action::ClosePane);
+        assert_eq!(app.dock.leaf_paths(), vec![Vec::<bool>::new()]);
+        assert_eq!(app.dock.streams(), vec![b.clone(), a.clone(), c.clone()]);
+        app.apply(Action::ClosePane);
+        assert_eq!(app.message.as_deref(), Some("One window: nothing to close"));
+        // Every stream is still drawn somewhere.
+        let screen = render(&mut app, 80, 14);
+        assert!(screen[1].contains("[#3] c.log"), "{screen:#?}");
+    }
+
+    #[test]
+    fn the_layout_is_saved_for_the_gui_and_comes_back_with_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let b = dir.path().join("b.log");
+        std::fs::write(&a, LOG).unwrap();
+        std::fs::write(&b, LOG).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        let gui = crate::config::FastTailConfig {
+            open_files: vec![a.clone(), b.clone()],
+            ..Default::default()
+        };
+        gui.save_to(&ini).unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::SplitDown);
+        app.save_config();
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        let text = saved.dock_layout.clone().expect("layout saved");
+        assert_eq!(
+            DockLayout::parse(&text).and_then(|l| l.main_pane()),
+            Some(app.dock.clone())
+        );
+
+        // The next run starts with the same windows.
+        let mut again = app_over(&ini);
+        again.restore_dock(saved.dock_layout.as_deref());
+        assert_eq!(again.dock, app.dock);
+
+        // A session keeps its layout too.
+        let session = dir.path().join("two.fasttail-session.ini");
+        app.save_session(&session);
+        app.apply(Action::ClosePane);
+        assert_eq!(app.dock.leaf_paths().len(), 1);
+        app.load_session(&session);
+        assert_eq!(app.dock.leaf_paths().len(), 2, "{:?}", app.message);
+        assert_eq!(app.dock.find_stream(&b), Some(vec![true]));
     }
 }
