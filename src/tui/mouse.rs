@@ -51,6 +51,8 @@ pub struct HitMap {
     pub floats: Vec<(Rect, usize)>,
     /// The area of the windows (between the tab strip and the status bar).
     pub main: Rect,
+    /// The `[x]` of each stream window, top right: the window it closes a stream of.
+    pub close_buttons: Vec<(Rect, Place)>,
 }
 
 /// What a cell of the screen is.
@@ -77,6 +79,9 @@ pub enum Target {
     FloatTitle(usize),
     /// The bottom-right corner of a floating window: dragged, it resizes the window.
     FloatCorner(usize),
+    /// The `[x]` of a window (its position in `HitMap::close_buttons`): closes the
+    /// stream the window shows.
+    Close(usize),
     /// The top border of a window, where its `[#N]` title sits.
     WindowTitle(usize),
     /// A drawn row of a window (a view row of the engine).
@@ -117,6 +122,13 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
     }
     // Floating windows lie over the dock: the topmost under the pointer takes it.
     if let Some((r, f)) = map.floats.iter().rev().find(|(r, _)| r.contains(p)) {
+        let close = map
+            .close_buttons
+            .iter()
+            .position(|(b, place)| *place == Place::Float(*f) && b.contains(p));
+        if let Some(i) = close {
+            return Target::Close(i);
+        }
         let tab = map
             .leaf_tabs
             .iter()
@@ -131,6 +143,13 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
             return Target::FloatCorner(*f);
         }
         return window_target(map, p);
+    }
+    if let Some(i) = map
+        .close_buttons
+        .iter()
+        .position(|(b, place)| matches!(place, Place::Dock(_)) && b.contains(p))
+    {
+        return Target::Close(i);
     }
     if let Some(i) = map.leaf_tabs.iter().position(|(r, _, _)| r.contains(p)) {
         return Target::LeafTab(i);
@@ -263,6 +282,12 @@ mod tests {
             split: Rect::new(0, 1, 80, 10),
             handle: Rect::new(39, 2, 2, 9),
         });
+        map.close_buttons
+            .push((Rect::new(46, 3, 3, 1), Place::Float(0)));
+        map.close_buttons
+            .push((Rect::new(76, 1, 3, 1), Place::Dock(vec![true])));
+        assert_eq!(hit_test(&map, 47, 3), Target::Close(0));
+        assert_eq!(hit_test(&map, 77, 1), Target::Close(1));
         assert_eq!(hit_test(&map, 35, 3), Target::FloatTitle(0));
         assert_eq!(hit_test(&map, 49, 8), Target::FloatCorner(0));
         assert_eq!(hit_test(&map, 48, 8), Target::FloatCorner(0));

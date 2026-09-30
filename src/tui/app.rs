@@ -2421,6 +2421,16 @@ impl App {
             }
             // A floating window: raised and focused, then moved by its title or resized
             // by its bottom-right corner.
+            // `[x]`: the stream the window shows closes, as with Ctrl+W.
+            Target::Close(i) => {
+                let Some((_, place)) = self.hits.close_buttons.get(i).cloned() else {
+                    return false;
+                };
+                if let Some(idx) = self.shown_at(&place) {
+                    self.focus_tab(idx);
+                    self.close_stream();
+                }
+            }
             Target::FloatTitle(f) | Target::FloatCorner(f) => {
                 let Some(&(rect, _)) = self.hits.floats.iter().find(|(_, i)| *i == f) else {
                     return false;
@@ -2861,6 +2871,13 @@ impl App {
             _ => 0,
         };
         let mut title = self.leaf_title(area, place, tabs, shown, title_style);
+        // The `[x]` sits right-aligned in the top border, before the corner.
+        if area.width >= 8 {
+            self.hits.close_buttons.push((
+                Rect::new(area.right().saturating_sub(4), area.y, 3, 1),
+                place.clone(),
+            ));
+        }
         let tab = &mut self.tabs[idx];
         let e = &tab.engine;
         let follow = if e.follow_tail {
@@ -2873,11 +2890,18 @@ impl App {
         };
         title.push(follow);
         title.push(Span::raw(" "));
+        let close = Span::styled(
+            "[x]",
+            Style::default()
+                .fg(palette.accent())
+                .add_modifier(Modifier::BOLD),
+        );
         let block = Block::bordered()
             .style(palette.window())
             .border_set(palette.border_set(chrome))
             .border_style(palette.border_style(chrome))
             .title_top(Line::from(title))
+            .title_top(Line::from(close).right_aligned())
             .title_bottom(
                 Line::from(format!(" {} ", counts_text(e, tab.is_hex(), tab.hex_width)))
                     .style(title_style),
@@ -3679,6 +3703,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     ("double click", "toggle the row's bookmark", None),
     ("wheel", "scroll the window under the pointer", None),
+    ("[x]", "top right: close the window's stream", None),
     (
         "drag corner",
         "resize a floating window (bottom right)",
@@ -5875,6 +5900,33 @@ mod tests {
         assert!(app.on_mouse(release(30, 12)));
         assert_eq!(app.floats.len(), 1);
         assert!(app.dock.find_stream(&a).is_none());
+    }
+
+    #[test]
+    fn the_x_in_a_window_closes_its_stream() {
+        let files = [("a.log", LOG), ("b.log", LOG)];
+        let (mut app, _dir) = app_with(&files, false);
+        app.apply(Action::SplitRight);
+        let screen = render(&mut app, 80, 14);
+        // Each window has its [x], top right, before the corner.
+        let row: Vec<char> = screen[1].chars().collect();
+        assert_eq!(row[36..39].iter().collect::<String>(), "[x]", "{screen:#?}");
+        assert_eq!(row[76..79].iter().collect::<String>(), "[x]", "{screen:#?}");
+        // A click on b's [x] closes b; its window goes with it.
+        assert!(app.on_mouse(click(77, 1)));
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].title, "a.log");
+        assert_eq!(app.dock.leaf_paths(), vec![Vec::<bool>::new()]);
+        // The last stream stays, as with Ctrl+W (one stream: no strip, the window on row 0).
+        render(&mut app, 80, 14);
+        assert!(app.on_mouse(click(77, 0)));
+        assert_eq!(app.tabs.len(), 1);
+        let said = app.message.clone().unwrap_or_default();
+        assert!(
+            said.starts_with("The only stream"),
+            "{said:?} {:?}",
+            app.hits.close_buttons
+        );
     }
 
     #[test]
