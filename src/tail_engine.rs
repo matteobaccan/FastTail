@@ -7333,6 +7333,23 @@ impl TailEngine {
         }
     }
 
+    /// The visible bookmark after (`forward`) or before line `from`, wrapping around, and
+    /// whether it wrapped. For a front end with its own cursor: unlike `bookmark_next` /
+    /// `bookmark_prev` it keeps no position of its own.
+    pub fn bookmark_from(&self, from: usize, forward: bool) -> Option<(usize, bool)> {
+        let visible = self.visible_bookmarks();
+        let found = if forward {
+            visible.iter().copied().find(|&l| l > from)
+        } else {
+            visible.iter().rev().copied().find(|&l| l < from)
+        };
+        match found {
+            Some(line) => Some((line, false)),
+            None if forward => visible.first().map(|&l| (l, true)),
+            None => visible.last().map(|&l| (l, true)),
+        }
+    }
+
     /// Bookmarks, manual or automatic, that pass the active filters, in file order.
     fn visible_bookmarks(&self) -> Vec<usize> {
         let mut all: Vec<usize> = self

@@ -28,6 +28,8 @@ use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::view;
 
 /// Columns moved by one horizontal scroll step.
+/// Characters of a bookmark note the status bar shows.
+const NOTE_PREVIEW_CHARS: usize = 40;
 /// Cells one `←` / `→` scrolls sideways.
 const HSCROLL_STEP: usize = 1;
 
@@ -106,6 +108,8 @@ pub enum PromptKind {
     Search,
     Include,
     Exclude,
+    /// The note of the bookmark on this line.
+    Note(usize),
 }
 
 pub struct Prompt {
@@ -348,6 +352,8 @@ impl App {
                 tab.engine.set_exclude_filter(&text);
                 tab.top = 0;
             }
+            // A note bookmarks the line; an empty one removes the note, not the bookmark.
+            PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
         }
     }
 
@@ -365,6 +371,7 @@ impl App {
             PromptKind::Search => e.search_query.clone(),
             PromptKind::Include => e.include_filter().to_string(),
             PromptKind::Exclude => e.exclude_filter().to_string(),
+            PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
         };
         self.prompt = Some(Prompt { kind, text });
     }
@@ -400,6 +407,10 @@ impl App {
             Action::ToggleHelp => self.show_help = !self.show_help,
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
+            Action::EditNote => match self.tabs[self.active].cursor_line() {
+                Some(line) => self.open_prompt(PromptKind::Note(line)),
+                None => self.message = Some("No row for a note".into()),
+            },
             Action::EditExclude => self.open_prompt(PromptKind::Exclude),
             Action::CycleSplit => self.cycle_split(),
             Action::CopyOrQuit if !self.tabs[self.active].engine.has_selection() => {
@@ -604,6 +615,32 @@ impl App {
             Action::ScrollLeft => tab.hscroll = tab.hscroll.saturating_sub(HSCROLL_STEP),
             Action::ScrollRight => tab.hscroll += HSCROLL_STEP,
             Action::ScrollHome => tab.hscroll = 0,
+            Action::ToggleBookmark => match tab.cursor_line() {
+                Some(line) => tab.engine.toggle_bookmark(line),
+                None => self.message = Some("No row to bookmark".into()),
+            },
+            Action::NextBookmark | Action::PrevBookmark => {
+                let from = tab.cursor_line().unwrap_or(0);
+                let forward = action == Action::NextBookmark;
+                match tab.engine.bookmark_from(from, forward) {
+                    Some((line, wrapped)) => {
+                        if let Some(row) = tab.engine.get_visible_row_of_line(line) {
+                            tab.set_cursor(row);
+                        }
+                        if wrapped {
+                            self.message = Some(
+                                if forward {
+                                    "Bookmarks: back to the first"
+                                } else {
+                                    "Bookmarks: back to the last"
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                    None => self.message = Some("No bookmark visible".into()),
+                }
+            }
             Action::SearchNext => {
                 if tab.engine.search_next(false).is_none() {
                     self.message = Some("No search hits".into());
@@ -785,10 +822,17 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
             );
-        let line = match &self.message {
-            Some(m) => Line::styled(m.clone(), Style::default().fg(self.palette.accent())),
-            None => Line::styled(
-                "? help  q quit  Space follow  / search  n/N next  i/x filter  l level  c collapse  s split  y copy",
+        let tab = &self.tabs[self.active];
+        let note = tab
+            .cursor_line()
+            .and_then(|l| tab.engine.bookmark_note(l))
+            .map(|n| n.chars().take(NOTE_PREVIEW_CHARS).collect::<String>());
+        let line = match (&self.message, note) {
+            (Some(m), _) => Line::styled(m.clone(), Style::default().fg(self.palette.accent())),
+            // The note of the cursor row's bookmark, when there is one.
+            (None, Some(n)) => Line::styled(format!("* {n}"), Style::default().fg(self.palette.accent())),
+            (None, None) => Line::styled(
+                "? help  q quit  Space follow  / search  n/N next  i/x filter  b mark  ]/[ marks  m note  y copy",
                 Style::default().fg(self.palette.dim()),
             ),
         };
@@ -861,6 +905,7 @@ impl App {
             PromptKind::Search => "Search",
             PromptKind::Include => "Include filter",
             PromptKind::Exclude => "Exclude filter",
+            PromptKind::Note(_) => "Bookmark note",
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
         let Some(p) = &self.prompt else {
@@ -897,6 +942,9 @@ impl App {
             "c                cycle collapse: off, exact, numbers",
             "s                split: side by side, stacked, off",
             "Tab  Alt+1..9    next window or file / file N",
+            "b  Ctrl+F2       bookmark the cursor row, on or off",
+            "] F2 / [ Shift+F2  next / previous bookmark (wraps)",
+            "m                note of the cursor row's bookmark",
             "y  Ctrl+C        copy the selection or the cursor row",
             "                 (Ctrl+C quits when nothing is selected)",
             "q                quit",
@@ -1052,7 +1100,9 @@ pub fn render_row(
     } else {
         Style::default().fg(palette.dim())
     };
-    let mark = if bookmarked {
+    let mark = if bookmarked && engine.is_auto_bookmark(line_idx) {
+        'o'
+    } else if bookmarked {
         '*'
     } else if hit {
         '>'
@@ -1299,6 +1349,53 @@ mod tests {
         let reversed = |y: u16| buf[(5, y)].modifier.contains(Modifier::REVERSED);
         // Rows 1-3 of the screen hold lines 1-3; the cursor is on the second.
         assert!(!reversed(1) && reversed(2) && !reversed(3));
+    }
+
+    #[test]
+    fn bookmarks_notes_and_their_keys_follow_the_cursor() {
+        let body = numbered(1_000);
+        let (mut app, _dir) = app_with(&[("big.log", body.as_str())], false);
+        render(&mut app, 80, 30);
+        // `b` on lines 120 and 900 (rows = lines here, no filter), then `[` from 950.
+        for line in [119, 899] {
+            app.tabs[0].set_cursor(line);
+            app.apply(Action::ToggleBookmark);
+        }
+        app.tabs[0].set_cursor(949);
+        app.apply(Action::PrevBookmark);
+        assert_eq!(app.tabs[0].cursor_line(), Some(899));
+        app.apply(Action::PrevBookmark);
+        assert_eq!(app.tabs[0].cursor_line(), Some(119));
+        app.apply(Action::PrevBookmark);
+        assert_eq!(app.tabs[0].cursor_line(), Some(899), "wraps to the last");
+        assert!(app.message.as_deref().unwrap().contains("last"));
+        app.message = None;
+        app.apply(Action::NextBookmark);
+        assert_eq!(app.tabs[0].cursor_line(), Some(119), "wraps to the first");
+
+        // `m` on line 88: the note bookmarks it and the status bar shows it there.
+        app.message = None;
+        app.tabs[0].set_cursor(87);
+        app.apply(Action::EditNote);
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::Note(87))
+        );
+        let prompt = app.prompt.take().unwrap();
+        app.submit_prompt(Prompt {
+            text: "payment retried".into(),
+            ..prompt
+        });
+        assert!(app.tabs[0].engine.is_bookmarked(87));
+        let screen = render(&mut app, 80, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("* payment retried")),
+            "{screen:#?}"
+        );
+        // The gutter marks the bookmarked rows with `*`.
+        assert!(screen.iter().any(|l| l.contains("88*")), "{screen:#?}");
+        app.apply(Action::ToggleBookmark);
+        assert!(!app.tabs[0].engine.is_bookmarked(87));
     }
 
     #[test]

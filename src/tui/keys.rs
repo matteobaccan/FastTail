@@ -44,6 +44,13 @@ pub enum Action {
     Copy,
     /// CTRL + C: copies the selection when there is one, else quits.
     CopyOrQuit,
+    /// `b` / CTRL + F2: bookmark on the cursor row, on or off.
+    ToggleBookmark,
+    /// `]` / F2 and `[` / SHIFT + F2: next / previous visible bookmark, wrapping around.
+    NextBookmark,
+    PrevBookmark,
+    /// `m`: the note of the cursor row's bookmark.
+    EditNote,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -59,6 +66,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
             KeyCode::Char('c') | KeyCode::Char('C') => Some(Action::CopyOrQuit),
             KeyCode::Char('b') => Some(Action::PageUp),
             KeyCode::Char('f') => Some(Action::PageDown),
+            KeyCode::F(2) => Some(Action::ToggleBookmark),
             _ => None,
         };
     }
@@ -72,6 +80,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Up => return Some(Action::SelectUp),
             KeyCode::Down => return Some(Action::SelectDown),
+            KeyCode::F(2) => return Some(Action::PrevBookmark),
             _ => {}
         }
     }
@@ -99,6 +108,10 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('l') => Action::CycleLevel,
         KeyCode::Char('s') => Action::CycleSplit,
         KeyCode::Char('y') => Action::Copy,
+        KeyCode::Char('b') => Action::ToggleBookmark,
+        KeyCode::Char(']') | KeyCode::F(2) => Action::NextBookmark,
+        KeyCode::Char('[') => Action::PrevBookmark,
+        KeyCode::Char('m') => Action::EditNote,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -151,6 +164,25 @@ mod tests {
 
     fn press(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn bookmark_keys() {
+        let k = |code, m| map_key(press(code, m));
+        let none = KeyModifiers::NONE;
+        assert_eq!(k(KeyCode::Char('b'), none), Some(Action::ToggleBookmark));
+        assert_eq!(
+            k(KeyCode::F(2), KeyModifiers::CONTROL),
+            Some(Action::ToggleBookmark)
+        );
+        assert_eq!(k(KeyCode::Char(']'), none), Some(Action::NextBookmark));
+        assert_eq!(k(KeyCode::F(2), none), Some(Action::NextBookmark));
+        assert_eq!(k(KeyCode::Char('['), none), Some(Action::PrevBookmark));
+        assert_eq!(
+            k(KeyCode::F(2), KeyModifiers::SHIFT),
+            Some(Action::PrevBookmark)
+        );
+        assert_eq!(k(KeyCode::Char('m'), none), Some(Action::EditNote));
     }
 
     #[test]
