@@ -66,13 +66,22 @@ pub enum Action {
     /// `O`: load a session; `S`: save the open streams as a session.
     OpenSession,
     SaveSession,
+    /// `T`: the next theme.
+    CycleTheme,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
 /// releases (and repeats as presses), which would otherwise act twice.
-pub fn map_key(key: KeyEvent) -> Option<Action> {
+pub fn map_key(mut key: KeyEvent) -> Option<Action> {
     if key.kind == KeyEventKind::Release {
         return None;
+    }
+    // The Windows console may report SHIFT + t as a lowercase `t` with the SHIFT
+    // modifier, where other terminals send `T`: both mean the capital.
+    if let KeyCode::Char(c) = key.code {
+        if key.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() {
+            key.code = KeyCode::Char(c.to_ascii_uppercase());
+        }
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -137,6 +146,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('o') => Action::OpenFile,
         KeyCode::Char('O') => Action::OpenSession,
         KeyCode::Char('S') => Action::SaveSession,
+        KeyCode::Char('T') => Action::CycleTheme,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -183,6 +193,7 @@ mod tests {
         let shift = KeyModifiers::SHIFT;
         assert_eq!(k(KeyCode::Char('O'), shift), Some(Action::OpenSession));
         assert_eq!(k(KeyCode::Char('S'), shift), Some(Action::SaveSession));
+        assert_eq!(k(KeyCode::Char('T'), shift), Some(Action::CycleTheme));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),
@@ -239,6 +250,21 @@ mod tests {
         assert_eq!(
             map_key(press(KeyCode::Char('N'), KeyModifiers::SHIFT)),
             Some(Action::SearchPrev)
+        );
+    }
+
+    #[test]
+    fn shift_with_a_lowercase_letter_is_the_capital() {
+        let shift = KeyModifiers::SHIFT;
+        let k = |c| map_key(press(KeyCode::Char(c), shift));
+        assert_eq!(k('t'), Some(Action::CycleTheme), "not the time range");
+        assert_eq!(k('g'), Some(Action::Bottom));
+        assert_eq!(k('n'), Some(Action::SearchPrev));
+        assert_eq!(k('o'), Some(Action::OpenSession));
+        assert_eq!(k('s'), Some(Action::SaveSession));
+        assert_eq!(
+            map_key(press(KeyCode::Char('t'), KeyModifiers::NONE)),
+            Some(Action::TimeRange)
         );
     }
 

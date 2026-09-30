@@ -478,7 +478,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
 - **Window:** id `fasttail_settings_popup`, frame `panel_bg` with a 1.5 px `border_color` stroke, default **460 × 400**, geometry persisted in `settings_pos` and `settings_size`.
 - **Contents:** a vertical `ScrollArea` that does not auto-shrink:
   1. `⚙ SETTINGS` heading.
-  2. **Theme:** selectable `Tron` · `Matrix` · `Blade` · `Light` (the last one localized).
+  2. **Theme:** selectable `Tron` · `Matrix` · `Blade` · `Light` (localized) · `Commander`.
   3. **Language:** a 220 px combo. The first entry is `System language (<detected>)`, then a separator and the 16 languages by native name.
   4. **Zoom:** `[-]  🔍 N%  [+]  [100%]`, in 10 % steps over 50–300 %.
   5. **Font Size:** `[-]  N pt  [+]  [100%]`, over 8–32 pt; the default is 13.
@@ -940,25 +940,26 @@ Source: `src/theme.rs`, with the dock style and hard-coded colours in `src/ui/ap
 | `Matrix` | Matrix | Matrix (Phosphor Green / Black) |
 | `Blade` | Blade | Blade (Amber Noir / Neon Magenta) |
 | `Light` | localized "Light" | Light (Clean Solar / Crisp Slate) |
+| `Commander` | Commander | Commander (Classic Blue / White) |
 
 ### 6.2 Base palette
 
-| Token (method) | Tron | Matrix | Blade | Light |
-|---|---|---|---|---|
-| `bg_color` (canvas, title bar, tab bar) | `#0A0F18` | `#030603` | `#121014` | `#F3F5F9` |
-| `panel_bg` (panels, tab body, dialogs) | `#0D1420` | `#060C06` | `#1A161C` | `#FFFFFF` |
-| `tab_active_bg` | `#122032` | `#0A1A0C` | `#261C2A` | `#FFFFFF` |
-| `tab_inactive_bg` | `#080C12` | `#040804` | `#0E0C10` | `#EAEEF4` |
-| `button_bg` | `#0C131E` | `#08120A` | `#1C141A` | `#F0F4FA` |
-| `code_block_bg` | `#121C2C` | `#081008` | `#221C24` | `#EEF2F8` |
-| `border_color` | `#00E5FF` | `#00FF41` | `#FF8C00` | `#0078D7` |
-| `accent_color` (= `info_color`) | `#00E5FF` | `#00FF41` | `#FF8C00` | `#0072CE` |
-| `secondary_accent` | `#00B4D8` | `#32CD32` | `#FF0055` | `#009688` |
-| `text_primary` | `#E0F0FF` | `#DCFFDC` | `#FFF3E0` | `#181C24` |
-| `text_dim` | `#648CAA` | `#82C382` | `#AF9187` | `#64748B` |
-| `error_color` | `#FF3344` | `#FF3344` | `#FF3344` | `#FF3344` |
-| `warn_color` | `#FFBB00` | `#FFBB00` | `#FFBB00` | `#C36900` |
-| selection fill | accent × 0.35 | accent × 0.35 | accent × 0.35 | accent × 0.35 |
+| Token (method) | Tron | Matrix | Blade | Light | Commander |
+|---|---|---|---|---|---|
+| `bg_color` (canvas, title bar, tab bar) | `#0A0F18` | `#030603` | `#121014` | `#F3F5F9` | `#000080` |
+| `panel_bg` (panels, tab body, dialogs) | `#0D1420` | `#060C06` | `#1A161C` | `#FFFFFF` | `#0000AA` |
+| `tab_active_bg` | `#122032` | `#0A1A0C` | `#261C2A` | `#FFFFFF` | `#006E8C` |
+| `tab_inactive_bg` | `#080C12` | `#040804` | `#0E0C10` | `#EAEEF4` | `#00006E` |
+| `button_bg` | `#0C131E` | `#08120A` | `#1C141A` | `#F0F4FA` | `#000096` |
+| `code_block_bg` | `#121C2C` | `#081008` | `#221C24` | `#EEF2F8` | `#000096` |
+| `border_color` | `#00E5FF` | `#00FF41` | `#FF8C00` | `#0078D7` | `#55FFFF` |
+| `accent_color` (= `info_color`) | `#00E5FF` | `#00FF41` | `#FF8C00` | `#0072CE` | `#FFFF55` |
+| `secondary_accent` | `#00B4D8` | `#32CD32` | `#FF0055` | `#009688` | `#55FFFF` |
+| `text_primary` | `#E0F0FF` | `#DCFFDC` | `#FFF3E0` | `#181C24` | `#E6F0FF` |
+| `text_dim` | `#648CAA` | `#82C382` | `#AF9187` | `#64748B` | `#A0B4DC` |
+| `error_color` | `#FF3344` | `#FF3344` | `#FF3344` | `#FF3344` | `#FF3344` |
+| `warn_color` | `#FFBB00` | `#FFBB00` | `#FFBB00` | `#C36900` | `#FFBB00` |
+| selection fill | accent × 0.35 | accent × 0.35 | accent × 0.35 | accent × 0.35 | accent × 0.35 |
 
 `×` means egui `gamma_multiply`: every channel, alpha included, is scaled, so the colour becomes translucent.
 

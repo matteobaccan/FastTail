@@ -21,6 +21,8 @@ pub enum CyberTheme {
     Matrix,
     Blade,
     Light,
+    /// The classic blue and white of the DOS file managers.
+    Commander,
 }
 
 impl CyberTheme {
@@ -30,6 +32,7 @@ impl CyberTheme {
             CyberTheme::Matrix => "Matrix (Phosphor Green / Black)",
             CyberTheme::Blade => "Blade (Amber Noir / Neon Magenta)",
             CyberTheme::Light => "Light (Clean Solar / Crisp Slate)",
+            CyberTheme::Commander => "Commander (Classic Blue / White)",
         }
     }
 
@@ -39,6 +42,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(3, 6, 3),
             CyberTheme::Blade => Rgba::from_rgb(18, 16, 20),
             CyberTheme::Light => Rgba::from_rgb(243, 245, 249),
+            CyberTheme::Commander => Rgba::from_rgb(0, 0, 128),
         }
     }
 
@@ -48,6 +52,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(6, 12, 6),
             CyberTheme::Blade => Rgba::from_rgb(26, 22, 28),
             CyberTheme::Light => Rgba::from_rgb(255, 255, 255),
+            CyberTheme::Commander => Rgba::from_rgb(0, 0, 170),
         }
     }
 
@@ -58,6 +63,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(10, 26, 12),
             CyberTheme::Blade => Rgba::from_rgb(38, 28, 42),
             CyberTheme::Light => Rgba::from_rgb(255, 255, 255),
+            CyberTheme::Commander => Rgba::from_rgb(0, 110, 140),
         }
     }
 
@@ -68,6 +74,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(4, 8, 4),
             CyberTheme::Blade => Rgba::from_rgb(14, 12, 16),
             CyberTheme::Light => Rgba::from_rgb(234, 238, 244),
+            CyberTheme::Commander => Rgba::from_rgb(0, 0, 110),
         }
     }
 
@@ -77,6 +84,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(8, 18, 10),
             CyberTheme::Blade => Rgba::from_rgb(28, 20, 26),
             CyberTheme::Light => Rgba::from_rgb(240, 244, 250),
+            CyberTheme::Commander => Rgba::from_rgb(0, 0, 150),
         }
     }
 
@@ -86,6 +94,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(8, 16, 8),
             CyberTheme::Blade => Rgba::from_rgb(34, 28, 36),
             CyberTheme::Light => Rgba::from_rgb(238, 242, 248),
+            CyberTheme::Commander => Rgba::from_rgb(0, 0, 150),
         }
     }
 
@@ -95,6 +104,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(0, 255, 65),
             CyberTheme::Blade => Rgba::from_rgb(255, 140, 0),
             CyberTheme::Light => Rgba::from_rgb(0, 120, 215),
+            CyberTheme::Commander => Rgba::from_rgb(85, 255, 255),
         }
     }
 
@@ -104,6 +114,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(0, 255, 65),
             CyberTheme::Blade => Rgba::from_rgb(255, 140, 0),
             CyberTheme::Light => Rgba::from_rgb(0, 114, 206),
+            CyberTheme::Commander => Rgba::from_rgb(255, 255, 85),
         }
     }
 
@@ -113,6 +124,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(50, 205, 50),
             CyberTheme::Blade => Rgba::from_rgb(255, 0, 85),
             CyberTheme::Light => Rgba::from_rgb(0, 150, 136),
+            CyberTheme::Commander => Rgba::from_rgb(85, 255, 255),
         }
     }
 
@@ -122,6 +134,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(220, 255, 220),
             CyberTheme::Blade => Rgba::from_rgb(255, 243, 224),
             CyberTheme::Light => Rgba::from_rgb(24, 28, 36),
+            CyberTheme::Commander => Rgba::from_rgb(230, 240, 255),
         }
     }
 
@@ -131,6 +144,7 @@ impl CyberTheme {
             CyberTheme::Matrix => Rgba::from_rgb(130, 195, 130),
             CyberTheme::Blade => Rgba::from_rgb(175, 145, 135),
             CyberTheme::Light => Rgba::from_rgb(100, 116, 139),
+            CyberTheme::Commander => Rgba::from_rgb(160, 180, 220),
         }
     }
 
@@ -284,6 +298,11 @@ impl CyberTheme {
             (CyberTheme::Light, K::Url) => [0, 90, 200],
             (CyberTheme::Light, K::Duration) => [0, 110, 100],
             (CyberTheme::Light, K::Path) => [60, 70, 110],
+            (CyberTheme::Commander, K::Ip) => [85, 255, 255],
+            (CyberTheme::Commander, K::Uuid) => [255, 170, 255],
+            (CyberTheme::Commander, K::Url) => [170, 205, 255],
+            (CyberTheme::Commander, K::Duration) => [255, 255, 85],
+            (CyberTheme::Commander, K::Path) => [205, 225, 255],
         };
         Rgba::from_rgb(r, g, b)
     }
@@ -329,10 +348,29 @@ impl CyberTheme {
             [0, 120, 134],
             [60, 65, 76],
         ];
-        let table = if *self == CyberTheme::Light {
-            &LIGHT
-        } else {
-            &DARK
+        // On the blue of Commander every entry is lifted so it reads on it.
+        const COMMANDER: [[u8; 3]; 16] = [
+            [165, 170, 190],
+            [255, 125, 125],
+            [110, 240, 130],
+            [255, 235, 100],
+            [150, 185, 255],
+            [245, 150, 255],
+            [90, 235, 245],
+            [230, 230, 230],
+            [185, 190, 210],
+            [255, 150, 150],
+            [150, 255, 160],
+            [255, 255, 140],
+            [175, 205, 255],
+            [255, 175, 255],
+            [150, 250, 255],
+            [255, 255, 255],
+        ];
+        let table = match self {
+            CyberTheme::Light => &LIGHT,
+            CyberTheme::Commander => &COMMANDER,
+            _ => &DARK,
         };
         table.map(|[r, g, b]| Rgba::from_rgb(r, g, b))
     }
@@ -436,6 +474,7 @@ mod tests {
             CyberTheme::Matrix,
             CyberTheme::Blade,
             CyberTheme::Light,
+            CyberTheme::Commander,
         ] {
             for (i, c) in theme.ansi_palette().iter().enumerate() {
                 let ratio = contrast(*c, theme.bg_color());
@@ -459,6 +498,7 @@ mod tests {
             CyberTheme::Matrix,
             CyberTheme::Blade,
             CyberTheme::Light,
+            CyberTheme::Commander,
         ] {
             let colours: Vec<Rgba> = TokenKind::ALL
                 .iter()

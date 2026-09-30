@@ -706,6 +706,7 @@ impl FastTailConfig {
             CyberTheme::Matrix => "Matrix",
             CyberTheme::Blade => "Blade",
             CyberTheme::Light => "Light",
+            CyberTheme::Commander => "Commander",
         };
         let unit_str = match self.size_unit {
             SizeUnit::Bytes => "Bytes",
@@ -937,6 +938,7 @@ impl FastTailConfig {
                     "matrix" => CyberTheme::Matrix,
                     "blade" => CyberTheme::Blade,
                     "light" => CyberTheme::Light,
+                    "commander" => CyberTheme::Commander,
                     _ => CyberTheme::Tron,
                 };
             }

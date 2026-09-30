@@ -584,6 +584,24 @@ impl App {
         }
     }
 
+    /// `Shift+T`: the next theme, in the order of the GUI's list, saved as the ini's
+    /// `theme`.
+    fn cycle_theme(&mut self) {
+        use crate::theme::CyberTheme;
+        let next = match self.palette.theme {
+            CyberTheme::Tron => CyberTheme::Matrix,
+            CyberTheme::Matrix => CyberTheme::Blade,
+            CyberTheme::Blade => CyberTheme::Light,
+            CyberTheme::Light => CyberTheme::Commander,
+            CyberTheme::Commander => CyberTheme::Tron,
+        };
+        self.palette.theme = next;
+        if let Some(s) = self.settings.as_mut() {
+            s.config.theme = next;
+        }
+        self.message = Some(format!("Theme: {}", next.name()));
+    }
+
     /// The configuration of the run (the defaults when there is none, as in tests).
     fn settings_mut(&mut self) -> &mut crate::tui::workspace::Settings {
         self.settings.get_or_insert_with(Default::default)
@@ -1028,6 +1046,7 @@ impl App {
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::TimeRange => self.open_time_range(),
+            Action::CycleTheme => self.cycle_theme(),
             Action::OpenFile => self.open_prompt(PromptKind::OpenFile),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -1374,6 +1393,8 @@ impl App {
         // The hit map is rebuilt with every frame: a click is tested against what the
         // user saw.
         self.hits = HitMap::default();
+        // The theme's background behind everything (the terminal's own at 16 colours).
+        frame.render_widget(Block::default().style(self.palette.screen()), frame.area());
         let strip = if self.tabs.len() > 1 { 1 } else { 0 };
         let [tabs_area, main_area, status_area] = Layout::vertical([
             Constraint::Length(strip),
@@ -1478,6 +1499,7 @@ impl App {
             Style::default().fg(palette.dim())
         };
         let block = Block::bordered()
+            .style(palette.window())
             .border_set(palette.border_set(chrome))
             .border_style(palette.border_style(chrome))
             .title_top(Line::from(vec![
@@ -1528,6 +1550,7 @@ impl App {
     fn draw_status(&self, frame: &mut Frame, area: Rect) {
         let chrome = Chrome::Plain;
         let block = Block::bordered()
+            .style(self.palette.window())
             .border_set(self.palette.border_set(chrome))
             .border_style(self.palette.border_style(chrome))
             .title_top(
@@ -1568,6 +1591,7 @@ impl App {
         let (x, y, w, h) = view::centered(area.width, area.height, size.0, size.1);
         let rect = Rect::new(area.x + x, area.y + y, w, h);
         let block = Block::bordered()
+            .style(self.palette.dialog())
             .border_set(self.palette.border_set(Chrome::Dialog))
             .border_style(self.palette.border_style(Chrome::Dialog))
             .title_top(
@@ -1580,6 +1604,7 @@ impl App {
         let inner = block.inner(rect);
         frame.render_widget(Clear, rect);
         frame.render_widget(block, rect);
+        cast_shadow(frame.buffer_mut(), rect, self.palette.shadow());
         // Buttons, right-aligned on the last inner row.
         let labels: &[&str] = if cancel {
             &["[ OK ]", "[ Cancel ]"]
@@ -1846,10 +1871,10 @@ impl App {
             "Up/Down j/k      move the cursor one row",
             "PgUp/PgDn        move it one page (also Ctrl+B / Ctrl+F)",
             "Shift+Up/Down    extend the selection from the cursor",
-            "Home g / End G   first / last row (the last one follows)",
+            "Home g / End Shift+G  first / last row (the last one follows)",
             "Left/Right 0     scroll sideways one cell / back to column 0",
             "Space            toggle follow",
-            "/  n  N  Esc     search, next, previous, clear (also F3 / Shift+F3)",
+            "/ n Shift+N Esc  search, next, previous, clear (also F3 / Shift+F3)",
             "i  x             include / exclude filter",
             "l                cycle the minimum level",
             "c                cycle collapse: off, exact, numbers",
@@ -1861,8 +1886,9 @@ impl App {
             "Ctrl+K           cursor row in context (filters off), again back",
             "Ctrl+G  :        go to a line (N, +N, -N) or a time (14:02)",
             "o                open a file, pattern or archive entry",
-            "O  S             open a session / save the streams as a session",
+            "Shift+O Shift+S  open a session / save the streams as a session",
             "t                time range: from / to (14:02, -15m, now)",
+            "Shift+T          next theme: Tron, Matrix, Blade, Light, Commander",
             "a                ANSI colours: auto, render, strip, raw (^[)",
             "h                HEX view of the bytes (go to: 1024, 0x400), again back",
             "y  Ctrl+C        copy the selection or the cursor row",
@@ -1875,25 +1901,83 @@ impl App {
             "click toggles a bookmark.",
             mouse_hint,
         ];
-        // Taller than the screen: Up / Down / PgUp / PgDn scroll it.
-        let height = (text.len() as u16 + 3).min(area.height);
+        // On a wide screen the keys go in two columns, so they all show at once; the
+        // mouse notes stay under them. Otherwise one column, which scrolls with Up /
+        // Down / PgUp / PgDn when the screen is too short for it.
+        const COL: usize = 76;
+        let split = text.iter().position(|l| l.is_empty()).unwrap_or(text.len());
+        let (keys, notes) = text.split_at(split);
+        let two = area.width as usize >= 2 * COL + 6;
+        let lines: Vec<String> = if two {
+            let half = keys.len().div_ceil(2);
+            let mut out: Vec<String> = (0..half)
+                .map(|i| {
+                    let right = keys.get(half + i).copied().unwrap_or("");
+                    format!("{:<COL$}  {right}", keys[i])
+                })
+                .collect();
+            out.extend(notes.iter().map(|l| l.to_string()));
+            out
+        } else {
+            text.iter().map(|l| l.to_string()).collect()
+        };
+        let width = if two { 2 * COL as u16 + 4 } else { 78 };
+        let height = (lines.len() as u16 + 3).min(area.height);
         let rows = height.saturating_sub(3) as usize;
-        self.help_top = self.help_top.min(text.len().saturating_sub(rows));
-        let title = if rows < text.len() {
+        self.help_top = self.help_top.min(lines.len().saturating_sub(rows));
+        let more_below = self.help_top + rows < lines.len();
+        let title = if rows < lines.len() {
             "Keys - Up/Down scroll, any other key closes"
         } else {
             "Keys - any key closes"
         };
-        let inner = self.dialog(frame, area, (78, height), title, false);
+        let inner = self.dialog(frame, area, (width, height), title, false);
         frame.render_widget(
             Paragraph::new(
-                text.iter()
+                lines
+                    .iter()
                     .skip(self.help_top)
-                    .map(|l| Line::from(*l))
+                    .map(|l| Line::from(l.clone()))
                     .collect::<Vec<_>>(),
             ),
             inner,
         );
+        if more_below {
+            // On the last row, left of the OK button: there is more under the fold.
+            let hint = " \u{2193} more (Down) ";
+            let at = Rect {
+                y: inner.bottom().saturating_sub(1),
+                height: 1,
+                width: hint.chars().count() as u16,
+                ..inner
+            };
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    hint,
+                    Style::default()
+                        .fg(self.palette.accent())
+                        .add_modifier(Modifier::BOLD),
+                )),
+                at.intersection(inner),
+            );
+        }
+    }
+}
+
+/// Darkens the cells a dialog at `rect` shades: two columns on its right and one row
+/// below it, offset by one, as a light from the top left would. The characters stay, so
+/// what is behind still shows through the shadow.
+fn cast_shadow(buf: &mut ratatui::buffer::Buffer, rect: Rect, style: Style) {
+    let screen = buf.area;
+    let right = Rect::new(rect.right(), rect.y + 1, 2, rect.height);
+    let below = Rect::new(rect.x + 2, rect.bottom(), rect.width, 1);
+    for area in [right, below] {
+        let area = area.intersection(screen);
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_style(style);
+            }
+        }
     }
 }
 
@@ -3029,12 +3113,23 @@ mod tests {
         let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
         app.apply(Action::ToggleHelp);
         let tall = render(&mut app, 100, 60);
-        for key in ["F3", "Ctrl+G", "O  S", "?  F1", "HEX", "ANSI"] {
+        for key in ["F3", "Ctrl+G", "Shift+O", "Shift+T", "?  F1", "HEX", "ANSI"] {
             assert!(tall.iter().any(|l| l.contains(key)), "{key}: {tall:#?}");
         }
+        let wide = render(&mut app, 170, 30);
+        assert!(
+            wide.iter().any(|l| l.contains("move the cursor one row"))
+                && wide.iter().any(|l| l.contains("next theme")),
+            "two columns show every key: {wide:#?}"
+        );
+        assert!(!wide.iter().any(|l| l.contains("Up/Down scroll")));
         let short = render(&mut app, 80, 24);
         assert!(
             short.iter().any(|l| l.contains("Up/Down scroll")),
+            "{short:#?}"
+        );
+        assert!(
+            short.iter().any(|l| l.contains("more (Down)")),
             "{short:#?}"
         );
         assert!(short.iter().any(|l| l.contains("move the cursor one row")));
@@ -3157,6 +3252,54 @@ mod tests {
         }
         let saved = crate::tui::workspace::Settings::read(&ini).config;
         assert_eq!(saved.bookmarks_for(&a, 3), Some(vec![1]));
+    }
+
+    #[test]
+    fn the_theme_paints_the_windows_and_dialogs_cast_a_shadow() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        let panel = app.palette.window().bg.unwrap();
+        let screen_bg = app.palette.screen().bg.unwrap();
+        let buf = draw_buffer(&mut app, 80, 20);
+        // Inside the window (right of the text), and the theme's text colour.
+        assert_eq!(buf[(70, 3)].bg, panel);
+        assert_eq!(buf[(70, 3)].fg, app.palette.window().fg.unwrap());
+
+        app.apply(Action::StartSearch);
+        let buf = draw_buffer(&mut app, 80, 20);
+        let d = app.hits.dialog.unwrap().outer;
+        assert_eq!(buf[(d.x + 1, d.y + 1)].bg, app.palette.dialog().bg.unwrap());
+        let shadow = app.palette.shadow().bg.unwrap();
+        assert_eq!(buf[(d.right(), d.y + 1)].bg, shadow, "right of the dialog");
+        assert_eq!(buf[(d.x + 3, d.bottom())].bg, shadow, "below it");
+        assert_ne!(buf[(d.x, d.bottom())].bg, shadow, "offset from the corner");
+        assert_ne!(shadow, screen_bg);
+        assert_eq!(buf[(d.x, d.y)].symbol(), "┌", "square corners");
+
+        // 16 colours: the terminal's own background and text.
+        let p16 = Palette::new(CyberTheme::Tron, ColorDepth::Ansi16, false);
+        assert_eq!(p16.window(), Style::default());
+        assert_eq!(p16.screen(), Style::default());
+    }
+
+    #[test]
+    fn t_cycles_the_themes_and_records_the_choice_for_the_ini() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        app.settings = Some(crate::tui::workspace::Settings::default());
+        let before = app.palette.window();
+        app.apply(Action::CycleTheme);
+        assert_eq!(app.palette.theme, CyberTheme::Matrix);
+        assert_ne!(app.palette.window(), before);
+        assert_eq!(
+            app.settings.as_ref().unwrap().config.theme,
+            CyberTheme::Matrix
+        );
+        assert!(app.message.as_deref().unwrap().starts_with("Theme: Matrix"));
+        for _ in 0..3 {
+            app.apply(Action::CycleTheme);
+        }
+        assert_eq!(app.palette.theme, CyberTheme::Commander, "the blue classic");
+        app.apply(Action::CycleTheme);
+        assert_eq!(app.palette.theme, CyberTheme::Tron, "back to the first");
     }
 
     #[test]

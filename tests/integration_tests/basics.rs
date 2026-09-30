@@ -100,6 +100,7 @@ fn test_themes_and_palettes() {
         CyberTheme::Matrix,
         CyberTheme::Blade,
         CyberTheme::Light,
+        CyberTheme::Commander,
     ] {
         let bg = theme.bg_color();
         let border = theme.border_color();

@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Commander theme.** A fifth theme, the classic blue and white of the DOS file managers:
+  blue screen and panels, near-white text, light cyan borders and yellow accents. Listed
+  in Settings and in the command palette; stored as `theme=Commander` (older builds read
+  it as Tron).
+
 ## [0.14.0] - 2026-09-29
 
 ### Added

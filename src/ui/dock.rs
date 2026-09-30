@@ -7732,10 +7732,10 @@ pub fn render_settings_content(
             .clicked();
         ui.selectable_value(theme, CyberTheme::Blade, "Blade")
             .clicked();
-        if ui
-            .selectable_value(theme, CyberTheme::Light, t(*lang, "theme_light"))
-            .clicked()
-        {}
+        ui.selectable_value(theme, CyberTheme::Light, t(*lang, "theme_light"))
+            .clicked();
+        ui.selectable_value(theme, CyberTheme::Commander, "Commander")
+            .clicked();
     });
 
     ui.add_space(6.0);
