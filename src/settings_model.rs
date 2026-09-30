@@ -2,9 +2,10 @@
 // Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
 // SPDX-License-Identifier: MIT
 
-//! Ranges of the numeric settings, shared by `FastTailConfig::load` (the ini and the
-//! `FASTTAIL_*` variables), the GUI Settings widgets and the terminal Settings dialog,
-//! so every place accepts exactly the same values.
+//! What a setting may hold, shared by `FastTailConfig::load` (the ini and the
+//! `FASTTAIL_*` variables), the GUI Settings and editors and the terminal dialogs, so
+//! every place accepts exactly the same values: the ranges of the numeric settings and
+//! the checks of preset names, external tools, highlight rules and the global filter.
 
 use std::ops::RangeInclusive;
 
@@ -40,6 +41,91 @@ pub fn clamp<T: Ord + Copy>(value: T, range: &RangeInclusive<T>) -> T {
     value.clamp(*range.start(), *range.end())
 }
 
+/// Why a filter preset name cannot be used as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetNameProblem {
+    Empty,
+    /// Another preset has it (`except` is the one being renamed).
+    Taken,
+}
+
+/// Checks a preset name (trimmed). Saving under a taken name overwrites that preset, so
+/// the save dialog only refuses `Empty`; a rename refuses both.
+pub fn preset_name_problem(
+    presets: &[crate::filter_preset::FilterPreset],
+    name: &str,
+    except: Option<usize>,
+) -> Option<PresetNameProblem> {
+    let name = name.trim();
+    if name.is_empty() {
+        Some(PresetNameProblem::Empty)
+    } else if crate::filter_preset::name_taken(presets, name, except) {
+        Some(PresetNameProblem::Taken)
+    } else {
+        None
+    }
+}
+
+/// What is wrong with an external tool's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolProblem {
+    /// The shortcut cannot be read (see `external_tools::Shortcut::parse`).
+    BadShortcut,
+    /// The tool is bound to a highlight rule that no longer exists.
+    MissingRule,
+}
+
+/// The problems of `tool`, given the patterns of the current highlight rules.
+pub fn tool_problems(
+    tool: &crate::external_tools::ExternalTool,
+    rule_patterns: &[&str],
+) -> Vec<ToolProblem> {
+    let mut problems = Vec::new();
+    if tool.shortcut.is_some() && tool.parsed_shortcut().is_none() {
+        problems.push(ToolProblem::BadShortcut);
+    }
+    if let Some(bound) = tool.bound_rule.as_deref() {
+        if !rule_patterns.contains(&bound) {
+            problems.push(ToolProblem::MissingRule);
+        }
+    }
+    problems
+}
+
+/// The compile error of a regular expression, `None` when it compiles.
+pub fn regex_error(pattern: &str, case_sensitive: bool) -> Option<String> {
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(!case_sensitive)
+        .build()
+        .err()
+        .map(|e| e.to_string())
+}
+
+/// Why a highlight rule will not match as written: a regex rule whose pattern does not
+/// compile (the engine then matches it as plain text).
+pub fn rule_problem(rule: &crate::tail_engine::HighlightRule) -> Option<String> {
+    if rule.is_regex {
+        regex_error(&rule.pattern, rule.case_sensitive)
+    } else {
+        None
+    }
+}
+
+/// The first term of a regex global filter that does not compile, with its error.
+pub fn global_filter_problem(
+    filter: &crate::global_filter::GlobalFilter,
+) -> Option<(String, String)> {
+    if !filter.is_regex {
+        return None;
+    }
+    filter
+        .include
+        .iter()
+        .chain(&filter.exclude)
+        .filter(|t| !t.is_empty())
+        .find_map(|t| regex_error(t, filter.case_sensitive).map(|e| (t.clone(), e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +152,56 @@ mod tests {
         assert!(STDIN_SPOOL_MAX_MB.contains(&cfg.stdin_spool_max_mb));
         assert!(SCREENSAVER_TIMEOUT_MINS.contains(&cfg.screensaver_timeout_mins));
         assert!(TIME_DELTA_GAP_MS.contains(&cfg.time_delta_gap_ms));
+    }
+
+    #[test]
+    fn presets_tools_rules_and_filters_are_checked() {
+        use crate::external_tools::ExternalTool;
+        use crate::filter_preset::FilterPreset;
+        let presets = vec![FilterPreset {
+            name: "errors".to_string(),
+            state: Default::default(),
+        }];
+        assert_eq!(
+            preset_name_problem(&presets, "  ", None),
+            Some(PresetNameProblem::Empty)
+        );
+        assert_eq!(
+            preset_name_problem(&presets, "errors", None),
+            Some(PresetNameProblem::Taken)
+        );
+        assert_eq!(preset_name_problem(&presets, "errors", Some(0)), None);
+
+        let mut tool = ExternalTool::new("edit", "code", "{file}");
+        assert!(tool_problems(&tool, &[]).is_empty());
+        tool.shortcut = Some("Ctrl+Nope".to_string());
+        tool.bound_rule = Some("ERROR".to_string());
+        assert_eq!(
+            tool_problems(&tool, &["WARN"]),
+            vec![ToolProblem::BadShortcut, ToolProblem::MissingRule]
+        );
+        assert_eq!(
+            tool_problems(&tool, &["ERROR"]),
+            vec![ToolProblem::BadShortcut]
+        );
+
+        let mut rule = crate::tail_engine::HighlightRule::new("a(b", [0; 3], [0; 3], true);
+        assert!(rule_problem(&rule).is_some());
+        rule.is_regex = false;
+        assert!(
+            rule_problem(&rule).is_none(),
+            "plain text always matches as written"
+        );
+
+        let mut filter = crate::global_filter::GlobalFilter {
+            include: vec!["ok".to_string(), "[x".to_string()],
+            ..Default::default()
+        };
+        assert!(global_filter_problem(&filter).is_none(), "plain terms");
+        filter.is_regex = true;
+        assert_eq!(
+            global_filter_problem(&filter).map(|(t, _)| t),
+            Some("[x".to_string())
+        );
     }
 }

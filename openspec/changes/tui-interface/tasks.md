@@ -9,7 +9,7 @@
 - [x] 1.3 `external_tools::Shortcut` with a neutral `KeyName` and `Mods`; GUI mapping at the edge; `tool.N` ini round-trip test unchanged
 - [x] 1.4 `src/workspace.rs`: `open_target`, `restore(config)`, `snapshot(engines)` (open files, `stream_N` state, bookmarks and notes, taken out of `save_dock_layout`), the go-to parser and the time-range text parser; the GUI calls them
 - [x] 1.5 `src/lock.rs`: `LockAttempts`, `LOCK_MAX_FAILURES`, `LOCK_COOLDOWN`, `pin_matches` and an idle clock with the arming rule, out of `ui/app.rs` and `config.rs`; the GUI lock uses it
-- [ ] 1.6 `src/settings_model.rs`: ranges, defaults and validation of every setting both interfaces edit, highlight-rule, preset, global-filter and tool validation; the GUI Settings and `FastTailConfig::load` use it
+- [x] 1.6 `src/settings_model.rs`: ranges, defaults and validation of every setting both interfaces edit, highlight-rule, preset, global-filter and tool validation; the GUI Settings and `FastTailConfig::load` use it
 - [ ] 1.7 Search wrap-around and rule sound alerts returned as engine events instead of calling `audio` from the engine; the GUI plays them
 - [ ] 1.8 `Cargo.toml`: features `gui` and `tui`, `default = ["gui", "tui"]`; optional GUI crates under `gui`; `ui` and `renderer` behind `#[cfg(feature = "gui")]`; `[[bin]]` entries with `required-features`
 - [ ] 1.9 Unit tests for each moved piece; `cargo check --no-default-features --features tui`; `cargo tree` without GUI crates
