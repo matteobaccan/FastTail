@@ -139,6 +139,32 @@ pub fn session_plan(settings: &mut Settings, file: &Path) -> Result<Plan, String
     })
 }
 
+/// What to open at start, decided as the GUI decides it: a named session (`--session`),
+/// else the saved workspace unless `fresh`, then the command-line paths it does not
+/// already hold, in the order given.
+pub fn start_plan(
+    settings: &mut Settings,
+    session: Option<&Path>,
+    fresh: bool,
+    cli_paths: &[PathBuf],
+) -> Result<Plan, String> {
+    let mut plan = match session {
+        Some(file) => session_plan(settings, file)?,
+        None if fresh => Plan::default(),
+        None => workspace_plan(settings),
+    };
+    for path in cli_paths {
+        if !plan
+            .paths
+            .iter()
+            .any(|p| crate::paths::paths_equal(p, path))
+        {
+            plan.paths.push(path.clone());
+        }
+    }
+    Ok(plan)
+}
+
 /// Opens the streams of `plan` with the ini's settings and saved state. Returns the
 /// engines in plan order and a message per stream that could not be opened.
 pub fn open_plan(settings: &Settings, plan: &Plan) -> (Vec<TailEngine>, Vec<String>) {
@@ -216,6 +242,30 @@ mod tests {
         let ini = dir.join("fasttail.ini");
         cfg.to_ini().write_to_file(&ini).unwrap();
         ini
+    }
+
+    #[test]
+    fn the_start_plan_adds_command_line_files_to_the_workspace_as_the_gui_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let ini = write_workspace(dir.path());
+        let a = dir.path().join("a.log");
+        let b = dir.path().join("b.log");
+        let c = dir.path().join("c.log");
+        std::fs::write(&c, "c\n").unwrap();
+
+        let mut settings = Settings::read(&ini);
+        let plan = start_plan(&mut settings, None, false, &[b.clone(), c.clone()]).unwrap();
+        assert_eq!(
+            plan.paths,
+            vec![a.clone(), b.clone(), c.clone()],
+            "no duplicate b"
+        );
+
+        let plan = start_plan(&mut settings, None, true, &[c.clone()]).unwrap();
+        assert_eq!(plan.paths, vec![c.clone()], "--fresh skips the workspace");
+
+        let missing = dir.path().join("none.fasttail-session.ini");
+        assert!(start_plan(&mut settings, Some(&missing), false, &[]).is_err());
     }
 
     #[test]

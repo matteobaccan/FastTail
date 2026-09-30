@@ -24,7 +24,7 @@
 ## 3. Terminal interface: viewing
 
 - [x] 3.1 Move the prototype into the library module `tui` with `tui::run(args, config)`; `src/bin/fasttail-tui.rs` as a thin `main`; keep `--bench`, `--capture`, `--stats` hidden for tests and measurements
-- [ ] 3.2 Open everything through `workspace::open_target`; workspace restore, `--fresh`, `--session`, command-line paths as in the GUI
+- [x] 3.2 Open everything through `workspace::open_target`; workspace restore, `--fresh`, `--session`, command-line paths as in the GUI
 - [ ] 3.3 Keyboard cursor row, `Shift+↑` / `Shift+↓` selection, row actions on selection or cursor; cell-width horizontal scroll
 - [ ] 3.4 Bookmarks (`b`, `Ctrl+F2`, `]` `[`, `F2` `Shift+F2`), note dialog (`m`), note in the status bar, `Ctrl+K` context view with banner, go-to dialog (`Ctrl+G`, `:`)
 - [ ] 3.5 HEX view (`h`): width-driven bytes per row, visible rows only, byte hits painted, `n` / `N`, place kept both ways, offset go-to, follow
