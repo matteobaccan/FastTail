@@ -57,6 +57,8 @@ pub enum Action {
     GoTo,
     /// `h`: the HEX view of the bytes, and back to the lines.
     ToggleHex,
+    /// `a`: how escape sequences show: auto, render, strip, raw.
+    CycleAnsi,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -122,6 +124,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('m') => Action::EditNote,
         KeyCode::Char(':') => Action::GoTo,
         KeyCode::Char('h') => Action::ToggleHex,
+        KeyCode::Char('a') => Action::CycleAnsi,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -198,6 +201,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('g'), ctrl), Some(Action::GoTo));
         assert_eq!(k(KeyCode::Char(':'), none), Some(Action::GoTo));
         assert_eq!(k(KeyCode::Char('h'), none), Some(Action::ToggleHex));
+        assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),

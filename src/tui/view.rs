@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 //! Pure layout of the log view: which rows are on screen, where the window moves to
-//! reveal a row, and how a line is cut into plain and search-hit segments. No terminal
+//! reveal a row, and how a line is cut into plain, ANSI-coloured and search-hit segments.
+//! No terminal
 //! and no engine here, so all of it is testable.
 
 use std::ops::Range;
@@ -81,30 +82,72 @@ pub fn hit_ranges(line: &str, query: &str) -> Vec<Range<usize>> {
     out
 }
 
-/// `line` cut into consecutive segments, each flagged when it is a search hit.
-pub fn segments<'a>(line: &'a str, hits: &[Range<usize>]) -> Vec<(&'a str, bool)> {
-    let mut out = Vec::with_capacity(hits.len() * 2 + 1);
-    let mut pos = 0;
-    for h in hits {
-        if h.start > pos {
-            out.push((&line[pos..h.start], false));
-        }
-        out.push((&line[h.start..h.end], true));
-        pos = h.end;
-    }
-    if pos < line.len() || out.is_empty() {
-        out.push((&line[pos..], false));
-    }
-    out
+/// What paints a segment of a line: nothing, ANSI style run `i`, or a search hit (which
+/// wins over the run under it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Paint {
+    Plain,
+    Run(usize),
+    Hit,
 }
 
-/// Text safe to hand to the terminal: tabs expanded to four spaces and other control
-/// characters (a stray ESC, CR, BEL) shown as `·` instead of being interpreted.
+/// `line` cut into consecutive segments by the search `hits` and the ANSI style `runs`
+/// (both sorted and non-overlapping byte ranges). Neighbours painted alike are merged.
+pub fn segments<'a>(
+    line: &'a str,
+    hits: &[Range<usize>],
+    runs: &[Range<usize>],
+) -> Vec<(&'a str, Paint)> {
+    let len = line.len();
+    let mut cuts = Vec::with_capacity(2 * (hits.len() + runs.len()) + 2);
+    cuts.extend([0, len]);
+    for r in hits.iter().chain(runs) {
+        cuts.extend([r.start.min(len), r.end.min(len)]);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut parts: Vec<(usize, usize, Paint)> = Vec::with_capacity(cuts.len());
+    let (mut h, mut r) = (0, 0);
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        while hits.get(h).is_some_and(|x| x.end <= a) {
+            h += 1;
+        }
+        while runs.get(r).is_some_and(|x| x.end <= a) {
+            r += 1;
+        }
+        let paint = if hits.get(h).is_some_and(|x| x.start <= a) {
+            Paint::Hit
+        } else if runs.get(r).is_some_and(|x| x.start <= a) {
+            Paint::Run(r)
+        } else {
+            Paint::Plain
+        };
+        match parts.last_mut() {
+            Some(last) if last.2 == paint => last.1 = b,
+            _ => parts.push((a, b, paint)),
+        }
+    }
+    if parts.is_empty() {
+        return vec![(line, Paint::Plain)];
+    }
+    parts
+        .into_iter()
+        // A range off a character boundary (never from the engine) is dropped rather
+        // than cut through a character.
+        .filter_map(|(a, b, p)| line.get(a..b).map(|t| (t, p)))
+        .collect()
+}
+
+/// Text safe to hand to the terminal: tabs expanded to four spaces, `ESC` shown as `^[`
+/// (raw ANSI mode) and other control characters (CR, BEL) as `·`, so no sequence from a
+/// log line is ever interpreted by the terminal.
 pub fn sanitize(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
             '\t' => out.push_str("    "),
+            '\x1b' => out.push_str("^["),
             c if c.is_control() => out.push('\u{b7}'),
             c => out.push(c),
         }
@@ -115,15 +158,15 @@ pub fn sanitize(text: &str) -> String {
 /// Drops the first `skip` terminal cells of the segment list (horizontal scroll). Wide
 /// characters (CJK, most emoji) take two cells; one cut in half becomes a space, so the
 /// columns after it stay where they are.
-pub fn skip_cells(segments: Vec<(String, bool)>, mut skip: usize) -> Vec<(String, bool)> {
+pub fn skip_cells<P>(segments: Vec<(String, P)>, mut skip: usize) -> Vec<(String, P)> {
     use unicode_width::UnicodeWidthChar;
     if skip == 0 {
         return segments;
     }
     let mut out = Vec::with_capacity(segments.len());
-    for (text, hit) in segments {
+    for (text, paint) in segments {
         if skip == 0 {
-            out.push((text, hit));
+            out.push((text, paint));
             continue;
         }
         let mut cut = text.len();
@@ -151,7 +194,7 @@ pub fn skip_cells(segments: Vec<(String, bool)>, mut skip: usize) -> Vec<(String
                 } else {
                     rest.to_string()
                 },
-                hit,
+                paint,
             ));
             skip = 0;
         }
@@ -208,24 +251,49 @@ mod tests {
         let line = "Error: disk error on ERROR path";
         let hits = hit_ranges(line, "error");
         assert_eq!(hits, vec![0..5, 12..17, 21..26]);
-        let segs = segments(line, &hits);
-        assert_eq!(segs[0], ("Error", true));
-        assert_eq!(segs[1], (": disk ", false));
-        assert_eq!(segs.last().unwrap(), &(" path", false));
+        let segs = segments(line, &hits, &[]);
+        assert_eq!(segs[0], ("Error", Paint::Hit));
+        assert_eq!(segs[1], (": disk ", Paint::Plain));
+        assert_eq!(segs.last().unwrap(), &(" path", Paint::Plain));
         assert!(hit_ranges(line, "  ").is_empty());
-        assert_eq!(segments("abc", &[]), vec![("abc", false)]);
+        assert_eq!(segments("abc", &[], &[]), vec![("abc", Paint::Plain)]);
+        assert_eq!(segments("", &[], &[]), vec![("", Paint::Plain)]);
     }
 
     #[test]
     fn hits_respect_utf8_boundaries() {
         let line = "città ERR città";
         let hits = hit_ranges(line, "err");
-        assert_eq!(segments(line, &hits)[1], ("ERR", true));
+        assert_eq!(segments(line, &hits, &[])[1], ("ERR", Paint::Hit));
+    }
+
+    #[test]
+    fn a_hit_wins_over_the_ansi_run_under_it() {
+        // "red" is a run over 4..12, "err" a hit over 6..9 inside it.
+        let (hit, run) = (6..9, 4..12);
+        let segs = segments(
+            "the red error",
+            std::slice::from_ref(&hit),
+            std::slice::from_ref(&run),
+        );
+        assert_eq!(
+            segs,
+            vec![
+                ("the ", Paint::Plain),
+                ("re", Paint::Run(0)),
+                ("d e", Paint::Hit),
+                ("rro", Paint::Run(0)),
+                ("r", Paint::Plain),
+            ]
+        );
+        // Two runs side by side stay apart: they carry different styles.
+        let segs = segments("abcd", &[], &[0..2, 2..4]);
+        assert_eq!(segs, vec![("ab", Paint::Run(0)), ("cd", Paint::Run(1))]);
     }
 
     #[test]
     fn sanitize_and_horizontal_scroll() {
-        assert_eq!(sanitize("a\tb\x1b[0m\r"), "a    b\u{b7}[0m\u{b7}");
+        assert_eq!(sanitize("a\tb\x1b[0m\r"), "a    b^[[0m\u{b7}");
         let segs = vec![("hello ".to_string(), false), ("world".to_string(), true)];
         let cut = skip_cells(segs.clone(), 8);
         assert_eq!(cut, vec![("rld".to_string(), true)]);
