@@ -64,7 +64,7 @@ OPTIONS:
 
 ENVIRONMENT:
     FASTTAIL_CONFIG      Configuration file, as for the GUI
-    FASTTAIL_TUI_COLORS  16 or truecolor: overrides the colour detection
+    FASTTAIL_TUI_COLORS  16, 256 or truecolor: overrides the colour detection
     FASTTAIL_TUI_ASCII   set: same as --ascii
 
 Press ? or F1 in the viewer for the keys.
@@ -285,13 +285,29 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     }
     let mut stats = FrameStats::default();
     let result = run_terminal(&mut app, &mut stats, &opts);
-    if let Err(e) = result {
-        eprintln!("fasttail-tui: {e}");
-    }
     if let Some(file) = &opts.stats {
         let _ = std::fs::write(file, stats.report(palette));
     }
-    0
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            // The terminal is already restored: the message lands on the main screen.
+            eprintln!("fasttail-tui: {e}");
+            1
+        }
+    }
+}
+
+/// Why the terminal could not be taken over: raw mode refused, as mintty does without
+/// `winpty` (its pipes are not a console), or no terminal at all.
+fn no_raw_mode() -> &'static str {
+    if cfg!(windows) {
+        "this terminal cannot be used interactively (raw mode refused). Run fasttail-tui \
+         in Windows Terminal, cmd or PowerShell, or through winpty (winpty fasttail-tui) \
+         in mintty / Git Bash"
+    } else {
+        "no interactive terminal (raw mode refused): run fasttail-tui in a terminal"
+    }
 }
 
 /// Prints one frame as text once the files are indexed (the captures in the docs).
@@ -339,7 +355,8 @@ fn run_terminal(app: &mut App, stats: &mut FrameStats, opts: &Options) -> io::Re
         restore_terminal();
         default_hook(info);
     }));
-    terminal::enable_raw_mode()?;
+    terminal::enable_raw_mode()
+        .map_err(|e| io::Error::new(e.kind(), format!("{} ({e})", no_raw_mode())))?;
     execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
     if app.mouse {
         // On Windows this also turns QuickEdit off while the app runs (crossterm sets

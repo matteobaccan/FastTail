@@ -383,9 +383,9 @@ all of them, because the library crate is monolithic. A clean release build took
   hosts. Keys and mouse were only exercised through the unit tests, not by hand.
 - **Truecolor detection.** `COLORTERM=truecolor|24bit`, `WT_SESSION` (Windows Terminal),
   or a Windows console that accepts VT sequences (`crossterm::ansi_support`) mean RGB.
-  Otherwise the 16 basic colours are used. `FASTTAIL_TUI_COLORS=16|truecolor` overrides
-  the detection. `xterm-256color` without `COLORTERM` is treated as 16 colours, which is
-  conservative; a real port would add the 256-colour cube.
+  `TERM` holding `256color` means the xterm 256-colour cube and grey ramp (nearest
+  entry); otherwise the 16 basic colours are used. `FASTTAIL_TUI_COLORS=16|256|truecolor`
+  overrides the detection.
 - **Legacy console.** Without VT support (the pre-2017 conhost, or "Use legacy console"
   ticked), crossterm falls back to the WinAPI with 16 colours, and raster fonts may not
   have box characters. The TUI then switches to the 16-colour palette and ASCII
