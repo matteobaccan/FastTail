@@ -43,7 +43,11 @@
 - [ ] 4.3 Filter presets (`p`): apply, save current as, rename, delete
 - [ ] 4.4 Global filter editor (`F`) and on / off (`f`), 300 ms debounce
 - [ ] 4.5 External tools: editor page in Settings, `!` menu on the cursor row or selection, shortcuts, rule-bound runs with the 1 per second and 10 children limits, null standard handles for every child
-- [ ] 4.5b Key conventions: `e`/`E`, `w`/`W` level jumps, counts, `?` with no file, `:` palette over `src/actions.rs` (line jump), bindings from the registry, Kitty keyboard protocol on / off
+- [ ] 4.5b Key conventions:
+  - [x] `e`/`E`, `w`/`W` level jumps (`TailEngine::level_line_from`, cached levels only, no file read) and counts (`12j`, `3e`, at most 99,999; `0` alone still scrolls, `Esc` drops a count)
+  - [ ] `?` with no file (an empty workspace, also after closing the last stream)
+  - [ ] `:` palette over `src/actions.rs` (line jump)
+  - [ ] Bindings from the registry, Kitty keyboard protocol on / off
 - [ ] 4.6 Lock screen: `Ctrl+L`, idle lock from the shared idle clock, full-screen bordered PIN dialog with nothing else drawn, key and mouse filtering (`q`, `Esc`, `Ctrl+C` dropped), shared attempts and cooldown, maintenance phrase, tailing continues, exact restore
 - [x] 4.7 Close stream (`Ctrl+W`, as a browser or editor tab; `w` / `W` are the warning jumps of 4.5b and closing a window moved to `Alt+X`); the last stream stays open until 4.5b handles an empty workspace (the theme cycle `T` shipped with 3.10)
 

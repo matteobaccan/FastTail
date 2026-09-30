@@ -417,6 +417,8 @@ pub struct App {
     /// Stream whose rows a left-button drag is selecting.
     drag: Option<usize>,
     last_signature: Signature,
+    /// A count typed before a move (`12j`, `3e`).
+    count: Option<u32>,
 }
 
 /// How often the configuration is saved while it changes, as in the GUI.
@@ -426,6 +428,8 @@ const SAVE_EVERY: Duration = Duration::from_secs(2);
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Rows moved by one wheel step, as in the GUI.
 const WHEEL_ROWS: usize = 3;
+/// The largest count before a move.
+const MAX_COUNT: u32 = 99_999;
 /// Share of a split one `Alt+arrow` moves its divider.
 const RESIZE_STEP: f32 = 0.05;
 
@@ -465,6 +469,7 @@ impl App {
             last_click: None,
             drag: None,
             last_signature: Signature::default(),
+            count: None,
         }
     }
 
@@ -724,7 +729,21 @@ impl App {
         if self.show_help && self.on_help_key(key) {
             return true;
         }
+        if let Some(n) = self.count_digit(key) {
+            self.count = Some(n);
+            self.message = Some(format!("Count {n}"));
+            return true;
+        }
+        let count = self.count.take();
+        if count.is_some() && key.code == crossterm::event::KeyCode::Esc {
+            self.message = None;
+            return true;
+        }
         let Some(action) = keys::map_key(key) else {
+            if count.is_some() {
+                self.message = None;
+                return true;
+            }
             return false;
         };
         // Any other key closes the help (and acts); `?` / F1 only close it.
@@ -735,8 +754,100 @@ impl App {
             }
         }
         self.message = None;
-        self.apply(action);
+        self.apply_counted(action, count.unwrap_or(1));
         true
+    }
+
+    /// The count after digit `key`: `1`-`9` start one, `0` extends it (alone it is
+    /// still the scroll to column 0). At most `MAX_COUNT`.
+    fn count_digit(&self, key: crossterm::event::KeyEvent) -> Option<u32> {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release
+            || key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return None;
+        }
+        let KeyCode::Char(c @ '0'..='9') = key.code else {
+            return None;
+        };
+        if c == '0' && self.count.is_none() {
+            return None;
+        }
+        let digit = c as u32 - '0' as u32;
+        Some(
+            self.count
+                .unwrap_or(0)
+                .saturating_mul(10)
+                .saturating_add(digit)
+                .min(MAX_COUNT),
+        )
+    }
+
+    /// `action` repeated `count` times for the moves that take a count (`j` `k` `n`
+    /// `N` `e` `E` `w` `W`); any other action runs once.
+    pub fn apply_counted(&mut self, action: Action, count: u32) {
+        match action {
+            Action::NextError | Action::PrevError | Action::NextWarn | Action::PrevWarn => {
+                let errors = matches!(action, Action::NextError | Action::PrevError);
+                let forward = matches!(action, Action::NextError | Action::NextWarn);
+                self.level_jump(errors, forward, count.max(1));
+            }
+            Action::LineUp | Action::LineDown | Action::SearchNext | Action::SearchPrev => {
+                for _ in 0..count.max(1) {
+                    self.apply(action);
+                }
+            }
+            _ => self.apply(action),
+        }
+    }
+
+    /// `e` `E` `w` `W`: the cursor to the `count`-th next (or previous) ERROR or WARN
+    /// line visible under the filters, wrapping around.
+    fn level_jump(&mut self, errors: bool, forward: bool, count: u32) {
+        let name = if errors { "ERROR" } else { "WARN" };
+        let tab = &mut self.tabs[self.active];
+        if tab.is_hex() {
+            self.message = Some("The HEX view shows bytes, not lines: h returns to them".into());
+            return;
+        }
+        let warn = LogLevel::Warn as u8;
+        let want = |v: u8| {
+            if errors {
+                crate::tail_engine::is_error_level(v)
+            } else {
+                v == warn
+            }
+        };
+        let mut line = tab.cursor_line().unwrap_or(0);
+        let (mut found, mut wrapped) = (false, false);
+        for _ in 0..count {
+            match tab.engine.level_line_from(line, forward, want) {
+                Some((l, w)) => {
+                    line = l;
+                    found = true;
+                    wrapped |= w;
+                }
+                None => break,
+            }
+        }
+        if !found {
+            let yet = if tab.engine.levels_complete() {
+                ""
+            } else {
+                " yet (levels are still being read)"
+            };
+            self.message = Some(format!("No {name} line visible{yet}"));
+            return;
+        }
+        if let Some(row) = tab.engine.get_visible_row_of_line(line) {
+            tab.set_cursor(row);
+        }
+        if wrapped {
+            let end = if forward { "first" } else { "last" };
+            self.message = Some(format!("{name}: back to the {end}"));
+        }
     }
 
     /// The help's own keys: the cursor over the entries and `Enter` to run one. Returns
@@ -1696,6 +1807,9 @@ impl App {
             Action::EditExclude => self.open_prompt(PromptKind::Exclude),
             Action::SplitRight => self.split_focused(Dir::Horizontal),
             Action::SplitDown => self.split_focused(Dir::Vertical),
+            Action::NextError | Action::PrevError | Action::NextWarn | Action::PrevWarn => {
+                self.apply_counted(action, 1)
+            }
             Action::ClosePane => self.close_pane(),
             Action::CloseStream => self.close_stream(),
             Action::ResizeLeft => self.resize_pane(Dir::Horizontal, -RESIZE_STEP),
@@ -3158,6 +3272,21 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "b  Ctrl+F2",
         "bookmark the cursor row, on or off",
         Some(Action::ToggleBookmark),
+    ),
+    (
+        "e E",
+        "next / previous ERROR line (wraps)",
+        Some(Action::NextError),
+    ),
+    (
+        "w W",
+        "next / previous WARN line (wraps)",
+        Some(Action::NextWarn),
+    ),
+    (
+        "count",
+        "digits before j k n N e E w W repeat it: 10j, 3e",
+        None,
     ),
     ("] F2", "next bookmark (wraps)", Some(Action::NextBookmark)),
     (
@@ -5111,6 +5240,51 @@ mod tests {
         // Every stream is still drawn somewhere.
         let screen = render(&mut app, 80, 14);
         assert!(screen[1].contains("[#3] c.log"), "{screen:#?}");
+    }
+
+    #[test]
+    fn a_count_before_e_jumps_to_the_nth_error_and_w_finds_warnings() {
+        use crossterm::event::KeyCode;
+        let body: String = (1..=100)
+            .map(|i| {
+                let level = match i {
+                    10 | 50 | 90 => "ERROR",
+                    30 => "WARN",
+                    _ => "INFO",
+                };
+                format!("2026-09-28 10:00:00 {level} line {i}\n")
+            })
+            .collect();
+        let (mut app, _dir) = app_with(&[("a.log", &body)], false);
+        render(&mut app, 80, 20);
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.tabs[0].cursor_line(), Some(0));
+        // `2e` from row 1: the second ERROR, line 50 (index 49).
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.message.as_deref(), Some("Count 2"));
+        press(&mut app, KeyCode::Char('e'));
+        assert_eq!(app.tabs[0].cursor_line(), Some(49));
+        assert!(!app.tabs[0].engine.follow_tail);
+        // `E` back to line 10; `E` again wraps to line 90.
+        press(&mut app, KeyCode::Char('E'));
+        assert_eq!(app.tabs[0].cursor_line(), Some(9));
+        press(&mut app, KeyCode::Char('E'));
+        assert_eq!(app.tabs[0].cursor_line(), Some(89));
+        assert_eq!(app.message.as_deref(), Some("ERROR: back to the last"));
+        // `w` finds the WARN line; `12j` moves twelve rows; `0` alone still scrolls.
+        press(&mut app, KeyCode::Char('w'));
+        assert_eq!(app.tabs[0].cursor_line(), Some(29));
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.tabs[0].cursor_line(), Some(41));
+        press(&mut app, KeyCode::Char('0'));
+        assert!(app.count.is_none());
+        // Esc drops a pending count.
+        press(&mut app, KeyCode::Char('5'));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.tabs[0].cursor_line(), Some(42));
     }
 
     #[test]

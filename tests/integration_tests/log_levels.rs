@@ -286,3 +286,52 @@ fn test_level_i18n_keys() {
         }
     }
 }
+
+#[test]
+fn level_jumps_find_the_next_visible_line_and_wrap() {
+    use fasttail::tail_engine::is_error_level;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("levels_jump.log");
+    write_level_log(&log);
+    let mut engine = TailEngine::open(&log).unwrap();
+    let warn = |v: u8| v == fasttail::log_level::LogLevel::Warn as u8;
+    // ERROR on line 3, FATAL on line 7, WARN on line 2.
+    assert_eq!(
+        engine.level_line_from(0, true, is_error_level),
+        Some((3, false))
+    );
+    assert_eq!(
+        engine.level_line_from(3, true, is_error_level),
+        Some((7, false))
+    );
+    assert_eq!(
+        engine.level_line_from(7, true, is_error_level),
+        Some((3, true))
+    );
+    assert_eq!(
+        engine.level_line_from(3, false, is_error_level),
+        Some((7, true))
+    );
+    assert_eq!(engine.level_line_from(5, false, warn), Some((2, false)));
+    assert_eq!(engine.level_line_from(5, true, warn), Some((2, true)));
+    // A line the filters hide is skipped.
+    engine.set_exclude_filter("payment");
+    wait_for_jobs(&mut engine);
+    assert_eq!(
+        engine.level_line_from(0, true, is_error_level),
+        Some((7, false))
+    );
+    engine.set_exclude_filter("kernel");
+    wait_for_jobs(&mut engine);
+    assert_eq!(
+        engine.level_line_from(0, true, is_error_level),
+        Some((3, false))
+    );
+    assert_eq!(
+        engine.level_line_from(3, true, is_error_level),
+        Some((3, true))
+    );
+    engine.set_exclude_filter("");
+    wait_for_jobs(&mut engine);
+    assert_eq!(engine.level_line_from(0, true, |_| false), None);
+}
