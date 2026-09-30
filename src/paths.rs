@@ -35,3 +35,33 @@ pub fn paths_equal(a: &Path, b: &Path) -> bool {
     }
     false
 }
+
+/// Creates or truncates a regular export file safely.
+/// Opens without truncating, validates that the handle points to a regular file,
+/// and truncates to 0 bytes only after confirming it is not a directory or non-regular file.
+pub fn create_export_file(target: &Path) -> std::io::Result<std::fs::File> {
+    if target.exists() {
+        let meta = std::fs::metadata(target)?;
+        if !meta.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Target path is not a regular file",
+            ));
+        }
+    }
+    // Not truncated on open: only once it is known to be a regular file (below).
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(target)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Target path is not a regular file",
+        ));
+    }
+    file.set_len(0)?;
+    Ok(file)
+}

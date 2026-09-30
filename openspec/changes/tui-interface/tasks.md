@@ -11,7 +11,7 @@
 - [x] 1.5 `src/lock.rs`: `LockAttempts`, `LOCK_MAX_FAILURES`, `LOCK_COOLDOWN`, `pin_matches` and an idle clock with the arming rule, out of `ui/app.rs` and `config.rs`; the GUI lock uses it
 - [x] 1.6 `src/settings_model.rs`: ranges, defaults and validation of every setting both interfaces edit, highlight-rule, preset, global-filter and tool validation; the GUI Settings and `FastTailConfig::load` use it
 - [x] 1.7 Search wrap-around and rule sound alerts returned as engine events instead of calling `audio` from the engine; the GUI plays them
-- [ ] 1.8 `Cargo.toml`: features `gui` and `tui`, `default = ["gui", "tui"]`; optional GUI crates under `gui`; `ui` and `renderer` behind `#[cfg(feature = "gui")]`; `[[bin]]` entries with `required-features`
+- [x] 1.8 `Cargo.toml`: features `gui` and `tui`, `default = ["gui", "tui"]`; optional GUI crates under `gui`; `ui` and `renderer` behind `#[cfg(feature = "gui")]`; `[[bin]]` entries with `required-features`
 - [ ] 1.9 Unit tests for each moved piece; `cargo check --no-default-features --features tui`; `cargo tree` without GUI crates
 
 ## 2. Configuration shared and written by both interfaces

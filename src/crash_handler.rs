@@ -227,11 +227,15 @@ pub fn install_crash_handler() {
             ISSUES_URL
         );
 
+        #[cfg(feature = "gui")]
         rfd::MessageDialog::new()
             .set_title("FastTail - Unexpected Crash")
             .set_description(&desc)
             .set_level(rfd::MessageLevel::Error)
             .show();
+        // Without a window toolkit the report goes to the terminal.
+        #[cfg(not(feature = "gui"))]
+        eprintln!("{desc}");
     }));
 }
 
