@@ -660,31 +660,18 @@ impl FastTailApp {
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
         if has_restored_tabs {
             // Restore engines for tabs already positioned in the dock layout without altering dock tree
-            let mut tabs_to_open: Vec<PathBuf> = Vec::new();
-            for (_, tab) in app.dock_state.iter_all_tabs() {
-                if let FastTailTab::LogStream(p) = tab {
-                    if !tabs_to_open
-                        .iter()
-                        .any(|existing| paths_equal(existing.as_path(), p.as_path()))
-                    {
-                        tabs_to_open.push(p.clone());
-                    }
-                }
-            }
-            for path in tabs_to_open {
-                // A pattern tab resolves to the newest match again at every start; a
-                // compressed one is decompressed again in the background. Archives,
-                // missing and unreadable files are skipped.
-                let wake = Self::make_wake(&app.egui_ctx);
-                if let OpenOutcome::Opened(engine) =
-                    crate::workspace::open_target(&path, &app.config, Some(wake))
-                {
-                    let mut engine = *engine;
-                    crate::workspace::apply_settings(&mut engine, &app.config);
-                    crate::workspace::restore_stream(&mut engine, &app.config, &path);
-                    app.engines.push(engine);
-                }
-            }
+            let tabs: Vec<PathBuf> = app
+                .dock_state
+                .iter_all_tabs()
+                .filter_map(|(_, tab)| match tab {
+                    FastTailTab::LogStream(p) => Some(p.clone()),
+                    _ => None,
+                })
+                .collect();
+            // Missing and unreadable files are skipped, as are bare archives.
+            let wake = Self::make_wake(&app.egui_ctx);
+            let restored = crate::workspace::open_all(&tabs, &app.config, Some(wake));
+            app.engines.extend(restored.engines);
         } else {
             // Clean dock layout: open previously saved files into dock
             for path in app.config.open_files.clone() {

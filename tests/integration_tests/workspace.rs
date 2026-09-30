@@ -185,3 +185,38 @@ fn snapshot_writes_the_open_files_and_stream_states_into_the_config() {
         "nothing new"
     );
 }
+
+#[test]
+fn restore_reopens_the_saved_open_files_with_their_state() {
+    use fasttail::workspace::restore;
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.log");
+    let b = dir.path().join("b.log");
+    std::fs::write(&a, "one\ntwo\n").unwrap();
+    std::fs::write(&b, "three\n").unwrap();
+    let bundle = dir.path().join("bundle.zip");
+    zip(&bundle, &["x.log", "y.log"]);
+    let gone = dir.path().join("gone.log");
+
+    let mut cfg = config(dir.path());
+    cfg.open_files = vec![
+        b.clone(),
+        gone.clone(),
+        a.clone(),
+        b.clone(),
+        bundle.clone(),
+    ];
+    let mut entry = fasttail::session::StreamEntry::new(a.clone());
+    entry.include_filter = "two".to_string();
+    cfg.set_stream_state(entry);
+
+    let restored = restore(&cfg, None);
+    let paths: Vec<_> = restored.engines.iter().map(|e| e.path.clone()).collect();
+    assert_eq!(
+        paths,
+        vec![b.clone(), a.clone()],
+        "tab order, no duplicates"
+    );
+    assert_eq!(restored.skipped, vec![gone, bundle]);
+    assert_eq!(restored.engines[1].include_filter(), "two");
+}
