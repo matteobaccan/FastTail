@@ -98,6 +98,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
             KeyCode::Up => return Some(Action::SelectUp),
             KeyCode::Down => return Some(Action::SelectDown),
             KeyCode::F(2) => return Some(Action::PrevBookmark),
+            KeyCode::F(3) => return Some(Action::SearchPrev),
             _ => {}
         }
     }
@@ -116,7 +117,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Right => Action::ScrollRight,
         KeyCode::Char('0') => Action::ScrollHome,
         KeyCode::Char('/') => Action::StartSearch,
-        KeyCode::Char('n') => Action::SearchNext,
+        KeyCode::Char('n') | KeyCode::F(3) => Action::SearchNext,
         KeyCode::Char('N') => Action::SearchPrev,
         KeyCode::Esc => Action::ClearSearch,
         KeyCode::Char('i') => Action::EditInclude,
@@ -174,6 +175,11 @@ mod tests {
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));
         assert_eq!(k(KeyCode::Char('o'), none), Some(Action::OpenFile));
+        assert_eq!(k(KeyCode::F(3), none), Some(Action::SearchNext));
+        assert_eq!(
+            k(KeyCode::F(3), KeyModifiers::SHIFT),
+            Some(Action::SearchPrev)
+        );
         let shift = KeyModifiers::SHIFT;
         assert_eq!(k(KeyCode::Char('O'), shift), Some(Action::OpenSession));
         assert_eq!(k(KeyCode::Char('S'), shift), Some(Action::SaveSession));
