@@ -66,6 +66,8 @@ pub enum Action {
     /// `O`: load a session; `S`: save the open streams as a session.
     OpenSession,
     SaveSession,
+    /// `T`: the next theme.
+    CycleTheme,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -137,6 +139,7 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('o') => Action::OpenFile,
         KeyCode::Char('O') => Action::OpenSession,
         KeyCode::Char('S') => Action::SaveSession,
+        KeyCode::Char('T') => Action::CycleTheme,
         KeyCode::Char('?') | KeyCode::F(1) => Action::ToggleHelp,
         _ => return None,
     })
@@ -183,6 +186,7 @@ mod tests {
         let shift = KeyModifiers::SHIFT;
         assert_eq!(k(KeyCode::Char('O'), shift), Some(Action::OpenSession));
         assert_eq!(k(KeyCode::Char('S'), shift), Some(Action::SaveSession));
+        assert_eq!(k(KeyCode::Char('T'), shift), Some(Action::CycleTheme));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),

@@ -339,8 +339,9 @@ a few kilobytes on the main thread, as in the GUI.
 **Colours.** Truecolor when `COLORTERM` is `truecolor` / `24bit`, `WT_SESSION` is set or
 the Windows console accepts VT sequences; 256 colours when `TERM` contains `256color`;
 16 otherwise; `FASTTAIL_TUI_COLORS=16|256|truecolor` overrides. Colours are reduced by
-nearest match; backgrounds and plain text use the terminal's own. Precedence: search hit
-over rule over ANSI, as in the GUI. **Text width** is measured in cells
+nearest match; at 256 colours and truecolor the theme paints backgrounds, text and
+borders as in the GUI (at 16 colours the terminal's own stay), and dialogs cast a shadow.
+Precedence: search hit over rule over ANSI, as in the GUI. **Text width** is measured in cells
 (`unicode-width`) for CJK dialogs and wide characters.
 
 ### 12. Release gate

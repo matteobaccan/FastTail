@@ -286,17 +286,67 @@ impl Palette {
             (true, Chrome::Focused) => ASCII_FOCUSED_BORDER,
             (true, _) => ASCII_BORDER,
             (false, Chrome::Focused) => border::DOUBLE,
-            (false, Chrome::Dialog) => border::ROUNDED,
+            // Square corners: the rounded ones are missing from common console fonts
+            // (Consolas), which draw a mismatched glyph there.
+            (false, Chrome::Dialog) => border::PLAIN,
             (false, Chrome::Plain) => border::PLAIN,
         }
     }
 
-    /// Border colour: the theme accent for the focused window and dialogs.
+    /// Border colour: the theme accent for the focused window and dialogs, the theme's
+    /// border colour for the others.
     pub fn border_style(&self, chrome: Chrome) -> Style {
         match chrome {
             Chrome::Focused | Chrome::Dialog => Style::default().fg(self.accent()),
+            Chrome::Plain if self.painted() => {
+                Style::default().fg(self.map(self.theme.border_color()))
+            }
             Chrome::Plain => Style::default().fg(self.dim()),
         }
+    }
+
+    /// Whether the theme paints the backgrounds and the plain text, as the GUI does.
+    /// With 16 colours the terminal's own background and text stay: the theme's shades
+    /// would turn into rough approximations there.
+    pub fn painted(&self) -> bool {
+        self.depth != ColorDepth::Ansi16
+    }
+
+    /// The theme's own colours behind `bg`, with its primary text colour; the terminal's
+    /// defaults when the theme is not painted.
+    fn surface(&self, bg: Rgba) -> Style {
+        if !self.painted() {
+            return Style::default();
+        }
+        Style::default()
+            .bg(self.map(bg))
+            .fg(self.map(self.theme.text_primary()))
+    }
+
+    /// The screen behind the windows.
+    pub fn screen(&self) -> Style {
+        self.surface(self.theme.bg_color())
+    }
+
+    /// Inside a stream window and the status bar.
+    pub fn window(&self) -> Style {
+        self.surface(self.theme.panel_bg())
+    }
+
+    /// Inside a dialog: the active tab's shade, a step above the windows.
+    pub fn dialog(&self) -> Style {
+        self.surface(self.theme.tab_active_bg())
+    }
+
+    /// The shadow a dialog casts on what is behind it: a dark band, the covered text
+    /// still readable in the dim colour.
+    pub fn shadow(&self) -> Style {
+        let bg = if self.painted() {
+            self.map(self.theme.bg_color().gamma_multiply(0.35))
+        } else {
+            Color::Black
+        };
+        Style::default().bg(bg).fg(Color::DarkGray)
     }
 
     fn map(&self, c: Rgba) -> Color {
