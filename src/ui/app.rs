@@ -2856,8 +2856,9 @@ impl FastTailApp {
                     .min_size(egui::vec2(0.0, 26.0));
 
                     if ui
-                        .add(play_btn)
+                        .add_enabled(!self.engines.is_empty(), play_btn)
                         .on_hover_text(t(self.config.language, "play_tip"))
+                        .on_disabled_hover_text(t(self.config.language, "status_no_file"))
                         .clicked()
                     {
                         for eng in &mut self.engines {
@@ -2886,8 +2887,9 @@ impl FastTailApp {
                     .min_size(egui::vec2(0.0, 26.0));
 
                     if ui
-                        .add(pause_btn)
+                        .add_enabled(!self.engines.is_empty(), pause_btn)
                         .on_hover_text(t(self.config.language, "pause_tip"))
+                        .on_disabled_hover_text(t(self.config.language, "status_no_file"))
                         .clicked()
                     {
                         for eng in &mut self.engines {
