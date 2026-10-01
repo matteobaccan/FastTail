@@ -84,14 +84,14 @@ plus binary. Maintainer: Matteo Baccan. Licence: MIT.
    lnav, LogExpert, ...) and propose the next features as OpenSpec changes.
 
 **Nightly release (maintainer decision, 2026-09-30).** Every evening after 18:00 (Europe/Rome)
-a patch release is cut from `main` (`0.15.1`, `0.15.2`, ...) when something was merged since
+a patch release of the current minor is cut from `main` (`0.16.1`, `0.16.2`, ...) when something was merged since
 the last tag; nothing merged, no release. Steps 1 to 3 above are skipped for it (the
 maintainer tests the published build); step 4 applies (release PR, CI green, merge), with the CHANGELOG `[Unreleased]` entries
 of the day as its section. The tag is automatic: `.github/workflows/release-tag.yml` tags
 `vx.y.z` when the version reaches `main` and starts `build.yml` on the tag (agent
 sessions cannot push tags). A minor
-version (`0.16.0`, ..., `0.20.0`) is cut only when a milestone of the plan is complete, with
-the full process. Work that is not ready stays out of `main` or is described in the
+version is cut when a milestone of the plan is complete, or when the maintainer asks for one
+after testing a preview build (0.16.0), with the full process. Work that is not ready stays out of `main` or is described in the
 CHANGELOG as a preview.
 
 Fixed decisions: release targets are Windows x86_64, Linux x86_64, Linux ARM64,
@@ -102,16 +102,60 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.15.0** (2026-09-30): Commander theme and the terminal interface as a
-  preview (`fasttail-tui` in every archive).
-- Next: nightly patch releases (`0.15.x`) while **0.20.0 terminal interface (TUI)** is
-  completed, spec `openspec/changes/tui-interface/`: task group 4 (rule editor, presets,
-  global filter, external tools, lock, the rest of 4.5b: `?` with no file, `:` palette,
-  registry bindings), then groups 5 to 8 (hand-off, release pipeline, i18n, docs,
-  parity checklist). 0.20.0 ships at full GUI parity without the "preview" label.
+- Latest release: **0.16.0** (2026-09-30): terminal-interface windows (floating windows
+  that move, resize and overlap, `[x]` to close, empty workspace, full-screen help). The
+  terminal interface is still a preview. 0.15.0 introduced it and the Commander theme.
+- Next: nightly patch releases (`0.16.x`) while **0.20.0 terminal interface (TUI)** is
+  completed, spec `openspec/changes/tui-interface/` (`tasks.md` is the checklist, ticked
+  as work lands):
+  - Group 4. What is open:
+    - 4.1: the Settings dialog exists; the PIN-lock page and the missing fields are open.
+    - 4.2: the rule editor.
+    - 4.3: presets.
+    - 4.4: the global filter.
+    - 4.5: external tools.
+    - 4.6: the lock screen.
+    - 4.5b: the `:` palette with line jump, and registry bindings with the Kitty protocol.
+  - Groups 5 to 8: hand-off, release pipeline, i18n, `docs/tui.md`, the parity checklist.
+  - 0.20.0 ships at full GUI parity without the "preview" label.
+- In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
+  AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
+  build of `build.yml` on its branch before merging; task 5.0, the downloads grid, is done).
 - Then **0.21.0** analysis (`structured-field-terms`, field statistics, ...),
   **0.22.0** sources/integrations and **0.23.0** binary views (`disassembly-view`); see
   `docs/competitor-analysis.md` section 8.
+
+### Handover notes (2026-09-30, end of the 0.16.0 session)
+
+- No open PRs. `main` holds everything; the 0.16.0 release PR is the last change.
+- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (4.2 rule editor is
+  the biggest remaining piece). The terminal code is in `src/tui/`:
+  - `app.rs`: state, keys, mouse, drawing, tests;
+  - `dock.rs`: layout geometry and drop zones;
+  - `mouse.rs`: the hit map;
+  - `keys.rs`: the key map;
+  - `form.rs`: the dialog toolkit;
+  - `browser.rs`: the Open dialog;
+  - `settings.rs`: the Settings form.
+
+  Their rules are in the spec's `terminal-interface` delta. `src/dock_layout.rs` is shared
+  with the GUI.
+- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (104 tests)
+  and `cargo clippy --no-default-features --features tui --all-targets -- -D warnings` on
+  top of the usual checks.
+- Preview build for the maintainer:
+  1. `cargo build --release --no-default-features --features tui --bin fasttail-tui --target x86_64-pc-windows-gnu`
+  2. `x86_64-w64-mingw32-strip`
+  3. Send the exe.
+- Open questions for the maintainer, not yet answered:
+  - PgUp / PgDn acceleration while the key is held. Today queued presses are already
+    drawn once, so the limit is the key-repeat rate.
+  - Whether "search all streams" (the GUI's `Ctrl+Shift+F` Find results) should come to
+    the terminal. The `terminal-interface` spec currently excludes it from 0.20.0.
+    Propose it as its own OpenSpec change if wanted.
+- The nightly routine (claude.ai Routines, 18:10 Europe/Rome) fires into the session that
+  created it. A session started elsewhere follows the rule above by hand if the routine
+  did not run.
 
 ## For Claude Code sessions with the maintainer
 

@@ -241,11 +241,24 @@ every evening after 18:00 when something was merged (AGENTS.md, release process)
 |---|---|---|
 | `release-packages` — `.deb` / `.rpm` / AppImage (Linux x86_64 and ARM64), `.msi` (Windows), universal `.dmg` and Intel archive (macOS), each install-tested in CI | RustDesk-style platform coverage (maintainer request) | M |
 
+### 0.16.0 — terminal windows
+
+Released on 2026-09-30 in the evening, a minor at the maintainer's request after testing
+the preview build:
+- floating terminal windows that move, resize and overlap;
+- `[x]` to close a window;
+- the empty workspace;
+- a help that shows every key;
+- the bookmark report export fix;
+- the downloads grid on the release page.
+
+Nightly patches continue as `0.16.x`; `release-packages` moves with them.
+
 ### 0.20.0 — terminal interface (next)
 
 After 0.14.0 the maintainer moved the terminal interface forward: 0.20.0 holds only
 `tui-interface` (PR #132, the TUI at parity with the window, HEX view included, Markdown
-excluded), completed through the 0.15.x patches. The gap changes below resume after it.
+excluded), completed through the nightly patches (0.15.x, then 0.16.x). The gap changes below resume after it.
 
 ### 0.21.0 — structured logs and analysis, continued
 

@@ -30,7 +30,7 @@ four packages below.
   location, then removed.
 - The existing archives stay, with the same names, for users and scripts that use them.
 
-Target release: a **0.15.x** patch (a nightly release, AGENTS.md), before the 0.20.0
+Target release: a **0.16.x** patch (a nightly release, AGENTS.md), before the 0.20.0
 terminal milestone. Priority: **medium**. Effort: **M (1–2 weeks)**. No key is added to
 `fasttail.ini`.
 
