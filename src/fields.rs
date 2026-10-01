@@ -42,8 +42,10 @@ pub const SYSLOG_PATTERN: &str = r"^(?:<(?P<pri>\d{1,3})>)?(?P<time>[A-Z][a-z]{2
 #[derive(Debug)]
 pub struct RegexFields {
     regex: Regex,
-    /// `(group index, name)` of the named groups, in pattern order.
-    names: Vec<(usize, Box<str>)>,
+    /// Pre-assembled contiguous scratch bytes for all group names.
+    names_scratch: Vec<u8>,
+    /// `(group index, scratch_start, scratch_end)` of named groups, in pattern order.
+    names: Vec<(usize, u32, u32)>,
 }
 
 impl RegexFields {
@@ -51,15 +53,24 @@ impl RegexFields {
     /// give no field.
     pub fn new(pattern: &str) -> Result<Self, String> {
         let regex = Regex::new(pattern).map_err(|e| e.to_string())?;
-        let names: Vec<(usize, Box<str>)> = regex
-            .capture_names()
-            .enumerate()
-            .filter_map(|(i, n)| n.map(|n| (i, n.into())))
-            .collect();
+        let mut names_scratch = Vec::new();
+        let mut names = Vec::new();
+        for (i, name) in regex.capture_names().enumerate() {
+            if let Some(n) = name {
+                let start = names_scratch.len() as u32;
+                names_scratch.extend_from_slice(n.as_bytes());
+                let end = names_scratch.len() as u32;
+                names.push((i, start, end));
+            }
+        }
         if names.is_empty() {
             return Err("no named group (?P<name>...)".to_string());
         }
-        Ok(Self { regex, names })
+        Ok(Self {
+            regex,
+            names_scratch,
+            names,
+        })
     }
 
     pub fn pattern(&self) -> &str {
@@ -501,29 +512,29 @@ fn is_key_byte(c: u8) -> bool {
     !matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'=' | b'"')
 }
 
-/// Length of the `key=` at `pos`, or `None` when the word there is not a pair.
-fn logfmt_pair_key(b: &[u8], pos: usize) -> Option<usize> {
-    let mut end = pos;
-    while end < b.len() && is_key_byte(b[end]) {
-        end += 1;
-    }
-    (end > pos && b.get(end) == Some(&b'=')).then_some(end - pos)
-}
-
 fn scan_logfmt(line: &str, out: &mut FieldSpans) -> bool {
     let b = line.as_bytes();
     // The first pair: text before it is the prefix.
-    let mut pos = skip_ws(b, 0);
+    // Use SIMD memchr to jump directly to the first '=' byte and scan backwards for key start.
+    let mut search_pos = skip_ws(b, 0);
     let mut first = None;
-    while pos < b.len() {
-        if logfmt_pair_key(b, pos).is_some() {
-            first = Some(pos);
+    while search_pos < b.len() {
+        if let Some(eq_rel) = memchr::memchr(b'=', &b[search_pos..]) {
+            let eq_pos = search_pos + eq_rel;
+            let mut k_start = eq_pos;
+            while k_start > search_pos && is_key_byte(b[k_start - 1]) {
+                k_start -= 1;
+            }
+            if k_start < eq_pos
+                && (k_start == 0 || matches!(b[k_start - 1], b' ' | b'\t' | b'\r' | b'\n'))
+            {
+                first = Some(k_start);
+                break;
+            }
+            search_pos = eq_pos + 1;
+        } else {
             break;
         }
-        while pos < b.len() && !matches!(b[pos], b' ' | b'\t') {
-            pos += 1;
-        }
-        pos = skip_ws(b, pos);
     }
     let Some(first) = first else {
         return false;
@@ -596,10 +607,13 @@ fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> bool {
     let matched = r.regex.captures_read(&mut locs, line).is_some();
     if matched {
         out.matched = locs.get(0);
-        for (group, name) in &r.names {
-            if let Some((a, z)) = locs.get(*group) {
-                let (ka, kz) = out.scratch_key(name.as_bytes());
-                out.push(KeyAt::Scratch(ka, kz), (a, z), false);
+        // Copy pre-assembled group names in a single bulk slice copy into out.scratch
+        // instead of calling scratch_key (which resizes and checks bounds) per group.
+        let base = out.scratch.len() as u32;
+        out.scratch.extend_from_slice(&r.names_scratch);
+        for &(group, ka, kz) in &r.names {
+            if let Some((a, z)) = locs.get(group) {
+                out.push(KeyAt::Scratch(base + ka, base + kz), (a, z), false);
             }
         }
     }
