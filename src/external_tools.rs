@@ -289,7 +289,16 @@ pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
         #[cfg(not(windows))]
         let quote_arg = quote_sh_arg;
 
-        let mut line = tool.program.clone();
+        let mut line = if (tool.program.contains(' ')
+            || tool.program.contains('/')
+            || tool.program.contains('\\'))
+            && !tool.program.starts_with('"')
+            && !tool.program.starts_with('\'')
+        {
+            quote_arg(&tool.program)
+        } else {
+            tool.program.clone()
+        };
         for a in &args {
             line.push(' ');
             line.push_str(&quote_arg(a));
@@ -761,6 +770,32 @@ mod tests {
         {
             assert_eq!(args[0], "/c");
             assert_eq!(args[1], "echo \"hello; rm -rf /\"");
+        }
+    }
+
+    #[test]
+    fn test_build_command_shell_mode_quotes_program_path_with_spaces() {
+        let mut tool = ExternalTool::new("custom", "/usr/local/bin/my tool", "{line}");
+        tool.use_shell = true;
+        let ctx = ToolContext {
+            line: "test_line".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_command(&tool, &ctx);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args.len(), 2);
+        #[cfg(not(windows))]
+        {
+            assert_eq!(args[0], "-c");
+            assert_eq!(args[1], "'/usr/local/bin/my tool' 'test_line'");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(args[0], "/c");
+            assert_eq!(args[1], "\"/usr/local/bin/my tool\" \"test_line\"");
         }
     }
 }
