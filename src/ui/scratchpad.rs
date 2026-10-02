@@ -209,13 +209,13 @@ impl Scratchpad {
             let _ = std::fs::remove_file(paths_file_of(&file));
             return Ok(());
         }
-        std::fs::write(&file, self.text.as_bytes())?;
+        crate::config::overwrite_regular_file(&file, self.text.as_bytes())?;
         let map: String = self
             .paths
             .iter()
             .map(|(name, path)| format!("{name}|{}\n", path.display()))
             .collect();
-        std::fs::write(paths_file_of(&file), map)
+        crate::config::overwrite_regular_file(&paths_file_of(&file), map.as_bytes())
     }
 
     /// Saves when a change is older than `SAVE_DELAY`.
@@ -325,7 +325,7 @@ pub fn render(
                 .add_filter("Text (*.txt)", &["txt"])
                 .save_file();
             if let Some(path) = target {
-                pad.notice = Some(match std::fs::write(&path, pad.text.as_bytes()) {
+                pad.notice = Some(match crate::config::overwrite_regular_file(&path, pad.text.as_bytes()) {
                     Ok(()) => (
                         t(lang, "report_saved").replace("{path}", &path.display().to_string()),
                         false,
@@ -649,5 +649,23 @@ mod tests {
             default_pad_of(&dir.path().join("fasttail.ini")),
             dir.path().join("scratchpad.txt")
         );
+    }
+
+    #[test]
+    fn test_save_rejects_non_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_target = dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        let mut pad = Scratchpad {
+            file: Some(dir_target.clone()),
+            text: "some content".into(),
+            ..Default::default()
+        };
+
+        let err = pad
+            .save()
+            .expect_err("save should fail when target is a directory");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }
