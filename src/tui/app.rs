@@ -2599,11 +2599,13 @@ impl App {
                     None => self.message = Some("No bookmark visible".into()),
                 }
             }
+            #[allow(clippy::collapsible_match)]
             Action::SearchNext => {
                 if tab.engine.search_next(false).is_none() {
                     self.message = Some("No search hits".into());
                 }
             }
+            #[allow(clippy::collapsible_match)]
             Action::SearchPrev => {
                 if tab.engine.search_prev(false).is_none() {
                     self.message = Some("No search hits".into());

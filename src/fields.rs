@@ -235,9 +235,21 @@ impl FieldSpans {
         self.spans.iter().map(move |s| self.field(line, s))
     }
 
+    /// Checks whether `span`'s key matches `key` without slicing the value or constructing `Field`.
+    /// Slices key bytes/str directly, short-circuiting on length mismatch.
+    fn span_key_matches(&self, line: &str, span: &FieldSpan, key: &str) -> bool {
+        match span.key {
+            KeyAt::Line(a, b) => line.get(a as usize..b as usize) == Some(key),
+            KeyAt::Scratch(a, b) => self.scratch.get(a as usize..b as usize) == Some(key.as_bytes()),
+        }
+    }
+
     /// The first field named `key`.
     pub fn get<'a>(&'a self, line: &'a str, key: &str) -> Option<Field<'a>> {
-        self.iter(line).find(|f| f.key == key)
+        self.spans
+            .iter()
+            .find(|span| self.span_key_matches(line, span, key))
+            .map(|span| self.field(line, span))
     }
 
     fn push(&mut self, key: KeyAt, value: (usize, usize), quoted: bool) -> bool {
