@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Defer value slicing and struct construction during span key matching
+**Learning:** In structured field lookup hot loops (`FieldSpans::get`), calling `iter(line)` constructed full `Field` structs (which slice and process value ranges into `&str`) for every preceding span before testing key equality. Comparing key byte/string slices directly via `span_key_matches` short-circuits instantly on length mismatch and avoids value slicing until a matching span is found.
+**Action:** In span/token search routines, test key equality directly against index bounds or scratch buffers before constructing full item/value representations.
