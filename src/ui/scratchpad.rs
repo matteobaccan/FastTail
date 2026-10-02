@@ -308,8 +308,12 @@ pub fn render(
             find_next = true;
         }
         if ui
-            .button("▼")
+            .add_enabled(
+                !pad.find.is_empty(),
+                egui::Button::new("▼"),
+            )
             .on_hover_text(t(lang, "search_next"))
+            .on_disabled_hover_text(t(lang, "scratch_find_hint"))
             .clicked()
         {
             find_next = true;

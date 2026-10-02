@@ -164,7 +164,7 @@ pub fn render_find_results(
                 ),
             )
             .on_hover_text(t(lang, "tip_find_all_refresh"))
-            .on_disabled_hover_text(t(lang, "tip_find_all_refresh"))
+            .on_disabled_hover_text(t(lang, "find_all_empty"))
             .clicked()
         {
             refresh = true;
