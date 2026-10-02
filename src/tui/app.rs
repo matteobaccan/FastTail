@@ -2530,6 +2530,7 @@ impl App {
         true
     }
 
+    #[allow(clippy::collapsible_match)]
     fn apply_to_tab(&mut self, action: Action) {
         let tab = &mut self.tabs[self.active];
         let page = tab.height.max(1);
