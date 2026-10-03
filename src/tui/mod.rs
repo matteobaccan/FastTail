@@ -286,7 +286,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     let result = run_terminal(&mut app, &mut stats, &opts);
     app.save_config();
     if let Some(file) = &opts.stats {
-        let _ = std::fs::write(file, stats.report(palette));
+        if let Ok(mut export) = crate::paths::create_export_file(std::path::Path::new(file)) {
+            use std::io::Write;
+            let _ = export.write_all(stats.report(palette).as_bytes());
+        }
     }
     match result {
         Ok(()) => 0,
