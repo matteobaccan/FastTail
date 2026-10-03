@@ -4317,6 +4317,7 @@ fn header_menu(
         // The last column stays: no columns at all would read as the defaults.
         if ui
             .add_enabled(keys.len() > 1, egui::Button::new(t(lang, "fields_hide")))
+            .on_disabled_hover_text(t(lang, "fields_min_columns_tip"))
             .clicked()
         {
             let mut next = keys.clone();
@@ -4326,6 +4327,7 @@ fn header_menu(
         }
         if ui
             .add_enabled(i > 0, egui::Button::new(t(lang, "fields_move_left")))
+            .on_disabled_hover_text(t(lang, "already_at_left"))
             .clicked()
         {
             let mut next = keys.clone();
@@ -4338,6 +4340,7 @@ fn header_menu(
                 i + 1 < keys.len(),
                 egui::Button::new(t(lang, "fields_move_right")),
             )
+            .on_disabled_hover_text(t(lang, "already_at_right"))
             .clicked()
         {
             let mut next = keys.clone();
@@ -4357,6 +4360,7 @@ fn header_menu(
                     can_change,
                     egui::Checkbox::new(&mut shown, RichText::new(key).monospace()),
                 )
+                .on_disabled_hover_text(t(lang, "fields_min_columns_tip"))
                 .changed()
             {
                 let mut next = keys.clone();
