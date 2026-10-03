@@ -6084,4 +6084,17 @@ mod tests {
         assert_eq!(app.dock.leaf_paths().len(), 2, "{:?}", app.message);
         assert_eq!(app.dock.find_stream(&b), Some(vec![true]));
     }
+
+    #[test]
+    fn test_export_file_validates_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid_file = dir.path().join("export.txt");
+        assert!(crate::paths::create_export_file(&valid_file).is_ok());
+        assert!(valid_file.is_file());
+
+        let sub_dir = dir.path().join("sub_dir");
+        std::fs::create_dir(&sub_dir).unwrap();
+        let err = crate::paths::create_export_file(&sub_dir).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
 }
