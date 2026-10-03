@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - SIMD unescaping and instant non-logfmt rejection
+**Learning:** Character-by-character string unescaping in `unescape` causes individual UTF-8 byte encoding and capacity checks for non-escaped character runs. Using `memchr::memchr` to locate backslash positions allows bulk slice copying via `push_str(&raw[from..pos])`. Additionally, checking `memchr::memchr(b'=', b).is_none()` at the entry of `scan_logfmt` allows instant O(1) rejection of non-logfmt lines during auto-detection or line scanning without word-by-word iteration.
+**Action:** Use `memchr` slice boundary scanning for bulk string unescaping and early SIMD key-byte checks in log field scanners.
