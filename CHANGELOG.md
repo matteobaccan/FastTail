@@ -37,6 +37,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   expressions. A regex that does not compile is marked. Edits reach every stream 300 ms
   after the last key, and streams opened later too; they are saved in
   `[global_filter]`. `f` switches it on or off at once.
+- **External tools in the terminal interface (`!`).** These are the tools of
+  `fasttail.ini`:
+  - `!` lists them, each with its command, shortcut and the rule it runs for. `Enter` or
+    `1`-`9` runs one on the cursor row, with the selection's text when the row is
+    selected.
+  - A tool's shortcut (`Ctrl+Shift+E`, `Alt+F9`, ...) runs it straight from the view.
+  - A tool bound to a rule runs when the rule matches an appended line: at most once a
+    second per tool and 10 at a time, as in the GUI, with the dropped runs counted in
+    the menu.
+
+  Arguments expand exactly as in the GUI, and a tool's input and output are never the
+  terminal. Editing the tools in the terminal comes next.
 
 ### Changed
 

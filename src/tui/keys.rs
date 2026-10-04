@@ -97,6 +97,8 @@ pub enum Action {
     /// `F`: the global filter editor; `f`: the global filter on or off.
     EditGlobal,
     ToggleGlobal,
+    /// `!`: the external tools to run on the cursor row or the selection.
+    Tools,
     /// `e` / `E`: the next / previous ERROR (or FATAL) line; `w` / `W`: WARN.
     NextError,
     PrevError,
@@ -198,6 +200,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('p') => Action::Presets,
         KeyCode::Char('F') => Action::EditGlobal,
         KeyCode::Char('f') => Action::ToggleGlobal,
+        KeyCode::Char('!') => Action::Tools,
         KeyCode::Char('e') => Action::NextError,
         KeyCode::Char('E') => Action::PrevError,
         KeyCode::Char('w') => Action::NextWarn,
@@ -254,6 +257,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('p'), none), Some(Action::Presets));
         assert_eq!(k(KeyCode::Char('F'), none), Some(Action::EditGlobal));
         assert_eq!(k(KeyCode::Char('f'), none), Some(Action::ToggleGlobal));
+        assert_eq!(k(KeyCode::Char('!'), none), Some(Action::Tools));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),
