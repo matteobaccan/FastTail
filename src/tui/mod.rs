@@ -18,6 +18,7 @@ mod hex;
 mod keys;
 mod mouse;
 mod picker;
+mod rules;
 mod settings;
 mod view;
 mod workspace;

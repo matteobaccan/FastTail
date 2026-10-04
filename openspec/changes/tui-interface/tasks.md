@@ -40,7 +40,9 @@
 ## 4. Terminal interface: settings, editors, tools, lock
 
 - [ ] 4.1 Settings dialog (`,`): interface, appearance, performance and refresh, new-stream defaults, `auto_bookmark_max`, `size_unit`, sound, PIN lock (set / change / remove, `lock_enabled` (arms the idle lock), idle minutes, deterrent statement), validation from `settings_model`, `[ OK ]` applies and saves
-- [ ] 4.2 Highlight-rule editor (`r`): all rule fields, add / edit / delete / reorder, colour swatches and `#RRGGBB` with depth preview, quick labels listed and removable
+- [ ] 4.2 Highlight-rule editor (`r`):
+  - [x] All rule fields, add / edit / delete / reorder, colour swatches and `#RRGGBB` with depth preview, bound tool; each change applied to every stream and saved (`src/tui/rules.rs`)
+  - [ ] Quick labels listed and removable (the terminal has no quick labels yet: `Ctrl+Shift+1..9` on the search text first)
 - [ ] 4.3 Filter presets (`p`): apply, save current as, rename, delete
 - [ ] 4.4 Global filter editor (`F`) and on / off (`f`), 300 ms debounce
 - [ ] 4.5 External tools: editor page in Settings, `!` menu on the cursor row or selection, shortcuts, rule-bound runs with the 1 per second and 10 children limits, null standard handles for every child

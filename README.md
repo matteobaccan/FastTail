@@ -222,8 +222,9 @@ the same, and docks it back). A floating window lies over the others: drag its t
 move it and its bottom-right corner to resize it; every window can float, leaving the
 dock empty. `[x]` at the top right of a window, or `Ctrl+W`, closes its stream; after the
 last one (or when started with nothing to open) the workspace is empty. `o` opens a file
-through a folder browser, `,` the Settings, `Shift+T` the next theme. The preview lacks the rule editor, filter presets, the global filter,
-external tools, the PIN lock and translations; they come with 0.20.0.
+through a folder browser, `,` the Settings, `Shift+T` the next theme. `r` edits the highlight rules (order, colours, options).
+The preview lacks filter presets, the global filter, external tools, the PIN lock and
+translations; they come with 0.20.0.
 
 ### Print mode (no window)
 `fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme, the level colours, the highlight rules and automatic highlighting). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.

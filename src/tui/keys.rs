@@ -90,6 +90,8 @@ pub enum Action {
     CycleTheme,
     /// `,`: the Settings dialog.
     Settings,
+    /// `r`: the highlight-rule editor.
+    EditRules,
     /// `e` / `E`: the next / previous ERROR (or FATAL) line; `w` / `W`: WARN.
     NextError,
     PrevError,
@@ -187,6 +189,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('S') => Action::SaveSession,
         KeyCode::Char('T') => Action::CycleTheme,
         KeyCode::Char(',') => Action::Settings,
+        KeyCode::Char('r') => Action::EditRules,
         KeyCode::Char('e') => Action::NextError,
         KeyCode::Char('E') => Action::PrevError,
         KeyCode::Char('w') => Action::NextWarn,
@@ -239,6 +242,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('S'), shift), Some(Action::SaveSession));
         assert_eq!(k(KeyCode::Char('T'), shift), Some(Action::CycleTheme));
         assert_eq!(k(KeyCode::Char(','), none), Some(Action::Settings));
+        assert_eq!(k(KeyCode::Char('r'), none), Some(Action::EditRules));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),
