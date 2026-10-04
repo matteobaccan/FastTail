@@ -282,14 +282,19 @@ pub fn quote_cmd_arg(s: &str) -> String {
 /// directly with one argv entry per expanded argument; with it, `cmd /c` (Windows) or
 /// `sh -c` runs the program with safely quoted arguments to prevent command injection.
 pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
-    let args = expanded_args(tool, ctx);
+    let matched = match_value(tool, &ctx.line);
+    let program = expand_argument(&tool.program, ctx, &matched);
+    let args: Vec<String> = split_args(&tool.args)
+        .iter()
+        .map(|a| expand_argument(a, ctx, &matched))
+        .collect();
     let mut cmd = if tool.use_shell {
         #[cfg(windows)]
         let quote_arg = quote_cmd_arg;
         #[cfg(not(windows))]
         let quote_arg = quote_sh_arg;
 
-        let mut line = tool.program.clone();
+        let mut line = quote_arg(&program);
         for a in &args {
             line.push(' ');
             line.push_str(&quote_arg(a));
@@ -309,7 +314,7 @@ pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
         cmd.stdin(Stdio::null());
         cmd
     } else {
-        let mut c = Command::new(&tool.program);
+        let mut c = Command::new(&program);
         c.args(&args);
         c.stdin(Stdio::null());
         c
@@ -755,12 +760,38 @@ mod tests {
         #[cfg(not(windows))]
         {
             assert_eq!(args[0], "-c");
-            assert_eq!(args[1], "echo 'hello; rm -rf /'");
+            assert_eq!(args[1], "'echo' 'hello; rm -rf /'");
         }
         #[cfg(windows)]
         {
             assert_eq!(args[0], "/c");
-            assert_eq!(args[1], "echo \"hello; rm -rf /\"");
+            assert_eq!(args[1], "\"echo\" \"hello; rm -rf /\"");
+        }
+    }
+
+    #[test]
+    fn test_build_command_expands_and_quotes_program() {
+        let mut tool = ExternalTool::new("custom", "{dir}/my tool", "{line}");
+        tool.use_shell = true;
+        let ctx = ToolContext {
+            line: "sample".to_string(),
+            dir: "/path; evil".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_command(&tool, &ctx);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        #[cfg(not(windows))]
+        {
+            assert_eq!(args[0], "-c");
+            assert_eq!(args[1], "'/path; evil/my tool' 'sample'");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(args[0], "/c");
+            assert_eq!(args[1], "\"/path; evil/my tool\" \"sample\"");
         }
     }
 }
