@@ -276,8 +276,6 @@ impl RadioList {
     }
 }
 
-// Used by the editor dialogs (tasks 4.2 to 4.4).
-#[allow(dead_code)]
 /// An ordered list with a selected row: `↑` `↓` select, `Alt+↑` / `Alt+↓` (or `K` / `J`)
 /// move the selected item, `Delete` removes it. The order is the priority, as in the
 /// rule list.
@@ -287,7 +285,6 @@ pub struct ReorderList<T> {
     pub selected: usize,
 }
 
-#[allow(dead_code)]
 impl<T> ReorderList<T> {
     pub fn new(items: Vec<T>) -> Self {
         Self { items, selected: 0 }
@@ -348,8 +345,6 @@ impl<T> ReorderList<T> {
     }
 }
 
-// Used by the editor dialogs (tasks 4.2 to 4.4).
-#[allow(dead_code)]
 /// A colour typed as `#RRGGBB` (or `RRGGBB`), or picked from `swatches` with `[` / `]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColourField {
@@ -359,7 +354,6 @@ pub struct ColourField {
     swatch: Option<usize>,
 }
 
-#[allow(dead_code)]
 impl ColourField {
     pub fn new(rgb: [u8; 3], swatches: Vec<[u8; 3]>) -> Self {
         Self {
@@ -397,15 +391,11 @@ impl ColourField {
     }
 }
 
-// Used by the editor dialogs (tasks 4.2 to 4.4).
-#[allow(dead_code)]
 /// `#rrggbb` of a colour, upper case.
 pub fn hex(rgb: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
 }
 
-// Used by the editor dialogs (tasks 4.2 to 4.4).
-#[allow(dead_code)]
 /// `#RRGGBB` or `RRGGBB`, any case.
 pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
     let t = text.trim();

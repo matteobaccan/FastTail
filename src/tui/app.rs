@@ -34,6 +34,7 @@ use crate::tui::hex;
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::picker::{refusal_text, EntryPicker};
+use crate::tui::rules::{RuleWidget, RulesDialog, RulesKey};
 use crate::tui::settings::SettingsForm;
 use crate::tui::view::{self, Paint};
 
@@ -403,6 +404,8 @@ pub struct App {
     pub sessions: Option<SessionDialog>,
     /// The Settings dialog (`,`).
     pub settings_form: Option<SettingsForm>,
+    /// The highlight-rule editor (`r`).
+    pub rules: Option<RulesDialog>,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
@@ -473,6 +476,7 @@ impl App {
             browser: None,
             sessions: None,
             settings_form: None,
+            rules: None,
             confirm_overwrite: None,
             settings: None,
             autosave: false,
@@ -849,6 +853,9 @@ impl App {
         if self.settings_form.is_some() {
             return self.on_settings_key(key);
         }
+        if self.rules.is_some() {
+            return self.on_rules_key(key);
+        }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
         }
@@ -1057,6 +1064,14 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        if let Some(form) = self.rules.as_mut().and_then(|d| d.form.as_mut()) {
+            if let Some(RuleWidget::Text(t)) =
+                form.fields.get_mut(form.focus).map(|f| &mut f.widget)
+            {
+                t.insert(text);
+            }
+            return true;
+        }
         if let Some(f) = self.settings_form.as_mut() {
             if let Some(crate::tui::settings::Widget::Text(t)) =
                 f.fields.get_mut(f.focus).map(|x| &mut x.widget)
@@ -1120,6 +1135,44 @@ impl App {
     fn open_settings(&mut self) {
         let form = SettingsForm::from_config(&self.settings_mut().config);
         self.settings_form = Some(form);
+    }
+
+    /// `r`: the highlight-rule editor over the rules of `fasttail.ini`.
+    fn open_rules(&mut self) {
+        let config = &self.settings_mut().config;
+        self.rules = Some(RulesDialog::new(
+            &config.highlight_rules,
+            &config.external_tools,
+        ));
+    }
+
+    fn on_rules_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(d) = self.rules.as_mut() else {
+            return false;
+        };
+        match d.on_key(key) {
+            RulesKey::Changed => self.apply_rules(),
+            RulesKey::Close => self.rules = None,
+            RulesKey::Moved => {}
+            RulesKey::Other => return false,
+        }
+        true
+    }
+
+    /// The editor's rules reach every stream and `fasttail.ini` at once, as in the GUI;
+    /// the tools bound to a renamed or deleted rule follow it.
+    fn apply_rules(&mut self) {
+        let Some(d) = &self.rules else {
+            return;
+        };
+        let rules = d.rules();
+        let settings = self.settings.get_or_insert_with(Default::default);
+        let before = std::mem::replace(&mut settings.config.highlight_rules, rules.clone());
+        d.bind_tools(&before, &mut settings.config.external_tools);
+        for tab in &mut self.tabs {
+            tab.engine.set_highlight_rules(rules.clone());
+        }
+        self.save_config();
     }
 
     fn on_settings_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -2083,6 +2136,7 @@ impl App {
                 Action::OpenFile => self.open_browser(),
                 Action::OpenSession => self.open_sessions(),
                 Action::Settings => self.open_settings(),
+                Action::EditRules => self.open_rules(),
                 Action::CycleTheme => self.cycle_theme(),
                 _ => self.message = Some(NO_FILE.into()),
             }
@@ -2123,6 +2177,7 @@ impl App {
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
             Action::Settings => self.open_settings(),
+            Action::EditRules => self.open_rules(),
             Action::OpenFile => self.open_browser(),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -2203,6 +2258,7 @@ impl App {
                     || self.picker.is_some()
                     || self.sessions.is_some()
                     || self.settings_form.is_some()
+                    || self.rules.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
@@ -2376,6 +2432,17 @@ impl App {
                     }
                 }
             }
+            // The rule list: a click selects a rule, a click on the selected one edits
+            // it; in the form a click focuses a field.
+            Target::ListItem(i) if self.rules.is_some() => {
+                if let Some(d) = self.rules.as_mut() {
+                    match d.form.as_mut() {
+                        Some(f) => f.focus = i.min(f.fields.len().saturating_sub(1)),
+                        None if d.list.selected == i => d.edit_selected(),
+                        None => d.list.selected = i.min(d.list.items.len().saturating_sub(1)),
+                    }
+                }
+            }
             Target::ListItem(i) if self.settings_form.is_some() => {
                 if let Some(f) = self.settings_form.as_mut() {
                     f.focus = i;
@@ -2406,7 +2473,13 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if self.settings_form.is_some() {
+                if let Some(d) = self.rules.as_mut() {
+                    if d.form.is_none() {
+                        self.rules = None;
+                    } else if d.submit_form() {
+                        self.apply_rules();
+                    }
+                } else if self.settings_form.is_some() {
                     self.submit_settings();
                 } else if let Some(file) = self.confirm_overwrite.take() {
                     self.save_session(&file);
@@ -2423,8 +2496,16 @@ impl App {
                 }
                 self.show_help = false;
             }
+            // Cancel in the rule form drops the form only: the list's changes are
+            // already applied.
+            Target::DialogCancel if self.rules.as_ref().is_some_and(|d| d.form.is_some()) => {
+                if let Some(d) = self.rules.as_mut() {
+                    d.form = None;
+                }
+            }
             Target::DialogCancel | Target::OutsideDialog => {
                 self.prompt = None;
+                self.rules = None;
                 self.time_range = None;
                 self.sessions = None;
                 self.settings_form = None;
@@ -2707,6 +2788,9 @@ impl App {
         }
         if self.settings_form.is_some() {
             self.draw_settings(frame, main_area);
+        }
+        if self.rules.is_some() {
+            self.draw_rules(frame, main_area);
         }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
@@ -3137,6 +3221,149 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    /// The rule editor: the list (each pattern in its own colours, then its options),
+    /// or the form of one rule with a preview at the terminal's colour depth.
+    fn draw_rules(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let Some(d) = self.rules.as_ref() else {
+            return;
+        };
+        if let Some(form) = &d.form {
+            let lines = form.lines();
+            let problems = form.problems();
+            let fallback = form
+                .index
+                .and_then(|i| d.list.items.get(i))
+                .map(|e| e.rule.clone())
+                .unwrap_or_else(|| {
+                    crate::tail_engine::HighlightRule::new("", [255; 3], [0; 3], false)
+                });
+            let rule = form.rule(&fallback);
+            let (focus, rejected) = (form.focus, form.rejected);
+            let title = if form.index.is_some() {
+                "Rule - Tab/Up/Down move, Space ticks, Left/Right choose, [ ] colour"
+            } else {
+                "New rule - Tab/Up/Down move, Space ticks, Left/Right choose, [ ] colour"
+            };
+            let height = (lines.len() as u16 + 6).min(area.height);
+            let inner = self.dialog(frame, area, (78, height), title, true);
+            let error = Style::default().fg(palette.level_color(LogLevel::Error));
+            let mut out = Vec::with_capacity(lines.len() + 2);
+            for (i, text) in lines.iter().enumerate() {
+                let y = inner.y + i as u16;
+                if y + 2 >= inner.bottom() {
+                    break;
+                }
+                self.hits
+                    .list_items
+                    .push((Rect::new(inner.x, y, inner.width, 1), i));
+                let problem = problems.iter().find(|(p, _)| *p == i).map(|(_, p)| p);
+                let mut style = Style::default();
+                if problem.is_some() && rejected {
+                    style = error;
+                }
+                if i == focus {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                let shown = match problem {
+                    Some(p) if rejected => format!("{text}  ({p})"),
+                    _ => text.clone(),
+                };
+                out.push(Line::styled(view::sanitize(&shown), style));
+            }
+            let sample = if rule.pattern.is_empty() {
+                "sample text".to_string()
+            } else {
+                view::sanitize(&rule.pattern)
+            };
+            out.push(Line::raw(""));
+            out.push(Line::from(vec![
+                Span::styled(format!("{:<30}", "Preview"), dim),
+                Span::styled(format!(" {sample} "), palette.rule_style(&rule.style())),
+            ]));
+            frame.render_widget(Paragraph::new(out), inner);
+            return;
+        }
+        let rows = d.list.items.len().max(1) as u16;
+        let height = (rows + 6).min(area.height);
+        let inner = self.dialog(
+            frame,
+            area,
+            (78, height),
+            "Highlight rules - the first rule that matches paints the line",
+            false,
+        );
+        let Some(d) = self.rules.as_mut() else {
+            return;
+        };
+        let list_rows = inner.height.saturating_sub(3) as usize;
+        if d.list.selected < d.top {
+            d.top = d.list.selected;
+        } else if list_rows > 0 && d.list.selected >= d.top + list_rows {
+            d.top = d.list.selected + 1 - list_rows;
+        }
+        let mut out = Vec::with_capacity(list_rows + 2);
+        out.push(Line::styled(
+            "Enter edit  a add  d delete  Space on/off  Alt+Up/Down K/J move  Esc close",
+            dim,
+        ));
+        if d.list.items.is_empty() {
+            out.push(Line::styled("  (no rules: a adds one)", dim));
+        }
+        for (i, e) in d.list.items.iter().enumerate().skip(d.top).take(list_rows) {
+            let y = inner.y + 1 + (i - d.top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let r = &e.rule;
+            let mark = if r.enabled { "[x]" } else { "[ ]" };
+            let mut flags = Vec::new();
+            if r.is_regex {
+                flags.push(if r.captures_only {
+                    "regex groups"
+                } else {
+                    "regex"
+                });
+            }
+            if r.case_sensitive {
+                flags.push("Aa");
+            }
+            if r.auto_bookmark {
+                flags.push("bookmarks");
+            }
+            if r.sound_alert != crate::audio::SoundAlertPreset::None {
+                flags.push(r.sound_alert.name());
+            }
+            let tools: Vec<&str> = e
+                .tools
+                .iter()
+                .filter_map(|t| d.tool_names.get(*t).map(String::as_str))
+                .collect();
+            let tools = if tools.is_empty() {
+                String::new()
+            } else {
+                format!("  tool: {}", tools.join(", "))
+            };
+            let selected = i == d.list.selected;
+            let row = if selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let name: String = view::sanitize(&r.pattern).chars().take(36).collect();
+            out.push(Line::from(vec![
+                Span::styled(format!("{mark} {:>2}. ", i + 1), row),
+                Span::styled(format!(" {name} "), palette.rule_style(&r.style())),
+                Span::styled(
+                    format!("  {}{tools}", flags.join(" ")),
+                    row.fg(palette.dim()),
+                ),
+            ]));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     fn draw_settings(&mut self, frame: &mut Frame, area: Rect) {
@@ -3824,6 +4051,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         ",",
         "Settings: theme, language, view, sound",
         Some(Action::Settings),
+    ),
+    (
+        "r",
+        "highlight rules: add, edit, reorder",
+        Some(Action::EditRules),
     ),
     (
         "Shift+T",
@@ -6083,5 +6315,88 @@ mod tests {
         app.load_session(&session);
         assert_eq!(app.dock.leaf_paths().len(), 2, "{:?}", app.message);
         assert_eq!(app.dock.find_stream(&b), Some(vec![true]));
+    }
+
+    #[test]
+    fn the_rule_editor_reorders_adds_and_saves_for_every_stream() {
+        use crate::tail_engine::HighlightRule;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, "ERROR timeout on db\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            highlight_rules: vec![
+                HighlightRule::new("ERROR", [255, 0, 0], [0, 0, 0], false),
+                HighlightRule::new("WARN", [255, 160, 0], [0, 0, 0], false),
+                HighlightRule::new("timeout", [255, 255, 0], [0, 0, 0], false),
+            ],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        render(&mut app, 100, 30);
+        app.apply(Action::EditRules);
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("[x]  3.  timeout")),
+            "{screen:#?}"
+        );
+        // A click selects a rule, a second click on it opens its form.
+        let (r, _) = app.hits.list_items[1];
+        assert!(app.on_mouse(click(r.x + 2, r.y)));
+        assert_eq!(app.rules.as_ref().unwrap().list.selected, 1);
+        assert!(app.on_mouse(click(r.x + 2, r.y)));
+        assert!(app.rules.as_ref().unwrap().form.is_some());
+        render(&mut app, 100, 30);
+        let cancel = app.hits.dialog.unwrap().cancel.unwrap();
+        assert!(app.on_mouse(click(cancel.x + 1, cancel.y)));
+        assert!(
+            app.rules.as_ref().unwrap().form.is_none(),
+            "Cancel drops the form only"
+        );
+        render(&mut app, 100, 30);
+        // Rule 3 to the top: it paints the line now, and the ini lists it first.
+        press(&mut app, KeyCode::End);
+        for _ in 0..2 {
+            app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        }
+        let first = |app: &App| app.tabs[0].engine.highlight_rules[0].pattern.clone();
+        assert_eq!(first(&app), "timeout");
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.highlight_rules[0].pattern, "timeout");
+        assert_eq!(saved.highlight_rules.len(), 3);
+        // A new rule FATAL that bookmarks its lines, through the form.
+        press(&mut app, KeyCode::Char('a'));
+        keys(&mut app, "FATAL");
+        let screen = render(&mut app, 100, 30);
+        assert!(screen.iter().any(|l| l.contains("Preview")), "{screen:#?}");
+        for _ in 0..9 {
+            press(&mut app, KeyCode::Down);
+        }
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.rules.as_ref().unwrap().form.is_none());
+        press(&mut app, KeyCode::Esc);
+        assert!(app.rules.is_none());
+        let rules = &app.tabs[0].engine.highlight_rules;
+        assert_eq!(rules[1].pattern, "FATAL");
+        assert!(rules[1].auto_bookmark);
+        // An appended FATAL line gets its automatic bookmark.
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&a).unwrap();
+        writeln!(f, "FATAL disk full").unwrap();
+        drop(f);
+        let start = Instant::now();
+        while app.tabs[0].engine.total_lines() < 2 && start.elapsed() < Duration::from_secs(5) {
+            app.tabs[0].engine.poll_updates();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(app.tabs[0].engine.is_auto_bookmark(1));
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.highlight_rules[1].pattern, "FATAL");
     }
 }

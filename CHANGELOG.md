@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Highlight-rule editor in the terminal interface (`r`).** It lists the rules in their
+  order, the first that matches painting the line, each pattern drawn in its own
+  colours. `Enter` edits a rule in a form with every option:
+  - regex, groups only and match case;
+  - bold and italic;
+  - text and background colour, typed as `#RRGGBB` or picked with `[` / `]`, with a preview;
+  - sound and automatic bookmarks;
+  - the tool it runs, and on / off.
+
+  `a` adds a rule, `d` deletes one, `Space` switches it on or off, and `Alt+↑` / `Alt+↓`
+  (or `K` / `J`) move it. Every change reaches all streams and `fasttail.ini` at once, as
+  in the GUI's Highlights window. A renamed rule keeps its tool.
+
 ### Changed
 
 - **Disabled controls say why.** Play / Pause are disabled with no stream open; the

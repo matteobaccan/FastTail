@@ -454,7 +454,8 @@ impl HighlightRule {
         rule
     }
 
-    fn style(&self) -> HighlightStyle {
+    /// The rule's colours and attributes as the views paint them.
+    pub fn style(&self) -> HighlightStyle {
         HighlightStyle {
             fg: Rgba::from_rgb(self.fg_color[0], self.fg_color[1], self.fg_color[2]),
             bg: Rgba::from_rgb(self.bg_color[0], self.bg_color[1], self.bg_color[2]),
