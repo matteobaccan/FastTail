@@ -69,6 +69,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   The PIN or the maintenance phrase unlocks it, back to exactly where it was. Without a
   PIN nothing locks.
+- **PIN lock section in the terminal Settings.** It sets the PIN (typed twice, 4 to 12
+  digits, shown as `*` and stored scrambled), changes or removes it, and switches the
+  idle lock and its minutes. The idle lock needs a PIN; removing the PIN switches it off,
+  as in the GUI.
 
 ### Changed
 
