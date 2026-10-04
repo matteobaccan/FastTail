@@ -34,6 +34,7 @@ use crate::tui::hex;
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::picker::{refusal_text, EntryPicker};
+use crate::tui::presets::{self, PresetsDialog, PresetsKey};
 use crate::tui::rules::{RuleWidget, RulesDialog, RulesKey};
 use crate::tui::settings::SettingsForm;
 use crate::tui::view::{self, Paint};
@@ -406,6 +407,8 @@ pub struct App {
     pub settings_form: Option<SettingsForm>,
     /// The highlight-rule editor (`r`).
     pub rules: Option<RulesDialog>,
+    /// The filter presets (`p`).
+    pub presets: Option<PresetsDialog>,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
@@ -477,6 +480,7 @@ impl App {
             sessions: None,
             settings_form: None,
             rules: None,
+            presets: None,
             confirm_overwrite: None,
             settings: None,
             autosave: false,
@@ -856,6 +860,9 @@ impl App {
         if self.rules.is_some() {
             return self.on_rules_key(key);
         }
+        if self.presets.is_some() {
+            return self.on_presets_key(key);
+        }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
         }
@@ -1064,6 +1071,11 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        if let Some(presets::Mode::Name { field, .. }) = self.presets.as_mut().map(|d| &mut d.mode)
+        {
+            field.insert(text);
+            return true;
+        }
         if let Some(form) = self.rules.as_mut().and_then(|d| d.form.as_mut()) {
             if let Some(RuleWidget::Text(t)) =
                 form.fields.get_mut(form.focus).map(|f| &mut f.widget)
@@ -1135,6 +1147,80 @@ impl App {
     fn open_settings(&mut self) {
         let form = SettingsForm::from_config(&self.settings_mut().config);
         self.settings_form = Some(form);
+    }
+
+    /// `p`: the filter presets of `fasttail.ini`.
+    fn open_presets(&mut self) {
+        let list = self.settings_mut().config.filter_presets.clone();
+        self.presets = Some(PresetsDialog::new(&list));
+    }
+
+    fn on_presets_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(d) = self.presets.as_mut() else {
+            return false;
+        };
+        match d.on_key(key) {
+            PresetsKey::Changed => self.store_presets(),
+            PresetsKey::Apply { index, all } => self.apply_preset(index, all),
+            PresetsKey::Save { name, with_time } => {
+                let Some(tab) = self.tabs.get(self.active) else {
+                    self.message = Some(NO_FILE.into());
+                    return true;
+                };
+                let preset = crate::filter_preset::FilterPreset {
+                    state: crate::filter_preset::FilterState::of_engine(&tab.engine, with_time),
+                    name,
+                };
+                self.message = Some(format!("Preset {} saved", preset.name));
+                if let Some(d) = self.presets.as_mut() {
+                    d.saved(preset);
+                }
+                self.store_presets();
+            }
+            PresetsKey::Close => self.presets = None,
+            PresetsKey::Moved => {}
+            PresetsKey::Other => return false,
+        }
+        true
+    }
+
+    /// The dialog's presets become the configuration's, saved at once.
+    fn store_presets(&mut self) {
+        let Some(d) = &self.presets else {
+            return;
+        };
+        self.settings
+            .get_or_insert_with(Default::default)
+            .config
+            .filter_presets = d.presets();
+        self.save_config();
+    }
+
+    /// Preset `index` replaces the filters of the focused stream, or of every stream,
+    /// in one recomputation each; the dialog closes.
+    fn apply_preset(&mut self, index: usize, all: bool) {
+        let Some(p) = self
+            .presets
+            .as_ref()
+            .and_then(|d| d.list.items.get(index).cloned())
+        else {
+            return;
+        };
+        if self.tabs.is_empty() {
+            self.message = Some(NO_FILE.into());
+            return;
+        }
+        if all {
+            for tab in &mut self.tabs {
+                p.apply_to(&mut tab.engine);
+            }
+        } else if let Some(tab) = self.tabs.get_mut(self.active) {
+            p.apply_to(&mut tab.engine);
+        }
+        self.presets = None;
+        let target = if all { "every stream" } else { "the stream" };
+        self.message = Some(format!("Preset {} applied to {target}", p.name));
+        self.save_config();
     }
 
     /// `r`: the highlight-rule editor over the rules of `fasttail.ini`.
@@ -2178,6 +2264,7 @@ impl App {
             Action::CycleTheme => self.cycle_theme(),
             Action::Settings => self.open_settings(),
             Action::EditRules => self.open_rules(),
+            Action::Presets => self.open_presets(),
             Action::OpenFile => self.open_browser(),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -2259,6 +2346,7 @@ impl App {
                     || self.sessions.is_some()
                     || self.settings_form.is_some()
                     || self.rules.is_some()
+                    || self.presets.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
@@ -2443,6 +2531,17 @@ impl App {
                     }
                 }
             }
+            // A click selects a preset, a click on the selected one applies it.
+            Target::ListItem(i) if self.presets.is_some() => {
+                let apply = self.presets.as_mut().and_then(|d| {
+                    let hit = d.list.selected == i;
+                    d.list.selected = i.min(d.list.items.len().saturating_sub(1));
+                    hit.then_some(d.list.selected)
+                });
+                if let Some(index) = apply {
+                    self.apply_preset(index, false);
+                }
+            }
             Target::ListItem(i) if self.settings_form.is_some() => {
                 if let Some(f) = self.settings_form.as_mut() {
                     f.focus = i;
@@ -2473,7 +2572,18 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if let Some(d) = self.rules.as_mut() {
+                if let Some(d) = self.presets.as_mut() {
+                    match d.mode {
+                        presets::Mode::List => self.presets = None,
+                        _ => {
+                            let enter = crossterm::event::KeyEvent::new(
+                                crossterm::event::KeyCode::Enter,
+                                KeyModifiers::NONE,
+                            );
+                            self.on_presets_key(enter);
+                        }
+                    }
+                } else if let Some(d) = self.rules.as_mut() {
                     if d.form.is_none() {
                         self.rules = None;
                     } else if d.submit_form() {
@@ -2498,6 +2608,18 @@ impl App {
             }
             // Cancel in the rule form drops the form only: the list's changes are
             // already applied.
+            // Cancel while naming or confirming goes back to the preset list.
+            Target::DialogCancel
+                if self
+                    .presets
+                    .as_ref()
+                    .is_some_and(|d| d.mode != presets::Mode::List) =>
+            {
+                if let Some(d) = self.presets.as_mut() {
+                    d.mode = presets::Mode::List;
+                    d.problem = None;
+                }
+            }
             Target::DialogCancel if self.rules.as_ref().is_some_and(|d| d.form.is_some()) => {
                 if let Some(d) = self.rules.as_mut() {
                     d.form = None;
@@ -2506,6 +2628,7 @@ impl App {
             Target::DialogCancel | Target::OutsideDialog => {
                 self.prompt = None;
                 self.rules = None;
+                self.presets = None;
                 self.time_range = None;
                 self.sessions = None;
                 self.settings_form = None;
@@ -2791,6 +2914,9 @@ impl App {
         }
         if self.rules.is_some() {
             self.draw_rules(frame, main_area);
+        }
+        if self.presets.is_some() {
+            self.draw_presets(frame, main_area);
         }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
@@ -3221,6 +3347,141 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    /// The filter presets: the list (name and filters, the one equal to the focused
+    /// stream marked `=`, the one applied and edited since `~`), or the name being
+    /// typed, or the delete confirmation.
+    fn draw_presets(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let accent = Style::default().fg(palette.accent());
+        let Some(d) = self.presets.as_ref() else {
+            return;
+        };
+        match &d.mode {
+            presets::Mode::Name {
+                field,
+                rename,
+                with_time,
+                on_time,
+            } => {
+                let title = if rename.is_some() {
+                    "Rename preset"
+                } else {
+                    "Save the stream's filters as a preset"
+                };
+                let (shown, x) = field.view(60);
+                let problem = d.problem.clone();
+                let mut lines = vec![Line::from(vec![
+                    Span::styled("Name ", dim),
+                    Span::raw(view::sanitize(&shown)),
+                ])];
+                if rename.is_none() {
+                    let style = if *on_time {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    lines.push(Line::styled(
+                        with_time.text("include the time range (Tab, Space)"),
+                        style,
+                    ));
+                    lines.push(Line::styled("A taken name replaces that preset.", dim));
+                }
+                if let Some(p) = problem {
+                    lines.push(Line::styled(
+                        p,
+                        Style::default().fg(palette.level_color(LogLevel::Error)),
+                    ));
+                }
+                let on_time = *on_time;
+                let height = lines.len() as u16 + 4;
+                let inner = self.dialog(frame, area, (70, height), title, true);
+                if !on_time {
+                    frame.set_cursor_position((inner.x + 5 + x as u16, inner.y));
+                }
+                frame.render_widget(Paragraph::new(lines), inner);
+            }
+            presets::Mode::ConfirmDelete(i) => {
+                let name = d
+                    .list
+                    .items
+                    .get(*i)
+                    .map(|p| view::sanitize(&p.name))
+                    .unwrap_or_default();
+                let inner = self.dialog(frame, area, (64, 6), "Delete preset?", true);
+                frame.render_widget(
+                    Paragraph::new(vec![
+                        Line::raw(format!("Delete the preset {name}?")),
+                        Line::styled("Enter deletes, Esc keeps it.", dim),
+                    ]),
+                    inner,
+                );
+            }
+            presets::Mode::List => {
+                let label = self
+                    .tabs
+                    .get(self.active)
+                    .map(|t| crate::filter_preset::preset_label(&d.list.items, &t.engine));
+                let marks: Vec<&str> = d
+                    .list
+                    .items
+                    .iter()
+                    .map(|p| match label {
+                        Some(crate::filter_preset::PresetLabel::Matches(n)) if n == p.name => "=",
+                        Some(crate::filter_preset::PresetLabel::Modified(n)) if n == p.name => "~",
+                        _ => " ",
+                    })
+                    .collect();
+                let rows = d.list.items.len().max(1) as u16;
+                let height = (rows + 6).min(area.height);
+                let inner = self.dialog(
+                    frame,
+                    area,
+                    (78, height),
+                    "Filter presets - = the stream's filters, ~ edited since",
+                    false,
+                );
+                let Some(d) = self.presets.as_mut() else {
+                    return;
+                };
+                let list_rows = inner.height.saturating_sub(3) as usize;
+                if d.list.selected < d.top {
+                    d.top = d.list.selected;
+                } else if list_rows > 0 && d.list.selected >= d.top + list_rows {
+                    d.top = d.list.selected + 1 - list_rows;
+                }
+                let mut out = vec![Line::styled(
+                    "Enter apply  A to all  s save  r rename  d delete  Alt+Up/Down move  Esc",
+                    dim,
+                )];
+                if d.list.items.is_empty() {
+                    out.push(Line::styled(
+                        "  (no presets: s saves the stream's filters as one)",
+                        dim,
+                    ));
+                }
+                for (i, p) in d.list.items.iter().enumerate().skip(d.top).take(list_rows) {
+                    let y = inner.y + 1 + (i - d.top) as u16;
+                    self.hits
+                        .list_items
+                        .push((Rect::new(inner.x, y, inner.width, 1), i));
+                    let row = if i == d.list.selected {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    let name: String = view::sanitize(&p.name).chars().take(24).collect();
+                    out.push(Line::from(vec![
+                        Span::styled(format!("{} ", marks[i]), accent),
+                        Span::styled(format!("{name:<24} "), row),
+                        Span::styled(view::sanitize(&presets::summary(&p.state)), dim),
+                    ]));
+                }
+                frame.render_widget(Paragraph::new(out), inner);
+            }
+        }
     }
 
     /// The rule editor: the list (each pattern in its own colours, then its options),
@@ -4010,11 +4271,10 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::NextWarn),
     ),
     ("10j  3e", "a count repeats j k n N e E w W", None),
-    ("] F2", "next bookmark (wraps)", Some(Action::NextBookmark)),
     (
-        "[ Shift+F2",
-        "previous bookmark (wraps)",
-        Some(Action::PrevBookmark),
+        "] [  F2",
+        "next / previous bookmark (Shift+F2 back)",
+        Some(Action::NextBookmark),
     ),
     (
         "m",
@@ -4036,11 +4296,10 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "open: browse folders, a path or *.log",
         Some(Action::OpenFile),
     ),
-    ("Shift+O", "open a session", Some(Action::OpenSession)),
     (
-        "Shift+S",
-        "save the streams as a session",
-        Some(Action::SaveSession),
+        "Shift+O/S",
+        "open / save a session",
+        Some(Action::OpenSession),
     ),
     (
         "t",
@@ -4056,6 +4315,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "r",
         "highlight rules: add, edit, reorder",
         Some(Action::EditRules),
+    ),
+    (
+        "p",
+        "filter presets: apply, save, rename",
+        Some(Action::Presets),
     ),
     (
         "Shift+T",
@@ -6398,5 +6662,66 @@ mod tests {
         assert!(app.tabs[0].engine.is_auto_bookmark(1));
         let saved = crate::tui::workspace::Settings::read(&ini).config;
         assert_eq!(saved.highlight_rules[1].pattern, "FATAL");
+    }
+
+    #[test]
+    fn a_preset_saved_in_the_terminal_is_applied_and_reaches_the_ini() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.log"), dir.path().join("b.log"));
+        std::fs::write(&a, "payment ok\nDEBUG payment\nother\n").unwrap();
+        std::fs::write(&b, "payment b\nother b\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone(), b.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.focus_tab(0);
+        app.tabs[0].engine.set_include_filter("payment");
+        app.tabs[0].engine.set_exclude_filter("DEBUG");
+        // Save the stream's filters as "payments".
+        app.apply(Action::Presets);
+        press(&mut app, KeyCode::Char('s'));
+        keys(&mut app, "payments");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.message.as_deref(), Some("Preset payments saved"));
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.filter_presets.len(), 1);
+        assert_eq!(saved.filter_presets[0].name, "payments");
+        assert_eq!(saved.filter_presets[0].state.include, ["payment"]);
+        assert_eq!(saved.filter_presets[0].state.exclude, ["DEBUG"]);
+        // The list marks it as the focused stream's filters.
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("= payments")),
+            "{screen:#?}"
+        );
+        // Applied to every stream with A: b gets the same filters, the dialog closes.
+        app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert!(app.presets.is_none());
+        assert_eq!(app.tabs[1].engine.include_terms(), ["payment"]);
+        assert_eq!(app.tabs[1].engine.exclude_terms(), ["DEBUG"]);
+        // Renamed, then deleted after the confirmation.
+        app.apply(Action::Presets);
+        press(&mut app, KeyCode::Char('r'));
+        keys(&mut app, " EU");
+        press(&mut app, KeyCode::Enter);
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.filter_presets[0].name, "payments EU");
+        press(&mut app, KeyCode::Char('d'));
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("Delete the preset payments EU?")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Enter);
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert!(saved.filter_presets.is_empty());
     }
 }

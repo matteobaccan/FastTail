@@ -22,6 +22,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `a` adds a rule, `d` deletes one, `Space` switches it on or off, and `Alt+↑` / `Alt+↓`
   (or `K` / `J`) move it. Every change reaches all streams and `fasttail.ini` at once, as
   in the GUI's Highlights window. A renamed rule keeps its tool.
+- **Filter presets in the terminal interface (`p`).** These are the presets of the GUI's
+  drop-down: each name comes with its filters, and the one equal to the focused stream
+  is marked `=` (`~` when it was applied and edited since).
+  - `Enter` applies a preset to the stream, `A` to every stream.
+  - `s` saves the stream's filters as a preset, optionally with the time range. A taken
+    name replaces that preset.
+  - `r` renames a preset, `d` deletes it after a confirmation, and `Alt+↑` / `Alt+↓`
+    move it.
+
+  Every change is saved to `fasttail.ini`, so the GUI lists it.
 
 ### Changed
 
