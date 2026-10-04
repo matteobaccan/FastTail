@@ -44,6 +44,8 @@ pub enum Key {
     StdinSpoolMaxMb,
     AutoBookmarkMax,
     Sound,
+    /// Opens the external tools editor (`Enter`); the tools are not part of the form.
+    Tools,
 }
 
 /// The input of a field.
@@ -53,6 +55,8 @@ pub enum Widget {
     Radio(RadioList),
     Number(NumberField),
     Text(TextField),
+    /// A row that opens another dialog with `Enter`, showing this text.
+    Button(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +213,15 @@ impl SettingsForm {
             )
             .starts("New streams"),
             Field::new(Key::Sound, "Sound alerts", check(c.sound_enabled)).starts("Sound"),
+            Field::new(
+                Key::Tools,
+                "External tools",
+                Widget::Button(format!(
+                    "{} defined - Enter edits them",
+                    c.external_tools.len()
+                )),
+            )
+            .starts("External tools"),
         ];
         Self {
             fields,
@@ -243,6 +256,7 @@ impl SettingsForm {
             Widget::Radio(_) => FieldKey::Other,
             Widget::Number(n) => n.on_key(key),
             Widget::Text(t) => t.on_key(key),
+            Widget::Button(_) => FieldKey::Other,
         };
         if done == FieldKey::Edited {
             self.rejected = false;
@@ -311,6 +325,7 @@ impl SettingsForm {
                 Key::StdinSpoolMaxMb => c.stdin_spool_max_mb = num() as u32,
                 Key::AutoBookmarkMax => c.auto_bookmark_max = num() as usize,
                 Key::Sound => c.sound_enabled = on,
+                Key::Tools => {}
             }
         }
         if c.language_auto {
@@ -340,6 +355,7 @@ impl SettingsForm {
                 ),
                 Widget::Number(n) => format!("[{}]", n.field.text()),
                 Widget::Text(t) => format!("[{}]", t.text()),
+                Widget::Button(text) => format!("> {text}"),
             };
             out.push((format!("  {:<34}{value}", f.label), Some(i)));
         }

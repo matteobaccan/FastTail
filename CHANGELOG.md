@@ -48,7 +48,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     the menu.
 
   Arguments expand exactly as in the GUI, and a tool's input and output are never the
-  terminal. Editing the tools in the terminal comes next.
+  terminal.
+- **Tools editor in the terminal interface.** Settings > External tools (or `e` in the
+  `!` menu) edits the same `[tool.N]` list as the GUI. Each tool has:
+  - name, program and arguments, with the placeholders listed;
+  - the regex for `{match}`, the shortcut and the shell flag;
+  - the rule it runs for.
+
+  A missing name or program, a shortcut without a modifier or a broken regex is marked
+  and not saved. The list adds, deletes and moves tools and shows the dropped
+  rule-bound runs. Every change is saved at once.
 
 ### Changed
 
