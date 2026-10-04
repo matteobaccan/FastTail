@@ -32,6 +32,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     move it.
 
   Every change is saved to `fasttail.ini`, so the GUI lists it.
+- **Global filter in the terminal interface (`F`, `f`).** `F` edits the GUI's global
+  filter: the on switch, up to 8 include and 8 exclude terms, match case and regular
+  expressions. A regex that does not compile is marked. Edits reach every stream 300 ms
+  after the last key, and streams opened later too; they are saved in
+  `[global_filter]`. `f` switches it on or off at once.
 
 ### Changed
 
