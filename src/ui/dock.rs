@@ -7453,6 +7453,7 @@ fn render_rule_set_controls(
                 ),
             )
             .on_hover_text(t(lang, "rules_export_tip"))
+            .on_disabled_hover_text(t(lang, "rules_export_tip"))
             .clicked()
         {
             if let Some(target) = rfd::FileDialog::new()
@@ -7567,6 +7568,7 @@ fn render_rule_set_controls(
                             ),
                         )
                         .on_hover_text(t(lang, "rules_import_append_tip"))
+                        .on_disabled_hover_text(t(lang, "rules_import_append_tip"))
                         .clicked()
                     {
                         let incoming = std::mem::take(&mut pending.rules);
@@ -7589,6 +7591,7 @@ fn render_rule_set_controls(
                             ),
                         )
                         .on_hover_text(t(lang, "rules_import_replace_tip"))
+                        .on_disabled_hover_text(t(lang, "rules_import_replace_tip"))
                         .clicked()
                     {
                         pending.confirm = true;

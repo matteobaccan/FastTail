@@ -2599,16 +2599,14 @@ impl App {
                     None => self.message = Some("No bookmark visible".into()),
                 }
             }
-            Action::SearchNext => {
-                if tab.engine.search_next(false).is_none() {
-                    self.message = Some("No search hits".into());
-                }
+            Action::SearchNext if tab.engine.search_next(false).is_none() => {
+                self.message = Some("No search hits".into());
             }
-            Action::SearchPrev => {
-                if tab.engine.search_prev(false).is_none() {
-                    self.message = Some("No search hits".into());
-                }
+            Action::SearchNext => {}
+            Action::SearchPrev if tab.engine.search_prev(false).is_none() => {
+                self.message = Some("No search hits".into());
             }
+            Action::SearchPrev => {}
             Action::ToggleContext => toggle_context(tab, &mut self.message),
             Action::ToggleHex => tab.toggle_hex(),
             Action::CycleAnsi => {
