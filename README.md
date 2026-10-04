@@ -222,8 +222,8 @@ the same, and docks it back). A floating window lies over the others: drag its t
 move it and its bottom-right corner to resize it; every window can float, leaving the
 dock empty. `[x]` at the top right of a window, or `Ctrl+W`, closes its stream; after the
 last one (or when started with nothing to open) the workspace is empty. `o` opens a file
-through a folder browser, `,` the Settings, `Shift+T` the next theme. `r` edits the highlight rules (order, colours, options).
-The preview lacks filter presets, the global filter, external tools, the PIN lock and
+through a folder browser, `,` the Settings, `Shift+T` the next theme. `r` edits the highlight rules (order, colours, options), `p` applies, saves and renames
+filter presets. The preview lacks the global filter, external tools, the PIN lock and
 translations; they come with 0.20.0.
 
 ### Print mode (no window)
