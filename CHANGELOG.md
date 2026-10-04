@@ -58,6 +58,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A missing name or program, a shortcut without a modifier or a broken regex is marked
   and not saved. The list adds, deletes and moves tools and shows the dropped
   rule-bound runs. Every change is saved at once.
+- **PIN lock in the terminal interface (`Ctrl+L`).** With a PIN set, `Ctrl+L` locks over
+  anything, an open dialog included. The idle lock closes it after the idle minutes when
+  the lock is switched on, as in the GUI. While locked:
+  - the screen shows only a bordered PIN dialog, with no line, file name, count or status;
+  - every key but the PIN's is dropped (`Esc`, `q` and `Ctrl+C` too), and the mouse does
+    nothing;
+  - three wrong PINs pause the prompt for 60 s;
+  - streams keep tailing.
+
+  The PIN or the maintenance phrase unlocks it, back to exactly where it was. Without a
+  PIN nothing locks.
 
 ### Changed
 
