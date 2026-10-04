@@ -53,7 +53,7 @@
   - [x] `?` with no file (an empty workspace, also after closing the last stream; the last docked window can float, leaving the dock empty)
   - [ ] `:` palette over `src/actions.rs` (line jump)
   - [ ] Bindings from the registry, Kitty keyboard protocol on / off
-- [ ] 4.6 Lock screen: `Ctrl+L`, idle lock from the shared idle clock, full-screen bordered PIN dialog with nothing else drawn, key and mouse filtering (`q`, `Esc`, `Ctrl+C` dropped), shared attempts and cooldown, maintenance phrase, tailing continues, exact restore
+- [x] 4.6 Lock screen: `Ctrl+L`, idle lock from the shared idle clock, full-screen bordered PIN dialog with nothing else drawn, key and mouse filtering (`q`, `Esc`, `Ctrl+C` dropped), shared attempts and cooldown, maintenance phrase, tailing continues, exact restore
 - [x] 4.7 Close stream (`Ctrl+W`, as a browser or editor tab; `w` / `W` are the warning jumps of 4.5b and closing a window moved to `Alt+X`); closing the last stream leaves an empty workspace (4.5b) (the theme cycle `T` shipped with 3.10)
 
 ## 5. Interface selection and hand-offs

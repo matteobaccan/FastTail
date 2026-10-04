@@ -420,6 +420,12 @@ pub struct App {
     pub tools_editor: Option<ToolsDialog>,
     /// Spawns the external tools and keeps the limits of the rule-bound runs.
     tool_runner: crate::external_tools::ToolRunner,
+    /// The PIN lock screen while locked: the PIN being typed and the last notice.
+    pub locked: Option<LockScreen>,
+    /// Wrong PINs and their cooldown, shared rules with the GUI (memory only).
+    lock_attempts: crate::lock::LockAttempts,
+    /// Time since the last key or mouse event, for the idle lock.
+    idle: crate::lock::IdleClock,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
@@ -460,6 +466,13 @@ pub struct App {
 /// What an empty workspace says.
 const NO_FILE: &str = "No file open: o opens one, Ctrl+O a session, q quits";
 
+/// The lock screen: the PIN being typed (shown as `*`) and the last notice.
+#[derive(Debug, Default)]
+pub struct LockScreen {
+    pub field: TextField,
+    pub notice: String,
+}
+
 /// How often the configuration is saved while it changes, as in the GUI.
 const SAVE_EVERY: Duration = Duration::from_secs(2);
 
@@ -496,6 +509,9 @@ impl App {
             global_due: None,
             tool_menu: None,
             tools_editor: None,
+            locked: None,
+            lock_attempts: Default::default(),
+            idle: crate::lock::IdleClock::new(Instant::now()),
             tool_runner: Default::default(),
             confirm_overwrite: None,
             settings: None,
@@ -804,6 +820,15 @@ impl App {
         if due {
             self.run_bound_tools();
         }
+        // The idle lock, armed by a PIN, `lock_enabled` and the idle minutes.
+        let idle_locked = self.locked.is_none()
+            && self
+                .settings
+                .as_ref()
+                .is_some_and(|s| self.idle.idle_lock_due(Instant::now(), &s.config));
+        if idle_locked {
+            self.lock();
+        }
         let global_applied = self.global_due.is_some_and(|due| Instant::now() >= due);
         if global_applied {
             self.apply_pending_global();
@@ -814,7 +839,7 @@ impl App {
         let sig = self.signature();
         let changed = sig != self.last_signature;
         self.last_signature = sig;
-        changed || listed || global_applied
+        changed || listed || global_applied || idle_locked
     }
 
     /// Background work in flight: the loop then polls a little faster.
@@ -873,6 +898,16 @@ impl App {
         // in every dialog alike, or a key would act twice.
         if key.kind == crossterm::event::KeyEventKind::Release {
             return false;
+        }
+        self.idle.touch(Instant::now());
+        // Locked: only the PIN field's keys and Enter, nothing else (not even quit).
+        if self.locked.is_some() {
+            return self.on_lock_key(key);
+        }
+        // Ctrl+L locks over any dialog, which is there again after the unlock.
+        if keys::map_key(key) == Some(Action::Lock) {
+            self.lock();
+            return true;
         }
         if self.confirm_overwrite.is_some() {
             return self.on_confirm_key(key);
@@ -1114,6 +1149,10 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        // Nothing reaches the screens under the lock, not even pasted text.
+        if self.locked.is_some() {
+            return false;
+        }
         if let Some(form) = self.tools_editor.as_mut().and_then(|d| d.form.as_mut()) {
             if let Some(ToolWidget::Text(t)) =
                 form.fields.get_mut(form.focus).map(|f| &mut f.widget)
@@ -1209,6 +1248,72 @@ impl App {
     fn open_settings(&mut self) {
         let form = SettingsForm::from_config(&self.settings_mut().config);
         self.settings_form = Some(form);
+    }
+
+    /// `Ctrl+L` (or the idle lock): the PIN screen, when a PIN is set. Without one
+    /// nothing locks, so nobody can be locked out; the state under it stays as it is.
+    fn lock(&mut self) {
+        let can = self
+            .settings
+            .as_ref()
+            .is_some_and(|s| crate::lock::can_lock(&s.config));
+        if !can {
+            self.message = Some("Set a PIN in the GUI's Settings to lock".into());
+            return;
+        }
+        self.locked = Some(LockScreen::default());
+    }
+
+    /// A key on the lock screen: the PIN field's editing keys and `Enter`; every other
+    /// key, `Esc`, `q` and `Ctrl+C` included, is dropped.
+    fn on_lock_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        let now = Instant::now();
+        let Some(screen) = self.locked.as_mut() else {
+            return false;
+        };
+        if self.lock_attempts.cooldown_left(now).is_some() {
+            return true;
+        }
+        match key.code {
+            KeyCode::Enter => {
+                let stored = self
+                    .settings
+                    .as_ref()
+                    .map(|s| s.config.lock_pin.clone())
+                    .unwrap_or_default();
+                if crate::lock::pin_matches(&stored, screen.field.text()) {
+                    self.lock_attempts.reset();
+                    self.locked = None;
+                } else {
+                    screen.field = TextField::default();
+                    screen.notice = if self.lock_attempts.register_failure(now) {
+                        "Too many wrong PINs".into()
+                    } else {
+                        "Wrong PIN".into()
+                    };
+                }
+                true
+            }
+            KeyCode::Char(_)
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                false
+            }
+            KeyCode::Char(_)
+            | KeyCode::Backspace
+            | KeyCode::Delete
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Home
+            | KeyCode::End => {
+                screen.field.on_key(key);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// `!`: the menu of the external tools.
@@ -2547,6 +2652,7 @@ impl App {
             Action::EditGlobal => self.open_global(),
             Action::ToggleGlobal => self.toggle_global(),
             Action::Tools => self.open_tool_menu(),
+            Action::Lock => self.lock(),
             Action::OpenFile => self.open_browser(),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -2611,6 +2717,11 @@ impl App {
     /// Handles a mouse event against the last frame; returns true when the screen
     /// changed.
     pub fn on_mouse(&mut self, ev: MouseEvent) -> bool {
+        self.idle.touch(Instant::now());
+        // The mouse does nothing while locked.
+        if self.locked.is_some() {
+            return false;
+        }
         match ev.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 if let Some(b) = self.browser.as_mut() {
@@ -3213,6 +3324,11 @@ impl App {
         // The hit map is rebuilt with every frame: a click is tested against what the
         // user saw.
         self.hits = HitMap::default();
+        // Locked: the PIN dialog on a blank screen and nothing else.
+        if self.locked.is_some() {
+            self.draw_lock(frame);
+            return;
+        }
         // The theme's background behind everything (the terminal's own at 16 colours).
         frame.render_widget(Block::default().style(self.palette.screen()), frame.area());
         let strip = if self.tabs.len() > 1 { 1 } else { 0 };
@@ -3695,6 +3811,71 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    /// The lock screen: a blank screen and a bordered PIN dialog, without any line,
+    /// name, count or status of the streams; during the cooldown, a countdown.
+    fn draw_lock(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+        frame.render_widget(Clear, area);
+        frame.render_widget(Block::default().style(self.palette.screen()), area);
+        let palette = self.palette;
+        let block = Block::bordered()
+            .style(palette.dialog())
+            .border_set(palette.border_set(Chrome::Dialog))
+            .border_style(palette.border_style(Chrome::Dialog))
+            .title_top(
+                Line::from(" FastTail is locked ").style(
+                    Style::default()
+                        .fg(palette.accent())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let Some(screen) = self.locked.as_ref() else {
+            return;
+        };
+        let wait = self.lock_attempts.cooldown_left(Instant::now());
+        let mut lines = vec![Line::raw("")];
+        match wait {
+            Some(left) => lines.push(
+                Line::raw(format!(
+                    "Too many wrong PINs: try again in {} s",
+                    left.as_secs() + 1
+                ))
+                .centered(),
+            ),
+            None => {
+                let stars = "*".repeat(screen.field.text().chars().count());
+                lines.push(Line::raw(format!("PIN: {stars}_")).centered());
+                if !screen.notice.is_empty() {
+                    lines.push(
+                        Line::styled(
+                            screen.notice.clone(),
+                            Style::default().fg(palette.level_color(LogLevel::Error)),
+                        )
+                        .centered(),
+                    );
+                }
+            }
+        }
+        lines.push(Line::raw(""));
+        lines.push(
+            Line::styled(
+                "Type the PIN and press Enter. The lock deters onlookers; it is not security.",
+                Style::default().fg(palette.dim()),
+            )
+            .centered(),
+        );
+        let y = inner.y + inner.height.saturating_sub(lines.len() as u16) / 2;
+        let rect = Rect::new(
+            inner.x,
+            y,
+            inner.width,
+            (lines.len() as u16).min(inner.height),
+        );
+        frame.render_widget(Paragraph::new(lines), rect);
     }
 
     /// The external tools editor: the list (name, command, shortcut, rule and dropped
@@ -4778,10 +4959,9 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "extend the selection from the cursor",
         None,
     ),
-    ("Home g", "first row", Some(Action::Top)),
     (
-        "End Shift+G",
-        "last row, and follow it",
+        "Home g  End G",
+        "first row / last row, and follow it",
         Some(Action::Bottom),
     ),
     ("Left/Right 0", "scroll sideways / back to column 0", None),
@@ -4928,6 +5108,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "external tools on the row or selection",
         Some(Action::Tools),
     ),
+    ("Ctrl+L", "lock with the PIN", Some(Action::Lock)),
     (
         "Shift+T",
         "next theme (Tron ... Commander)",
@@ -6231,7 +6412,7 @@ mod tests {
             assert!(tall.iter().any(|l| l.contains(key)), "{key}: {tall:#?}");
         }
         // The cursor starts on the first entry with a command and skips the others.
-        assert_eq!(HELP[app.help_sel].2, Some(Action::Top));
+        assert_eq!(HELP[app.help_sel].2, Some(Action::Bottom));
         press(&mut app, KeyCode::Up);
         assert_eq!(
             HELP[app.help_sel].2,
@@ -6240,7 +6421,7 @@ mod tests {
         );
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Down);
-        assert_eq!(HELP[app.help_sel].2, Some(Action::Bottom));
+        assert_eq!(HELP[app.help_sel].2, Some(Action::ToggleFollow));
 
         // Two columns on a wide screen; Right jumps to the other column.
         let wide = render(&mut app, 170, 30);
@@ -7526,5 +7707,72 @@ mod tests {
         press(&mut app, KeyCode::Char('e'));
         assert!(app.tool_menu.is_none());
         assert!(app.tools_editor.is_some());
+    }
+
+    #[test]
+    fn the_lock_hides_everything_drops_keys_counts_failures_and_restores_the_state() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("secret-app.log");
+        std::fs::write(&a, "password=hunter2\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            lock_pin: crate::lock::scramble_pin("4821"),
+            lock_enabled: true,
+            screensaver_timeout_mins: 1,
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::StartSearch);
+        // Ctrl+L: only the PIN dialog, nothing of the stream.
+        app.on_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert!(app.locked.is_some());
+        let screen = render(&mut app, 100, 30).join("\n");
+        assert!(screen.contains("FastTail is locked"), "{screen}");
+        for hidden in ["hunter2", "secret-app", "1/1", "FOLLOW", "help"] {
+            assert!(!screen.contains(hidden), "{hidden} shown: {screen}");
+        }
+        // Esc, q, Ctrl+C and the mouse do nothing.
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('q'));
+        app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(!app.on_mouse(click(5, 5)));
+        assert!(app.locked.is_some() && !app.quit);
+        // Three wrong PINs start the cooldown; typing is dropped meanwhile.
+        for _ in 0..3 {
+            keys(&mut app, "0000");
+            press(&mut app, KeyCode::Enter);
+        }
+        let screen = render(&mut app, 100, 30).join("\n");
+        assert!(screen.contains("try again in"), "{screen}");
+        assert!(app.lock_attempts.cooldown_left(Instant::now()).is_some());
+        keys(&mut app, "4821");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.locked.is_some(), "no attempt during the cooldown");
+        // After it, the right PIN opens it, and the open dialog is still there.
+        app.lock_attempts = Default::default();
+        app.locked = Some(LockScreen::default());
+        keys(&mut app, "4821");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.locked.is_none());
+        assert!(app.prompt.is_some(), "the search dialog is back");
+        // The maintenance phrase opens it too.
+        app.lock();
+        keys(&mut app, "joshua");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.locked.is_none());
+        // The idle lock: a minute without a key or mouse event.
+        app.idle = crate::lock::IdleClock::new(Instant::now() - Duration::from_secs(61));
+        assert!(app.tick());
+        assert!(app.locked.is_some());
+        // Without a PIN nothing locks.
+        app.locked = None;
+        app.settings.as_mut().unwrap().config.lock_pin.clear();
+        app.lock();
+        assert!(app.locked.is_none());
     }
 }

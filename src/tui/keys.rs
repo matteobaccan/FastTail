@@ -99,6 +99,8 @@ pub enum Action {
     ToggleGlobal,
     /// `!`: the external tools to run on the cursor row or the selection.
     Tools,
+    /// `Ctrl+L`: the PIN lock.
+    Lock,
     /// `e` / `E`: the next / previous ERROR (or FATAL) line; `w` / `W`: WARN.
     NextError,
     PrevError,
@@ -130,6 +132,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('k') => Some(Action::ToggleContext),
             KeyCode::Char('g') => Some(Action::GoTo),
             KeyCode::Char('w') => Some(Action::CloseStream),
+            KeyCode::Char('l') => Some(Action::Lock),
             KeyCode::PageUp => Some(Action::PrevInPane),
             KeyCode::PageDown => Some(Action::NextInPane),
             _ => None,
@@ -258,6 +261,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('F'), none), Some(Action::EditGlobal));
         assert_eq!(k(KeyCode::Char('f'), none), Some(Action::ToggleGlobal));
         assert_eq!(k(KeyCode::Char('!'), none), Some(Action::Tools));
+        assert_eq!(k(KeyCode::Char('l'), ctrl), Some(Action::Lock));
         assert_eq!(
             k(KeyCode::Char('g'), none),
             Some(Action::Top),
