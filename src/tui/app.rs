@@ -30,6 +30,7 @@ use crate::tui::clipboard::{Clipboard, Copied};
 use crate::tui::colors::{Chrome, Palette};
 use crate::tui::dock::{self, Place, Zone};
 use crate::tui::form::{FieldKey, TextField};
+use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
@@ -409,6 +410,9 @@ pub struct App {
     pub rules: Option<RulesDialog>,
     /// The filter presets (`p`).
     pub presets: Option<PresetsDialog>,
+    /// The global filter editor (`F`), and when its pending edit is applied.
+    pub global: Option<GlobalDialog>,
+    global_due: Option<Instant>,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
@@ -481,6 +485,8 @@ impl App {
             settings_form: None,
             rules: None,
             presets: None,
+            global: None,
+            global_due: None,
             confirm_overwrite: None,
             settings: None,
             autosave: false,
@@ -785,13 +791,17 @@ impl App {
             }
             tab.seen_lines = tab.engine.total_lines();
         }
+        let global_applied = self.global_due.is_some_and(|due| Instant::now() >= due);
+        if global_applied {
+            self.apply_pending_global();
+        }
         if self.autosave && self.last_save.elapsed() >= SAVE_EVERY {
             self.save_config();
         }
         let sig = self.signature();
         let changed = sig != self.last_signature;
         self.last_signature = sig;
-        changed || listed
+        changed || listed || global_applied
     }
 
     /// Background work in flight: the loop then polls a little faster.
@@ -862,6 +872,9 @@ impl App {
         }
         if self.presets.is_some() {
             return self.on_presets_key(key);
+        }
+        if self.global.is_some() {
+            return self.on_global_key(key);
         }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
@@ -1071,6 +1084,17 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        if self.global.is_some() {
+            // Typed character by character, so the term rows follow as with keys.
+            for c in text.chars().filter(|c| !c.is_control()) {
+                let key = crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(c),
+                    KeyModifiers::NONE,
+                );
+                self.on_global_key(key);
+            }
+            return true;
+        }
         if let Some(presets::Mode::Name { field, .. }) = self.presets.as_mut().map(|d| &mut d.mode)
         {
             field.insert(text);
@@ -1147,6 +1171,78 @@ impl App {
     fn open_settings(&mut self) {
         let form = SettingsForm::from_config(&self.settings_mut().config);
         self.settings_form = Some(form);
+    }
+
+    /// `F`: the global filter editor.
+    fn open_global(&mut self) {
+        let gf = &self.settings_mut().config.global_filter;
+        self.global = Some(GlobalDialog::new(gf));
+    }
+
+    fn on_global_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(d) = self.global.as_mut() else {
+            return false;
+        };
+        match d.on_key(key) {
+            // Applied `APPLY_DELAY_MS` after the last edit (see `tick`).
+            GlobalKey::Edited => {
+                self.global_due = Some(
+                    Instant::now() + Duration::from_millis(crate::global_filter::APPLY_DELAY_MS),
+                );
+            }
+            GlobalKey::Close => self.close_global(),
+            GlobalKey::Moved => {}
+            GlobalKey::Other => return false,
+        }
+        true
+    }
+
+    /// Closes the editor, applying a pending edit at once.
+    fn close_global(&mut self) {
+        self.apply_pending_global();
+        self.global = None;
+        self.global_due = None;
+    }
+
+    /// The editor's pending edit, if any, reaches the streams and `fasttail.ini`.
+    fn apply_pending_global(&mut self) {
+        let Some(d) = self.global.as_mut().filter(|d| d.dirty) else {
+            return;
+        };
+        d.dirty = false;
+        self.global_due = None;
+        let base = self.settings_mut().config.global_filter.clone();
+        let gf = match &self.global {
+            Some(d) => d.filter(&base),
+            None => return,
+        };
+        self.set_global_filter(gf);
+    }
+
+    /// `f`: the global filter on or off, at once.
+    fn toggle_global(&mut self) {
+        let mut gf = self.settings_mut().config.global_filter.clone();
+        gf.enabled = !gf.enabled;
+        let state = match (gf.enabled, gf.has_terms()) {
+            (true, true) => "on",
+            (true, false) => "on, but it has no term: F edits it",
+            (false, _) => "off",
+        };
+        self.message = Some(format!("Global filter {state}"));
+        self.set_global_filter(gf);
+    }
+
+    /// `gf` becomes the global filter: compiled once and shared by every stream (and
+    /// the streams opened later), then saved.
+    fn set_global_filter(&mut self, gf: crate::global_filter::GlobalFilter) {
+        let compiled = gf.compile();
+        let settings = self.settings.get_or_insert_with(Default::default);
+        settings.config.global_filter = gf;
+        settings.global = compiled.clone();
+        for tab in &mut self.tabs {
+            tab.engine.set_global_filter(compiled.clone());
+        }
+        self.save_config();
     }
 
     /// `p`: the filter presets of `fasttail.ini`.
@@ -2223,6 +2319,8 @@ impl App {
                 Action::OpenSession => self.open_sessions(),
                 Action::Settings => self.open_settings(),
                 Action::EditRules => self.open_rules(),
+                Action::EditGlobal => self.open_global(),
+                Action::ToggleGlobal => self.toggle_global(),
                 Action::CycleTheme => self.cycle_theme(),
                 _ => self.message = Some(NO_FILE.into()),
             }
@@ -2265,6 +2363,8 @@ impl App {
             Action::Settings => self.open_settings(),
             Action::EditRules => self.open_rules(),
             Action::Presets => self.open_presets(),
+            Action::EditGlobal => self.open_global(),
+            Action::ToggleGlobal => self.toggle_global(),
             Action::OpenFile => self.open_browser(),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -2347,6 +2447,7 @@ impl App {
                     || self.settings_form.is_some()
                     || self.rules.is_some()
                     || self.presets.is_some()
+                    || self.global.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
@@ -2531,6 +2632,12 @@ impl App {
                     }
                 }
             }
+            // A click focuses a row of the global filter editor.
+            Target::ListItem(i) if self.global.is_some() => {
+                if let Some(d) = self.global.as_mut() {
+                    d.focus = i.min(d.rows().len().saturating_sub(1));
+                }
+            }
             // A click selects a preset, a click on the selected one applies it.
             Target::ListItem(i) if self.presets.is_some() => {
                 let apply = self.presets.as_mut().and_then(|d| {
@@ -2572,7 +2679,9 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if let Some(d) = self.presets.as_mut() {
+                if self.global.is_some() {
+                    self.close_global();
+                } else if let Some(d) = self.presets.as_mut() {
                     match d.mode {
                         presets::Mode::List => self.presets = None,
                         _ => {
@@ -2626,6 +2735,8 @@ impl App {
                 }
             }
             Target::DialogCancel | Target::OutsideDialog => {
+                // The global filter's edits are kept, as the GUI's bar keeps them.
+                self.close_global();
                 self.prompt = None;
                 self.rules = None;
                 self.presets = None;
@@ -2917,6 +3028,9 @@ impl App {
         }
         if self.presets.is_some() {
             self.draw_presets(frame, main_area);
+        }
+        if self.global.is_some() {
+            self.draw_global(frame, main_area);
         }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
@@ -3347,6 +3461,82 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    /// The global filter editor: the switches, then the include and exclude rows
+    /// (filled ones and a spare one each), a regex that does not compile marked.
+    fn draw_global(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let Some(d) = self.global.as_ref() else {
+            return;
+        };
+        let rows = d.rows();
+        let height = (rows.len() as u16 + 6).min(area.height);
+        let inner = self.dialog(
+            frame,
+            area,
+            (72, height),
+            "Global filter - every stream combines it with its own filters",
+            false,
+        );
+        let Some(d) = self.global.as_ref() else {
+            return;
+        };
+        let mut out = vec![Line::styled(
+            "Tab/Up/Down move, Space ticks, type a term; applied as you type. Enter/Esc close",
+            dim,
+        )];
+        let mut cursor = None;
+        for (k, row) in rows.iter().enumerate() {
+            let y = inner.y + 1 + k as u16;
+            if y + 1 >= inner.bottom() {
+                break;
+            }
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), k));
+            let (label, value) = match row {
+                global::Row::Enabled => ("On (f)", d.enabled.text("")),
+                global::Row::MatchCase => ("Match case", d.case_sensitive.text("")),
+                global::Row::Regex => ("Regular expressions", d.is_regex.text("")),
+                global::Row::Include(i) => (
+                    if *i == 0 { "Include (all match)" } else { "" },
+                    d.term(*row).to_string(),
+                ),
+                global::Row::Exclude(i) => (
+                    if *i == 0 { "Exclude (none match)" } else { "" },
+                    d.term(*row).to_string(),
+                ),
+            };
+            let term_row = matches!(row, global::Row::Include(_) | global::Row::Exclude(_));
+            let mut style = Style::default();
+            if k == d.focus {
+                style = style.add_modifier(Modifier::REVERSED);
+                if term_row {
+                    let field = match row {
+                        global::Row::Include(i) => d.include.get(*i),
+                        global::Row::Exclude(i) => d.exclude.get(*i),
+                        _ => None,
+                    };
+                    let x = field.map_or(0, |f| f.view(40).1);
+                    cursor = Some((inner.x + 22 + x as u16, y));
+                }
+            }
+            let mut spans = vec![
+                Span::styled(format!("{label:<22}"), dim),
+                Span::styled(format!("{:<40}", view::sanitize(&value)), style),
+            ];
+            if d.invalid.contains(row) {
+                spans.push(Span::styled(" does not compile", error));
+            }
+            out.push(Line::from(spans));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        if let Some(at) = cursor {
+            frame.set_cursor_position(at);
+        }
     }
 
     /// The filter presets: the list (name and filters, the one equal to the focused
@@ -4320,6 +4510,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "p",
         "filter presets: apply, save, rename",
         Some(Action::Presets),
+    ),
+    (
+        "F  f",
+        "global filter: edit / on or off",
+        Some(Action::EditGlobal),
     ),
     (
         "Shift+T",
@@ -6723,5 +6918,65 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         let saved = crate::tui::workspace::Settings::read(&ini).config;
         assert!(saved.filter_presets.is_empty());
+    }
+
+    #[test]
+    fn the_global_filter_is_edited_applied_after_the_delay_and_switched_with_f() {
+        use crossterm::event::KeyCode;
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.log"), dir.path().join("b.log"));
+        std::fs::write(&a, "GET /api\nGET /healthcheck\n").unwrap();
+        std::fs::write(&b, "healthcheck ok\nlogin\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone(), b.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        let rows = |app: &App, i: usize| app.tabs[i].engine.visible_line_count();
+        assert_eq!((rows(&app, 0), rows(&app, 1)), (2, 2));
+        // F: on, then the exclude term healthcheck.
+        app.apply(Action::EditGlobal);
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("Exclude (none match)")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Char(' '));
+        // On, Match case, Regex, Include, then the exclude row.
+        for _ in 0..4 {
+            press(&mut app, KeyCode::Down);
+        }
+        keys(&mut app, "healthcheck");
+        // Not yet: it waits 300 ms after the last key.
+        app.tick();
+        assert_eq!(rows(&app, 1), 2);
+        std::thread::sleep(Duration::from_millis(
+            crate::global_filter::APPLY_DELAY_MS + 50,
+        ));
+        assert!(app.tick());
+        assert_eq!((rows(&app, 0), rows(&app, 1)), (1, 1));
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert!(saved.global_filter.enabled);
+        assert_eq!(saved.global_filter.exclude, ["healthcheck"]);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.global.is_none());
+        // f switches it off and on again, at once.
+        app.apply(Action::ToggleGlobal);
+        assert_eq!(app.message.as_deref(), Some("Global filter off"));
+        assert_eq!(rows(&app, 1), 2);
+        app.apply(Action::ToggleGlobal);
+        assert_eq!(rows(&app, 1), 1);
+        // A stream opened later applies it too.
+        let c = dir.path().join("c.log");
+        std::fs::write(&c, "healthcheck\nother\n").unwrap();
+        app.open_file(&c);
+        assert_eq!(rows(&app, 2), 1);
     }
 }

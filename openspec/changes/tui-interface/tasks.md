@@ -44,7 +44,7 @@
   - [x] All rule fields, add / edit / delete / reorder, colour swatches and `#RRGGBB` with depth preview, bound tool; each change applied to every stream and saved (`src/tui/rules.rs`)
   - [ ] Quick labels listed and removable (the terminal has no quick labels yet: `Ctrl+Shift+1..9` on the search text first)
 - [x] 4.3 Filter presets (`p`): apply (`Enter` to the stream, `A` to all), save current as (with or without the time range), rename, delete after a confirmation, reorder (`src/tui/presets.rs`)
-- [ ] 4.4 Global filter editor (`F`) and on / off (`f`), 300 ms debounce
+- [x] 4.4 Global filter editor (`F`) and on / off (`f`), 300 ms debounce; streams opened later apply it, a regex that does not compile is marked (`src/tui/global.rs`)
 - [ ] 4.5 External tools: editor page in Settings, `!` menu on the cursor row or selection, shortcuts, rule-bound runs with the 1 per second and 10 children limits, null standard handles for every child
 - [ ] 4.5b Key conventions:
   - [x] `e`/`E`, `w`/`W` level jumps (`TailEngine::level_line_from`, cached levels only, no file read) and counts (`12j`, `3e`, at most 99,999; `0` alone still scrolls, `Esc` drops a count)

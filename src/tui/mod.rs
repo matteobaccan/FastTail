@@ -14,6 +14,7 @@ mod clipboard;
 mod colors;
 mod dock;
 mod form;
+mod global;
 mod hex;
 mod keys;
 mod mouse;
