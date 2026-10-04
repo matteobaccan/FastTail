@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Disabled controls say why.** Play / Pause are disabled with no stream open; the
+  Compare view's previous / next change buttons are disabled when the two sides are
+  identical; the column header menu's Hide, Move left / right and column checkboxes,
+  the scratchpad's find-next and the rule set export / import buttons show a tooltip
+  when disabled; Find All's Refresh tells how to start a search (#216, #218, #222, #224).
+- **Field and level scanning.** A line without `=` is rejected at once by the logfmt
+  scanner; unescaping copies the text between backslashes in bulk; a field lookup by
+  name compares keys without building each field; level words are matched by length
+  first (#219, #223, #225).
+
+### Fixed
+
+- **Scratchpad and terminal statistics files.** Saving the scratchpad and writing the
+  `--stats` report refuse a directory or another non-regular file, as the other exports
+  do (#220).
+
 ## [0.16.0] - 2026-09-30
 
 Terminal interface windows: floating windows that move, resize and overlap, `[x]` to
