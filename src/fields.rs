@@ -235,9 +235,23 @@ impl FieldSpans {
         self.spans.iter().map(move |s| self.field(line, s))
     }
 
+    /// Checks whether `span`'s key matches `key` without slicing the value or constructing `Field`.
+    /// Slices key bytes/str directly, short-circuiting on length mismatch.
+    fn span_key_matches(&self, line: &str, span: &FieldSpan, key: &str) -> bool {
+        match span.key {
+            KeyAt::Line(a, b) => line.get(a as usize..b as usize) == Some(key),
+            KeyAt::Scratch(a, b) => {
+                self.scratch.get(a as usize..b as usize) == Some(key.as_bytes())
+            }
+        }
+    }
+
     /// The first field named `key`.
     pub fn get<'a>(&'a self, line: &'a str, key: &str) -> Option<Field<'a>> {
-        self.iter(line).find(|f| f.key == key)
+        self.spans
+            .iter()
+            .find(|span| self.span_key_matches(line, span, key))
+            .map(|span| self.field(line, span))
     }
 
     fn push(&mut self, key: KeyAt, value: (usize, usize), quoted: bool) -> bool {
@@ -285,54 +299,65 @@ pub fn unescape(raw: &str) -> Cow<'_, str> {
         return Cow::Borrowed(raw);
     }
     let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('t') => out.push('\t'),
-            Some('r') => out.push('\r'),
-            Some('b') => out.push('\u{8}'),
-            Some('f') => out.push('\u{c}'),
-            Some('u') => {
-                let hex = |chars: &mut std::str::Chars| -> Option<u32> {
-                    let s: String = chars.clone().take(4).collect();
-                    if s.len() != 4 {
-                        return None;
+    let mut from = 0;
+    let b = raw.as_bytes();
+    while from < b.len() {
+        match memchr::memchr(b'\\', &b[from..]) {
+            Some(rel) => {
+                let pos = from + rel;
+                out.push_str(&raw[from..pos]);
+                let mut chars = raw[pos..].chars();
+                chars.next(); // skip '\\'
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('r') => out.push('\r'),
+                    Some('b') => out.push('\u{8}'),
+                    Some('f') => out.push('\u{c}'),
+                    Some('u') => {
+                        let hex = |chars: &mut std::str::Chars| -> Option<u32> {
+                            let s: String = chars.clone().take(4).collect();
+                            if s.len() != 4 {
+                                return None;
+                            }
+                            let v = u32::from_str_radix(&s, 16).ok()?;
+                            for _ in 0..4 {
+                                chars.next();
+                            }
+                            Some(v)
+                        };
+                        let Some(hi) = hex(&mut chars) else {
+                            out.push_str("\\u");
+                            from = raw.len() - chars.as_str().len();
+                            continue;
+                        };
+                        let code = if (0xD800..0xDC00).contains(&hi) {
+                            let mut look = chars.clone();
+                            let lo = (look.next() == Some('\\') && look.next() == Some('u'))
+                                .then(|| hex(&mut look))
+                                .flatten()
+                                .filter(|lo| (0xDC00..0xE000).contains(lo));
+                            match lo {
+                                Some(lo) => {
+                                    chars = look;
+                                    0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
+                                }
+                                None => 0xFFFD,
+                            }
+                        } else {
+                            hi
+                        };
+                        out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
                     }
-                    let v = u32::from_str_radix(&s, 16).ok()?;
-                    for _ in 0..4 {
-                        chars.next();
-                    }
-                    Some(v)
-                };
-                let Some(hi) = hex(&mut chars) else {
-                    out.push_str("\\u");
-                    continue;
-                };
-                let code = if (0xD800..0xDC00).contains(&hi) {
-                    let mut look = chars.clone();
-                    let lo = (look.next() == Some('\\') && look.next() == Some('u'))
-                        .then(|| hex(&mut look))
-                        .flatten()
-                        .filter(|lo| (0xDC00..0xE000).contains(lo));
-                    match lo {
-                        Some(lo) => {
-                            chars = look;
-                            0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
-                        }
-                        None => 0xFFFD,
-                    }
-                } else {
-                    hi
-                };
-                out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+                    Some(other) => out.push(other),
+                    None => out.push('\\'),
+                }
+                from = raw.len() - chars.as_str().len();
             }
-            Some(other) => out.push(other),
-            None => out.push('\\'),
+            None => {
+                out.push_str(&raw[from..]);
+                break;
+            }
         }
     }
     Cow::Owned(out)
@@ -512,6 +537,9 @@ fn logfmt_pair_key(b: &[u8], pos: usize) -> Option<usize> {
 
 fn scan_logfmt(line: &str, out: &mut FieldSpans) -> bool {
     let b = line.as_bytes();
+    if memchr::memchr(b'=', b).is_none() {
+        return false;
+    }
     // The first pair: text before it is the prefix.
     let mut pos = skip_ws(b, 0);
     let mut first = None;

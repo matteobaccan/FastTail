@@ -248,6 +248,9 @@ pub fn render(
         return;
     };
     let json_possible = view.json_possible();
+    let diff = view.diff();
+    let has_changes = !diff.changes.is_empty();
+
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(t(lang, "compare_ignore")).monospace());
         ui.checkbox(&mut view.opts.timestamp, t(lang, "compare_opt_timestamp"));
@@ -262,15 +265,17 @@ pub fn render(
         );
         ui.separator();
         if ui
-            .button("▲")
+            .add_enabled(has_changes, egui::Button::new("▲"))
             .on_hover_text(t(lang, "compare_prev"))
+            .on_disabled_hover_text(t(lang, "compare_identical"))
             .clicked()
         {
             view.step_change(false);
         }
         if ui
-            .button("▼")
+            .add_enabled(has_changes, egui::Button::new("▼"))
             .on_hover_text(t(lang, "compare_next"))
+            .on_disabled_hover_text(t(lang, "compare_identical"))
             .clicked()
         {
             view.step_change(true);
@@ -290,8 +295,6 @@ pub fn render(
     } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F7)) {
         view.step_change(true);
     }
-
-    let diff = view.diff();
     let summary = if diff.changes.is_empty() {
         t(lang, "compare_identical").to_string()
     } else {

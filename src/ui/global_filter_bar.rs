@@ -54,6 +54,7 @@ pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Lang
         .on_hover_text(t(lang, "global_filter_tip"));
         if ui
             .checkbox(&mut gf.enabled, t(lang, "global_filter_enabled"))
+            .on_hover_text(t(lang, "global_filter_tip"))
             .changed()
         {
             out.switched = true;
