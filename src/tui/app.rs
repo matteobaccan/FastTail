@@ -38,7 +38,7 @@ use crate::tui::picker::{refusal_text, EntryPicker};
 use crate::tui::presets::{self, PresetsDialog, PresetsKey};
 use crate::tui::rules::{RuleWidget, RulesDialog, RulesKey};
 use crate::tui::settings::SettingsForm;
-use crate::tui::tools::{self, MenuKey, ToolMenu};
+use crate::tui::tools::{self, MenuKey, ToolMenu, ToolWidget, ToolsDialog, ToolsKey};
 use crate::tui::view::{self, Paint};
 
 /// Columns moved by one horizontal scroll step.
@@ -416,6 +416,8 @@ pub struct App {
     global_due: Option<Instant>,
     /// The external tools menu (`!`).
     pub tool_menu: Option<ToolMenu>,
+    /// The external tools editor (from Settings, or `e` in the menu).
+    pub tools_editor: Option<ToolsDialog>,
     /// Spawns the external tools and keeps the limits of the rule-bound runs.
     tool_runner: crate::external_tools::ToolRunner,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
@@ -493,6 +495,7 @@ impl App {
             global: None,
             global_due: None,
             tool_menu: None,
+            tools_editor: None,
             tool_runner: Default::default(),
             confirm_overwrite: None,
             settings: None,
@@ -874,6 +877,10 @@ impl App {
         if self.confirm_overwrite.is_some() {
             return self.on_confirm_key(key);
         }
+        // The tools editor opens over Settings, so it has the keys first.
+        if self.tools_editor.is_some() {
+            return self.on_tools_editor_key(key);
+        }
         if self.settings_form.is_some() {
             return self.on_settings_key(key);
         }
@@ -1107,6 +1114,14 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        if let Some(form) = self.tools_editor.as_mut().and_then(|d| d.form.as_mut()) {
+            if let Some(ToolWidget::Text(t)) =
+                form.fields.get_mut(form.focus).map(|f| &mut f.widget)
+            {
+                t.insert(text);
+            }
+            return true;
+        }
         if self.global.is_some() {
             // Typed character by character, so the term rows follow as with keys.
             for c in text.chars().filter(|c| !c.is_control()) {
@@ -1212,10 +1227,60 @@ impl App {
                 self.run_tool(i);
             }
             MenuKey::Close => self.tool_menu = None,
+            MenuKey::Edit => {
+                self.tool_menu = None;
+                self.open_tools_editor();
+            }
             MenuKey::Moved => {}
             MenuKey::Other => return false,
         }
         true
+    }
+
+    /// The external tools editor over the tools of `fasttail.ini`.
+    fn open_tools_editor(&mut self) {
+        let config = &self.settings_mut().config;
+        self.tools_editor = Some(ToolsDialog::new(
+            &config.external_tools,
+            &config.highlight_rules,
+        ));
+    }
+
+    fn on_tools_editor_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(d) = self.tools_editor.as_mut() else {
+            return false;
+        };
+        match d.on_key(key) {
+            ToolsKey::Changed => self.store_tools(),
+            ToolsKey::Close => self.tools_editor = None,
+            ToolsKey::Moved => {}
+            ToolsKey::Other => return false,
+        }
+        true
+    }
+
+    /// The editor's tools become the configuration's, saved at once; the Settings row
+    /// under the editor counts them again.
+    fn store_tools(&mut self) {
+        let Some(d) = &self.tools_editor else {
+            return;
+        };
+        let tools = d.tools();
+        let count = tools.len();
+        self.settings
+            .get_or_insert_with(Default::default)
+            .config
+            .external_tools = tools;
+        if let Some(form) = self.settings_form.as_mut() {
+            for f in &mut form.fields {
+                if f.key == crate::tui::settings::Key::Tools {
+                    f.widget = crate::tui::settings::Widget::Button(format!(
+                        "{count} defined - Enter edits them"
+                    ));
+                }
+            }
+        }
+        self.save_config();
     }
 
     /// Runs tool `i` on the cursor row of the focused stream (with the selection's
@@ -1465,6 +1530,18 @@ impl App {
         let Some(form) = self.settings_form.as_mut() else {
             return false;
         };
+        // `Enter` on the External tools row opens their editor over Settings.
+        let on_tools = form
+            .fields
+            .get(form.focus)
+            .is_some_and(|f| f.key == crate::tui::settings::Key::Tools);
+        if on_tools
+            && key.code == crossterm::event::KeyCode::Enter
+            && key.kind != crossterm::event::KeyEventKind::Release
+        {
+            self.open_tools_editor();
+            return true;
+        }
         match form.on_key(key) {
             FieldKey::Submit => self.submit_settings(),
             FieldKey::Cancel => self.settings_form = None,
@@ -2554,6 +2631,7 @@ impl App {
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
+                    || self.tools_editor.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
@@ -2738,6 +2816,17 @@ impl App {
                     }
                 }
             }
+            // The tools editor: a click selects a tool, a second click edits it; in the
+            // form a click focuses a field.
+            Target::ListItem(i) if self.tools_editor.is_some() => {
+                if let Some(d) = self.tools_editor.as_mut() {
+                    match d.form.as_mut() {
+                        Some(f) => f.focus = i.min(f.fields.len().saturating_sub(1)),
+                        None if d.list.selected == i => d.edit_selected(),
+                        None => d.list.selected = i.min(d.list.items.len().saturating_sub(1)),
+                    }
+                }
+            }
             // A click runs the tool.
             Target::ListItem(i) if self.tool_menu.is_some() => {
                 self.tool_menu = None;
@@ -2761,8 +2850,15 @@ impl App {
                 }
             }
             Target::ListItem(i) if self.settings_form.is_some() => {
-                if let Some(f) = self.settings_form.as_mut() {
+                let tools = self.settings_form.as_mut().is_some_and(|f| {
                     f.focus = i;
+                    f.fields
+                        .get(i)
+                        .is_some_and(|x| x.key == crate::tui::settings::Key::Tools)
+                });
+                // The External tools row opens their editor.
+                if tools {
+                    self.open_tools_editor();
                 }
             }
             // One click selects, a click on the selected entry opens it (as a double
@@ -2790,7 +2886,13 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if let Some(m) = self.tool_menu.take() {
+                if let Some(d) = self.tools_editor.as_mut() {
+                    if d.form.is_none() {
+                        self.tools_editor = None;
+                    } else if d.submit_form() {
+                        self.store_tools();
+                    }
+                } else if let Some(m) = self.tool_menu.take() {
                     if m.count > 0 {
                         self.run_tool(m.selected);
                     }
@@ -2832,6 +2934,16 @@ impl App {
             }
             // Cancel in the rule form drops the form only: the list's changes are
             // already applied.
+            // Cancel in the tool form drops the form only.
+            Target::DialogCancel
+                if self.tools_editor.as_ref().is_some_and(|d| d.form.is_some()) =>
+            {
+                if let Some(d) = self.tools_editor.as_mut() {
+                    d.form = None;
+                }
+            }
+            // A click outside the tools editor closes it, back to Settings if open.
+            Target::OutsideDialog if self.tools_editor.is_some() => self.tools_editor = None,
             // Cancel while naming or confirming goes back to the preset list.
             Target::DialogCancel
                 if self
@@ -3150,6 +3262,9 @@ impl App {
         }
         if self.tool_menu.is_some() {
             self.draw_tool_menu(frame, main_area);
+        }
+        if self.tools_editor.is_some() {
+            self.draw_tools_editor(frame, main_area);
         }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
@@ -3582,6 +3697,114 @@ impl App {
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
     }
 
+    /// The external tools editor: the list (name, command, shortcut, rule and dropped
+    /// runs), or the form of one tool with the placeholders the arguments take.
+    fn draw_tools_editor(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let Some(d) = self.tools_editor.as_ref() else {
+            return;
+        };
+        if let Some(form) = &d.form {
+            let lines = form.lines();
+            let problems = form.problems(&d.rules);
+            let (focus, rejected) = (form.focus, form.rejected);
+            let title = if form.index.is_some() {
+                "Tool - Tab/Up/Down move, Space ticks, Left/Right choose"
+            } else {
+                "New tool - Tab/Up/Down move, Space ticks, Left/Right choose"
+            };
+            let height = (lines.len() as u16 + 5).min(area.height);
+            let inner = self.dialog(frame, area, (78, height), title, true);
+            let error = Style::default().fg(palette.level_color(LogLevel::Error));
+            let mut out = Vec::with_capacity(lines.len());
+            let fields = lines.len() - 1;
+            for (i, text) in lines.iter().enumerate() {
+                let y = inner.y + i as u16;
+                if y + 1 >= inner.bottom() {
+                    break;
+                }
+                if i == fields {
+                    out.push(Line::styled(view::sanitize(text), dim));
+                    continue;
+                }
+                self.hits
+                    .list_items
+                    .push((Rect::new(inner.x, y, inner.width, 1), i));
+                let problem = problems.iter().find(|(p, _)| *p == i).map(|(_, p)| p);
+                let mut style = Style::default();
+                if problem.is_some() && rejected {
+                    style = error;
+                }
+                if i == focus {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                let shown = match problem {
+                    Some(p) if rejected => format!("{text}  ({p})"),
+                    _ => text.clone(),
+                };
+                out.push(Line::styled(view::sanitize(&shown), style));
+            }
+            frame.render_widget(Paragraph::new(out), inner);
+            return;
+        }
+        let rows = d.list.items.len().max(1) as u16;
+        let height = (rows + 6).min(area.height);
+        let inner = self.dialog(frame, area, (78, height), "External tools", false);
+        let Some(d) = self.tools_editor.as_mut() else {
+            return;
+        };
+        let list_rows = inner.height.saturating_sub(3) as usize;
+        if d.list.selected < d.top {
+            d.top = d.list.selected;
+        } else if list_rows > 0 && d.list.selected >= d.top + list_rows {
+            d.top = d.list.selected + 1 - list_rows;
+        }
+        let mut out = vec![Line::styled(
+            "Enter edit  a add  d delete  Alt+Up/Down K/J move  Esc close",
+            dim,
+        )];
+        if d.list.items.is_empty() {
+            out.push(Line::styled("  (no tools: a adds one)", dim));
+        }
+        for (i, t) in d.list.items.iter().enumerate().skip(d.top).take(list_rows) {
+            let y = inner.y + 1 + (i - d.top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let row = if i == d.list.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let mut extra = Vec::new();
+            if let Some(sc) = t.shortcut.as_deref() {
+                extra.push(sc.to_string());
+            }
+            if let Some(rule) = t.bound_rule.as_deref() {
+                extra.push(format!("rule {rule}"));
+                let dropped = self.tool_runner.dropped_for(&t.name);
+                if dropped > 0 {
+                    extra.push(format!("{dropped} dropped"));
+                }
+            }
+            if t.use_shell {
+                extra.push("shell".into());
+            }
+            let name: String = view::sanitize(&t.name).chars().take(20).collect();
+            let command: String = view::sanitize(&format!("{} {}", t.program, t.args))
+                .chars()
+                .take(30)
+                .collect();
+            out.push(Line::from(vec![
+                Span::styled(format!("{:>2}. {name:<20} ", i + 1), row),
+                Span::styled(format!("{command:<31}"), dim),
+                Span::styled(extra.join("  "), dim),
+            ]));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
     /// The external tools menu: number, name and command of each tool, its shortcut
     /// and the rule it runs for.
     fn draw_tool_menu(&mut self, frame: &mut Frame, area: Rect) {
@@ -3605,12 +3828,12 @@ impl App {
             false,
         );
         let mut out = vec![Line::styled(
-            "Enter or 1-9 runs, Up/Down choose, Esc closes",
+            "Enter or 1-9 runs, Up/Down choose, e edits the tools, Esc closes",
             dim,
         )];
         if tools.is_empty() {
             out.push(Line::styled(
-                "  (no tools: the GUI's Settings or [tool.N] in fasttail.ini define them)",
+                "  (no tools: e adds one, as Settings > External tools does)",
                 dim,
             ));
         }
@@ -7243,5 +7466,65 @@ mod tests {
         app.run_bound_tools();
         assert_eq!(app.tool_runner.dropped_for("notify"), 2);
         assert_eq!(app.tool_runner.last_error, None);
+    }
+
+    #[test]
+    fn the_tools_editor_opens_from_settings_and_saves_the_tools() {
+        use crossterm::event::KeyCode;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("app.log");
+        std::fs::write(&a, "line\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        // Settings: the External tools row, Enter opens the editor over it.
+        app.apply(Action::Settings);
+        let form = app.settings_form.as_mut().unwrap();
+        form.focus = form
+            .fields
+            .iter()
+            .position(|f| f.key == crate::tui::settings::Key::Tools)
+            .unwrap();
+        press(&mut app, KeyCode::Enter);
+        assert!(app.tools_editor.is_some());
+        assert!(app.settings_form.is_some(), "Settings stays under it");
+        // A new tool: name, program, arguments kept as {file}, then OK.
+        press(&mut app, KeyCode::Char('a'));
+        keys(&mut app, "editor");
+        press(&mut app, KeyCode::Down);
+        keys(&mut app, "code");
+        let screen = render(&mut app, 100, 30);
+        assert!(screen.iter().any(|l| l.contains("{lineno}")), "{screen:#?}");
+        press(&mut app, KeyCode::Enter);
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.external_tools.len(), 1);
+        assert_eq!(saved.external_tools[0].name, "editor");
+        assert_eq!(saved.external_tools[0].program, "code");
+        assert_eq!(saved.external_tools[0].args, "{file}");
+        // Esc goes back to Settings, whose row counts the tool.
+        press(&mut app, KeyCode::Esc);
+        assert!(app.tools_editor.is_none());
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("1 defined")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Esc);
+        // The ! menu lists it, and e opens the editor too.
+        app.apply(Action::Tools);
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("1. editor")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Char('e'));
+        assert!(app.tool_menu.is_none());
+        assert!(app.tools_editor.is_some());
     }
 }
