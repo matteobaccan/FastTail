@@ -462,3 +462,25 @@ pub fn open_all(paths: &[PathBuf], config: &FastTailConfig, wake: Option<WakeFn>
 pub fn restore(config: &FastTailConfig, wake: Option<WakeFn>) -> Restored {
     open_all(&config.open_files, config, wake)
 }
+
+/// Row data handed to an external tool: the row text, the file being tailed (the resolved
+/// file of a pattern stream, the archive of a compressed one, never its spool), the
+/// 1-based line number and the selection text when the row is part of a selection.
+pub fn tool_context_for_row(
+    engine: &TailEngine,
+    row: usize,
+) -> Option<crate::external_tools::ToolContext> {
+    let line = engine.get_line(row)?.into_owned();
+    let file = engine.source_file();
+    let selection = if engine.has_selection() && engine.is_selected(row) {
+        engine.copy_selection_text()
+    } else {
+        None
+    };
+    Some(crate::external_tools::ToolContext::for_row(
+        &file,
+        row + 1,
+        &line,
+        selection.as_deref(),
+    ))
+}

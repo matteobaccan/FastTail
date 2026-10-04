@@ -38,6 +38,7 @@ use crate::tui::picker::{refusal_text, EntryPicker};
 use crate::tui::presets::{self, PresetsDialog, PresetsKey};
 use crate::tui::rules::{RuleWidget, RulesDialog, RulesKey};
 use crate::tui::settings::SettingsForm;
+use crate::tui::tools::{self, MenuKey, ToolMenu};
 use crate::tui::view::{self, Paint};
 
 /// Columns moved by one horizontal scroll step.
@@ -413,6 +414,10 @@ pub struct App {
     /// The global filter editor (`F`), and when its pending edit is applied.
     pub global: Option<GlobalDialog>,
     global_due: Option<Instant>,
+    /// The external tools menu (`!`).
+    pub tool_menu: Option<ToolMenu>,
+    /// Spawns the external tools and keeps the limits of the rule-bound runs.
+    tool_runner: crate::external_tools::ToolRunner,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
@@ -487,6 +492,8 @@ impl App {
             presets: None,
             global: None,
             global_due: None,
+            tool_menu: None,
+            tool_runner: Default::default(),
             confirm_overwrite: None,
             settings: None,
             autosave: false,
@@ -791,6 +798,9 @@ impl App {
             }
             tab.seen_lines = tab.engine.total_lines();
         }
+        if due {
+            self.run_bound_tools();
+        }
         let global_applied = self.global_due.is_some_and(|due| Instant::now() >= due);
         if global_applied {
             self.apply_pending_global();
@@ -876,6 +886,9 @@ impl App {
         if self.global.is_some() {
             return self.on_global_key(key);
         }
+        if self.tool_menu.is_some() {
+            return self.on_tool_menu_key(key);
+        }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
         }
@@ -892,6 +905,16 @@ impl App {
             return self.on_prompt_key(key);
         }
         if self.show_help && self.on_help_key(key) {
+            return true;
+        }
+        // A tool's shortcut runs it on the cursor row (shortcuts always have a modifier).
+        if let Some(i) = self
+            .settings
+            .as_ref()
+            .and_then(|s| tools::tool_for_key(&s.config.external_tools, &key))
+        {
+            self.count = None;
+            self.run_tool(i);
             return true;
         }
         if let Some(n) = self.count_digit(key) {
@@ -1171,6 +1194,87 @@ impl App {
     fn open_settings(&mut self) {
         let form = SettingsForm::from_config(&self.settings_mut().config);
         self.settings_form = Some(form);
+    }
+
+    /// `!`: the menu of the external tools.
+    fn open_tool_menu(&mut self) {
+        let n = self.settings_mut().config.external_tools.len();
+        self.tool_menu = Some(ToolMenu::new(n));
+    }
+
+    fn on_tool_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(m) = self.tool_menu.as_mut() else {
+            return false;
+        };
+        match m.on_key(key) {
+            MenuKey::Run(i) => {
+                self.tool_menu = None;
+                self.run_tool(i);
+            }
+            MenuKey::Close => self.tool_menu = None,
+            MenuKey::Moved => {}
+            MenuKey::Other => return false,
+        }
+        true
+    }
+
+    /// Runs tool `i` on the cursor row of the focused stream (with the selection's
+    /// text when the row is selected), as the GUI's row menu does.
+    fn run_tool(&mut self, i: usize) {
+        let Some(tool) = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.config.external_tools.get(i).cloned())
+        else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            self.message = Some(NO_FILE.into());
+            return;
+        };
+        let Some(line) = tab.cursor_line() else {
+            self.message = Some("No row for a tool (the HEX view shows bytes)".into());
+            return;
+        };
+        let Some(ctx) = crate::workspace::tool_context_for_row(&tab.engine, line) else {
+            return;
+        };
+        self.message = Some(match self.tool_runner.run_manual(&tool, &ctx) {
+            Ok(()) => format!("Started {}", tool.name),
+            Err(e) => format!("Cannot start {}: {e}", tool.name),
+        });
+    }
+
+    /// Runs the tools bound to the rules that matched appended lines, within the limits
+    /// of `ToolRunner` (one run per second per tool, 10 children), as the GUI does.
+    fn run_bound_tools(&mut self) {
+        let Some(settings) = self.settings.as_ref() else {
+            return;
+        };
+        let tools = &settings.config.external_tools;
+        let bound: std::collections::HashSet<String> =
+            tools.iter().filter_map(|t| t.bound_rule.clone()).collect();
+        for tab in &mut self.tabs {
+            let e = &mut tab.engine;
+            if e.tool_bound_rules != bound {
+                e.tool_bound_rules = bound.clone();
+            }
+            if e.pending_tool_hits.is_empty() {
+                continue;
+            }
+            let hits = std::mem::take(&mut e.pending_tool_hits);
+            for (pattern, row) in hits {
+                let Some(ctx) = crate::workspace::tool_context_for_row(e, row) else {
+                    continue;
+                };
+                for tool in tools
+                    .iter()
+                    .filter(|t| t.bound_rule.as_deref() == Some(pattern.as_str()))
+                {
+                    self.tool_runner.run_bound(tool, &ctx);
+                }
+            }
+        }
     }
 
     /// `F`: the global filter editor.
@@ -2365,6 +2469,7 @@ impl App {
             Action::Presets => self.open_presets(),
             Action::EditGlobal => self.open_global(),
             Action::ToggleGlobal => self.toggle_global(),
+            Action::Tools => self.open_tool_menu(),
             Action::OpenFile => self.open_browser(),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
@@ -2448,6 +2553,7 @@ impl App {
                     || self.rules.is_some()
                     || self.presets.is_some()
                     || self.global.is_some()
+                    || self.tool_menu.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
                 {
@@ -2632,6 +2738,11 @@ impl App {
                     }
                 }
             }
+            // A click runs the tool.
+            Target::ListItem(i) if self.tool_menu.is_some() => {
+                self.tool_menu = None;
+                self.run_tool(i);
+            }
             // A click focuses a row of the global filter editor.
             Target::ListItem(i) if self.global.is_some() => {
                 if let Some(d) = self.global.as_mut() {
@@ -2679,7 +2790,11 @@ impl App {
                 self.open_picked();
             }
             Target::DialogOk => {
-                if self.global.is_some() {
+                if let Some(m) = self.tool_menu.take() {
+                    if m.count > 0 {
+                        self.run_tool(m.selected);
+                    }
+                } else if self.global.is_some() {
                     self.close_global();
                 } else if let Some(d) = self.presets.as_mut() {
                     match d.mode {
@@ -2737,6 +2852,7 @@ impl App {
             Target::DialogCancel | Target::OutsideDialog => {
                 // The global filter's edits are kept, as the GUI's bar keeps them.
                 self.close_global();
+                self.tool_menu = None;
                 self.prompt = None;
                 self.rules = None;
                 self.presets = None;
@@ -3031,6 +3147,9 @@ impl App {
         }
         if self.global.is_some() {
             self.draw_global(frame, main_area);
+        }
+        if self.tool_menu.is_some() {
+            self.draw_tool_menu(frame, main_area);
         }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
@@ -3461,6 +3580,76 @@ impl App {
             inner,
         );
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    /// The external tools menu: number, name and command of each tool, its shortcut
+    /// and the rule it runs for.
+    fn draw_tool_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let Some(selected) = self.tool_menu.as_ref().map(|m| m.selected) else {
+            return;
+        };
+        let tools = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.external_tools.clone())
+            .unwrap_or_default();
+        let rows = tools.len().max(1) as u16;
+        let height = (rows + 6).min(area.height);
+        let inner = self.dialog(
+            frame,
+            area,
+            (78, height),
+            "External tools - on the cursor row or the selection",
+            false,
+        );
+        let mut out = vec![Line::styled(
+            "Enter or 1-9 runs, Up/Down choose, Esc closes",
+            dim,
+        )];
+        if tools.is_empty() {
+            out.push(Line::styled(
+                "  (no tools: the GUI's Settings or [tool.N] in fasttail.ini define them)",
+                dim,
+            ));
+        }
+        let room = inner.height.saturating_sub(3) as usize;
+        let top = selected.saturating_sub(room.saturating_sub(1));
+        for (i, t) in tools.iter().enumerate().skip(top).take(room) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let row = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let mut extra = Vec::new();
+            if let Some(sc) = t.shortcut.as_deref().filter(|s| !s.is_empty()) {
+                extra.push(sc.to_string());
+            }
+            if let Some(rule) = t.bound_rule.as_deref() {
+                let dropped = self.tool_runner.dropped_for(&t.name);
+                extra.push(if dropped > 0 {
+                    format!("rule {rule}, {dropped} dropped")
+                } else {
+                    format!("rule {rule}")
+                });
+            }
+            let name: String = view::sanitize(&t.name).chars().take(20).collect();
+            let command: String = view::sanitize(&format!("{} {}", t.program, t.args))
+                .chars()
+                .take(30)
+                .collect();
+            out.push(Line::from(vec![
+                Span::styled(format!("{:>2}. {name:<20} ", i + 1), row),
+                Span::styled(format!("{command:<31}"), dim),
+                Span::styled(extra.join("  "), dim),
+            ]));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// The global filter editor: the switches, then the include and exclude rows
@@ -4451,14 +4640,9 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::ToggleBookmark),
     ),
     (
-        "e E",
-        "next / previous ERROR line (wraps)",
+        "e E  w W",
+        "next / previous ERROR, WARN line (wraps)",
         Some(Action::NextError),
-    ),
-    (
-        "w W",
-        "next / previous WARN line (wraps)",
-        Some(Action::NextWarn),
     ),
     ("10j  3e", "a count repeats j k n N e E w W", None),
     (
@@ -4515,6 +4699,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "F  f",
         "global filter: edit / on or off",
         Some(Action::EditGlobal),
+    ),
+    (
+        "!",
+        "external tools on the row or selection",
+        Some(Action::Tools),
     ),
     (
         "Shift+T",
@@ -6978,5 +7167,81 @@ mod tests {
         std::fs::write(&c, "healthcheck\nother\n").unwrap();
         app.open_file(&c);
         assert_eq!(rows(&app, 2), 1);
+    }
+
+    #[test]
+    fn tools_run_from_the_menu_by_shortcut_and_for_their_rule_with_the_limits() {
+        use crate::external_tools::ExternalTool;
+        use crate::tail_engine::HighlightRule;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("app.log");
+        std::fs::write(&a, "start\nERROR one\n").unwrap();
+        // The test binary itself: a program every platform can start, that exits at once.
+        let me = std::env::current_exe().unwrap().display().to_string();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            highlight_rules: vec![HighlightRule::new("FATAL", [255, 0, 0], [0; 3], false)],
+            external_tools: vec![
+                ExternalTool {
+                    shortcut: Some("Ctrl+Shift+E".into()),
+                    ..ExternalTool::new("editor", &me, "--list {file}:{lineno}")
+                },
+                ExternalTool {
+                    bound_rule: Some("FATAL".into()),
+                    ..ExternalTool::new("notify", &me, "--list {line}")
+                },
+                ExternalTool::new("missing", "/nonexistent/fasttail-tool", ""),
+            ],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        let screen = {
+            app.apply(Action::Tools);
+            render(&mut app, 100, 30)
+        };
+        assert!(
+            screen.iter().any(|l| l.contains("1. editor")),
+            "{screen:#?}"
+        );
+        assert!(
+            screen.iter().any(|l| l.contains("rule FATAL")),
+            "{screen:#?}"
+        );
+        // From the menu, on the cursor row.
+        press(&mut app, KeyCode::Enter);
+        assert!(app.tool_menu.is_none());
+        assert_eq!(app.message.as_deref(), Some("Started editor"));
+        // A program that cannot start says so.
+        app.apply(Action::Tools);
+        press(&mut app, KeyCode::Char('3'));
+        assert!(app
+            .message
+            .as_deref()
+            .unwrap()
+            .starts_with("Cannot start missing"));
+        // By its shortcut, from the view.
+        app.message = None;
+        let cs = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+        assert!(app.on_key(KeyEvent::new(KeyCode::Char('E'), cs)));
+        assert_eq!(app.message.as_deref(), Some("Started editor"));
+        // Three FATAL lines in a row: the bound tool runs once, the other two are dropped.
+        app.run_bound_tools();
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&a).unwrap();
+        writeln!(f, "FATAL a\nFATAL b\nFATAL c").unwrap();
+        drop(f);
+        let start = Instant::now();
+        while app.tabs[0].engine.total_lines() < 5 && start.elapsed() < Duration::from_secs(5) {
+            app.tabs[0].engine.poll_updates();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        app.run_bound_tools();
+        assert_eq!(app.tool_runner.dropped_for("notify"), 2);
+        assert_eq!(app.tool_runner.last_error, None);
     }
 }

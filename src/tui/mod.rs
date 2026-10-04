@@ -22,6 +22,7 @@ mod picker;
 mod presets;
 mod rules;
 mod settings;
+mod tools;
 mod view;
 mod workspace;
 
