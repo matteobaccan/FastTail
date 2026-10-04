@@ -241,7 +241,7 @@ Dialogs SHALL open centred over the windows, clear what is under them, take the 
 - **THEN** after the save `fasttail.ini` still holds `renderer=glow` and `zoom_factor=1.30`.
 
 #### Scenario: Setting a PIN from the terminal
-- **WHEN** the user sets the PIN `4821` in the terminal Settings and confirms it
+- **WHEN** the user types the PIN `4821` twice in the terminal Settings, ticks "Lock when idle" and presses `[ OK ]`
 - **THEN** `fasttail.ini` holds `lock_enabled=true` and a scrambled `lock_pin` that is not `4821`, and `Ctrl+L` in either interface locks with that PIN.
 
 ### Requirement: Terminal Rule Editor, Presets and Global Filter

@@ -46,6 +46,13 @@ pub enum Key {
     Sound,
     /// Opens the external tools editor (`Enter`); the tools are not part of the form.
     Tools,
+    /// The idle lock switch (`lock_enabled`), the idle minutes
+    /// (`screensaver_timeout_mins`), a new PIN typed twice, and removing the PIN.
+    LockEnabled,
+    IdleMinutes,
+    PinNew,
+    PinConfirm,
+    RemovePin,
 }
 
 /// The input of a field.
@@ -101,6 +108,8 @@ pub struct SettingsForm {
     pub top: usize,
     /// `[ OK ]` found fields that cannot be applied: they are marked until edited.
     pub rejected: bool,
+    /// A PIN is stored now (the idle lock needs one, set here or before).
+    has_pin: bool,
 }
 
 fn number<T: Copy + Into<u64>>(value: T, range: &std::ops::RangeInclusive<T>) -> Widget {
@@ -222,13 +231,51 @@ impl SettingsForm {
                 )),
             )
             .starts("External tools"),
+            Field::new(Key::LockEnabled, "Lock when idle", check(c.lock_enabled))
+                .starts("PIN lock - deters onlookers, it is not security"),
+            Field::new(
+                Key::IdleMinutes,
+                "Idle minutes before the lock",
+                number(c.screensaver_timeout_mins, &model::SCREENSAVER_TIMEOUT_MINS),
+            ),
+            Field::new(
+                Key::PinNew,
+                if c.lock_pin.is_empty() {
+                    "New PIN (4-12 digits)"
+                } else {
+                    "Change the PIN (4-12 digits)"
+                },
+                Widget::Text(TextField::default()),
+            ),
+            Field::new(
+                Key::PinConfirm,
+                "The new PIN again",
+                Widget::Text(TextField::default()),
+            ),
+            Field::new(Key::RemovePin, "Remove the PIN", check(false)),
         ];
         Self {
             fields,
             focus: 0,
             top: 0,
             rejected: false,
+            has_pin: !c.lock_pin.is_empty(),
         }
+    }
+
+    /// The text of field `key` (empty for a field that is not text).
+    fn text_of(&self, key: Key) -> &str {
+        match self.fields.iter().find(|f| f.key == key).map(|f| &f.widget) {
+            Some(Widget::Text(t)) => t.text(),
+            _ => "",
+        }
+    }
+
+    fn checked(&self, key: Key) -> bool {
+        matches!(
+            self.fields.iter().find(|f| f.key == key).map(|f| &f.widget),
+            Some(Widget::Check(c)) if c.on
+        )
     }
 
     /// Sends a key to the focused field; `Tab` / `Shift+Tab` and `↑` / `↓` (outside a
@@ -272,10 +319,30 @@ impl SettingsForm {
 
     /// The fields that cannot be applied, with why.
     pub fn problems(&self) -> Vec<(usize, String)> {
+        let new_pin = self.text_of(Key::PinNew).trim().to_string();
+        let remove = self.checked(Key::RemovePin);
+        let will_have_pin = !remove && (self.has_pin || !new_pin.is_empty());
         self.fields
             .iter()
             .enumerate()
-            .filter_map(|(i, f)| f.problem().map(|p| (i, p)))
+            .filter_map(|(i, f)| {
+                let pin = match f.key {
+                    Key::PinNew if !new_pin.is_empty() && !crate::lock::is_valid_pin(&new_pin) => {
+                        Some("4 to 12 digits".to_string())
+                    }
+                    Key::PinConfirm if self.text_of(Key::PinConfirm).trim() != new_pin => {
+                        Some("does not match the new PIN".to_string())
+                    }
+                    // Removing the PIN switches the idle lock off too, as in the GUI.
+                    Key::LockEnabled
+                        if self.checked(Key::LockEnabled) && !remove && !will_have_pin =>
+                    {
+                        Some("set a PIN first".to_string())
+                    }
+                    _ => None,
+                };
+                pin.or_else(|| f.problem()).map(|p| (i, p))
+            })
             .collect()
     }
 
@@ -325,7 +392,24 @@ impl SettingsForm {
                 Key::StdinSpoolMaxMb => c.stdin_spool_max_mb = num() as u32,
                 Key::AutoBookmarkMax => c.auto_bookmark_max = num() as usize,
                 Key::Sound => c.sound_enabled = on,
-                Key::Tools => {}
+                Key::Tools | Key::PinConfirm => {}
+                Key::LockEnabled => c.lock_enabled = on,
+                Key::IdleMinutes => c.screensaver_timeout_mins = num() as u32,
+                Key::PinNew => {
+                    let pin = match &f.widget {
+                        Widget::Text(t) => t.text().trim().to_string(),
+                        _ => String::new(),
+                    };
+                    if !pin.is_empty() {
+                        c.lock_pin = crate::lock::scramble_pin(&pin);
+                    }
+                }
+                // Last in the form, so it wins over a new PIN typed with it.
+                Key::RemovePin if on => {
+                    c.lock_pin.clear();
+                    c.lock_enabled = false;
+                }
+                Key::RemovePin => {}
             }
         }
         if c.language_auto {
@@ -354,6 +438,10 @@ impl SettingsForm {
                     r.options.get(r.selected).map(String::as_str).unwrap_or("")
                 ),
                 Widget::Number(n) => format!("[{}]", n.field.text()),
+                // A PIN never shows: one `*` per character typed.
+                Widget::Text(t) if matches!(f.key, Key::PinNew | Key::PinConfirm) => {
+                    format!("[{}]", "*".repeat(t.text().chars().count()))
+                }
                 Widget::Text(t) => format!("[{}]", t.text()),
                 Widget::Button(text) => format!("> {text}"),
             };
@@ -462,5 +550,46 @@ mod tests {
         assert!(text.contains(&"Performance and refresh"));
         let fields = lines.iter().filter(|(_, f)| f.is_some()).count();
         assert_eq!(fields, form.fields.len());
+    }
+
+    #[test]
+    fn the_pin_is_set_twice_checked_scrambled_and_removed() {
+        let mut c = FastTailConfig::default();
+        let mut form = SettingsForm::from_config(&c);
+        let type_in = |form: &mut SettingsForm, k: Key, text: &str| {
+            focus_on(form, k);
+            for ch in text.chars() {
+                form.on_key(key(KeyCode::Char(ch)));
+            }
+        };
+        // The idle lock needs a PIN.
+        focus_on(&mut form, Key::LockEnabled);
+        form.on_key(key(KeyCode::Char(' ')));
+        assert!(form.apply(&mut c).is_err());
+        // Too short, then not matching, then right.
+        type_in(&mut form, Key::PinNew, "48");
+        assert!(form.apply(&mut c).is_err());
+        type_in(&mut form, Key::PinNew, "21");
+        type_in(&mut form, Key::PinConfirm, "4822");
+        assert!(form.apply(&mut c).is_err());
+        focus_on(&mut form, Key::PinConfirm);
+        form.on_key(key(KeyCode::Backspace));
+        form.on_key(key(KeyCode::Char('1')));
+        // The PIN never shows in the form.
+        assert!(form.lines().iter().all(|(l, _)| !l.contains("4821")));
+        form.apply(&mut c).unwrap();
+        assert!(c.lock_enabled);
+        assert_ne!(c.lock_pin, "4821");
+        assert!(crate::lock::pin_matches(&c.lock_pin, "4821"));
+        // A form opened again leaves the PIN as it is; Remove clears it and the switch.
+        let untouched = SettingsForm::from_config(&c);
+        let mut again = c.clone();
+        untouched.apply(&mut again).unwrap();
+        assert_eq!(again.lock_pin, c.lock_pin);
+        let mut form = SettingsForm::from_config(&c);
+        focus_on(&mut form, Key::RemovePin);
+        form.on_key(key(KeyCode::Char(' ')));
+        form.apply(&mut c).unwrap();
+        assert!(c.lock_pin.is_empty() && !c.lock_enabled);
     }
 }

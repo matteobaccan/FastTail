@@ -1258,7 +1258,7 @@ impl App {
             .as_ref()
             .is_some_and(|s| crate::lock::can_lock(&s.config));
         if !can {
-            self.message = Some("Set a PIN in the GUI's Settings to lock".into());
+            self.message = Some("Set a PIN in Settings (,) to lock".into());
             return;
         }
         self.locked = Some(LockScreen::default());
