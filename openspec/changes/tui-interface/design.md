@@ -167,7 +167,7 @@ previous release is:
 | Windows zip | at most 4 MB larger |
 | `fasttail.exe` | at most 1 MB larger (hand-off, lock and settings moved to shared modules) |
 | Linux / macOS `fasttail` | at most 5 MB larger uncompressed, 2 MB larger `.tar.gz` |
-| Linux `fasttail-tui` (terminal-only, per arch) | at most 25 MB uncompressed (debug info kept), `.tar.gz` at most 8 MB |
+| Linux `fasttail-tui` (terminal-only, per arch) | at most 25 MB uncompressed, `.tar.gz` at most 8 MB; its debug info (41 MB with it on x86_64) travels in a `-symbols-` archive, as the Windows PDBs do |
 
 Builds: Windows `cargo build --release --bins` (one build, both executables; the linker
 drops egui and wgpu from `fasttail-tui.exe`); macOS `cargo build --release`; Linux

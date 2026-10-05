@@ -258,9 +258,14 @@ jobs:
           fi
           cargo build --release --no-default-features --features tui --bin fasttail-tui --target ${{ matrix.target }} --target-dir target-tui
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
-          mkdir -p stage-tui
+          mkdir -p stage-tui stage-tui-symbols
           cp "target-tui/${{ matrix.target }}/release/fasttail-tui" LICENSE README.md stage-tui/
+          # The debug info goes in its own archive, as the Windows PDBs do: unpacked next
+          # to the executable (`fasttail-tui.debug`, found through its debug link), it gives
+          # crash backtraces their files and lines; the download stays small.
+          (cd stage-tui             && objcopy --only-keep-debug fasttail-tui fasttail-tui.debug             && objcopy --strip-debug --add-gnu-debuglink=fasttail-tui.debug fasttail-tui             && mv fasttail-tui.debug ../stage-tui-symbols/)
           tar -C stage-tui -czf "dist/${{ matrix.tui_only_asset }}-$version.tar.gz" fasttail-tui LICENSE README.md
+          tar -C stage-tui-symbols -czf "dist/${{ matrix.tui_only_asset }}-symbols-$version.tar.gz" fasttail-tui.debug
 
       # Sizes of the executables and the archives, for the budget in
       # openspec/changes/tui-interface/design.md (compared with the previous release).
@@ -274,7 +279,7 @@ jobs:
             echo "|---|---|"
             for f in "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
                      "target/${{ matrix.target }}/release/${{ matrix.tui_binary }}" \
-                     target-tui/${{ matrix.target }}/release/fasttail-tui dist/*; do
+                     stage-tui/fasttail-tui dist/*; do
               [ -f "$f" ] && echo "| $(basename "$f") | $(wc -c < "$f" | tr -d ' ') |"
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"

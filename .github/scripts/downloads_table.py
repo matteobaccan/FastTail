@@ -19,14 +19,14 @@ ASSETS = [
     ("x86-64", "Linux", "RPM", r"^fasttail-.*\.x86_64\.rpm$"),
     ("x86-64", "Linux", "AppImage", r"^fasttail-linux-x86_64-.*\.AppImage$"),
     ("x86-64", "Linux", "tar.gz", r"^fasttail-linux-x86_64-.*\.tar\.gz$"),
-    ("x86-64", "Linux", "terminal only", r"^fasttail-tui-linux-x86_64-.*\.tar\.gz$"),
+    ("x86-64", "Linux", "terminal only", r"^fasttail-tui-linux-x86_64-[0-9].*\.tar\.gz$"),
     ("x86-64", "macOS", "DMG", r"^fasttail-macos-universal-.*\.dmg$"),
     ("x86-64", "macOS", "tar.gz", r"^fasttail-macos-x86_64-.*\.tar\.gz$"),
     ("ARM64", "Linux", "DEB", r"^fasttail_.*_arm64\.deb$"),
     ("ARM64", "Linux", "RPM", r"^fasttail-.*\.aarch64\.rpm$"),
     ("ARM64", "Linux", "AppImage", r"^fasttail-linux-arm64-.*\.AppImage$"),
     ("ARM64", "Linux", "tar.gz", r"^fasttail-linux-arm64-.*\.tar\.gz$"),
-    ("ARM64", "Linux", "terminal only", r"^fasttail-tui-linux-arm64-.*\.tar\.gz$"),
+    ("ARM64", "Linux", "terminal only", r"^fasttail-tui-linux-arm64-[0-9].*\.tar\.gz$"),
     ("ARM64", "macOS", "DMG", r"^fasttail-macos-universal-.*\.dmg$"),
     ("ARM64", "macOS", "tar.gz", r"^fasttail-macos-arm64-.*\.tar\.gz$"),
 ]
@@ -63,7 +63,7 @@ def main() -> None:
         )
     if symbols:
         links = ", ".join(f"[{n}]({base}/{n})" for n in symbols)
-        notes.append(f"Windows debug symbols, only needed to read a crash dump: {links}.")
+        notes.append(f"Debug symbols, only needed to read a crash dump: {links}.")
     notes.append(
         "The builds are not signed: Windows SmartScreen asks to confirm (More info → Run "
         "anyway) and macOS asks once (System Settings → Privacy & Security → Open anyway)."
