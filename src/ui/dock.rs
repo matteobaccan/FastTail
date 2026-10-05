@@ -4066,6 +4066,20 @@ impl ColumnLayout {
     }
 }
 
+/// The cells of the column view side by side from `origin`, one per width: the header
+/// and every row place their columns with this, so they cannot drift apart.
+fn cell_rects(origin: egui::Pos2, height: f32, widths: &[f32]) -> Vec<egui::Rect> {
+    let mut x = origin.x;
+    widths
+        .iter()
+        .map(|w| {
+            let cell = egui::Rect::from_min_size(egui::pos2(x, origin.y), egui::vec2(*w, height));
+            x += w;
+            cell
+        })
+        .collect()
+}
+
 /// Colours of a row's cells.
 struct CellStyle<'a> {
     font_id: &'a egui::FontId,
@@ -4106,9 +4120,13 @@ fn draw_field_cells(
         label(ui, line, color);
         return;
     };
-    for (key, width) in layout.keys.iter().zip(&layout.widths) {
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(*width, style.row_height), egui::Sense::hover());
+    // One allocation for all the cells, placed by `cell_rects` as the header places its
+    // names: allocating each cell on its own added egui's item spacing after every one.
+    let total: f32 = layout.widths.iter().sum();
+    let (all, _) =
+        ui.allocate_exact_size(egui::vec2(total, style.row_height), egui::Sense::hover());
+    let cells = cell_rects(all.left_top(), style.row_height, &layout.widths);
+    for (key, rect) in layout.keys.iter().zip(cells) {
         if let Some(bg) = style.bg {
             ui.painter().rect_filled(rect, 0.0, bg);
         }
@@ -4170,15 +4188,9 @@ fn render_field_header(
     );
     let font_id = egui::FontId::monospace(font_size);
     let mut action: Option<HeaderAction> = None;
-    let mut x = rect.left() + cells_x - engine.current_scroll_x;
-    let mut cells = Vec::with_capacity(layout.keys.len());
-    for width in &layout.widths {
-        cells.push(egui::Rect::from_min_size(
-            egui::pos2(x, rect.top()),
-            egui::vec2(*width, rect.height()),
-        ));
-        x += width;
-    }
+    let left = rect.left() + cells_x - engine.current_scroll_x;
+    let cells = cell_rects(egui::pos2(left, rect.top()), rect.height(), &layout.widths);
+    let x = cells.last().map_or(left, |c| c.right());
     let pointer = ui.input(|i| i.pointer.interact_pos());
     for (i, (key, cell)) in layout.keys.iter().zip(&cells).enumerate() {
         let visible = cell.intersect(rect);
@@ -8159,4 +8171,83 @@ fn render_markdown_stream(
 
     engine.current_scroll_y = scroll_output.state.offset.y;
     engine.current_scroll_x = scroll_output.state.offset.x;
+}
+
+#[cfg(test)]
+mod column_tests {
+    use super::*;
+
+    /// Where a row of the column view draws each cell's text, relative to where its
+    /// cells start, laid out in a horizontal row with egui's default item spacing, as
+    /// the text view draws its rows.
+    fn row_cell_text_x(layout: &ColumnLayout, values: &[&str]) -> Vec<f32> {
+        let fields = crate::fields::RowFields {
+            shaped: true,
+            partial: false,
+            fields: layout
+                .keys
+                .iter()
+                .zip(values)
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+            outside: String::new(),
+        };
+        let font_id = egui::FontId::monospace(13.0);
+        let style = CellStyle {
+            font_id: &font_id,
+            row_height: 18.0,
+            text: Color32::WHITE,
+            bg: None,
+            level_colors: false,
+        };
+        let ctx = egui::Context::default();
+        let mut start = 0.0;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| {
+                start = ui.cursor().left();
+                draw_field_cells(ui, layout, Some(&fields), "", &style, &CyberTheme::Tron);
+            });
+        });
+        // The font atlas comes back as a texture delta egui wants consumed.
+        output.textures_delta.clear();
+        values
+            .iter()
+            .map(|v| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.text() == *v => Some(t.pos.x - start),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{v} not drawn"))
+            })
+            .collect()
+    }
+
+    /// The header puts each name at the left of its column, the columns side by side
+    /// (`cell_rects`); a row must draw each value at the same place. Before, every
+    /// cell of a row also took egui's item spacing, so column N drifted N gaps right.
+    #[test]
+    fn row_cells_line_up_with_the_header() {
+        let layout = ColumnLayout {
+            keys: vec![
+                "time".into(),
+                "level".into(),
+                "msg_id".into(),
+                "host".into(),
+            ],
+            widths: vec![80.0, 48.0, 64.0, 56.0],
+            char_w: 8.0,
+        };
+        let header: Vec<f32> = cell_rects(egui::pos2(0.0, 0.0), 18.0, &layout.widths)
+            .iter()
+            .map(|r| r.left())
+            .collect();
+        assert_eq!(header, vec![0.0, 80.0, 128.0, 192.0]);
+        let row = row_cell_text_x(&layout, &["10:00", "INFO", "42", "web1"]);
+        for (h, r) in header.iter().zip(&row) {
+            assert!((h - r).abs() < 0.01, "header {header:?} row {row:?}");
+        }
+    }
 }
