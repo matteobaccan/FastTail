@@ -74,6 +74,9 @@ ron = "0.12"
 toml = "1.0"
 rust-ini = "0.21"
 regex = "1.11"
+# The ASM view (openspec/changes/disassembly-view): the x86 decoder and its Intel formatter
+# only, pure Rust.
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel"] }
 smallvec = "1.13"
 rfd = { version = "0.17", optional = true }
 

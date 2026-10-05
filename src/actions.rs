@@ -74,6 +74,8 @@ pub enum ActionId {
     ViewText,
     ViewHex,
     ViewMarkdown,
+    ViewAsm,
+    AsmArch,
     LineNumbers,
     TimeDelta,
     Wrap,
@@ -155,6 +157,8 @@ pub enum Need {
     NotHex,
     /// The line views only (not HEX, not Markdown).
     LineView,
+    /// The ASM view.
+    Asm,
     /// A stream that can follow (not a compressed snapshot).
     Followable,
     /// An active search.
@@ -194,8 +198,10 @@ pub struct ActionState {
 /// Snapshot of the focused stream.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StreamState {
+    /// HEX or ASM: a view of bytes, not lines.
     pub hex: bool,
     pub markdown: bool,
+    pub asm: bool,
     pub compressed: bool,
     pub has_search: bool,
     pub has_query: bool,
@@ -213,8 +219,9 @@ impl StreamState {
     pub fn of(engine: &TailEngine) -> Self {
         let row = engine.current_row();
         Self {
-            hex: engine.view_mode == ViewMode::Hex,
+            hex: engine.view_mode.is_bytes(),
             markdown: engine.view_mode == ViewMode::Markdown,
+            asm: engine.view_mode == ViewMode::Asm,
             compressed: engine.is_compressed(),
             has_search: !engine.search_query.trim().is_empty()
                 || !engine.last_searched_query.is_empty(),
@@ -244,6 +251,7 @@ impl Need {
             Need::Stream | Need::Pin | Need::Session => true,
             Need::NotHex => !stream.hex,
             Need::LineView => !stream.hex && !stream.markdown,
+            Need::Asm => stream.asm,
             Need::Followable => !stream.compressed,
             Need::Search => stream.has_search,
             Need::Query => stream.has_query,
@@ -261,6 +269,7 @@ impl Need {
         Some(match self {
             Need::NotHex => "palette_not_hex",
             Need::LineView => "palette_text_only",
+            Need::Asm => "palette_not_asm",
             Need::Followable => "compressed_follow_tip",
             Need::Search | Need::Query => "palette_no_search",
             Need::Row => "palette_no_row",
@@ -352,6 +361,8 @@ pub const ACTIONS: &[Action] = &[
     action(A::ViewText, "view.mode.text", "act_view_text", C::View, S::Stream, None, &[]),
     action(A::ViewHex, "view.mode.hex", "act_view_hex", C::View, S::Stream, None, &[]),
     action(A::ViewMarkdown, "view.mode.markdown", "act_view_md", C::View, S::Stream, None, &[]),
+    action(A::ViewAsm, "view.mode.asm", "act_view_asm", C::View, S::Stream, None, &[]),
+    action(A::AsmArch, "view.asm.arch", "act_asm_arch", C::View, S::Stream, None, &[N::Asm]),
     action(A::LineNumbers, "view.line_numbers.toggle", "show_lines", C::View, S::Stream, None, &[N::NotHex]),
     action(A::TimeDelta, "view.time_delta.toggle", "act_time_delta", C::View, S::Stream, None, &[N::NotHex]),
     action(A::Wrap, "view.wrap.toggle", "act_wrap", C::View, S::Stream, Some("ALT + W"), &[N::NotHex]),

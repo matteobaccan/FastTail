@@ -25,6 +25,7 @@ mod basics;
 mod bookmark_report;
 mod char_selection;
 mod compare_lines;
+mod disassembly_view;
 mod external_tools;
 mod filter_tabs;
 mod line_wrap;
@@ -229,5 +230,5 @@ mod time_display;
 
 mod search_scope;
 
-mod workspace;
 mod minimised_window;
+mod workspace;

@@ -80,7 +80,10 @@ impl Tab {
     pub fn new(mut engine: TailEngine) -> Self {
         // Markdown is a GUI view: the terminal shows the lines (or the HEX a binary
         // file opened in).
-        if !matches!(engine.view_mode, ViewMode::Text | ViewMode::Hex) {
+        if !matches!(
+            engine.view_mode,
+            ViewMode::Text | ViewMode::Hex | ViewMode::Asm
+        ) {
             engine.set_view_mode(ViewMode::Text);
         }
         let title = stream_title(&engine);
@@ -114,13 +117,22 @@ impl Tab {
         self.engine.get_actual_line_idx(self.cursor)
     }
 
+    /// A view of bytes (HEX or ASM): no lines to select, bookmark or filter.
     pub fn is_hex(&self) -> bool {
-        self.engine.view_mode == ViewMode::Hex
+        self.engine.view_mode.is_bytes()
     }
 
-    /// Rows of the view: HEX rows, or the filtered and collapsed lines.
+    pub fn is_asm(&self) -> bool {
+        self.engine.view_mode == ViewMode::Asm
+    }
+
+    /// Rows of the view: HEX rows, the filtered and collapsed lines, or in ASM the rows
+    /// of the screen (the cursor moves on them; the view moves by offset, see
+    /// `asm_move`).
     pub fn row_count(&self) -> usize {
-        if self.is_hex() {
+        if self.is_asm() {
+            self.height.max(1)
+        } else if self.is_hex() {
             self.engine.total_hex_rows(self.hex_width)
         } else {
             self.engine.visible_line_count()
@@ -134,7 +146,11 @@ impl Tab {
         let follow = self.engine.follow_tail;
         let n = self.hex_width.max(1);
         if self.is_hex() {
-            let offset = (self.cursor * n) as u64;
+            let offset = if self.is_asm() {
+                self.asm_cursor_offset()
+            } else {
+                (self.cursor * n) as u64
+            };
             self.engine.set_view_mode(ViewMode::Text);
             if !follow {
                 let line = self.engine.line_of_offset(offset);
@@ -154,6 +170,66 @@ impl Tab {
         }
         self.engine.follow_tail = follow;
         self.pin_cursor();
+    }
+
+    /// `d`: from HEX or the lines to the ASM view (at the HEX cursor row's bytes, or at
+    /// the current search hit, else where it was or the entry point), and from ASM back
+    /// to HEX at the cursor row's bytes. Follow stays.
+    fn toggle_asm(&mut self) {
+        let follow = self.engine.follow_tail;
+        let n = self.hex_width.max(1);
+        if self.is_asm() {
+            let offset = self.asm_cursor_offset();
+            self.engine.set_view_mode(ViewMode::Hex);
+            self.engine.scroll_to_byte = None;
+            if !follow {
+                self.set_cursor(offset as usize / n);
+            }
+        } else {
+            if self.engine.view_mode == ViewMode::Hex {
+                self.engine.hex_top_offset = (self.cursor * n) as u64;
+            }
+            self.engine.set_view_mode(ViewMode::Asm);
+            self.engine.scroll_to_byte = None;
+            self.top = 0;
+            self.cursor = 0;
+        }
+        self.engine.follow_tail = follow;
+        self.pin_cursor();
+    }
+
+    /// The offset of the ASM row under the cursor.
+    fn asm_cursor_offset(&mut self) -> u64 {
+        let rows = self.engine.asm_rows(self.height.max(1));
+        rows.get(self.cursor)
+            .or(rows.last())
+            .map_or(self.engine.asm.top, |r| r.offset)
+    }
+
+    /// Moves the ASM cursor `n` rows (negative: up), scrolling the view at its edges;
+    /// `select` extends the selection from where it started (or the cursor row).
+    fn asm_move(&mut self, n: isize, select: bool) {
+        self.engine.follow_tail = false;
+        let anchor = self.asm_cursor_offset();
+        let height = self.height.max(1) as isize;
+        let target = self.cursor as isize + n;
+        if target < 0 {
+            self.engine.asm_scroll(target);
+            self.cursor = 0;
+        } else if target >= height {
+            self.engine.asm_scroll(target - height + 1);
+            self.cursor = height as usize - 1;
+        } else {
+            self.cursor = target as usize;
+        }
+        // Never below the last row of a short file.
+        let shown = self.engine.asm_rows(self.height.max(1)).len();
+        self.cursor = self.cursor.min(shown.saturating_sub(1));
+        if select {
+            let from = self.engine.asm.selection.map_or(anchor, |(a, _)| a);
+            let to = self.asm_cursor_offset();
+            self.engine.asm.selection = Some((from, to));
+        }
     }
 
     /// Adopts the bytes per row a window `width` cells wide allows, keeping the cursor
@@ -895,7 +971,11 @@ impl App {
                 }
             }
             if let Some(offset) = tab.engine.scroll_to_byte.take() {
-                if tab.is_hex() {
+                if tab.is_asm() {
+                    tab.engine.asm.top = offset as u64;
+                    tab.engine.follow_tail = false;
+                    tab.cursor = 0;
+                } else if tab.is_hex() {
                     tab.set_cursor(offset / tab.hex_width.max(1));
                 }
             }
@@ -1630,9 +1710,14 @@ impl App {
     /// Runs a palette entry; the text and HEX views only switch when not already there.
     fn run_palette(&mut self, id: ActionId, action: Action) {
         let hex = self.tabs.get(self.active).is_some_and(|t| t.is_hex());
+        let asm = self.tabs.get(self.active).is_some_and(|t| t.is_asm());
         match id {
             ActionId::ViewText if !hex => {}
-            ActionId::ViewHex if hex => {}
+            ActionId::ViewHex if hex && !asm => {}
+            ActionId::ViewAsm if asm => {}
+            ActionId::AsmArch if !asm => {
+                self.message = Some(tx(self.lang, "Only in the ASM view: d opens it").into())
+            }
             _ => self.apply(action),
         }
     }
@@ -2601,6 +2686,14 @@ impl App {
             // A note bookmarks the line; an empty one removes the note, not the bookmark.
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
+            PromptKind::Goto if tab.is_asm() => {
+                if tab.engine.asm_go_to(&text) {
+                    tab.engine.follow_tail = false;
+                    tab.cursor = 0;
+                } else {
+                    self.message = Some(txf(self.lang, "Cannot go to \"{0}\"", &[&text]));
+                }
+            }
             PromptKind::Goto if tab.is_hex() => match hex::parse_offset(&text) {
                 Some(offset) if tab.engine.file_size > 0 => {
                     let last = tab.engine.file_size as usize - 1;
@@ -3184,7 +3277,9 @@ impl App {
                 | Action::SelectUp
                 | Action::SelectDown
         );
-        if row_action && self.tabs[self.active].is_hex() {
+        let asm_select = self.tabs[self.active].is_asm()
+            && matches!(action, Action::SelectUp | Action::SelectDown);
+        if row_action && self.tabs[self.active].is_hex() && !asm_select {
             self.message = Some(
                 tx(
                     self.lang,
@@ -3265,7 +3360,17 @@ impl App {
     /// Copies the selection, or the cursor row when nothing is selected.
     fn copy_selection(&mut self) {
         let tab = &mut self.tabs[self.active];
-        let text = if tab.engine.has_selection() {
+        let text = if tab.is_asm() {
+            if tab.engine.asm.selection.is_none() {
+                let at = tab.asm_cursor_offset();
+                tab.engine.asm.selection = Some((at, at));
+                let text = tab.engine.asm_selection_text();
+                tab.engine.asm.selection = None;
+                text
+            } else {
+                tab.engine.asm_selection_text()
+            }
+        } else if tab.engine.has_selection() {
             tab.engine.copy_selection_text()
         } else {
             // The cursor row as a one-row selection, so a collapsed group copies whole.
@@ -3342,6 +3447,16 @@ impl App {
                     return false;
                 };
                 let t = &mut self.tabs[tab];
+                if t.is_asm() {
+                    t.engine.follow_tail = false;
+                    let up = ev.kind == MouseEventKind::ScrollUp;
+                    t.engine.asm_scroll(if up {
+                        -(WHEEL_ROWS as isize)
+                    } else {
+                        WHEEL_ROWS as isize
+                    });
+                    return true;
+                }
                 let rows = t.row_count();
                 if t.engine.follow_tail {
                     t.top = view::follow_top(rows, t.height);
@@ -3829,6 +3944,29 @@ impl App {
         }
         tab.pin_cursor();
         let cursor = tab.cursor;
+        if tab.is_asm() {
+            let step = match action {
+                Action::LineUp | Action::SelectUp => Some(-1),
+                Action::LineDown | Action::SelectDown => Some(1),
+                Action::PageUp => Some(-(page as isize)),
+                Action::PageDown => Some(page as isize),
+                _ => None,
+            };
+            if let Some(n) = step {
+                let select = matches!(action, Action::SelectUp | Action::SelectDown);
+                if !select {
+                    tab.engine.asm.selection = None;
+                }
+                tab.asm_move(n, select);
+                return;
+            }
+            if action == Action::Top {
+                tab.engine.follow_tail = false;
+                tab.engine.asm_seek(0);
+                tab.cursor = 0;
+                return;
+            }
+        }
         match action {
             Action::ToggleFollow => {
                 tab.engine.follow_tail = !tab.engine.follow_tail;
@@ -3902,6 +4040,22 @@ impl App {
             }
             Action::ToggleContext => toggle_context(tab, &mut self.message, self.lang),
             Action::ToggleHex => tab.toggle_hex(),
+            Action::ToggleAsm => tab.toggle_asm(),
+            Action::CycleArch if !tab.is_asm() => {
+                self.message = Some(tx(self.lang, "Only in the ASM view: d opens it").into())
+            }
+            Action::CycleArch => {
+                let next = tab.engine.asm.arch.next();
+                tab.engine.set_disasm_arch(next);
+                self.message = Some(match tab.engine.asm.known_executable() {
+                    Some(_) => txf(
+                        self.lang,
+                        "Architecture {0} (the executable's {1} is used while it is open)",
+                        &[&next.name(), &tab.engine.asm.label()],
+                    ),
+                    None => txf(self.lang, "Architecture: {0}", &[&next.name()]),
+                });
+            }
             Action::ToggleLineNumbers => {
                 tab.engine.show_line_numbers = !tab.engine.show_line_numbers;
                 self.message = Some(
@@ -4514,7 +4668,15 @@ impl App {
             inner.y += 1;
             inner.height -= 1;
         }
-        let (lines, row_count) = if tab.is_hex() {
+        let (lines, row_count) = if tab.is_asm() {
+            asm_rows(
+                tab,
+                &palette,
+                inner.width as usize,
+                inner.height as usize,
+                self.lang,
+            )
+        } else if tab.is_hex() {
             hex_rows(
                 tab,
                 &palette,
@@ -6400,8 +6562,8 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::CycleAnsi),
     ),
     (
-        "h",
-        en("HEX view (go to 1024 or 0x400) and back"),
+        "h  d  D",
+        en("HEX / ASM view and back; D: 16/32/64"),
         Some(Action::ToggleHex),
     ),
     (
@@ -6596,7 +6758,17 @@ fn cast_shadow(buf: &mut ratatui::buffer::Buffer, rect: Rect, style: Style) {
 
 /// Bottom-left of a window: rows and lines, and the background work in progress.
 fn counts_text(e: &TailEngine, hex: bool, hex_width: usize, lang: Language) -> String {
-    let mut s = if hex {
+    let mut s = if e.view_mode == ViewMode::Asm {
+        // Where the screen starts, out of the size (instructions are not counted).
+        txf(
+            lang,
+            "{0} bytes, at 0x{1}",
+            &[
+                &group_digits(e.file_size as usize),
+                &format!("{:X}", e.asm.top),
+            ],
+        )
+    } else if hex {
         txf(
             lang,
             "{0} bytes, {1} rows of {2}",
@@ -6644,15 +6816,21 @@ fn counts_text(e: &TailEngine, hex: bool, hex_width: usize, lang: Language) -> S
 /// Bottom-right of a window: filters, level, collapse and the search position.
 fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
     if hex {
-        // Filters, level and collapse do not apply to the bytes.
+        // Filters, level and collapse do not apply to the bytes. ASM names its
+        // architecture (the executable's when one is recognised).
+        let view = if e.view_mode == ViewMode::Asm {
+            format!("ASM {}", e.asm.label())
+        } else {
+            "HEX".into()
+        };
         let query = e.search_query.trim();
         if query.is_empty() {
-            return "HEX".into();
+            return view;
         }
         let current = e
             .current_match_idx
             .map_or("-".to_string(), |i| (i + 1).to_string());
-        return format!("HEX  /{query} {current}/{}", e.search_byte_matches.len());
+        return format!("{view}  /{query} {current}/{}", e.search_byte_matches.len());
     }
     let mut parts = Vec::new();
     let inc = e.include_filter();
@@ -6850,6 +7028,120 @@ fn hex_rows(
         } else {
             line
         });
+    }
+    let drawn = lines.len();
+    (lines, drawn)
+}
+
+/// The ASM view of `tab`: rows decoded from `engine.asm.top`, one per row of the window
+/// (address, section, bytes, instruction; `db` data in the secondary colour), the search
+/// hits and the selection painted, the cursor row reversed. Follow keeps the end of the
+/// file on the last row.
+fn asm_rows(
+    tab: &mut Tab,
+    palette: &Palette,
+    width: usize,
+    height: usize,
+    lang: Language,
+) -> (Vec<Line<'static>>, usize) {
+    tab.height = height;
+    tab.top = 0;
+    let follow = tab.engine.follow_tail;
+    if follow {
+        tab.engine.asm_bottom(height);
+    }
+    let rows = tab.engine.asm_rows(height);
+    if rows.is_empty() {
+        let text = tx(lang, "(empty file, or still loading)");
+        return (
+            vec![Line::styled(text, Style::default().fg(palette.dim()))],
+            0,
+        );
+    }
+    tab.cursor = if follow {
+        rows.len() - 1
+    } else {
+        tab.cursor.min(rows.len() - 1)
+    };
+    let engine = &tab.engine;
+    let wide = rows.iter().any(|r| r.address > u32::MAX as u64);
+    let digits = if wide { 16 } else { 8 };
+    // Bytes beyond what the window holds are cut with `…`; narrow windows keep the
+    // instruction and lose the bytes first.
+    let bytes_width = if width >= digits + 60 { 30 } else { 12 };
+    let has_search = !engine.last_searched_query.is_empty();
+    let current = engine.current_search_byte();
+    let selection = engine.asm.selection.map(|(a, b)| (a.min(b), a.max(b)));
+    let mut lines = Vec::with_capacity(rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        let end = row.offset + row.bytes.len() as u64;
+        let hit = has_search && engine.hex_row_matches(row.offset as usize, end as usize);
+        let active =
+            hit && current.is_some_and(|(o, l)| (o as u64) < end && (o + l) as u64 > row.offset);
+        let selected = selection.is_some_and(|(a, b)| row.offset >= a && row.offset <= b);
+        let mut bytes = crate::disasm::hex_bytes(&row.bytes);
+        if bytes.chars().count() > bytes_width {
+            bytes = bytes.chars().take(bytes_width - 1).collect::<String>() + "…";
+        }
+        // The mnemonic in the text colour, its operands in the accent; `db` data in the
+        // secondary colour.
+        let (mnemonic, operands) = row.text.split_once(' ').unwrap_or((&row.text, ""));
+        let (code, args) = if row.data {
+            (row.text.clone(), String::new())
+        } else {
+            (format!("{mnemonic:<7}"), operands.to_string())
+        };
+        let text_style = if row.data {
+            Style::default().fg(palette.secondary())
+        } else {
+            Style::default()
+        };
+        let mut line = Line::from(vec![
+            Span::styled(
+                format!("{:0digits$X} ", row.address),
+                Style::default().fg(palette.dim()),
+            ),
+            Span::styled(
+                format!("{:<9}", row.section.as_deref().unwrap_or("")),
+                Style::default().fg(palette.accent()),
+            ),
+            Span::styled(
+                format!("{bytes:<bytes_width$} "),
+                Style::default().fg(palette.dim()),
+            ),
+            Span::styled(code, text_style),
+            Span::styled(args, Style::default().fg(palette.accent())),
+        ]);
+        if active {
+            line = line.patch_style(palette.active_hit());
+        } else if hit {
+            line = line.patch_style(palette.hit());
+        } else if selected {
+            line = line.patch_style(palette.selection());
+        }
+        if i == tab.cursor {
+            line = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+        }
+        // Sideways scrolling as in the other views.
+        if tab.hscroll > 0 {
+            let mut left = tab.hscroll;
+            let spans: Vec<Span<'static>> = line
+                .spans
+                .into_iter()
+                .filter_map(|s| {
+                    let n = s.content.chars().count();
+                    if left >= n {
+                        left -= n;
+                        return None;
+                    }
+                    let kept: String = s.content.chars().skip(left).collect();
+                    left = 0;
+                    Some(Span::styled(kept, s.style))
+                })
+                .collect();
+            line = Line::from(spans).style(line.style);
+        }
+        lines.push(line);
     }
     let drawn = lines.len();
     (lines, drawn)
@@ -7528,6 +7820,95 @@ mod tests {
         assert_eq!(app.tabs[0].cursor, rows - 1, "clamped to the last byte");
         go_to(&mut app, "zz");
         assert!(app.message.as_deref().unwrap().contains("Cannot go to"));
+    }
+
+    /// push rbp; mov rbp,rsp; sub rsp,10h; mov eax,0; leave; ret, `n` times.
+    fn asm_app(n: usize) -> (App, tempfile::TempDir) {
+        let code: [u8; 15] = [
+            0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x10, 0xB8, 0x00, 0x00, 0x00, 0x00, 0xC9,
+            0xC3,
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("code.bin");
+        std::fs::write(&path, code.repeat(n)).unwrap();
+        let tabs = vec![Tab::new(TailEngine::open(&path).unwrap())];
+        let palette = Palette::new(CyberTheme::Tron, ColorDepth::TrueColor, false);
+        (App::new(tabs, palette), dir)
+    }
+
+    #[test]
+    fn d_opens_the_asm_view_which_moves_by_instructions() {
+        let (mut app, _dir) = asm_app(40);
+        render(&mut app, 80, 20);
+        app.apply(Action::Top);
+        assert!(app.tabs[0].is_hex(), "a binary file opens in HEX");
+        // From the HEX cursor row (the first: offset 0, so the start of the file).
+        app.apply(Action::ToggleAsm);
+        let screen = render(&mut app, 80, 20);
+        assert!(app.tabs[0].is_asm());
+        for text in [
+            "push   rbp",
+            "48 89 E5",
+            "mov    rbp,rsp",
+            "ASM x86-64",
+            "[ASM]",
+        ] {
+            assert!(
+                screen.iter().any(|l| l.contains(text)),
+                "{text}: {screen:#?}"
+            );
+        }
+        app.apply(Action::LineDown);
+        app.apply(Action::LineDown);
+        assert_eq!(app.tabs[0].cursor, 2);
+        app.apply(Action::PageDown);
+        assert!(app.tabs[0].engine.asm.top > 0, "a page moves the view");
+        app.apply(Action::Top);
+        assert_eq!(app.tabs[0].engine.asm.top, 0);
+        // Shift+Down selects; y copies the rows as address, bytes, instruction.
+        app.apply(Action::SelectDown);
+        let text = app.tabs[0].engine.asm_selection_text().unwrap();
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.lines().nth(1).unwrap().ends_with("mov rbp,rsp"));
+        // Go to an offset, then D changes the architecture shown in the border.
+        go_to(&mut app, "0x10");
+        assert_eq!(app.tabs[0].engine.asm.top, 16);
+        app.apply(Action::CycleArch);
+        let screen = render(&mut app, 80, 20);
+        assert!(
+            screen.iter().any(|l| l.contains("ASM x86-16")),
+            "{screen:#?}"
+        );
+        assert!(app.tabs[0].engine.asm_dirty, "saved as disasm_arch=");
+        // d returns to HEX on the same bytes, h to the lines.
+        app.apply(Action::ToggleAsm);
+        assert!(app.tabs[0].is_hex() && !app.tabs[0].is_asm());
+        app.apply(Action::ToggleAsm);
+        app.apply(Action::ToggleHex);
+        assert!(!app.tabs[0].is_hex());
+    }
+
+    #[test]
+    fn the_asm_view_fits_narrow_and_wide_windows_and_follows() {
+        let (mut app, _dir) = asm_app(400);
+        render(&mut app, 80, 20);
+        app.apply(Action::ToggleAsm);
+        app.apply(Action::Bottom);
+        for width in [80, 200] {
+            let screen = render(&mut app, width, 20);
+            assert!(screen.iter().all(|l| l.chars().count() == width as usize));
+            assert!(
+                screen.iter().any(|l| l.contains("C3") && l.contains("ret")),
+                "{width}: {screen:#?}"
+            );
+        }
+        // Follow keeps the last instruction on the last row of the window.
+        let height = app.tabs[0].height;
+        let rows = app.tabs[0].engine.asm_rows(height);
+        let last = rows.last().unwrap();
+        assert_eq!(last.offset + 1, app.tabs[0].engine.file_size);
+        app.apply(Action::LineUp);
+        assert!(!app.tabs[0].engine.follow_tail);
     }
 
     #[test]

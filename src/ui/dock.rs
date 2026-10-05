@@ -1347,9 +1347,7 @@ fn render_log_stream(
     // height; wrap mode hands the wrap renderer a request that it resolves through the real
     // row heights (see `wrap_layout`), so every jump stays anchored to a line index.
     engine.sync_row_mode(row_height);
-    let wrap_view = |engine: &TailEngine| {
-        engine.wraps_rows() && engine.view_mode != crate::tail_engine::ViewMode::Hex
-    };
+    let wrap_view = |engine: &TailEngine| engine.wraps_rows() && !engine.view_mode.is_bytes();
     let top_row = |engine: &TailEngine| -> usize {
         if wrap_view(engine) {
             engine.wrap_anchor.row
@@ -1401,7 +1399,11 @@ fn render_log_stream(
     // Scroll to a search target (a line index, or a byte offset in HEX view), centering it
     // in the viewport
     let scroll_to_target = |engine: &mut TailEngine, target: usize| {
-        if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+        if engine.view_mode == crate::tail_engine::ViewMode::Asm {
+            // The row holding the target starts the screen (see `render_asm_stream`).
+            engine.scroll_to_byte = Some(target);
+            engine.follow_tail = false;
+        } else if engine.view_mode == crate::tail_engine::ViewMode::Hex {
             let row_y = (target / bytes_per_row) as f32 * hex_row_height;
             engine.requested_scroll_y = Some((row_y - viewport_height / 2.0).max(0.0));
             engine.requested_scroll_x = Some(0.0);
@@ -1443,7 +1445,7 @@ fn render_log_stream(
 
     // A result of the search across streams asked for this line (`request_jump`).
     if let Some(line) = engine.pending_jump.take() {
-        let target = if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+        let target = if engine.view_mode.is_bytes() {
             engine.line_offsets.get(line).map(|&off| off as usize)
         } else {
             Some(line)
@@ -1527,12 +1529,13 @@ fn render_log_stream(
 
         ui.separator();
 
-        // Mode Switcher (TXT, HEX, MD)
+        // Mode Switcher (TXT, HEX, ASM, MD)
         let current_mode = engine.view_mode;
         let is_txt = current_mode == crate::tail_engine::ViewMode::Text
             || current_mode == crate::tail_engine::ViewMode::Filtered;
         let is_hex = current_mode == crate::tail_engine::ViewMode::Hex;
         let is_md = current_mode == crate::tail_engine::ViewMode::Markdown;
+        let is_asm = current_mode == crate::tail_engine::ViewMode::Asm;
 
         if toggle_button(ui, theme, "🔤 TXT", is_txt, theme.accent_color().into())
             .on_hover_text(t(lang, "tip_mode_txt"))
@@ -1549,6 +1552,15 @@ fn render_log_stream(
             || act(ActionId::ViewHex)
         {
             engine.set_view_mode(crate::tail_engine::ViewMode::Hex);
+            ui.ctx().request_repaint();
+        }
+
+        if toggle_button(ui, theme, "⚙ ASM", is_asm, theme.secondary_accent().into())
+            .on_hover_text(t(lang, "tip_mode_asm"))
+            .clicked()
+            || act(ActionId::ViewAsm)
+        {
+            engine.set_view_mode(crate::tail_engine::ViewMode::Asm);
             ui.ctx().request_repaint();
         }
 
@@ -1574,7 +1586,7 @@ fn render_log_stream(
         }
 
         // Line numbers & Line wrap toggle, meaningful in the text views only (hidden in Hex mode)
-        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+        if !engine.view_mode.is_bytes() {
             ui.separator();
 
             // Line numbers toggle, for this stream only
@@ -1637,7 +1649,7 @@ fn render_log_stream(
         }
 
         // Encoding selector (relevant in Text & Markdown modes)
-        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+        if !engine.view_mode.is_bytes() {
             let mut curr_enc = engine.encoding;
             egui::ComboBox::from_id_salt(format!("enc_sel_{}", engine.path.display()))
                 .selected_text(RichText::new(curr_enc.name()).monospace().size(11.0))
@@ -1712,6 +1724,39 @@ fn render_log_stream(
             }
         }
 
+        // ASM architecture: the stream's choice, or the executable's (which wins).
+        if engine.view_mode == crate::tail_engine::ViewMode::Asm {
+            ui.separator();
+            if act(ActionId::AsmArch) {
+                engine.set_disasm_arch(engine.asm.arch.next());
+            }
+            match engine.asm.known_executable() {
+                Some(_) => {
+                    ui.label(
+                        RichText::new(engine.asm.label())
+                            .monospace()
+                            .size(11.0)
+                            .color(theme.secondary_accent()),
+                    )
+                    .on_hover_text(t(lang, "asm_arch_exe_tip"));
+                }
+                None => {
+                    let mut arch = engine.asm.arch;
+                    egui::ComboBox::from_id_salt(format!("asm_arch_{}", engine.path.display()))
+                        .selected_text(RichText::new(arch.name()).monospace().size(11.0))
+                        .width(80.0)
+                        .show_ui(ui, |ui| {
+                            for a in crate::disasm::Arch::ALL {
+                                ui.selectable_value(&mut arch, a, a.name());
+                            }
+                        })
+                        .response
+                        .on_hover_text(t(lang, "asm_arch_tip"));
+                    engine.set_disasm_arch(arch);
+                }
+            }
+        }
+
         ui.separator();
 
         // Lines count stat (shows filtered count vs total when filtering is active)
@@ -1746,6 +1791,10 @@ fn render_log_stream(
             }
             crate::tail_engine::ViewMode::Markdown => {
                 format!("{}: {}", t(lang, "lines"), engine.total_lines())
+            }
+            // Where the screen starts, out of the file size (instructions are not counted).
+            crate::tail_engine::ViewMode::Asm => {
+                format!("0x{:X} / 0x{:X}", engine.asm.top, engine.file_size)
             }
         };
         ui.label(
@@ -1796,7 +1845,7 @@ fn render_log_stream(
         }
 
         // Per-level counters (most severe first), only the levels seen in the file
-        if engine.view_mode != crate::tail_engine::ViewMode::Hex {
+        if !engine.view_mode.is_bytes() {
             let counts: Vec<(LogLevel, u64)> = LogLevel::ALL
                 .iter()
                 .rev()
@@ -2223,7 +2272,11 @@ fn render_log_stream(
             );
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut engine.goto_input)
-                    .hint_text(t(lang, "goto_hint"))
+                    .hint_text(if engine.view_mode == crate::tail_engine::ViewMode::Asm {
+                        t(lang, "asm_goto_hint")
+                    } else {
+                        t(lang, "goto_hint")
+                    })
                     .desired_width(130.0)
                     .id(goto_id),
             );
@@ -2286,6 +2339,16 @@ fn render_log_stream(
                             t(lang, "goto_no_tag").replace("{tag}", typed.trim_start_matches('#')),
                         );
                     }
+                }
+            } else if enter && engine.view_mode == crate::tail_engine::ViewMode::Asm {
+                if engine.asm_go_to(&engine.goto_input.clone()) {
+                    engine.follow_tail = false;
+                    engine.goto_notice = None;
+                    engine.goto_open = false;
+                    ui.ctx().memory_mut(|m| m.stop_text_input());
+                    ui.ctx().request_repaint();
+                } else {
+                    engine.goto_notice = Some(t(lang, "goto_invalid").to_string());
                 }
             } else if enter {
                 let current_line = engine.get_actual_line_idx(top_row(engine)).unwrap_or(0);
@@ -2507,7 +2570,10 @@ fn render_log_stream(
                     .as_ref()
                     .filter(|sel| !sel.is_empty())
                     .map(|sel| sel.selected().to_string());
-                if let Some(text) = chars.or_else(|| engine.copy_selection_text()) {
+                let asm = (engine.view_mode == crate::tail_engine::ViewMode::Asm)
+                    .then(|| engine.asm_selection_text())
+                    .flatten();
+                if let Some(text) = asm.or(chars).or_else(|| engine.copy_selection_text()) {
                     ui.ctx().copy_text(text);
                 }
             }
@@ -2551,7 +2617,9 @@ fn render_log_stream(
             );
             let text_view = !matches!(
                 engine.view_mode,
-                crate::tail_engine::ViewMode::Hex | crate::tail_engine::ViewMode::Markdown
+                crate::tail_engine::ViewMode::Hex
+                    | crate::tail_engine::ViewMode::Markdown
+                    | crate::tail_engine::ViewMode::Asm
             );
             if text_view
                 && (act(ActionId::Collapse)
@@ -2606,7 +2674,9 @@ fn render_log_stream(
             let plain_f4 = egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F4);
             let line_view = !matches!(
                 engine.view_mode,
-                crate::tail_engine::ViewMode::Hex | crate::tail_engine::ViewMode::Markdown
+                crate::tail_engine::ViewMode::Hex
+                    | crate::tail_engine::ViewMode::Markdown
+                    | crate::tail_engine::ViewMode::Asm
             );
             let rule_prev = act(ActionId::RulePrev)
                 || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&shift_f4)));
@@ -2727,6 +2797,22 @@ fn render_log_stream(
             );
         }
         render_hex_stream(ui, engine, theme, lang, font_size);
+        return;
+    }
+    if engine.view_mode == crate::tail_engine::ViewMode::Asm {
+        if pane_visible {
+            render_search_pane(
+                ui,
+                engine,
+                theme,
+                lang,
+                font_size,
+                level_colors,
+                search_view,
+            );
+        }
+        let keys = is_focused && !ui.ctx().egui_wants_keyboard_input();
+        render_asm_stream(ui, engine, theme, lang, font_size, keys);
         return;
     }
 
@@ -3497,7 +3583,7 @@ fn render_search_pane(
                     }
                 });
             });
-            if engine.view_mode == crate::tail_engine::ViewMode::Hex {
+            if engine.view_mode.is_bytes() {
                 ui.centered_and_justified(|ui| {
                     ui.label(
                         RichText::new(t(lang, "search_pane_hex"))
@@ -6416,6 +6502,206 @@ fn render_hex_stream(
     }
     engine.current_scroll_x = scroll_output.state.offset.x;
     engine.current_scroll_y = scroll_output.state.offset.y;
+    engine.hex_top_offset =
+        (scroll_output.state.offset.y / row_height.max(1.0)) as u64 * bytes_per_row as u64;
+}
+
+/// The ASM view: rows decoded from `engine.asm.top`, as many as the area holds, drawn
+/// straight with the painter (address, section, bytes, instruction). The wheel, the
+/// arrows and the pages move by rows; the bar on the right maps the offset over the file
+/// size. A click selects a row, Shift + click extends; follow keeps the end of the file
+/// on the last row.
+fn render_asm_stream(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    font_size: f32,
+    keys: bool,
+) {
+    let size = engine.file_size;
+    if size == 0 {
+        ui.centered_and_justified(|ui| {
+            ui.label(
+                RichText::new(t(lang, "file_empty"))
+                    .monospace()
+                    .color(theme.text_dim()),
+            );
+        });
+        return;
+    }
+    let font_id = egui::FontId::monospace(font_size);
+    let (row_height, char_width) = ui
+        .ctx()
+        .fonts_mut(|f| (f.row_height(&font_id), f.glyph_width(&font_id, '0')));
+    let (rect, response) =
+        ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+    let bar = egui::Rect::from_min_max(egui::pos2(rect.right() - 10.0, rect.top()), rect.max);
+    let rows_fit = ((rect.height() / row_height).floor() as usize).max(1);
+    let memory_id = egui::Id::new("asm_view").with(&engine.path);
+
+    // Movement: a search hit or go to first, then the keys, the wheel and the bar.
+    if let Some(target) = engine.scroll_to_byte.take() {
+        engine.asm.top = (target as u64).min(size - 1);
+        engine.follow_tail = false;
+    }
+    let mut step: isize = 0;
+    if keys {
+        ui.input(|i| {
+            if i.key_pressed(egui::Key::ArrowUp) {
+                step -= 1;
+            }
+            if i.key_pressed(egui::Key::ArrowDown) {
+                step += 1;
+            }
+            if i.key_pressed(egui::Key::PageUp) {
+                step -= rows_fit as isize;
+            }
+            if i.key_pressed(egui::Key::PageDown) {
+                step += rows_fit as isize;
+            }
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::Home) {
+                engine.asm.top = 0;
+                engine.follow_tail = false;
+            }
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::End) {
+                engine.follow_tail = true;
+            }
+        });
+    }
+    if response.hovered() {
+        let wheel = ui.input(|i| i.smooth_scroll_delta.y);
+        if wheel != 0.0 {
+            let rest: f32 = ui.data(|d| d.get_temp(memory_id)).unwrap_or(0.0);
+            let total = rest - wheel / row_height;
+            let whole = total.trunc();
+            ui.data_mut(|d| d.insert_temp(memory_id, total - whole));
+            step += whole as isize;
+        }
+    }
+    if step != 0 {
+        engine.follow_tail = false;
+        engine.asm_scroll(step);
+    }
+    let bar_response = ui.interact(bar, memory_id.with("bar"), egui::Sense::click_and_drag());
+    if let Some(pos) = bar_response
+        .interact_pointer_pos()
+        .filter(|_| bar_response.dragged() || bar_response.clicked())
+    {
+        let frac = ((pos.y - bar.top()) / bar.height()).clamp(0.0, 1.0) as f64;
+        engine.follow_tail = false;
+        engine.asm_seek((frac * size as f64) as u64);
+    }
+    if engine.follow_tail {
+        engine.asm_bottom(rows_fit);
+    }
+
+    let rows = engine.asm_rows(rows_fit);
+    let wide = rows.iter().any(|r| r.address > u32::MAX as u64);
+    let address_chars = if wide { 16 } else { 8 };
+    let section_chars = 10;
+    let bytes_chars = 3 * 10;
+    let has_search = !engine.last_searched_query.is_empty();
+    let active = engine.current_search_byte();
+    let selection = engine.asm.selection.map(|(a, b)| (a.min(b), a.max(b)));
+
+    // A click selects the row under the pointer; Shift extends from the first one.
+    if response.clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            let index = ((pos.y - rect.top()) / row_height) as usize;
+            if let Some(row) = rows.get(index) {
+                let shift = ui.input(|i| i.modifiers.shift);
+                engine.asm.selection = match engine.asm.selection {
+                    Some((anchor, _)) if shift => Some((anchor, row.offset)),
+                    _ => Some((row.offset, row.offset)),
+                };
+                engine.follow_tail = false;
+            }
+        }
+    }
+
+    let painter = ui.painter_at(rect);
+    let dim = Color32::from(theme.text_dim());
+    let primary = Color32::from(theme.text_primary());
+    let bytes_color = Color32::from(theme.secondary_accent());
+    let accent = Color32::from(theme.accent_color());
+    let data_color = Color32::from(theme.warn_color());
+    for (i, row) in rows.iter().enumerate() {
+        let y = rect.top() + i as f32 * row_height;
+        let row_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), y),
+            egui::vec2(rect.width() - bar.width(), row_height),
+        );
+        let end = row.offset + row.bytes.len() as u64;
+        let hit = has_search && engine.hex_row_matches(row.offset as usize, end as usize);
+        let current = hit
+            && active
+                .is_some_and(|(off, len)| (off as u64) < end && (off + len) as u64 > row.offset);
+        let selected = selection.is_some_and(|(a, b)| row.offset >= a && row.offset <= b);
+        if let Some(fill) = row_tint(theme, hit, current, selected, false) {
+            painter.rect_filled(row_rect, 0.0, fill);
+        }
+        let mut x = rect.left() + 4.0;
+        let mut text = |s: &str, color: Color32, chars: usize| {
+            painter.text(
+                egui::pos2(x, y),
+                egui::Align2::LEFT_TOP,
+                s,
+                font_id.clone(),
+                color,
+            );
+            x += (chars as f32 + 2.0) * char_width;
+        };
+        let text_color = if hit { Color32::BLACK } else { primary };
+        text(
+            &format!("{:0width$X}", row.address, width = address_chars),
+            if hit { Color32::BLACK } else { dim },
+            address_chars,
+        );
+        text(row.section.as_deref().unwrap_or(""), accent, section_chars);
+        let mut bytes = crate::disasm::hex_bytes(&row.bytes);
+        if bytes.len() > bytes_chars {
+            bytes.truncate(bytes_chars - 1);
+            bytes.push('…');
+        }
+        text(
+            &bytes,
+            if hit { Color32::BLACK } else { bytes_color },
+            bytes_chars,
+        );
+        // The mnemonic in the text colour, its operands in the accent.
+        let (mnemonic, operands) = row.text.split_once(' ').unwrap_or((&row.text, ""));
+        if row.data || hit {
+            text(
+                &row.text,
+                if hit { text_color } else { data_color },
+                row.text.len(),
+            );
+        } else {
+            text(mnemonic, text_color, mnemonic.chars().count().max(6) - 1);
+            text(operands, accent, operands.len());
+        }
+    }
+
+    // The bar: the screen's place in the file.
+    painter.rect_filled(
+        bar,
+        2.0,
+        Color32::from(theme.text_dim()).gamma_multiply(0.15),
+    );
+    let shown = rows
+        .last()
+        .map_or(0, |r| r.offset + r.bytes.len() as u64 - engine.asm.top);
+    let thumb_h = (bar.height() * shown as f32 / size as f32).clamp(12.0, bar.height());
+    let thumb_y = bar.top() + (bar.height() - thumb_h) * (engine.asm.top as f32 / size as f32);
+    painter.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(bar.left() + 2.0, thumb_y),
+            egui::vec2(6.0, thumb_h),
+        ),
+        3.0,
+        accent.gamma_multiply(0.6),
+    );
 }
 
 /// Which term list of a stream a control edits.

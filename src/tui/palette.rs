@@ -30,6 +30,8 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::GoToLine => (Action::GoTo, "Ctrl+G"),
         ActionId::Copy => (Action::Copy, "y"),
         ActionId::ViewText | ActionId::ViewHex => (Action::ToggleHex, "h"),
+        ActionId::ViewAsm => (Action::ToggleAsm, "d"),
+        ActionId::AsmArch => (Action::CycleArch, "D"),
         ActionId::Collapse => (Action::CycleCollapse, "c"),
         ActionId::SearchFocus => (Action::StartSearch, "/"),
         ActionId::SearchNext => (Action::SearchNext, "n"),
