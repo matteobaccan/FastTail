@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The hand-off and terminal messages in every language**: the errors of `--tui`,
+  `--gui` and *Switch now* (window missing, no display, no terminal, standard input that
+  cannot follow) are translated; on standard error they follow the system's language.
 - **Terminal interface: `Ctrl+←` / `Ctrl+→` scroll a window sideways by 10 columns**;
   `←` / `→` still move one column.
 - **Terminal interface in every language.** Every text of the terminal interface (bars,

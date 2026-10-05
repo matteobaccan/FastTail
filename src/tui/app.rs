@@ -2242,7 +2242,7 @@ impl App {
         self.save_config();
         match (self.start_gui)() {
             Ok(()) => self.quit = true,
-            Err(e) => self.interface_switch = Some(InterfaceSwitch::Failed(e.to_string())),
+            Err(e) => self.interface_switch = Some(InterfaceSwitch::Failed(e.text(self.lang))),
         }
     }
 

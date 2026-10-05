@@ -35,6 +35,11 @@ pub fn gui_exe_name() -> String {
 /// What a build without the graphical interface answers to `--gui`: the archive it came
 /// from, and the one that has the window.
 pub fn terminal_only_message() -> String {
+    terminal_only_text(crate::i18n::Language::En)
+}
+
+/// `terminal_only_message` in `lang`.
+pub fn terminal_only_text(lang: crate::i18n::Language) -> String {
     let arch = match std::env::consts::ARCH {
         "aarch64" => "arm64",
         other => other,
@@ -44,9 +49,10 @@ pub fn terminal_only_message() -> String {
         std::env::consts::OS,
         env!("CARGO_PKG_VERSION")
     );
-    format!(
-        "the graphical interface is not in this build (fasttail-tui-{platform}); \
-         use the fasttail-{platform} archive"
+    crate::i18n_tui::txf(
+        lang,
+        "the graphical interface is not in this build (fasttail-tui-{0}); use the fasttail-{0} archive",
+        &[&platform],
     )
 }
 
@@ -173,21 +179,31 @@ pub enum StartError {
 }
 
 impl std::fmt::Display for StartError {
-    /// The terminal interface's wording (English, as its other messages); the window
-    /// words the hand-off failures with its translations.
+    /// In English; `text` words it in a language.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text(crate::i18n::Language::En))
+    }
+}
+
+impl StartError {
+    /// The error in `lang`.
+    pub fn text(&self, lang: crate::i18n::Language) -> String {
+        use crate::i18n_tui::{tx, txf};
         match self {
-            StartError::NotInBuild => f.write_str(&terminal_only_message()),
-            StartError::NoDisplay => f.write_str(
-                "no display (DISPLAY and WAYLAND_DISPLAY are not set): \
-                 the graphical interface opens at the next start from a desktop",
-            ),
+            StartError::NotInBuild => terminal_only_text(lang),
+            StartError::NoDisplay => tx(
+                lang,
+                "no display (DISPLAY and WAYLAND_DISPLAY are not set): the graphical interface opens at the next start from a desktop",
+            )
+            .to_string(),
             StartError::NotFound(path) => {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 let dir = path.parent().unwrap_or(Path::new("."));
-                write!(f, "{name} was not found in {}", dir.display())
+                txf(lang, "{0} was not found in {1}", &[&name, &dir.display()])
             }
-            StartError::Failed(path, e) => write!(f, "cannot start {}: {e}", path.display()),
+            StartError::Failed(path, e) => {
+                txf(lang, "cannot start {0}: {1}", &[&path.display(), &e])
+            }
         }
     }
 }

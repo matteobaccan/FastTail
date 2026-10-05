@@ -117,21 +117,31 @@ fn parse_args(args: impl IntoIterator<Item = String>, cwd: &Path) -> Result<Opti
 fn hand_off_to_gui(args: &[String]) -> i32 {
     use crate::handoff;
     if !cfg!(feature = "gui") {
-        eprintln!("fasttail-tui: {}", handoff::terminal_only_message());
+        eprintln!("fasttail-tui: {}", handoff::terminal_only_text(cli_lang()));
         return 2;
     }
     let name = handoff::gui_exe_name();
     let exe = handoff::sibling_exe(&name).unwrap_or_else(|| PathBuf::from(&name));
     if !exe.is_file() {
         let dir = exe.parent().unwrap_or(Path::new("."));
-        eprintln!("fasttail-tui: {name} was not found in {}", dir.display());
+        eprintln!(
+            "fasttail-tui: {}",
+            crate::i18n_tui::txf(
+                cli_lang(),
+                "{0} was not found in {1}",
+                &[&name, &dir.display()]
+            )
+        );
         return 1;
     }
     let args = handoff::forwarded_args(args, handoff::HANDOFF_FLAG, None);
     match handoff::start_detached(&exe, &args) {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("fasttail-tui: cannot start {}: {e}", exe.display());
+            eprintln!(
+                "fasttail-tui: {}",
+                crate::i18n_tui::txf(cli_lang(), "cannot start {0}: {1}", &[&exe.display(), &e])
+            );
             1
         }
     }
@@ -337,13 +347,24 @@ fn run_args(args: Vec<String>) -> i32 {
 /// Why the terminal could not be taken over: raw mode refused, as mintty does without
 /// `winpty` (its pipes are not a console), or no terminal at all.
 fn no_raw_mode() -> &'static str {
+    let lang = cli_lang();
     if cfg!(windows) {
-        "this terminal cannot be used interactively (raw mode refused). Run fasttail-tui \
-         in Windows Terminal, cmd or PowerShell, or through winpty (winpty fasttail-tui) \
-         in mintty / Git Bash"
+        crate::i18n_tui::tx(
+            lang,
+            "this terminal cannot be used interactively (raw mode refused). Run fasttail-tui in Windows Terminal, cmd or PowerShell, or through winpty (winpty fasttail-tui) in mintty / Git Bash",
+        )
     } else {
-        "no interactive terminal (raw mode refused): run fasttail-tui in a terminal"
+        crate::i18n_tui::tx(
+            lang,
+            "no interactive terminal (raw mode refused): run fasttail-tui in a terminal",
+        )
     }
+}
+
+/// The language of messages written before the interface runs (to standard error): the
+/// system's, as the terminal around them speaks it.
+fn cli_lang() -> crate::i18n::Language {
+    crate::i18n::Language::detect()
 }
 
 /// Prints one frame as text once the files are indexed (the captures in the docs).
