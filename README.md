@@ -250,8 +250,12 @@ from a terminal).
 `fasttail-tui --gui` goes the other way: it starts `fasttail` from the same folder with the
 same arguments, detached from the terminal, and exits.
 
-`?` or `F1` lists every key as a menu (`Enter` runs one); the status bar shows the main
-commands as `[ ]` buttons for the mouse. Windows follow the GUI's dock: `s` or `|` opens
+`?` or `F1` lists every key as a menu (`Enter` runs one). A top bar follows the GUI's
+title bar and toolbar: the version and session, the CPU and RAM meters (Settings >
+*CPU and RAM in the top bar*, the window's *System Telemetry*), the global filter state and the palette on the first row; Open,
+Sessions, Rules, Play / Pause of every stream, Settings and Help on the second (from 16
+rows up). The status bar at the bottom shows the stream commands; every `[ ]` button can
+be clicked. Windows follow the GUI's dock: `s` or `|` opens
 a window beside, `_` below, `<` `>` move a stream between windows, `Alt+arrows` or a
 dragged divider resize, a title dragged onto a window's edge splits it and onto its
 centre adds a tab, and dropped anywhere else it becomes a floating window (`Alt+F` does

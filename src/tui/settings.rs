@@ -42,6 +42,7 @@ pub enum Key {
     TimeDelta,
     TimeDeltaGap,
     SizeUnit,
+    Telemetry,
     PollInterval,
     SizeCheckInterval,
     SpoolDir,
@@ -231,6 +232,11 @@ impl SettingsForm {
                 Key::SizeUnit,
                 "File size in",
                 Widget::Radio(RadioList::new(&["bytes", "MB", "GB", "hex"], unit)),
+            ),
+            Field::new(
+                Key::Telemetry,
+                "CPU and RAM in the top bar",
+                check(c.telemetry_enabled),
             ),
             Field::new(
                 Key::PollInterval,
@@ -429,6 +435,7 @@ impl SettingsForm {
                 Key::TimeDelta => c.show_time_delta = on,
                 Key::TimeDeltaGap => c.time_delta_gap_ms = num(),
                 Key::SizeUnit => c.size_unit = SIZE_UNITS[choice],
+                Key::Telemetry => c.telemetry_enabled = on,
                 Key::PollInterval => c.poll_interval_ms = num() as u32,
                 Key::SizeCheckInterval => c.size_check_interval_ms = num() as u32,
                 Key::SpoolDir => {

@@ -343,7 +343,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal.draw(|f| app.draw(f)).unwrap();
         let screen = buffer_text(terminal.backend().buffer());
-        assert!(screen[0].contains("1:a.log") && screen[0].contains("2:b.log"));
+        assert!(screen[1].contains("1:a.log") && screen[1].contains("2:b.log"));
         assert!(screen.iter().any(|l| l.contains("+ERROR")), "{screen:#?}");
         assert!(!screen.iter().any(|l| l.contains("INFO start")));
         // The row the rule matches carries the rule's colours.

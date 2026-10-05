@@ -10,13 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Terminal interface: a top bar like the GUI's.** The first row shows the version and
+  the session, the CPU and RAM meters (with *System telemetry* on), the global filter
+  state and the command palette. The second row, in terminals with at least 16 rows, has
+  Open, Sessions, Rules (with the number of enabled rules), Play and Pause for every
+  stream, Settings and Help. Every button can be clicked and names its key. The status
+  bar at the bottom keeps the stream commands.
 - **Filter tabs survive a restart.** A tab made with **⧉ Open filter as new tab** is saved
   with the workspace and in sessions, as `filter:<n>:<source>` with its frozen filter, its
   own filters and view options, and its bookmarks by source line. At the next start it is
   rebuilt from the source, and the source opens too if it was closed. Older versions skip
   the entry. The terminal interface does not show filter tabs yet, but keeps them while
   their source stays open.
-
 - **Windows: `fasttail.exe` hands off to the terminal interface.** With `--tui`, or
   `interface=tui` in `fasttail.ini` (a double click included), `fasttail.exe` starts
   `fasttail-tui.exe` from its own folder in a new console window, with the same

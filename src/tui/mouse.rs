@@ -8,6 +8,7 @@
 use ratatui::layout::{Position, Rect};
 
 use crate::tui::dock::{DividerArea, LeafArea, Place};
+use crate::tui::keys::Action;
 
 /// A stream window as it was last drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,8 @@ pub struct HitMap {
     pub list_items: Vec<(Rect, usize)>,
     /// The `[ ... ]` buttons of the status bar, and their position in its list.
     pub buttons: Vec<(Rect, usize)>,
+    /// The buttons of the top bar and what they run.
+    pub top_buttons: Vec<(Rect, Action)>,
     /// The dock's leaves, where a moved window can be dropped.
     pub leaves: Vec<LeafArea>,
     /// The dock's dividers, dragged to resize.
@@ -66,6 +69,8 @@ pub enum Target {
     ListItem(usize),
     /// A `[ ... ]` button of the status bar (its position in the bar).
     Button(usize),
+    /// A button of the top bar.
+    TopButton(Action),
     /// Anywhere else while a dialog is open: closes it, like Esc.
     OutsideDialog,
     /// A title in the stream strip at the top.
@@ -116,6 +121,9 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
     }
     if let Some((_, i)) = map.buttons.iter().find(|(r, _)| r.contains(p)) {
         return Target::Button(*i);
+    }
+    if let Some((_, action)) = map.top_buttons.iter().find(|(r, _)| r.contains(p)) {
+        return Target::TopButton(*action);
     }
     if let Some((_, tab)) = map.tab_titles.iter().find(|(r, _)| r.contains(p)) {
         return Target::TabTitle(*tab);
