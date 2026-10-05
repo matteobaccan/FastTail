@@ -225,9 +225,9 @@ Closed on 2026-09-29 with the changes below; the rest of the planned 0.14.0 move
 | `relative-time-windows` — "last 15 min / 1 h / 24 h", `--since -3h` | hl | S |
 | `partial-line-selection` — select part of a line | 19 | M |
 | `scratchpad` — notes tab lines can be sent to | klogg | S |
-| `filter-to-tab` — the filtered view as a new following tab (saving the tabs: 0.21.0) | LogExpert | M |
+| `filter-to-tab` — the filtered view as a new following tab (saving the tabs: 0.16.2) | LogExpert | M |
 | `compare-lines` — diff of two lines or two regions | requested | M |
-| `tray-icon` — minimise to tray, tray menu, Windows (Linux: 0.21.0) | SnakeTail | S–M |
+| `tray-icon` — minimise to tray, tray menu, Windows (Linux: `linux-tray-icon`, 0.21.0) | SnakeTail | S–M |
 | `structured-fields` — JSON / logfmt / regex parsers with detection, column view | 1 | L |
 
 ### 0.15.0 — terminal interface preview, then nightly patches
@@ -275,7 +275,7 @@ excluded), completed through the nightly patches (0.15.x, then 0.16.x). The gap 
 | `operation-timeline` — Gantt of operations by an id field | lnav | M |
 | `cross-line-regex` — regex across lines (plus single-line regex search) | 20 | M |
 | `export-formats` — CSV and HTML export | 18 | S |
-| `tray-icon` (Linux backend) and `filter-to-tab` (saved derived tabs) — the parts left open | — | S |
+| `linux-tray-icon` — the Linux tray backend left open by `tray-icon` | — | S |
 
 ### 0.22.0 — sources and integrations
 
