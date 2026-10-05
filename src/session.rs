@@ -104,6 +104,10 @@ pub struct StreamEntry {
     pub fields_view: bool,
     pub fields_columns: Vec<String>,
     pub fields_widths: BTreeMap<String, u16>,
+    /// The frozen filter of a derived stream ("Open filter as new tab"), whose `path` is
+    /// then its `filter:<n>:<source>` name (see `filter_tab::identity`): `frozen.*` keys,
+    /// plus `source_rel` for the source's relative path. Older builds skip such a stream.
+    pub frozen: Option<crate::filter_tab::FrozenFilter>,
 }
 
 impl StreamEntry {
@@ -177,8 +181,23 @@ impl Session {
                 None => s.path.clone(),
             };
             sec.set("path", file.to_string_lossy().to_string());
-            if let Some(rel) = base_dir.and_then(|b| relative_under(&file, b)) {
-                sec.set("rel", rel);
+            match crate::filter_tab::parse_identity(&file) {
+                // Under its own key: an older build must not open the source in its place.
+                Some((_, source)) => {
+                    if let Some(rel) = base_dir.and_then(|b| relative_under(&source, b)) {
+                        sec.set("source_rel", rel);
+                    }
+                }
+                None => {
+                    if let Some(rel) = base_dir.and_then(|b| relative_under(&file, b)) {
+                        sec.set("rel", rel);
+                    }
+                }
+            }
+            if let Some(frozen) = &s.frozen {
+                for (key, value) in frozen.to_ini_pairs() {
+                    sec.set(key, value);
+                }
             }
             if let Some(entry) = &s.archive_entry {
                 sec.set("entry", entry);
@@ -276,28 +295,59 @@ impl Session {
             let Some(written) = absolute.clone().or_else(|| relative.clone()) else {
                 continue;
             };
-            let from_rel = base_dir
-                .zip(relative)
-                .map(|(b, r)| b.join(r))
-                .filter(|p| source_exists(p));
-            let resolved = match from_rel {
-                Some(p) => {
-                    if absolute
-                        .as_deref()
-                        .map(|a| !same_path(a, &p))
-                        .unwrap_or(true)
-                    {
-                        out.relocated = true;
-                    }
-                    p
+            let derived = absolute
+                .as_deref()
+                .and_then(crate::filter_tab::parse_identity);
+            let frozen =
+                crate::filter_tab::FrozenFilter::from_ini(|key| sec.get(key).map(str::to_string));
+            let is_derived = derived.is_some();
+            let resolved = if let Some((n, source)) = derived {
+                if frozen.is_none() {
+                    continue;
                 }
-                None => match absolute.filter(|p| source_exists(p)) {
-                    Some(p) => p,
+                // The source may be an archive entry (`bundle.zip/app.log`).
+                let exists = |p: &PathBuf| source_exists(p) || crate::compressed::source_exists(p);
+                let from_rel = base_dir
+                    .zip(sec.get("source_rel").filter(|p| !p.is_empty()))
+                    .map(|(b, r)| b.join(r))
+                    .filter(exists);
+                match from_rel.or_else(|| Some(source.clone()).filter(exists)) {
+                    Some(p) => {
+                        if !same_path(&p, &source) {
+                            out.relocated = true;
+                        }
+                        crate::filter_tab::identity(n, &p)
+                    }
                     None => {
                         out.missing.push(written);
                         continue;
                     }
-                },
+                }
+            } else {
+                let from_rel = base_dir
+                    .zip(relative)
+                    .map(|(b, r)| b.join(r))
+                    .filter(|p| source_exists(p));
+                let resolved = match from_rel {
+                    Some(p) => {
+                        if absolute
+                            .as_deref()
+                            .map(|a| !same_path(a, &p))
+                            .unwrap_or(true)
+                        {
+                            out.relocated = true;
+                        }
+                        p
+                    }
+                    None => match absolute.filter(|p| source_exists(p)) {
+                        Some(p) => p,
+                        None => {
+                            out.missing.push(written);
+                            continue;
+                        }
+                    },
+                };
+                resolved
             };
             let archive_entry = sec
                 .get("entry")
@@ -404,6 +454,7 @@ impl Session {
                         })
                     })
                     .collect(),
+                frozen: if is_derived { frozen } else { None },
             });
         }
         if out.relocated {

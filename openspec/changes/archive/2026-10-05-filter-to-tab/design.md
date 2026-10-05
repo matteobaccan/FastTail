@@ -56,11 +56,17 @@ the derived stream restarts from empty (as stdin), saying earlier matches were d
   already decodes, strips ANSI, follows appends and reports truncation and rotation
   (`reload_generation`), so one reader serves both and every encoding works. An
   unterminated last line waits for its newline.
-- **Persistence (D3) is not done:** a derived tab is transient like standard input (left
-  out of the dock layout, `open_files` and sessions). Tasks 3.1 / 3.2 stay open.
+- **Persistence (D3), done in 0.16.2:** the tab is saved as `filter:<n>:<source path>` in
+  `open_files`, the dock layout and sessions (its tab is renamed from the spool to that name
+  when saved and back when restored); the section holds the frozen filter as `frozen.*`
+  keys and, in a session file, the source's relative path as `source_rel` (not `rel`, so
+  an older build does not open the source in its place). A restored tab opens its source
+  when it is not open; its bookmarks are saved by source line and applied as the fill
+  reaches them. The terminal interface does not show derived tabs but keeps their entries
+  while their source stays open.
 - **Bounds (D5):** a full spool stops the tab from following (it says so) instead of
   restarting from empty; the large-copy warning is not done.
-- **Bookmarks** are kept by derived line, not by source line (they are not saved anyway).
+- **Bookmarks** are kept by derived line while the tab is open and saved by source line.
 
 ## Risks / Trade-offs
 

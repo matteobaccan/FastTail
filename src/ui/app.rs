@@ -9,7 +9,7 @@ use crate::i18n::t;
 use crate::lock::LockAttempts;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
-use crate::session::{LoadedSession, Session};
+use crate::session::{LoadedSession, Session, StreamEntry};
 use crate::tail_engine::{QuickLabel, TailEngine};
 use crate::theme::CyberTheme;
 use crate::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
@@ -649,6 +649,15 @@ impl FastTailApp {
             let wake = Self::make_wake(&app.egui_ctx);
             let restored = crate::workspace::open_all(&tabs, &app.config, Some(wake));
             app.engines.extend(restored.engines);
+            // Derived streams, saved under their `filter:` name: rebuilt from their
+            // source, their tab renamed after the spool (or dropped with its source).
+            for tab in tabs
+                .iter()
+                .filter(|t| crate::filter_tab::parse_identity(t).is_some())
+            {
+                let spool = app.restore_filter_tab(tab, false);
+                rename_tab(&mut app.dock_state, tab, spool);
+            }
             // Open files the layout has no tab for (opened in the terminal interface) join
             // the main area.
             for path in app.config.open_files.clone() {
@@ -713,6 +722,7 @@ impl FastTailApp {
         // Results are not persisted: the Find results tab is left out (after the window
         // rects are applied, since dropping it may drop a floating window).
         let mut dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
+        rename_derived_tabs(&mut dock_to_save, &self.engines, true);
         crate::ui::find_results::retain_tabs(&mut dock_to_save, |tab| !is_stdin_tab(tab));
         ron::to_string(&dock_to_save).ok()
     }
@@ -723,7 +733,8 @@ impl FastTailApp {
         let mut paths: Vec<PathBuf> = Vec::new();
         for (_, tab) in self.dock_state.iter_all_tabs() {
             if let FastTailTab::LogStream(p) = tab {
-                if !is_stdin_tab(tab) && !paths.iter().any(|e| paths_equal(e, p)) {
+                let stdin = crate::stdin_source::is_stdin_path(p);
+                if !stdin && !paths.iter().any(|e| paths_equal(e, p)) {
                     paths.push(p.clone());
                 }
             }
@@ -749,9 +760,9 @@ impl FastTailApp {
     fn session_fingerprint(&mut self) -> String {
         let base = self.session_base_dir();
         let mut session = self.capture_session();
-        session.dock_layout = Some(dock_signature(
-            &crate::ui::find_results::without_find_results(&self.dock_state),
-        ));
+        let mut dock = crate::ui::find_results::without_find_results(&self.dock_state);
+        rename_derived_tabs(&mut dock, &self.engines, true);
+        session.dock_layout = Some(dock_signature(&dock));
         session.serialized(base.as_deref())
     }
 
@@ -971,42 +982,103 @@ impl FastTailApp {
             self.engines[idx].view_notice = Some(t(lang, "filter_tab_no_filter").to_string());
             return None;
         }
+        // The next free number among the derived streams of this source.
+        let n = 1 + self
+            .engines
+            .iter()
+            .filter_map(|e| e.derived.as_ref())
+            .filter(|f| f.source == source.path)
+            .map(|f| f.n)
+            .max()
+            .unwrap_or(0);
+        let engine = match self.derived_engine(idx, n, filter) {
+            Ok(engine) => engine,
+            Err(e) => {
+                self.engines[idx].view_notice = Some(e);
+                return None;
+            }
+        };
+        let source_path = self.engines[idx].path.clone();
+        let spool = engine.path.clone();
+        self.engines.push(engine);
+        self.place_derived_tab(&source_path, spool.clone());
+        self.save_dock_layout();
+        Some(spool)
+    }
+
+    /// A derived engine number `n` of the stream at `idx` through `filter`, following.
+    fn derived_engine(
+        &self,
+        idx: usize,
+        n: usize,
+        filter: crate::filter_tab::FrozenFilter,
+    ) -> Result<TailEngine, String> {
+        let source = &self.engines[idx];
         let name = crate::find_all::stream_name(source);
         let spool_dir = self.config.compressed_settings().spool_dir;
         let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
-        let feeder = match crate::filter_tab::DerivedFeeder::create(
-            source, name, filter, &spool_dir, max_bytes,
-        ) {
-            Ok(feeder) => feeder,
-            Err(e) => {
-                self.engines[idx].view_notice = Some(e.to_string());
-                return None;
-            }
-        };
-        let source_path = source.path.clone();
-        let spool = feeder.spool_path().to_path_buf();
-        let mut engine = match TailEngine::open(&spool) {
-            Ok(engine) => engine,
-            Err(e) => {
-                self.engines[idx].view_notice = Some(e.to_string());
-                return None;
-            }
-        };
+        let feeder = crate::filter_tab::DerivedFeeder::create(
+            source, name, n, filter, &spool_dir, max_bytes,
+        )
+        .map_err(|e| e.to_string())?;
+        let mut engine = TailEngine::open(feeder.spool_path()).map_err(|e| e.to_string())?;
         engine.derived = Some(Box::new(feeder));
+        crate::workspace::apply_settings(&mut engine, &self.config);
+        engine.set_quick_labels(&self.quick_labels);
         engine.set_global_filter(self.global_spec.clone());
         engine.follow_tail = true;
-        self.engines.push(engine);
-        // Next to its source: in the source's dock leaf.
+        Ok(engine)
+    }
+
+    /// Puts a derived stream's tab next to its source: in the source's dock leaf.
+    fn place_derived_tab(&mut self, source: &Path, spool: PathBuf) {
         let tab = FastTailTab::LogStream(spool.clone());
         match self
             .dock_state
-            .find_tab(&FastTailTab::LogStream(source_path))
+            .find_tab(&FastTailTab::LogStream(source.to_path_buf()))
         {
             Some(at) => {
                 self.dock_state.set_focused_node_and_surface(at.node_path());
                 self.dock_state.push_to_focused_leaf(tab);
             }
-            None => self.add_stream_tab(spool.clone()),
+            None => self.add_stream_tab(spool),
+        }
+    }
+
+    /// Rebuilds the derived stream saved as `identity` (`filter:<n>:<source>`) from its
+    /// source, opened first when it is not, with the state saved for it. `place` puts
+    /// its tab next to the source; without it the caller has a tab for it already.
+    /// Returns the spool path, `None` when the source or the saved filter is missing.
+    fn restore_filter_tab(&mut self, identity: &Path, place: bool) -> Option<PathBuf> {
+        let (n, source) = crate::filter_tab::parse_identity(identity)?;
+        if let Some(existing) = self.engines.iter().find(|e| {
+            e.derived
+                .as_ref()
+                .is_some_and(|f| f.n == n && paths_equal(&f.source, &source))
+        }) {
+            return Some(existing.path.clone());
+        }
+        // Opening the source saves the workspace, which drops the states of streams not
+        // open yet: this one's is put back after.
+        let state = self.config.stream_state_for(identity)?.clone();
+        let filter = state.frozen.clone()?;
+        let position = |engines: &[TailEngine]| {
+            engines
+                .iter()
+                .position(|e| e.derived.is_none() && paths_equal(&e.path, &source))
+        };
+        if position(&self.engines).is_none() {
+            self.open_log_file(source.clone());
+        }
+        let idx = position(&self.engines)?;
+        self.config.set_stream_state(state);
+        let mut engine = self.derived_engine(idx, n, filter).ok()?;
+        crate::workspace::restore_stream(&mut engine, &self.config, identity);
+        let source_path = self.engines[idx].path.clone();
+        let spool = engine.path.clone();
+        self.engines.push(engine);
+        if place {
+            self.place_derived_tab(&source_path, spool.clone());
         }
         Some(spool)
     }
@@ -1066,6 +1138,22 @@ impl FastTailApp {
             let mut feeder = derived.derived.take().expect("a derived stream");
             if feeder.step(source, std::time::Duration::from_millis(4)) {
                 changed = true;
+            }
+            // Restored bookmarks, as the fill reaches their lines.
+            if !feeder.pending_bookmarks.is_empty() {
+                let reached = feeder.take_reached_bookmarks(derived.total_lines());
+                if !reached.is_empty() {
+                    let mut lines: Vec<usize> = derived.bookmarks.iter().copied().collect();
+                    let mut notes = derived.bookmark_notes.clone();
+                    for (line, note) in reached {
+                        lines.push(line);
+                        if let Some(note) = note {
+                            notes.insert(line, note);
+                        }
+                    }
+                    derived.set_bookmarks_with_notes(lines, notes);
+                    changed = true;
+                }
             }
             derived.derived = Some(feeder);
         }
@@ -1429,14 +1517,27 @@ impl FastTailApp {
         self.floating_window_rects.clear();
         self.config.open_files.clear();
         self.config.streams.clear();
+        // Each state just before its stream opens (an opening saves the workspace, which
+        // keeps only the states of open streams). A derived stream may open its source
+        // before the source's own entry comes: the source's state goes in first.
+        let adopt = |config: &mut FastTailConfig, entry: &StreamEntry| {
+            config.set_stream_state(entry.clone());
+            config.set_wrap(&entry.path, entry.wrap);
+            config.set_bookmarks_with_notes(&entry.path, &entry.bookmarks, &entry.bookmark_notes);
+        };
         for entry in &loaded.session.streams {
-            self.config.set_stream_state(entry.clone());
-            self.config.set_wrap(&entry.path, entry.wrap);
-            self.config.set_bookmarks_with_notes(
-                &entry.path,
-                &entry.bookmarks,
-                &entry.bookmark_notes,
-            );
+            if let Some((_, source)) = crate::filter_tab::parse_identity(&entry.path) {
+                let source_entry = loaded
+                    .session
+                    .streams
+                    .iter()
+                    .find(|s| paths_equal(&s.path, &source));
+                let source_open = self.engines.iter().any(|e| paths_equal(&e.path, &source));
+                if let (Some(source_entry), false) = (source_entry, source_open) {
+                    adopt(&mut self.config, source_entry);
+                }
+            }
+            adopt(&mut self.config, entry);
             self.open_log_file(entry.path.clone());
         }
         if let Some(layout) = &loaded.session.dock_layout {
@@ -1451,10 +1552,13 @@ impl FastTailApp {
                     .collect();
                 let matches = !tabs.iter().any(|p| crate::stdin_source::is_stdin_path(p))
                     && tabs.len() == self.engines.len()
-                    && tabs
-                        .iter()
-                        .all(|t| self.engines.iter().any(|e| paths_equal(&e.path, t)));
+                    && tabs.iter().all(|t| {
+                        self.engines
+                            .iter()
+                            .any(|e| paths_equal(&crate::workspace::persisted_path(e), t))
+                    });
                 if matches {
+                    rename_derived_tabs(&mut ds, &self.engines, false);
                     for (surf_index, surface) in ds.iter_surfaces_indexed() {
                         if let egui_dock::Surface::Window(_tree, ws) = surface {
                             let r = ws.rect();
@@ -1730,6 +1834,7 @@ impl FastTailApp {
         let mut dock_to_save = crate::ui::find_results::without_find_results(&dock_to_save);
 
         // After the floating rectangles, whose surface indices this may shift.
+        rename_derived_tabs(&mut dock_to_save, &self.engines, true);
         crate::ui::find_results::retain_tabs(&mut dock_to_save, |tab| !is_stdin_tab(tab));
         if let Ok(ron_str) = ron::to_string(&dock_to_save) {
             if self.config.dock_layout.as_deref() != Some(&ron_str) {
@@ -1936,6 +2041,13 @@ impl FastTailApp {
     }
 
     pub fn open_log_file(&mut self, path: PathBuf) {
+        // A saved derived stream ("Open filter as new tab") is rebuilt from its source.
+        if crate::filter_tab::parse_identity(&path).is_some() {
+            if self.restore_filter_tab(&path, true).is_some() {
+                self.save_dock_layout();
+            }
+            return;
+        }
         let is_pattern = crate::wildcard::is_pattern_path(&path);
         if !is_pattern && !crate::compressed::source_exists(&path) {
             return;
@@ -5634,9 +5746,48 @@ fn dock_signature(dock: &DockState<FastTailTab>) -> String {
     out
 }
 
-/// True for the tab of the standard-input stream, which no workspace or session keeps.
-/// Streams that are not saved in the workspace or sessions: standard input and the
-/// derived streams of "Open filter as new tab" (their spools go with the process).
+/// Renames the tabs of the derived streams of `engines` in `dock`: to their saved
+/// `filter:` name (`to_saved`), or from it back to their spool.
+fn rename_derived_tabs(dock: &mut DockState<FastTailTab>, engines: &[TailEngine], to_saved: bool) {
+    for (_, tab) in dock.iter_all_tabs_mut() {
+        let FastTailTab::LogStream(p) = tab else {
+            continue;
+        };
+        let found = engines.iter().find_map(|e| {
+            let identity = e.derived.as_ref()?.identity();
+            if to_saved && e.path == *p {
+                Some(identity)
+            } else if !to_saved && identity == *p {
+                Some(e.path.clone())
+            } else {
+                None
+            }
+        });
+        if let Some(path) = found {
+            *p = path;
+        }
+    }
+}
+
+/// The tab of `from` shows `to` instead, or goes when `to` is `None`.
+fn rename_tab(dock: &mut DockState<FastTailTab>, from: &Path, to: Option<PathBuf>) {
+    match to {
+        Some(to) => {
+            for (_, tab) in dock.iter_all_tabs_mut() {
+                if matches!(tab, FastTailTab::LogStream(p) if p == from) {
+                    *tab = FastTailTab::LogStream(to.clone());
+                }
+            }
+        }
+        None => crate::ui::find_results::retain_tabs(
+            dock,
+            |tab| !matches!(tab, FastTailTab::LogStream(p) if p == from),
+        ),
+    }
+}
+
+/// Tabs no workspace or session keeps as they are: standard input, and a derived stream
+/// still named after its spool (`rename_derived_tabs` gives it its saved name first).
 fn is_stdin_tab(tab: &FastTailTab) -> bool {
     matches!(tab, FastTailTab::LogStream(p)
         if crate::stdin_source::is_stdin_path(p) || crate::filter_tab::is_derived_path(p))
