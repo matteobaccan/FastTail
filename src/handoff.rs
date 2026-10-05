@@ -50,6 +50,39 @@ pub fn terminal_only_message() -> String {
     )
 }
 
+/// Whether the terminal interface can run here (Linux and macOS, in process): standard
+/// output is a terminal, `TERM` is not `dumb`, and keys can be read, from standard input
+/// or, when that is a pipe (`cmd | fasttail --tui -`), from `/dev/tty`.
+pub fn terminal_usable(
+    stdout_is_terminal: bool,
+    term: Option<&str>,
+    stdin_is_terminal: bool,
+    dev_tty_opens: bool,
+) -> bool {
+    stdout_is_terminal && term != Some("dumb") && (stdin_is_terminal || dev_tty_opens)
+}
+
+/// `terminal_usable` for this process. `/dev/tty` is tried only when standard input is
+/// not a terminal.
+#[cfg(unix)]
+pub fn terminal_available() -> bool {
+    use std::io::IsTerminal;
+    let stdin_is_terminal = std::io::stdin().is_terminal();
+    let dev_tty_opens = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .is_ok()
+    };
+    terminal_usable(
+        std::io::stdout().is_terminal(),
+        std::env::var("TERM").ok().as_deref(),
+        stdin_is_terminal,
+        !stdin_is_terminal && dev_tty_opens(),
+    )
+}
+
 /// `name` in the directory of the running executable (where the archives put both).
 pub fn sibling_exe(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -362,6 +395,27 @@ mod tests {
             for &lang in Language::ALL.iter().filter(|l| **l != Language::En) {
                 assert_ne!(t(lang, key), english, "{key} in {lang:?}");
             }
+        }
+    }
+
+    /// The Unix decision table of design 3: (stdout, TERM, stdin, /dev/tty) -> terminal.
+    #[test]
+    fn unix_terminal_decision_table() {
+        let xterm = Some("xterm-256color");
+        for (stdout, term, stdin, dev_tty, usable) in [
+            (true, xterm, true, false, true),        // an interactive shell
+            (true, xterm, false, true, true),        // `cmd | fasttail --tui -`
+            (true, None, true, false, true),         // TERM unset is not `dumb`
+            (false, xterm, true, true, false),       // `fasttail --tui > out.txt`
+            (true, Some("dumb"), true, true, false), // an editor's shell buffer
+            (true, xterm, false, false, false),      // no controlling terminal for keys
+            (false, None, false, false, false),      // a desktop launcher
+        ] {
+            assert_eq!(
+                terminal_usable(stdout, term, stdin, dev_tty),
+                usable,
+                "{stdout} {term:?} {stdin} {dev_tty}"
+            );
         }
     }
 

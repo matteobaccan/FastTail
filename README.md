@@ -232,6 +232,10 @@ the window opens and says why. From cmd or PowerShell run `fasttail-tui.exe` dir
 `fasttail.exe --tui` works there too, but in a second console window, and it refuses
 standard input (`command | fasttail-tui.exe -` reads it).
 
+On Linux and macOS `fasttail --tui`, or `interface=tui` started from a terminal, runs the
+terminal interface in the same process; started without a terminal (a desktop launcher),
+`interface=tui` opens the window instead and `--tui` exits with code 1.
+
 `fasttail-tui --gui` goes the other way: it starts `fasttail` from the same folder with the
 same arguments, detached from the terminal, and exits.
 
