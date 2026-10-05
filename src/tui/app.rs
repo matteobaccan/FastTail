@@ -8391,6 +8391,134 @@ mod tests {
         assert_eq!(app.tabs[0].hscroll, 0);
     }
 
+    /// Every dialog and editor opens over the windows, inside the screen, with its frame
+    /// and buttons registered for the mouse (task 7.2 of tui-interface).
+    #[test]
+    fn every_dialog_draws_inside_the_screen() {
+        let log = "2026-09-28 10:00:00 INFO start\n{\"user\":{\"id\":7}}\n";
+        let (mut app, _dir) = app_with(&[("a.log", log)], false);
+        app.settings = Some(crate::tui::workspace::Settings::default());
+        let actions = [
+            Action::StartSearch,
+            Action::EditInclude,
+            Action::EditExclude,
+            Action::GoTo,
+            Action::EditNote,
+            Action::TimeRange,
+            Action::OpenFile,
+            Action::OpenSession,
+            Action::SaveSession,
+            Action::Settings,
+            Action::EditRules,
+            Action::Presets,
+            Action::EditGlobal,
+            Action::Tools,
+            Action::Palette,
+            Action::About,
+            Action::JsonTree,
+        ];
+        for action in actions {
+            render(&mut app, 100, 30);
+            app.tabs[0].set_cursor(1);
+            app.apply(action);
+            let screen = render(&mut app, 100, 30);
+            let d = app
+                .hits
+                .dialog
+                .unwrap_or_else(|| panic!("{action:?} drew no dialog: {screen:#?}"));
+            assert!(
+                d.outer.right() <= 100 && d.outer.bottom() <= 30,
+                "{action:?}"
+            );
+            assert!(d
+                .outer
+                .contains(ratatui::layout::Position::new(d.ok.x, d.ok.y)));
+            // Esc closes it, whichever it is.
+            let esc =
+                crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE);
+            app.on_key(esc);
+            if app.settings_form.is_some() || app.rules.is_some() || app.tools_editor.is_some() {
+                app.on_key(esc);
+            }
+            render(&mut app, 100, 30);
+            assert!(app.hits.dialog.is_none(), "{action:?} still open");
+        }
+    }
+
+    /// The HEX view fits as many bytes per row as the window has room for.
+    #[test]
+    fn the_hex_view_uses_the_width_it_has() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        app.apply(Action::ToggleHex);
+        render(&mut app, 80, 20);
+        let narrow = app.tabs[0].hex_width;
+        let screen = render(&mut app, 240, 20);
+        let wide = app.tabs[0].hex_width;
+        assert!(narrow >= 8 && wide > narrow, "{narrow} {wide}");
+        assert!(screen.iter().any(|l| l.contains("00000000")), "{screen:#?}");
+    }
+
+    /// Chinese and Japanese texts are measured in cells: the bars and the help fit.
+    #[test]
+    fn a_cjk_language_fits_the_cells() {
+        for lang in [Language::Zh, Language::Ja] {
+            let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+            app.settings = Some(crate::tui::workspace::Settings::default());
+            app.settings.as_mut().unwrap().config.language = lang;
+            app.apply_running_config();
+            // A wide character takes two cells: the text capture has a blank after it.
+            let has = |screen: &[String], en| {
+                let text = crate::i18n_tui::tx(lang, en).replace(' ', "");
+                screen.iter().any(|l| l.replace(' ', "").contains(&text))
+            };
+            let screen = render(&mut app, 100, 30);
+            assert!(has(&screen, "Open"), "{screen:#?}");
+            // Every row still ends with the window's right border at column 100.
+            assert!(screen[3..8].iter().all(|l| l.ends_with('║')), "{screen:#?}");
+            app.apply(Action::ToggleHelp);
+            let help = render(&mut app, 120, 30);
+            assert!(has(&help, "this help"), "{help:#?}");
+        }
+    }
+
+    /// Frame time on a generated file at 200 x 60 (p95 at most 5 ms), ignored by default
+    /// like the benchmarks: `cargo test --release ... -- --ignored frame_time`.
+    #[test]
+    #[ignore]
+    fn frame_time_at_200_by_60() {
+        let mut text = String::new();
+        for i in 0..200_000 {
+            let level = ["INFO", "WARN", "ERROR"][i % 3];
+            text.push_str(&format!(
+                "2026-09-28 10:{:02}:{:02} {level} request {i} took {}ms\n",
+                (i / 60) % 60,
+                i % 60,
+                i % 997
+            ));
+        }
+        let (mut app, _dir) = app_with(&[("big.log", text.as_str())], false);
+        for _ in 0..500 {
+            app.tick();
+            if !app.busy() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(200, 60)).unwrap();
+        app.tabs[0].engine.follow_tail = false;
+        let rows = app.tabs[0].engine.visible_line_count();
+        let mut samples = Vec::new();
+        for i in 0..300 {
+            app.tabs[0].top = rows / 300 * i;
+            let t = Instant::now();
+            terminal.draw(|f| app.draw(f)).unwrap();
+            samples.push(t.elapsed());
+        }
+        samples.sort();
+        let p95 = samples[samples.len() * 95 / 100];
+        assert!(p95 <= Duration::from_millis(5), "p95 {p95:?}");
+    }
+
     #[test]
     fn a_closing_window_shrinks_away() {
         let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
