@@ -225,9 +225,11 @@ column says where each gap stands after 0.20.0.
 | 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray 0.21.0, OutputDebugString and plugin API 0.22.0, cross-line regex 0.23.0 |
 | 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | closed, 0.20.0 (`fasttail-tui`, Linux terminal-only archive) |
 
-### New candidates for 0.24.0 or later
+### New candidates for 0.24.0
 
-Found in the 2026-10-05 scan; not yet OpenSpec changes and not assigned to a release.
+Found in the 2026-10-05 scan and assigned to 0.24.0 by the maintainer the same evening, each
+now an OpenSpec change (section 8): `open-at-line`, `hide-lines`, `tabular-files`,
+`field-sparkline`, `split-log`, `out-of-order-lines`, `tui-find-all`.
 
 | Candidate | Who has it | Value | Effort |
 |---|---|---|---|
@@ -348,7 +350,7 @@ group move to 0.23.0.
 | `structured-field-terms` — field filter terms, level and time from fields, cell spans, copy as shown | 1, 4 | M |
 | `merged-timeline-view` — several files merged by timestamp | 2 | L |
 | `folder-source` — several patterns, subfolders, "open all" | Tailviewer, LogFusion | M |
-| `disassembly-view` — ASM view of a stream: x86 16 / 32 / 64-bit, PE and ELF entry point and sections (a maintainer request; hex editors with a disassembly pane such as Hiew and 010 Editor have it; it extends the HEX view in the window and in the terminal) | requested | M |
+| `disassembly-view` — ASM view of a stream: x86 16 / 32 / 64-bit, PE and ELF entry point and sections (a maintainer request; hex editors with a disassembly pane such as Hiew and 010 Editor have it; it extends the HEX view in the window and in the terminal) — **shipped early in 0.20.1** | requested | M |
 | `linux-tray-icon` — the Linux tray backend left open by `tray-icon` | — | S |
 
 ### 0.22.0 — sources and integrations
@@ -380,6 +382,21 @@ group move to 0.23.0.
 | `pattern-grouping` — Drain patterns, CTRL + SHIFT + G | 6 | M |
 | `spike-explanation` — what is different in a histogram spike | Loki, Kibana | M |
 | `operation-timeline` — Gantt of operations by an id field | lnav | M |
+
+### 0.24.0 — scan candidates of 2026-10-05
+
+The seven candidates of section 6, assigned by the maintainer on 2026-10-05.
+`field-sparkline` comes after `field-statistics` (0.23.0).
+
+| Change | Who has it | Effort |
+|---|---|---|
+| `open-at-line` — `fasttail app.log:1204`, `--line N`, also for `--print` | LogExpert, Chipmunk | S |
+| `hide-lines` — hide selected lines by hand, listed, restorable, saved per stream | LogExpert | S |
+| `tabular-files` — CSV / TSV as columns, header and separator detection, quoted multi-line cells | lnav, LogExpert | M |
+| `field-sparkline` — a numeric field plotted over the timeline histogram | lnav, gonzo | M |
+| `split-log` — split a file by lines, size or time | lnav | S |
+| `out-of-order-lines` — backward clock jumps marked, counted and walked | nerdlog | S |
+| `tui-find-all` — Search all streams in the terminal interface | FastTail window, Chipmunk | M |
 
 Open questions are listed in each change's design.
 
