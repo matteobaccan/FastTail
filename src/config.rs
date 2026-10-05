@@ -1729,6 +1729,15 @@ pub fn read_rule_set(path: &Path) -> Result<Vec<HighlightRule>, RuleSetError> {
     use std::io::Read;
     ensure_regular_or_absent(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
     let file = fs::File::open(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
+    if !file
+        .metadata()
+        .map_err(|e| RuleSetError::Io(e.to_string()))?
+        .is_file()
+    {
+        return Err(RuleSetError::Io(
+            "target path is not a regular file".to_string(),
+        ));
+    }
     let mut bytes = Vec::new();
     file.take(MAX_RULE_SET_BYTES + 1)
         .read_to_end(&mut bytes)
@@ -2106,5 +2115,16 @@ mod tests {
         assert!(!is_valid_pin("1234567890123"));
         assert!(!is_valid_pin("12a4"));
         assert!(!is_valid_pin(""));
+    }
+
+    #[test]
+    fn test_read_rule_set_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_target = temp_dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        let err =
+            read_rule_set(&dir_target).expect_err("read_rule_set should fail when target is a directory");
+        assert!(matches!(err, RuleSetError::Io(_)));
     }
 }
