@@ -73,8 +73,10 @@ pub enum Action {
     EditNote,
     /// CTRL + K: the cursor row in context (filters suspended), and back.
     ToggleContext,
-    /// CTRL + G, `:`: go to a line (`N`, `+N`, `-N`) or a time (`14:02`).
+    /// CTRL + G: go to a line (`N`, `+N`, `-N`) or a time (`14:02`).
     GoTo,
+    /// `:`: the command palette (a number there goes to that line).
+    Palette,
     /// `h`: the HEX view of the bytes, and back to the lines.
     ToggleHex,
     /// `a`: how escape sequences show: auto, render, strip, raw.
@@ -190,7 +192,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char(']') | KeyCode::F(2) => Action::NextBookmark,
         KeyCode::Char('[') => Action::PrevBookmark,
         KeyCode::Char('m') => Action::EditNote,
-        KeyCode::Char(':') => Action::GoTo,
+        KeyCode::Char(':') => Action::Palette,
         KeyCode::Char('h') => Action::ToggleHex,
         KeyCode::Char('a') => Action::CycleAnsi,
         KeyCode::Char('t') => Action::TimeRange,
@@ -241,7 +243,7 @@ mod tests {
         let ctrl = KeyModifiers::CONTROL;
         assert_eq!(k(KeyCode::Char('k'), ctrl), Some(Action::ToggleContext));
         assert_eq!(k(KeyCode::Char('g'), ctrl), Some(Action::GoTo));
-        assert_eq!(k(KeyCode::Char(':'), none), Some(Action::GoTo));
+        assert_eq!(k(KeyCode::Char(':'), none), Some(Action::Palette));
         assert_eq!(k(KeyCode::Char('h'), none), Some(Action::ToggleHex));
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));

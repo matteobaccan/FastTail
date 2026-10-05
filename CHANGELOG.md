@@ -58,6 +58,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A missing name or program, a shortcut without a modifier or a broken regex is marked
   and not saved. The list adds, deletes and moves tools and shows the dropped
   rule-bound runs. Every change is saved at once.
+- **Command palette in the terminal interface (`:`).** It lists the commands of the
+  GUI's palette that the terminal runs, named in the interface language, each with its
+  terminal key. Typing filters them, `Enter` (or a click) runs one. A number, `+N`, `-N`
+  or a time goes to that line, as `:` did before; `Ctrl+G` still opens the go-to
+  dialog.
 - **PIN lock in the terminal interface (`Ctrl+L`).** With a PIN set, `Ctrl+L` locks over
   anything, an open dialog included. The idle lock closes it after the idle minutes when
   the lock is switched on, as in the GUI. While locked:

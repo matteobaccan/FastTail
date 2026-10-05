@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
+use crate::actions::ActionId;
 use crate::ansi::{AnsiMode, StyleRun};
 use crate::collapse::CollapseMode;
 use crate::dock_layout::{Dir, Layout as DockLayout, Pane, Tab as DockTab};
@@ -34,6 +35,7 @@ use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
+use crate::tui::palette::{self, CommandPalette, PaletteKey};
 use crate::tui::picker::{refusal_text, EntryPicker};
 use crate::tui::presets::{self, PresetsDialog, PresetsKey};
 use crate::tui::rules::{RuleWidget, RulesDialog, RulesKey};
@@ -418,6 +420,8 @@ pub struct App {
     pub tool_menu: Option<ToolMenu>,
     /// The external tools editor (from Settings, or `e` in the menu).
     pub tools_editor: Option<ToolsDialog>,
+    /// The command palette (`:`).
+    pub palette_dialog: Option<CommandPalette>,
     /// Spawns the external tools and keeps the limits of the rule-bound runs.
     tool_runner: crate::external_tools::ToolRunner,
     /// The PIN lock screen while locked: the PIN being typed and the last notice.
@@ -509,6 +513,7 @@ impl App {
             global_due: None,
             tool_menu: None,
             tools_editor: None,
+            palette_dialog: None,
             locked: None,
             lock_attempts: Default::default(),
             idle: crate::lock::IdleClock::new(Instant::now()),
@@ -931,6 +936,9 @@ impl App {
         if self.tool_menu.is_some() {
             return self.on_tool_menu_key(key);
         }
+        if self.palette_dialog.is_some() {
+            return self.on_palette_key(key);
+        }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
         }
@@ -1161,6 +1169,11 @@ impl App {
             }
             return true;
         }
+        if let Some(p) = self.palette_dialog.as_mut() {
+            p.field.insert(text);
+            p.selected = 0;
+            return true;
+        }
         if self.global.is_some() {
             // Typed character by character, so the term rows follow as with keys.
             for c in text.chars().filter(|c| !c.is_control()) {
@@ -1313,6 +1326,48 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// `:`: the command palette, named in the interface language.
+    fn open_palette(&mut self) {
+        let lang = self
+            .settings
+            .as_ref()
+            .map_or(crate::i18n::Language::En, |s| s.config.language);
+        self.palette_dialog = Some(CommandPalette::new(lang));
+    }
+
+    fn on_palette_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(p) = self.palette_dialog.as_mut() else {
+            return false;
+        };
+        match p.on_key(key) {
+            PaletteKey::Run(id, action) => {
+                self.palette_dialog = None;
+                self.run_palette(id, action);
+            }
+            PaletteKey::GoTo(text) => {
+                self.palette_dialog = None;
+                self.submit_prompt(Prompt {
+                    kind: PromptKind::Goto,
+                    field: TextField::new(&text),
+                });
+            }
+            PaletteKey::Close => self.palette_dialog = None,
+            PaletteKey::Moved => {}
+            PaletteKey::Other => return false,
+        }
+        true
+    }
+
+    /// Runs a palette entry; the text and HEX views only switch when not already there.
+    fn run_palette(&mut self, id: ActionId, action: Action) {
+        let hex = self.tabs.get(self.active).is_some_and(|t| t.is_hex());
+        match id {
+            ActionId::ViewText if !hex => {}
+            ActionId::ViewHex if hex => {}
+            _ => self.apply(action),
         }
     }
 
@@ -2644,6 +2699,7 @@ impl App {
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
+            Action::Palette => self.open_palette(),
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
             Action::Settings => self.open_settings(),
@@ -2742,6 +2798,7 @@ impl App {
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
+                    || self.palette_dialog.is_some()
                     || self.tools_editor.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.show_help
@@ -2938,6 +2995,14 @@ impl App {
                     }
                 }
             }
+            // A click runs the palette entry.
+            Target::ListItem(i) if self.palette_dialog.is_some() => {
+                if let Some(p) = self.palette_dialog.take() {
+                    if let Some(e) = p.entries.get(i) {
+                        self.run_palette(e.id, e.action);
+                    }
+                }
+            }
             // A click runs the tool.
             Target::ListItem(i) if self.tool_menu.is_some() => {
                 self.tool_menu = None;
@@ -3002,6 +3067,15 @@ impl App {
                         self.tools_editor = None;
                     } else if d.submit_form() {
                         self.store_tools();
+                    }
+                } else if self.palette_dialog.is_some() {
+                    // OK is Enter.
+                    let enter = crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Enter,
+                        KeyModifiers::NONE,
+                    );
+                    if !self.on_palette_key(enter) {
+                        self.palette_dialog = None;
                     }
                 } else if let Some(m) = self.tool_menu.take() {
                     if m.count > 0 {
@@ -3076,6 +3150,7 @@ impl App {
                 // The global filter's edits are kept, as the GUI's bar keeps them.
                 self.close_global();
                 self.tool_menu = None;
+                self.palette_dialog = None;
                 self.prompt = None;
                 self.rules = None;
                 self.presets = None;
@@ -3378,6 +3453,9 @@ impl App {
         }
         if self.tool_menu.is_some() {
             self.draw_tool_menu(frame, main_area);
+        }
+        if self.palette_dialog.is_some() {
+            self.draw_palette(frame, main_area);
         }
         if self.tools_editor.is_some() {
             self.draw_tools_editor(frame, main_area);
@@ -3984,6 +4062,59 @@ impl App {
             ]));
         }
         frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// The command palette: the query, then the matching actions with their keys; a
+    /// number goes to that line.
+    fn draw_palette(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(p) = self.palette_dialog.as_ref() else {
+            return;
+        };
+        let shown = p.shown();
+        let goto = palette::is_goto(p.field.text());
+        let height = (shown.len().max(1) as u16 + 5).min(area.height).min(22);
+        let inner = self.dialog(frame, area, (64, height), "Commands", true);
+        let Some(p) = self.palette_dialog.as_ref() else {
+            return;
+        };
+        let (text, x) = p.field.view(inner.width.saturating_sub(2) as usize);
+        let mut out = vec![Line::raw(format!(": {}", view::sanitize(&text)))];
+        out.push(Line::styled(
+            if goto {
+                "Enter goes to this line (N +N -N) or time (14:02)"
+            } else {
+                "Type to filter, Enter runs, a number goes to that line"
+            },
+            dim,
+        ));
+        if !goto && shown.is_empty() {
+            out.push(Line::styled("  (no command matches)", dim));
+        }
+        let room = inner.height.saturating_sub(2) as usize;
+        let top = p.selected.saturating_sub(room.saturating_sub(1));
+        let width = inner.width as usize;
+        let mut items = Vec::new();
+        for (row, &i) in shown.iter().enumerate().skip(top).take(room) {
+            let e = &p.entries[i];
+            let style = if row == p.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let name_room = width.saturating_sub(e.key.len() + 3);
+            let name: String = e.name.chars().take(name_room).collect();
+            let gap = width.saturating_sub(name.chars().count() + e.key.len() + 2);
+            out.push(Line::from(vec![
+                Span::styled(format!(" {name}{}", " ".repeat(gap)), style),
+                Span::styled(format!("{} ", e.key), style.patch(dim)),
+            ]));
+            let y = inner.y + 2 + (row - top) as u16;
+            items.push((Rect::new(inner.x, y, inner.width, 1), i));
+        }
+        self.hits.list_items.extend(items);
+        frame.render_widget(Paragraph::new(out), inner);
+        frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
     }
 
     /// The external tools menu: number, name and command of each tool, its shortcut
@@ -5065,7 +5196,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         "Ctrl+G  :",
-        "go to a line (N +N -N) or a time (14:02)",
+        "go to line or time; : all commands",
         Some(Action::GoTo),
     ),
     (
@@ -5876,6 +6007,41 @@ mod tests {
         assert!(app.message.as_deref().unwrap().contains("hidden"));
         go(&mut app, "nonsense");
         assert!(app.message.as_deref().unwrap().contains("Cannot go to"));
+    }
+
+    #[test]
+    fn the_palette_goes_to_a_line_and_runs_commands() {
+        use crossterm::event::KeyCode;
+        let body = numbered(1500);
+        let (mut app, _dir) = app_with(&[("n.log", body.as_str())], false);
+        render(&mut app, 80, 20);
+        // `:`, a number, Enter: line 1200.
+        press(&mut app, KeyCode::Char(':'));
+        assert!(app.palette_dialog.is_some());
+        for c in "1200".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        let screen = render(&mut app, 80, 20);
+        assert!(screen.iter().any(|l| l.contains(": 1200")), "{screen:#?}");
+        press(&mut app, KeyCode::Enter);
+        app.tick();
+        assert!(app.palette_dialog.is_none());
+        assert_eq!(app.tabs[0].cursor_line(), Some(1199));
+        // A command by name: the HEX view, which the text view entry leaves alone.
+        press(&mut app, KeyCode::Char(':'));
+        app.on_paste("hex");
+        let screen = render(&mut app, 80, 20);
+        assert!(screen.iter().any(|l| l.contains("HEX")), "{screen:#?}");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.tabs[0].is_hex());
+        app.run_palette(ActionId::ViewHex, Action::ToggleHex);
+        assert!(app.tabs[0].is_hex(), "already in HEX");
+        app.run_palette(ActionId::ViewText, Action::ToggleHex);
+        assert!(!app.tabs[0].is_hex());
+        // Esc closes without running anything.
+        press(&mut app, KeyCode::Char(':'));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.palette_dialog.is_none());
     }
 
     fn go_to(app: &mut App, text: &str) {
