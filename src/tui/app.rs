@@ -1733,8 +1733,12 @@ impl App {
         self.palette.theme = config.theme;
         self.palette.level_colors = config.level_colors;
         self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
+        // The line-number and time delta columns are defaults for new streams: each open
+        // stream keeps its own, as with the GUI's per-stream switches.
         for tab in &mut self.tabs {
+            let columns = (tab.engine.show_line_numbers, tab.engine.show_time_delta);
             crate::workspace::apply_settings(&mut tab.engine, config);
+            (tab.engine.show_line_numbers, tab.engine.show_time_delta) = columns;
         }
         self.message = Some("Settings saved".into());
         self.save_config();
@@ -3340,6 +3344,17 @@ impl App {
             }
             Action::ToggleContext => toggle_context(tab, &mut self.message),
             Action::ToggleHex => tab.toggle_hex(),
+            Action::ToggleLineNumbers => {
+                tab.engine.show_line_numbers = !tab.engine.show_line_numbers;
+                self.message = Some(
+                    if tab.engine.show_line_numbers {
+                        "Line numbers on"
+                    } else {
+                        "Line numbers off"
+                    }
+                    .into(),
+                );
+            }
             Action::CycleAnsi => {
                 let next = match tab.engine.ansi_mode {
                     AnsiMode::Auto => AnsiMode::Render,
@@ -5246,8 +5261,8 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::CycleTheme),
     ),
     (
-        "a",
-        "ANSI colours: auto, render, strip, raw",
+        "a  #",
+        "ANSI: auto/render/strip/raw; # numbers",
         Some(Action::CycleAnsi),
     ),
     (
@@ -6816,14 +6831,15 @@ mod tests {
             "{screen:#?}"
         );
 
-        // Theme: one to the right; Line numbers: off; Poll interval: out of range.
+        // Theme: one to the right; line numbers in new streams: off; Poll interval: out
+        // of range.
         let focus = |app: &mut App, label: &str| {
             let f = app.settings_form.as_mut().unwrap();
             f.focus = f.fields.iter().position(|x| x.label == label).unwrap();
         };
         focus(&mut app, "Theme");
         press(&mut app, KeyCode::Right);
-        focus(&mut app, "Line numbers");
+        focus(&mut app, "Line numbers in new streams");
         press(&mut app, KeyCode::Char(' '));
         focus(&mut app, "Poll interval (ms)");
         app.on_key(crossterm::event::KeyEvent::new(
@@ -6841,11 +6857,23 @@ mod tests {
         assert!(app.settings_form.is_none());
         assert_eq!(app.palette.theme, CyberTheme::Matrix, "applied at once");
         assert_eq!(app.idle_poll, Duration::from_millis(700));
-        assert!(!app.tabs[0].engine.show_line_numbers);
+        assert!(
+            app.tabs[0].engine.show_line_numbers,
+            "the open stream keeps its own"
+        );
         let saved = crate::tui::workspace::Settings::read(&ini).config;
         assert_eq!(saved.theme, CyberTheme::Matrix);
         assert_eq!(saved.poll_interval_ms, 700);
         assert!(!saved.show_line_numbers);
+        // A stream opened now takes the default.
+        let b = dir.path().join("b.log");
+        std::fs::write(&b, LOG).unwrap();
+        app.open_file(&b);
+        assert!(!app.tabs[1].engine.show_line_numbers);
+        // `#` switches the focused stream's own.
+        app.focus_tab(0);
+        press(&mut app, KeyCode::Char('#'));
+        assert_eq!(app.message.as_deref(), Some("Line numbers off"));
         let screen = render(&mut app, 90, 20);
         assert!(
             screen.iter().any(|l| l.starts_with("\u{2551} 2026-09-28")),

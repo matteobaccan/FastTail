@@ -168,17 +168,12 @@ impl SettingsForm {
                 "Follow the system language",
                 check(c.language_auto),
             ),
-            Field::new(Key::LineNumbers, "Line numbers", check(c.show_line_numbers)).starts("View"),
             Field::new(
                 Key::LevelColors,
                 "Colour rows by level",
                 check(c.level_colors),
-            ),
-            Field::new(
-                Key::TimeDelta,
-                "Time delta column",
-                check(c.show_time_delta),
-            ),
+            )
+            .starts("View"),
             Field::new(
                 Key::TimeDeltaGap,
                 "Time delta gap (ms)",
@@ -216,11 +211,21 @@ impl SettingsForm {
                 number(c.stdin_spool_max_mb, &model::STDIN_SPOOL_MAX_MB),
             ),
             Field::new(
+                Key::LineNumbers,
+                "Line numbers in new streams",
+                check(c.show_line_numbers),
+            )
+            .starts("New streams and bookmarks - each stream keeps its own"),
+            Field::new(
+                Key::TimeDelta,
+                "Time delta column in new streams",
+                check(c.show_time_delta),
+            ),
+            Field::new(
                 Key::AutoBookmarkMax,
                 "Automatic bookmarks per file",
                 Widget::Number(auto_max),
-            )
-            .starts("New streams"),
+            ),
             Field::new(Key::Sound, "Sound alerts", check(c.sound_enabled)).starts("Sound"),
             Field::new(
                 Key::Tools,

@@ -222,7 +222,8 @@ the same, and docks it back). A floating window lies over the others: drag its t
 move it and its bottom-right corner to resize it; every window can float, leaving the
 dock empty. `[x]` at the top right of a window, or `Ctrl+W`, closes its stream; after the
 last one (or when started with nothing to open) the workspace is empty. `o` opens a file
-through a folder browser, `,` the Settings, `Shift+T` the next theme. `r` edits the highlight rules (order, colours, options), `p` applies, saves and renames
+through a folder browser, `,` the Settings, `Shift+T` the next theme, `#` the line numbers of the stream (Settings
+sets them, and the time delta column, for new streams). `r` edits the highlight rules (order, colours, options), `p` applies, saves and renames
 filter presets, `F` edits the global filter and `f` switches it on or off, `!` runs an
 external tool on the cursor row (a tool's shortcut and rule-bound runs work too; Settings
 > External tools, or `e` in that menu, edits them), `Ctrl+L` locks with the PIN (set in

@@ -39,11 +39,11 @@
 
 ## 4. Terminal interface: settings, editors, tools, lock
 
-- [ ] 4.1 Settings dialog (`,`):
+- [x] 4.1 Settings dialog (`,`):
   - [x] Interface, appearance, performance and refresh, `auto_bookmark_max`, `size_unit`, sound, validation from `settings_model`, `[ OK ]` applies and saves (`src/tui/settings.rs`)
   - [x] PIN lock: set (twice) / change / remove, `lock_enabled` (arms the idle lock, needs a PIN), idle minutes, deterrent statement
   - [x] External tools page (4.5)
-  - [ ] New-stream defaults (the per-stream defaults the GUI applies to new streams)
+  - [x] New-stream defaults: line numbers and the time delta column in new streams, as the GUI's Settings; open streams keep their own, `#` switches the focused stream's line numbers (the GUI's `# 123`)
 - [ ] 4.2 Highlight-rule editor (`r`):
   - [x] All rule fields, add / edit / delete / reorder, colour swatches and `#RRGGBB` with depth preview, bound tool; each change applied to every stream and saved (`src/tui/rules.rs`)
   - [ ] Quick labels listed and removable (the terminal has no quick labels yet: `Ctrl+Shift+1..9` on the search text first)
