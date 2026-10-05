@@ -116,7 +116,8 @@ No environment variable: the command line covers scripts.
   console, as for `--version`) pointing to `fasttail-tui.exe`: handing a pipe to a
   child in a new console is not worth it when the direct executable covers the case.
 - `fasttail-tui.exe --gui` looks for `fasttail.exe` next to itself and starts it
-  detached (`DETACHED_PROCESS`), arguments minus `--gui`, and exits 0. If it is missing
+  detached (`DETACHED_PROCESS`), with its arguments, `--gui` included (without it,
+  `interface=tui` would send the window straight back to the terminal), and exits 0. If it is missing
   it prints `fasttail.exe was not found in <dir>` to stderr and exits 1: it was started
   only to hand off, and a terminal user reads stderr.
 - From a terminal the user runs `fasttail-tui.exe`. `fasttail.exe --tui` typed in cmd

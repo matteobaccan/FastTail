@@ -109,13 +109,29 @@ fn parse_args(args: impl IntoIterator<Item = String>, cwd: &Path) -> Result<Opti
     Ok(opts)
 }
 
-/// What `--gui` answers in the terminal executable.
-fn gui_handoff_message() -> &'static str {
-    if cfg!(feature = "gui") {
-        // The hand-off itself comes with tasks 5.3 and 5.4 of openspec/changes/tui-interface.
-        "--gui: run fasttail for the graphical interface"
-    } else {
-        "the graphical interface is not in this build; use the fasttail archive"
+/// `--gui`: starts `fasttail` from this executable's directory with the same arguments
+/// (`--gui` included, see `crate::handoff`) and returns the exit code: 0 once started, 1
+/// when it is missing or does not start, 2 in a build without the graphical interface.
+fn hand_off_to_gui(args: &[String]) -> i32 {
+    use crate::handoff;
+    if !cfg!(feature = "gui") {
+        eprintln!("fasttail-tui: {}", handoff::terminal_only_message());
+        return 2;
+    }
+    let name = handoff::gui_exe_name();
+    let exe = handoff::sibling_exe(&name).unwrap_or_else(|| PathBuf::from(&name));
+    if !exe.is_file() {
+        let dir = exe.parent().unwrap_or(Path::new("."));
+        eprintln!("fasttail-tui: {name} was not found in {}", dir.display());
+        return 1;
+    }
+    let args = handoff::forwarded_args(args, handoff::HANDOFF_FLAG, None);
+    match handoff::start_detached(&exe, &args) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("fasttail-tui: cannot start {}: {e}", exe.display());
+            1
+        }
     }
 }
 
@@ -156,7 +172,7 @@ fn wait_for_key() {
 
 fn run_args(args: Vec<String>) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let opts = match parse_args(args, &cwd) {
+    let opts = match parse_args(args.iter().cloned(), &cwd) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("fasttail-tui: {e}\n\n{TUI_USAGE}");
@@ -182,8 +198,7 @@ fn run_args(args: Vec<String>) -> i32 {
         return crate::print_mode::run(cli);
     }
     if cli.gui {
-        eprintln!("fasttail-tui: {}", gui_handoff_message());
-        return 2;
+        return hand_off_to_gui(&args);
     }
     let term = TermInfo::from_env();
     if let Some(file) = &opts.bench {
