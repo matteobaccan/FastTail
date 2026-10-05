@@ -16,6 +16,7 @@ use crate::log_level::LogLevel;
 use crate::scan_job::FilterSpec;
 use crate::spool::SpoolFile;
 use crate::tail_engine::{time_window_contains, TailEngine};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -127,6 +128,91 @@ impl FrozenFilter {
     }
 }
 
+impl FrozenFilter {
+    /// The `frozen.*` keys a workspace or session section stores the filter under
+    /// (`frozen.include.1=ERROR`, `frozen.level=WARN`, ...), as key and value pairs.
+    pub fn to_ini_pairs(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (key, terms) in [("include", &self.include), ("exclude", &self.exclude)] {
+            for (n, term) in terms.iter().enumerate() {
+                out.push((
+                    format!("frozen.{key}.{}", n + 1),
+                    crate::filter_preset::ini_value(term),
+                ));
+            }
+        }
+        if self.case_sensitive {
+            out.push(("frozen.case".into(), "true".into()));
+        }
+        if self.is_regex {
+            out.push(("frozen.regex".into(), "true".into()));
+        }
+        if self.min_level != LogLevel::Unknown {
+            out.push(("frozen.level".into(), self.min_level.name().into()));
+        }
+        out.push((
+            "frozen.unknown_levels".into(),
+            self.show_unknown_levels.to_string(),
+        ));
+        if let Some(ms) = self.time_from {
+            out.push(("frozen.from".into(), ms.to_string()));
+        }
+        if let Some(ms) = self.time_to {
+            out.push(("frozen.to".into(), ms.to_string()));
+        }
+        out
+    }
+
+    /// The filter `to_ini_pairs` wrote, read through `get`; `None` when the keys do not
+    /// describe an active filter.
+    pub fn from_ini(get: impl Fn(&str) -> Option<String>) -> Option<Self> {
+        let terms = |key: &str| -> Vec<String> {
+            (1..=crate::scan_job::MAX_FILTER_TERMS)
+                .filter_map(|n| get(&format!("frozen.{key}.{n}")))
+                .filter(|t| !t.is_empty())
+                .collect()
+        };
+        let flag = |key: &str| get(key).is_some_and(|v| v.trim() == "true");
+        let min_level = get("frozen.level")
+            .and_then(|name| {
+                (1..=6)
+                    .map(LogLevel::from_u8)
+                    .find(|l| l.name().eq_ignore_ascii_case(name.trim()))
+            })
+            .unwrap_or(LogLevel::Unknown);
+        let millis = |key: &str| get(key).and_then(|v| v.trim().parse::<i64>().ok());
+        let filter = Self {
+            include: terms("include"),
+            exclude: terms("exclude"),
+            case_sensitive: flag("frozen.case"),
+            is_regex: flag("frozen.regex"),
+            min_level,
+            show_unknown_levels: get("frozen.unknown_levels").is_none_or(|v| v.trim() != "false"),
+            time_from: millis("frozen.from"),
+            time_to: millis("frozen.to"),
+        };
+        filter.is_active().then_some(filter)
+    }
+}
+
+/// Prefix of the name a derived stream is saved under: `filter:<n>:<source path>`, with
+/// `n` telling apart the derived streams of one source. It is never a file, so an older
+/// build skips it.
+pub const IDENTITY_PREFIX: &str = "filter:";
+
+/// The saved name of derived stream `n` of `source`.
+pub fn identity(n: usize, source: &Path) -> PathBuf {
+    PathBuf::from(format!("{IDENTITY_PREFIX}{n}:{}", source.to_string_lossy()))
+}
+
+/// The number and source path of a saved name made by `identity`.
+pub fn parse_identity(path: &Path) -> Option<(usize, PathBuf)> {
+    let rest = path.to_str()?.strip_prefix(IDENTITY_PREFIX)?;
+    let (n, source) = rest.split_once(':')?;
+    let n = n.parse().ok()?;
+    (!source.is_empty()).then(|| (n, PathBuf::from(source)))
+}
+
 fn nonempty(terms: &[String]) -> Vec<String> {
     terms
         .iter()
@@ -165,6 +251,11 @@ pub enum Stopped {
 pub struct DerivedFeeder {
     /// The source stream (`TailEngine::path`) and its tab title when the tab was made.
     pub source: PathBuf,
+    /// Tells apart the derived streams of one source in their saved name (`identity`).
+    pub n: usize,
+    /// Restored bookmarks and notes by source line, waiting for the fill to reach them.
+    pub pending_bookmarks: Vec<usize>,
+    pub pending_notes: BTreeMap<usize, String>,
     pub source_name: String,
     pub filter: FrozenFilter,
     spec: FilterSpec,
@@ -196,6 +287,7 @@ impl DerivedFeeder {
     pub fn create(
         source: &TailEngine,
         source_name: String,
+        n: usize,
         filter: FrozenFilter,
         spool_dir: &Path,
         max_bytes: u64,
@@ -206,6 +298,9 @@ impl DerivedFeeder {
         let (spool, out) = SpoolFile::create(spool_dir, &name)?;
         Ok(Self {
             source: source.path.clone(),
+            n,
+            pending_bookmarks: Vec::new(),
+            pending_notes: BTreeMap::new(),
             source_name,
             spec: filter.spec(),
             filter,
@@ -222,6 +317,37 @@ impl DerivedFeeder {
             seen_at: Instant::now(),
             partial: None,
         })
+    }
+
+    /// The name the stream is saved under in the workspace and sessions.
+    pub fn identity(&self) -> PathBuf {
+        identity(self.n, &self.source)
+    }
+
+    /// The restored bookmarks the derived stream can take now: their source line was
+    /// read, and the derived line holding it is among the `derived_total` lines the
+    /// derived engine has. A source line that was read without passing the filter (the
+    /// source changed since) is dropped. Returns derived lines with their notes.
+    pub fn take_reached_bookmarks(&mut self, derived_total: usize) -> Vec<(usize, Option<String>)> {
+        let mut out = Vec::new();
+        let (map, next, notes) = (&self.map, self.next, &mut self.pending_notes);
+        self.pending_bookmarks.retain(|&line| {
+            if line >= next {
+                return true;
+            }
+            match map.binary_search(&line) {
+                Ok(at) if at >= derived_total => true,
+                Ok(at) => {
+                    out.push((at, notes.remove(&line)));
+                    false
+                }
+                Err(_) => {
+                    notes.remove(&line);
+                    false
+                }
+            }
+        });
+        out
     }
 
     /// The spool the derived engine reads.
@@ -381,6 +507,15 @@ mod tests {
     }
 
     #[test]
+    fn the_saved_name_holds_the_number_and_the_source() {
+        let source = Path::new(r"C:\logs:b.log");
+        let name = identity(3, source);
+        assert_eq!(parse_identity(&name), Some((3, source.to_path_buf())));
+        assert_eq!(parse_identity(Path::new("C:/logs/app.log")), None);
+        assert_eq!(parse_identity(Path::new("filter:x:C:/a.log")), None);
+    }
+
+    #[test]
     fn the_spool_holds_the_lines_the_frozen_filter_passes_with_their_traces() {
         let dir = tempfile::tempdir().unwrap();
         let mut source = open(
@@ -401,6 +536,7 @@ mod tests {
         let mut feeder = DerivedFeeder::create(
             &source,
             "app.log".into(),
+            1,
             filter,
             &dir.path().join("spool"),
             1 << 20,
@@ -431,6 +567,7 @@ mod tests {
         let mut feeder = DerivedFeeder::create(
             &source,
             "app.log".into(),
+            1,
             filter,
             &dir.path().join("spool"),
             1 << 20,
@@ -475,6 +612,7 @@ mod tests {
         let mut feeder = DerivedFeeder::create(
             &source,
             "app.log".into(),
+            1,
             filter,
             &dir.path().join("spool"),
             1 << 20,
@@ -505,6 +643,7 @@ mod tests {
         let feeder = DerivedFeeder::create(
             &source,
             "logs.zip › app/x.log".into(),
+            1,
             filter,
             &dir.path().join("spool"),
             1 << 20,
@@ -531,6 +670,7 @@ mod tests {
         let mut feeder = DerivedFeeder::create(
             &source,
             "app.log".into(),
+            1,
             filter,
             &dir.path().join("spool"),
             10,

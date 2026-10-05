@@ -16,7 +16,7 @@ While a stream in Text view has an active filter of its own (include or exclude 
 - **THEN** the source stream is focused, showing line 48,211 in context.
 
 ### Requirement: Derived Stream Persistence
-A derived stream SHALL be saved in the workspace and in session files as its source path, its copied filter and its own view settings, SHALL NOT be added to the recent files, and SHALL be rebuilt from the source file when restored. Its bookmarks SHALL be stored by source line number.
+A derived stream SHALL be saved in the workspace and in session files under the name `filter:<n>:<source path>` (with the source's relative path in a session file), with its copied filter (`frozen.*` keys) and its own view settings, SHALL NOT be added to the recent files, and SHALL be rebuilt from the source file when restored. Its bookmarks SHALL be stored by source line number.
 
 #### Scenario: Restart
 - **WHEN** FastTail is closed with a derived `ERROR` tab of `app.log` bookmarked at source line 900 and started again

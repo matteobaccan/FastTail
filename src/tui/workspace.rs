@@ -150,6 +150,11 @@ pub fn workspace_plan(settings: &Settings) -> Plan {
         ..Plan::default()
     };
     for entry in Session::from_config(&settings.config).streams {
+        // The GUI's derived streams ("Open filter as new tab") are not opened here; the
+        // saved workspace keeps them (see `WorkspaceState::keep_derived`).
+        if crate::filter_tab::parse_identity(&entry.path).is_some() {
+            continue;
+        }
         if exists(&entry.path) {
             plan.paths.push(entry.path);
         } else {
@@ -165,7 +170,13 @@ pub fn session_plan(settings: &mut Settings, file: &Path) -> Result<Plan, String
         Session::load_from(file).map_err(|e| format!("cannot load {}: {e}", file.display()))?;
     settings.adopt_session(&loaded.session.streams);
     Ok(Plan {
-        paths: loaded.session.streams.into_iter().map(|s| s.path).collect(),
+        paths: loaded
+            .session
+            .streams
+            .into_iter()
+            .map(|s| s.path)
+            .filter(|p| crate::filter_tab::parse_identity(p).is_none())
+            .collect(),
         missing: loaded.missing,
         dock_layout: loaded.session.dock_layout,
     })

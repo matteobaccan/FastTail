@@ -36,6 +36,7 @@ fn entry(path: PathBuf) -> StreamEntry {
         fields_widths: [("http.status".to_string(), 6), ("ts".to_string(), 24)]
             .into_iter()
             .collect(),
+        frozen: None,
     }
 }
 
@@ -495,4 +496,57 @@ fn session_i18n_keys_exist_in_every_language() {
         }
         assert!(t(lang, "session_unsaved_body").contains("{name}"));
     }
+}
+
+#[test]
+fn a_derived_stream_round_trips_with_its_frozen_filter_and_follows_a_moved_bundle() {
+    use fasttail::filter_tab::{identity, FrozenFilter};
+    use fasttail::log_level::LogLevel;
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = dir.path().join("bundle");
+    std::fs::create_dir(&bundle).unwrap();
+    let log = bundle.join("app.log");
+    std::fs::write(
+        &log, "a
+",
+    )
+    .unwrap();
+    let frozen = FrozenFilter {
+        include: vec!["ERROR".into(), " padded ".into()],
+        exclude: vec!["health".into()],
+        case_sensitive: true,
+        is_regex: false,
+        min_level: LogLevel::Warn,
+        show_unknown_levels: false,
+        time_from: Some(1_700_000_000_000),
+        time_to: None,
+    };
+    let mut derived = StreamEntry::new(identity(2, &log));
+    derived.frozen = Some(frozen.clone());
+    derived.include_filter = "timeout".into();
+    derived.bookmarks = vec![10];
+    let session = Session {
+        streams: vec![StreamEntry::new(log.clone()), derived.clone()],
+        dock_layout: None,
+    };
+    let file = bundle.join(format!("incident{SESSION_SUFFIX}"));
+    session.save_to(&file).unwrap();
+    let loaded = Session::load_from(&file).unwrap();
+    assert!(loaded.missing.is_empty());
+    assert_eq!(loaded.session.streams[1], derived);
+
+    // The bundle moves: the source is found by its relative path.
+    let moved = dir.path().join("moved");
+    std::fs::rename(&bundle, &moved).unwrap();
+    let loaded = Session::load_from(&moved.join(format!("incident{SESSION_SUFFIX}"))).unwrap();
+    assert!(loaded.relocated);
+    let entry = &loaded.session.streams[1];
+    assert_eq!(entry.path, identity(2, &moved.join("app.log")));
+    assert_eq!(entry.frozen, Some(frozen));
+
+    // Without its source the derived stream is reported missing.
+    std::fs::remove_file(moved.join("app.log")).unwrap();
+    let loaded = Session::load_from(&moved.join(format!("incident{SESSION_SUFFIX}"))).unwrap();
+    assert!(loaded.session.streams.is_empty());
+    assert_eq!(loaded.missing.len(), 2);
 }

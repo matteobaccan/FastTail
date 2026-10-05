@@ -1284,8 +1284,10 @@ impl App {
             crate::workspace::save_changes(&mut tab.engine, &mut settings.config, false);
         }
         let order: Vec<PathBuf> = self.tabs.iter().map(|t| t.engine.path.clone()).collect();
-        crate::workspace::snapshot(&order, self.tabs.iter().map(|t| &t.engine))
-            .write_into(&mut settings.config);
+        let mut state = crate::workspace::snapshot(&order, self.tabs.iter().map(|t| &t.engine));
+        // The derived streams of the window ("Open filter as new tab") stay for it.
+        state.keep_derived(&settings.config.open_files);
+        state.write_into(&mut settings.config);
         match settings.save() {
             Ok(_) => self.save_error = None,
             Err(e) => {

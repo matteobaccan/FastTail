@@ -13,8 +13,8 @@
 
 ## 3. Persistence
 
-- [ ] 3.1 `filter:` identity; workspace and session entries (source path, frozen filter, own filters and options); excluded from recent files
-- [ ] 3.2 Rebuild on restore; tests for the round trip
+- [x] 3.1 `filter:` identity; workspace and session entries (source path, frozen filter, own filters and options); excluded from recent files
+- [x] 3.2 Rebuild on restore; tests for the round trip
 
 ## 4. Texts and documentation
 
@@ -25,4 +25,4 @@
 
 - [x] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
 - [x] 5.2 Local preview exe for the maintainer before the 0.13.0 release
-- [ ] 5.3 After the release, archive the change so `filters-and-highlighting` gains the new requirements
+- [x] 5.3 After the release, archive the change so `filters-and-highlighting` gains the new requirements

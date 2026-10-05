@@ -14,6 +14,7 @@ use crate::config::FastTailConfig;
 use crate::paths::paths_equal;
 use crate::session::StreamEntry;
 use crate::tail_engine::{FileEncoding, TailEngine, WakeFn};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// What opening a path gave.
@@ -154,12 +155,20 @@ pub fn apply_settings(engine: &mut TailEngine, config: &FastTailConfig) {
 pub fn restore_stream(engine: &mut TailEngine, config: &FastTailConfig, path: &Path) {
     engine.wrap_lines = config.wrap_for(path);
     restore_bookmarks(engine, config, path);
-    apply_stream_state(engine, config);
+    apply_stream_state(engine, config, path);
 }
 
 /// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
 /// its bookmarks wait until the index covers them (see `TailEngine::poll_compressed`).
 fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
+    // A derived stream saves them by source line: they wait for its fill to reach them.
+    if let Some(feeder) = engine.derived.as_mut() {
+        if let Some((_, lines, notes)) = cfg.saved_bookmarks(path) {
+            feeder.pending_bookmarks = lines.clone();
+            feeder.pending_notes = notes.clone();
+        }
+        return;
+    }
     if let Some(c) = engine.compressed.as_mut() {
         if let Some((_, lines, notes)) = cfg.saved_bookmarks(path) {
             c.pending_bookmarks = lines.clone();
@@ -170,10 +179,10 @@ fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path)
     }
 }
 
-/// Applies the persisted filters, search query, encoding and ANSI mode of the engine's
-/// path (wrap and bookmarks are applied by the caller from their own sections).
-fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
-    let Some(entry) = cfg.stream_state_for(&engine.path).cloned() else {
+/// Applies the persisted filters, search query, encoding and ANSI mode saved for `path`
+/// (wrap and bookmarks are applied by the caller from their own sections).
+fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
+    let Some(entry) = cfg.stream_state_for(path).cloned() else {
         return;
     };
     engine.timeline_open = entry.timeline;
@@ -251,17 +260,51 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig) {
     }
 }
 
-/// Whether a stream is kept in the workspace and in sessions: not standard input, not a
-/// derived stream of "Open filter as new tab" (their spools go with the process).
+/// Whether a stream is kept in the workspace and in sessions: not standard input (its
+/// spool goes with the process). A derived stream of "Open filter as new tab" is kept
+/// under its `filter:` name and rebuilt from its source (see `persisted_path`).
 pub fn is_persisted(engine: &TailEngine) -> bool {
-    !engine.is_stdin() && engine.derived.is_none()
+    !engine.is_stdin()
+}
+
+/// The path a stream is saved under: its own, or for a derived stream the
+/// `filter:<n>:<source>` name, since its spool goes with the process.
+pub fn persisted_path(engine: &TailEngine) -> PathBuf {
+    match &engine.derived {
+        Some(feeder) => feeder.identity(),
+        None => engine.path.clone(),
+    }
+}
+
+/// The bookmarks and notes of `engine` as they are saved. A derived stream's are
+/// stored by source line, so they find their lines again when it is rebuilt; the ones
+/// still waiting for the fill are kept.
+fn saved_bookmarks(engine: &TailEngine) -> (Vec<usize>, BTreeMap<usize, String>) {
+    let Some(feeder) = &engine.derived else {
+        return (
+            engine.bookmarks.iter().copied().collect(),
+            engine.bookmark_notes.clone(),
+        );
+    };
+    let mut lines = feeder.pending_bookmarks.clone();
+    let mut notes = feeder.pending_notes.clone();
+    for &line in &engine.bookmarks {
+        if let Some(source) = feeder.source_line(line) {
+            lines.push(source);
+            if let Some(note) = engine.bookmark_notes.get(&line) {
+                notes.insert(source, note.clone());
+            }
+        }
+    }
+    lines.sort_unstable();
+    lines.dedup();
+    (lines, notes)
 }
 
 /// The session entry describing `engine` as it is now. The line-number and time delta
 /// switches are always recorded, so a saved stream never depends on the defaults.
 pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
-    let mut bookmarks: Vec<usize> = engine.bookmarks.iter().copied().collect();
-    let mut bookmark_notes = engine.bookmark_notes.clone();
+    let (mut bookmarks, mut bookmark_notes) = saved_bookmarks(engine);
     if let Some(c) = engine.compressed.as_ref() {
         // A restored compressed stream still waiting for its index to reach them.
         if bookmarks.is_empty() {
@@ -270,7 +313,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         }
     }
     StreamEntry {
-        path: engine.path.clone(),
+        path: persisted_path(engine),
         include_filter: engine.include_filter().to_string(),
         exclude_filter: engine.exclude_filter().to_string(),
         include_extra: extra_terms(engine.include_terms()),
@@ -303,6 +346,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         fields_view: engine.fields_view(),
         fields_columns: engine.chosen_field_columns().to_vec(),
         fields_widths: engine.field_widths().clone(),
+        frozen: engine.derived.as_ref().map(|f| f.filter.clone()),
     }
 }
 
@@ -330,12 +374,23 @@ pub fn snapshot<'a>(
     order: &[PathBuf],
     engines: impl IntoIterator<Item = &'a TailEngine>,
 ) -> WorkspaceState {
+    let engines: Vec<&TailEngine> = engines.into_iter().collect();
     let mut open_files: Vec<PathBuf> = Vec::new();
     for path in order {
-        let skipped =
-            crate::stdin_source::is_stdin_path(path) || crate::filter_tab::is_derived_path(path);
-        if !skipped && !open_files.iter().any(|p| paths_equal(p, path)) {
-            open_files.push(path.clone());
+        if crate::stdin_source::is_stdin_path(path) {
+            continue;
+        }
+        // A derived stream's tab names its spool: it is saved under its `filter:` name.
+        let path = match engines
+            .iter()
+            .find(|e| e.derived.is_some() && e.path == *path)
+        {
+            Some(engine) => persisted_path(engine),
+            None if crate::filter_tab::is_derived_path(path) => continue,
+            None => path.clone(),
+        };
+        if !open_files.iter().any(|p| paths_equal(p, &path)) {
+            open_files.push(path);
         }
     }
     let streams = engines
@@ -350,6 +405,21 @@ pub fn snapshot<'a>(
 }
 
 impl WorkspaceState {
+    /// Keeps the derived streams of `previous` (the open files as saved before) whose
+    /// source is still open: a front end without derived streams (the terminal
+    /// interface) leaves them for the next one that has them.
+    pub fn keep_derived(&mut self, previous: &[PathBuf]) {
+        for path in previous {
+            let Some((_, source)) = crate::filter_tab::parse_identity(path) else {
+                continue;
+            };
+            let source_open = self.open_files.iter().any(|p| paths_equal(p, &source));
+            if source_open && !self.open_files.iter().any(|p| p == path) {
+                self.open_files.push(path.clone());
+            }
+        }
+    }
+
     /// Writes the open files and the stream states into `config`, dropping the state of
     /// files no longer open. Wrap and bookmarks live in their own sections, written as
     /// they change (see `save_changes`), so their most-recent order is kept.
@@ -393,15 +463,16 @@ pub fn save_changes(
         return false;
     }
     let mut changed = false;
+    let path = persisted_path(engine);
     if engine.bookmarks_dirty {
         engine.bookmarks_dirty = false;
-        let lines: Vec<usize> = engine.bookmarks.iter().copied().collect();
-        config.set_bookmarks_with_notes(&engine.path, &lines, &engine.bookmark_notes);
+        let (lines, notes) = saved_bookmarks(engine);
+        config.set_bookmarks_with_notes(&path, &lines, &notes);
         changed = true;
     }
     if engine.wrap_dirty {
         engine.wrap_dirty = false;
-        config.set_wrap(&engine.path, engine.wrap_lines);
+        config.set_wrap(&path, engine.wrap_lines);
         changed = true;
     }
     if engine.ansi_dirty
