@@ -8,7 +8,7 @@
 use crate::ansi::{AnsiColor, AnsiStyle};
 use crate::color::Rgba;
 use crate::log_level::LogLevel;
-use crate::tail_engine::HighlightStyle;
+use crate::tail_engine::{HighlightStyle, SpanStyle};
 use crate::theme::CyberTheme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
@@ -248,6 +248,23 @@ impl Palette {
             style = style.add_modifier(Modifier::ITALIC);
         }
         style
+    }
+
+    /// Style of quick label `n` (1..=9): the theme's label colours, as in the GUI.
+    pub fn label_style(&self, n: u8) -> Style {
+        let (fg, bg) = self.theme.label_style(n);
+        Style::default().fg(self.map(fg)).bg(self.map(bg))
+    }
+
+    /// Style of a painted span of a row: a captures-only rule, a quick label, an ANSI
+    /// run or an automatic token.
+    pub fn span_style(&self, span: &SpanStyle) -> Style {
+        match span {
+            SpanStyle::Rule(rule) => self.rule_style(rule),
+            SpanStyle::Label(n) => self.label_style(*n),
+            SpanStyle::Ansi(a) => self.ansi_style(a),
+            SpanStyle::Token(kind) => Style::default().fg(self.map(self.theme.token_color(*kind))),
+        }
     }
 
     /// Style of an ANSI-coloured run: its colours (the theme's palette for 0..16, as in

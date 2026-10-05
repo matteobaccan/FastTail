@@ -17,7 +17,7 @@ use crate::collapse::CollapseMode;
 use crate::dock_layout::{Dir, Layout as DockLayout, Pane, Tab as DockTab};
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
-use crate::tail_engine::{TailEngine, ViewMode};
+use crate::tail_engine::{QuickLabel, TailEngine, ViewMode};
 use crate::time_range_text::{self, side_readable, Side};
 use crate::tui::browser::{self, FileBrowser, Kind};
 use crate::tui::calendar::{self, Calendar};
@@ -465,6 +465,11 @@ pub struct App {
     last_signature: Signature,
     /// A count typed before a move (`12j`, `3e`).
     count: Option<u32>,
+    /// Quick labels (CTRL + SHIFT + 1..9, or `L` and a digit), in every stream; in
+    /// memory only, as in the GUI.
+    pub quick_labels: Vec<QuickLabel>,
+    /// `L` was pressed: the next digit is a label colour.
+    label_pending: bool,
 }
 
 /// What an empty workspace says.
@@ -538,6 +543,8 @@ impl App {
             drag: None,
             last_signature: Signature::default(),
             count: None,
+            quick_labels: Vec::new(),
+            label_pending: false,
         }
     }
 
@@ -967,6 +974,15 @@ impl App {
             self.run_tool(i);
             return true;
         }
+        // `L` then `1`-`9`: a quick label of that colour; any other key drops the `L`.
+        if self.label_pending && key.kind != crossterm::event::KeyEventKind::Release {
+            self.label_pending = false;
+            self.message = None;
+            if let crossterm::event::KeyCode::Char(c @ '1'..='9') = key.code {
+                self.toggle_label(c as u8 - b'0');
+            }
+            return true;
+        }
         if let Some(n) = self.count_digit(key) {
             self.count = Some(n);
             self.message = Some(format!("Count {n}"));
@@ -1329,6 +1345,38 @@ impl App {
         }
     }
 
+    /// The focused stream's search text as quick label `color`: added, recoloured, or
+    /// removed when it already has that colour (`QuickLabel::toggle`, as in the GUI).
+    fn toggle_label(&mut self, color: u8) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let text = tab.engine.search_query.trim().to_string();
+        if text.is_empty() {
+            self.message = Some("Search for the text to label first (/)".into());
+            return;
+        }
+        if QuickLabel::toggle(&mut self.quick_labels, &text, color) {
+            let on = self
+                .quick_labels
+                .iter()
+                .any(|l| l.text == text && l.color == color);
+            self.message = Some(if on {
+                format!("Label {color}: {text}")
+            } else {
+                format!("Label removed: {text}")
+            });
+            self.sync_labels();
+        }
+    }
+
+    /// Hands the quick labels to every stream.
+    fn sync_labels(&mut self) {
+        for tab in &mut self.tabs {
+            tab.engine.set_quick_labels(&self.quick_labels);
+        }
+    }
+
     /// `:`: the command palette, named in the interface language.
     fn open_palette(&mut self) {
         let lang = self
@@ -1651,10 +1699,9 @@ impl App {
     /// `r`: the highlight-rule editor over the rules of `fasttail.ini`.
     fn open_rules(&mut self) {
         let config = &self.settings_mut().config;
-        self.rules = Some(RulesDialog::new(
-            &config.highlight_rules,
-            &config.external_tools,
-        ));
+        let mut d = RulesDialog::new(&config.highlight_rules, &config.external_tools);
+        d.labels = self.quick_labels.clone();
+        self.rules = Some(d);
     }
 
     fn on_rules_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -1663,6 +1710,10 @@ impl App {
         };
         match d.on_key(key) {
             RulesKey::Changed => self.apply_rules(),
+            RulesKey::Labels => {
+                self.quick_labels = d.labels.clone();
+                self.sync_labels();
+            }
             RulesKey::Close => self.rules = None,
             RulesKey::Moved => {}
             RulesKey::Other => return false,
@@ -1833,6 +1884,7 @@ impl App {
         let stdin = stdin.map(|i| self.tabs.remove(i));
         self.tabs = engines.into_iter().map(Tab::new).collect();
         self.tabs.extend(stdin);
+        self.sync_labels();
         self.active = 0;
         self.restore_dock(plan.dock_layout.as_deref());
         // The session's layout becomes the configuration's, as in the GUI.
@@ -2058,6 +2110,7 @@ impl App {
                 }
                 let place = self.focused_place();
                 let path = engine.path.clone();
+                engine.set_quick_labels(&self.quick_labels);
                 self.tabs.push(Tab::new(engine));
                 // The new stream is a tab of the focused window, as in the GUI.
                 match place {
@@ -2704,6 +2757,11 @@ impl App {
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::Palette => self.open_palette(),
+            Action::Label(n) => self.toggle_label(n),
+            Action::LabelPrefix => {
+                self.label_pending = true;
+                self.message = Some("Label colour: 1-9 (the search text)".into());
+            }
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
             Action::Settings => self.open_settings(),
@@ -2983,8 +3041,17 @@ impl App {
                 if let Some(d) = self.rules.as_mut() {
                     match d.form.as_mut() {
                         Some(f) => f.focus = i.min(f.fields.len().saturating_sub(1)),
-                        None if d.list.selected == i => d.edit_selected(),
-                        None => d.list.selected = i.min(d.list.items.len().saturating_sub(1)),
+                        // The rows after the rules are the quick labels.
+                        None if i >= d.list.items.len() => {
+                            d.on_labels = true;
+                            d.label_sel =
+                                (i - d.list.items.len()).min(d.labels.len().saturating_sub(1));
+                        }
+                        None if d.list.selected == i && !d.on_labels => d.edit_selected(),
+                        None => {
+                            d.on_labels = false;
+                            d.list.selected = i.min(d.list.items.len().saturating_sub(1));
+                        }
                     }
                 }
             }
@@ -4477,7 +4544,13 @@ impl App {
             frame.render_widget(Paragraph::new(out), inner);
             return;
         }
-        let rows = d.list.items.len().max(1) as u16;
+        // The quick labels take a title row and one row each below the rules.
+        let label_rows = if d.labels.is_empty() {
+            0
+        } else {
+            d.labels.len() + 1
+        };
+        let rows = (d.list.items.len().max(1) + label_rows) as u16;
         let height = (rows + 6).min(area.height);
         let inner = self.dialog(
             frame,
@@ -4489,7 +4562,8 @@ impl App {
         let Some(d) = self.rules.as_mut() else {
             return;
         };
-        let list_rows = inner.height.saturating_sub(3) as usize;
+        let label_rows = label_rows.min(inner.height.saturating_sub(4) as usize);
+        let list_rows = (inner.height.saturating_sub(3) as usize).saturating_sub(label_rows);
         if d.list.selected < d.top {
             d.top = d.list.selected;
         } else if list_rows > 0 && d.list.selected >= d.top + list_rows {
@@ -4537,7 +4611,7 @@ impl App {
             } else {
                 format!("  tool: {}", tools.join(", "))
             };
-            let selected = i == d.list.selected;
+            let selected = i == d.list.selected && !d.on_labels;
             let row = if selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -4552,6 +4626,30 @@ impl App {
                     row.fg(palette.dim()),
                 ),
             ]));
+        }
+        if label_rows > 0 {
+            let shown_rules = out.len();
+            out.push(Line::styled(
+                "Quick labels (memory only) - Tab here and back, d removes",
+                dim,
+            ));
+            let first = inner.y + shown_rules as u16 + 1;
+            let n = d.list.items.len();
+            for (j, l) in d.labels.iter().enumerate().take(label_rows - 1) {
+                self.hits
+                    .list_items
+                    .push((Rect::new(inner.x, first + j as u16, inner.width, 1), n + j));
+                let row = if d.on_labels && j == d.label_sel {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                let text: String = view::sanitize(&l.text).chars().take(50).collect();
+                out.push(Line::from(vec![
+                    Span::styled(format!("    {} ", l.color), row),
+                    Span::styled(format!(" {text} "), palette.label_style(l.color)),
+                ]));
+            }
         }
         frame.render_widget(Paragraph::new(out), inner);
     }
@@ -5235,8 +5333,8 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::Settings),
     ),
     (
-        "r",
-        "highlight rules: add, edit, reorder",
+        "r  L",
+        "highlight rules; L 1-9 labels the search",
         Some(Action::EditRules),
     ),
     (
@@ -5663,6 +5761,49 @@ pub fn render_row(
     let row = engine.get_row(line_idx);
     let text = row.as_ref().map_or("", |r| r.line.as_str());
     let text = text.trim_end_matches(['\r', '\n']);
+    // With captures-only rules or quick labels the row is painted span by span, first
+    // rule winning per byte, then the labels, then the ANSI colours (see
+    // `TailEngine::match_row_spans`); a search hit still wins over all of them.
+    if engine.has_span_rules() {
+        let painted = match &row {
+            Some(r) => engine.match_row_spans(r),
+            None => Default::default(),
+        };
+        let base = match &painted.rest {
+            Some(rule) => palette.rule_style(rule),
+            None => palette.level_style(engine.level_of(line_idx)),
+        };
+        let spans_in: Vec<std::ops::Range<usize>> =
+            painted.spans.iter().map(|s| s.start..s.end).collect();
+        let hits = if hit && !query.is_empty() {
+            view::hit_ranges(text, query)
+        } else {
+            Vec::new()
+        };
+        let segs: Vec<(String, Paint)> = view::segments(text, &hits, &spans_in)
+            .into_iter()
+            .map(|(s, p)| (view::sanitize(s), p))
+            .collect();
+        let hit_style = if active {
+            palette.active_hit()
+        } else {
+            palette.hit()
+        };
+        for (s, paint) in view::skip_cells(segs, hscroll) {
+            let style = match paint {
+                Paint::Plain => base,
+                Paint::Run(i) => base.patch(palette.span_style(&painted.spans[i].style)),
+                Paint::Hit => hit_style,
+            };
+            spans.push(Span::styled(s, style));
+        }
+        let line = Line::from(spans);
+        return if engine.is_selected(line_idx) {
+            line.style(palette.selection())
+        } else {
+            line
+        };
+    }
     // Precedence as in the GUI: a search hit over a highlight rule over the ANSI
     // colours; the level palette only applies to rows no rule matched.
     let rule = engine.match_highlight(text);
@@ -6057,6 +6198,66 @@ mod tests {
         press(&mut app, KeyCode::Char(':'));
         press(&mut app, KeyCode::Esc);
         assert!(app.palette_dialog.is_none());
+    }
+
+    #[test]
+    fn a_quick_label_paints_the_search_text_and_the_rule_editor_removes_it() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
+        render(&mut app, 80, 20);
+        // No search yet: nothing to label.
+        press(&mut app, KeyCode::Char('L'));
+        press(&mut app, KeyCode::Char('3'));
+        assert!(app.quick_labels.is_empty());
+        assert!(app.message.as_deref().unwrap().contains("Search"));
+        let prompt = Prompt {
+            kind: PromptKind::Search,
+            field: TextField::new("slow"),
+        };
+        app.submit_prompt(prompt);
+        press(&mut app, KeyCode::Char('L'));
+        press(&mut app, KeyCode::Char('3'));
+        assert_eq!(app.message.as_deref(), Some("Label 3: slow"));
+        // Every stream has it; CTRL + SHIFT + 3 again removes it, and once more adds it.
+        assert_eq!(app.tabs[1].engine.quick_labels().len(), 1);
+        let ctrl_shift = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+        app.on_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('3'),
+            ctrl_shift,
+        ));
+        assert!(app.tabs[0].engine.quick_labels().is_empty());
+        app.on_key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('3'),
+            ctrl_shift,
+        ));
+        // Without the search the label paints the text in its colours.
+        press(&mut app, KeyCode::Esc);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        app.tick();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let lines = buffer_text(buf);
+        let (y, row) = lines
+            .iter()
+            .enumerate()
+            .find(|(_, l)| l.contains("slow disk"))
+            .unwrap();
+        let x = row[..row.find("slow").unwrap()].chars().count();
+        assert_eq!(
+            buf[(x as u16, y as u16)].bg,
+            app.palette.label_style(3).bg.unwrap()
+        );
+        // The rule editor lists it; Tab then d removes it from every stream.
+        app.apply(Action::EditRules);
+        let screen = render(&mut app, 80, 20);
+        assert!(
+            screen.iter().any(|l| l.contains("Quick labels")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('d'));
+        assert!(app.quick_labels.is_empty());
+        assert!(app.tabs[1].engine.quick_labels().is_empty());
     }
 
     fn go_to(app: &mut App, text: &str) {

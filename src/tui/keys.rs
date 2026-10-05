@@ -83,6 +83,12 @@ pub enum Action {
     CycleAnsi,
     /// `#`: the line numbers of the focused stream, on or off.
     ToggleLineNumbers,
+    /// CTRL + SHIFT + 1..9: the search text as a quick label of colour N (or recoloured,
+    /// or removed when it has that colour), as in the GUI.
+    Label(u8),
+    /// `L`: the next key `1`-`9` is the colour of a quick label (terminals that do not
+    /// deliver CTRL + SHIFT + digit).
+    LabelPrefix,
     /// `t`: the time range dialog.
     TimeRange,
     /// `o`: open a file by path.
@@ -128,6 +134,14 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     if ctrl {
+        // CTRL + SHIFT + digit, as the digit or as its shifted US symbol.
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            if let KeyCode::Char(c) = key.code {
+                if let Some(n) = "123456789".find(c).or_else(|| "!@#$%^&*(".find(c)) {
+                    return Some(Action::Label(n as u8 + 1));
+                }
+            }
+        }
         return match key.code {
             KeyCode::Char('c') | KeyCode::Char('C') => Some(Action::CopyOrQuit),
             KeyCode::Char('b') => Some(Action::PageUp),
@@ -198,6 +212,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('h') => Action::ToggleHex,
         KeyCode::Char('a') => Action::CycleAnsi,
         KeyCode::Char('#') => Action::ToggleLineNumbers,
+        KeyCode::Char('L') => Action::LabelPrefix,
         KeyCode::Char('t') => Action::TimeRange,
         KeyCode::Char('o') => Action::OpenFile,
         KeyCode::Char('O') => Action::OpenSession,
@@ -248,6 +263,10 @@ mod tests {
         assert_eq!(k(KeyCode::Char('g'), ctrl), Some(Action::GoTo));
         assert_eq!(k(KeyCode::Char(':'), none), Some(Action::Palette));
         assert_eq!(k(KeyCode::Char('#'), none), Some(Action::ToggleLineNumbers));
+        let ctrl_shift = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+        assert_eq!(k(KeyCode::Char('3'), ctrl_shift), Some(Action::Label(3)));
+        assert_eq!(k(KeyCode::Char('#'), ctrl_shift), Some(Action::Label(3)));
+        assert_eq!(k(KeyCode::Char('L'), none), Some(Action::LabelPrefix));
         assert_eq!(k(KeyCode::Char('h'), none), Some(Action::ToggleHex));
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));

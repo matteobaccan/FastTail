@@ -109,7 +109,6 @@ Update this section in each release PR.
   completed, spec `openspec/changes/tui-interface/` (`tasks.md` is the checklist, ticked
   as work lands):
   - Group 4. What is open:
-    - 4.2: quick labels in the rule editor (the editor itself is done).
     - 4.5b: registry bindings with the Kitty protocol (the `:` palette is done).
   - Groups 5 to 8: hand-off, release pipeline, i18n, `docs/tui.md`, the parity checklist.
   - 0.20.0 ships at full GUI parity without the "preview" label.
@@ -123,8 +122,8 @@ Update this section in each release PR.
 ### Handover notes (2026-09-30, end of the 0.16.0 session)
 
 - No open PRs. `main` holds everything; the 0.16.0 release PR is the last change.
-- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (4.2 quick labels or the
-  4.5b registry bindings next; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
+- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (the 4.5b registry bindings
+  and Kitty protocol next, then group 5; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
   - `app.rs`: state, keys, mouse, drawing, tests;
   - `dock.rs`: layout geometry and drop zones;
   - `mouse.rs`: the hit map;
@@ -140,7 +139,7 @@ Update this section in each release PR.
 
   Their rules are in the spec's `terminal-interface` delta. `src/dock_layout.rs` is shared
   with the GUI.
-- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (124 tests)
+- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (126 tests)
   and `cargo clippy --no-default-features --features tui --all-targets -- -D warnings` on
   top of the usual checks.
 - Preview build for the maintainer:

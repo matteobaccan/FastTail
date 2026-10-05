@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::audio::SoundAlertPreset;
 use crate::external_tools::ExternalTool;
 use crate::settings_model as model;
-use crate::tail_engine::HighlightRule;
+use crate::tail_engine::{HighlightRule, QuickLabel};
 use crate::tui::form::{CheckBox, ColourField, FieldKey, RadioList, ReorderList, TextField};
 
 /// Colours `[` / `]` step through in a colour field.
@@ -90,6 +90,11 @@ pub struct RulesDialog {
     pub form: Option<RuleForm>,
     /// First list row shown when the list is taller than the dialog.
     pub top: usize,
+    /// The quick labels, listed below the rules (memory only, set by the caller).
+    pub labels: Vec<QuickLabel>,
+    /// `Tab` moved the keyboard to the labels; `label_sel` is the selected one.
+    pub on_labels: bool,
+    pub label_sel: usize,
 }
 
 /// What a key did to the dialog.
@@ -99,6 +104,8 @@ pub enum RulesKey {
     Changed,
     /// Only the view changed (selection, focus, text being typed).
     Moved,
+    /// A quick label was removed: the caller takes `labels`.
+    Labels,
     /// The dialog closes.
     Close,
     /// The key does nothing here.
@@ -321,6 +328,9 @@ impl RulesDialog {
             tool_names: tools.iter().map(|t| t.name.clone()).collect(),
             form: None,
             top: 0,
+            labels: Vec::new(),
+            on_labels: false,
+            label_sel: 0,
         }
     }
 
@@ -439,6 +449,13 @@ impl RulesDialog {
         let plain = !key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            self.on_labels = !self.on_labels && !self.labels.is_empty();
+            return RulesKey::Moved;
+        }
+        if self.on_labels {
+            return self.label_key(key);
+        }
         match key.code {
             KeyCode::Esc => return RulesKey::Close,
             KeyCode::Enter | KeyCode::F(2) => {
@@ -470,6 +487,29 @@ impl RulesDialog {
             _ => {}
         }
         self.list_key(key)
+    }
+
+    /// Keys of the quick labels: the arrows choose one, `d` / `Delete` removes it.
+    fn label_key(&mut self, key: KeyEvent) -> RulesKey {
+        let n = self.labels.len();
+        match key.code {
+            KeyCode::Esc => RulesKey::Close,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.label_sel = self.label_sel.saturating_sub(1);
+                RulesKey::Moved
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.label_sel = (self.label_sel + 1).min(n.saturating_sub(1));
+                RulesKey::Moved
+            }
+            KeyCode::Delete | KeyCode::Char('d') if self.label_sel < n => {
+                self.labels.remove(self.label_sel);
+                self.label_sel = self.label_sel.min(self.labels.len().saturating_sub(1));
+                self.on_labels = !self.labels.is_empty();
+                RulesKey::Labels
+            }
+            _ => RulesKey::Other,
+        }
     }
 
     /// Keys of the list itself: a move or a deletion changes the rules (a move at
@@ -558,6 +598,33 @@ mod tests {
         let patterns: Vec<String> = d.rules().iter().map(|r| r.pattern.clone()).collect();
         assert_eq!(patterns, ["timeout", "WARN"]);
         assert_eq!(d.on_key(key(KeyCode::Esc)), RulesKey::Close);
+    }
+
+    #[test]
+    fn tab_reaches_the_quick_labels_and_d_removes_one() {
+        let mut d = RulesDialog::new(&[rule("ERROR")], &[]);
+        // Without labels Tab stays on the rules.
+        d.on_key(key(KeyCode::Tab));
+        assert!(!d.on_labels);
+        d.labels = vec![
+            QuickLabel {
+                text: "payment".into(),
+                color: 1,
+            },
+            QuickLabel {
+                text: "timeout".into(),
+                color: 4,
+            },
+        ];
+        d.on_key(key(KeyCode::Tab));
+        assert!(d.on_labels);
+        d.on_key(key(KeyCode::Down));
+        assert_eq!(d.on_key(key(KeyCode::Char('d'))), RulesKey::Labels);
+        assert_eq!(d.labels.len(), 1);
+        assert_eq!(d.labels[0].text, "payment");
+        assert_eq!(d.rules().len(), 1, "the rules are untouched");
+        assert_eq!(d.on_key(key(KeyCode::Delete)), RulesKey::Labels);
+        assert!(d.labels.is_empty() && !d.on_labels, "back to the rules");
     }
 
     #[test]
