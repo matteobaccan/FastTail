@@ -152,8 +152,9 @@ fn pressed(key: &KeyEvent) -> bool {
     key.kind != KeyEventKind::Release
 }
 
-/// A whole number typed in a text field and checked against a range; `↑` / `↓` step it
-/// by one inside the range.
+/// A whole number typed in a text field and checked against a range; `→` / `←` step it
+/// by one inside the range (as they move a radio list's choice; `↑` / `↓` are left to
+/// the form, to walk the fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NumberField {
     pub field: TextField,
@@ -191,14 +192,14 @@ impl NumberField {
             }
         };
         match key.code {
-            KeyCode::Up | KeyCode::Down => {
+            KeyCode::Right | KeyCode::Left => {
                 let current = self
                     .field
                     .text()
                     .trim()
                     .parse::<u64>()
                     .unwrap_or(*self.range.start());
-                let v = step(current, key.code == KeyCode::Up);
+                let v = step(current, key.code == KeyCode::Right);
                 self.field = TextField::new(&v.to_string());
                 FieldKey::Edited
             }
@@ -493,15 +494,15 @@ mod tests {
         let mut n = NumberField::new(250, 50..=5000);
         assert_eq!(n.value(), Ok(250));
         assert_eq!(n.on_key(key(KeyCode::Char('x'))), FieldKey::Other);
-        n.on_key(key(KeyCode::Up));
+        n.on_key(key(KeyCode::Right));
         assert_eq!(n.value(), Ok(251));
         n.on_key(mods(KeyCode::Char('u'), KeyModifiers::CONTROL));
         typed_number(&mut n, "9");
         assert_eq!(n.value(), Err("50 to 5000".to_string()));
-        n.on_key(key(KeyCode::Down));
+        n.on_key(key(KeyCode::Left));
         assert_eq!(n.value(), Ok(50), "a step brings it into the range");
         let mut top = NumberField::new(5000, 50..=5000);
-        top.on_key(key(KeyCode::Up));
+        top.on_key(key(KeyCode::Right));
         assert_eq!(top.value(), Ok(5000));
     }
 
