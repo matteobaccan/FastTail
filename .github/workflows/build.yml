@@ -91,7 +91,7 @@ jobs:
       - name: 🖥️ Terminal-only build
         shell: bash
         run: |
-          cargo clippy --no-default-features --features tui --lib --target ${{ matrix.target }} -- -D warnings
+          cargo clippy --no-default-features --features tui --lib --bin fasttail-tui --target ${{ matrix.target }} -- -D warnings
           gui=$(cargo tree --no-default-features --features tui -e normal --prefix none --target ${{ matrix.target }} | grep -E '^(egui|eframe|egui_dock|egui_commonmark|wgpu|winit|glow|rfd) ' || true)
           if [ -n "$gui" ]; then
             echo "GUI crates in the terminal-only build:"
@@ -140,6 +140,7 @@ jobs:
             ext: tar.gz
             binary: fasttail
             tui_binary: fasttail-tui
+            tui_only_asset: fasttail-tui-linux-x86_64
 
           - name: 🐧 Linux ARM64
             os: ubuntu-24.04-arm
@@ -148,6 +149,7 @@ jobs:
             ext: tar.gz
             binary: fasttail
             tui_binary: fasttail-tui
+            tui_only_asset: fasttail-tui-linux-arm64
 
           # macOS
           # Temporarily disabled: macOS x86_64 (Intel) build
@@ -241,6 +243,41 @@ jobs:
               ;;
           esac
           ls -la dist
+
+      # Linux: a terminal-only archive for servers without a desktop, built again without
+      # the GUI features so the binary provably links no GUI crate (the default build's
+      # `fasttail-tui` would, on ELF, keep more of them than the MSVC linker does).
+      - name: 🖥️ Terminal-only archive (Linux)
+        if: matrix.tui_only_asset != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          gui=$(cargo tree --no-default-features --features tui -e normal --prefix none --target ${{ matrix.target }} | grep -E '^(egui|eframe|egui_dock|egui_commonmark|wgpu|winit|glow|rfd) ' || true)
+          if [ -n "$gui" ]; then
+            echo "::error::GUI crates in the terminal-only build: $gui"; exit 1
+          fi
+          cargo build --release --no-default-features --features tui --bin fasttail-tui --target ${{ matrix.target }} --target-dir target-tui
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          mkdir -p stage-tui
+          cp "target-tui/${{ matrix.target }}/release/fasttail-tui" LICENSE README.md stage-tui/
+          tar -C stage-tui -czf "dist/${{ matrix.tui_only_asset }}-$version.tar.gz" fasttail-tui LICENSE README.md
+
+      # Sizes of the executables and the archives, for the budget in
+      # openspec/changes/tui-interface/design.md (compared with the previous release).
+      - name: 📏 Sizes
+        shell: bash
+        run: |
+          {
+            echo "### Sizes (${{ matrix.name }})"
+            echo
+            echo "| File | Bytes |"
+            echo "|---|---|"
+            for f in "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+                     "target/${{ matrix.target }}/release/${{ matrix.tui_binary }}" \
+                     target-tui/${{ matrix.target }}/release/fasttail-tui dist/*; do
+              [ -f "$f" ] && echo "| $(basename "$f") | $(wc -c < "$f" | tr -d ' ') |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: ⬆️ Upload build artifact
         uses: actions/upload-artifact@v7
