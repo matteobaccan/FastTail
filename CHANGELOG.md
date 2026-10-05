@@ -58,6 +58,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A missing name or program, a shortcut without a modifier or a broken regex is marked
   and not saved. The list adds, deletes and moves tools and shows the dropped
   rule-bound runs. Every change is saved at once.
+- **Quick labels in the terminal interface.** `Ctrl+Shift+1..9` turns the search text
+  into a quick colour label in every stream, as in the GUI; terminals that do not send
+  that key take `L` and the digit. The rule editor (`r`) lists the labels below the
+  rules: `Tab` reaches them and `d` removes one. Labels stay in memory, as in the GUI.
+  Rows are now painted span by span, so "paint the groups only" rules colour only their
+  groups in the terminal too.
 - **New-stream defaults in the terminal interface.** Settings lists line numbers and the
   time delta column under "New streams and bookmarks", as defaults for streams opened
   from then on, as in the GUI: open streams keep their own. `#` switches the line

@@ -44,9 +44,9 @@
   - [x] PIN lock: set (twice) / change / remove, `lock_enabled` (arms the idle lock, needs a PIN), idle minutes, deterrent statement
   - [x] External tools page (4.5)
   - [x] New-stream defaults: line numbers and the time delta column in new streams, as the GUI's Settings; open streams keep their own, `#` switches the focused stream's line numbers (the GUI's `# 123`)
-- [ ] 4.2 Highlight-rule editor (`r`):
+- [x] 4.2 Highlight-rule editor (`r`):
   - [x] All rule fields, add / edit / delete / reorder, colour swatches and `#RRGGBB` with depth preview, bound tool; each change applied to every stream and saved (`src/tui/rules.rs`)
-  - [ ] Quick labels listed and removable (the terminal has no quick labels yet: `Ctrl+Shift+1..9` on the search text first)
+  - [x] Quick labels listed and removable (`Tab` to the labels, `d`); `Ctrl+Shift+1..9` where the terminal delivers it, or `L` and a digit, labels the search text; rows are painted span by span (captures-only rules, labels, ANSI) through `TailEngine::match_row_spans`
 - [x] 4.3 Filter presets (`p`): apply (`Enter` to the stream, `A` to all), save current as (with or without the time range), rename, delete after a confirmation, reorder (`src/tui/presets.rs`)
 - [x] 4.4 Global filter editor (`F`) and on / off (`f`), 300 ms debounce; streams opened later apply it, a regex that does not compile is marked (`src/tui/global.rs`)
 - [x] 4.5 External tools:
