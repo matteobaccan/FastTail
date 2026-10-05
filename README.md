@@ -15,6 +15,12 @@
   </p>
 </div>
 
+> **Contributing: please send specs, not code.** If you want to contribute, open an issue with
+> a spec of the behaviour you want: what it does, how it is used, and the cases it must
+> handle. An [OpenSpec](https://github.com/Fission-AI/OpenSpec) change in the format of
+> [`openspec/changes`](openspec/changes) is welcome too. The maintainer has specs
+> implemented by AI agents, so code pull requests are not merged.
+
 ---
 
 ## ⚡ Overview
