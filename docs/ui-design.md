@@ -495,6 +495,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
      - The count of dropped runs (bound tools) and `🗑 Remove`.
      - `➕ Add tool`, and the last run error.
   10. **Renderer:** a combo (Auto, OpenGL, wgpu, `Software (CPU, wgpu) — not recommended`). Below it, `Applies at the next start · <chip> <details>`, and a ⚠ warning when Software is selected.
+  10b. **Interface at start:** Graphical / Terminal as selectable values, saved at once (`interface`). On Windows a ⚠ line says when `fasttail-tui.exe` is not next to `fasttail.exe`. Picking Terminal opens **`⇄ Switch interface`** (`fasttail_interface_switch`, centred, fixed): on Windows *Switch now* (saves the workspace, starts `fasttail-tui.exe` in a new console, quits; when it cannot start, the `⚠ Terminal interface not started` notice says why and the window stays) and *At next start*; on Linux and macOS a note that the terminal interface opens the next time FastTail is started from a terminal, with `OK`.
   11. Checkboxes: **Always on top**, **Flash the window on background alerts**.
   12. **⚡ PERFORMANCE & REFRESH:**
 
@@ -1263,6 +1264,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `theme` | `Tron` | Tron, Matrix, Blade or Light (§6) |
 | `language`, `language_auto` | detected, `true` | UI language (§8) |
 | `renderer` | `auto` | `auto`, `glow`, `wgpu` or `software`; applies at the next start |
+| `interface` | `gui` | `gui` or `tui`: the interface opened at start (`--tui` / `--gui` override it); Settings offers to switch now |
 | `always_on_top` | false | window level; 📌 |
 | `flash_on_alert` | false | taskbar attention for background errors |
 | `level_colors` | true | colour rows by level |

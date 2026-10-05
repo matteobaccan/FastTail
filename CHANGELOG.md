@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   under `command | fasttail --tui -`). Without one, `--tui` stops with `--tui needs a
   terminal` and exit code 1, while `interface=tui` opens the window with the stderr line
   `interface=tui ignored: no terminal` (a desktop launcher, for example).
+- **Switching interface from Settings, in both interfaces.** The window has a new
+  *Interface at start* entry (Graphical / Terminal) next to the renderer. Picking the other
+  interface saves `interface` and offers *Switch now* or *At next start*. *Switch now*
+  saves the workspace, starts the other interface and closes the current one: from the
+  window to the terminal on Windows, and from the terminal to the window everywhere a
+  display is available. On Linux and macOS the window cannot switch into a terminal, so
+  the dialog says the terminal interface opens at the next start from a terminal. When the
+  other executable is missing or there is no display, the current interface keeps running
+  and says why. On Windows Settings warns when the other executable is not next to this
+  one, and the terminal-only build shows no graphical choice.
 - **`fasttail-tui --gui` opens the window.** It starts `fasttail` (`fasttail.exe`) from its
   own folder with the same arguments, detached from the terminal, and exits 0; when
   `fasttail` is not there it says so on stderr and exits 1. A build without the graphical

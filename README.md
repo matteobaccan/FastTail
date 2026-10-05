@@ -236,6 +236,11 @@ On Linux and macOS `fasttail --tui`, or `interface=tui` started from a terminal,
 terminal interface in the same process; started without a terminal (a desktop launcher),
 `interface=tui` opens the window instead and `--tui` exits with code 1.
 
+Settings (in the window and in the terminal) has *Interface at start*: picking the other
+one offers *Switch now*, which saves the workspace and reopens it in the other interface
+(from the window into a terminal on Windows only; on Linux and macOS start `fasttail`
+from a terminal).
+
 `fasttail-tui --gui` goes the other way: it starts `fasttail` from the same folder with the
 same arguments, detached from the terminal, and exits.
 

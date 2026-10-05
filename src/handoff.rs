@@ -159,6 +159,106 @@ pub fn windows_command_line(program: &Path, args: &[String]) -> String {
     line
 }
 
+/// Why the other interface did not start.
+#[derive(Debug)]
+pub enum StartError {
+    /// This build has no graphical interface (the Linux terminal-only archive).
+    NotInBuild,
+    /// No display to open a window on (Linux without `DISPLAY` or `WAYLAND_DISPLAY`).
+    NoDisplay,
+    /// The other executable is not next to this one: the path looked for.
+    NotFound(PathBuf),
+    /// It is there but did not start.
+    Failed(PathBuf, std::io::Error),
+}
+
+impl std::fmt::Display for StartError {
+    /// The terminal interface's wording (English, as its other messages); the window
+    /// words the hand-off failures with its translations.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartError::NotInBuild => f.write_str(&terminal_only_message()),
+            StartError::NoDisplay => f.write_str(
+                "no display (DISPLAY and WAYLAND_DISPLAY are not set): \
+                 the graphical interface opens at the next start from a desktop",
+            ),
+            StartError::NotFound(path) => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let dir = path.parent().unwrap_or(Path::new("."));
+                write!(f, "{name} was not found in {}", dir.display())
+            }
+            StartError::Failed(path, e) => write!(f, "cannot start {}: {e}", path.display()),
+        }
+    }
+}
+
+/// `name` next to this executable when it is there.
+fn find_sibling(name: &str) -> Result<PathBuf, StartError> {
+    let exe = sibling_exe(name).unwrap_or_else(|| PathBuf::from(name));
+    if exe.is_file() {
+        Ok(exe)
+    } else {
+        Err(StartError::NotFound(exe))
+    }
+}
+
+/// Whether a window can be opened from here: always on Windows and macOS, on other
+/// systems when `DISPLAY` or `WAYLAND_DISPLAY` is set.
+pub fn display_available() -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        return true;
+    }
+    ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()))
+}
+
+/// Settings "Switch now" in the terminal interface: starts `fasttail --gui` from this
+/// executable's directory, detached. The caller saved the workspace first and quits
+/// once it started.
+pub fn start_gui() -> Result<(), StartError> {
+    if !cfg!(feature = "gui") {
+        return Err(StartError::NotInBuild);
+    }
+    if !display_available() {
+        return Err(StartError::NoDisplay);
+    }
+    let exe = find_sibling(&gui_exe_name())?;
+    start_detached(&exe, &["--gui".to_string()]).map_err(|e| StartError::Failed(exe, e))
+}
+
+/// Whether the other interface's executable is next to this one (Settings warns when it
+/// is not, on Windows where they are two files).
+pub fn sibling_present(name: &str) -> bool {
+    find_sibling(name).is_ok()
+}
+
+/// The window's words for a terminal that did not start: what happened, the path, and
+/// the OS error when there is one.
+pub fn tui_start_failure(lang: crate::i18n::Language, err: &StartError) -> String {
+    use crate::i18n::t;
+    match err {
+        StartError::NotFound(path) => {
+            format!("{}\n{}", t(lang, "handoff_not_found"), path.display())
+        }
+        StartError::Failed(path, e) => format!(
+            "{}\n{}\n{e}",
+            t(lang, "handoff_start_failed"),
+            path.display()
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// The Windows hand-off to the terminal: `fasttail-tui.exe` from this executable's
+/// directory in a new console, with `args` (`--handoff` is added).
+#[cfg(windows)]
+pub fn start_tui_in_new_console(args: &[String]) -> Result<(), StartError> {
+    let exe = find_sibling(&tui_exe_name())?;
+    let args = forwarded_args(args, "--tui", Some(HANDOFF_FLAG));
+    start_in_new_console(&exe, &args).map_err(|e| StartError::Failed(exe, e))
+}
+
 /// Starts `program` with `args`, detached from this terminal, and returns without waiting:
 /// no standard handle is passed on, on Windows without a console (`DETACHED_PROCESS`, the
 /// window needs none), elsewhere in a process group of its own, so the window outlives
@@ -417,6 +517,51 @@ mod tests {
                 "{stdout} {term:?} {stdin} {dev_tty}"
             );
         }
+    }
+
+    /// The window's Settings entry and switch dialog. "Terminal" is the same word in
+    /// several languages, so that one is only checked to exist.
+    #[test]
+    fn interface_switch_texts_are_translated_everywhere() {
+        use crate::i18n::{t, Language};
+        for key in [
+            "interface_label",
+            "interface_gui",
+            "interface_tui",
+            "interface_tui_missing",
+            "interface_switch_title",
+            "interface_switch_body",
+            "interface_switch_now",
+            "interface_switch_later",
+            "interface_next_terminal_start",
+        ] {
+            let english = t(Language::En, key);
+            assert_ne!(english, "Unknown", "{key}");
+            if key == "interface_tui" {
+                continue;
+            }
+            for &lang in Language::ALL.iter().filter(|l| **l != Language::En) {
+                assert_ne!(t(lang, key), english, "{key} in {lang:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn start_errors_read_as_the_spec_words_them() {
+        let path = std::env::temp_dir().join(gui_exe_name());
+        let missing = StartError::NotFound(path.clone());
+        assert_eq!(
+            missing.to_string(),
+            format!(
+                "{} was not found in {}",
+                gui_exe_name(),
+                path.parent().unwrap().display()
+            )
+        );
+        assert!(StartError::NoDisplay.to_string().contains("DISPLAY"));
+        assert!(StartError::NotInBuild
+            .to_string()
+            .contains("not in this build"));
     }
 
     #[test]
