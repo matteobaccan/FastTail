@@ -260,21 +260,18 @@ After 0.14.0 the maintainer moved the terminal interface forward: 0.20.0 holds o
 `tui-interface` (PR #132, the TUI at parity with the window, HEX view included, Markdown
 excluded), completed through the nightly patches (0.15.x, then 0.16.x). The gap changes below resume after it.
 
-### 0.21.0 — structured logs and analysis, continued
+### 0.21.0 — structured logs, sources from folders, binary views
+
+Re-planned by the maintainer on 2026-10-05: the disassembly view moves here from 0.23.0;
+user-defined formats, boolean filters, cross-line regex, export formats and the statistics
+group move to 0.23.0.
 
 | Change | Gaps | Effort |
 |---|---|---|
 | `structured-field-terms` — field filter terms, level and time from fields, cell spans, copy as shown | 1, 4 | M |
-| `custom-log-formats` — user-defined formats (named groups, timestamp, multiline start) | 1 | M |
-| `boolean-filter-expressions` — AND / OR / NOT, field operands | 4 | M |
 | `merged-timeline-view` — several files merged by timestamp | 2 | L |
 | `folder-source` — several patterns, subfolders, "open all" | Tailviewer, LogFusion | M |
-| `pattern-grouping` — Drain patterns, CTRL + SHIFT + G | 6 | M |
-| `field-statistics` — top-N and statistics of a field | 15 | M |
-| `spike-explanation` — what is different in a histogram spike | Loki, Kibana | M |
-| `operation-timeline` — Gantt of operations by an id field | lnav | M |
-| `cross-line-regex` — regex across lines (plus single-line regex search) | 20 | M |
-| `export-formats` — CSV and HTML export | 18 | S |
+| `disassembly-view` — ASM view of a stream: x86 16 / 32 / 64-bit, PE and ELF entry point and sections (a maintainer request; hex editors with a disassembly pane such as Hiew and 010 Editor have it; it extends the HEX view in the window and in the terminal) | requested | M |
 | `linux-tray-icon` — the Linux tray backend left open by `tray-icon` | — | S |
 
 ### 0.22.0 — sources and integrations
@@ -294,19 +291,20 @@ excluded), completed through the nightly patches (0.15.x, then 0.16.x). The gap 
 | `web-ui` — read-only local web view, off by default | Seq, Loki | M |
 | `plugin-api` — out-of-process source plugins, bundled formats | 20 | L |
 
-### 0.23.0 — binary views
-
-A maintainer request (2026-09-30), not a competitor gap among log viewers: hex editors with a
-disassembly pane (Hiew, 010 Editor) have it. It extends the HEX view in the window and in the
-terminal interface.
+### 0.23.0 — formats, filters and statistics (postponed from 0.21.0)
 
 | Change | Gaps | Effort |
 |---|---|---|
-| `disassembly-view` — ASM view of a stream: x86 16 / 32 / 64-bit, PE and ELF entry point and sections | requested | M |
+| `custom-log-formats` — user-defined formats (named groups, timestamp, multiline start) | 1 | M |
+| `boolean-filter-expressions` — AND / OR / NOT, field operands | 4 | M |
+| `cross-line-regex` — regex across lines (plus single-line regex search) | 20 | M |
+| `export-formats` — CSV and HTML export | 18 | S |
+| `field-statistics` — top-N and statistics of a field | 15 | M |
+| `pattern-grouping` — Drain patterns, CTRL + SHIFT + G | 6 | M |
+| `spike-explanation` — what is different in a histogram spike | Loki, Kibana | M |
+| `operation-timeline` — Gantt of operations by an id field | lnav | M |
 
-0.21.0 is the heaviest (one L change and ten M); if it runs long, `operation-timeline` and
-`cross-line-regex` are the first to move to 0.22.0. Open questions are listed in each
-change's design.
+Open questions are listed in each change's design.
 
 ## 9. Scan history
 

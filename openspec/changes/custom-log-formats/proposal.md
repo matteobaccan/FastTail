@@ -44,7 +44,7 @@ formats.
 - Per stream, `fields_parser=format:<name>` in the workspace and session files; no new
   key in `fasttail.ini` besides the folder being fixed next to it.
 
-Target release: **0.21.0** (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
+Target release: **0.23.0** (re-planned by the maintainer on 2026-10-05, from 0.21.0) (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Medium**. Effort: **M**.
 
 ### Non-goals

@@ -34,7 +34,7 @@ summaries" as a market signal.
 - The chosen source per stream is not persisted; the tab is not saved in the layout. No
   new key in `fasttail.ini`.
 
-Target release: **0.21.0** (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
+Target release: **0.23.0** (re-planned by the maintainer on 2026-10-05, from 0.21.0) (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **medium**. Effort: **M (1–3 weeks)**.
 
 ### Non-goals
