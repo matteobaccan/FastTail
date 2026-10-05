@@ -411,7 +411,28 @@ impl SettingsForm {
         if !problems.is_empty() {
             return Err(problems);
         }
-        for f in &self.fields {
+        self.write(c, &[], false);
+        Ok(())
+    }
+
+    /// Writes the fields that can apply while the dialog is open, as the GUI's Settings
+    /// do: every valid field but the PIN ones and the interface (which wait for OK).
+    pub fn apply_live(&self, c: &mut FastTailConfig) {
+        let skip: Vec<usize> = self.problems().into_iter().map(|(i, _)| i).collect();
+        self.write(c, &skip, true);
+    }
+
+    /// Writes the fields into `c`, but those at the positions in `skip`; `live` also
+    /// leaves out the PIN fields, the idle lock and the interface.
+    fn write(&self, c: &mut FastTailConfig, skip: &[usize], live: bool) {
+        for (i, f) in self.fields.iter().enumerate() {
+            let waits = matches!(
+                f.key,
+                Key::PinNew | Key::PinConfirm | Key::RemovePin | Key::LockEnabled | Key::Interface
+            );
+            if skip.contains(&i) || (live && waits) {
+                continue;
+            }
             let num = || match &f.widget {
                 Widget::Number(n) => n.value().unwrap_or_default(),
                 _ => 0,
@@ -479,7 +500,6 @@ impl SettingsForm {
         if c.language_auto {
             c.language = Language::detect();
         }
-        Ok(())
     }
 
     /// The form as lines: section titles, then `label  value` per field. Returns the

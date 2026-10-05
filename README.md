@@ -265,7 +265,7 @@ the same, and docks it back). A floating window lies over the others: drag its t
 move it and its bottom-right corner to resize it; every window can float, leaving the
 dock empty. `[x]` at the top right of a window, or `Ctrl+W`, closes its stream; after the
 last one (or when started with nothing to open) the workspace is empty. `o` opens a file
-through a folder browser, `,` the Settings, `Shift+T` the next theme, `#` the line numbers of the stream (Settings
+through a folder browser, `,` the Settings (changes apply at once; `Esc` goes back), `Shift+T` the next theme, `#` the line numbers of the stream (Settings
 sets them, and the time delta column, for new streams). `r` edits the highlight rules (order, colours, options) and lists the quick labels,
 `Ctrl+Shift+1..9` (sent by terminals with the Kitty keyboard protocol, which is switched
 on when available; elsewhere `L` and a digit) turns the

@@ -67,6 +67,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Terminal interface: Settings apply at once**, as in the GUI: a new theme, colours,
+  polling or any other valid value shows while the dialog is open. `[ OK ]` saves;
+  `[ Cancel ]` or `Esc` brings back the values it opened with. The PIN fields, the idle
+  lock and the interface choice still wait for `[ OK ]`.
 - **Terminal Settings: `↑` / `↓` always move between fields, `←` / `→` change the value.**
   A number field used to keep `↑` / `↓` for stepping its value, so walking the list with
   the arrows stopped there; now `→` / `←` step a number by one, as they already pick a
