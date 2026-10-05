@@ -8,13 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-05
+
+The terminal interface is complete and no longer a preview: `fasttail-tui` (and
+`fasttail --tui`) has the window's features, in the 16 languages, sharing `fasttail.ini`
+and the sessions with it. The guide is [docs/tui.md](docs/tui.md).
+
+### Added
+
+- **Linux: a terminal-only archive per architecture**,
+  `fasttail-tui-linux-<arch>-<version>.tar.gz`: `fasttail-tui` built without the window,
+  for servers and SSH sessions with no graphical libraries (about 3 MB). Its debug info is
+  in the matching `-symbols-` archive, as the Windows PDBs are.
+- **The hand-off and terminal messages in every language**: the errors of `--tui`,
+  `--gui` and *Switch now* (window missing, no display, no terminal, standard input that
+  cannot follow) are translated; on standard error they follow the system's language.
+- **The terminal interface guide**, `docs/tui.md`: starting on each system, the screen,
+  every key, the mouse, Settings and editors, the lock, languages, terminals and limits.
+
+### Changed
+
+- **The terminal interface is no longer a preview.** Its README section describes it as a
+  peer of the window, with troubleshooting for mintty, legacy consoles and OSC 52.
+- **Every release build prints the size of its executables and archives**, checked
+  against the budget of the terminal interface.
+
 ## [0.16.2] - 2026-10-05
 
 ### Added
 
-- **The hand-off and terminal messages in every language**: the errors of `--tui`,
-  `--gui` and *Switch now* (window missing, no display, no terminal, standard input that
-  cannot follow) are translated; on standard error they follow the system's language.
 - **Terminal interface: `Ctrl+←` / `Ctrl+→` scroll a window sideways by 10 columns**;
   `←` / `→` still move one column.
 - **Terminal interface in every language.** Every text of the terminal interface (bars,
@@ -1442,6 +1464,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.0]: https://github.com/matteobaccan/FastTail/compare/v0.16.2...v0.20.0
 [0.16.2]: https://github.com/matteobaccan/FastTail/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/matteobaccan/FastTail/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/matteobaccan/FastTail/compare/v0.15.0...v0.16.0

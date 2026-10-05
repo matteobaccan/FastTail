@@ -102,55 +102,34 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.16.2** (2026-10-05, nightly): terminal-interface group 5 (one command
-  line, `--tui` / `--gui`, the hand-offs), and after the maintainer's review of its
-  preview a top bar and the GUI's stream bar and filter row in every window, About, live
-  Settings, window resize from every side, a closing effect, the bell on background
-  alerts, `Ctrl+arrows` by 10 columns and every terminal text in 16 languages; filter tabs
-  saved with the workspace and sessions; JSON rows as a foldable tree in both interfaces
-  (`json-tree-view`); `tray-icon` archived (Linux backend: `linux-tray-icon`). The
-  terminal interface is still a preview.
-- Next: nightly patch releases (`0.16.x`) while **0.20.0 terminal interface (TUI)** is
-  completed, spec `openspec/changes/tui-interface/` (`tasks.md` is the checklist, ticked
-  as work lands):
-  - Groups 1 to 5 are done, and the interface texts of 7.3 (4.12).
-  - Groups 6 to 8: release pipeline, the command-line and hand-off messages (7.3),
-    `docs/tui.md`, the parity checklist, capture tests.
-  - 0.20.0 ships at full GUI parity without the "preview" label.
+- Latest release: **0.20.0** (2026-10-05): the terminal interface complete and no longer a
+  preview (GUI parity, 16 languages, `docs/tui.md`, Linux terminal-only archives, build
+  sizes in every release job). 0.16.2 brought the TUI review round, saved filter tabs and
+  JSON trees.
+- Next: nightly patch releases (`0.20.x`); `tui-interface` is archived after this release.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
   build of `build.yml` on its branch before merging; task 5.0, the downloads grid, is done).
-- Then **0.21.0** (`structured-field-terms`, `merged-timeline-view`, `folder-source`,
+- Then the fix of issue #161 (streams not polled while the window is minimised), then
+  **0.21.0** (`structured-field-terms`, `merged-timeline-view`, `folder-source`,
   `disassembly-view`, `linux-tray-icon`), **0.22.0** sources/integrations and **0.23.0** the
   formats, filters and statistics postponed from 0.21.0 (re-planned 2026-10-05); see
   `docs/competitor-analysis.md` section 8.
 
-### Handover notes (2026-10-05, 0.16.2 nightly)
+### Handover notes (2026-10-05, 0.20.0)
 
-- No open PRs. `main` holds everything; the 0.16.2 release PR is the last change.
-- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 6 (the release
-  pipeline). The terminal code is in `src/tui/`:
-  - `app.rs`: state, keys, mouse, drawing, tests;
-  - `bars.rs`: the stream bar and filter row inside a window;
-  - `dock.rs`: layout geometry and drop zones;
-  - `mouse.rs`: the hit map;
-  - `keys.rs`: the key map;
-  - `form.rs`: the dialog toolkit;
-  - `browser.rs`: the Open dialog;
-  - `settings.rs`: the Settings form;
-  - `rules.rs`: the highlight-rule editor;
-  - `presets.rs`: the filter presets;
-  - `global.rs`: the global filter editor;
-  - `tools.rs`: the external tools menu, shortcuts and editor;
-  - `palette.rs`: the `:` command palette;
-  - `json.rs`: the JSON tree dialog (`J`).
-
-  Their rules are in the spec's `terminal-interface` delta. `src/dock_layout.rs` is shared
-  with the GUI. Terminal texts go through `src/i18n_tui.rs` (`tx` / `txf` / `en`, keyed by
-  the English; `every_terminal_text_is_translated` fails on a text without its row).
-- Pending OpenSpec changes started this cycle: `json-tree-view` (implemented, archive after
-  the release), `linux-tray-icon` (0.21.0).
-- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (147 tests)
+- No open PRs. `main` holds everything; the 0.20.0 release PR is the last change, then the
+  post-release archive of `tui-interface` (its deltas create `terminal-interface` and
+  update `command-line`, `rendering-backend`, `release-pipeline`, `cyber-themes`,
+  `window-lock`).
+- The terminal code is in `src/tui/` (`app.rs` state, keys, mouse, drawing and tests;
+  `bars.rs`, `dock.rs`, `mouse.rs`, `keys.rs`, `form.rs`, `browser.rs`, `settings.rs`,
+  `rules.rs`, `presets.rs`, `global.rs`, `tools.rs`, `palette.rs`, `json.rs`); its texts in
+  `src/i18n_tui.rs` (`tx` / `txf` / `en`, keyed by the English;
+  `every_terminal_text_is_translated` fails on a text without its row). The guide is
+  `docs/tui.md`.
+- Not checked by hand: Linux in a terminal and over SSH (CI builds and tests it).
+- TUI testing: `cargo test --no-default-features --features tui --lib` (about 530 tests)
   and `cargo clippy --no-default-features --features tui --all-targets -- -D warnings` on
   top of the usual checks.
 - Preview build for the maintainer:
