@@ -122,6 +122,8 @@ pub enum Action {
     PauseAll,
     /// `J`: the JSON tree of the cursor row.
     JsonTree,
+    /// The About window (top bar, palette).
+    About,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
