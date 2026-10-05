@@ -234,11 +234,14 @@ fn run_args(args: Vec<String>) -> i32 {
     let (engines, errors) = workspace::open_plan(&settings, &plan);
     let mut tabs: Vec<Tab> = engines.into_iter().map(Tab::new).collect();
     let mut notices: Vec<String> = errors;
-    notices.extend(workspace::missing_notice(&plan.missing));
+    notices.extend(workspace::missing_notice(
+        &plan.missing,
+        settings.config.language,
+    ));
     let piped = crate::stdin_source::classify() == crate::stdin_source::StdinKind::Piped;
     let mut focus = 0;
     if cli.stdin || piped {
-        match app::open_stdin(&settings.config.stdin_settings()) {
+        match app::open_stdin(&settings.config.stdin_settings(), settings.config.language) {
             Ok(mut engine) => {
                 settings.prepare(&mut engine);
                 focus = tabs.len();
@@ -285,6 +288,7 @@ fn run_args(args: Vec<String>) -> i32 {
     app.active = focus;
     app.mouse = !cli.no_mouse;
     app.idle_poll = settings.poll_interval();
+    app.lang = settings.config.language;
     // Streams opened later (`o`, the entry picker) get the same setup.
     app.settings = Some(settings);
     if !notices.is_empty() {

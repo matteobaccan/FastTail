@@ -27,6 +27,7 @@ pub mod global_filter;
 pub mod handoff;
 pub mod html_converter;
 pub mod i18n;
+pub mod i18n_tui;
 pub mod json_tree;
 pub mod lock;
 pub mod log_level;

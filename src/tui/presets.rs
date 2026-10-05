@@ -7,6 +7,8 @@
 //! saved from the focused stream, renamed, reordered and deleted. The dialog edits its
 //! own copy of the list; the caller stores it and saves after each change.
 
+use crate::i18n::Language;
+use crate::i18n_tui::{en, tx, txf};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::filter_preset::{FilterPreset, FilterState};
@@ -38,7 +40,7 @@ pub struct PresetsDialog {
     /// First list row shown when the list is taller than the dialog.
     pub top: usize,
     /// Why the last name was refused.
-    pub problem: Option<String>,
+    pub problem: Option<&'static str>,
 }
 
 /// What a key asks of the caller.
@@ -63,15 +65,15 @@ pub enum PresetsKey {
     Other,
 }
 
-fn problem_text(p: PresetNameProblem) -> String {
+fn problem_text(p: PresetNameProblem) -> &'static str {
     match p {
-        PresetNameProblem::Empty => "type a name".into(),
-        PresetNameProblem::Taken => "another preset has this name".into(),
+        PresetNameProblem::Empty => en("type a name"),
+        PresetNameProblem::Taken => en("another preset has this name"),
     }
 }
 
 /// One line about a filter state: terms, level, toggles and time range.
-pub fn summary(s: &FilterState) -> String {
+pub fn summary(s: &FilterState, lang: Language) -> String {
     let mut parts = Vec::new();
     if !s.include.is_empty() {
         parts.push(format!("+{}", s.include.join(" +")));
@@ -89,10 +91,10 @@ pub fn summary(s: &FilterState) -> String {
         parts.push("Aa".into());
     }
     if let Some((from, to)) = &s.time {
-        parts.push(format!("time {from}..{to}"));
+        parts.push(txf(lang, "time {0}..{1}", &[&from, &to]));
     }
     if parts.is_empty() {
-        "no filter".into()
+        tx(lang, "no filter").into()
     } else {
         parts.join("  ")
     }
@@ -374,14 +376,14 @@ mod tests {
         assert_eq!(d.on_key(key(KeyCode::Enter)), PresetsKey::Other);
         d.start_save();
         assert_eq!(d.on_key(key(KeyCode::Enter)), PresetsKey::Moved);
-        assert_eq!(d.problem.as_deref(), Some("type a name"));
+        assert_eq!(d.problem, Some("type a name"));
         let s = FilterState {
             include: vec!["payment".into()],
             exclude: vec!["DEBUG".into()],
             min_level: LogLevel::Warn,
             ..FilterState::default()
         };
-        assert_eq!(summary(&s), "+payment  -DEBUG  >= WARN");
-        assert_eq!(summary(&FilterState::default()), "no filter");
+        assert_eq!(summary(&s, Language::En), "+payment  -DEBUG  >= WARN");
+        assert_eq!(summary(&FilterState::default(), Language::En), "no filter");
     }
 }

@@ -166,8 +166,10 @@ pub fn workspace_plan(settings: &Settings) -> Plan {
 
 /// The streams of a named session file, which also becomes the per-stream state.
 pub fn session_plan(settings: &mut Settings, file: &Path) -> Result<Plan, String> {
-    let loaded =
-        Session::load_from(file).map_err(|e| format!("cannot load {}: {e}", file.display()))?;
+    let loaded = Session::load_from(file).map_err(|e| {
+        let lang = settings.config.language;
+        crate::i18n_tui::txf(lang, "cannot load {0}: {1}", &[&file.display(), &e])
+    })?;
     settings.adopt_session(&loaded.session.streams);
     Ok(Plan {
         paths: loaded
@@ -230,7 +232,7 @@ fn exists(path: &Path) -> bool {
 }
 
 /// "Skipped 2 missing files: a.log, b.log" for the status bar.
-pub fn missing_notice(missing: &[PathBuf]) -> Option<String> {
+pub fn missing_notice(missing: &[PathBuf], lang: crate::i18n::Language) -> Option<String> {
     if missing.is_empty() {
         return None;
     }
@@ -242,11 +244,14 @@ pub fn missing_notice(missing: &[PathBuf]) -> Option<String> {
                 .unwrap_or_else(|| p.display().to_string())
         })
         .collect();
-    let what = if missing.len() == 1 { "file" } else { "files" };
-    Some(format!(
-        "Skipped {} missing {what}: {}",
-        missing.len(),
-        names.join(", ")
+    let template = if missing.len() == 1 {
+        crate::i18n_tui::tx(lang, "Skipped {0} missing file: {1}")
+    } else {
+        crate::i18n_tui::tx(lang, "Skipped {0} missing files: {1}")
+    };
+    Some(crate::i18n_tui::fill(
+        template,
+        &[&missing.len(), &names.join(", ")],
     ))
 }
 
@@ -323,7 +328,7 @@ mod tests {
         let plan = workspace_plan(&settings);
         assert_eq!(plan.paths.len(), 2);
         assert_eq!(
-            missing_notice(&plan.missing).unwrap(),
+            missing_notice(&plan.missing, crate::i18n::Language::En).unwrap(),
             "Skipped 1 missing file: gone.log"
         );
         let (engines, errors) = open_plan(&settings, &plan);

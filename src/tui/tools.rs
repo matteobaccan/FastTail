@@ -10,6 +10,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::external_tools::{ExternalTool, KeyName, Mods, Shortcut, PLACEHOLDERS};
+use crate::i18n::Language;
+use crate::i18n_tui::{en, tx};
 use crate::settings_model as model;
 use crate::tui::form::{CheckBox, FieldKey, RadioList, ReorderList, TextField};
 
@@ -182,27 +184,27 @@ impl ToolForm {
         Self {
             index,
             fields: vec![
-                field(ToolKey::Name, "Name", text(&tool.name)),
-                field(ToolKey::Command, "Program", text(&tool.program)),
-                field(ToolKey::Args, "Arguments", text(&tool.args)),
+                field(ToolKey::Name, en("Name"), text(&tool.name)),
+                field(ToolKey::Command, en("Program"), text(&tool.program)),
+                field(ToolKey::Args, en("Arguments"), text(&tool.args)),
                 field(
                     ToolKey::Match,
-                    "Regex for {match}",
+                    en("Regex for {match}"),
                     text(tool.match_pattern.as_deref().unwrap_or("")),
                 ),
                 field(
                     ToolKey::Shortcut,
-                    "Shortcut (Ctrl+Shift+E)",
+                    en("Shortcut (Ctrl+Shift+E)"),
                     text(tool.shortcut.as_deref().unwrap_or("")),
                 ),
                 field(
                     ToolKey::Shell,
-                    "Run through the shell",
+                    en("Run through the shell"),
                     ToolWidget::Check(CheckBox { on: tool.use_shell }),
                 ),
                 field(
                     ToolKey::Rule,
-                    "Run when a rule matches",
+                    en("Run when a rule matches"),
                     ToolWidget::Radio(RadioList::new(&choices, rule)),
                 ),
             ],
@@ -245,7 +247,7 @@ impl ToolForm {
     }
 
     /// The fields that cannot be applied, with why.
-    pub fn problems(&self, rules: &[String]) -> Vec<(usize, String)> {
+    pub fn problems(&self, rules: &[String], lang: Language) -> Vec<(usize, String)> {
         let tool = self.tool(rules);
         let patterns: Vec<&str> = rules.iter().map(String::as_str).collect();
         let bad_shortcut =
@@ -253,12 +255,12 @@ impl ToolForm {
         let mut out = Vec::new();
         for (i, f) in self.fields.iter().enumerate() {
             let problem = match f.key {
-                ToolKey::Name if tool.name.is_empty() => Some("type a name".to_string()),
+                ToolKey::Name if tool.name.is_empty() => Some(tx(lang, "type a name").to_string()),
                 ToolKey::Command if tool.program.is_empty() => {
-                    Some("type the program to run".to_string())
+                    Some(tx(lang, "type the program to run").to_string())
                 }
                 ToolKey::Shortcut if bad_shortcut => {
-                    Some("a modifier and a key: Ctrl+Shift+E, Alt+F9".to_string())
+                    Some(tx(lang, "a modifier and a key: Ctrl+Shift+E, Alt+F9").to_string())
                 }
                 ToolKey::Match => tool
                     .match_pattern
@@ -302,7 +304,7 @@ impl ToolForm {
     }
 
     /// `label  value` per field, then the placeholders the arguments take.
-    pub fn lines(&self) -> Vec<String> {
+    pub fn lines(&self, lang: Language) -> Vec<String> {
         let mut out: Vec<String> = self
             .fields
             .iter()
@@ -316,12 +318,21 @@ impl ToolForm {
                         r.options.get(r.selected).map(String::as_str).unwrap_or("")
                     ),
                 };
-                format!("{:<26}{value}", f.label)
+                format!("{}{value}", padded(tx(lang, f.label), 26))
             })
             .collect();
-        out.push(format!("{:<26}{}", "Placeholders", PLACEHOLDERS.join(" ")));
+        out.push(format!(
+            "{}{}",
+            padded(tx(lang, "Placeholders"), 26),
+            PLACEHOLDERS.join(" ")
+        ));
         out
     }
+}
+
+fn padded(label: &str, width: usize) -> String {
+    let pad = width.saturating_sub(unicode_width::UnicodeWidthStr::width(label));
+    format!("{label}{}", " ".repeat(pad))
 }
 
 impl ToolsDialog {
@@ -357,7 +368,7 @@ impl ToolsDialog {
         let Some(form) = self.form.as_mut() else {
             return false;
         };
-        if !form.problems(&self.rules).is_empty() {
+        if !form.problems(&self.rules, Language::En).is_empty() {
             form.rejected = true;
             return false;
         }

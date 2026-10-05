@@ -5,21 +5,23 @@
 //! The month grid of the time range dialog: a cursor day (days since 1970-01-01), moved
 //! by days, weeks and months, and the weeks of the cursor's month, Monday first.
 
+use crate::i18n_tui::en;
+
 use crate::timestamp::{date_to_days, days_to_date};
 
 const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
+    en("January"),
+    en("February"),
+    en("March"),
+    en("April"),
+    en("May"),
+    en("June"),
+    en("July"),
+    en("August"),
+    en("September"),
+    en("October"),
+    en("November"),
+    en("December"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,9 +51,12 @@ impl Calendar {
     }
 
     /// "September 2026".
-    pub fn title(&self) -> String {
+    pub fn title(&self, lang: crate::i18n::Language) -> String {
         let (y, m, _) = days_to_date(self.cursor);
-        format!("{} {y}", MONTHS[(m - 1) as usize])
+        format!(
+            "{} {y}",
+            crate::i18n_tui::tx(lang, MONTHS[(m - 1) as usize])
+        )
     }
 
     /// The weeks of the cursor's month, Monday first; `None` outside the month.
@@ -106,7 +111,7 @@ mod tests {
     fn the_grid_starts_on_monday_and_holds_the_month() {
         // 1 September 2026 is a Tuesday.
         let c = Calendar::new(day(2026, 9, 18));
-        assert_eq!(c.title(), "September 2026");
+        assert_eq!(c.title(crate::i18n::Language::En), "September 2026");
         let weeks = c.weeks();
         assert_eq!(weeks[0][0], None, "Monday 31 August is outside");
         assert_eq!(weeks[0][1], Some(day(2026, 9, 1)));

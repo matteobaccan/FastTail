@@ -179,6 +179,14 @@ impl NumberField {
         }
     }
 
+    /// `value`'s message in `lang`: the range, or nothing when the value is valid.
+    pub fn problem(&self, lang: crate::i18n::Language) -> Option<String> {
+        let (lo, hi) = (*self.range.start(), *self.range.end());
+        self.value()
+            .err()
+            .map(|_| crate::i18n_tui::txf(lang, "{0} to {1}", &[&lo, &hi]))
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
         if !pressed(&key) {
             return FieldKey::Other;

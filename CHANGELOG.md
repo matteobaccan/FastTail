@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Terminal interface in every language.** Every text of the terminal interface (bars,
+  windows, dialogs, Settings, editors, help, messages) is translated into the 16
+  languages of the window, following `fasttail.ini`'s language or the system's. A new
+  language in Settings shows at once, and picking one stops following the system's, as
+  in the window.
 - **Terminal interface: the GUI's stream bar and filter row in every window.** A row of
   clickable chips (follow, monitor, TXT / HEX, line numbers, encoding, ANSI mode,
   collapse, context lines, the time span that opens the time range, line counts) and a

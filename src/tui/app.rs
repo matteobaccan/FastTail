@@ -27,6 +27,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::i18n::Language;
+use crate::i18n_tui::{en, tx, txf};
 use crate::tui::clipboard::{Clipboard, Copied};
 use crate::tui::colors::{Chrome, Palette};
 use crate::tui::dock::{self, Place, Zone};
@@ -489,6 +491,8 @@ pub struct App {
     last_engine_poll: Option<Instant>,
     /// Clickable rectangles of the last frame.
     pub hits: HitMap,
+    /// The language of the texts (`fasttail.ini`'s, English without a configuration).
+    pub lang: Language,
     /// CPU and memory for the top bar (`telemetry_enabled`), read once a second.
     telemetry: Telemetry,
     clipboard: Clipboard,
@@ -507,7 +511,7 @@ pub struct App {
 }
 
 /// What an empty workspace says.
-const NO_FILE: &str = "No file open: o opens one, Ctrl+O a session, q quits";
+const NO_FILE: &str = en("No file open: o opens one, Ctrl+O a session, q quits");
 
 /// The lock screen: the PIN being typed (shown as `*`) and the last notice.
 #[derive(Debug, Default)]
@@ -584,6 +588,7 @@ impl App {
             idle_poll: Duration::from_millis(250),
             last_engine_poll: None,
             hits: HitMap::default(),
+            lang: Language::En,
             telemetry: Telemetry::default(),
             clipboard: Clipboard::default(),
             last_click: None,
@@ -865,11 +870,15 @@ impl App {
                     }
                 } else if tab.engine.scan_progress().is_none() {
                     tab.pending_first_hit = false;
-                    self.message = Some(format!("Not found: {}", tab.engine.search_query));
+                    self.message = Some(txf(
+                        self.lang,
+                        "Not found: {0}",
+                        &[&tab.engine.search_query],
+                    ));
                 }
             }
             if let Some(result) = tab.engine.take_goto_time_result() {
-                self.message = goto_target(tab, result, "that time");
+                self.message = goto_target(tab, result, tx(self.lang, "that time"), self.lang);
             }
             if let Some(line) = tab.engine.pending_jump.take() {
                 // The context view shows the line it was entered on.
@@ -1071,7 +1080,7 @@ impl App {
         }
         if let Some(n) = self.count_digit(key) {
             self.count = Some(n);
-            self.message = Some(format!("Count {n}"));
+            self.message = Some(txf(self.lang, "Count {0}", &[&n]));
             return true;
         }
         let count = self.count.take();
@@ -1150,7 +1159,13 @@ impl App {
         let name = if errors { "ERROR" } else { "WARN" };
         let tab = &mut self.tabs[self.active];
         if tab.is_hex() {
-            self.message = Some("The HEX view shows bytes, not lines: h returns to them".into());
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "The HEX view shows bytes, not lines: h returns to them",
+                )
+                .into(),
+            );
             return;
         }
         let warn = LogLevel::Warn as u8;
@@ -1177,9 +1192,9 @@ impl App {
             let yet = if tab.engine.levels_complete() {
                 ""
             } else {
-                " yet (levels are still being read)"
+                tx(self.lang, " yet (levels are still being read)")
             };
-            self.message = Some(format!("No {name} line visible{yet}"));
+            self.message = Some(txf(self.lang, "No {0} line visible{1}", &[&name, &yet]));
             return;
         }
         if let Some(row) = tab.engine.get_visible_row_of_line(line) {
@@ -1187,7 +1202,7 @@ impl App {
         }
         if wrapped {
             let end = if forward { "first" } else { "last" };
-            self.message = Some(format!("{name}: back to the {end}"));
+            self.message = Some(txf(self.lang, "{0}: back to the {1}", &[&name, &end]));
         }
     }
 
@@ -1358,7 +1373,11 @@ impl App {
         match settings.save() {
             Ok(_) => self.save_error = None,
             Err(e) => {
-                let text = format!("Cannot save {}: {e}", settings.path.display());
+                let text = txf(
+                    self.lang,
+                    "Cannot save {0}: {1}",
+                    &[&settings.path.display(), &e],
+                );
                 if self.save_error.as_ref() != Some(&text) {
                     self.message = Some(text.clone());
                     self.save_error = Some(text);
@@ -1387,6 +1406,10 @@ impl App {
         }
         settings.config = next;
         self.apply_running_config();
+        // A new language shows in the dialog at once too.
+        if let Some(form) = self.settings_form.as_mut() {
+            form.lang = self.lang;
+        }
         true
     }
 
@@ -1415,6 +1438,7 @@ impl App {
             return;
         };
         let config = &settings.config;
+        self.lang = config.language;
         self.palette.theme = config.theme;
         self.palette.level_colors = config.level_colors;
         self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
@@ -1433,7 +1457,7 @@ impl App {
             .as_ref()
             .is_some_and(|s| crate::lock::can_lock(&s.config));
         if !can {
-            self.message = Some("Set a PIN in Settings (,) to lock".into());
+            self.message = Some(tx(self.lang, "Set a PIN in Settings (,) to lock").into());
             return;
         }
         self.locked = Some(LockScreen::default());
@@ -1463,9 +1487,9 @@ impl App {
                 } else {
                     screen.field = TextField::default();
                     screen.notice = if self.lock_attempts.register_failure(now) {
-                        "Too many wrong PINs".into()
+                        tx(self.lang, "Too many wrong PINs").into()
                     } else {
-                        "Wrong PIN".into()
+                        tx(self.lang, "Wrong PIN").into()
                     };
                 }
                 true
@@ -1499,7 +1523,7 @@ impl App {
         };
         let text = tab.engine.search_query.trim().to_string();
         if text.is_empty() {
-            self.message = Some("Search for the text to label first (/)".into());
+            self.message = Some(tx(self.lang, "Search for the text to label first (/)").into());
             return;
         }
         if QuickLabel::toggle(&mut self.quick_labels, &text, color) {
@@ -1508,9 +1532,9 @@ impl App {
                 .iter()
                 .any(|l| l.text == text && l.color == color);
             self.message = Some(if on {
-                format!("Label {color}: {text}")
+                txf(self.lang, "Label {0}: {1}", &[&color, &text])
             } else {
-                format!("Label removed: {text}")
+                txf(self.lang, "Label removed: {0}", &[&text])
             });
             self.sync_labels();
         }
@@ -1536,7 +1560,7 @@ impl App {
     fn open_json(&mut self) {
         let tab = &self.tabs[self.active];
         let Some(line) = tab.cursor_line() else {
-            self.message = Some("No row".into());
+            self.message = Some(tx(self.lang, "No row").into());
             return;
         };
         let text = tab.engine.get_line(line).unwrap_or_default();
@@ -1546,10 +1570,10 @@ impl App {
                 self.json_dialog = Some(JsonDialog::new(number, tree));
             }
             Err(crate::json_tree::NoTree::TooLarge) => {
-                self.message = Some("JSON over 4 MB: not shown as a tree".into())
+                self.message = Some(tx(self.lang, "JSON over 4 MB: not shown as a tree").into())
             }
             Err(crate::json_tree::NoTree::NotJson) => {
-                self.message = Some("No JSON on this row".into())
+                self.message = Some(tx(self.lang, "No JSON on this row").into())
             }
         }
     }
@@ -1560,15 +1584,17 @@ impl App {
         };
         match d.on_key(key) {
             JsonKey::Close => self.json_dialog = None,
-            JsonKey::Cut => self.message = Some("Stopped at 5,000 rows".into()),
+            JsonKey::Cut => self.message = Some(tx(self.lang, "Stopped at 5,000 rows").into()),
             JsonKey::Copy { text, path } => {
                 let what = if path { "path" } else { "value" };
                 self.message = Some(match self.clipboard.copy(&text) {
-                    Ok(Copied::System) => format!("Copied the {what}"),
-                    Ok(Copied::Osc52) => {
-                        format!("Sent the {what} to the terminal clipboard (OSC 52)")
-                    }
-                    Err(e) => format!("Copy failed: {e}"),
+                    Ok(Copied::System) => txf(self.lang, "Copied the {0}", &[&what]),
+                    Ok(Copied::Osc52) => txf(
+                        self.lang,
+                        "Sent the {0} to the terminal clipboard (OSC 52)",
+                        &[&what],
+                    ),
+                    Err(e) => txf(self.lang, "Copy failed: {0}", &[&e]),
                 });
             }
             JsonKey::Handled => {}
@@ -1672,8 +1698,10 @@ impl App {
         if let Some(form) = self.settings_form.as_mut() {
             for f in &mut form.fields {
                 if f.key == crate::tui::settings::Key::Tools {
-                    f.widget = crate::tui::settings::Widget::Button(format!(
-                        "{count} defined - Enter edits them"
+                    f.widget = crate::tui::settings::Widget::Button(txf(
+                        self.lang,
+                        "{0} defined - Enter edits them",
+                        &[&count],
                     ));
                 }
             }
@@ -1692,19 +1720,20 @@ impl App {
             return;
         };
         let Some(tab) = self.tabs.get(self.active) else {
-            self.message = Some(NO_FILE.into());
+            self.message = Some(tx(self.lang, NO_FILE).into());
             return;
         };
         let Some(line) = tab.cursor_line() else {
-            self.message = Some("No row for a tool (the HEX view shows bytes)".into());
+            self.message =
+                Some(tx(self.lang, "No row for a tool (the HEX view shows bytes)").into());
             return;
         };
         let Some(ctx) = crate::workspace::tool_context_for_row(&tab.engine, line) else {
             return;
         };
         self.message = Some(match self.tool_runner.run_manual(&tool, &ctx) {
-            Ok(()) => format!("Started {}", tool.name),
-            Err(e) => format!("Cannot start {}: {e}", tool.name),
+            Ok(()) => txf(self.lang, "Started {0}", &[&tool.name]),
+            Err(e) => txf(self.lang, "Cannot start {0}: {1}", &[&tool.name, &e]),
         });
     }
 
@@ -1792,10 +1821,10 @@ impl App {
         gf.enabled = !gf.enabled;
         let state = match (gf.enabled, gf.has_terms()) {
             (true, true) => "on",
-            (true, false) => "on, but it has no term: F edits it",
+            (true, false) => tx(self.lang, "on, but it has no term: F edits it"),
             (false, _) => "off",
         };
-        self.message = Some(format!("Global filter {state}"));
+        self.message = Some(txf(self.lang, "Global filter {0}", &[&state]));
         self.set_global_filter(gf);
     }
 
@@ -1827,14 +1856,14 @@ impl App {
             PresetsKey::Apply { index, all } => self.apply_preset(index, all),
             PresetsKey::Save { name, with_time } => {
                 let Some(tab) = self.tabs.get(self.active) else {
-                    self.message = Some(NO_FILE.into());
+                    self.message = Some(tx(self.lang, NO_FILE).into());
                     return true;
                 };
                 let preset = crate::filter_preset::FilterPreset {
                     state: crate::filter_preset::FilterState::of_engine(&tab.engine, with_time),
                     name,
                 };
-                self.message = Some(format!("Preset {} saved", preset.name));
+                self.message = Some(txf(self.lang, "Preset {0} saved", &[&preset.name]));
                 if let Some(d) = self.presets.as_mut() {
                     d.saved(preset);
                 }
@@ -1870,7 +1899,7 @@ impl App {
             return;
         };
         if self.tabs.is_empty() {
-            self.message = Some(NO_FILE.into());
+            self.message = Some(tx(self.lang, NO_FILE).into());
             return;
         }
         if all {
@@ -1881,8 +1910,16 @@ impl App {
             p.apply_to(&mut tab.engine);
         }
         self.presets = None;
-        let target = if all { "every stream" } else { "the stream" };
-        self.message = Some(format!("Preset {} applied to {target}", p.name));
+        let target = if all {
+            tx(self.lang, "every stream")
+        } else {
+            tx(self.lang, "the stream")
+        };
+        self.message = Some(txf(
+            self.lang,
+            "Preset {0} applied to {1}",
+            &[&p.name, &target],
+        ));
         self.save_config();
     }
 
@@ -1978,7 +2015,7 @@ impl App {
             self.interface_switch = Some(InterfaceSwitch::Offer);
         }
         self.apply_running_config();
-        self.message = Some("Settings saved".into());
+        self.message = Some(tx(self.lang, "Settings saved").into());
         self.save_config();
     }
 
@@ -1997,7 +2034,7 @@ impl App {
         if let Some(s) = self.settings.as_mut() {
             s.config.theme = next;
         }
-        self.message = Some(format!("Theme: {}", next.name()));
+        self.message = Some(txf(self.lang, "Theme: {0}", &[&next.name()]));
     }
 
     /// The GUI's "Flash on background alert" in a terminal: while a stream that is not on
@@ -2042,9 +2079,9 @@ impl App {
         }
         self.message = Some(
             if on {
-                "Following every stream"
+                tx(self.lang, "Following every stream")
             } else {
-                "Every stream paused"
+                tx(self.lang, "Every stream paused")
             }
             .into(),
         );
@@ -2092,7 +2129,7 @@ impl App {
             match d.recent.get(d.selected) {
                 Some(f) => f.clone(),
                 None => {
-                    self.message = Some("No recent session: type a path".into());
+                    self.message = Some(tx(self.lang, "No recent session: type a path").into());
                     return;
                 }
             }
@@ -2127,20 +2164,24 @@ impl App {
         // The session's layout becomes the configuration's, as in the GUI.
         self.dock_dirty = true;
         let mut notes: Vec<String> = errors;
-        notes.extend(crate::tui::workspace::missing_notice(&plan.missing));
+        notes.extend(crate::tui::workspace::missing_notice(
+            &plan.missing,
+            self.lang,
+        ));
         self.message = Some(if notes.is_empty() {
-            format!(
-                "Session {} loaded: {} streams",
-                crate::session::Session::name_of(file),
-                plan.paths.len()
+            txf(
+                self.lang,
+                "Session {0} loaded: {1} streams",
+                &[&crate::session::Session::name_of(file), &plan.paths.len()],
             )
         } else {
             notes.join("  |  ")
         });
         if self.tabs.is_empty() {
-            self.message = Some(format!(
-                "Session {} opened nothing",
-                crate::session::Session::name_of(file)
+            self.message = Some(txf(
+                self.lang,
+                "Session {0} opened nothing",
+                &[&crate::session::Session::name_of(file)],
             ));
         }
         self.save_config();
@@ -2155,9 +2196,10 @@ impl App {
         let file = crate::session::Session::with_suffix(&absolute(typed));
         let config_path = self.settings_mut().path.clone();
         if crate::paths::paths_equal(&file, &config_path) {
-            self.message = Some(format!(
-                "{} is the configuration file: it cannot be a session",
-                file.display()
+            self.message = Some(txf(
+                self.lang,
+                "{0} is the configuration file: it cannot be a session",
+                &[&file.display()],
             ));
             return;
         }
@@ -2237,20 +2279,25 @@ impl App {
             dock_layout: Some(self.dock_ron()),
         };
         if let Err(e) = session.save_to(file) {
-            self.message = Some(format!("Cannot save {}: {e}", file.display()));
+            self.message = Some(txf(
+                self.lang,
+                "Cannot save {0}: {1}",
+                &[&file.display(), &e],
+            ));
             return;
         }
         let config = &mut self.settings_mut().config;
         config.current_session = Some(file.to_path_buf());
         config.add_recent_session(file);
         let stdin = if self.tabs.iter().any(|t| t.engine.is_stdin()) {
-            " (standard input is not saved)"
+            tx(self.lang, " (standard input is not saved)")
         } else {
             ""
         };
-        self.message = Some(format!(
-            "Session saved to {}: {count} streams{stdin}",
-            file.display()
+        self.message = Some(txf(
+            self.lang,
+            "Session saved to {0}: {1} streams{2}",
+            &[&file.display(), &count, &stdin],
         ));
         self.save_config();
     }
@@ -2285,7 +2332,7 @@ impl App {
             .and_then(|t| t.engine.path.parent().map(Path::to_path_buf))
             .filter(|d| d.is_dir())
             .or_else(|| std::env::current_dir().ok());
-        self.browser = Some(FileBrowser::at(start));
+        self.browser = Some(FileBrowser::at(start, self.lang));
     }
 
     fn on_browser_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -2337,11 +2384,11 @@ impl App {
             return;
         };
         let Some(entry) = p.chosen() else {
-            self.message = Some("No entry matches".into());
+            self.message = Some(tx(self.lang, "No entry matches").into());
             return;
         };
         if let Some(r) = &entry.refusal {
-            self.message = Some(format!("{}: {}", entry.name, refusal_text(r)));
+            self.message = Some(format!("{}: {}", entry.name, refusal_text(r, self.lang)));
             return;
         }
         let path = crate::compressed::entry_path(&p.archive, &entry.name);
@@ -2401,23 +2448,25 @@ impl App {
                 self.focus_tab(self.tabs.len() - 1);
             }
             OpenOutcome::OpenEntry(entry) => self.open_file(&entry),
-            OpenOutcome::Missing => self.message = Some(format!("{shown}: not found")),
+            OpenOutcome::Missing => {
+                self.message = Some(txf(self.lang, "{0}: not found", &[&shown]))
+            }
             OpenOutcome::Failed { error, .. } => self.message = Some(format!("{shown}: {error:?}")),
             OpenOutcome::EmptyArchive(_) => {
-                self.message = Some(format!("{shown}: the archive holds no file"))
+                self.message = Some(txf(self.lang, "{0}: the archive holds no file", &[&shown]))
             }
             OpenOutcome::ChooseEntries {
                 archive,
                 entries,
                 partial,
-            } => self.picker = Some(EntryPicker::new(archive, entries, partial)),
+            } => self.picker = Some(EntryPicker::new(archive, entries, partial, self.lang)),
             OpenOutcome::ScanTar { archive, codec } => {
                 let scan = crate::compressed::TarScan::start(
                     &archive,
                     codec,
                     crate::compressed::ScanLimits::default(),
                 );
-                self.picker = Some(EntryPicker::scanning(archive, scan));
+                self.picker = Some(EntryPicker::scanning(archive, scan, self.lang));
             }
             OpenOutcome::ListFailed { error, .. } => {
                 self.message = Some(format!("{shown}: {error}"))
@@ -2555,16 +2604,17 @@ impl App {
                     let last = tab.engine.file_size as usize - 1;
                     tab.set_cursor(offset.min(last) / tab.hex_width.max(1));
                 }
-                _ => self.message = Some(format!("Cannot go to \"{text}\"")),
+                _ => self.message = Some(txf(self.lang, "Cannot go to \"{0}\"", &[&text])),
             },
             PromptKind::Goto => {
                 let current = tab.cursor_line().unwrap_or(0);
                 let target = tab.engine.resolve_goto(&text, current);
                 if target.is_some_and(|t| t.waiting) {
                     // The jump happens when the timing ends (see `tick`).
-                    self.message = Some("Timing the file to find that time...".into());
+                    self.message =
+                        Some(tx(self.lang, "Timing the file to find that time...").into());
                 } else {
-                    self.message = goto_target(tab, target, &text);
+                    self.message = goto_target(tab, target, &text, self.lang);
                 }
             }
         }
@@ -2667,11 +2717,17 @@ impl App {
     fn split_focused(&mut self, dir: Dir) {
         let n = self.tabs.len();
         if n < 2 {
-            self.message = Some("A split needs two streams: o opens another".into());
+            self.message = Some(tx(self.lang, "A split needs two streams: o opens another").into());
             return;
         }
         if let Place::Float(_) = self.focused_place() {
-            self.message = Some("A floating window: Alt+F docks it, then it splits".into());
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "A floating window: Alt+F docks it, then it splits",
+                )
+                .into(),
+            );
             return;
         }
         let leaf = self.focused_leaf();
@@ -2762,9 +2818,13 @@ impl App {
             .min(self.tabs.len().saturating_sub(1));
         self.focus_tab(self.active);
         self.message = Some(if self.tabs.is_empty() {
-            format!("Closed {}: no file open, o opens one", tab.title)
+            txf(
+                self.lang,
+                "Closed {0}: no file open, o opens one",
+                &[&tab.title],
+            )
         } else {
-            format!("Closed {}", tab.title)
+            txf(self.lang, "Closed {0}", &[&tab.title])
         });
     }
 
@@ -2776,7 +2836,7 @@ impl App {
         }
         let leaf = self.focused_leaf();
         if leaf.is_empty() {
-            self.message = Some("One window: nothing to close".into());
+            self.message = Some(tx(self.lang, "One window: nothing to close").into());
             return;
         }
         let window = self.window_rect(&Place::Dock(leaf.clone()));
@@ -2800,9 +2860,9 @@ impl App {
                 e.is_watching = !e.is_watching;
                 self.message = Some(
                     if e.is_watching {
-                        "Monitor on"
+                        tx(self.lang, "Monitor on")
                     } else {
-                        "Monitor off"
+                        tx(self.lang, "Monitor off")
                     }
                     .into(),
                 );
@@ -2812,14 +2872,14 @@ impl App {
             C::Encoding => {
                 let next = crate::tui::bars::next_encoding(e.encoding);
                 e.set_encoding(next);
-                self.message = Some(format!("Encoding: {}", next.name()));
+                self.message = Some(txf(self.lang, "Encoding: {0}", &[&next.name()]));
             }
             C::Ansi => self.apply(Action::CycleAnsi),
             C::Collapse => self.apply(Action::CycleCollapse),
             C::Context => {
                 let next = crate::tui::bars::next_context(e.context_lines());
                 e.set_context_lines(next);
-                self.message = Some(format!("Context lines: {next}"));
+                self.message = Some(txf(self.lang, "Context lines: {0}", &[&next]));
             }
             C::Time => self.apply(Action::TimeRange),
             C::Include => self.apply(Action::EditInclude),
@@ -2916,7 +2976,7 @@ impl App {
         }
         let leaf = self.focused_leaf();
         let Some((split, _)) = self.dock.split_above(&leaf, dir) else {
-            self.message = Some("No divider that way".into());
+            self.message = Some(tx(self.lang, "No divider that way").into());
             return;
         };
         if let Some(Pane::Split { fraction, .. }) = self.dock.get(&split) {
@@ -2930,13 +2990,13 @@ impl App {
     /// `<` / `>`: the focused stream becomes a tab of the previous / next window.
     fn move_to_pane(&mut self, forward: bool) {
         if let Place::Float(_) = self.focused_place() {
-            self.message = Some("A floating window: Alt+F docks it".into());
+            self.message = Some(tx(self.lang, "A floating window: Alt+F docks it").into());
             return;
         }
         let leaves = self.dock.leaf_paths();
         let n = leaves.len();
         if n < 2 {
-            self.message = Some("One window: s splits it".into());
+            self.message = Some(tx(self.lang, "One window: s splits it").into());
             return;
         }
         let here = self.focused_leaf();
@@ -2967,7 +3027,7 @@ impl App {
         let next = match pos {
             Some(p) => p.min(n - 1),
             None if n < 2 => {
-                self.message = Some("One tab in this window".into());
+                self.message = Some(tx(self.lang, "One tab in this window").into());
                 return;
             }
             None if forward => (active + 1) % n,
@@ -3108,7 +3168,7 @@ impl App {
                 Action::CycleTheme => self.cycle_theme(),
                 Action::PlayAll | Action::PauseAll => {}
                 Action::About => self.show_about = !self.show_about,
-                _ => self.message = Some(NO_FILE.into()),
+                _ => self.message = Some(tx(self.lang, NO_FILE).into()),
             }
             return;
         }
@@ -3123,7 +3183,13 @@ impl App {
                 | Action::SelectDown
         );
         if row_action && self.tabs[self.active].is_hex() {
-            self.message = Some("The HEX view shows bytes, not lines: h returns to them".into());
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "The HEX view shows bytes, not lines: h returns to them",
+                )
+                .into(),
+            );
             return;
         }
         match action {
@@ -3148,7 +3214,7 @@ impl App {
             Action::Label(n) => self.toggle_label(n),
             Action::LabelPrefix => {
                 self.label_pending = true;
-                self.message = Some("Label colour: 1-9 (the search text)".into());
+                self.message = Some(tx(self.lang, "Label colour: 1-9 (the search text)").into());
             }
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
@@ -3167,7 +3233,7 @@ impl App {
             Action::About => self.show_about = !self.show_about,
             Action::EditNote => match self.tabs[self.active].cursor_line() {
                 Some(line) => self.open_prompt(PromptKind::Note(line)),
-                None => self.message = Some("No row for a note".into()),
+                None => self.message = Some(tx(self.lang, "No row for a note").into()),
             },
             Action::EditExclude => self.open_prompt(PromptKind::Exclude),
             Action::SplitRight => self.split_focused(Dir::Horizontal),
@@ -3210,14 +3276,18 @@ impl App {
             })
         };
         let Some(text) = text else {
-            self.message = Some("Nothing to copy".into());
+            self.message = Some(tx(self.lang, "Nothing to copy").into());
             return;
         };
         let lines = text.lines().count();
         self.message = Some(match self.clipboard.copy(&text) {
-            Ok(Copied::System) => format!("Copied {lines} lines to the clipboard"),
-            Ok(Copied::Osc52) => format!("Sent {lines} lines to the terminal clipboard (OSC 52)"),
-            Err(e) => format!("Copy failed: {e}"),
+            Ok(Copied::System) => txf(self.lang, "Copied {0} lines to the clipboard", &[&lines]),
+            Ok(Copied::Osc52) => txf(
+                self.lang,
+                "Sent {0} lines to the terminal clipboard (OSC 52)",
+                &[&lines],
+            ),
+            Err(e) => txf(self.lang, "Copy failed: {0}", &[&e]),
         });
     }
 
@@ -3792,7 +3862,7 @@ impl App {
             Action::ScrollHome => tab.hscroll = 0,
             Action::ToggleBookmark => match tab.cursor_line() {
                 Some(line) => tab.engine.toggle_bookmark(line),
-                None => self.message = Some("No row to bookmark".into()),
+                None => self.message = Some(tx(self.lang, "No row to bookmark").into()),
             },
             Action::NextBookmark | Action::PrevBookmark => {
                 let from = tab.cursor_line().unwrap_or(0);
@@ -3805,36 +3875,36 @@ impl App {
                         if wrapped {
                             self.message = Some(
                                 if forward {
-                                    "Bookmarks: back to the first"
+                                    tx(self.lang, "Bookmarks: back to the first")
                                 } else {
-                                    "Bookmarks: back to the last"
+                                    tx(self.lang, "Bookmarks: back to the last")
                                 }
                                 .into(),
                             );
                         }
                     }
-                    None => self.message = Some("No bookmark visible".into()),
+                    None => self.message = Some(tx(self.lang, "No bookmark visible").into()),
                 }
             }
             Action::SearchNext => {
                 if tab.engine.search_next(false).is_none() {
-                    self.message = Some("No search hits".into());
+                    self.message = Some(tx(self.lang, "No search hits").into());
                 }
             }
             Action::SearchPrev => {
                 if tab.engine.search_prev(false).is_none() {
-                    self.message = Some("No search hits".into());
+                    self.message = Some(tx(self.lang, "No search hits").into());
                 }
             }
-            Action::ToggleContext => toggle_context(tab, &mut self.message),
+            Action::ToggleContext => toggle_context(tab, &mut self.message, self.lang),
             Action::ToggleHex => tab.toggle_hex(),
             Action::ToggleLineNumbers => {
                 tab.engine.show_line_numbers = !tab.engine.show_line_numbers;
                 self.message = Some(
                     if tab.engine.show_line_numbers {
-                        "Line numbers on"
+                        tx(self.lang, "Line numbers on")
                     } else {
-                        "Line numbers off"
+                        tx(self.lang, "Line numbers off")
                     }
                     .into(),
                 );
@@ -3848,15 +3918,17 @@ impl App {
                 };
                 tab.engine.set_ansi_mode(next);
                 self.message = Some(match next {
-                    AnsiMode::Auto => {
-                        format!("ANSI: auto (now {})", tab.engine.ansi_effective().name())
-                    }
-                    mode => format!("ANSI: {}", mode.name()),
+                    AnsiMode::Auto => txf(
+                        self.lang,
+                        "ANSI: auto (now {0})",
+                        &[&tab.engine.ansi_effective().name()],
+                    ),
+                    mode => txf(self.lang, "ANSI: {0}", &[&mode.name()]),
                 });
             }
             // In the context view, Esc returns to the filtered rows first.
             Action::ClearSearch if tab.engine.context_line().is_some() => {
-                toggle_context(tab, &mut self.message)
+                toggle_context(tab, &mut self.message, self.lang)
             }
             Action::ClearSearch => {
                 tab.engine.search_query.clear();
@@ -3871,7 +3943,7 @@ impl App {
                     CollapseMode::Numbers => CollapseMode::Off,
                 };
                 tab.engine.set_collapse_mode(next);
-                self.message = Some(format!("Collapse: {}", next.name()));
+                self.message = Some(txf(self.lang, "Collapse: {0}", &[&next.name()]));
             }
             Action::CycleLevel => {
                 let next = match tab.engine.min_level {
@@ -3884,8 +3956,8 @@ impl App {
                 tab.engine.set_min_level(next);
                 tab.top = 0;
                 self.message = Some(match next {
-                    LogLevel::Unknown => "Level filter: off".into(),
-                    l => format!("Level filter: {} and above", l.name()),
+                    LogLevel::Unknown => tx(self.lang, "Level filter: off").into(),
+                    l => txf(self.lang, "Level filter: {0} and above", &[&l.name()]),
                 });
             }
             _ => {}
@@ -3991,7 +4063,11 @@ impl App {
         let dim = Style::default().fg(self.palette.dim());
         let ascii = self.palette.ascii;
         let config = self.settings.as_ref().map(|s| &s.config);
-        let mut title = format!(" FastTail v{} by {AUTHOR}", env!("CARGO_PKG_VERSION"));
+        let mut title = txf(
+            self.lang,
+            " FastTail v{0} by {1}",
+            &[&env!("CARGO_PKG_VERSION"), &AUTHOR],
+        );
         if let Some(file) = config.and_then(|c| c.current_session.as_deref()) {
             let dot = if ascii { "-" } else { "·" };
             title.push_str(&format!(
@@ -4016,7 +4092,11 @@ impl App {
         if let Some(text) = telemetry {
             right.push(TopItem::Text(text, dim));
         }
-        let global = if applied { "Global on" } else { "Global off" };
+        let global = if applied {
+            tx(self.lang, "Global on")
+        } else {
+            tx(self.lang, "Global off")
+        };
         right.push(TopItem::Button(
             "F",
             global.into(),
@@ -4025,7 +4105,7 @@ impl App {
         ));
         right.push(TopItem::Button(
             ":",
-            "Palette".into(),
+            tx(self.lang, "Palette").into(),
             Action::Palette,
             false,
         ));
@@ -4036,22 +4116,41 @@ impl App {
             return;
         }
         let (play, pause) = if ascii {
-            ("> Play", "|| Pause")
+            (tx(self.lang, "> Play"), tx(self.lang, "|| Pause"))
         } else {
-            ("▶ Play", "⏸ Pause")
+            (tx(self.lang, "▶ Play"), tx(self.lang, "⏸ Pause"))
         };
         let left = vec![
-            TopItem::Button("o", "Open".into(), Action::OpenFile, false),
-            TopItem::Button("O", "Sessions".into(), Action::OpenSession, false),
-            TopItem::Button("r", format!("Rules ({rules})"), Action::EditRules, false),
+            TopItem::Button("o", tx(self.lang, "Open").into(), Action::OpenFile, false),
+            TopItem::Button(
+                "O",
+                tx(self.lang, "Sessions").into(),
+                Action::OpenSession,
+                false,
+            ),
+            TopItem::Button(
+                "r",
+                txf(self.lang, "Rules ({0})", &[&rules]),
+                Action::EditRules,
+                false,
+            ),
             TopItem::Button("", play.into(), Action::PlayAll, false),
             TopItem::Button("", pause.into(), Action::PauseAll, false),
-            TopItem::Button(",", "Settings".into(), Action::Settings, false),
+            TopItem::Button(
+                ",",
+                tx(self.lang, "Settings").into(),
+                Action::Settings,
+                false,
+            ),
         ];
-        let about = if ascii { "About" } else { "ℹ About" };
+        let about = if ascii {
+            tx(self.lang, "About")
+        } else {
+            tx(self.lang, "ℹ About")
+        };
         let right = vec![
             TopItem::Button("", about.into(), Action::About, false),
-            TopItem::Button("?", "Help".into(), Action::ToggleHelp, false),
+            TopItem::Button("?", tx(self.lang, "Help").into(), Action::ToggleHelp, false),
         ];
         let row = Rect::new(area.x, area.y + 1, area.width, 1);
         self.draw_top_row(frame, row, &left, &right);
@@ -4148,9 +4247,9 @@ impl App {
         if self.dock.streams().is_empty() {
             // An empty dock: the background, a hint and one place to drop a window.
             let hint = if self.tabs.is_empty() {
-                NO_FILE
+                tx(self.lang, NO_FILE)
             } else {
-                "Alt+F on a floating window docks it here"
+                tx(self.lang, "Alt+F on a floating window docks it here")
             };
             // On the bottom row, where a new floating window does not cover it.
             let y = area.bottom().saturating_sub(1).max(area.y);
@@ -4212,9 +4311,9 @@ impl App {
         }) = &self.dock_drag
         {
             let title = if *zone == Zone::Float {
-                " float here "
+                tx(self.lang, " float here ")
             } else {
-                " drop here "
+                tx(self.lang, " drop here ")
             };
             let block = Block::bordered()
                 .border_set(self.palette.border_set(Chrome::Focused))
@@ -4241,7 +4340,7 @@ impl App {
         let name = |me: &Self, k: usize| match tabs[k].stream().and_then(|p| me.tab_index(p)) {
             Some(i) if k == shown => format!(" [#{}] {} ", i + 1, me.tabs[i].title),
             Some(i) => format!(" {}:{} ", i + 1, me.tabs[i].title),
-            None => format!(" {} ", panel_name(&tabs[k])),
+            None => format!(" {} ", panel_name(&tabs[k], self.lang)),
         };
         if tabs.len() < 2 {
             return vec![Span::styled(name(self, shown), style)];
@@ -4287,7 +4386,10 @@ impl App {
         frame.render_widget(block, area);
         frame.render_widget(
             Paragraph::new(Line::styled(
-                " A panel of the GUI. Ctrl+PgUp/PgDn: the other tabs of this window",
+                tx(
+                    self.lang,
+                    " A panel of the GUI. Ctrl+PgUp/PgDn: the other tabs of this window",
+                ),
                 style,
             )),
             inner,
@@ -4334,11 +4436,14 @@ impl App {
         let e = &tab.engine;
         let follow = if e.follow_tail {
             Span::styled(
-                " FOLLOW ",
+                tx(self.lang, " FOLLOW "),
                 Style::default().fg(Color::Black).bg(palette.accent()),
             )
         } else {
-            Span::styled(" PAUSED ", Style::default().fg(palette.dim()))
+            Span::styled(
+                tx(self.lang, " PAUSED "),
+                Style::default().fg(palette.dim()),
+            )
         };
         title.push(follow);
         title.push(Span::raw(" "));
@@ -4355,11 +4460,14 @@ impl App {
             .title_top(Line::from(title))
             .title_top(Line::from(close).right_aligned())
             .title_bottom(
-                Line::from(format!(" {} ", counts_text(e, tab.is_hex(), tab.hex_width)))
-                    .style(title_style),
+                Line::from(format!(
+                    " {} ",
+                    counts_text(e, tab.is_hex(), tab.hex_width, self.lang)
+                ))
+                .style(title_style),
             )
             .title_bottom(
-                Line::from(format!(" {} ", view_state_text(e, tab.is_hex())))
+                Line::from(format!(" {} ", view_state_text(e, tab.is_hex(), self.lang)))
                     .style(title_style)
                     .right_aligned(),
             );
@@ -4373,7 +4481,7 @@ impl App {
                 .settings
                 .as_ref()
                 .is_some_and(|s| s.config.global_filter.is_applied());
-            let lines = crate::tui::bars::lines(tab, &palette, global);
+            let lines = crate::tui::bars::lines(tab, &palette, global, self.lang);
             for (n, chips) in lines.into_iter().take(bars).enumerate() {
                 let row = Rect::new(inner.x, inner.y + n as u16, inner.width, 1);
                 for (rect, chip) in
@@ -4391,7 +4499,10 @@ impl App {
             let banner = Rect { height: 1, ..inner };
             frame.render_widget(
                 Paragraph::new(Line::styled(
-                    " In context: filters suspended. Ctrl+K or Esc returns",
+                    tx(
+                        self.lang,
+                        " In context: filters suspended. Ctrl+K or Esc returns",
+                    ),
                     Style::default().fg(Color::Black).bg(palette.accent()),
                 )),
                 banner,
@@ -4400,9 +4511,15 @@ impl App {
             inner.height -= 1;
         }
         let (lines, row_count) = if tab.is_hex() {
-            hex_rows(tab, &palette, inner.width as usize, inner.height as usize)
+            hex_rows(
+                tab,
+                &palette,
+                inner.width as usize,
+                inner.height as usize,
+                self.lang,
+            )
         } else {
-            stream_rows(tab, &palette, inner.height as usize)
+            stream_rows(tab, &palette, inner.height as usize, self.lang)
         };
         self.hits.windows.push(WindowHit {
             tab: idx,
@@ -4449,14 +4566,15 @@ impl App {
                 let mut spans = Vec::with_capacity(STATUS.len() * 4);
                 let mut x = inner.x;
                 for (i, (k, label, _)) in STATUS.iter().enumerate() {
-                    let w = (k.chars().count() + label.chars().count() + 3) as u16;
+                    let k = tx(self.lang, k);
+                    let w = (k.chars().count() + tx(self.lang, label).chars().count() + 3) as u16;
                     if x + w > inner.right() {
                         break;
                     }
                     self.hits.buttons.push((Rect::new(x, inner.y, w, 1), i));
                     spans.push(Span::styled("[", bracket));
-                    spans.push(Span::styled(*k, key));
-                    spans.push(Span::raw(format!(" {label}")));
+                    spans.push(Span::styled(k, key));
+                    spans.push(Span::raw(format!(" {}", tx(self.lang, label))));
                     spans.push(Span::styled("]", bracket));
                     spans.push(Span::raw(" "));
                     x += w + 1;
@@ -4497,9 +4615,9 @@ impl App {
         cast_shadow(frame.buffer_mut(), rect, self.palette.shadow());
         // Buttons, right-aligned on the last inner row.
         let labels: &[&str] = if cancel {
-            &["[ OK ]", "[ Cancel ]"]
+            &[tx(self.lang, "[ OK ]"), tx(self.lang, "[ Cancel ]")]
         } else {
-            &["[ OK ]"]
+            &[tx(self.lang, "[ OK ]")]
         };
         let row = inner.bottom().saturating_sub(1);
         // Two columns between buttons, one after the last.
@@ -4532,22 +4650,22 @@ impl App {
             return;
         };
         let title = match kind {
-            PromptKind::Search => "Search",
-            PromptKind::Include => "Include filter",
-            PromptKind::Exclude => "Exclude filter",
-            PromptKind::Note(_) => "Bookmark note",
+            PromptKind::Search => tx(self.lang, "Search"),
+            PromptKind::Include => tx(self.lang, "Include filter"),
+            PromptKind::Exclude => tx(self.lang, "Exclude filter"),
+            PromptKind::Note(_) => tx(self.lang, "Bookmark note"),
             PromptKind::Goto if self.tabs[self.active].is_hex() => {
-                "Go to byte offset (decimal or 0x hex)"
+                tx(self.lang, "Go to byte offset (decimal or 0x hex)")
             }
-            PromptKind::Goto => "Go to line (N, +N, -N) or time (14:02)",
-            PromptKind::SaveSession => "Save session as",
+            PromptKind::Goto => tx(self.lang, "Go to line (N, +N, -N) or time (14:02)"),
+            PromptKind::SaveSession => tx(self.lang, "Save session as"),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
         let Some(p) = &self.prompt else {
             return;
         };
         let hint = Line::styled(
-            "Enter confirm   Esc cancel   Ctrl+U clear",
+            tx(self.lang, "Enter confirm   Esc cancel   Ctrl+U clear"),
             Style::default().fg(self.palette.dim()),
         );
         let (shown, x) = p.field.view(inner.width.saturating_sub(2) as usize);
@@ -4573,7 +4691,7 @@ impl App {
             .border_set(palette.border_set(Chrome::Dialog))
             .border_style(palette.border_style(Chrome::Dialog))
             .title_top(
-                Line::from(" FastTail is locked ").style(
+                Line::from(tx(self.lang, " FastTail is locked ")).style(
                     Style::default()
                         .fg(palette.accent())
                         .add_modifier(Modifier::BOLD),
@@ -4588,15 +4706,16 @@ impl App {
         let mut lines = vec![Line::raw("")];
         match wait {
             Some(left) => lines.push(
-                Line::raw(format!(
-                    "Too many wrong PINs: try again in {} s",
-                    left.as_secs() + 1
+                Line::raw(txf(
+                    self.lang,
+                    "Too many wrong PINs: try again in {0} s",
+                    &[&(left.as_secs() + 1)],
                 ))
                 .centered(),
             ),
             None => {
                 let stars = "*".repeat(screen.field.text().chars().count());
-                lines.push(Line::raw(format!("PIN: {stars}_")).centered());
+                lines.push(Line::raw(txf(self.lang, "PIN: {0}_", &[&stars])).centered());
                 if !screen.notice.is_empty() {
                     lines.push(
                         Line::styled(
@@ -4611,7 +4730,10 @@ impl App {
         lines.push(Line::raw(""));
         lines.push(
             Line::styled(
-                "Type the PIN and press Enter. The lock deters onlookers; it is not security.",
+                tx(
+                    self.lang,
+                    "Type the PIN and press Enter. The lock deters onlookers; it is not security.",
+                ),
                 Style::default().fg(palette.dim()),
             )
             .centered(),
@@ -4635,13 +4757,19 @@ impl App {
             return;
         };
         if let Some(form) = &d.form {
-            let lines = form.lines();
-            let problems = form.problems(&d.rules);
+            let lines = form.lines(self.lang);
+            let problems = form.problems(&d.rules, self.lang);
             let (focus, rejected) = (form.focus, form.rejected);
             let title = if form.index.is_some() {
-                "Tool - Tab/Up/Down move, Space ticks, Left/Right choose"
+                tx(
+                    self.lang,
+                    "Tool - Tab/Up/Down move, Space ticks, Left/Right choose",
+                )
             } else {
-                "New tool - Tab/Up/Down move, Space ticks, Left/Right choose"
+                tx(
+                    self.lang,
+                    "New tool - Tab/Up/Down move, Space ticks, Left/Right choose",
+                )
             };
             let height = (lines.len() as u16 + 5).min(area.height);
             let inner = self.dialog(frame, area, (78, height), title, true);
@@ -4679,7 +4807,13 @@ impl App {
         }
         let rows = d.list.items.len().max(1) as u16;
         let height = (rows + 6).min(area.height);
-        let inner = self.dialog(frame, area, (78, height), "External tools", false);
+        let inner = self.dialog(
+            frame,
+            area,
+            (78, height),
+            tx(self.lang, "External tools"),
+            false,
+        );
         let Some(d) = self.tools_editor.as_mut() else {
             return;
         };
@@ -4690,11 +4824,14 @@ impl App {
             d.top = d.list.selected + 1 - list_rows;
         }
         let mut out = vec![Line::styled(
-            "Enter edit  a add  d delete  Alt+Up/Down K/J move  Esc close",
+            tx(
+                self.lang,
+                "Enter edit  a add  d delete  Alt+Up/Down K/J move  Esc close",
+            ),
             dim,
         )];
         if d.list.items.is_empty() {
-            out.push(Line::styled("  (no tools: a adds one)", dim));
+            out.push(Line::styled(tx(self.lang, "  (no tools: a adds one)"), dim));
         }
         for (i, t) in d.list.items.iter().enumerate().skip(d.top).take(list_rows) {
             let y = inner.y + 1 + (i - d.top) as u16;
@@ -4711,7 +4848,7 @@ impl App {
                 extra.push(sc.to_string());
             }
             if let Some(rule) = t.bound_rule.as_deref() {
-                extra.push(format!("rule {rule}"));
+                extra.push(txf(self.lang, "rule {0}", &[&rule]));
                 let dropped = self.tool_runner.dropped_for(&t.name);
                 if dropped > 0 {
                     extra.push(format!("{dropped} dropped"));
@@ -4744,7 +4881,7 @@ impl App {
         let shown = p.shown();
         let goto = palette::is_goto(p.field.text());
         let height = (shown.len().max(1) as u16 + 5).min(area.height).min(22);
-        let inner = self.dialog(frame, area, (64, height), "Commands", true);
+        let inner = self.dialog(frame, area, (64, height), tx(self.lang, "Commands"), true);
         let Some(p) = self.palette_dialog.as_ref() else {
             return;
         };
@@ -4752,14 +4889,20 @@ impl App {
         let mut out = vec![Line::raw(format!(": {}", view::sanitize(&text)))];
         out.push(Line::styled(
             if goto {
-                "Enter goes to this line (N +N -N) or time (14:02)"
+                tx(
+                    self.lang,
+                    "Enter goes to this line (N +N -N) or time (14:02)",
+                )
             } else {
-                "Type to filter, Enter runs, a number goes to that line"
+                tx(
+                    self.lang,
+                    "Type to filter, Enter runs, a number goes to that line",
+                )
             },
             dim,
         ));
         if !goto && shown.is_empty() {
-            out.push(Line::styled("  (no command matches)", dim));
+            out.push(Line::styled(tx(self.lang, "  (no command matches)"), dim));
         }
         let room = inner.height.saturating_sub(2) as usize;
         let top = p.selected.saturating_sub(room.saturating_sub(1));
@@ -4802,13 +4945,13 @@ impl App {
         let dim = Style::default().fg(self.palette.dim());
         let colours = match self.palette.depth {
             crate::tui::colors::ColorDepth::TrueColor => "truecolor",
-            crate::tui::colors::ColorDepth::Ansi256 => "256 colours",
-            crate::tui::colors::ColorDepth::Ansi16 => "16 colours",
+            crate::tui::colors::ColorDepth::Ansi256 => tx(self.lang, "256 colours"),
+            crate::tui::colors::ColorDepth::Ansi16 => tx(self.lang, "16 colours"),
         };
         let terminal = if self.palette.ascii {
-            format!("terminal, {colours}, ASCII")
+            txf(self.lang, "terminal, {0}, ASCII", &[&colours])
         } else {
-            format!("terminal, {colours}")
+            txf(self.lang, "terminal, {0}", &[&colours])
         };
         let rows: Vec<(&str, String)> = vec![
             (
@@ -4835,7 +4978,7 @@ impl App {
             .unwrap_or(0);
         let tagline = t(lang, "about_tagline");
         let height = rows.len() as u16 + 7;
-        let title = format!("{} FastTail", t(lang, "about"));
+        let title = txf(self.lang, "{0} FastTail", &[&t(lang, "about")]);
         let inner = self.dialog(frame, area, (64, height), &title, false);
         let mut out = vec![
             Line::styled(" FASTTAIL", accent),
@@ -4861,7 +5004,7 @@ impl App {
             return;
         };
         let rows = d.rows();
-        let title = format!("JSON - line {}", d.line_number);
+        let title = txf(self.lang, "JSON - line {0}", &[&d.line_number]);
         let width = area.width.saturating_sub(4).clamp(20, 110);
         let height = (rows.len() as u16 + 5).min(area.height).max(7);
         let inner = self.dialog(frame, area, (width, height), &title, false);
@@ -4869,14 +5012,17 @@ impl App {
             return;
         };
         let mut out = vec![Line::styled(
-            "Arrows move and fold, * expand all, - collapse, y value, Y path",
+            tx(
+                self.lang,
+                "Arrows move and fold, * expand all, - collapse, y value, Y path",
+            ),
             dim,
         )];
         let room = inner.height.saturating_sub(1) as usize;
         let top = d.selected.saturating_sub(room.saturating_sub(1));
         let mut items = Vec::new();
         for (i, row) in rows.iter().enumerate().skip(top).take(room) {
-            let text = d.row_text(*row);
+            let text = d.row_text(*row, self.lang);
             let value_style = match text.kind {
                 Some(crate::json_tree::Kind::String) => Style::default().fg(palette.secondary()),
                 Some(crate::json_tree::Kind::Number) => Style::default().fg(palette.accent()),
@@ -4897,7 +5043,10 @@ impl App {
             items.push((Rect::new(inner.x, y, inner.width, 1), i));
         }
         if let Some(at) = d.tree.error() {
-            out.push(Line::styled(format!("! invalid JSON from byte {at}"), dim));
+            out.push(Line::styled(
+                txf(self.lang, "! invalid JSON from byte {0}", &[&at]),
+                dim,
+            ));
         }
         self.hits.list_items.extend(items);
         frame.render_widget(Paragraph::new(out), inner);
@@ -4922,16 +5071,25 @@ impl App {
             frame,
             area,
             (78, height),
-            "External tools - on the cursor row or the selection",
+            tx(
+                self.lang,
+                "External tools - on the cursor row or the selection",
+            ),
             false,
         );
         let mut out = vec![Line::styled(
-            "Enter or 1-9 runs, Up/Down choose, e edits the tools, Esc closes",
+            tx(
+                self.lang,
+                "Enter or 1-9 runs, Up/Down choose, e edits the tools, Esc closes",
+            ),
             dim,
         )];
         if tools.is_empty() {
             out.push(Line::styled(
-                "  (no tools: e adds one, as Settings > External tools does)",
+                tx(
+                    self.lang,
+                    "  (no tools: e adds one, as Settings > External tools does)",
+                ),
                 dim,
             ));
         }
@@ -4954,9 +5112,9 @@ impl App {
             if let Some(rule) = t.bound_rule.as_deref() {
                 let dropped = self.tool_runner.dropped_for(&t.name);
                 extra.push(if dropped > 0 {
-                    format!("rule {rule}, {dropped} dropped")
+                    txf(self.lang, "rule {0}, {1} dropped", &[&rule, &dropped])
                 } else {
-                    format!("rule {rule}")
+                    txf(self.lang, "rule {0}", &[&rule])
                 });
             }
             let name: String = view::sanitize(&t.name).chars().take(20).collect();
@@ -4988,14 +5146,20 @@ impl App {
             frame,
             area,
             (72, height),
-            "Global filter - every stream combines it with its own filters",
+            tx(
+                self.lang,
+                "Global filter - every stream combines it with its own filters",
+            ),
             false,
         );
         let Some(d) = self.global.as_ref() else {
             return;
         };
         let mut out = vec![Line::styled(
-            "Tab/Up/Down move, Space ticks, type a term; applied as you type. Enter/Esc close",
+            tx(
+                self.lang,
+                "Tab/Up/Down move, Space ticks, type a term; applied as you type. Enter/Esc close",
+            ),
             dim,
         )];
         let mut cursor = None;
@@ -5008,15 +5172,23 @@ impl App {
                 .list_items
                 .push((Rect::new(inner.x, y, inner.width, 1), k));
             let (label, value) = match row {
-                global::Row::Enabled => ("On (f)", d.enabled.text("")),
-                global::Row::MatchCase => ("Match case", d.case_sensitive.text("")),
-                global::Row::Regex => ("Regular expressions", d.is_regex.text("")),
+                global::Row::Enabled => (tx(self.lang, "On (f)"), d.enabled.text("")),
+                global::Row::MatchCase => (tx(self.lang, "Match case"), d.case_sensitive.text("")),
+                global::Row::Regex => (tx(self.lang, "Regular expressions"), d.is_regex.text("")),
                 global::Row::Include(i) => (
-                    if *i == 0 { "Include (all match)" } else { "" },
+                    if *i == 0 {
+                        tx(self.lang, "Include (all match)")
+                    } else {
+                        ""
+                    },
                     d.term(*row).to_string(),
                 ),
                 global::Row::Exclude(i) => (
-                    if *i == 0 { "Exclude (none match)" } else { "" },
+                    if *i == 0 {
+                        tx(self.lang, "Exclude (none match)")
+                    } else {
+                        ""
+                    },
                     d.term(*row).to_string(),
                 ),
             };
@@ -5039,7 +5211,7 @@ impl App {
                 Span::styled(format!("{:<40}", view::sanitize(&value)), style),
             ];
             if d.invalid.contains(row) {
-                spans.push(Span::styled(" does not compile", error));
+                spans.push(Span::styled(tx(self.lang, " does not compile"), error));
             }
             out.push(Line::from(spans));
         }
@@ -5067,14 +5239,14 @@ impl App {
                 on_time,
             } => {
                 let title = if rename.is_some() {
-                    "Rename preset"
+                    tx(self.lang, "Rename preset")
                 } else {
-                    "Save the stream's filters as a preset"
+                    tx(self.lang, "Save the stream's filters as a preset")
                 };
                 let (shown, x) = field.view(60);
-                let problem = d.problem.clone();
+                let problem = d.problem;
                 let mut lines = vec![Line::from(vec![
-                    Span::styled("Name ", dim),
+                    Span::styled(tx(self.lang, "Name "), dim),
                     Span::raw(view::sanitize(&shown)),
                 ])];
                 if rename.is_none() {
@@ -5084,14 +5256,17 @@ impl App {
                         Style::default()
                     };
                     lines.push(Line::styled(
-                        with_time.text("include the time range (Tab, Space)"),
+                        with_time.text(tx(self.lang, "include the time range (Tab, Space)")),
                         style,
                     ));
-                    lines.push(Line::styled("A taken name replaces that preset.", dim));
+                    lines.push(Line::styled(
+                        tx(self.lang, "A taken name replaces that preset."),
+                        dim,
+                    ));
                 }
                 if let Some(p) = problem {
                     lines.push(Line::styled(
-                        p,
+                        tx(self.lang, p),
                         Style::default().fg(palette.level_color(LogLevel::Error)),
                     ));
                 }
@@ -5110,11 +5285,12 @@ impl App {
                     .get(*i)
                     .map(|p| view::sanitize(&p.name))
                     .unwrap_or_default();
-                let inner = self.dialog(frame, area, (64, 6), "Delete preset?", true);
+                let inner =
+                    self.dialog(frame, area, (64, 6), tx(self.lang, "Delete preset?"), true);
                 frame.render_widget(
                     Paragraph::new(vec![
-                        Line::raw(format!("Delete the preset {name}?")),
-                        Line::styled("Enter deletes, Esc keeps it.", dim),
+                        Line::raw(txf(self.lang, "Delete the preset {0}?", &[&name])),
+                        Line::styled(tx(self.lang, "Enter deletes, Esc keeps it."), dim),
                     ]),
                     inner,
                 );
@@ -5140,7 +5316,10 @@ impl App {
                     frame,
                     area,
                     (78, height),
-                    "Filter presets - = the stream's filters, ~ edited since",
+                    tx(
+                        self.lang,
+                        "Filter presets - = the stream's filters, ~ edited since",
+                    ),
                     false,
                 );
                 let Some(d) = self.presets.as_mut() else {
@@ -5153,12 +5332,18 @@ impl App {
                     d.top = d.list.selected + 1 - list_rows;
                 }
                 let mut out = vec![Line::styled(
-                    "Enter apply  A to all  s save  r rename  d delete  Alt+Up/Down move  Esc",
+                    tx(
+                        self.lang,
+                        "Enter apply  A to all  s save  r rename  d delete  Alt+Up/Down move  Esc",
+                    ),
                     dim,
                 )];
                 if d.list.items.is_empty() {
                     out.push(Line::styled(
-                        "  (no presets: s saves the stream's filters as one)",
+                        tx(
+                            self.lang,
+                            "  (no presets: s saves the stream's filters as one)",
+                        ),
                         dim,
                     ));
                 }
@@ -5176,7 +5361,7 @@ impl App {
                     out.push(Line::from(vec![
                         Span::styled(format!("{} ", marks[i]), accent),
                         Span::styled(format!("{name:<24} "), row),
-                        Span::styled(view::sanitize(&presets::summary(&p.state)), dim),
+                        Span::styled(view::sanitize(&presets::summary(&p.state, self.lang)), dim),
                     ]));
                 }
                 frame.render_widget(Paragraph::new(out), inner);
@@ -5193,8 +5378,8 @@ impl App {
             return;
         };
         if let Some(form) = &d.form {
-            let lines = form.lines();
-            let problems = form.problems();
+            let lines = form.lines(self.lang);
+            let problems = form.problems(self.lang);
             let fallback = form
                 .index
                 .and_then(|i| d.list.items.get(i))
@@ -5205,9 +5390,15 @@ impl App {
             let rule = form.rule(&fallback);
             let (focus, rejected) = (form.focus, form.rejected);
             let title = if form.index.is_some() {
-                "Rule - Tab/Up/Down move, Space ticks, Left/Right choose, [ ] colour"
+                tx(
+                    self.lang,
+                    "Rule - Tab/Up/Down move, Space ticks, Left/Right choose, [ ] colour",
+                )
             } else {
-                "New rule - Tab/Up/Down move, Space ticks, Left/Right choose, [ ] colour"
+                tx(
+                    self.lang,
+                    "New rule - Tab/Up/Down move, Space ticks, Left/Right choose, [ ] colour",
+                )
             };
             let height = (lines.len() as u16 + 6).min(area.height);
             let inner = self.dialog(frame, area, (78, height), title, true);
@@ -5236,13 +5427,13 @@ impl App {
                 out.push(Line::styled(view::sanitize(&shown), style));
             }
             let sample = if rule.pattern.is_empty() {
-                "sample text".to_string()
+                tx(self.lang, "sample text").to_string()
             } else {
                 view::sanitize(&rule.pattern)
             };
             out.push(Line::raw(""));
             out.push(Line::from(vec![
-                Span::styled(format!("{:<30}", "Preview"), dim),
+                Span::styled(format!("{:<30}", tx(self.lang, "Preview")), dim),
                 Span::styled(format!(" {sample} "), palette.rule_style(&rule.style())),
             ]));
             frame.render_widget(Paragraph::new(out), inner);
@@ -5260,7 +5451,10 @@ impl App {
             frame,
             area,
             (78, height),
-            "Highlight rules - the first rule that matches paints the line",
+            tx(
+                self.lang,
+                "Highlight rules - the first rule that matches paints the line",
+            ),
             false,
         );
         let Some(d) = self.rules.as_mut() else {
@@ -5275,11 +5469,14 @@ impl App {
         }
         let mut out = Vec::with_capacity(list_rows + 2);
         out.push(Line::styled(
-            "Enter edit  a add  d delete  Space on/off  Alt+Up/Down K/J move  Esc close",
+            tx(
+                self.lang,
+                "Enter edit  a add  d delete  Space on/off  Alt+Up/Down K/J move  Esc close",
+            ),
             dim,
         ));
         if d.list.items.is_empty() {
-            out.push(Line::styled("  (no rules: a adds one)", dim));
+            out.push(Line::styled(tx(self.lang, "  (no rules: a adds one)"), dim));
         }
         for (i, e) in d.list.items.iter().enumerate().skip(d.top).take(list_rows) {
             let y = inner.y + 1 + (i - d.top) as u16;
@@ -5291,7 +5488,7 @@ impl App {
             let mut flags = Vec::new();
             if r.is_regex {
                 flags.push(if r.captures_only {
-                    "regex groups"
+                    tx(self.lang, "regex groups")
                 } else {
                     "regex"
                 });
@@ -5313,7 +5510,7 @@ impl App {
             let tools = if tools.is_empty() {
                 String::new()
             } else {
-                format!("  tool: {}", tools.join(", "))
+                txf(self.lang, "  tool: {0}", &[&tools.join(", ")])
             };
             let selected = i == d.list.selected && !d.on_labels;
             let row = if selected {
@@ -5334,7 +5531,10 @@ impl App {
         if label_rows > 0 {
             let shown_rules = out.len();
             out.push(Line::styled(
-                "Quick labels (memory only) - Tab here and back, d removes",
+                tx(
+                    self.lang,
+                    "Quick labels (memory only) - Tab here and back, d removes",
+                ),
                 dim,
             ));
             let first = inner.y + shown_rules as u16 + 1;
@@ -5367,7 +5567,10 @@ impl App {
             frame,
             area,
             (74, height),
-            "Settings - Tab/Up/Down move, Left/Right choose, Space ticks",
+            tx(
+                self.lang,
+                "Settings - Tab/Up/Down move, Left/Right choose, Space ticks",
+            ),
             true,
         );
         let palette = self.palette;
@@ -5419,7 +5622,7 @@ impl App {
         frame.render_widget(Paragraph::new(out), inner);
         frame.render_widget(
             Paragraph::new(Line::styled(
-                "Enter or [ OK ] applies and saves, Esc cancels",
+                tx(self.lang, "Enter or [ OK ] applies and saves, Esc cancels"),
                 Style::default().fg(palette.dim()),
             )),
             Rect {
@@ -5432,7 +5635,13 @@ impl App {
 
     fn draw_sessions(&mut self, frame: &mut Frame, area: Rect) {
         let rows = self.sessions.as_ref().map_or(0, |d| d.recent.len()) as u16;
-        let inner = self.dialog(frame, area, (72, rows.max(1) + 7), "Open session", true);
+        let inner = self.dialog(
+            frame,
+            area,
+            (72, rows.max(1) + 7),
+            tx(self.lang, "Open session"),
+            true,
+        );
         let palette = self.palette;
         let Some(d) = &self.sessions else {
             return;
@@ -5441,14 +5650,20 @@ impl App {
         let (shown, x) = d.field.view(inner.width.saturating_sub(6) as usize);
         let mut lines = vec![
             Line::from(vec![
-                Span::styled("Path ", dim),
+                Span::styled(tx(self.lang, "Path "), dim),
                 Span::raw(view::sanitize(&shown)),
             ]),
-            Line::styled("Recent sessions (Up/Down, Enter with an empty path):", dim),
+            Line::styled(
+                tx(
+                    self.lang,
+                    "Recent sessions (Up/Down, Enter with an empty path):",
+                ),
+                dim,
+            ),
         ];
         frame.set_cursor_position((inner.x + 5 + x as u16, inner.y));
         if d.recent.is_empty() {
-            lines.push(Line::styled("  (none)", dim));
+            lines.push(Line::styled(tx(self.lang, "  (none)"), dim));
         }
         for (i, f) in d.recent.iter().enumerate() {
             let name = crate::session::Session::name_of(f);
@@ -5475,19 +5690,31 @@ impl App {
         };
         let (title, text, cancel) = match &state {
             InterfaceSwitch::Offer => (
-                "Switch interface",
+                tx(self.lang, "Switch interface"),
                 vec![
-                    Line::raw("The graphical interface opens at the next start."),
-                    Line::raw("Switch now? The workspace is saved and the terminal"),
-                    Line::raw("interface closes. (Enter: now / Esc: at next start)"),
+                    Line::raw(tx(
+                        self.lang,
+                        "The graphical interface opens at the next start.",
+                    )),
+                    Line::raw(tx(
+                        self.lang,
+                        "Switch now? The workspace is saved and the terminal",
+                    )),
+                    Line::raw(tx(
+                        self.lang,
+                        "interface closes. (Enter: now / Esc: at next start)",
+                    )),
                 ],
                 true,
             ),
             InterfaceSwitch::Failed(why) => (
-                "Graphical interface not started",
+                tx(self.lang, "Graphical interface not started"),
                 vec![
                     Line::raw(view::sanitize(why)),
-                    Line::raw("It opens at the next start; this interface keeps running."),
+                    Line::raw(tx(
+                        self.lang,
+                        "It opens at the next start; this interface keeps running.",
+                    )),
                 ],
                 false,
             ),
@@ -5506,13 +5733,20 @@ impl App {
     }
 
     fn draw_confirm(&mut self, frame: &mut Frame, area: Rect) {
-        let inner = self.dialog(frame, area, (64, 6), "Overwrite?", true);
+        let inner = self.dialog(frame, area, (64, 6), tx(self.lang, "Overwrite?"), true);
         let Some(file) = &self.confirm_overwrite else {
             return;
         };
         let text = vec![
-            Line::raw(view::sanitize(&format!("{} exists.", file.display()))),
-            Line::raw("Replace it with the open streams? (Enter / Esc)"),
+            Line::raw(view::sanitize(&txf(
+                self.lang,
+                "{0} exists.",
+                &[&file.display()],
+            ))),
+            Line::raw(tx(
+                self.lang,
+                "Replace it with the open streams? (Enter / Esc)",
+            )),
         ];
         frame.render_widget(Paragraph::new(text), inner);
     }
@@ -5521,7 +5755,7 @@ impl App {
     /// date) and a status line.
     fn draw_browser(&mut self, frame: &mut Frame, area: Rect) {
         let height = area.height.saturating_sub(2).clamp(10, 30);
-        let inner = self.dialog(frame, area, (78, height), "Open", true);
+        let inner = self.dialog(frame, area, (78, height), tx(self.lang, "Open"), true);
         let palette = self.palette;
         let Some(b) = self.browser.as_mut() else {
             return;
@@ -5536,7 +5770,7 @@ impl App {
         let width = inner.width as usize;
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Look in ", dim),
+                Span::styled(tx(self.lang, "Look in "), dim),
                 Span::styled(
                     view::sanitize(&tail_chars(&b.location(), width.saturating_sub(8))),
                     accent,
@@ -5547,7 +5781,7 @@ impl App {
         let (shown_field, x) = b.field.view(width.saturating_sub(6));
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Name ", dim),
+                Span::styled(tx(self.lang, "Name "), dim),
                 Span::raw(view::sanitize(&shown_field)),
             ])),
             row(inner.y + 1),
@@ -5598,8 +5832,10 @@ impl App {
         });
         let status = match &b.note {
             Some(note) => note.clone(),
-            None => format!(
-                "{dirs} folders, {files} files. Enter opens, Backspace goes up, type to filter or a path"
+            None => txf(
+                self.lang,
+                "{0} folders, {1} files. Enter opens, Backspace goes up, type to filter or a path",
+                &[&dirs, &files],
             ),
         };
         frame.render_widget(
@@ -5615,7 +5851,7 @@ impl App {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            format!("Open an entry of {name}")
+            txf(self.lang, "Open an entry of {0}", &[&name])
         }) else {
             return;
         };
@@ -5630,7 +5866,7 @@ impl App {
         let (shown_filter, x) = p.filter.view(inner.width.saturating_sub(8) as usize);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("Filter ", dim),
+                Span::styled(tx(self.lang, "Filter "), dim),
                 Span::raw(view::sanitize(&shown_filter)),
             ])),
             Rect { height: 1, ..inner },
@@ -5653,7 +5889,7 @@ impl App {
             let e = &p.entries[i];
             let size = crate::tui::picker::human_size(e.size);
             let (text, style) = match &e.refusal {
-                Some(r) => (format!("{}  ({})", e.name, refusal_text(r)), dim),
+                Some(r) => (format!("{}  ({})", e.name, refusal_text(r, self.lang)), dim),
                 None => (format!("{}  {size}", e.name), Style::default()),
             };
             let style = if k == p.selected {
@@ -5669,13 +5905,21 @@ impl App {
         }
         frame.render_widget(Paragraph::new(lines), list);
         let status = match (&p.scan, &p.partial) {
-            (Some(scan), _) => format!(
-                "{} entries, reading the archive {:.0}%",
-                p.entries.len(),
-                scan.progress() * 100.0
+            (Some(scan), _) => txf(
+                self.lang,
+                "{0} entries, reading the archive {1}%",
+                &[&p.entries.len(), &format!("{:.0}", scan.progress() * 100.0)],
             ),
-            (None, Some(note)) => format!("{} of {} entries. {note}", shown.len(), p.entries.len()),
-            (None, None) => format!("{} of {} entries", shown.len(), p.entries.len()),
+            (None, Some(note)) => txf(
+                self.lang,
+                "{0} of {1} entries. {2}",
+                &[&shown.len(), &p.entries.len(), &note],
+            ),
+            (None, None) => txf(
+                self.lang,
+                "{0} of {1} entries",
+                &[&shown.len(), &p.entries.len()],
+            ),
         };
         frame.render_widget(
             Paragraph::new(Line::styled(status, dim)),
@@ -5688,7 +5932,7 @@ impl App {
     }
 
     fn draw_time_range(&mut self, frame: &mut Frame, area: Rect) {
-        let inner = self.dialog(frame, area, (64, 21), "Time range", true);
+        let inner = self.dialog(frame, area, (64, 21), tx(self.lang, "Time range"), true);
         let palette = self.palette;
         let Some(d) = &self.time_range else {
             return;
@@ -5702,9 +5946,12 @@ impl App {
             .add_modifier(Modifier::BOLD);
         let mut lines = Vec::with_capacity(18);
         let mut cursor = None;
-        for (row, (label, field, on)) in [("From", &d.from, !d.on_to), ("To", &d.to, d.on_to)]
-            .into_iter()
-            .enumerate()
+        for (row, (label, field, on)) in [
+            (tx(self.lang, "From"), &d.from, !d.on_to),
+            (tx(self.lang, "To"), &d.to, d.on_to),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let (shown, x) = field.view(width);
             let bad = !side_readable(field.text().trim(), reference);
@@ -5733,19 +5980,23 @@ impl App {
             ));
         }
         // The calendar and the time of the edited side.
-        let side = if d.on_to { "To" } else { "From" };
+        let side = if d.on_to {
+            tx(self.lang, "To")
+        } else {
+            tx(self.lang, "From")
+        };
         let picked = time_range_text::parse(d.side_text(), reference).map(time_range_text::day_of);
         let cal_on = d.zone == RangeZone::Calendar;
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![
             Span::styled(format!("{side}: "), accent),
             Span::styled(
-                format!("\u{25c0} {} \u{25b6}", d.calendar.title()),
+                format!("\u{25c0} {} \u{25b6}", d.calendar.title(self.lang)),
                 if cal_on { accent } else { Style::default() },
             ),
-            Span::styled("  PgUp/PgDn month", dim),
+            Span::styled(tx(self.lang, "  PgUp/PgDn month"), dim),
         ]));
-        lines.push(Line::styled("Mo Tu We Th Fr Sa Su", dim));
+        lines.push(Line::styled(tx(self.lang, "Mo Tu We Th Fr Sa Su"), dim));
         let first_week_row = inner.y + lines.len() as u16;
         for (w, week) in d.calendar.weeks().iter().enumerate() {
             let mut spans = Vec::with_capacity(7);
@@ -5790,24 +6041,33 @@ impl App {
             }
         };
         lines.push(Line::from(vec![
-            Span::styled("Time   ", if time_on { accent } else { dim }),
+            Span::styled(tx(self.lang, "Time   "), if time_on { accent } else { dim }),
             Span::styled(format!("{h:02}"), part(!d.on_minutes)),
             Span::raw(":"),
             Span::styled(format!("{m:02}"), part(d.on_minutes)),
-            Span::styled("   Up/Down change, Left/Right hours or minutes", dim),
+            Span::styled(
+                tx(self.lang, "   Up/Down change, Left/Right hours or minutes"),
+                dim,
+            ),
         ]));
         lines.push(Line::raw(""));
         lines.push(Line::styled(
-            "Type 2026-09-18 14:02, 14:02, -15m or now; empty side = open.",
+            tx(
+                self.lang,
+                "Type 2026-09-18 14:02, 14:02, -15m or now; empty side = open.",
+            ),
             dim,
         ));
         lines.push(Line::styled(
-            "Tab: field, calendar, time. Space picks a day, Enter applies.",
+            tx(
+                self.lang,
+                "Tab: field, calendar, time. Space picks a day, Enter applies.",
+            ),
             dim,
         ));
         if d.invalid {
             lines.push(Line::styled(
-                "A side cannot be read as a time",
+                tx(self.lang, "A side cannot be read as a time"),
                 Style::default().fg(palette.level_color(LogLevel::Error)),
             ));
         }
@@ -5819,21 +6079,28 @@ impl App {
 
     fn draw_help(&mut self, frame: &mut Frame, area: Rect) {
         let note = if self.mouse {
-            "Mouse on: SHIFT + drag selects text natively (--no-mouse turns the mouse off)"
+            tx(
+                self.lang,
+                "Mouse on: SHIFT + drag selects text natively (--no-mouse turns the mouse off)",
+            )
         } else {
-            "Mouse off (--no-mouse): the terminal selects text"
+            tx(
+                self.lang,
+                "Mouse off (--no-mouse): the terminal selects text",
+            )
         };
         // As many columns (up to 3, each at least 44 cells) as it takes to show every
         // entry at once; a screen too small for that scrolls, the cursor kept in view.
+        let lang = self.lang;
         let kw = HELP
             .iter()
-            .map(|(k, _, _)| k.chars().count())
+            .map(|(k, _, _)| tx(lang, k).chars().count())
             .max()
             .unwrap_or(0)
             + 2;
         let entries: Vec<String> = HELP
             .iter()
-            .map(|(k, d, _)| format!("{k:<kw$}{d}"))
+            .map(|(k, d, _)| format!("{:<kw$}{}", tx(lang, k), tx(lang, d)))
             .collect();
         let longest = entries.iter().map(|e| e.chars().count()).max().unwrap_or(0);
         let room_w = (area.width as usize).saturating_sub(4);
@@ -5873,7 +6140,7 @@ impl App {
             frame,
             area,
             (width, height),
-            "Keys - arrows choose, Enter runs, Esc closes",
+            tx(self.lang, "Keys - arrows choose, Enter runs, Esc closes"),
             false,
         );
         let selected = Style::default().add_modifier(Modifier::REVERSED);
@@ -5913,7 +6180,7 @@ impl App {
         frame.render_widget(Paragraph::new(lines), inner);
         if hidden > 0 {
             // On the button row, left of OK, so no entry is covered.
-            let hint = format!(" \u{2193} {hidden} more (Down) ");
+            let hint = txf(self.lang, " ↓ {0} more (Down) ", &[&hidden]);
             let at = Rect::new(
                 inner.x,
                 inner.bottom(),
@@ -5936,190 +6203,210 @@ impl App {
 /// The help: keys, what they do and the command `Enter` runs from the help (`None` for
 /// entries that only describe, which the cursor steps over).
 const HELP: &[(&str, &str, Option<Action>)] = &[
-    ("Up/Down j/k", "move the cursor one row", None),
-    ("PgUp/PgDn", "move it one page (also Ctrl+B / Ctrl+F)", None),
+    ("Up/Down j/k", en("move the cursor one row"), None),
+    (
+        "PgUp/PgDn",
+        en("move it one page (also Ctrl+B / Ctrl+F)"),
+        None,
+    ),
     (
         "Shift+Up/Down",
-        "extend the selection from the cursor",
+        en("extend the selection from the cursor"),
         None,
     ),
     (
         "Home g  End G",
-        "first row / last row, and follow it",
+        en("first row / last row, and follow it"),
         Some(Action::Bottom),
     ),
-    ("Left/Right 0", "scroll sideways / back to column 0", None),
-    ("Space", "toggle follow", Some(Action::ToggleFollow)),
-    ("/", "search", Some(Action::StartSearch)),
+    (
+        "Left/Right 0",
+        en("scroll sideways / back to column 0"),
+        None,
+    ),
+    (en("Space"), en("toggle follow"), Some(Action::ToggleFollow)),
+    ("/", en("search"), Some(Action::StartSearch)),
     (
         "n Shift+N  F3",
-        "next / previous hit (Shift+F3 previous)",
+        en("next / previous hit (Shift+F3 previous)"),
         Some(Action::SearchNext),
     ),
     (
         "Esc",
-        "clear the search and the selection",
+        en("clear the search and the selection"),
         Some(Action::ClearSearch),
     ),
-    ("i", "include filter", Some(Action::EditInclude)),
-    ("x", "exclude filter", Some(Action::EditExclude)),
-    ("l", "cycle the minimum level", Some(Action::CycleLevel)),
+    ("i", en("include filter"), Some(Action::EditInclude)),
+    ("x", en("exclude filter"), Some(Action::EditExclude)),
+    ("l", en("cycle the minimum level"), Some(Action::CycleLevel)),
     (
         "c",
-        "cycle collapse: off, exact, numbers",
+        en("cycle collapse: off, exact, numbers"),
         Some(Action::CycleCollapse),
     ),
     (
         "s |  _",
-        "new window beside / below (next stream)",
+        en("new window beside / below (next stream)"),
         Some(Action::SplitRight),
     ),
     (
         "Ctrl+W",
-        "close the stream, and its empty window",
+        en("close the stream, and its empty window"),
         Some(Action::CloseStream),
     ),
     (
         "Alt+X",
-        "close the window (its tabs join the next)",
+        en("close the window (its tabs join the next)"),
         Some(Action::ClosePane),
     ),
     (
         "< >",
-        "move the stream to the prev / next window",
+        en("move the stream to the prev / next window"),
         Some(Action::MoveNextPane),
     ),
     (
         "Ctrl+PgUp/PgDn",
-        "previous / next tab of the window",
+        en("previous / next tab of the window"),
         Some(Action::NextInPane),
     ),
     (
         "Alt+F",
-        "float the window, or dock it back",
+        en("float the window, or dock it back"),
         Some(Action::ToggleFloat),
     ),
-    ("Alt+arrows", "move the divider or a floating window", None),
-    ("click", "focus a window, select a row, show a tab", None),
     (
-        "Shift+click",
-        "extend the selection (or drag over rows)",
+        "Alt+arrows",
+        en("move the divider or a floating window"),
         None,
     ),
-    ("double click", "toggle the row's bookmark", None),
-    ("wheel", "scroll the window under the pointer", None),
-    ("[x]", "top right: close the window's stream", None),
     (
-        "drag edge",
-        "resize a floating window (corners, sides)",
+        en("click"),
+        en("focus a window, select a row, show a tab"),
         None,
     ),
-    ("drag divider", "resize the windows beside it", None),
-    ("drag title", "edge splits, centre = tab, else floats", None),
+    (
+        en("Shift+click"),
+        en("extend the selection (or drag over rows)"),
+        None,
+    ),
+    (en("double click"), en("toggle the row's bookmark"), None),
+    (en("wheel"), en("scroll the window under the pointer"), None),
+    ("[x]", en("top right: close the window's stream"), None),
+    (
+        en("drag edge"),
+        en("resize a floating window (corners, sides)"),
+        None,
+    ),
+    (en("drag divider"), en("resize the windows beside it"), None),
+    (
+        en("drag title"),
+        en("edge splits, centre = tab, else floats"),
+        None,
+    ),
     (
         "Tab  Alt+1..9",
-        "next window or file / file N (Shift+Tab)",
+        en("next window or file / file N (Shift+Tab)"),
         Some(Action::NextTab),
     ),
     (
         "b  Ctrl+F2",
-        "bookmark the cursor row, on or off",
+        en("bookmark the cursor row, on or off"),
         Some(Action::ToggleBookmark),
     ),
     (
         "e E  w W",
-        "next / previous ERROR, WARN line (wraps)",
+        en("next / previous ERROR, WARN line (wraps)"),
         Some(Action::NextError),
     ),
-    ("10j  3e", "a count repeats j k n N e E w W", None),
+    ("10j  3e", en("a count repeats j k n N e E w W"), None),
     (
         "] [  F2",
-        "next / previous bookmark (Shift+F2 back)",
+        en("next / previous bookmark (Shift+F2 back)"),
         Some(Action::NextBookmark),
     ),
     (
         "m",
-        "note of the cursor row's bookmark",
+        en("note of the cursor row's bookmark"),
         Some(Action::EditNote),
     ),
     (
         "Ctrl+K",
-        "the row in context (filters off) and back",
+        en("the row in context (filters off) and back"),
         Some(Action::ToggleContext),
     ),
     (
         "J",
-        "the cursor row's JSON as a tree",
+        en("the cursor row's JSON as a tree"),
         Some(Action::JsonTree),
     ),
     (
         "Ctrl+G  :",
-        "go to line or time; : all commands",
+        en("go to line or time; : all commands"),
         Some(Action::GoTo),
     ),
     (
         "o",
-        "open: browse folders, a path or *.log",
+        en("open: browse folders, a path or *.log"),
         Some(Action::OpenFile),
     ),
     (
         "Shift+O/S",
-        "open / save a session",
+        en("open / save a session"),
         Some(Action::OpenSession),
     ),
     (
         "t",
-        "time range: from / to, calendar and time",
+        en("time range: from / to, calendar and time"),
         Some(Action::TimeRange),
     ),
     (
         ",",
-        "Settings: theme, language, view, sound",
+        en("Settings: theme, language, view, sound"),
         Some(Action::Settings),
     ),
     (
         "r  L",
-        "highlight rules; L 1-9 labels the search",
+        en("highlight rules; L 1-9 labels the search"),
         Some(Action::EditRules),
     ),
     (
         "p",
-        "filter presets: apply, save, rename",
+        en("filter presets: apply, save, rename"),
         Some(Action::Presets),
     ),
     (
         "F  f",
-        "global filter: edit / on or off",
+        en("global filter: edit / on or off"),
         Some(Action::EditGlobal),
     ),
     (
         "!",
-        "external tools on the row or selection",
+        en("external tools on the row or selection"),
         Some(Action::Tools),
     ),
-    ("Ctrl+L", "lock with the PIN", Some(Action::Lock)),
+    ("Ctrl+L", en("lock with the PIN"), Some(Action::Lock)),
     (
         "Shift+T",
-        "next theme (Tron ... Commander)",
+        en("next theme (Tron ... Commander)"),
         Some(Action::CycleTheme),
     ),
     (
         "a  #",
-        "ANSI: auto/render/strip/raw; # numbers",
+        en("ANSI: auto/render/strip/raw; # numbers"),
         Some(Action::CycleAnsi),
     ),
     (
         "h",
-        "HEX view (go to 1024 or 0x400) and back",
+        en("HEX view (go to 1024 or 0x400) and back"),
         Some(Action::ToggleHex),
     ),
     (
         "y Ctrl+C",
-        "copy selection or row (Ctrl+C: else quit)",
+        en("copy selection or row (Ctrl+C: else quit)"),
         Some(Action::Copy),
     ),
-    ("?  F1", "this help", None),
-    ("q", "quit", Some(Action::Quit)),
+    ("?  F1", en("this help"), None),
+    ("q", en("quit"), Some(Action::Quit)),
 ];
 
 /// The first `n` characters of `s`, the last one an ellipsis when it is cut.
@@ -6145,32 +6432,32 @@ fn tail_chars(s: &str, n: usize) -> String {
 
 /// The name of a tab that is not an open stream: a GUI panel, or a file this run does
 /// not have open.
-fn panel_name(tab: &DockTab) -> String {
+fn panel_name(tab: &DockTab, lang: Language) -> String {
     match tab {
         DockTab::LogStream(p) => p
             .file_name()
             .map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into()),
-        DockTab::Filters => "Filters".into(),
-        DockTab::Highlights => "Highlights".into(),
-        DockTab::Settings => "Settings".into(),
-        DockTab::FindResults => "Find results".into(),
-        DockTab::Scratchpad => "Scratchpad".into(),
-        DockTab::Compare => "Compare".into(),
+        DockTab::Filters => tx(lang, "Filters").into(),
+        DockTab::Highlights => tx(lang, "Highlights").into(),
+        DockTab::Settings => tx(lang, "Settings").into(),
+        DockTab::FindResults => tx(lang, "Find results").into(),
+        DockTab::Scratchpad => tx(lang, "Scratchpad").into(),
+        DockTab::Compare => tx(lang, "Compare").into(),
     }
 }
 
 /// The buttons of the status bar: key, label, command; drawn as `[? help]`, as many as
 /// fit the width.
 const STATUS: &[(&str, &str, Action)] = &[
-    ("/", "search", Action::StartSearch),
-    ("n", "next", Action::SearchNext),
-    ("i", "include", Action::EditInclude),
-    ("x", "exclude", Action::EditExclude),
-    ("t", "time", Action::TimeRange),
-    ("Space", "follow", Action::ToggleFollow),
-    ("b", "mark", Action::ToggleBookmark),
-    ("Shift+T", "theme", Action::CycleTheme),
-    ("q", "quit", Action::Quit),
+    ("/", en("search"), Action::StartSearch),
+    ("n", en("next"), Action::SearchNext),
+    ("i", en("include"), Action::EditInclude),
+    ("x", en("exclude"), Action::EditExclude),
+    ("t", en("time"), Action::TimeRange),
+    (en("Space"), en("follow"), Action::ToggleFollow),
+    ("b", en("mark"), Action::ToggleBookmark),
+    ("Shift+T", en("theme"), Action::CycleTheme),
+    ("q", en("quit"), Action::Quit),
 ];
 
 /// How long a closing window's outline takes to shrink away.
@@ -6304,18 +6591,25 @@ fn cast_shadow(buf: &mut ratatui::buffer::Buffer, rect: Rect, style: Style) {
 }
 
 /// Bottom-left of a window: rows and lines, and the background work in progress.
-fn counts_text(e: &TailEngine, hex: bool, hex_width: usize) -> String {
+fn counts_text(e: &TailEngine, hex: bool, hex_width: usize, lang: Language) -> String {
     let mut s = if hex {
-        format!(
-            "{} bytes, {} rows of {hex_width}",
-            group_digits(e.file_size as usize),
-            group_digits(e.total_hex_rows(hex_width))
+        txf(
+            lang,
+            "{0} bytes, {1} rows of {2}",
+            &[
+                &group_digits(e.file_size as usize),
+                &group_digits(e.total_hex_rows(hex_width)),
+                &hex_width,
+            ],
         )
     } else {
-        format!(
-            "{}/{} lines",
-            group_digits(e.visible_line_count()),
-            group_digits(e.total_lines())
+        txf(
+            lang,
+            "{0}/{1} lines",
+            &[
+                &group_digits(e.visible_line_count()),
+                &group_digits(e.total_lines()),
+            ],
         )
     };
     if let Some((kind, p, hits)) = e.scan_progress() {
@@ -6330,17 +6624,21 @@ fn counts_text(e: &TailEngine, hex: bool, hex_width: usize) -> String {
         };
         s.push_str(&format!(" - {name} {:.0}%", p * 100.0));
         if kind == ScanKind::Search {
-            s.push_str(&format!(" ({hits} hits)"));
+            s.push_str(&txf(lang, " ({0} hits)", &[&hits]));
         }
     }
     if let Some(c) = e.compressed.as_ref().filter(|c| c.is_running()) {
-        s.push_str(&format!(" - decompressing {:.0}%", c.progress() * 100.0));
+        s.push_str(&txf(
+            lang,
+            " - decompressing {0}%",
+            &[&format!("{:.0}", c.progress() * 100.0)],
+        ));
     }
     s
 }
 
 /// Bottom-right of a window: filters, level, collapse and the search position.
-fn view_state_text(e: &TailEngine, hex: bool) -> String {
+fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
     if hex {
         // Filters, level and collapse do not apply to the bytes.
         let query = e.search_query.trim();
@@ -6387,7 +6685,7 @@ fn view_state_text(e: &TailEngine, hex: bool) -> String {
         ));
     }
     if parts.is_empty() {
-        "no filter".into()
+        tx(lang, "no filter").into()
     } else {
         parts.join("  ")
     }
@@ -6398,9 +6696,10 @@ fn goto_target(
     tab: &mut Tab,
     target: Option<crate::tail_engine::GotoTarget>,
     typed: &str,
+    lang: Language,
 ) -> Option<String> {
     let Some(t) = target else {
-        return Some(format!("Cannot go to \"{typed}\""));
+        return Some(txf(lang, "Cannot go to \"{0}\"", &[&typed]));
     };
     // The exact line: a collapsed group hiding it opens.
     tab.engine.reveal_line(t.line);
@@ -6408,17 +6707,17 @@ fn goto_target(
         tab.set_cursor(row);
     }
     t.hidden.then(|| {
-        format!(
-            "Line {} is hidden by the filters: showing {}",
-            t.requested + 1,
-            t.line + 1
+        txf(
+            lang,
+            "Line {0} is hidden by the filters: showing {1}",
+            &[&(t.requested + 1), &(t.line + 1)],
         )
     })
 }
 
 /// Enters the context view on the cursor row, or leaves it with the cursor back on the
 /// line it was entered on.
-fn toggle_context(tab: &mut Tab, message: &mut Option<String>) {
+fn toggle_context(tab: &mut Tab, message: &mut Option<String>, lang: Language) {
     if let Some(line) = tab.engine.context_line() {
         tab.engine.leave_context();
         if let Some(row) = tab.engine.get_visible_row_of_line(line) {
@@ -6431,13 +6730,18 @@ fn toggle_context(tab: &mut Tab, message: &mut Option<String>) {
         return;
     };
     if !tab.engine.enter_context(line) {
-        *message = Some("Show in context needs an active filter".into());
+        *message = Some(tx(lang, "Show in context needs an active filter").into());
     }
 }
 
 /// The rows of a window `height` rows tall: only these are read from the engine.
 /// Also returns how many rows were drawn, for the mouse.
-fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'static>>, usize) {
+fn stream_rows(
+    tab: &mut Tab,
+    palette: &Palette,
+    height: usize,
+    lang: Language,
+) -> (Vec<Line<'static>>, usize) {
     tab.height = height;
     tab.pin_cursor();
     let engine = &tab.engine;
@@ -6479,9 +6783,9 @@ fn stream_rows(tab: &mut Tab, palette: &Palette, height: usize) -> (Vec<Line<'st
     let drawn = lines.len();
     if lines.is_empty() {
         let text = if engine.total_lines() == 0 {
-            "(empty file, or still loading)"
+            tx(lang, "(empty file, or still loading)")
         } else {
-            "(no line matches the filters)"
+            tx(lang, "(no line matches the filters)")
         };
         lines.push(Line::styled(text, Style::default().fg(palette.dim())));
     }
@@ -6495,6 +6799,7 @@ fn hex_rows(
     palette: &Palette,
     width: usize,
     height: usize,
+    lang: Language,
 ) -> (Vec<Line<'static>>, usize) {
     tab.height = height;
     tab.fit_hex_width(width);
@@ -6508,7 +6813,7 @@ fn hex_rows(
     let range = view::visible_range(tab.top, height, rows);
     let engine = &tab.engine;
     if range.is_empty() {
-        let text = "(empty file, or still loading)";
+        let text = tx(lang, "(empty file, or still loading)");
         return (
             vec![Line::styled(text, Style::default().fg(palette.dim()))],
             0,
@@ -6709,14 +7014,15 @@ pub fn open_path(
     config: &crate::config::FastTailConfig,
 ) -> Result<TailEngine, String> {
     use crate::workspace::{open_target, OpenOutcome};
+    let lang = config.language;
     // `compressed::OpenError` has no `Display`: its debug form is enough for now.
     let shown = path.display();
     match open_target(path, config, None) {
         OpenOutcome::Opened(engine) => Ok(*engine),
         OpenOutcome::OpenEntry(entry) => open_path(&entry, config),
-        OpenOutcome::Missing => Err(format!("{shown}: not found")),
+        OpenOutcome::Missing => Err(txf(lang, "{0}: not found", &[&shown])),
         OpenOutcome::Failed { error, .. } => Err(format!("{shown}: {error:?}")),
-        OpenOutcome::EmptyArchive(_) => Err(format!("{shown}: empty archive")),
+        OpenOutcome::EmptyArchive(_) => Err(txf(lang, "{0}: empty archive", &[&shown])),
         OpenOutcome::ChooseEntries { entries, .. } => {
             let names: Vec<&str> = entries
                 .iter()
@@ -6724,26 +7030,32 @@ pub fn open_path(
                 .take(5)
                 .map(|e| e.name.as_str())
                 .collect();
-            Err(format!(
-                "{shown}: archive with {} entries; open one as {shown}/<entry> (e.g. {})",
-                entries.len(),
-                names.join(", ")
+            Err(txf(
+                lang,
+                "{0}: archive with {1} entries; open one as {2}/<entry> (e.g. {3})",
+                &[&shown, &entries.len(), &shown, &names.join(", ")],
             ))
         }
-        OpenOutcome::ScanTar { .. } => Err(format!(
-            "{shown}: tar archive; open one entry as {shown}/<entry>"
+        OpenOutcome::ScanTar { .. } => Err(txf(
+            lang,
+            "{0}: tar archive; open one entry as {1}/<entry>",
+            &[&shown, &shown],
         )),
         OpenOutcome::ListFailed { error, .. } => Err(format!("{shown}: {error}")),
     }
 }
 
 /// Standard input as a stream, spooled to disk like the GUI does.
-pub fn open_stdin(settings: &crate::stdin_source::Settings) -> Result<TailEngine, String> {
+pub fn open_stdin(
+    settings: &crate::stdin_source::Settings,
+    lang: Language,
+) -> Result<TailEngine, String> {
     use crate::stdin_source as stdin;
-    let input = stdin::take_stdin().ok_or("standard input is not available")?;
+    let input = stdin::take_stdin().ok_or(tx(lang, "standard input is not available"))?;
     let stream = stdin::StdinStream::start(input, settings, None)
-        .map_err(|e| format!("cannot spool standard input: {e}"))?;
-    stdin::open_engine(stream, None).map_err(|e| format!("cannot open standard input: {e}"))
+        .map_err(|e| txf(lang, "cannot spool standard input: {0}", &[&e]))?;
+    stdin::open_engine(stream, None)
+        .map_err(|e| txf(lang, "cannot open standard input: {0}", &[&e]))
 }
 
 /// A path the user typed, made absolute the way the GUI's command line does.
@@ -7956,7 +8268,7 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         let d = app.time_range.as_ref().unwrap();
         assert_eq!(d.zone, RangeZone::Calendar);
-        assert_eq!(d.calendar.title(), "September 2026");
+        assert_eq!(d.calendar.title(Language::En), "September 2026");
         let first = d.calendar.cursor;
         press(&mut app, KeyCode::Right);
         press(&mut app, KeyCode::Char(' '));
@@ -8185,6 +8497,41 @@ mod tests {
 ",
         );
         assert!(!ring(&mut app));
+    }
+
+    #[test]
+    fn the_terminal_speaks_the_language_of_the_ini_and_switches_at_once() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        app.settings = Some(crate::tui::workspace::Settings::default());
+        app.settings.as_mut().unwrap().config.language = Language::It;
+        app.apply_running_config();
+        let screen = render(&mut app, 120, 30);
+        assert!(screen[1].contains("[o Apri]"), "{screen:#?}");
+        assert!(
+            screen.iter().any(|l| l.contains("[▶ Segui]")),
+            "{screen:#?}"
+        );
+        app.apply(Action::ToggleHelp);
+        let screen = render(&mut app, 120, 30);
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("sposta il cursore di una riga")));
+        app.apply(Action::ToggleHelp);
+        // Settings: the language field changes the texts while the dialog is open.
+        app.apply(Action::Settings);
+        let f = app.settings_form.as_mut().unwrap();
+        f.focus = f.fields.iter().position(|x| x.label == "Language").unwrap();
+        let fr = Language::ALL
+            .iter()
+            .position(|l| *l == Language::Fr)
+            .unwrap();
+        if let crate::tui::settings::Widget::Radio(r) = &mut f.fields[f.focus].widget {
+            r.selected = fr - 1;
+        }
+        press(&mut app, crossterm::event::KeyCode::Right);
+        assert_eq!(app.lang, Language::Fr);
+        let screen = render(&mut app, 120, 30);
+        assert!(screen.iter().any(|l| l.contains("Réglages")), "{screen:#?}");
     }
 
     #[test]
