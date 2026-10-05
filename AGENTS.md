@@ -102,9 +102,10 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.16.0** (2026-09-30): terminal-interface windows (floating windows
-  that move, resize and overlap, `[x]` to close, empty workspace, full-screen help). The
-  terminal interface is still a preview. 0.15.0 introduced it and the Commander theme.
+- Latest release: **0.16.1** (2026-10-05, nightly): terminal-interface group 4 (Settings
+  with PIN lock, tools editor and new-stream defaults, rule editor with quick labels,
+  presets, global filter, external tools, lock screen, `:` palette, Kitty keys). The
+  terminal interface is still a preview. 0.16.0 brought its floating windows.
 - Next: nightly patch releases (`0.16.x`) while **0.20.0 terminal interface (TUI)** is
   completed, spec `openspec/changes/tui-interface/` (`tasks.md` is the checklist, ticked
   as work lands):
@@ -118,11 +119,11 @@ Update this section in each release PR.
   **0.22.0** sources/integrations and **0.23.0** binary views (`disassembly-view`); see
   `docs/competitor-analysis.md` section 8.
 
-### Handover notes (2026-09-30, end of the 0.16.0 session)
+### Handover notes (2026-10-05, 0.16.1 nightly)
 
-- No open PRs. `main` holds everything; the 0.16.0 release PR is the last change.
+- No open PRs. `main` holds everything; the 0.16.1 release PR is the last change.
 - Where to resume: `openspec/changes/tui-interface/tasks.md`, group 5 (the GUI / TUI hand-off)
-  next; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
+  next (the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
   - `app.rs`: state, keys, mouse, drawing, tests;
   - `dock.rs`: layout geometry and drop zones;
   - `mouse.rs`: the hit map;
