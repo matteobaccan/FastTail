@@ -300,22 +300,15 @@ impl SettingsForm {
         )
     }
 
-    /// Sends a key to the focused field; `Tab` / `Shift+Tab` and `↑` / `↓` (outside a
-    /// radio list) move between fields. `Enter` and `Esc` come back to the dialog.
+    /// Sends a key to the focused field; `Tab` / `Shift+Tab` and `↑` / `↓` move between
+    /// fields, on every kind of field, and `←` / `→` change the value (a radio list's
+    /// choice, a number by one). `Enter` and `Esc` come back to the dialog.
     pub fn on_key(&mut self, key: KeyEvent) -> FieldKey {
         match key.code {
-            KeyCode::Tab => return self.move_focus(1),
-            KeyCode::BackTab => return self.move_focus(-1),
+            KeyCode::Tab | KeyCode::Down => return self.move_focus(1),
+            KeyCode::BackTab | KeyCode::Up => return self.move_focus(-1),
             KeyCode::Enter => return FieldKey::Submit,
             KeyCode::Esc => return FieldKey::Cancel,
-            _ => {}
-        }
-        let is_number = matches!(self.fields[self.focus].widget, Widget::Number(_));
-        // Up / Down step a number and move a radio list's choice only with Left /
-        // Right; otherwise they walk the fields.
-        match key.code {
-            KeyCode::Up if !is_number => return self.move_focus(-1),
-            KeyCode::Down if !is_number => return self.move_focus(1),
             _ => {}
         }
         let field = &mut self.fields[self.focus];
@@ -551,12 +544,28 @@ mod tests {
         assert_eq!(form.focus, 0);
         form.on_key(key(KeyCode::Tab));
         assert_eq!(form.fields[form.focus].key, Key::Theme);
-        // On a number, Up / Down step the value instead.
+        // On a number Up / Down still walk the fields; Right / Left step the value.
         focus_on(&mut form, Key::PollInterval);
-        let before = form.fields[form.focus].clone();
+        let at = form.focus;
+        form.on_key(key(KeyCode::Down));
+        assert_eq!(form.focus, at + 1);
         form.on_key(key(KeyCode::Up));
+        assert_eq!(form.focus, at);
+        let value = |form: &SettingsForm| match &form.fields[form.focus].widget {
+            Widget::Number(n) => n.value().unwrap(),
+            other => panic!("{other:?}"),
+        };
+        let before = value(&form);
+        form.on_key(key(KeyCode::Right));
+        assert_eq!(value(&form), before + 1);
+        form.on_key(key(KeyCode::Left));
+        form.on_key(key(KeyCode::Left));
+        assert_eq!(value(&form), before - 1);
         assert_eq!(form.fields[form.focus].key, Key::PollInterval);
-        assert_ne!(form.fields[form.focus], before);
+        // Digits are still typed at the end.
+        form.on_key(key(KeyCode::Backspace));
+        form.on_key(key(KeyCode::Char('7')));
+        assert_eq!(value(&form), (before - 1) / 10 * 10 + 7);
         assert_eq!(form.on_key(key(KeyCode::Enter)), FieldKey::Submit);
         assert_eq!(form.on_key(key(KeyCode::Esc)), FieldKey::Cancel);
     }

@@ -41,6 +41,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Terminal Settings: `↑` / `↓` always move between fields, `←` / `→` change the value.**
+  A number field used to keep `↑` / `↓` for stepping its value, so walking the list with
+  the arrows stopped there; now `→` / `←` step a number by one, as they already pick a
+  choice in a list, and digits can still be typed.
 - **One command line for both executables.** `fasttail-tui` now takes every `fasttail`
   option: `--since` / `--until`, `--follow`, `--print`, `--version`, `--opt=value` and
   `--`; `--renderer` is accepted and ignored. `fasttail` accepts the terminal options
