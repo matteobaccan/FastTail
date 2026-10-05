@@ -60,6 +60,12 @@
 - [x] 4.6 Lock screen: `Ctrl+L`, idle lock from the shared idle clock, full-screen bordered PIN dialog with nothing else drawn, key and mouse filtering (`q`, `Esc`, `Ctrl+C` dropped), shared attempts and cooldown, maintenance phrase, tailing continues, exact restore
 - [x] 4.8 Top bar as the GUI's title bar and toolbar (maintainer request): title, version and session; CPU / RAM meters (`telemetry_enabled`), global filter and palette buttons; Open, Sessions, Rules (N), Play / Pause of every stream, Settings, Help; clickable, the command row from 16 rows up
 - [x] 4.9 Terminal bell for alerts in streams not on screen, with the GUI's `flash_on_alert` (maintainer request)
+- [x] 4.10 Title with the author (`by Matteo Baccan`) and the About window (top bar `[ℹ About]`, palette), as the GUI's (maintainer review of the 0.16.2 preview)
+- [ ] 4.11 Settings apply at once, as in the GUI: each change reaches the running interface (theme, language, colours, polling...) without OK
+- [ ] 4.12 Every terminal string through `i18n` (task 7.3, brought forward), so a language change and *Follow the system language* show at once
+- [ ] 4.13 Window resize from all four corners and from the edges: a floating window by any corner, its bottom row and its left and right borders; a docked window's border moves the divider it touches
+- [ ] 4.14 A short closing effect when a window or dialog closes
+- [ ] 4.15 The GUI's two rows inside every stream window: the stream bar (follow, monitor, view mode, line numbers, Δt, wrap, encoding, ANSI, fields, collapse, context, time span) and the filter row (include, exclude, Aa, .*, level, presets, global badge), clickable
 - [x] 4.7 Close stream (`Ctrl+W`, as a browser or editor tab; `w` / `W` are the warning jumps of 4.5b and closing a window moved to `Alt+X`); closing the last stream leaves an empty workspace (4.5b) (the theme cycle `T` shipped with 3.10)
 
 ## 5. Interface selection and hand-offs

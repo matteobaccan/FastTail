@@ -46,6 +46,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::Settings => (Action::Settings, ","),
         ActionId::ColorFilters => (Action::EditRules, "r"),
         ActionId::Help => (Action::ToggleHelp, "?"),
+        ActionId::About => (Action::About, ""),
         ActionId::LockNow => (Action::Lock, "Ctrl+L"),
         ActionId::SessionSaveAs => (Action::SaveSession, "S"),
         ActionId::SessionLoad => (Action::OpenSession, "O"),

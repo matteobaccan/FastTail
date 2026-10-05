@@ -251,9 +251,9 @@ from a terminal).
 same arguments, detached from the terminal, and exits.
 
 `?` or `F1` lists every key as a menu (`Enter` runs one). A top bar follows the GUI's
-title bar and toolbar: the version and session, the CPU and RAM meters (Settings >
+title bar and toolbar: the version, the author and the session, the CPU and RAM meters (Settings >
 *CPU and RAM in the top bar*, the window's *System Telemetry*), the global filter state and the palette on the first row; Open,
-Sessions, Rules, Play / Pause of every stream, Settings and Help on the second (from 16
+Sessions, Rules, Play / Pause of every stream, Settings, About and Help on the second (from 16
 rows up). The status bar at the bottom shows the stream commands; every `[ ]` button can
 be clicked. With *Bell when a hidden stream has an alert* (the window's *Flash on
 background alert*), a rule with a sound alert matching in a stream that is not on screen

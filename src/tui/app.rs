@@ -459,6 +459,8 @@ pub struct App {
     save_error: Option<String>,
     pub message: Option<String>,
     pub show_help: bool,
+    /// The About window, as the GUI's.
+    pub show_about: bool,
     /// First line of the help shown (it scrolls on a short screen).
     pub help_top: usize,
     /// The help entry under the cursor, and the rows of its first column when it is
@@ -567,6 +569,7 @@ impl App {
             quit: false,
             bell: false,
             json_dialog: None,
+            show_about: false,
             bell_rung: false,
             mouse: true,
             idle_poll: Duration::from_millis(250),
@@ -1000,6 +1003,15 @@ impl App {
         }
         if self.json_dialog.is_some() {
             return self.on_json_key(key);
+        }
+        if self.show_about {
+            use crossterm::event::{KeyCode, KeyEventKind};
+            if key.kind != KeyEventKind::Release
+                && matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q'))
+            {
+                self.show_about = false;
+            }
+            return true;
         }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
@@ -2911,6 +2923,7 @@ impl App {
                 Action::ToggleGlobal => self.toggle_global(),
                 Action::CycleTheme => self.cycle_theme(),
                 Action::PlayAll | Action::PauseAll => {}
+                Action::About => self.show_about = !self.show_about,
                 _ => self.message = Some(NO_FILE.into()),
             }
             return;
@@ -2967,6 +2980,7 @@ impl App {
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
             Action::JsonTree => self.open_json(),
+            Action::About => self.show_about = !self.show_about,
             Action::EditNote => match self.tabs[self.active].cursor_line() {
                 Some(line) => self.open_prompt(PromptKind::Note(line)),
                 None => self.message = Some("No row for a note".into()),
@@ -3055,6 +3069,7 @@ impl App {
                     || self.tool_menu.is_some()
                     || self.palette_dialog.is_some()
                     || self.json_dialog.is_some()
+                    || self.show_about
                     || self.tools_editor.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.interface_switch.is_some()
@@ -3349,6 +3364,8 @@ impl App {
                     }
                 } else if self.json_dialog.is_some() {
                     self.json_dialog = None;
+                } else if self.show_about {
+                    self.show_about = false;
                 } else if self.palette_dialog.is_some() {
                     // OK is Enter.
                     let enter = crossterm::event::KeyEvent::new(
@@ -3433,6 +3450,7 @@ impl App {
                 self.tool_menu = None;
                 self.palette_dialog = None;
                 self.json_dialog = None;
+                self.show_about = false;
                 self.prompt = None;
                 self.rules = None;
                 self.presets = None;
@@ -3756,6 +3774,9 @@ impl App {
         if self.json_dialog.is_some() {
             self.draw_json(frame, main_area);
         }
+        if self.show_about {
+            self.draw_about(frame, main_area);
+        }
         if self.tools_editor.is_some() {
             self.draw_tools_editor(frame, main_area);
         }
@@ -3782,7 +3803,7 @@ impl App {
         let dim = Style::default().fg(self.palette.dim());
         let ascii = self.palette.ascii;
         let config = self.settings.as_ref().map(|s| &s.config);
-        let mut title = format!(" FastTail v{}", env!("CARGO_PKG_VERSION"));
+        let mut title = format!(" FastTail v{} by {AUTHOR}", env!("CARGO_PKG_VERSION"));
         if let Some(file) = config.and_then(|c| c.current_session.as_deref()) {
             let dot = if ascii { "-" } else { "·" };
             title.push_str(&format!(
@@ -3839,12 +3860,11 @@ impl App {
             TopItem::Button("", pause.into(), Action::PauseAll, false),
             TopItem::Button(",", "Settings".into(), Action::Settings, false),
         ];
-        let right = vec![TopItem::Button(
-            "?",
-            "Help".into(),
-            Action::ToggleHelp,
-            false,
-        )];
+        let about = if ascii { "About" } else { "ℹ About" };
+        let right = vec![
+            TopItem::Button("", about.into(), Action::About, false),
+            TopItem::Button("?", "Help".into(), Action::ToggleHelp, false),
+        ];
         let row = Rect::new(area.x, area.y + 1, area.width, 1);
         self.draw_top_row(frame, row, &left, &right);
     }
@@ -4556,6 +4576,71 @@ impl App {
         self.hits.list_items.extend(items);
         frame.render_widget(Paragraph::new(out), inner);
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    /// The About window, as the GUI's: name, tagline, version, build date, the terminal's
+    /// colours, author, website, repository and licence.
+    fn draw_about(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::i18n::t;
+        let lang = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.language)
+            .unwrap_or(crate::i18n::Language::En);
+        let accent = Style::default()
+            .fg(self.palette.accent())
+            .add_modifier(Modifier::BOLD);
+        let dim = Style::default().fg(self.palette.dim());
+        let colours = match self.palette.depth {
+            crate::tui::colors::ColorDepth::TrueColor => "truecolor",
+            crate::tui::colors::ColorDepth::Ansi256 => "256 colours",
+            crate::tui::colors::ColorDepth::Ansi16 => "16 colours",
+        };
+        let terminal = if self.palette.ascii {
+            format!("terminal, {colours}, ASCII")
+        } else {
+            format!("terminal, {colours}")
+        };
+        let rows: Vec<(&str, String)> = vec![
+            (
+                t(lang, "about_version"),
+                format!("v{}", env!("CARGO_PKG_VERSION")),
+            ),
+            (
+                t(lang, "about_build_date"),
+                env!("BUILD_TIMESTAMP").to_string(),
+            ),
+            (t(lang, "about_renderer"), terminal),
+            (t(lang, "about_author"), AUTHOR.to_string()),
+            (t(lang, "about_website"), "www.baccan.it".to_string()),
+            (
+                t(lang, "about_repo"),
+                "github.com/matteobaccan/FastTail".to_string(),
+            ),
+            (t(lang, "about_license"), "MIT".to_string()),
+        ];
+        let label_w = rows
+            .iter()
+            .map(|(l, _)| unicode_width::UnicodeWidthStr::width(*l))
+            .max()
+            .unwrap_or(0);
+        let tagline = t(lang, "about_tagline");
+        let height = rows.len() as u16 + 7;
+        let title = format!("{} FastTail", t(lang, "about"));
+        let inner = self.dialog(frame, area, (64, height), &title, false);
+        let mut out = vec![
+            Line::styled(" FASTTAIL", accent),
+            Line::styled(format!(" {tagline}"), dim),
+            Line::raw(""),
+        ];
+        for (label, value) in rows {
+            let pad = label_w.saturating_sub(unicode_width::UnicodeWidthStr::width(label));
+            out.push(Line::from(vec![
+                Span::styled(format!(" {label}{} ", " ".repeat(pad)), dim),
+                Span::raw(value),
+            ]));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// The JSON dialog: the tree rows around the selected one, keys coloured as the GUI's
@@ -5878,6 +5963,9 @@ const STATUS: &[(&str, &str, Action)] = &[
     ("Shift+T", "theme", Action::CycleTheme),
     ("q", "quit", Action::Quit),
 ];
+
+/// The author, as the GUI's title bar and About window name him.
+const AUTHOR: &str = "Matteo Baccan";
 
 /// Rows of the top bar: the title row always, the command row from 16 rows up (a
 /// smaller terminal keeps them for the log; the keys still work).
@@ -7816,7 +7904,8 @@ mod tests {
         ] {
             assert!(tools.contains(label), "{label}: {tools}");
         }
-        assert!(tools.trim_end().ends_with("[? Help]"), "{tools}");
+        assert!(tools.trim_end().ends_with("[ℹ About] [? Help]"), "{tools}");
+        assert!(screen[0].contains("by Matteo Baccan"), "{screen:#?}");
         let click_on = |app: &mut App, action: Action| {
             let (r, _) = *app
                 .hits
@@ -7841,6 +7930,21 @@ mod tests {
         render(&mut app, 120, 20);
         click_on(&mut app, Action::OpenFile);
         assert!(app.browser.is_some());
+        app.browser = None;
+        render(&mut app, 120, 20);
+        click_on(&mut app, Action::About);
+        let screen = render(&mut app, 120, 20);
+        assert!(app.show_about);
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("Matteo Baccan") && l.contains("Author")));
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("github.com/matteobaccan/FastTail")));
+        let esc =
+            crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE);
+        app.on_key(esc);
+        assert!(!app.show_about);
         // A short terminal keeps only the title row.
         app.browser = None;
         let screen = render(&mut app, 120, 12);
