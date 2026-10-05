@@ -50,6 +50,7 @@ pub enum Key {
     StdinSpoolMaxMb,
     AutoBookmarkMax,
     Sound,
+    FlashOnAlert,
     /// Opens the external tools editor (`Enter`); the tools are not part of the form.
     Tools,
     /// The idle lock switch (`lock_enabled`), the idle minutes
@@ -282,6 +283,11 @@ impl SettingsForm {
             ),
             Field::new(Key::Sound, "Sound alerts", check(c.sound_enabled)).starts("Sound"),
             Field::new(
+                Key::FlashOnAlert,
+                "Bell when a hidden stream has an alert",
+                check(c.flash_on_alert),
+            ),
+            Field::new(
                 Key::Tools,
                 "External tools",
                 Widget::Button(format!(
@@ -449,6 +455,7 @@ impl SettingsForm {
                 Key::StdinSpoolMaxMb => c.stdin_spool_max_mb = num() as u32,
                 Key::AutoBookmarkMax => c.auto_bookmark_max = num() as usize,
                 Key::Sound => c.sound_enabled = on,
+                Key::FlashOnAlert => c.flash_on_alert = on,
                 Key::Tools | Key::PinConfirm => {}
                 Key::LockEnabled => c.lock_enabled = on,
                 Key::IdleMinutes => c.screensaver_timeout_mins = num() as u32,

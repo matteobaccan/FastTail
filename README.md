@@ -255,7 +255,9 @@ title bar and toolbar: the version and session, the CPU and RAM meters (Settings
 *CPU and RAM in the top bar*, the window's *System Telemetry*), the global filter state and the palette on the first row; Open,
 Sessions, Rules, Play / Pause of every stream, Settings and Help on the second (from 16
 rows up). The status bar at the bottom shows the stream commands; every `[ ]` button can
-be clicked. Windows follow the GUI's dock: `s` or `|` opens
+be clicked. With *Bell when a hidden stream has an alert* (the window's *Flash on
+background alert*), a rule with a sound alert matching in a stream that is not on screen
+rings the terminal bell once, until that stream is shown. Windows follow the GUI's dock: `s` or `|` opens
 a window beside, `_` below, `<` `>` move a stream between windows, `Alt+arrows` or a
 dragged divider resize, a title dragged onto a window's edge splits it and onto its
 centre adds a tab, and dropped anywhere else it becomes a floating window (`Alt+F` does

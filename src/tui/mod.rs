@@ -449,6 +449,11 @@ where
     let mut scroll_left = opts.scroll_test;
     while !app.quit {
         dirty |= app.tick();
+        if app.take_bell() {
+            // BEL: the terminal beeps or flashes, as it is set up to.
+            let mut out = io::stdout();
+            let _ = out.write_all(b"\x07").and_then(|_| out.flush());
+        }
         let loading = app.busy();
         let mut phase = if loading {
             Phase::Loading
