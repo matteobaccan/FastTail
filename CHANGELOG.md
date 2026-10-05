@@ -58,6 +58,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A missing name or program, a shortcut without a modifier or a broken regex is marked
   and not saved. The list adds, deletes and moves tools and shows the dropped
   rule-bound runs. Every change is saved at once.
+- **Kitty keyboard protocol in the terminal interface.** Terminals that support it
+  (kitty, WezTerm, foot, Ghostty, recent iTerm2 and Alacritty) receive keys without
+  ambiguity, so `Ctrl+Shift+1..9` and a lone `Esc` work there as typed. The protocol is
+  switched off again at exit.
 - **Quick labels in the terminal interface.** `Ctrl+Shift+1..9` turns the search text
   into a quick colour label in every stream, as in the GUI; terminals that do not send
   that key take `L` and the digit. The rule editor (`r`) lists the labels below the

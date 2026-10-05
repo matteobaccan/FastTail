@@ -347,9 +347,33 @@ fn wait_idle(app: &mut App) {
     }
 }
 
-/// Puts the terminal back: mouse capture and raw mode off, main screen, cursor shown.
-/// Disabling a capture that was never enabled is harmless.
+/// The Kitty keyboard protocol was pushed at start and must be popped at exit.
+static KITTY_KEYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns on the Kitty keyboard protocol when the terminal supports it (kitty, WezTerm,
+/// foot, Ghostty, recent iTerm2 and Alacritty; never the Windows console): with
+/// unambiguous escape codes, keys such as `Ctrl+Shift+3` and a lone `Esc` reach the
+/// interface as typed. Only the disambiguation flag is asked for, so text, `Enter`,
+/// `Tab` and `Backspace` keep their usual codes.
+fn enable_kitty_keys() {
+    use crossterm::event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+    if matches!(terminal::supports_keyboard_enhancement(), Ok(true))
+        && execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok()
+    {
+        KITTY_KEYS.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Puts the terminal back: the keyboard protocol popped, mouse capture and raw mode off,
+/// main screen, cursor shown. Disabling a capture that was never enabled is harmless.
 fn restore_terminal() {
+    if KITTY_KEYS.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = execute!(io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     let _ = terminal::disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
@@ -366,6 +390,7 @@ fn run_terminal(app: &mut App, stats: &mut FrameStats, opts: &Options) -> io::Re
     terminal::enable_raw_mode()
         .map_err(|e| io::Error::new(e.kind(), format!("{} ({e})", no_raw_mode())))?;
     execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
+    enable_kitty_keys();
     if app.mouse {
         // On Windows this also turns QuickEdit off while the app runs (crossterm sets
         // the console mode without it and restores the old mode on disable).

@@ -52,11 +52,11 @@
 - [x] 4.5 External tools:
   - [x] `!` menu on the cursor row or selection, shortcuts, rule-bound runs with the 1 per second and 10 children limits and the dropped count, null standard handles for every child (`src/tui/tools.rs`; `workspace::tool_context_for_row` shared with the GUI)
   - [x] Editor page in Settings (Settings > External tools, or `e` in the `!` menu): name, program, arguments with the placeholders, `{match}` regex, shortcut, shell flag, rule binding, dropped runs; checked as in the GUI
-- [ ] 4.5b Key conventions:
+- [x] 4.5b Key conventions:
   - [x] `e`/`E`, `w`/`W` level jumps (`TailEngine::level_line_from`, cached levels only, no file read) and counts (`12j`, `3e`, at most 99,999; `0` alone still scrolls, `Esc` drops a count)
   - [x] `?` with no file (an empty workspace, also after closing the last stream; the last docked window can float, leaving the dock empty)
   - [x] `:` palette over `src/actions.rs` (line jump): the registry's actions the terminal runs, named with `i18n`, with the terminal keys (`src/tui/palette.rs`); a number, `+N`, `-N` or a time goes there
-  - [ ] Bindings from the registry, Kitty keyboard protocol on / off
+  - [x] Kitty keyboard protocol pushed at start when supported (disambiguation flag only) and popped at exit or on a panic (`tui::enable_kitty_keys`); rebinding the terminal's keys moves to `remappable-shortcuts` (`[tui_shortcuts]`, 0.22.0), whose proposal already plans it
 - [x] 4.6 Lock screen: `Ctrl+L`, idle lock from the shared idle clock, full-screen bordered PIN dialog with nothing else drawn, key and mouse filtering (`q`, `Esc`, `Ctrl+C` dropped), shared attempts and cooldown, maintenance phrase, tailing continues, exact restore
 - [x] 4.7 Close stream (`Ctrl+W`, as a browser or editor tab; `w` / `W` are the warning jumps of 4.5b and closing a window moved to `Alt+X`); closing the last stream leaves an empty workspace (4.5b) (the theme cycle `T` shipped with 3.10)
 

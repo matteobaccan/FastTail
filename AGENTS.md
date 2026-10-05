@@ -108,8 +108,7 @@ Update this section in each release PR.
 - Next: nightly patch releases (`0.16.x`) while **0.20.0 terminal interface (TUI)** is
   completed, spec `openspec/changes/tui-interface/` (`tasks.md` is the checklist, ticked
   as work lands):
-  - Group 4. What is open:
-    - 4.5b: registry bindings with the Kitty protocol (the `:` palette is done).
+  - Group 4 is done.
   - Groups 5 to 8: hand-off, release pipeline, i18n, `docs/tui.md`, the parity checklist.
   - 0.20.0 ships at full GUI parity without the "preview" label.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
@@ -122,8 +121,8 @@ Update this section in each release PR.
 ### Handover notes (2026-09-30, end of the 0.16.0 session)
 
 - No open PRs. `main` holds everything; the 0.16.0 release PR is the last change.
-- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (the 4.5b registry bindings
-  and Kitty protocol next, then group 5; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
+- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 5 (the GUI / TUI hand-off)
+  next; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
   - `app.rs`: state, keys, mouse, drawing, tests;
   - `dock.rs`: layout geometry and drop zones;
   - `mouse.rs`: the hit map;
