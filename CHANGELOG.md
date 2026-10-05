@@ -54,6 +54,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Terminal interface: automatic token highlighting.** IP addresses, identifiers (UUID),
+  web addresses, durations and file paths are coloured in the terminal as in the window,
+  following the same `auto_highlight` and `auto_highlight_kinds` of `fasttail.ini`; the
+  terminal Settings has the switch and the five kinds under View. Before, the terminal
+  ignored the setting even when it was on in the window.
 - **Column view: the header lines up with the rows again.** Each cell of a row also took
   the window's item spacing, so the second column's values sat one character right of their
   name, the third two, and so on. Rows and header now place their columns the same way.

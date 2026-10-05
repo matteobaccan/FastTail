@@ -146,6 +146,7 @@ pub fn apply_settings(engine: &mut TailEngine, config: &FastTailConfig) {
     engine.size_unit = config.size_unit;
     engine.show_line_numbers = config.show_line_numbers;
     engine.show_time_delta = config.show_time_delta;
+    engine.set_auto_tokens(config.auto_tokens());
 }
 
 /// Restores what `fasttail.ini` saved for `path`: wrap, bookmarks and notes, then the

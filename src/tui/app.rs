@@ -8346,6 +8346,45 @@ mod tests {
         assert!(app.quit && app.interface_switch.is_none());
     }
 
+    /// Settings `[ OK ]` with the automatic highlighting on reaches the open streams, and
+    /// a row then carries the token spans the terminal colours.
+    #[test]
+    fn automatic_highlighting_reaches_the_open_streams() {
+        use crate::auto_highlight::{TokenKind, TokenKinds};
+        use crate::tail_engine::SpanStyle;
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", "GET from 10.0.0.7 took 35ms\n")], false);
+        app.settings = Some(crate::tui::workspace::Settings {
+            path: dir.path().join("fasttail.ini"),
+            ..Default::default()
+        });
+        assert!(app.tabs[0].engine.auto_tokens().is_empty());
+        app.open_settings();
+        let form = app.settings_form.as_mut().unwrap();
+        form.focus = form
+            .fields
+            .iter()
+            .position(|f| f.key == crate::tui::settings::Key::AutoHighlight)
+            .unwrap();
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings_form.is_none());
+        let engine = &mut app.tabs[0].engine;
+        assert_eq!(engine.auto_tokens(), TokenKinds::ALL);
+        render(&mut app, 80, 10);
+        let engine = &app.tabs[0].engine;
+        assert!(engine.has_span_rules());
+        let painted = engine.match_row_spans(&engine.get_row(0).expect("row 0"));
+        assert!(
+            painted
+                .spans
+                .iter()
+                .any(|s| s.style == SpanStyle::Token(TokenKind::Ip)),
+            "{:?}",
+            painted.spans
+        );
+    }
+
     #[test]
     fn the_interface_field_matches_the_build() {
         let form = crate::tui::settings::SettingsForm::from_config(&Default::default());

@@ -9,6 +9,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
+use crate::auto_highlight::TokenKind;
 use crate::config::{FastTailConfig, Interface};
 use crate::i18n::Language;
 use crate::settings_model as model;
@@ -34,6 +35,10 @@ pub enum Key {
     LanguageAuto,
     LineNumbers,
     LevelColors,
+    /// The automatic highlighting switch (`auto_highlight`) and each of its kinds
+    /// (`auto_highlight_kinds`).
+    AutoHighlight,
+    Token(TokenKind),
     TimeDelta,
     TimeDeltaGap,
     SizeUnit,
@@ -123,6 +128,22 @@ fn check(on: bool) -> Widget {
     Widget::Check(CheckBox { on })
 }
 
+/// One kind of the automatic highlighting, under its switch, as in the GUI's Settings.
+fn token_field(c: &FastTailConfig, kind: TokenKind) -> Field {
+    let label = match kind {
+        TokenKind::Ip => "  IP addresses",
+        TokenKind::Uuid => "  Identifiers (UUID)",
+        TokenKind::Url => "  Web addresses (URL)",
+        TokenKind::Duration => "  Durations",
+        TokenKind::Path => "  File paths",
+    };
+    Field::new(
+        Key::Token(kind),
+        label,
+        check(c.auto_highlight_kinds.contains(kind)),
+    )
+}
+
 /// The interface choice. A build without the window (the Linux terminal-only archive)
 /// shows the terminal as the only one, and says why; on Windows, where the window is
 /// another file, the graphical entry says when that file is missing.
@@ -191,6 +212,16 @@ impl SettingsForm {
                 check(c.level_colors),
             )
             .starts("View"),
+            Field::new(
+                Key::AutoHighlight,
+                "Automatic token highlighting",
+                check(c.auto_highlight),
+            ),
+            token_field(c, TokenKind::Ip),
+            token_field(c, TokenKind::Uuid),
+            token_field(c, TokenKind::Url),
+            token_field(c, TokenKind::Duration),
+            token_field(c, TokenKind::Path),
             Field::new(
                 Key::TimeDeltaGap,
                 "Time delta gap (ms)",
@@ -393,6 +424,8 @@ impl SettingsForm {
                 Key::LanguageAuto => c.language_auto = on,
                 Key::LineNumbers => c.show_line_numbers = on,
                 Key::LevelColors => c.level_colors = on,
+                Key::AutoHighlight => c.auto_highlight = on,
+                Key::Token(kind) => c.auto_highlight_kinds.set(kind, on),
                 Key::TimeDelta => c.show_time_delta = on,
                 Key::TimeDeltaGap => c.time_delta_gap_ms = num(),
                 Key::SizeUnit => c.size_unit = SIZE_UNITS[choice],
@@ -583,6 +616,31 @@ mod tests {
         assert!(text.contains(&"Performance and refresh"));
         let fields = lines.iter().filter(|(_, f)| f.is_some()).count();
         assert_eq!(fields, form.fields.len());
+    }
+
+    #[test]
+    fn automatic_highlighting_and_its_kinds_are_settings() {
+        use crate::auto_highlight::TokenKinds;
+        let mut c = FastTailConfig {
+            auto_highlight: false,
+            auto_highlight_kinds: TokenKinds::ALL,
+            ..Default::default()
+        };
+        let mut form = SettingsForm::from_config(&c);
+        focus_on(&mut form, Key::AutoHighlight);
+        form.on_key(key(KeyCode::Char(' ')));
+        focus_on(&mut form, Key::Token(TokenKind::Path));
+        form.on_key(key(KeyCode::Char(' ')));
+        form.apply(&mut c).unwrap();
+        assert!(c.auto_highlight);
+        assert!(!c.auto_highlight_kinds.contains(TokenKind::Path));
+        assert!(c.auto_highlight_kinds.contains(TokenKind::Ip));
+        assert_eq!(c.auto_tokens(), c.auto_highlight_kinds);
+        let lines: Vec<String> = form.lines().into_iter().map(|(l, _)| l).collect();
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("Automatic token highlighting")));
+        assert!(lines.iter().any(|l| l.contains("File paths")));
     }
 
     #[test]
