@@ -130,6 +130,9 @@ pub struct FastTailApp {
     /// Why the terminal interface asked for at start (`--tui`, `interface=tui`) could not
     /// be started, so the window opened instead (Windows hand-off, `main.rs`).
     pub handoff_notice: Option<String>,
+    /// The terminal was just picked as the interface in Settings: the dialog offering to
+    /// switch now is open.
+    interface_switch: bool,
     /// Standard input piped without `-`, waiting for its first byte before its stream
     /// (and tab) is created, and the command line options to apply to it then.
     pub pending_stdin: Option<crate::stdin_source::StdinStream>,
@@ -612,6 +615,7 @@ impl FastTailApp {
             archive_picker: None,
             open_notice: None,
             handoff_notice: None,
+            interface_switch: false,
             pending_stdin: None,
             stdin_options: StdinOptions::default(),
             save_notice: None,
@@ -1128,6 +1132,75 @@ impl FastTailApp {
 
     /// The app icon (RGBA, 128 × 128), also used for the tray.
     const ICON_RGBA: &'static [u8] = include_bytes!("../../assets/icon-128.rgba");
+
+    /// The terminal was picked in Settings. On Windows: "Switch now" saves the workspace,
+    /// hands off to `fasttail-tui.exe` and quits, or reports why it could not while the
+    /// window keeps running; "At next start" closes the dialog. On Linux and macOS a
+    /// window has no terminal to switch into: the dialog says when the choice applies.
+    fn draw_interface_switch(&mut self, ctx: &egui::Context) {
+        let lang = self.config.language;
+        let theme = self.config.theme;
+        let mut is_open = true;
+        let mut now = false;
+        let mut close = false;
+        egui::Window::new(
+            RichText::new(format!("⇄ {}", t(lang, "interface_switch_title")))
+                .monospace()
+                .color(theme.accent_color()),
+        )
+        .id(egui::Id::new("fasttail_interface_switch"))
+        .open(&mut is_open)
+        .resizable(false)
+        .collapsible(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            let body = if cfg!(windows) {
+                t(lang, "interface_switch_body")
+            } else {
+                t(lang, "interface_next_terminal_start")
+            };
+            ui.label(
+                RichText::new(body)
+                    .monospace()
+                    .size(11.5)
+                    .color(theme.text_primary()),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if cfg!(windows) {
+                    now = ui.button(t(lang, "interface_switch_now")).clicked();
+                    close = ui.button(t(lang, "interface_switch_later")).clicked();
+                } else {
+                    close = ui.button(t(lang, "session_ok")).clicked();
+                }
+            });
+            close |= ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        });
+        if now {
+            self.interface_switch = false;
+            self.switch_to_terminal(ctx);
+        } else if close || !is_open {
+            self.interface_switch = false;
+        }
+    }
+
+    /// Settings "Switch now" (Windows): the workspace is saved, then `fasttail-tui.exe`
+    /// starts in a new console and the window quits; when it cannot start, the window
+    /// stays and says why.
+    #[cfg(windows)]
+    fn switch_to_terminal(&mut self, ctx: &egui::Context) {
+        self.save_dock_layout();
+        match crate::handoff::start_tui_in_new_console(&[]) {
+            Ok(()) => self.quit(ctx),
+            Err(e) => {
+                self.handoff_notice =
+                    Some(crate::handoff::tui_start_failure(self.config.language, &e));
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn switch_to_terminal(&mut self, _ctx: &egui::Context) {}
 
     /// Quits for real, even with close to tray on.
     pub fn quit(&mut self, ctx: &egui::Context) {
@@ -3873,6 +3946,45 @@ impl FastTailApp {
                                 .color(theme.warn_color()),
                             );
                         }
+
+                        // Interface at start: saved at once; picking the terminal offers to
+                        // switch now (Windows) or says when it applies (Linux, macOS).
+                        ui.add_space(6.0);
+                        let before = self.config.interface;
+                        ui.horizontal(|ui| {
+                            use crate::config::Interface;
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "interface_label")))
+                                    .monospace(),
+                            );
+                            ui.selectable_value(
+                                &mut self.config.interface,
+                                Interface::Gui,
+                                t(lang, "interface_gui"),
+                            );
+                            ui.selectable_value(
+                                &mut self.config.interface,
+                                Interface::Tui,
+                                t(lang, "interface_tui"),
+                            );
+                        });
+                        if cfg!(windows)
+                            && !crate::handoff::sibling_present(&crate::handoff::tui_exe_name())
+                        {
+                            ui.label(
+                                RichText::new(format!(
+                                    "\u{26a0} {}",
+                                    t(lang, "interface_tui_missing")
+                                ))
+                                .small()
+                                .color(theme.warn_color()),
+                            );
+                        }
+                        if self.config.interface != before {
+                            let _ = self.config.save();
+                            self.interface_switch =
+                                self.config.interface == crate::config::Interface::Tui;
+                        }
                         ui.add_space(6.0);
                         if ui
                             .checkbox(&mut self.config.always_on_top, t(lang, "always_on_top"))
@@ -5030,6 +5142,9 @@ impl FastTailApp {
             if close || !is_open {
                 self.handoff_notice = None;
             }
+        }
+        if self.interface_switch {
+            self.draw_interface_switch(&ctx);
         }
         if let Some(notice) = self.save_notice.clone() {
             let lang = self.config.language;

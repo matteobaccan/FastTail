@@ -387,24 +387,14 @@ fn start_terminal_interface(cli: &CliArgs, lang: Language) -> Option<String> {
         fasttail::print_mode::console::release();
         std::process::exit(2);
     }
-    let name = handoff::tui_exe_name();
-    let exe = handoff::sibling_exe(&name).unwrap_or_else(|| name.clone().into());
-    let failure = |what: &str, detail: String| {
-        Some(format!(
-            "{}\n{}{detail}\n\n{}",
-            t(lang, what),
-            exe.display(),
-            t(lang, "handoff_gui_instead")
-        ))
-    };
-    if !exe.is_file() {
-        return failure("handoff_not_found", String::new());
-    }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let args = handoff::forwarded_args(&args, "--tui", Some(handoff::HANDOFF_FLAG));
-    match handoff::start_in_new_console(&exe, &args) {
+    match handoff::start_tui_in_new_console(&args) {
         Ok(()) => std::process::exit(0),
-        Err(err) => failure("handoff_start_failed", format!("\n{err}")),
+        Err(err) => Some(format!(
+            "{}\n\n{}",
+            handoff::tui_start_failure(lang, &err),
+            t(lang, "handoff_gui_instead")
+        )),
     }
 }
 

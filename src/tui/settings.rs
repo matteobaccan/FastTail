@@ -123,6 +123,23 @@ fn check(on: bool) -> Widget {
     Widget::Check(CheckBox { on })
 }
 
+/// The interface choice. A build without the window (the Linux terminal-only archive)
+/// shows the terminal as the only one, and says why; on Windows, where the window is
+/// another file, the graphical entry says when that file is missing.
+fn interface_widget(selected: usize) -> Widget {
+    if !cfg!(feature = "gui") {
+        return Widget::Button("terminal - the graphical interface is not in this build".into());
+    }
+    let missing =
+        cfg!(windows) && !crate::handoff::sibling_present(&crate::handoff::gui_exe_name());
+    let graphical = if missing {
+        "graphical (fasttail.exe missing)"
+    } else {
+        "graphical"
+    };
+    Widget::Radio(RadioList::new(&[graphical, "terminal"], selected))
+}
+
 impl SettingsForm {
     pub fn from_config(c: &FastTailConfig) -> Self {
         let theme = THEMES.iter().position(|t| *t == c.theme).unwrap_or(0);
@@ -150,7 +167,7 @@ impl SettingsForm {
             Field::new(
                 Key::Interface,
                 "Interface at start",
-                Widget::Radio(RadioList::new(&["graphical", "terminal"], interface)),
+                interface_widget(interface),
             )
             .starts("General"),
             Field::new(
@@ -369,13 +386,15 @@ impl SettingsForm {
                 _ => 0,
             };
             match f.key {
-                Key::Interface => {
+                // Only a choice changes it (not the terminal-only build's note).
+                Key::Interface if matches!(f.widget, Widget::Radio(_)) => {
                     c.interface = if choice == 1 {
                         Interface::Tui
                     } else {
                         Interface::Gui
                     }
                 }
+                Key::Interface => {}
                 Key::Theme => c.theme = THEMES[choice],
                 Key::Language => c.language = Language::ALL[choice],
                 Key::LanguageAuto => c.language_auto = on,

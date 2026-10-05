@@ -208,6 +208,15 @@ pub struct Prompt {
     pub field: TextField,
 }
 
+/// The dialog after the graphical interface was picked in Settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterfaceSwitch {
+    /// "Switch now" (`Enter`, `[ OK ]`) or "At next start" (`Esc`, `[ Cancel ]`).
+    Offer,
+    /// The window did not start: why.
+    Failed(String),
+}
+
 /// The open-session dialog: the recent sessions and a field for a typed path.
 pub struct SessionDialog {
     pub recent: Vec<PathBuf>,
@@ -432,6 +441,12 @@ pub struct App {
     idle: crate::lock::IdleClock,
     /// A session file that exists, waiting for `[ OK ]` to be overwritten.
     pub confirm_overwrite: Option<PathBuf>,
+    /// The graphical interface was just picked in Settings: switch now or at next start,
+    /// then why it could not start when that failed.
+    pub interface_switch: Option<InterfaceSwitch>,
+    /// Starts the window for "Switch now": `handoff::start_gui`, a stub in tests so that
+    /// no test ever starts a real FastTail (it would read the ini of its directory).
+    pub start_gui: fn() -> Result<(), crate::handoff::StartError>,
     /// The configuration new streams are set up with (none in tests and benchmarks:
     /// the defaults).
     pub settings: Option<crate::tui::workspace::Settings>,
@@ -524,6 +539,12 @@ impl App {
             idle: crate::lock::IdleClock::new(Instant::now()),
             tool_runner: Default::default(),
             confirm_overwrite: None,
+            interface_switch: None,
+            start_gui: if cfg!(test) {
+                || Err(crate::handoff::StartError::NotInBuild)
+            } else {
+                crate::handoff::start_gui
+            },
             settings: None,
             autosave: false,
             last_save: Instant::now(),
@@ -923,6 +944,9 @@ impl App {
         }
         if self.confirm_overwrite.is_some() {
             return self.on_confirm_key(key);
+        }
+        if self.interface_switch.is_some() {
+            return self.on_interface_switch_key(key);
         }
         // The tools editor opens over Settings, so it has the keys first.
         if self.tools_editor.is_some() {
@@ -1770,6 +1794,7 @@ impl App {
             return;
         };
         let settings = self.settings.get_or_insert_with(Default::default);
+        let interface_before = settings.config.interface;
         if let Err(problems) = form.apply(&mut settings.config) {
             form.rejected = true;
             let names: Vec<String> = problems
@@ -1781,6 +1806,10 @@ impl App {
         }
         self.settings_form = None;
         let config = &settings.config;
+        if config.interface == crate::config::Interface::Gui && interface_before != config.interface
+        {
+            self.interface_switch = Some(InterfaceSwitch::Offer);
+        }
         self.palette.theme = config.theme;
         self.palette.level_colors = config.level_colors;
         self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
@@ -1929,6 +1958,40 @@ impl App {
             return;
         }
         self.save_session(&file);
+    }
+
+    /// The switch dialog: `Enter` switches now (or closes the failure note), `Esc`
+    /// leaves the choice for the next start.
+    fn on_interface_switch_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        match key.code {
+            KeyCode::Enter => self.confirm_interface_switch(),
+            KeyCode::Esc => self.interface_switch = None,
+            _ => return false,
+        }
+        true
+    }
+
+    /// `[ OK ]` of the switch dialog.
+    fn confirm_interface_switch(&mut self) {
+        match self.interface_switch.take() {
+            Some(InterfaceSwitch::Offer) => self.switch_to_gui(),
+            Some(InterfaceSwitch::Failed(_)) | None => {}
+        }
+    }
+
+    /// Settings "Switch now": the workspace is saved, then the window starts
+    /// (`handoff::start_gui`) and the terminal interface quits, restoring the terminal.
+    /// When the window cannot start, a dialog says why and this interface keeps running.
+    fn switch_to_gui(&mut self) {
+        self.save_config();
+        match (self.start_gui)() {
+            Ok(()) => self.quit = true,
+            Err(e) => self.interface_switch = Some(InterfaceSwitch::Failed(e.to_string())),
+        }
     }
 
     fn on_confirm_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -2863,6 +2926,7 @@ impl App {
                     || self.palette_dialog.is_some()
                     || self.tools_editor.is_some()
                     || self.confirm_overwrite.is_some()
+                    || self.interface_switch.is_some()
                     || self.show_help
                 {
                     return false;
@@ -3132,6 +3196,9 @@ impl App {
                 }
                 self.open_picked();
             }
+            Target::DialogOk if self.interface_switch.is_some() => {
+                self.confirm_interface_switch();
+            }
             Target::DialogOk => {
                 if let Some(d) = self.tools_editor.as_mut() {
                     if d.form.is_none() {
@@ -3229,6 +3296,7 @@ impl App {
                 self.sessions = None;
                 self.settings_form = None;
                 self.confirm_overwrite = None;
+                self.interface_switch = None;
                 self.browser = None;
                 self.close_picker();
                 self.show_help = false;
@@ -3544,6 +3612,9 @@ impl App {
         }
         if self.confirm_overwrite.is_some() {
             self.draw_confirm(frame, main_area);
+        }
+        if self.interface_switch.is_some() {
+            self.draw_interface_switch(frame, main_area);
         }
     }
 
@@ -4763,6 +4834,42 @@ impl App {
             lines.push(Line::styled(text, style));
         }
         frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    fn draw_interface_switch(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(state) = self.interface_switch.clone() else {
+            return;
+        };
+        let (title, text, cancel) = match &state {
+            InterfaceSwitch::Offer => (
+                "Switch interface",
+                vec![
+                    Line::raw("The graphical interface opens at the next start."),
+                    Line::raw("Switch now? The workspace is saved and the terminal"),
+                    Line::raw("interface closes. (Enter: now / Esc: at next start)"),
+                ],
+                true,
+            ),
+            InterfaceSwitch::Failed(why) => (
+                "Graphical interface not started",
+                vec![
+                    Line::raw(view::sanitize(why)),
+                    Line::raw("It opens at the next start; this interface keeps running."),
+                ],
+                false,
+            ),
+        };
+        let width = text
+            .iter()
+            .map(|l| l.width() as u16 + 4)
+            .max()
+            .unwrap_or(40)
+            .clamp(40, area.width.saturating_sub(2).max(40));
+        let inner = self.dialog(frame, area, (width, text.len() as u16 + 3), title, cancel);
+        frame.render_widget(
+            Paragraph::new(text).wrap(ratatui::widgets::Wrap { trim: false }),
+            inner,
+        );
     }
 
     fn draw_confirm(&mut self, frame: &mut Frame, area: Rect) {
@@ -8169,5 +8276,91 @@ mod tests {
         app.settings.as_mut().unwrap().config.lock_pin.clear();
         app.lock();
         assert!(app.locked.is_none());
+    }
+
+    /// Settings with the graphical interface picked: saved, then the switch dialog.
+    /// "Switch now" goes through the test stub (`App::start_gui`): first failing, so the
+    /// dialog says why and nothing quits, then succeeding, so the interface quits.
+    #[test]
+    fn picking_the_graphical_interface_offers_to_switch_and_reports_a_failure() {
+        use crate::config::Interface;
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        let ini = dir.path().join("fasttail.ini");
+        let mut settings = crate::tui::workspace::Settings {
+            path: ini.clone(),
+            ..Default::default()
+        };
+        settings.config.interface = Interface::Tui;
+        app.settings = Some(settings);
+        app.open_settings();
+        let form = app.settings_form.as_mut().unwrap();
+        form.focus = form
+            .fields
+            .iter()
+            .position(|f| f.key == crate::tui::settings::Key::Interface)
+            .unwrap();
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Enter);
+        if !cfg!(feature = "gui") {
+            // The terminal-only build has no choice to make, so nothing to offer.
+            assert!(app.interface_switch.is_none());
+            assert_eq!(
+                app.settings.as_ref().unwrap().config.interface,
+                Interface::Tui
+            );
+            return;
+        }
+        assert_eq!(
+            app.settings.as_ref().unwrap().config.interface,
+            Interface::Gui
+        );
+        assert_eq!(app.interface_switch, Some(InterfaceSwitch::Offer));
+        let screen = render(&mut app, 90, 24).join("\n");
+        assert!(screen.contains("Switch interface"), "{screen}");
+        // "At next start": the choice stays saved, nothing else happens.
+        press(&mut app, KeyCode::Esc);
+        assert!(app.interface_switch.is_none() && !app.quit);
+        // "Switch now" from the dialog again.
+        app.interface_switch = Some(InterfaceSwitch::Offer);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.quit);
+        let Some(InterfaceSwitch::Failed(why)) = app.interface_switch.clone() else {
+            panic!("{:?}", app.interface_switch);
+        };
+        let screen = render(&mut app, 120, 24).join("\n");
+        assert!(
+            screen.contains("Graphical interface not started"),
+            "{screen}"
+        );
+        assert!(screen.contains(&why[..20.min(why.len())]), "{screen}");
+        // The workspace was saved before trying.
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(saved.interface, Interface::Gui);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.interface_switch.is_none());
+        // Started: the terminal interface quits.
+        app.start_gui = || Ok(());
+        app.interface_switch = Some(InterfaceSwitch::Offer);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.quit && app.interface_switch.is_none());
+    }
+
+    #[test]
+    fn the_interface_field_matches_the_build() {
+        let form = crate::tui::settings::SettingsForm::from_config(&Default::default());
+        let field = &form.fields[0];
+        assert_eq!(field.key, crate::tui::settings::Key::Interface);
+        match &field.widget {
+            #[cfg(feature = "gui")]
+            crate::tui::settings::Widget::Radio(r) => {
+                assert!(r.options[0].starts_with("graphical"));
+            }
+            #[cfg(not(feature = "gui"))]
+            crate::tui::settings::Widget::Button(text) => {
+                assert!(text.contains("not in this build"));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
