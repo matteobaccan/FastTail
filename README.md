@@ -178,7 +178,7 @@ fasttail --print [OPTIONS] [PATH...]
                      is opened as `./-`
   --fresh            start with an empty workspace instead of the saved one
   --tui / --gui      the interface to start, over `interface` in fasttail.ini (not
-                     both; for now `fasttail --tui` points to fasttail-tui)
+                     both; see Terminal interface below)
   --filter <TEXT>    include filter for the files opened from the command line
                      (given more than once, the last one counts)
   --exclude <TEXT>   exclude filter for those files
@@ -224,6 +224,13 @@ fasttail-tui --print --filter ERROR app.log  # print mode, as fasttail --print
 
 `fasttail-tui` takes every option of `fasttail` (`--since`, `--until`, `--follow`,
 `--print`, `--version`, ...); `--renderer` is accepted and ignored.
+
+On Windows `fasttail.exe --tui` (or `interface=tui` in `fasttail.ini`, for example with a
+double click) starts `fasttail-tui.exe` from the same folder in a new console window,
+with the same arguments, and closes. If `fasttail-tui.exe` is missing or does not start,
+the window opens and says why. From cmd or PowerShell run `fasttail-tui.exe` directly:
+`fasttail.exe --tui` works there too, but in a second console window, and it refuses
+standard input (`command | fasttail-tui.exe -` reads it).
 
 `?` or `F1` lists every key as a menu (`Enter` runs one); the status bar shows the main
 commands as `[ ]` buttons for the mouse. Windows follow the GUI's dock: `s` or `|` opens

@@ -108,6 +108,24 @@ Press ? or F1 in the viewer for the keys.
 "
 );
 
+/// The options followed by a value as a separate argument (`--filter ERROR`), for the
+/// hand-offs that pass a command line on without parsing it (`crate::handoff`).
+pub const VALUE_OPTIONS: &[&str] = &[
+    "--filter",
+    "--exclude",
+    "--since",
+    "--until",
+    "--level",
+    "--context",
+    "--color",
+    "--colour",
+    "--config",
+    "--session",
+    "--renderer",
+    "--search",
+    "--theme",
+];
+
 /// When print mode colours its output (`--color`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ColorChoice {
@@ -566,6 +584,20 @@ mod tests {
         let a = CliArgs::parse(["app.log"], &cwd()).unwrap();
         assert_eq!(a.interface(Interface::Tui), Interface::Tui);
         assert_eq!(a.interface(Interface::Gui), Interface::Gui);
+    }
+
+    #[test]
+    fn value_options_are_exactly_those_that_need_a_value() {
+        for name in VALUE_OPTIONS {
+            let m = usage_error(&["--print", name]);
+            assert!(m.contains(name) && m.contains("needs"), "{name}: {m}");
+        }
+        for flag in [
+            "--tui", "--gui", "--fresh", "--follow", "--split", "--ascii", "--print",
+        ] {
+            assert!(!VALUE_OPTIONS.contains(&flag));
+            assert!(CliArgs::parse(["--print", flag], &cwd()).is_ok(), "{flag}");
+        }
     }
 
     #[test]
