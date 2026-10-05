@@ -28,6 +28,9 @@ pub enum Action {
     PageDown,
     ScrollLeft,
     ScrollRight,
+    /// CTRL + LEFT / RIGHT: sideways by `HSCROLL_FAST` columns.
+    ScrollLeftFast,
+    ScrollRightFast,
     ScrollHome,
     StartSearch,
     SearchNext,
@@ -161,6 +164,8 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('l') => Some(Action::Lock),
             KeyCode::PageUp => Some(Action::PrevInPane),
             KeyCode::PageDown => Some(Action::NextInPane),
+            KeyCode::Left => Some(Action::ScrollLeftFast),
+            KeyCode::Right => Some(Action::ScrollRightFast),
             _ => None,
         };
     }
@@ -393,6 +398,9 @@ mod tests {
         assert_eq!(k(KeyCode::Char('w'), none), Some(Action::NextWarn));
         assert_eq!(k(KeyCode::Char('W'), shift), Some(Action::PrevWarn));
         assert_eq!(k(KeyCode::Left, alt), Some(Action::ResizeLeft));
+        assert_eq!(k(KeyCode::Left, ctrl), Some(Action::ScrollLeftFast));
+        assert_eq!(k(KeyCode::Right, ctrl), Some(Action::ScrollRightFast));
+        assert_eq!(k(KeyCode::Right, none), Some(Action::ScrollRight));
         assert_eq!(k(KeyCode::Down, alt), Some(Action::ResizeDown));
         assert_eq!(k(KeyCode::Char('<'), none), Some(Action::MovePrevPane));
         assert_eq!(k(KeyCode::Char('>'), shift), Some(Action::MoveNextPane));

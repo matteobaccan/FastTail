@@ -51,6 +51,8 @@ use crate::tui::view::{self, Paint};
 const NOTE_PREVIEW_CHARS: usize = 40;
 /// Cells one `←` / `→` scrolls sideways.
 const HSCROLL_STEP: usize = 1;
+/// Columns a CTRL + arrow scrolls sideways.
+const HSCROLL_FAST: usize = 10;
 
 /// One open stream and the view state the terminal keeps for it.
 pub struct Tab {
@@ -3859,6 +3861,8 @@ impl App {
             }
             Action::ScrollLeft => tab.hscroll = tab.hscroll.saturating_sub(HSCROLL_STEP),
             Action::ScrollRight => tab.hscroll += HSCROLL_STEP,
+            Action::ScrollLeftFast => tab.hscroll = tab.hscroll.saturating_sub(HSCROLL_FAST),
+            Action::ScrollRightFast => tab.hscroll += HSCROLL_FAST,
             Action::ScrollHome => tab.hscroll = 0,
             Action::ToggleBookmark => match tab.cursor_line() {
                 Some(line) => tab.engine.toggle_bookmark(line),
@@ -6221,7 +6225,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     (
         "Left/Right 0",
-        en("scroll sideways / back to column 0"),
+        en("sideways (Ctrl: by 10) / column 0"),
         None,
     ),
     (en("Space"), en("toggle follow"), Some(Action::ToggleFollow)),
@@ -8373,6 +8377,18 @@ mod tests {
             app.prompt.as_ref().map(|p| p.kind),
             Some(PromptKind::Include)
         );
+    }
+
+    #[test]
+    fn arrows_scroll_sideways_by_one_and_ctrl_arrows_by_ten() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        app.apply(Action::ScrollRight);
+        assert_eq!(app.tabs[0].hscroll, 1);
+        app.apply(Action::ScrollRightFast);
+        assert_eq!(app.tabs[0].hscroll, 11);
+        app.apply(Action::ScrollLeftFast);
+        app.apply(Action::ScrollLeftFast);
+        assert_eq!(app.tabs[0].hscroll, 0);
     }
 
     #[test]

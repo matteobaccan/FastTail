@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Terminal interface: `Ctrl+←` / `Ctrl+→` scroll a window sideways by 10 columns**;
+  `←` / `→` still move one column.
 - **Terminal interface in every language.** Every text of the terminal interface (bars,
   windows, dialogs, Settings, editors, help, messages) is translated into the 16
   languages of the window, following `fasttail.ini`'s language or the system's. A new
