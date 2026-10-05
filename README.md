@@ -213,73 +213,50 @@ Example: `fasttail --fresh --filter ERROR app.log err.log`.
 
 Without `--print`, `--since` and `--until` fill the time range of the streams opened from the command line (the stdin stream included) as if typed in the popup; a relative time (`-3h`) is kept as typed, so the window slides with the clock like one typed in the popup. A time FastTail cannot read is a usage error (exit code 2).
 
-### Terminal interface (preview)
+### Terminal interface
 
 `fasttail-tui` shows the same streams in a terminal: over SSH, on a server without a
-desktop, or in Windows Terminal. It uses the same engine and the same `fasttail.ini` (the
-workspace, the dock layout, sessions, bookmarks, filters and theme), writing back only
-what it changes, so the window and the terminal can take turns on one configuration.
+desktop, or in Windows Terminal, with the window's features (dock and floating windows,
+the stream bar and filter row, search, filters, levels, time range, collapse, context,
+bookmarks and notes, HEX, ANSI colours, JSON trees, Settings, rules, presets, global filter,
+external tools, PIN lock, the `:` palette) in the 16 languages. It uses the same engine and
+the same `fasttail.ini` (workspace, dock layout, sessions, bookmarks, filters, rules, theme),
+writing back only what it changes, so the window and the terminal can take turns on one
+configuration; with several instances on one `fasttail.ini` the last writer wins. The full
+guide, with every key, is [docs/tui.md](docs/tui.md).
 
 ```bash
 fasttail-tui app.log err.log          # two streams, as tabs of one window
 fasttail-tui --split app.log err.log  # side by side
-some-command | fasttail-tui           # standard input
+some-command | fasttail-tui -         # standard input
 fasttail-tui --ascii --no-mouse app.log
 fasttail-tui --print --filter ERROR app.log  # print mode, as fasttail --print
 ```
 
-`fasttail-tui` takes every option of `fasttail` (`--since`, `--until`, `--follow`,
-`--print`, `--version`, ...); `--renderer` is accepted and ignored.
+`fasttail-tui` takes every option of `fasttail`; `--renderer` is accepted and ignored.
 
-On Windows `fasttail.exe --tui` (or `interface=tui` in `fasttail.ini`, for example with a
-double click) starts `fasttail-tui.exe` from the same folder in a new console window,
-with the same arguments, and closes. If `fasttail-tui.exe` is missing or does not start,
-the window opens and says why. From cmd or PowerShell run `fasttail-tui.exe` directly:
-`fasttail.exe --tui` works there too, but in a second console window, and it refuses
-standard input (`command | fasttail-tui.exe -` reads it).
+- **Windows** ships two executables. Run `fasttail-tui.exe` directly from Windows
+  Terminal, cmd or PowerShell. `fasttail.exe --tui` (or `interface=tui` in
+  `fasttail.ini`, a double click included) starts `fasttail-tui.exe` from the same folder
+  in a new console window and closes; if it is missing or does not start, the window
+  opens and says why. Standard input cannot follow into the new console:
+  `command | fasttail-tui.exe -` reads it.
+- **Linux and macOS**: `fasttail --tui`, or `interface=tui` started from a terminal, runs
+  the terminal interface in the same process; without a terminal `interface=tui` opens the
+  window and `--tui` exits with code 1. On Linux the *terminal only* archive
+  (`fasttail-tui-linux-<arch>-<version>.tar.gz`) holds `fasttail-tui` built without the
+  window, for servers with no graphical libraries.
+- Settings > *Interface at start* chooses the interface; picking the other one offers
+  *Switch now*. `fasttail-tui --gui` starts the window and exits.
 
-On Linux and macOS `fasttail --tui`, or `interface=tui` started from a terminal, runs the
-terminal interface in the same process; started without a terminal (a desktop launcher),
-`interface=tui` opens the window instead and `--tui` exits with code 1.
+`?` or `F1` lists every key as a menu, `:` opens the command palette, and every bar chip
+and button can be clicked.
 
-Settings (in the window and in the terminal) has *Interface at start*: picking the other
-one offers *Switch now*, which saves the workspace and reopens it in the other interface
-(from the window into a terminal on Windows only; on Linux and macOS start `fasttail`
-from a terminal).
-
-`fasttail-tui --gui` goes the other way: it starts `fasttail` from the same folder with the
-same arguments, detached from the terminal, and exits.
-
-`?` or `F1` lists every key as a menu (`Enter` runs one). A top bar follows the GUI's
-title bar and toolbar: the version, the author and the session, the CPU and RAM meters (Settings >
-*CPU and RAM in the top bar*, the window's *System Telemetry*), the global filter state and the palette on the first row; Open,
-Sessions, Rules, Play / Pause of every stream, Settings, About and Help on the second (from 16
-rows up). Every window has the GUI's stream bar and filter row as clickable chips: follow,
-monitor, TXT / HEX, line numbers, encoding, ANSI, collapse, context lines, the time span
-(the time range), include and exclude, `Aa`, `.*`, level and presets. The status bar at the
-bottom shows the stream commands; every `[ ]` button can
-be clicked. With *Bell when a hidden stream has an alert* (the window's *Flash on
-background alert*), a rule with a sound alert matching in a stream that is not on screen
-rings the terminal bell once, until that stream is shown. Windows follow the GUI's dock: `s` or `|` opens
-a window beside, `_` below, `<` `>` move a stream between windows, `Alt+arrows` or a
-dragged divider resize, a title dragged onto a window's edge splits it and onto its
-centre adds a tab, and dropped anywhere else it becomes a floating window (`Alt+F` does
-the same, and docks it back). A floating window lies over the others: drag its title to
-move it, and any corner, its bottom row or its side borders to resize it; every window can float, leaving the
-dock empty. `[x]` at the top right of a window, or `Ctrl+W`, closes its stream; after the
-last one (or when started with nothing to open) the workspace is empty. `o` opens a file
-through a folder browser, `,` the Settings (changes apply at once; `Esc` goes back), `Shift+T` the next theme, `#` the line numbers of the stream (Settings
-sets them, and the time delta column, for new streams). `r` edits the highlight rules (order, colours, options) and lists the quick labels,
-`Ctrl+Shift+1..9` (sent by terminals with the Kitty keyboard protocol, which is switched
-on when available; elsewhere `L` and a digit) turns the
-search text into a quick label, `p` applies, saves and renames
-filter presets, `F` edits the global filter and `f` switches it on or off, `!` runs an
-external tool on the cursor row (a tool's shortcut and rule-bound runs work too; Settings
-> External tools, or `e` in that menu, edits them), `Ctrl+L` locks with the PIN (set in
-Settings > PIN lock), and `:` opens the command palette: the GUI's commands that the
-terminal runs, by name in the interface language with their keys, and a number typed
-there goes to that line. The terminal interface speaks the language of `fasttail.ini` (Settings > Language, or
-*Follow the system language*), and a change shows at once; the command-line messages stay in English.
+**Troubleshooting.** In Git Bash (mintty), which is not a console, run
+`winpty fasttail-tui`. A legacy Windows console without virtual-terminal support gets 16
+colours and ASCII borders by itself (`--ascii` forces them anywhere). Over SSH, copying
+goes through OSC 52, which the terminal must allow. `FASTTAIL_TUI_COLORS=16|256|truecolor`
+overrides the colour detection.
 
 ### Print mode (no window)
 `fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme, the level colours, the highlight rules and automatic highlighting). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.
@@ -517,9 +494,9 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 | Linux x86_64 | `fasttail-linux-x86_64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
 | Linux ARM64 | `fasttail-linux-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
 | macOS Apple Silicon | `fasttail-macos-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
+| Linux x86_64 / ARM64, terminal only | `fasttail-tui-linux-<arch>-<version>.tar.gz` | `fasttail-tui` (built without the window), `LICENSE`, `README.md`; its debug info in `fasttail-tui-linux-<arch>-symbols-<version>.tar.gz` |
 
-`fasttail-tui` is the terminal interface (a preview since 0.15.0, see below); `fasttail` is
-the window.
+`fasttail-tui` is the terminal interface (see below); `fasttail` is the window.
 
 ```bash
 # Linux / macOS
