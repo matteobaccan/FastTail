@@ -81,6 +81,8 @@ pub enum Action {
     ToggleHex,
     /// `a`: how escape sequences show: auto, render, strip, raw.
     CycleAnsi,
+    /// `#`: the line numbers of the focused stream, on or off.
+    ToggleLineNumbers,
     /// `t`: the time range dialog.
     TimeRange,
     /// `o`: open a file by path.
@@ -195,6 +197,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char(':') => Action::Palette,
         KeyCode::Char('h') => Action::ToggleHex,
         KeyCode::Char('a') => Action::CycleAnsi,
+        KeyCode::Char('#') => Action::ToggleLineNumbers,
         KeyCode::Char('t') => Action::TimeRange,
         KeyCode::Char('o') => Action::OpenFile,
         KeyCode::Char('O') => Action::OpenSession,
@@ -244,6 +247,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('k'), ctrl), Some(Action::ToggleContext));
         assert_eq!(k(KeyCode::Char('g'), ctrl), Some(Action::GoTo));
         assert_eq!(k(KeyCode::Char(':'), none), Some(Action::Palette));
+        assert_eq!(k(KeyCode::Char('#'), none), Some(Action::ToggleLineNumbers));
         assert_eq!(k(KeyCode::Char('h'), none), Some(Action::ToggleHex));
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));

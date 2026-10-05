@@ -58,6 +58,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A missing name or program, a shortcut without a modifier or a broken regex is marked
   and not saved. The list adds, deletes and moves tools and shows the dropped
   rule-bound runs. Every change is saved at once.
+- **New-stream defaults in the terminal interface.** Settings lists line numbers and the
+  time delta column under "New streams and bookmarks", as defaults for streams opened
+  from then on, as in the GUI: open streams keep their own. `#` switches the line
+  numbers of the focused stream.
 - **Command palette in the terminal interface (`:`).** It lists the commands of the
   GUI's palette that the terminal runs, named in the interface language, each with its
   terminal key. Typing filters them, `Enter` (or a click) runs one. A number, `+N`, `-N`

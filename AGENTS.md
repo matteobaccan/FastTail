@@ -109,7 +109,6 @@ Update this section in each release PR.
   completed, spec `openspec/changes/tui-interface/` (`tasks.md` is the checklist, ticked
   as work lands):
   - Group 4. What is open:
-    - 4.1: the new-stream defaults in Settings (the rest of Settings is done).
     - 4.2: quick labels in the rule editor (the editor itself is done).
     - 4.5b: registry bindings with the Kitty protocol (the `:` palette is done).
   - Groups 5 to 8: hand-off, release pipeline, i18n, `docs/tui.md`, the parity checklist.
@@ -124,8 +123,8 @@ Update this section in each release PR.
 ### Handover notes (2026-09-30, end of the 0.16.0 session)
 
 - No open PRs. `main` holds everything; the 0.16.0 release PR is the last change.
-- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (the 4.1 new-stream defaults
-  next; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
+- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (4.2 quick labels or the
+  4.5b registry bindings next; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
   - `app.rs`: state, keys, mouse, drawing, tests;
   - `dock.rs`: layout geometry and drop zones;
   - `mouse.rs`: the hit map;
