@@ -2786,6 +2786,58 @@ impl App {
         self.focus_tab(self.active);
     }
 
+    /// A chip of the focused stream's bars: the same as its key, or the switch the GUI's
+    /// bar has (monitor, encoding, `Aa`, `.*`, context lines).
+    fn run_chip(&mut self, chip: crate::tui::bars::BarChip) {
+        use crate::tui::bars::BarChip as C;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let e = &mut tab.engine;
+        match chip {
+            C::Follow => self.apply(Action::ToggleFollow),
+            C::Monitor => {
+                e.is_watching = !e.is_watching;
+                self.message = Some(
+                    if e.is_watching {
+                        "Monitor on"
+                    } else {
+                        "Monitor off"
+                    }
+                    .into(),
+                );
+            }
+            C::View => self.apply(Action::ToggleHex),
+            C::LineNumbers => self.apply(Action::ToggleLineNumbers),
+            C::Encoding => {
+                let next = crate::tui::bars::next_encoding(e.encoding);
+                e.set_encoding(next);
+                self.message = Some(format!("Encoding: {}", next.name()));
+            }
+            C::Ansi => self.apply(Action::CycleAnsi),
+            C::Collapse => self.apply(Action::CycleCollapse),
+            C::Context => {
+                let next = crate::tui::bars::next_context(e.context_lines());
+                e.set_context_lines(next);
+                self.message = Some(format!("Context lines: {next}"));
+            }
+            C::Time => self.apply(Action::TimeRange),
+            C::Include => self.apply(Action::EditInclude),
+            C::Exclude => self.apply(Action::EditExclude),
+            C::Case => {
+                e.filter_case_sensitive = !e.filter_case_sensitive;
+                e.refresh_filters();
+            }
+            C::Regex => {
+                e.filter_is_regex = !e.filter_is_regex;
+                e.refresh_filters();
+            }
+            C::Level => self.apply(Action::CycleLevel),
+            C::Presets => self.apply(Action::Presets),
+            C::Global => self.apply(Action::EditGlobal),
+        }
+    }
+
     /// Where the window at `place` was drawn on the last frame.
     fn window_rect(&self, place: &Place) -> Option<Rect> {
         match place {
@@ -3366,6 +3418,11 @@ impl App {
             Target::TopButton(action) => {
                 self.message = None;
                 self.apply(action);
+            }
+            Target::BarChip(tab, chip) => {
+                self.message = None;
+                self.focus_tab(tab);
+                self.run_chip(chip);
             }
             Target::ListItem(i) if self.time_range.is_some() => {
                 if let Some(d) = self.time_range.as_mut() {
@@ -4308,6 +4365,27 @@ impl App {
             );
         let mut inner = block.inner(area);
         frame.render_widget(block, area);
+        // The GUI's stream bar and filter row (the filter row not in HEX), when the
+        // window has room for them and a few rows of the log.
+        let bars = crate::tui::bars::rows_for(inner.height, tab.is_hex());
+        if bars > 0 {
+            let global = self
+                .settings
+                .as_ref()
+                .is_some_and(|s| s.config.global_filter.is_applied());
+            let lines = crate::tui::bars::lines(tab, &palette, global);
+            for (n, chips) in lines.into_iter().take(bars).enumerate() {
+                let row = Rect::new(inner.x, inner.y + n as u16, inner.width, 1);
+                for (rect, chip) in
+                    crate::tui::bars::draw(frame.buffer_mut(), row, &chips, &palette)
+                {
+                    self.hits.bar_chips.push((rect, idx, chip));
+                }
+            }
+            inner.y += bars as u16;
+            inner.height -= bars as u16;
+        }
+        let tab = &mut self.tabs[idx];
         if tab.engine.context_line().is_some() && inner.height > 1 {
             // The context view: every line, the filters suspended until Ctrl+K or Esc.
             let banner = Rect { height: 1, ..inner };
@@ -6800,9 +6878,9 @@ mod tests {
         terminal.draw(|f| app.draw(f)).unwrap();
         let buf = terminal.backend().buffer();
         let reversed = |y: u16| buf[(5, y)].modifier.contains(Modifier::REVERSED);
-        // Rows 2-4 of the screen (under the top bar and the border) hold lines 0-2;
-        // the cursor is on line 1.
-        assert!(!reversed(2) && reversed(3) && !reversed(4));
+        // Rows 3-5 of the screen (under the top bar, the border and the stream bar)
+        // hold lines 0-2; the cursor is on line 1.
+        assert!(!reversed(3) && reversed(4) && !reversed(5));
     }
 
     #[test]
@@ -7732,9 +7810,10 @@ mod tests {
         let panel = app.palette.window().bg.unwrap();
         let screen_bg = app.palette.screen().bg.unwrap();
         let buf = draw_buffer(&mut app, 80, 20);
-        // Inside the window (right of the text), and the theme's text colour.
-        assert_eq!(buf[(70, 3)].bg, panel);
-        assert_eq!(buf[(70, 3)].fg, app.palette.window().fg.unwrap());
+        // Inside the window (right of the text, under its two bars), and the theme's
+        // text colour.
+        assert_eq!(buf[(70, 6)].bg, panel);
+        assert_eq!(buf[(70, 6)].fg, app.palette.window().fg.unwrap());
 
         app.apply(Action::StartSearch);
         let buf = draw_buffer(&mut app, 80, 20);
@@ -7926,6 +8005,61 @@ mod tests {
             app.time_range.as_ref().unwrap().from.text(),
             "2026-09-28 02:01:00",
             "the day changes, the time stays"
+        );
+    }
+
+    #[test]
+    fn the_windows_have_the_guis_stream_bar_and_filter_row_which_click() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        let screen = render(&mut app, 120, 30);
+        let bar = screen
+            .iter()
+            .find(|l| l.contains("[▶ Follow]"))
+            .expect("stream bar");
+        for chip in [
+            "[▶ Monitor]",
+            "[TXT]",
+            "[# 123]",
+            "[UTF-8]",
+            "[ANSI auto]",
+            "[× off]",
+            "[± 0]",
+        ] {
+            assert!(bar.contains(chip), "{chip}: {bar}");
+        }
+        let filters = screen
+            .iter()
+            .find(|l| l.contains("Include"))
+            .expect("filter row");
+        for chip in ["Exclude", "[Aa]", "[.*]", "[All levels]", "[Presets]"] {
+            assert!(filters.contains(chip), "{chip}: {filters}");
+        }
+        let click_chip = |app: &mut App, chip: crate::tui::bars::BarChip| {
+            let (r, _, _) = *app
+                .hits
+                .bar_chips
+                .iter()
+                .find(|(_, _, c)| *c == chip)
+                .unwrap();
+            app.on_mouse(click(r.x + 1, r.y));
+        };
+        use crate::tui::bars::BarChip as C;
+        click_chip(&mut app, C::Follow);
+        assert!(!app.tabs[0].engine.follow_tail);
+        render(&mut app, 120, 30);
+        click_chip(&mut app, C::Monitor);
+        assert!(!app.tabs[0].engine.is_watching);
+        render(&mut app, 120, 30);
+        click_chip(&mut app, C::Case);
+        assert!(app.tabs[0].engine.filter_case_sensitive);
+        render(&mut app, 120, 30);
+        click_chip(&mut app, C::Context);
+        assert_eq!(app.tabs[0].engine.context_lines(), 1);
+        render(&mut app, 120, 30);
+        click_chip(&mut app, C::Include);
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::Include)
         );
     }
 
@@ -8157,7 +8291,12 @@ mod tests {
         assert!(screen[1].starts_with('╔'), "{screen:#?}");
         assert!(screen[1].contains("[#1] test.log"), "{screen:#?}");
         assert!(screen[1].contains("FOLLOW"), "{screen:#?}");
-        assert!(screen[2].starts_with('║') && screen[2].contains("INFO start"));
+        // The stream bar (a 6-row window has room for it, not for the filter row).
+        assert!(
+            screen[2].contains("[▶ Follow]") && screen[2].contains("[TXT]"),
+            "{screen:#?}"
+        );
+        assert!(screen[3].starts_with('║') && screen[3].contains("INFO start"));
         assert!(screen.iter().any(|l| l.contains("WARN slow disk")));
         // Bottom border of the window: the counts on the left, the filter state right.
         let bottom = &screen[8];

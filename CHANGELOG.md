@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Terminal interface: the GUI's stream bar and filter row in every window.** A row of
+  clickable chips (follow, monitor, TXT / HEX, line numbers, encoding, ANSI mode,
+  collapse, context lines, the time span that opens the time range, line counts) and a
+  filter row (include, exclude, `Aa`, `.*`, minimum level, presets, the global filter).
+  A small window keeps only the stream bar, or neither.
 - **Terminal interface: About window and the author in the top bar.** The title reads
   `FastTail vX by Matteo Baccan`, and `[ℹ About]` (also in the `:` palette) opens the
   GUI's About window: version, build date, the terminal's colours, author, website,

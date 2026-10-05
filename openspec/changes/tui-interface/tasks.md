@@ -65,7 +65,7 @@
 - [ ] 4.12 Every terminal string through `i18n` (task 7.3, brought forward), so a language change and *Follow the system language* show at once
 - [x] 4.13 Window resize from all four corners and from the edges: a floating window by any corner, its bottom row and its left and right borders; a docked window's border moves the divider it touches
 - [x] 4.14 A short closing effect when a window closes: its outline shrinks to the centre in 180 ms
-- [ ] 4.15 The GUI's two rows inside every stream window: the stream bar (follow, monitor, view mode, line numbers, Δt, wrap, encoding, ANSI, fields, collapse, context, time span) and the filter row (include, exclude, Aa, .*, level, presets, global badge), clickable
+- [x] 4.15 The GUI's two rows inside every stream window: the stream bar (follow, monitor, view mode, line numbers, Δt, wrap, encoding, ANSI, fields, collapse, context, time span) and the filter row (include, exclude, Aa, .*, level, presets, global badge), clickable
 - [x] 4.7 Close stream (`Ctrl+W`, as a browser or editor tab; `w` / `W` are the warning jumps of 4.5b and closing a window moved to `Alt+X`); closing the last stream leaves an empty workspace (4.5b) (the theme cycle `T` shipped with 3.10)
 
 ## 5. Interface selection and hand-offs

@@ -44,6 +44,9 @@ pub struct HitMap {
     pub buttons: Vec<(Rect, usize)>,
     /// The buttons of the top bar and what they run.
     pub top_buttons: Vec<(Rect, Action)>,
+    /// The chips of the stream bar and filter row inside each window: the stream and
+    /// the chip's position in `crate::tui::bars::BarChip`'s list.
+    pub bar_chips: Vec<(Rect, usize, crate::tui::bars::BarChip)>,
     /// The dock's leaves, where a moved window can be dropped.
     pub leaves: Vec<LeafArea>,
     /// The dock's dividers, dragged to resize.
@@ -71,6 +74,8 @@ pub enum Target {
     Button(usize),
     /// A button of the top bar.
     TopButton(Action),
+    /// A chip of a window's stream bar or filter row: the stream and the chip.
+    BarChip(usize, crate::tui::bars::BarChip),
     /// Anywhere else while a dialog is open: closes it, like Esc.
     OutsideDialog,
     /// A title in the stream strip at the top.
@@ -166,6 +171,14 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
     }
     if let Some((_, action)) = map.top_buttons.iter().find(|(r, _)| r.contains(p)) {
         return Target::TopButton(*action);
+    }
+    // A chip lies inside its window, which may be under a floating one: the topmost
+    // window under the pointer must be the chip's.
+    if let Some((_, tab, chip)) = map.bar_chips.iter().rev().find(|(r, _, _)| r.contains(p)) {
+        let top = map.windows.iter().rev().find(|w| w.outer.contains(p));
+        if top.is_some_and(|w| w.tab == *tab) {
+            return Target::BarChip(*tab, *chip);
+        }
     }
     if let Some((_, tab)) = map.tab_titles.iter().find(|(r, _)| r.contains(p)) {
         return Target::TabTitle(*tab);
