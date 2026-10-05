@@ -362,7 +362,13 @@ fn parse_command_line() -> CliArgs {
         // Reported now, while the parent console can still be attached; the rest of the
         // startup goes on, as for a missing file.
         attach_parent_console();
-        eprintln!("fasttail: standard input is not a pipe; nothing to read");
+        eprintln!(
+            "fasttail: {}",
+            fasttail::i18n_tui::tx(
+                Language::detect(),
+                "standard input is not a pipe; nothing to read"
+            )
+        );
         fasttail::print_mode::console::release();
         cli.stdin = false;
     }
@@ -381,8 +387,11 @@ fn start_terminal_interface(cli: &CliArgs, lang: Language) -> Option<String> {
     if cli.stdin || piped {
         attach_parent_console();
         eprintln!(
-            "fasttail: standard input cannot be handed to the terminal interface; \
-             run fasttail-tui.exe instead (command | fasttail-tui.exe -)"
+            "fasttail: {}",
+            fasttail::i18n_tui::tx(
+                lang,
+                "standard input cannot be handed to the terminal interface; run fasttail-tui.exe instead (command | fasttail-tui.exe -)",
+            )
         );
         fasttail::print_mode::console::release();
         std::process::exit(2);
@@ -403,20 +412,27 @@ fn start_terminal_interface(cli: &CliArgs, lang: Language) -> Option<String> {
 /// (`handoff::terminal_available`). Without one, `--tui` fails with exit code 1, and
 /// `interface=tui` from `fasttail.ini` opens the window with a line on stderr.
 #[cfg(not(windows))]
-fn start_terminal_interface(cli: &CliArgs, _lang: Language) -> Option<String> {
+fn start_terminal_interface(cli: &CliArgs, lang: Language) -> Option<String> {
+    use fasttail::i18n_tui::tx;
     if !fasttail::handoff::terminal_available() {
         if cli.tui {
-            eprintln!("fasttail: --tui needs a terminal");
+            eprintln!("fasttail: {}", tx(lang, "--tui needs a terminal"));
             std::process::exit(1);
         }
-        eprintln!("fasttail: interface=tui ignored: no terminal");
+        eprintln!(
+            "fasttail: {}",
+            tx(lang, "interface=tui ignored: no terminal")
+        );
         return None;
     }
     #[cfg(feature = "tui")]
     std::process::exit(fasttail::tui::run(std::env::args().skip(1)));
     #[cfg(not(feature = "tui"))]
     {
-        eprintln!("fasttail: the terminal interface is not in this build");
+        eprintln!(
+            "fasttail: {}",
+            tx(lang, "the terminal interface is not in this build")
+        );
         std::process::exit(2);
     }
 }
