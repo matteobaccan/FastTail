@@ -67,6 +67,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Terminal interface: closing a window has a short effect**: its outline shrinks to
+  its centre in about 180 ms, so it is clear which window went.
 - **Terminal interface: a floating window resizes from every corner and side.** Drag any
   of its four corners, its bottom row or its left or right border; the other sides stay
   where they are. Docked windows already resize by dragging the borders they share.

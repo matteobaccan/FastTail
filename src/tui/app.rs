@@ -474,6 +474,9 @@ pub struct App {
     pub quit: bool,
     /// The JSON tree of a row (`J`).
     pub json_dialog: Option<JsonDialog>,
+    /// Windows that just closed, drawn as an outline shrinking to their centre for
+    /// `CLOSE_EFFECT` (the place each had, and when it closed).
+    pub closing: Vec<(Rect, Instant)>,
     /// A stream not on screen matched a rule with a sound alert (`flash_on_alert`): the
     /// loop rings the terminal bell once (`take_bell`).
     bell: bool,
@@ -574,6 +577,7 @@ impl App {
             quit: false,
             bell: false,
             json_dialog: None,
+            closing: Vec::new(),
             show_about: false,
             bell_rung: false,
             mouse: true,
@@ -908,16 +912,21 @@ impl App {
         let sig = self.signature();
         let changed = sig != self.last_signature;
         self.last_signature = sig;
-        changed || listed || global_applied || idle_locked || telemetry
+        let animating = !self.closing.is_empty();
+        self.closing.retain(|(_, at)| at.elapsed() < CLOSE_EFFECT);
+        changed || listed || global_applied || idle_locked || telemetry || animating
     }
 
     /// Background work in flight: the loop then polls a little faster.
     pub fn busy(&self) -> bool {
-        self.tabs.iter().any(|t| {
-            t.engine.scan_progress().is_some()
-                || t.engine.index_pending
-                || t.engine.compressed.as_ref().is_some_and(|c| c.is_running())
-        }) || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
+        // A closing effect runs at the busy tick, so its frames are drawn.
+        !self.closing.is_empty()
+            || self.tabs.iter().any(|t| {
+                t.engine.scan_progress().is_some()
+                    || t.engine.index_pending
+                    || t.engine.compressed.as_ref().is_some_and(|c| c.is_running())
+            })
+            || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
     }
 
     fn signature(&self) -> Signature {
@@ -2703,6 +2712,7 @@ impl App {
         if let Some(s) = self.settings.as_mut() {
             crate::workspace::save_changes(&mut self.tabs[i].engine, &mut s.config, false);
         }
+        let window = self.window_rect(&place);
         let tab = self.tabs.remove(i);
         // Indices of the last frame and of a gesture in progress no longer hold.
         self.drag = None;
@@ -2714,16 +2724,22 @@ impl App {
                     Some(pane) => self.floats[f].pane = pane,
                     None => {
                         self.floats.remove(f);
+                        self.start_closing(window);
                     }
                 }
                 self.dock_dirty = true;
             }
             Place::Dock(_) => {
+                let leaves = self.dock.leaf_paths().len();
                 let dock = self
                     .dock
                     .clone()
                     .remove_stream(&path)
                     .unwrap_or_else(|| Pane::with_streams(&[]));
+                // The window went with its last tab.
+                if dock.leaf_paths().len() < leaves || dock.streams().is_empty() {
+                    self.start_closing(window);
+                }
                 self.set_dock(dock);
             }
         }
@@ -2763,9 +2779,65 @@ impl App {
             self.message = Some("One window: nothing to close".into());
             return;
         }
+        let window = self.window_rect(&Place::Dock(leaf.clone()));
         let dock = self.dock.clone().close_leaf(&leaf);
         self.set_dock(dock);
+        self.start_closing(window);
         self.focus_tab(self.active);
+    }
+
+    /// Where the window at `place` was drawn on the last frame.
+    fn window_rect(&self, place: &Place) -> Option<Rect> {
+        match place {
+            Place::Float(f) => self
+                .hits
+                .floats
+                .iter()
+                .find(|(_, i)| i == f)
+                .map(|(r, _)| *r),
+            Place::Dock(path) => self
+                .hits
+                .leaves
+                .iter()
+                .find(|l| &l.path == path)
+                .map(|l| l.area),
+        }
+    }
+
+    /// The closing effect of a window that was drawn at `rect`.
+    fn start_closing(&mut self, rect: Option<Rect>) {
+        if let Some(rect) = rect.filter(|r| r.area() > 0) {
+            self.closing.push((rect, Instant::now()));
+        }
+    }
+
+    /// The closing windows: each outline shrinks to its centre, dimmer as it goes.
+    fn draw_closing(&self, frame: &mut Frame) {
+        for (rect, at) in &self.closing {
+            let t = (at.elapsed().as_secs_f32() / CLOSE_EFFECT.as_secs_f32()).min(1.0);
+            if t >= 1.0 {
+                continue;
+            }
+            let scale = 1.0 - t;
+            let w = ((rect.width as f32 * scale) as u16).max(2);
+            let h = ((rect.height as f32 * scale) as u16).max(2);
+            let r = Rect::new(
+                rect.x + (rect.width - w.min(rect.width)) / 2,
+                rect.y + (rect.height - h.min(rect.height)) / 2,
+                w.min(rect.width),
+                h.min(rect.height),
+            )
+            .intersection(frame.area());
+            let style = if t < 0.5 {
+                Style::default().fg(self.palette.accent())
+            } else {
+                Style::default().fg(self.palette.dim())
+            };
+            let block = Block::bordered()
+                .border_set(self.palette.border_set(Chrome::Plain))
+                .border_style(style);
+            frame.render_widget(block, r);
+        }
     }
 
     /// `Alt+arrows`: the nearest divider of the focused window moves by `delta`.
@@ -3791,6 +3863,7 @@ impl App {
         self.hits.main = main_area;
         self.draw_dock(frame, main_area);
         self.draw_floats(frame, main_area);
+        self.draw_closing(frame);
         self.draw_status(frame, status_area);
         if self.show_help {
             // The whole screen: the keys need the room more than the windows do.
@@ -6022,6 +6095,9 @@ const STATUS: &[(&str, &str, Action)] = &[
     ("q", "quit", Action::Quit),
 ];
 
+/// How long a closing window's outline takes to shrink away.
+const CLOSE_EFFECT: Duration = Duration::from_millis(180);
+
 /// The author, as the GUI's title bar and About window name him.
 const AUTHOR: &str = "Matteo Baccan";
 
@@ -7851,6 +7927,27 @@ mod tests {
             "2026-09-28 02:01:00",
             "the day changes, the time stays"
         );
+    }
+
+    #[test]
+    fn a_closing_window_shrinks_away() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
+        app.apply(Action::SplitRight);
+        render(&mut app, 80, 20);
+        // b's window goes with its only tab: its outline is drawn shrinking, then gone.
+        app.focus_tab(1);
+        app.apply(Action::CloseStream);
+        assert_eq!(app.closing.len(), 1);
+        assert!(app.busy(), "drawn at the busy tick");
+        render(&mut app, 80, 20);
+        std::thread::sleep(CLOSE_EFFECT + Duration::from_millis(20));
+        app.tick();
+        assert!(app.closing.is_empty());
+        // Closing a tab of a window that keeps others has no effect.
+        let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
+        render(&mut app, 80, 20);
+        app.apply(Action::CloseStream);
+        assert!(app.closing.is_empty());
     }
 
     #[test]
