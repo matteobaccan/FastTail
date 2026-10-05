@@ -133,12 +133,12 @@ pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Lang
                 rows.remove(i);
                 out.terms_edited = true;
             }
-            if rows.len() < MAX_FILTER_TERMS
-                && rows.last().is_some_and(|r| !r.is_empty())
-                && ui
-                    .small_button("+")
-                    .on_hover_text(t(lang, "filter_add_term_tip"))
-                    .clicked()
+            let can_add = rows.len() < MAX_FILTER_TERMS && rows.last().is_some_and(|r| !r.is_empty());
+            if ui
+                .add_enabled(can_add, egui::Button::new("+").small())
+                .on_hover_text(t(lang, "filter_add_term_tip"))
+                .on_disabled_hover_text(t(lang, "filter_extra_terms_tip"))
+                .clicked()
             {
                 rows.push(String::new());
             }
