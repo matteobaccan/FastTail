@@ -404,6 +404,12 @@ pub fn normalize_note(text: &str) -> String {
     flat.trim().chars().take(MAX_NOTE_CHARS).collect()
 }
 
+/// A JSON row's tree, or why it has none.
+pub type JsonTreeResult = Result<crate::json_tree::Tree, crate::json_tree::NoTree>;
+
+/// Trees of expanded JSON rows kept at once.
+const JSON_TREES_KEPT: usize = 64;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HighlightRule {
     pub pattern: String,
@@ -1688,6 +1694,11 @@ pub struct TailEngine {
     /// Kinds of the automatic highlighting, `NONE` while it is off (`set_auto_tokens`).
     auto_tokens: TokenKinds,
     pub expanded_json_lines: HashSet<usize>,
+    /// The open nodes of each expanded JSON row's tree (`json_tree`); a row without an
+    /// entry shows its first level.
+    pub json_open: HashMap<usize, HashSet<usize>>,
+    /// The trees of the expanded JSON rows, read once (see `json_tree`).
+    json_trees: RefCell<HashMap<usize, Arc<JsonTreeResult>>>,
     pub requested_scroll_x: Option<f32>,
     pub requested_scroll_y: Option<f32>,
     pub scroll_to_line: Option<usize>,
@@ -2014,6 +2025,8 @@ impl TailEngine {
         self.max_line_bytes = 0;
         self.max_detected_width = 0.0;
         self.expanded_json_lines.clear();
+        self.json_open.clear();
+        self.json_trees.get_mut().clear();
         self.markdown_text_cache = None;
         self.unseen_lines = 0;
         self.unseen_severity = 0;
@@ -2297,6 +2310,8 @@ impl TailEngine {
             quick_labels: Vec::new(),
             auto_tokens: TokenKinds::NONE,
             expanded_json_lines: HashSet::new(),
+            json_open: HashMap::new(),
+            json_trees: RefCell::new(HashMap::new()),
             requested_scroll_x: None,
             requested_scroll_y: None,
             scroll_to_line: None,
@@ -2942,6 +2957,10 @@ impl TailEngine {
         // and a context view has nothing to return to.
         self.context = None;
         self.reload_generation = self.reload_generation.wrapping_add(1);
+        // The JSON rows' trees and folds named lines of the old index.
+        self.expanded_json_lines.clear();
+        self.json_open.clear();
+        self.json_trees.get_mut().clear();
         self.job = None;
         // New content: groups and expanded groups start over, detected once filtered.
         self.collapse.reset();
@@ -4097,10 +4116,53 @@ impl TailEngine {
         )
     }
 
+    /// Whether `line` carries a JSON payload: an object or array, or an object after a
+    /// leading timestamp (`json_tree::payload_start`).
     pub fn is_json_line(line: &str) -> bool {
-        let trimmed = line.trim();
-        (trimmed.starts_with('{') && trimmed.ends_with('}'))
-            || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        crate::json_tree::is_json_line(line)
+    }
+
+    /// The tree of the JSON payload of `line` (its text `text`), read on first use and
+    /// kept for the expanded rows, at most `JSON_TREES_KEPT` of them.
+    pub fn json_tree(&self, line: usize, text: &str) -> Arc<JsonTreeResult> {
+        let mut trees = self.json_trees.borrow_mut();
+        if let Some(tree) = trees.get(&line) {
+            return tree.clone();
+        }
+        if trees.len() >= JSON_TREES_KEPT {
+            trees.retain(|l, _| self.expanded_json_lines.contains(l));
+            if trees.len() >= JSON_TREES_KEPT {
+                trees.clear();
+            }
+        }
+        let tree = Arc::new(crate::json_tree::Tree::of_line(text));
+        trees.insert(line, tree.clone());
+        tree
+    }
+
+    /// The open nodes of `line`'s tree: the first level until the user changes them.
+    pub fn json_open_nodes(&self, line: usize, tree: &JsonTreeResult) -> HashSet<usize> {
+        match (self.json_open.get(&line), tree) {
+            (Some(open), _) => open.clone(),
+            (None, Ok(tree)) => tree.default_open(),
+            (None, Err(_)) => HashSet::new(),
+        }
+    }
+
+    /// Applies a fold action to `line`'s tree.
+    pub fn json_fold(&mut self, line: usize, action: crate::json_tree::Fold) -> bool {
+        let tree = self.json_trees.borrow().get(&line).cloned();
+        let Some(Ok(tree)) = tree.as_deref() else {
+            return false;
+        };
+        let mut open = self
+            .json_open
+            .get(&line)
+            .cloned()
+            .unwrap_or_else(|| tree.default_open());
+        let cut = tree.fold(&mut open, action);
+        self.json_open.insert(line, open);
+        cut
     }
 
     pub fn is_stacktrace_continuation(line: &str) -> bool {

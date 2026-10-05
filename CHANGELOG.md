@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **JSON as a foldable tree.** `[+] JSON` now expands a JSON line into a tree in the
+  line's own key order (it used to sort the keys): objects and arrays fold with a click,
+  values are coloured by type, long strings and containers are cut. Right-click a node to
+  copy its value or its path (`items[0].id`), or to expand or collapse everything below
+  it. A JSON object after a leading timestamp is detected too. In the terminal interface
+  `J` opens the same tree for the cursor row.
 - **Terminal interface: the bell on background alerts.** With *Flash on background alert*
   on (in the terminal Settings: *Bell when a hidden stream has an alert*), a highlight
   rule with a sound alert that matches in a stream not on screen rings the terminal bell

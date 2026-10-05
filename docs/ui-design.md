@@ -432,7 +432,7 @@ Empty states are centred and dim: `⏳ indexing...`, `⏳ filtering...`, *Log fi
   - **Click:** expands or collapses that group (`toggle_collapsed_row`). The badge's click target is registered after the row's, so it wins the click.
   - A click on the row of a closed group selects every line of the group. `CTRL + C`, the "Copy" menu entry and the exports keep every underlying line; "Copy as shown" writes one line per row with ` ×N` after a closed group's row.
   - Groups are detected over the visible (filtered) lines; appended lines resume the detection from the last entry, and a reload starts again. The context view is never collapsed.
-- **JSON toggle.** `[+] JSON` / `[-] JSON` in `secondary_accent`, at the font size minus 2 (minimum 9). When expanded, pretty JSON appears in an 11 pt frame (`panel_bg` × 1.3, border at 40 %).
+- **JSON toggle.** `[+] JSON` / `[-] JSON` in `secondary_accent`, at the font size minus 2 (minimum 9), on a row that is a JSON object or array or has an object after a leading timestamp (`json_tree::payload_start`). Expanded, the payload is a **tree** (`src/ui/json_view.rs` over `src/json_tree.rs`) in an 11 pt frame (`panel_bg` × 1.3, border at 40 %), in the line's key order, one galley line per tree row (not wrapped, clipped to the frame): `▸` / `▾` before an object or array with its key and `{N keys}` / `[N items]` in `text_dim`, keys in `text_primary`, strings in `secondary_accent` (cut at 500 characters with `…`), numbers in the accent, booleans and null in `warn_color`; at most 200 children per container, then `… N more`; invalid JSON ends with `⚠ Invalid JSON from byte N`; over 4 MB a single notice. The first level is open; a click on an object or array folds it (pointing-hand cursor). Its context menu: **Copy value** (a scalar's text, or indented JSON), **Copy path** (`items[0].id`, `["x-req"]`), and on a container **Expand all below** (stops at 5,000 rows, saying *Stopped at 5,000 rows* in the stream bar) and **Collapse all below**. The folds are kept per line (`TailEngine::json_open`) until the stream reloads.
 - **Text colouring,** by priority:
   1. Current hit: black text on `#00FFE6`, strong.
   2. Other hits: black on `#FFE600`.
@@ -1068,7 +1068,7 @@ On a software renderer, `apply_renderer_visuals` then removes shadows and roundi
   |---|---|
   | 10 pt | renderer chip, timeline labels |
   | 10.5 pt | telemetry, zoom label, hints |
-  | 11 pt | stream bar and filter row labels, pretty JSON, status path |
+  | 11 pt | stream bar and filter row labels, JSON tree, status path |
   | 11.5 pt | notices |
   | 12 pt | badge "F", Help subtitle |
   | 13 pt | title |

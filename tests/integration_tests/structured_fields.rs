@@ -402,3 +402,46 @@ fn field_names_with_ini_delimiters_keep_their_widths_and_spaces() {
     assert_eq!(back.fields_widths, entry.fields_widths);
     assert_eq!(back.fields_columns, entry.fields_columns);
 }
+
+#[test]
+fn an_expanded_json_row_keeps_its_folds_until_the_stream_reloads() {
+    use fasttail::json_tree::{Fold, Row};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("j.log");
+    write_lines(
+        &path,
+        &[r#"2026-10-05T10:00:00Z {"b":1,"a":{"c":[1,2]}}"#, "plain"],
+    );
+    let mut engine = TailEngine::open(&path).unwrap();
+    let text = engine.get_line(0).unwrap().into_owned();
+    assert!(TailEngine::is_json_line(&text));
+    assert!(!TailEngine::is_json_line("plain"));
+    let tree = engine.json_tree(0, &text);
+    let rows = |engine: &TailEngine| {
+        let open = engine.json_open_nodes(0, &tree);
+        tree.as_ref().as_ref().unwrap().rows(&open).len()
+    };
+    assert_eq!(rows(&engine), 2, "b, then a folded");
+    // `a` is node 2: unfolded, then everything below the payload.
+    assert!(!engine.json_fold(0, Fold::Toggle(2)));
+    assert_eq!(rows(&engine), 3);
+    assert!(!engine.json_fold(0, Fold::ExpandAll(0)));
+    assert_eq!(rows(&engine), 5);
+    let shown = tree
+        .as_ref()
+        .as_ref()
+        .unwrap()
+        .rows(&engine.json_open_nodes(0, &tree));
+    assert!(matches!(shown[2], Row::Node { depth: 1, .. }));
+    // A rewrite of the file reloads the stream and forgets the folds.
+    write_lines(&path, &["{}"]);
+    engine.size_check_interval = std::time::Duration::ZERO;
+    for _ in 0..50 {
+        engine.poll_updates();
+        if engine.json_open.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(engine.json_open.is_empty());
+}

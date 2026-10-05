@@ -120,6 +120,8 @@ pub enum Action {
     /// watched, or none is.
     PlayAll,
     PauseAll,
+    /// `J`: the JSON tree of the cursor row.
+    JsonTree,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
@@ -212,6 +214,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char(']') | KeyCode::F(2) => Action::NextBookmark,
         KeyCode::Char('[') => Action::PrevBookmark,
         KeyCode::Char('m') => Action::EditNote,
+        KeyCode::Char('J') => Action::JsonTree,
         KeyCode::Char(':') => Action::Palette,
         KeyCode::Char('h') => Action::ToggleHex,
         KeyCode::Char('a') => Action::CycleAnsi,

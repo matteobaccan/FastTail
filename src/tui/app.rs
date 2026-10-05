@@ -33,6 +33,7 @@ use crate::tui::dock::{self, Place, Zone};
 use crate::tui::form::{FieldKey, TextField};
 use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
+use crate::tui::json::{JsonDialog, JsonKey};
 use crate::tui::keys::{self, Action};
 use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
 use crate::tui::palette::{self, CommandPalette, PaletteKey};
@@ -465,6 +466,8 @@ pub struct App {
     pub help_sel: usize,
     help_half: usize,
     pub quit: bool,
+    /// The JSON tree of a row (`J`).
+    pub json_dialog: Option<JsonDialog>,
     /// A stream not on screen matched a rule with a sound alert (`flash_on_alert`): the
     /// loop rings the terminal bell once (`take_bell`).
     bell: bool,
@@ -563,6 +566,7 @@ impl App {
             help_half: 0,
             quit: false,
             bell: false,
+            json_dialog: None,
             bell_rung: false,
             mouse: true,
             idle_poll: Duration::from_millis(250),
@@ -993,6 +997,9 @@ impl App {
         }
         if self.palette_dialog.is_some() {
             return self.on_palette_key(key);
+        }
+        if self.json_dialog.is_some() {
+            return self.on_json_key(key);
         }
         if self.sessions.is_some() {
             return self.on_sessions_key(key);
@@ -1434,6 +1441,50 @@ impl App {
             .as_ref()
             .map_or(crate::i18n::Language::En, |s| s.config.language);
         self.palette_dialog = Some(CommandPalette::new(lang));
+    }
+
+    /// `J`: the JSON dialog on the cursor row's payload.
+    fn open_json(&mut self) {
+        let tab = &self.tabs[self.active];
+        let Some(line) = tab.cursor_line() else {
+            self.message = Some("No row".into());
+            return;
+        };
+        let text = tab.engine.get_line(line).unwrap_or_default();
+        match crate::json_tree::Tree::of_line(&text) {
+            Ok(tree) => {
+                let number = tab.engine.shown_line_number(line);
+                self.json_dialog = Some(JsonDialog::new(number, tree));
+            }
+            Err(crate::json_tree::NoTree::TooLarge) => {
+                self.message = Some("JSON over 4 MB: not shown as a tree".into())
+            }
+            Err(crate::json_tree::NoTree::NotJson) => {
+                self.message = Some("No JSON on this row".into())
+            }
+        }
+    }
+
+    fn on_json_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(d) = self.json_dialog.as_mut() else {
+            return false;
+        };
+        match d.on_key(key) {
+            JsonKey::Close => self.json_dialog = None,
+            JsonKey::Cut => self.message = Some("Stopped at 5,000 rows".into()),
+            JsonKey::Copy { text, path } => {
+                let what = if path { "path" } else { "value" };
+                self.message = Some(match self.clipboard.copy(&text) {
+                    Ok(Copied::System) => format!("Copied the {what}"),
+                    Ok(Copied::Osc52) => {
+                        format!("Sent the {what} to the terminal clipboard (OSC 52)")
+                    }
+                    Err(e) => format!("Copy failed: {e}"),
+                });
+            }
+            JsonKey::Handled => {}
+        }
+        true
     }
 
     fn on_palette_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -2915,6 +2966,7 @@ impl App {
             Action::OpenFile => self.open_browser(),
             Action::OpenSession => self.open_sessions(),
             Action::SaveSession => self.open_prompt(PromptKind::SaveSession),
+            Action::JsonTree => self.open_json(),
             Action::EditNote => match self.tabs[self.active].cursor_line() {
                 Some(line) => self.open_prompt(PromptKind::Note(line)),
                 None => self.message = Some("No row for a note".into()),
@@ -3002,6 +3054,7 @@ impl App {
                     || self.global.is_some()
                     || self.tool_menu.is_some()
                     || self.palette_dialog.is_some()
+                    || self.json_dialog.is_some()
                     || self.tools_editor.is_some()
                     || self.confirm_overwrite.is_some()
                     || self.interface_switch.is_some()
@@ -3212,6 +3265,12 @@ impl App {
                     }
                 }
             }
+            // A click folds or unfolds the node.
+            Target::ListItem(i) if self.json_dialog.is_some() => {
+                if let Some(d) = self.json_dialog.as_mut() {
+                    d.toggle_row(i);
+                }
+            }
             // A click runs the palette entry.
             Target::ListItem(i) if self.palette_dialog.is_some() => {
                 if let Some(p) = self.palette_dialog.take() {
@@ -3288,6 +3347,8 @@ impl App {
                     } else if d.submit_form() {
                         self.store_tools();
                     }
+                } else if self.json_dialog.is_some() {
+                    self.json_dialog = None;
                 } else if self.palette_dialog.is_some() {
                     // OK is Enter.
                     let enter = crossterm::event::KeyEvent::new(
@@ -3371,6 +3432,7 @@ impl App {
                 self.close_global();
                 self.tool_menu = None;
                 self.palette_dialog = None;
+                self.json_dialog = None;
                 self.prompt = None;
                 self.rules = None;
                 self.presets = None;
@@ -3690,6 +3752,9 @@ impl App {
         }
         if self.palette_dialog.is_some() {
             self.draw_palette(frame, main_area);
+        }
+        if self.json_dialog.is_some() {
+            self.draw_json(frame, main_area);
         }
         if self.tools_editor.is_some() {
             self.draw_tools_editor(frame, main_area);
@@ -4491,6 +4556,57 @@ impl App {
         self.hits.list_items.extend(items);
         frame.render_widget(Paragraph::new(out), inner);
         frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+    }
+
+    /// The JSON dialog: the tree rows around the selected one, keys coloured as the GUI's
+    /// (keys plain, strings in the second accent, numbers in the accent, the rest dim).
+    fn draw_json(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let Some(d) = self.json_dialog.as_ref() else {
+            return;
+        };
+        let rows = d.rows();
+        let title = format!("JSON - line {}", d.line_number);
+        let width = area.width.saturating_sub(4).clamp(20, 110);
+        let height = (rows.len() as u16 + 5).min(area.height).max(7);
+        let inner = self.dialog(frame, area, (width, height), &title, false);
+        let Some(d) = self.json_dialog.as_ref() else {
+            return;
+        };
+        let mut out = vec![Line::styled(
+            "Arrows move and fold, * expand all, - collapse, y value, Y path",
+            dim,
+        )];
+        let room = inner.height.saturating_sub(1) as usize;
+        let top = d.selected.saturating_sub(room.saturating_sub(1));
+        let mut items = Vec::new();
+        for (i, row) in rows.iter().enumerate().skip(top).take(room) {
+            let text = d.row_text(*row);
+            let value_style = match text.kind {
+                Some(crate::json_tree::Kind::String) => Style::default().fg(palette.secondary()),
+                Some(crate::json_tree::Kind::Number) => Style::default().fg(palette.accent()),
+                _ => dim,
+            };
+            let mut spans = vec![Span::styled(text.prefix, dim)];
+            if let Some(key) = text.key {
+                spans.push(Span::raw(view::sanitize(&key)));
+                spans.push(Span::styled(": ", dim));
+            }
+            spans.push(Span::styled(view::sanitize(&text.value), value_style));
+            let mut line = Line::from(spans);
+            if i == d.selected {
+                line = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+            }
+            out.push(line);
+            let y = inner.y + 1 + (i - top) as u16;
+            items.push((Rect::new(inner.x, y, inner.width, 1), i));
+        }
+        if let Some(at) = d.tree.error() {
+            out.push(Line::styled(format!("! invalid JSON from byte {at}"), dim));
+        }
+        self.hits.list_items.extend(items);
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// The external tools menu: number, name and command of each tool, its shortcut
@@ -5638,6 +5754,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::ToggleContext),
     ),
     (
+        "J",
+        "the cursor row's JSON as a tree",
+        Some(Action::JsonTree),
+    ),
+    (
         "Ctrl+G  :",
         "go to line or time; : all commands",
         Some(Action::GoTo),
@@ -5699,11 +5820,10 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::ToggleHex),
     ),
     (
-        "y",
-        "copy the selection or the cursor row",
+        "y Ctrl+C",
+        "copy selection or row (Ctrl+C: else quit)",
         Some(Action::Copy),
     ),
-    ("Ctrl+C", "copy, or quit when nothing is selected", None),
     ("?  F1", "this help", None),
     ("q", "quit", Some(Action::Quit)),
 ];
@@ -7571,6 +7691,39 @@ mod tests {
             "2026-09-28 02:01:00",
             "the day changes, the time stays"
         );
+    }
+
+    #[test]
+    fn j_opens_the_json_of_the_cursor_row_as_a_tree() {
+        let log = "plain line
+2026-10-05T10:00:00Z {\"user\":{\"id\":7},\"ok\":true}
+";
+        let (mut app, _dir) = app_with(&[("j.log", log)], false);
+        render(&mut app, 100, 30);
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::JsonTree);
+        assert!(app.json_dialog.is_none());
+        assert_eq!(app.message.as_deref(), Some("No JSON on this row"));
+        app.tabs[0].set_cursor(1);
+        app.apply(Action::JsonTree);
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("JSON - line 2")),
+            "{screen:#?}"
+        );
+        assert!(
+            screen.iter().any(|l| l.contains("> user: {1 keys}")),
+            "{screen:#?}"
+        );
+        assert!(screen.iter().any(|l| l.contains("ok: true")));
+        // A click on `user` unfolds it.
+        let (rect, _) = app.hits.list_items[0];
+        app.on_mouse(click(rect.x + 2, rect.y));
+        let screen = render(&mut app, 100, 30);
+        assert!(screen.iter().any(|l| l.contains("id: 7")), "{screen:#?}");
+        let key = |c| crossterm::event::KeyEvent::new(c, KeyModifiers::NONE);
+        app.on_key(key(crossterm::event::KeyCode::Esc));
+        assert!(app.json_dialog.is_none());
     }
 
     #[test]

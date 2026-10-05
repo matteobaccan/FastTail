@@ -16,6 +16,7 @@ mod dock;
 mod form;
 mod global;
 mod hex;
+mod json;
 mod keys;
 mod mouse;
 mod palette;
