@@ -102,15 +102,20 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.16.1** (2026-10-05, nightly): terminal-interface group 4 (Settings
-  with PIN lock, tools editor and new-stream defaults, rule editor with quick labels,
-  presets, global filter, external tools, lock screen, `:` palette, Kitty keys). The
-  terminal interface is still a preview. 0.16.0 brought its floating windows.
+- Latest release: **0.16.2** (2026-10-05, nightly): terminal-interface group 5 (one command
+  line, `--tui` / `--gui`, the hand-offs), and after the maintainer's review of its
+  preview a top bar and the GUI's stream bar and filter row in every window, About, live
+  Settings, window resize from every side, a closing effect, the bell on background
+  alerts, `Ctrl+arrows` by 10 columns and every terminal text in 16 languages; filter tabs
+  saved with the workspace and sessions; JSON rows as a foldable tree in both interfaces
+  (`json-tree-view`); `tray-icon` archived (Linux backend: `linux-tray-icon`). The
+  terminal interface is still a preview.
 - Next: nightly patch releases (`0.16.x`) while **0.20.0 terminal interface (TUI)** is
   completed, spec `openspec/changes/tui-interface/` (`tasks.md` is the checklist, ticked
   as work lands):
-  - Group 4 is done.
-  - Groups 5 to 8: hand-off, release pipeline, i18n, `docs/tui.md`, the parity checklist.
+  - Groups 1 to 5 are done, and the interface texts of 7.3 (4.12).
+  - Groups 6 to 8: release pipeline, the command-line and hand-off messages (7.3),
+    `docs/tui.md`, the parity checklist, capture tests.
   - 0.20.0 ships at full GUI parity without the "preview" label.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
@@ -119,12 +124,13 @@ Update this section in each release PR.
   **0.22.0** sources/integrations and **0.23.0** binary views (`disassembly-view`); see
   `docs/competitor-analysis.md` section 8.
 
-### Handover notes (2026-10-05, 0.16.1 nightly)
+### Handover notes (2026-10-05, 0.16.2 nightly)
 
-- No open PRs. `main` holds everything; the 0.16.1 release PR is the last change.
-- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 5 (the GUI / TUI hand-off)
-  next (the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
+- No open PRs. `main` holds everything; the 0.16.2 release PR is the last change.
+- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 6 (the release
+  pipeline). The terminal code is in `src/tui/`:
   - `app.rs`: state, keys, mouse, drawing, tests;
+  - `bars.rs`: the stream bar and filter row inside a window;
   - `dock.rs`: layout geometry and drop zones;
   - `mouse.rs`: the hit map;
   - `keys.rs`: the key map;
@@ -135,11 +141,15 @@ Update this section in each release PR.
   - `presets.rs`: the filter presets;
   - `global.rs`: the global filter editor;
   - `tools.rs`: the external tools menu, shortcuts and editor;
-  - `palette.rs`: the `:` command palette.
+  - `palette.rs`: the `:` command palette;
+  - `json.rs`: the JSON tree dialog (`J`).
 
   Their rules are in the spec's `terminal-interface` delta. `src/dock_layout.rs` is shared
-  with the GUI.
-- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (126 tests)
+  with the GUI. Terminal texts go through `src/i18n_tui.rs` (`tx` / `txf` / `en`, keyed by
+  the English; `every_terminal_text_is_translated` fails on a text without its row).
+- Pending OpenSpec changes started this cycle: `json-tree-view` (implemented, archive after
+  the release), `linux-tray-icon` (0.21.0).
+- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (147 tests)
   and `cargo clippy --no-default-features --features tui --all-targets -- -D warnings` on
   top of the usual checks.
 - Preview build for the maintainer:
