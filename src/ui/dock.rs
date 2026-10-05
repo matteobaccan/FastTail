@@ -3544,6 +3544,7 @@ fn render_extended_rows(
     columns: Option<&ColumnLayout>,
 ) -> RowInteractions {
     let mut toggle_json = None;
+    let mut json_fold: Option<(usize, crate::json_tree::Fold)> = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
@@ -3969,29 +3970,44 @@ fn render_extended_rows(
                     clear_scroll_to_line = true;
                 }
 
-                // Render expanded pretty JSON
+                // The expanded JSON payload as a foldable tree.
                 if is_json && is_expanded {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw_line) {
-                        if let Ok(pretty) = serde_json::to_string_pretty(&val) {
-                            egui::Frame::NONE
-                                .fill(Color32::from(theme.panel_bg()).linear_multiply(1.3))
-                                .stroke(Stroke::new(
-                                    1.0_f32,
-                                    theme.border_color().gamma_multiply(0.4),
-                                ))
-                                .inner_margin(egui::Margin::same(6))
-                                .show(ui, |ui| {
-                                    for line in pretty.lines() {
-                                        ui.label(
-                                            RichText::new(format!("        {}", line))
-                                                .monospace()
-                                                .size(11.0)
-                                                .color(theme.secondary_accent()),
-                                        );
-                                    }
-                                });
-                        }
-                    }
+                    let tree = engine.json_tree(actual_line_idx, raw_line);
+                    let open = engine.json_open_nodes(actual_line_idx, &tree);
+                    let block = crate::ui::json_view::layout(
+                        ui.ctx(),
+                        theme,
+                        lang,
+                        &tree,
+                        &open,
+                        &egui::FontId::monospace(11.0),
+                    );
+                    egui::Frame::NONE
+                        .fill(Color32::from(theme.panel_bg()).linear_multiply(1.3))
+                        .stroke(Stroke::new(
+                            1.0_f32,
+                            theme.border_color().gamma_multiply(0.4),
+                        ))
+                        .inner_margin(egui::Margin::same(6))
+                        .show(ui, |ui| {
+                            let size = egui::vec2(ui.available_width(), block.galley.size().y);
+                            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                            ui.painter().with_clip_rect(rect).galley(
+                                rect.min,
+                                block.galley.clone(),
+                                theme.text_primary().into(),
+                            );
+                            if let Some(fold) = crate::ui::json_view::interact(
+                                ui,
+                                rect,
+                                &block,
+                                &tree,
+                                actual_line_idx,
+                                lang,
+                            ) {
+                                json_fold = Some((actual_line_idx, fold));
+                            }
+                        });
                 }
             }
         }
@@ -3999,6 +4015,7 @@ fn render_extended_rows(
     if clear_scroll_to_line {
         engine.scroll_to_line = None;
     }
+    apply_json_fold(engine, json_fold, lang);
     if let Some(token) = token_pick {
         engine.toggle_selection_token(token.as_deref());
     }
@@ -5590,7 +5607,11 @@ fn span_layout_job(
 struct WrappedRow {
     line: usize,
     galley: std::sync::Arc<egui::Galley>,
-    pretty: Option<std::sync::Arc<egui::Galley>>,
+    /// The expanded JSON payload's tree, laid out, and the tree it shows.
+    json: Option<(
+        crate::ui::json_view::JsonBlock,
+        std::sync::Arc<crate::tail_engine::JsonTreeResult>,
+    )>,
     height: f32,
     is_json: bool,
     expanded: bool,
@@ -5647,6 +5668,7 @@ fn render_wrapped_rows(
 
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
     let mut toggle_json: Option<(usize, bool)> = None;
+    let mut json_fold: Option<(usize, crate::json_tree::Fold)> = None;
     let mut tool_run: Option<(usize, usize)> = None;
     let mut picks = RowMenuPicks::default();
     let mut badge_toggle: Option<usize> = None;
@@ -5740,31 +5762,20 @@ fn render_wrapped_rows(
                 (if is_json { text_w - json_w } else { text_w } - badge_w).max(20.0);
             let galley = ctx.fonts_mut(|f| f.layout_job(job));
             let mut height = galley.size().y.max(font_row_h) + pad;
-            let pretty = if expanded {
-                serde_json::from_str::<serde_json::Value>(raw)
-                    .ok()
-                    .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                    .map(|pretty| {
-                        let format = egui::TextFormat {
-                            font_id: pretty_font.clone(),
-                            color: Color32::PLACEHOLDER,
-                            ..Default::default()
-                        };
-                        let mut job = egui::text::LayoutJob::single_section(pretty, format);
-                        job.wrap.max_width = (text_w - 12.0).max(20.0);
-                        let g = ctx.fonts_mut(|f| f.layout_job(job));
-                        height += g.size().y + 16.0;
-                        g
-                    })
-            } else {
-                None
-            };
+            let json = expanded.then(|| {
+                let tree = eng.json_tree(line, raw);
+                let open = eng.json_open_nodes(line, &tree);
+                let block =
+                    crate::ui::json_view::layout(&ctx, theme, lang, &tree, &open, &pretty_font);
+                height += block.galley.size().y + 16.0;
+                (block, tree)
+            });
             laid.insert(
                 row,
                 WrappedRow {
                     line,
                     galley,
-                    pretty,
+                    json,
                     height,
                     is_json,
                     expanded,
@@ -5974,10 +5985,10 @@ fn render_wrapped_rows(
                     theme.accent_color().into(),
                 );
             }
-            if let Some(pretty) = &r.pretty {
+            if let Some((block, tree)) = &r.json {
                 let frame = egui::Rect::from_min_size(
                     egui::pos2(text_x, text_top + r.galley.size().y + 4.0),
-                    egui::vec2(text_w, pretty.size().y + 12.0),
+                    egui::vec2(text_w, block.galley.size().y + 12.0),
                 );
                 painter.rect(
                     frame,
@@ -5986,11 +5997,20 @@ fn render_wrapped_rows(
                     Stroke::new(1.0_f32, theme.border_color().gamma_multiply(0.4)),
                     egui::StrokeKind::Inside,
                 );
-                painter.galley(
+                let rect = egui::Rect::from_min_size(
                     frame.min + egui::vec2(6.0, 6.0),
-                    pretty.clone(),
-                    theme.secondary_accent().into(),
+                    egui::vec2(text_w - 12.0, block.galley.size().y),
                 );
+                painter.with_clip_rect(rect).galley(
+                    rect.min,
+                    block.galley.clone(),
+                    theme.text_primary().into(),
+                );
+                if let Some(fold) =
+                    crate::ui::json_view::interact(ui, rect, block, tree, line, lang)
+                {
+                    json_fold = Some((line, fold));
+                }
             }
 
             // Row selection: click, Shift+click (range), Ctrl+click (toggle)
@@ -6139,8 +6159,22 @@ fn render_wrapped_rows(
     if let Some(row) = badge_toggle {
         engine.toggle_collapsed_row(row);
     }
+    apply_json_fold(engine, json_fold, lang);
     picks.apply(ui, engine);
     (row_click, toggle_json, tool_run)
+}
+
+/// Applies a fold picked in an expanded JSON row's tree; "expand all" cut short says so.
+fn apply_json_fold(
+    engine: &mut TailEngine,
+    fold: Option<(usize, crate::json_tree::Fold)>,
+    lang: Language,
+) {
+    if let Some((line, fold)) = fold {
+        if engine.json_fold(line, fold) {
+            engine.view_notice = Some(t(lang, "json_cut").to_string());
+        }
+    }
 }
 
 fn render_hex_stream(

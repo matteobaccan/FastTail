@@ -405,6 +405,11 @@ impl Palette {
         self.map(self.theme.text_dim())
     }
 
+    /// The theme's second accent (JSON strings, as in the GUI).
+    pub fn secondary(&self) -> Color {
+        self.map(self.theme.secondary_accent())
+    }
+
     /// Search hits inside the text: dark text on the warning yellow, readable on every
     /// level colour.
     pub fn hit(&self) -> Style {
