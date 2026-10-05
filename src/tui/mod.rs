@@ -28,9 +28,10 @@ mod view;
 mod workspace;
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::cli::{CliArgs, TUI_USAGE};
 use crate::tail_engine::TailEngine;
 use crate::theme::CyberTheme;
 use crossterm::event::{
@@ -46,163 +47,132 @@ use app::{App, Tab};
 use colors::{Palette, TermInfo};
 use workspace::Settings;
 
-const USAGE: &str = "\
-fasttail-tui - FastTail in the terminal
-
-USAGE:
-    fasttail-tui [OPTIONS]              the workspace saved in fasttail.ini
-    fasttail-tui [OPTIONS] PATH...      the workspace and these files
-    command | fasttail-tui [OPTIONS] -
-
-fasttail.ini is read, never written: theme, highlight rules, global filter, poll
-interval, open files and their filters, search, bookmarks, encoding and collapse.
-
-OPTIONS:
-    --config <FILE>      Use this configuration file (same as FASTTAIL_CONFIG)
-    --session <FILE>     Open a named session (*.fasttail-session.ini)
-    --fresh              Start without the saved workspace
-    --filter <TEXT>      Include filter for the files named here
-    --exclude <TEXT>     Exclude filter for the files named here
-    --no-follow          Start the files named here paused
-    --split              Start with the first two files side by side
-    --search <TEXT>      Search the first file and jump to the first hit
-    --theme <NAME>       tron, matrix, blade, light: overrides the ini's theme
-    --ascii              Draw borders with +-| instead of box characters
-    --no-mouse           Leave the mouse to the terminal (native text selection)
-    -h, --help           Print this help
-
-ENVIRONMENT:
-    FASTTAIL_CONFIG      Configuration file, as for the GUI
-    FASTTAIL_TUI_COLORS  16, 256 or truecolor: overrides the colour detection
-    FASTTAIL_TUI_ASCII   set: same as --ascii
-
-Press ? or F1 in the viewer for the keys.
-";
-
-/// `--bench`, `--capture` and `--stats` are left out of the usage: they are for the tests
-/// and the measurements in `docs/tui-feasibility.md`.
-#[derive(Default)]
+/// The command line: the options every FastTail executable takes (`crate::cli`), plus
+/// `--bench`, `--capture`, `--stats` and the measurement aids, left out of the usage:
+/// they are for the tests and the measurements in `docs/tui-feasibility.md`.
+#[derive(Debug)]
 struct Options {
-    paths: Vec<String>,
-    stdin: bool,
-    filter: Option<String>,
-    exclude: Option<String>,
-    no_follow: bool,
-    split: bool,
-    theme: Option<String>,
-    config: Option<String>,
-    session: Option<String>,
-    ascii: bool,
-    no_mouse: bool,
+    cli: CliArgs,
     stats: Option<String>,
     bench: Option<String>,
     capture: Option<(u16, u16)>,
-    search: Option<String>,
     /// Capture with the search dialog open (for the docs), not advertised.
     capture_dialog: bool,
-    help: bool,
-    fresh: bool,
     /// Measurement aids, not advertised: quit after this many seconds, and page down
     /// this many times once the first file is indexed.
     quit_after: Option<u64>,
     scroll_test: Option<usize>,
 }
 
-fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
-    let mut o = Options::default();
+/// Takes the hidden options out of `args` (those before a `--`) and parses the rest as
+/// `fasttail` does, relative paths against `cwd`.
+fn parse_args(args: impl IntoIterator<Item = String>, cwd: &Path) -> Result<Options, String> {
     let mut args = args.into_iter();
+    let mut rest = Vec::new();
+    let mut opts = Options {
+        cli: CliArgs::default(),
+        stats: None,
+        bench: None,
+        capture: None,
+        capture_dialog: false,
+        quit_after: None,
+        scroll_test: None,
+    };
     let value = |args: &mut dyn Iterator<Item = String>, name: &str| {
         args.next().ok_or_else(|| format!("{name} needs a value"))
     };
     let number = |s: String| s.parse().map_err(|_| format!("bad number: {s}"));
     while let Some(a) = args.next() {
         match a.as_str() {
-            "-h" | "--help" => o.help = true,
-            "-" => o.stdin = true,
-            "--filter" => o.filter = Some(value(&mut args, &a)?),
-            "--exclude" => o.exclude = Some(value(&mut args, &a)?),
-            "--no-follow" => o.no_follow = true,
-            "--fresh" => o.fresh = true,
-            "--split" => o.split = true,
-            "--theme" => o.theme = Some(value(&mut args, &a)?),
-            "--config" => o.config = Some(value(&mut args, &a)?),
-            "--session" => o.session = Some(value(&mut args, &a)?),
-            "--ascii" => o.ascii = true,
-            "--no-mouse" => o.no_mouse = true,
-            "--stats" => o.stats = Some(value(&mut args, &a)?),
-            "--bench" => o.bench = Some(value(&mut args, &a)?),
-            "--search" => o.search = Some(value(&mut args, &a)?),
-            "--capture-dialog" => o.capture_dialog = true,
+            "--" => {
+                rest.push(a);
+                rest.extend(args.by_ref());
+            }
+            "--stats" => opts.stats = Some(value(&mut args, &a)?),
+            "--bench" => opts.bench = Some(value(&mut args, &a)?),
+            "--capture-dialog" => opts.capture_dialog = true,
             "--capture" => {
                 let v = value(&mut args, &a)?;
                 let (w, h) = v
                     .split_once('x')
                     .ok_or("--capture wants WxH, e.g. 100x24")?;
-                o.capture = Some((number(w.into())? as u16, number(h.into())? as u16));
+                opts.capture = Some((number(w.into())? as u16, number(h.into())? as u16));
             }
-            "--quit-after" => o.quit_after = Some(number(value(&mut args, &a)?)? as u64),
-            "--scroll-test" => o.scroll_test = Some(number(value(&mut args, &a)?)?),
-            s if s.starts_with("--") => return Err(format!("unknown option {s}")),
-            _ => o.paths.push(a),
+            "--quit-after" => opts.quit_after = Some(number(value(&mut args, &a)?)? as u64),
+            "--scroll-test" => opts.scroll_test = Some(number(value(&mut args, &a)?)?),
+            _ => rest.push(a),
         }
     }
-    Ok(o)
+    opts.cli = CliArgs::parse(rest, cwd).map_err(|e| e.to_string())?;
+    Ok(opts)
 }
 
-/// `--theme` when given (and known), else the ini's theme.
-fn theme_of(name: Option<&str>, configured: CyberTheme) -> CyberTheme {
-    match name.map(|s| s.to_ascii_lowercase()).as_deref() {
-        Some("tron") => CyberTheme::Tron,
-        Some("matrix") => CyberTheme::Matrix,
-        Some("blade") => CyberTheme::Blade,
-        Some("light") => CyberTheme::Light,
-        Some("commander") => CyberTheme::Commander,
-        _ => configured,
+/// What `--gui` answers in the terminal executable.
+fn gui_handoff_message() -> &'static str {
+    if cfg!(feature = "gui") {
+        // The hand-off itself comes with tasks 5.3 and 5.4 of openspec/changes/tui-interface.
+        "--gui: run fasttail for the graphical interface"
+    } else {
+        "the graphical interface is not in this build; use the fasttail archive"
     }
 }
 
 /// Runs the terminal interface with `args` (the command line without the program
 /// name) and returns the process exit code.
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
-    let opts = match parse_args(args) {
-        Ok(o) if o.help => {
-            print!("{USAGE}");
-            return 0;
-        }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let opts = match parse_args(args, &cwd) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("fasttail-tui: {e}\n\n{USAGE}");
+            eprintln!("fasttail-tui: {e}\n\n{TUI_USAGE}");
             return 2;
         }
     };
-    if let Some(cfg) = &opts.config {
+    let cli = &opts.cli;
+    if cli.show_help || cli.show_version {
+        if cli.show_version {
+            println!("fasttail-tui {}", env!("CARGO_PKG_VERSION"));
+        }
+        if cli.show_help {
+            print!("{TUI_USAGE}");
+        }
+        return 0;
+    }
+    if let Some(cfg) = &cli.config {
         // As the GUI does: the config lookup reads FASTTAIL_CONFIG first.
         std::env::set_var("FASTTAIL_CONFIG", cfg);
+    }
+    if cli.print {
+        // Headless, as `fasttail --print`: the configuration is only read.
+        return crate::print_mode::run(cli);
+    }
+    if cli.gui {
+        eprintln!("fasttail-tui: {}", gui_handoff_message());
+        return 2;
     }
     let term = TermInfo::from_env();
     if let Some(file) = &opts.bench {
         let palette = Palette::new(
-            theme_of(opts.theme.as_deref(), CyberTheme::Tron),
+            cli.theme.unwrap_or(CyberTheme::Tron),
             term.depth(),
-            opts.ascii || term.ascii_borders(),
+            cli.ascii || term.ascii_borders(),
         );
         return bench(file, palette);
     }
     // Read like the GUI does; the run writes it back only with its own changes.
     let mut settings = Settings::locate();
     let mut palette = Palette::new(
-        theme_of(opts.theme.as_deref(), settings.config.theme),
+        cli.theme.unwrap_or(settings.config.theme),
         term.depth(),
-        opts.ascii || term.ascii_borders(),
+        cli.ascii || term.ascii_borders(),
     );
     palette.level_colors = settings.config.level_colors;
 
     // What to open, as in the GUI: a named session or the saved workspace (not with
     // --fresh), then the files named on the command line.
-    let cli_paths: Vec<PathBuf> = opts.paths.iter().map(|p| app::absolute(p)).collect();
-    let session = opts.session.as_deref().map(app::absolute);
+    let cli_paths = &cli.paths;
     let plan =
-        match workspace::start_plan(&mut settings, session.as_deref(), opts.fresh, &cli_paths) {
+        match workspace::start_plan(&mut settings, cli.session.as_deref(), cli.fresh, cli_paths) {
             Ok(plan) => plan,
             Err(e) => {
                 eprintln!("fasttail-tui: {e}");
@@ -215,7 +185,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     notices.extend(workspace::missing_notice(&plan.missing));
     let piped = crate::stdin_source::classify() == crate::stdin_source::StdinKind::Piped;
     let mut focus = 0;
-    if opts.stdin || piped {
+    if cli.stdin || piped {
         match app::open_stdin(&settings.config.stdin_settings()) {
             Ok(mut engine) => {
                 settings.prepare(&mut engine);
@@ -226,8 +196,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
         }
     }
     // Nothing to open is an empty workspace, as in the GUI: `o` opens a file there.
-    // The command-line filters and --no-follow apply to the streams named on the command
-    // line and to standard input, as in the GUI; the restored ones keep their own state.
+    // The command-line filters, follow mode and time window apply to the streams named on
+    // the command line and to standard input, as in the GUI; the restored ones keep their
+    // own state.
     for tab in &mut tabs {
         let named = tab.engine.is_stdin()
             || cli_paths
@@ -236,18 +207,19 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
         if !named {
             continue;
         }
-        if let Some(f) = &opts.filter {
+        if let Some(f) = cli.window_filter() {
             tab.engine.set_include_filter(f);
         }
-        if let Some(f) = &opts.exclude {
+        if let Some(f) = cli.window_exclude() {
             tab.engine.set_exclude_filter(f);
         }
-        if opts.no_follow {
-            tab.engine.follow_tail = false;
+        if let Some(follow) = cli.follow {
+            tab.engine.follow_tail = follow;
         }
+        crate::cli::apply_time_window(&mut tab.engine, cli.since.as_deref(), cli.until.as_deref());
     }
     // The first stream named on the command line has the focus (standard input wins).
-    if !opts.stdin && !piped {
+    if !cli.stdin && !piped {
         if let Some(i) = tabs.iter().position(|t| {
             cli_paths
                 .iter()
@@ -259,7 +231,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
 
     let mut app = App::new(tabs, palette);
     app.active = focus;
-    app.mouse = !opts.no_mouse;
+    app.mouse = !cli.no_mouse;
     app.idle_poll = settings.poll_interval();
     // Streams opened later (`o`, the entry picker) get the same setup.
     app.settings = Some(settings);
@@ -271,10 +243,10 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
         .as_ref()
         .and_then(|s| s.config.dock_layout.clone());
     app.restore_dock(layout.as_deref());
-    if opts.split {
+    if cli.split {
         app.split_first_two();
     }
-    if let Some(text) = &opts.search {
+    if let Some(text) = &cli.search {
         app.search(text);
     }
     if let Some((w, h)) = opts.capture {
@@ -630,4 +602,63 @@ fn bench(file: &str, palette: Palette) -> i32 {
         run(label, &mut app);
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Options, String> {
+        parse_args(args.iter().map(|s| s.to_string()), Path::new("/work"))
+    }
+
+    #[test]
+    fn hidden_options_are_taken_out_before_the_shared_parser() {
+        let o = parse(&[
+            "--capture",
+            "100x24",
+            "--filter",
+            "ERROR",
+            "--quit-after",
+            "3",
+            "--theme",
+            "blade",
+            "app.log",
+        ])
+        .unwrap();
+        assert_eq!(o.capture, Some((100, 24)));
+        assert_eq!(o.quit_after, Some(3));
+        assert_eq!(o.cli.window_filter().map(String::as_str), Some("ERROR"));
+        assert_eq!(o.cli.theme, Some(CyberTheme::Blade));
+        assert_eq!(o.cli.paths, vec![Path::new("/work").join("app.log")]);
+    }
+
+    #[test]
+    fn after_a_double_dash_everything_is_a_path() {
+        let o = parse(&["--", "--capture", "-"]).unwrap();
+        assert!(o.capture.is_none());
+        assert!(o.cli.stdin);
+        assert_eq!(o.cli.paths, vec![Path::new("/work").join("--capture")]);
+    }
+
+    #[test]
+    fn the_terminal_executable_takes_every_fasttail_option() {
+        let o = parse(&[
+            "--tui",
+            "--renderer",
+            "wgpu",
+            "--since=-15m",
+            "--follow",
+            "--version",
+        ])
+        .unwrap();
+        assert!(o.cli.tui && o.cli.show_version);
+        assert_eq!(o.cli.since.as_deref(), Some("-15m"));
+        assert_eq!(o.cli.follow, Some(true));
+        assert!(parse(&["--tui", "--gui"])
+            .unwrap_err()
+            .contains("--tui and --gui"));
+        assert!(parse(&["--bogus"]).unwrap_err().contains("--bogus"));
+        assert!(parse(&["--capture", "wide"]).is_err());
+    }
 }

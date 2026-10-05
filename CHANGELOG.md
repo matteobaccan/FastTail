@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **One command line for both executables.** `fasttail-tui` now takes every `fasttail`
+  option: `--since` / `--until`, `--follow`, `--print`, `--version`, `--opt=value` and
+  `--`; `--renderer` is accepted and ignored. `fasttail` accepts the terminal options
+  (`--split`, `--search`, `--theme`, `--ascii`, `--no-mouse`) and ignores them. `--tui`
+  and `--gui` name the interface to start, and giving both is a usage error (exit 2). An
+  unknown `--theme` is now a usage error instead of being silently ignored. The hand-off
+  between the two interfaces comes next: for now `fasttail --tui` and `fasttail-tui --gui`
+  say which executable to run.
+
 ## [0.16.1] - 2026-10-05
 
 ### Added
