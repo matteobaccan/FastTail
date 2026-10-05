@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-05
+
+A nightly patch: the ASM view (x86 disassembly) and the fix for minimised windows.
+
 ### Added
 
 - **ASM view: x86 disassembly of any file.** A fourth view next to TXT, HEX and MD
@@ -1482,6 +1486,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.1]: https://github.com/matteobaccan/FastTail/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/matteobaccan/FastTail/compare/v0.16.2...v0.20.0
 [0.16.2]: https://github.com/matteobaccan/FastTail/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/matteobaccan/FastTail/compare/v0.16.0...v0.16.1

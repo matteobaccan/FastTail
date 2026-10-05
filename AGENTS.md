@@ -102,26 +102,27 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.20.0** (2026-10-05): the terminal interface complete and no longer a
-  preview (GUI parity, 16 languages, `docs/tui.md`, Linux terminal-only archives, build
-  sizes in every release job). 0.16.2 brought the TUI review round, saved filter tabs and
-  JSON trees.
-- Next: nightly patch releases (`0.20.x`); `tui-interface` is archived after this release.
+- Latest release: **0.20.1** (2026-10-05, nightly): the ASM view (`disassembly-view`, x86
+  disassembly in both interfaces, `src/disasm.rs`, dependency `iced-x86`) and the fix of
+  issue #161 (streams polled while the window is minimised or in the tray). 0.20.0 made the
+  terminal interface complete.
+- Next: nightly patch releases (`0.20.x`); `disassembly-view` is archived after this release.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
   build of `build.yml` on its branch before merging; task 5.0, the downloads grid, is done).
-- Then the fix of issue #161 (streams not polled while the window is minimised), then
-  **0.21.0** (`structured-field-terms`, `merged-timeline-view`, `folder-source`,
-  `disassembly-view`, `linux-tray-icon`), **0.22.0** sources/integrations and **0.23.0** the
+- Then **0.21.0** (`structured-field-terms`, `merged-timeline-view`, `folder-source`,
+  `linux-tray-icon`; `disassembly-view` shipped early in 0.20.1), **0.22.0** sources/integrations and **0.23.0** the
   formats, filters and statistics postponed from 0.21.0 (re-planned 2026-10-05); see
   `docs/competitor-analysis.md` section 8.
 
-### Handover notes (2026-10-05, 0.20.0)
+### Handover notes (2026-10-05, 0.20.1)
 
-- No open PRs. `main` holds everything; the 0.20.0 release PR is the last change, then the
-  post-release archive of `tui-interface` (its deltas create `terminal-interface` and
-  update `command-line`, `rendering-backend`, `release-pipeline`, `cyber-themes`,
-  `window-lock`).
+- No open PRs. `main` holds everything; the 0.20.1 release PR is the last change, then the
+  post-release archive of `disassembly-view` (task 6.3).
+- Not checked by hand yet: the #161 fix on Windows (minimise with a rule that has a sound)
+  and the ASM view on real executables (preview `target/fasttail-asm-preview.exe`).
+- Merge only after every check passed: on 2026-10-05 a merge that did not wait for green
+  let a `cargo fmt` failure reach `main` (fixed by #273).
 - The terminal code is in `src/tui/` (`app.rs` state, keys, mouse, drawing and tests;
   `bars.rs`, `dock.rs`, `mouse.rs`, `keys.rs`, `form.rs`, `browser.rs`, `settings.rs`,
   `rules.rs`, `presets.rs`, `global.rs`, `tools.rs`, `palette.rs`, `json.rs`); its texts in
