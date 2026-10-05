@@ -111,7 +111,7 @@ Update this section in each release PR.
   - Group 4. What is open:
     - 4.1: the new-stream defaults in Settings (the rest of Settings is done).
     - 4.2: quick labels in the rule editor (the editor itself is done).
-    - 4.5b: the `:` palette with line jump, and registry bindings with the Kitty protocol.
+    - 4.5b: registry bindings with the Kitty protocol (the `:` palette is done).
   - Groups 5 to 8: hand-off, release pipeline, i18n, `docs/tui.md`, the parity checklist.
   - 0.20.0 ships at full GUI parity without the "preview" label.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
@@ -124,8 +124,8 @@ Update this section in each release PR.
 ### Handover notes (2026-09-30, end of the 0.16.0 session)
 
 - No open PRs. `main` holds everything; the 0.16.0 release PR is the last change.
-- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (4.5b `:` palette and the
-  4.1 new-stream defaults next; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
+- Where to resume: `openspec/changes/tui-interface/tasks.md`, group 4 (the 4.1 new-stream defaults
+  next; the rule editor, `src/tui/rules.rs`, is the model for the dialogs). The terminal code is in `src/tui/`:
   - `app.rs`: state, keys, mouse, drawing, tests;
   - `dock.rs`: layout geometry and drop zones;
   - `mouse.rs`: the hit map;
@@ -136,11 +136,12 @@ Update this section in each release PR.
   - `rules.rs`: the highlight-rule editor;
   - `presets.rs`: the filter presets;
   - `global.rs`: the global filter editor;
-  - `tools.rs`: the external tools menu, shortcuts and editor.
+  - `tools.rs`: the external tools menu, shortcuts and editor;
+  - `palette.rs`: the `:` command palette.
 
   Their rules are in the spec's `terminal-interface` delta. `src/dock_layout.rs` is shared
   with the GUI.
-- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (121 tests)
+- TUI testing: `cargo test --no-default-features --features tui --lib tui::` (124 tests)
   and `cargo clippy --no-default-features --features tui --all-targets -- -D warnings` on
   top of the usual checks.
 - Preview build for the maintainer:

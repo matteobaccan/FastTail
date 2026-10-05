@@ -226,7 +226,9 @@ through a folder browser, `,` the Settings, `Shift+T` the next theme. `r` edits 
 filter presets, `F` edits the global filter and `f` switches it on or off, `!` runs an
 external tool on the cursor row (a tool's shortcut and rule-bound runs work too; Settings
 > External tools, or `e` in that menu, edits them), `Ctrl+L` locks with the PIN (set in
-Settings > PIN lock). The preview lacks translations; they come with 0.20.0.
+Settings > PIN lock), and `:` opens the command palette: the GUI's commands that the
+terminal runs, by name in the interface language with their keys, and a number typed
+there goes to that line. The preview lacks translations; they come with 0.20.0.
 
 ### Print mode (no window)
 `fasttail --print [OPTIONS] PATH...` writes the lines that pass the filters to standard output and exits, without opening a window, restoring or saving the workspace or writing `fasttail.ini` (it is only read, for the theme, the level colours, the highlight rules and automatic highlighting). The lines are exactly those the window shows for the same filters — the same matching code, stack-trace lines following their entry, timestamps inherited by the lines without one — and memory stays flat whatever the file size: nothing is indexed and the first match is printed as soon as it is read.

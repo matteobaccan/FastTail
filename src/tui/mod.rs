@@ -18,6 +18,7 @@ mod global;
 mod hex;
 mod keys;
 mod mouse;
+mod palette;
 mod picker;
 mod presets;
 mod rules;
