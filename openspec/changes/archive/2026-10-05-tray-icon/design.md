@@ -52,7 +52,8 @@ says where it went.
 
 ### As implemented (0.14.0)
 - **Scope:** Windows only (maintainer's choice); on other systems the options are greyed
-  out. The Linux `ksni` backend (D3) stays open.
+  out. The Linux `ksni` backend (D3) moved to the change `linux-tray-icon` when this one
+  was archived (2026-10-05).
 - **Spike (D1)**, run on Windows 11 with eframe 0.36: a window hidden with
   `Visible(false)` keeps running `update` when another thread requests repaints (~4
   frames/s at 250 ms); a *minimised* window gets no frame at all, even with those

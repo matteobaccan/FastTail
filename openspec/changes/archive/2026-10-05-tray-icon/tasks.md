@@ -2,7 +2,7 @@
 
 - [x] 1.1 Spike: does eframe 0.36 run `update` for a hidden viewport on Windows and Linux (X11, Wayland) when repaints are requested from another thread; choose D1 or its fallback
 - [x] 1.2 `src/tray.rs` trait; Windows backend (`Shell_NotifyIconW`, message-only window thread, popup menu, events channel)
-- [ ] 1.3 (open: Windows only for now) Linux backend with `ksni`; StatusNotifierWatcher detection
+- [x] 1.3 Linux backend with `ksni`: moved to the change `linux-tray-icon` (2026-10-05)
 - [x] 1.4 Badge rendering (dot colour and count) from the app icon; tooltip text
 
 ## 2. Window behaviour
@@ -23,4 +23,4 @@
 
 - [x] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
 - [x] 4.2 Local preview exe for the maintainer before the 0.13.0 release
-- [ ] 4.3 After the release, archive the change so `cyber-ui-docking` gains the new requirements
+- [x] 4.3 After the release, archive the change so `cyber-ui-docking` gains the new requirements
