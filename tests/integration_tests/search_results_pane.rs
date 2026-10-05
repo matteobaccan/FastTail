@@ -297,9 +297,11 @@ impl Harness {
     fn frame(&mut self, events: Vec<egui::Event>) {
         use fasttail::ui::dock::{DockContext, FastTailTabViewer};
         let input = egui::RawInput {
+            // Wide enough for the stream bar on one row: a bar that wraps moves the
+            // timeline strip while its time label changes during a drag.
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1400.0, 900.0),
+                egui::vec2(1600.0, 900.0),
             )),
             events,
             ..Default::default()
