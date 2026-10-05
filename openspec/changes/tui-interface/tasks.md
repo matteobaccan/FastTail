@@ -62,7 +62,7 @@
 - [x] 4.9 Terminal bell for alerts in streams not on screen, with the GUI's `flash_on_alert` (maintainer request)
 - [x] 4.10 Title with the author (`by Matteo Baccan`) and the About window (top bar `[ℹ About]`, palette), as the GUI's (maintainer review of the 0.16.2 preview)
 - [x] 4.11 Settings apply at once, as in the GUI: each change reaches the running interface (theme, language, colours, polling...) without OK
-- [ ] 4.12 Every terminal string through `i18n` (task 7.3, brought forward), so a language change and *Follow the system language* show at once
+- [x] 4.12 Every terminal string through `i18n` (task 7.3, brought forward), so a language change and *Follow the system language* show at once
 - [x] 4.13 Window resize from all four corners and from the edges: a floating window by any corner, its bottom row and its left and right borders; a docked window's border moves the divider it touches
 - [x] 4.14 A short closing effect when a window closes: its outline shrinks to the centre in 180 ms
 - [x] 4.15 The GUI's two rows inside every stream window: the stream bar (follow, monitor, view mode, line numbers, Δt, wrap, encoding, ANSI, fields, collapse, context, time span) and the filter row (include, exclude, Aa, .*, level, presets, global badge), clickable
@@ -88,7 +88,7 @@
 
 - [ ] 7.1 Parity checklist, run by hand on Windows (Windows Terminal, conhost, double click with `interface=tui`) and Linux (terminal and SSH): every 0.20.0 item of the scope table; a setting, a rule, a preset, a tool, a global filter term, a bookmark with a note and a session changed in one interface are found unchanged in the other after a restart; both hand-offs with and without the other executable
 - [ ] 7.2 `TestBackend` capture tests: each view (text, HEX at 80 and 240 columns, split, context banner), each dialog and editor, the lock screen (no line of the open files in the frame), ASCII mode, a CJK language; mouse hit tests; frame-time test on a generated file (p95 at most 5 ms at 200 x 60, ignored by default like the benchmarks)
-- [ ] 7.3 i18n keys for every terminal string, the Settings entry and the hand-off messages in all 16 languages; add them to the exhaustive i18n test
+- [ ] 7.3 (the interface texts are done, 4.12: `src/i18n_tui.rs`, checked by `every_terminal_text_is_translated`; left: the command-line and hand-off messages) i18n keys for every terminal string, the Settings entry and the hand-off messages in all 16 languages; add them to the exhaustive i18n test
 - [ ] 7.4 `docs/tui.md` (user guide from `docs/tui-feasibility.md`: start, keys, mouse, Settings and editors, lock, Windows consoles, colours, limits, the feasibility measurements as an appendix)
 - [ ] 7.5 README: "Terminal interface" section, the two Windows executables and why to run `fasttail-tui.exe` directly from a terminal, the Linux terminal-only archive, the `interface` key, `--tui` / `--gui`, several instances on one `fasttail.ini` (last writer wins), troubleshooting (mintty, legacy console, OSC 52)
 - [ ] 7.6 `docs/ui-design.md`: the Interface setting; CHANGELOG `[Unreleased]`

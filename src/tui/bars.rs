@@ -10,6 +10,8 @@
 
 use crate::ansi::AnsiMode;
 use crate::collapse::CollapseMode;
+use crate::i18n::Language;
+use crate::i18n_tui::{tx, txf};
 use crate::log_level::LogLevel;
 use crate::tail_engine::FileEncoding;
 use crate::tui::app::Tab;
@@ -81,7 +83,7 @@ pub fn next_context(n: u8) -> u8 {
 }
 
 /// The two bars of `tab` (the second empty in HEX). `global`: the global filter applies.
-pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
+pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<Vec<Chip>> {
     let e = &tab.engine;
     let ascii = palette.ascii;
     let accent = Style::default().fg(palette.accent());
@@ -104,12 +106,12 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
 
     let mut first = vec![
         chip(
-            format!("{} Follow", mark(e.follow_tail)),
+            txf(lang, "{0} Follow", &[&mark(e.follow_tail)]),
             if e.follow_tail { on } else { dim },
             BarChip::Follow,
         ),
         chip(
-            format!("{} Monitor", mark(e.is_watching)),
+            txf(lang, "{0} Monitor", &[&mark(e.is_watching)]),
             if e.is_watching { on } else { dim },
             BarChip::Monitor,
         ),
@@ -132,8 +134,8 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
             BarChip::Encoding,
         ));
         let ansi = match e.ansi_mode {
-            AnsiMode::Auto => "ANSI auto".to_string(),
-            mode => format!("ANSI {}", mode.name()),
+            AnsiMode::Auto => tx(lang, "ANSI auto").to_string(),
+            mode => txf(lang, "ANSI {0}", &[&mode.name()]),
         };
         let ansi_style = if e.ansi_mode == AnsiMode::Auto {
             dim
@@ -166,7 +168,7 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
             if n > 0 { accent } else { dim },
             BarChip::Context,
         ));
-        let clock = if ascii { "Time" } else { "🕘" };
+        let clock = if ascii { tx(lang, "Time") } else { "🕘" };
         let window = e.time_window().is_some();
         let span = e.visible_time_span().map(|(a, b)| {
             format!(
@@ -183,11 +185,11 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
     }
     let total = e.total_lines();
     let lines = if hex {
-        format!("{} bytes", e.file_size)
+        txf(lang, "{0} bytes", &[&e.file_size])
     } else if e.visible_line_count() == total {
-        format!("Lines: {total}")
+        txf(lang, "Lines: {0}", &[&total])
     } else {
-        format!("Lines: {} / {total}", e.visible_line_count())
+        txf(lang, "Lines: {0} / {1}", &[&e.visible_line_count(), &total])
     };
     first.push(text(lines, dim));
 
@@ -202,9 +204,9 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
     let include = e.include_filter();
     let exclude = e.exclude_filter();
     let mut second = vec![
-        text("Include".into(), accent),
+        text(tx(lang, "Include").into(), accent),
         chip(field(include), Style::default(), BarChip::Include),
-        text("Exclude".into(), warn),
+        text(tx(lang, "Exclude").into(), warn),
         chip(field(exclude), Style::default(), BarChip::Exclude),
         chip(
             "Aa".into(),
@@ -219,7 +221,7 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
     ];
     let ge = if ascii { ">=" } else { "≥" };
     let level = match e.min_level {
-        LogLevel::Unknown => "All levels".to_string(),
+        LogLevel::Unknown => tx(lang, "All levels").to_string(),
         l => format!("{ge} {}", l.name()),
     };
     let level_style = match e.min_level {
@@ -227,9 +229,13 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool) -> Vec<Vec<Chip>> {
         l => Style::default().fg(palette.level_color(l)),
     };
     second.push(chip(level, level_style, BarChip::Level));
-    second.push(chip("Presets".into(), dim, BarChip::Presets));
+    second.push(chip(tx(lang, "Presets").into(), dim, BarChip::Presets));
     if global {
-        let globe = if ascii { "Global" } else { "🌐 Global" };
+        let globe = if ascii {
+            tx(lang, "Global")
+        } else {
+            tx(lang, "🌐 Global")
+        };
         second.push(chip(globe.into(), on, BarChip::Global));
     }
     vec![first, second]

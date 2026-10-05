@@ -6,6 +6,8 @@
 //! filtered by what is typed, one chosen to open. A tar is listed by a background scan
 //! while the picker is open.
 
+use crate::i18n::Language;
+use crate::i18n_tui::{tx, txf};
 use std::path::PathBuf;
 
 use crate::compressed::{ArchiveEntryInfo, EntryRefusal, ScanState, TarScan};
@@ -23,23 +25,31 @@ pub struct EntryPicker {
     pub selected: usize,
     /// First position of `shown()` on screen.
     pub top: usize,
+    /// The language of the notes.
+    pub lang: Language,
 }
 
 impl EntryPicker {
-    pub fn new(archive: PathBuf, entries: Vec<ArchiveEntryInfo>, partial: bool) -> Self {
+    pub fn new(
+        archive: PathBuf,
+        entries: Vec<ArchiveEntryInfo>,
+        partial: bool,
+        lang: Language,
+    ) -> Self {
         Self {
             archive,
             entries,
             scan: None,
-            partial: partial.then(|| "The list is partial".to_string()),
+            partial: partial.then(|| tx(lang, "The list is partial").to_string()),
             filter: TextField::default(),
             selected: 0,
             top: 0,
+            lang,
         }
     }
 
-    pub fn scanning(archive: PathBuf, scan: TarScan) -> Self {
-        let mut p = Self::new(archive, Vec::new(), false);
+    pub fn scanning(archive: PathBuf, scan: TarScan, lang: Language) -> Self {
+        let mut p = Self::new(archive, Vec::new(), false, lang);
         p.scan = Some(scan);
         p
     }
@@ -58,9 +68,11 @@ impl EntryPicker {
             return got;
         }
         self.partial = match state {
-            ScanState::LimitReached => Some("The list is partial: too many entries".into()),
-            ScanState::Damaged(e) => Some(format!("The archive is damaged: {e}")),
-            ScanState::Failed(e) => Some(format!("Cannot read the archive: {e}")),
+            ScanState::LimitReached => {
+                Some(tx(self.lang, "The list is partial: too many entries").into())
+            }
+            ScanState::Damaged(e) => Some(txf(self.lang, "The archive is damaged: {0}", &[&e])),
+            ScanState::Failed(e) => Some(txf(self.lang, "Cannot read the archive: {0}", &[&e])),
             _ => None,
         };
         self.scan = None;
@@ -123,15 +135,15 @@ pub fn human_size(bytes: u64) -> String {
 }
 
 /// Why an entry cannot be opened, as the picker shows it.
-pub fn refusal_text(r: &EntryRefusal) -> String {
+pub fn refusal_text(r: &EntryRefusal, lang: Language) -> String {
     match r {
-        EntryRefusal::Encrypted => "encrypted".into(),
-        EntryRefusal::Method(m) => format!("unsupported compression: {m}"),
-        EntryRefusal::UnsafeName => "unsafe name".into(),
-        EntryRefusal::DuplicateName => "same path as an earlier entry".into(),
-        EntryRefusal::LinkOrSpecial => "link or special file".into(),
-        EntryRefusal::Sparse => "sparse entry".into(),
-        EntryRefusal::DictionaryTooLarge => "dictionary too large".into(),
+        EntryRefusal::Encrypted => tx(lang, "encrypted").into(),
+        EntryRefusal::Method(m) => txf(lang, "unsupported compression: {0}", &[&m]),
+        EntryRefusal::UnsafeName => tx(lang, "unsafe name").into(),
+        EntryRefusal::DuplicateName => tx(lang, "same path as an earlier entry").into(),
+        EntryRefusal::LinkOrSpecial => tx(lang, "link or special file").into(),
+        EntryRefusal::Sparse => tx(lang, "sparse entry").into(),
+        EntryRefusal::DictionaryTooLarge => tx(lang, "dictionary too large").into(),
     }
 }
 
@@ -156,6 +168,7 @@ mod tests {
             "logs.zip".into(),
             vec![entry("app.log"), entry("db.log"), entry("DB-old.log")],
             false,
+            Language::En,
         );
         assert_eq!(p.shown(), [0, 1, 2]);
         p.move_by(5);

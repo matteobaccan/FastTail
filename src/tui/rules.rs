@@ -11,6 +11,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::audio::SoundAlertPreset;
 use crate::external_tools::ExternalTool;
+use crate::i18n::Language;
+use crate::i18n_tui::{en, tx, txf};
 use crate::settings_model as model;
 use crate::tail_engine::{HighlightRule, QuickLabel};
 use crate::tui::form::{CheckBox, ColourField, FieldKey, RadioList, ReorderList, TextField};
@@ -131,44 +133,48 @@ impl RuleForm {
         let fields = vec![
             field(
                 RuleKey::Pattern,
-                "Pattern",
+                en("Pattern"),
                 RuleWidget::Text(TextField::new(&r.pattern)),
             ),
-            field(RuleKey::Regex, "Regular expression", check(r.is_regex)),
+            field(RuleKey::Regex, en("Regular expression"), check(r.is_regex)),
             field(
                 RuleKey::CapturesOnly,
-                "Paint the groups only (regex)",
+                en("Paint the groups only (regex)"),
                 check(r.captures_only),
             ),
-            field(RuleKey::MatchCase, "Match case", check(r.case_sensitive)),
-            field(RuleKey::Bold, "Bold", check(r.bold)),
-            field(RuleKey::Italic, "Italic", check(r.italic)),
+            field(
+                RuleKey::MatchCase,
+                en("Match case"),
+                check(r.case_sensitive),
+            ),
+            field(RuleKey::Bold, en("Bold"), check(r.bold)),
+            field(RuleKey::Italic, en("Italic"), check(r.italic)),
             field(
                 RuleKey::Foreground,
-                "Text colour",
+                en("Text colour"),
                 RuleWidget::Colour(ColourField::new(r.fg_color, SWATCHES.to_vec())),
             ),
             field(
                 RuleKey::Background,
-                "Background",
+                en("Background"),
                 RuleWidget::Colour(ColourField::new(r.bg_color, SWATCHES.to_vec())),
             ),
             field(
                 RuleKey::Sound,
-                "Sound",
+                en("Sound"),
                 RuleWidget::Radio(RadioList::new(&sounds, sound)),
             ),
             field(
                 RuleKey::AutoBookmark,
-                "Bookmark matching lines",
+                en("Bookmark matching lines"),
                 check(r.auto_bookmark),
             ),
             field(
                 RuleKey::Tool,
-                "Run tool",
+                en("Run tool"),
                 RuleWidget::Radio(RadioList::new(&tools, tool)),
             ),
-            field(RuleKey::Enabled, "Enabled", check(r.enabled)),
+            field(RuleKey::Enabled, en("Enabled"), check(r.enabled)),
         ];
         Self {
             index,
@@ -230,18 +236,18 @@ impl RuleForm {
     }
 
     /// The fields that cannot be applied, with why.
-    pub fn problems(&self) -> Vec<(usize, String)> {
+    pub fn problems(&self, lang: Language) -> Vec<(usize, String)> {
         let mut out = Vec::new();
         for (i, f) in self.fields.iter().enumerate() {
             let problem = match (&f.key, &f.widget) {
                 (RuleKey::Pattern, RuleWidget::Text(t)) if t.text().is_empty() => {
-                    Some("type a word or a regular expression".to_string())
+                    Some(tx(lang, "type a word or a regular expression").to_string())
                 }
                 (RuleKey::Pattern, _) => {
                     model::rule_problem(&self.rule(&HighlightRule::new("", [0; 3], [0; 3], false)))
                 }
                 (_, RuleWidget::Colour(c)) if c.value().is_none() => {
-                    Some("#RRGGBB, or [ ] for a swatch".to_string())
+                    Some(tx(lang, "#RRGGBB, or [ ] for a swatch").to_string())
                 }
                 _ => None,
             };
@@ -288,24 +294,29 @@ impl RuleForm {
     }
 
     /// `label  value` per field, as drawn.
-    pub fn lines(&self) -> Vec<String> {
+    pub fn lines(&self, lang: Language) -> Vec<String> {
         self.fields
             .iter()
             .map(|f| {
                 let value = match &f.widget {
                     RuleWidget::Text(t) => t.text().to_string(),
                     RuleWidget::Check(c) => c.text(""),
-                    RuleWidget::Colour(c) => format!("{}   [ ] swatch", c.field.text()),
+                    RuleWidget::Colour(c) => txf(lang, "{0}   [ ] swatch", &[&c.field.text()]),
                     RuleWidget::Radio(r) if r.text().chars().count() <= 44 => r.text(),
                     RuleWidget::Radio(r) => format!(
                         "< {} >",
                         r.options.get(r.selected).map(String::as_str).unwrap_or("")
                     ),
                 };
-                format!("{:<30}{value}", f.label)
+                format!("{}{value}", padded(tx(lang, f.label), 30))
             })
             .collect()
     }
+}
+
+fn padded(label: &str, width: usize) -> String {
+    let pad = width.saturating_sub(unicode_width::UnicodeWidthStr::width(label));
+    format!("{label}{}", " ".repeat(pad))
 }
 
 impl RulesDialog {
@@ -385,7 +396,7 @@ impl RulesDialog {
         let Some(form) = self.form.as_mut() else {
             return false;
         };
-        if !form.problems().is_empty() {
+        if !form.problems(Language::En).is_empty() {
             form.rejected = true;
             return false;
         }
@@ -640,7 +651,7 @@ mod tests {
         if let RuleWidget::Check(c) = &mut form.fields[1].widget {
             c.on = true;
         }
-        assert_eq!(form.problems().len(), 1);
+        assert_eq!(form.problems(Language::En).len(), 1);
         assert_eq!(d.on_key(key(KeyCode::Enter)), RulesKey::Moved);
         // Esc leaves the list as it was.
         assert_eq!(d.on_key(key(KeyCode::Esc)), RulesKey::Moved);

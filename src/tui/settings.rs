@@ -12,6 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::auto_highlight::TokenKind;
 use crate::config::{FastTailConfig, Interface};
 use crate::i18n::Language;
+use crate::i18n_tui::{en, tx, txf};
 use crate::settings_model as model;
 use crate::tail_engine::SizeUnit;
 use crate::theme::CyberTheme;
@@ -97,10 +98,10 @@ impl Field {
         self
     }
 
-    /// Why the field's value cannot be applied (a number out of its range).
-    pub fn problem(&self) -> Option<String> {
+    /// Why the field's value cannot be applied (a number out of its range), in `lang`.
+    pub fn problem(&self, lang: Language) -> Option<String> {
         match &self.widget {
-            Widget::Number(n) => n.value().err(),
+            Widget::Number(n) => n.problem(lang),
             _ => None,
         }
     }
@@ -117,6 +118,8 @@ pub struct SettingsForm {
     pub rejected: bool,
     /// A PIN is stored now (the idle lock needs one, set here or before).
     has_pin: bool,
+    /// The language of the texts (the one being chosen, while Settings is open).
+    pub lang: Language,
 }
 
 fn number<T: Copy + Into<u64>>(value: T, range: &std::ops::RangeInclusive<T>) -> Widget {
@@ -133,11 +136,11 @@ fn check(on: bool) -> Widget {
 /// One kind of the automatic highlighting, under its switch, as in the GUI's Settings.
 fn token_field(c: &FastTailConfig, kind: TokenKind) -> Field {
     let label = match kind {
-        TokenKind::Ip => "  IP addresses",
-        TokenKind::Uuid => "  Identifiers (UUID)",
-        TokenKind::Url => "  Web addresses (URL)",
-        TokenKind::Duration => "  Durations",
-        TokenKind::Path => "  File paths",
+        TokenKind::Ip => en("  IP addresses"),
+        TokenKind::Uuid => en("  Identifiers (UUID)"),
+        TokenKind::Url => en("  Web addresses (URL)"),
+        TokenKind::Duration => en("  Durations"),
+        TokenKind::Path => en("  File paths"),
     };
     Field::new(
         Key::Token(kind),
@@ -149,18 +152,24 @@ fn token_field(c: &FastTailConfig, kind: TokenKind) -> Field {
 /// The interface choice. A build without the window (the Linux terminal-only archive)
 /// shows the terminal as the only one, and says why; on Windows, where the window is
 /// another file, the graphical entry says when that file is missing.
-fn interface_widget(selected: usize) -> Widget {
+fn interface_widget(selected: usize, lang: Language) -> Widget {
     if !cfg!(feature = "gui") {
-        return Widget::Button("terminal - the graphical interface is not in this build".into());
+        return Widget::Button(
+            tx(
+                lang,
+                "terminal - the graphical interface is not in this build",
+            )
+            .into(),
+        );
     }
     let missing =
         cfg!(windows) && !crate::handoff::sibling_present(&crate::handoff::gui_exe_name());
     let graphical = if missing {
-        "graphical (fasttail.exe missing)"
+        tx(lang, "graphical (fasttail.exe missing)")
     } else {
-        "graphical"
+        tx(lang, "graphical")
     };
-    Widget::Radio(RadioList::new(&[graphical, "terminal"], selected))
+    Widget::Radio(RadioList::new(&[graphical, tx(lang, "terminal")], selected))
 }
 
 impl SettingsForm {
@@ -189,34 +198,34 @@ impl SettingsForm {
         let fields = vec![
             Field::new(
                 Key::Interface,
-                "Interface at start",
-                interface_widget(interface),
+                en("Interface at start"),
+                interface_widget(interface, c.language),
             )
-            .starts("General"),
+            .starts(en("General")),
             Field::new(
                 Key::Theme,
-                "Theme",
+                en("Theme"),
                 Widget::Radio(RadioList::new(&themes, theme)),
             ),
             Field::new(
                 Key::Language,
-                "Language",
+                en("Language"),
                 Widget::Radio(RadioList::new(&languages, language)),
             ),
             Field::new(
                 Key::LanguageAuto,
-                "Follow the system language",
+                en("Follow the system language"),
                 check(c.language_auto),
             ),
             Field::new(
                 Key::LevelColors,
-                "Colour rows by level",
+                en("Colour rows by level"),
                 check(c.level_colors),
             )
-            .starts("View"),
+            .starts(en("View")),
             Field::new(
                 Key::AutoHighlight,
-                "Automatic token highlighting",
+                en("Automatic token highlighting"),
                 check(c.auto_highlight),
             ),
             token_field(c, TokenKind::Ip),
@@ -226,104 +235,113 @@ impl SettingsForm {
             token_field(c, TokenKind::Path),
             Field::new(
                 Key::TimeDeltaGap,
-                "Time delta gap (ms)",
+                en("Time delta gap (ms)"),
                 number(c.time_delta_gap_ms, &model::TIME_DELTA_GAP_MS),
             ),
             Field::new(
                 Key::SizeUnit,
-                "File size in",
-                Widget::Radio(RadioList::new(&["bytes", "MB", "GB", "hex"], unit)),
+                en("File size in"),
+                Widget::Radio(RadioList::new(
+                    &[tx(c.language, "bytes"), "MB", "GB", tx(c.language, "hex")],
+                    unit,
+                )),
             ),
             Field::new(
                 Key::Telemetry,
-                "CPU and RAM in the top bar",
+                en("CPU and RAM in the top bar"),
                 check(c.telemetry_enabled),
             ),
             Field::new(
                 Key::PollInterval,
-                "Poll interval (ms)",
+                en("Poll interval (ms)"),
                 number(c.poll_interval_ms, &model::POLL_INTERVAL_MS),
             )
-            .starts("Performance and refresh"),
+            .starts(en("Performance and refresh")),
             Field::new(
                 Key::SizeCheckInterval,
-                "Size check interval (ms)",
+                en("Size check interval (ms)"),
                 number(c.size_check_interval_ms, &model::SIZE_CHECK_INTERVAL_MS),
             ),
             Field::new(
                 Key::SpoolDir,
-                "Spool directory (empty: default)",
+                en("Spool directory (empty: default)"),
                 Widget::Text(TextField::new(&spool)),
             ),
             Field::new(
                 Key::CompressedMaxGb,
-                "Largest decompressed file (GB)",
+                en("Largest decompressed file (GB)"),
                 number(c.compressed_max_gb, &model::COMPRESSED_MAX_GB),
             ),
             Field::new(
                 Key::StdinSpoolMaxMb,
-                "Standard input spool (MB)",
+                en("Standard input spool (MB)"),
                 number(c.stdin_spool_max_mb, &model::STDIN_SPOOL_MAX_MB),
             ),
             Field::new(
                 Key::LineNumbers,
-                "Line numbers in new streams",
+                en("Line numbers in new streams"),
                 check(c.show_line_numbers),
             )
-            .starts("New streams and bookmarks - each stream keeps its own"),
+            .starts(en("New streams and bookmarks - each stream keeps its own")),
             Field::new(
                 Key::TimeDelta,
-                "Time delta column in new streams",
+                en("Time delta column in new streams"),
                 check(c.show_time_delta),
             ),
             Field::new(
                 Key::AutoBookmarkMax,
-                "Automatic bookmarks per file",
+                en("Automatic bookmarks per file"),
                 Widget::Number(auto_max),
             ),
-            Field::new(Key::Sound, "Sound alerts", check(c.sound_enabled)).starts("Sound"),
+            Field::new(Key::Sound, en("Sound alerts"), check(c.sound_enabled)).starts(en("Sound")),
             Field::new(
                 Key::FlashOnAlert,
-                "Bell when a hidden stream has an alert",
+                en("Bell when a hidden stream has an alert"),
                 check(c.flash_on_alert),
             ),
             Field::new(
                 Key::Tools,
-                "External tools",
-                Widget::Button(format!(
-                    "{} defined - Enter edits them",
-                    c.external_tools.len()
+                en("External tools"),
+                Widget::Button(txf(
+                    c.language,
+                    en("{0} defined - Enter edits them"),
+                    &[&c.external_tools.len()],
                 )),
             )
-            .starts("External tools"),
-            Field::new(Key::LockEnabled, "Lock when idle", check(c.lock_enabled))
-                .starts("PIN lock - deters onlookers, it is not security"),
+            .starts(en("External tools")),
+            Field::new(
+                Key::LockEnabled,
+                en("Lock when idle"),
+                check(c.lock_enabled),
+            )
+            .starts(en("PIN lock - deters onlookers, it is not security")),
             Field::new(
                 Key::IdleMinutes,
-                "Idle minutes before the lock",
+                en("Idle minutes before the lock"),
                 number(c.screensaver_timeout_mins, &model::SCREENSAVER_TIMEOUT_MINS),
             ),
             Field::new(
                 Key::PinNew,
                 if c.lock_pin.is_empty() {
-                    "New PIN (4-12 digits)"
+                    en("New PIN (4-12 digits)")
                 } else {
-                    "Change the PIN (4-12 digits)"
+                    en("Change the PIN (4-12 digits)")
                 },
                 Widget::Text(TextField::default()),
             ),
             Field::new(
                 Key::PinConfirm,
-                "The new PIN again",
+                en("The new PIN again"),
                 Widget::Text(TextField::default()),
             ),
-            Field::new(Key::RemovePin, "Remove the PIN", check(false)),
+            Field::new(Key::RemovePin, en("Remove the PIN"), check(false)),
         ];
         Self {
             fields,
             focus: 0,
             top: 0,
             rejected: false,
+            lang: c.language,
             has_pin: !c.lock_pin.is_empty(),
         }
     }
@@ -365,6 +383,17 @@ impl SettingsForm {
         };
         if done == FieldKey::Edited {
             self.rejected = false;
+            // Picking a language stops following the system's, as in the GUI.
+            if self.fields[self.focus].key == Key::Language {
+                if let Some(Widget::Check(c)) = self
+                    .fields
+                    .iter_mut()
+                    .find(|f| f.key == Key::LanguageAuto)
+                    .map(|f| &mut f.widget)
+                {
+                    c.on = false;
+                }
+            }
         }
         done
     }
@@ -386,20 +415,20 @@ impl SettingsForm {
             .filter_map(|(i, f)| {
                 let pin = match f.key {
                     Key::PinNew if !new_pin.is_empty() && !crate::lock::is_valid_pin(&new_pin) => {
-                        Some("4 to 12 digits".to_string())
+                        Some(tx(self.lang, "4 to 12 digits").to_string())
                     }
                     Key::PinConfirm if self.text_of(Key::PinConfirm).trim() != new_pin => {
-                        Some("does not match the new PIN".to_string())
+                        Some(tx(self.lang, "does not match the new PIN").to_string())
                     }
                     // Removing the PIN switches the idle lock off too, as in the GUI.
                     Key::LockEnabled
                         if self.checked(Key::LockEnabled) && !remove && !will_have_pin =>
                     {
-                        Some("set a PIN first".to_string())
+                        Some(tx(self.lang, "set a PIN first").to_string())
                     }
                     _ => None,
                 };
-                pin.or_else(|| f.problem()).map(|p| (i, p))
+                pin.or_else(|| f.problem(self.lang)).map(|p| (i, p))
             })
             .collect()
     }
@@ -511,7 +540,7 @@ impl SettingsForm {
                 if !out.is_empty() {
                     out.push((String::new(), None));
                 }
-                out.push((s.to_string(), None));
+                out.push((tx(self.lang, s).to_string(), None));
             }
             let value = match &f.widget {
                 Widget::Check(c) => c.text(""),
@@ -529,7 +558,9 @@ impl SettingsForm {
                 Widget::Text(t) => format!("[{}]", t.text()),
                 Widget::Button(text) => format!("> {text}"),
             };
-            out.push((format!("  {:<34}{value}", f.label), Some(i)));
+            let label = tx(self.lang, f.label);
+            let pad = 34usize.saturating_sub(unicode_width::UnicodeWidthStr::width(label));
+            out.push((format!("  {label}{}{value}", " ".repeat(pad)), Some(i)));
         }
         out
     }

@@ -6,6 +6,7 @@
 //! an expanded `[+] JSON` row. A dialog rather than rows inside the window, so the
 //! window's row arithmetic (cursor, selection, mouse rows) stays as it is.
 
+use crate::i18n::{t, Language};
 use crate::json_tree::{Fold, Kind, Row, Tree};
 use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::HashSet;
@@ -58,7 +59,7 @@ impl JsonDialog {
     }
 
     /// The text of `row`.
-    pub fn row_text(&self, row: Row) -> RowText {
+    pub fn row_text(&self, row: Row, lang: Language) -> RowText {
         match row {
             Row::Node { id, depth } => {
                 let node = self.tree.node(id);
@@ -68,8 +69,14 @@ impl JsonDialog {
                     (true, false) => "> ",
                 };
                 let value = match node.kind {
-                    Kind::Object => format!("{{{} keys}}", node.children),
-                    Kind::Array => format!("[{} items]", node.children),
+                    Kind::Object => format!(
+                        "{{{}}}",
+                        t(lang, "json_keys").replace("{n}", &node.children.to_string())
+                    ),
+                    Kind::Array => format!(
+                        "[{}]",
+                        t(lang, "json_items").replace("{n}", &node.children.to_string())
+                    ),
                     _ => self.tree.display_value(id),
                 };
                 RowText {
@@ -82,7 +89,7 @@ impl JsonDialog {
             Row::More { depth, hidden } => RowText {
                 prefix: "  ".repeat(depth + 1),
                 key: None,
-                value: format!("... {hidden} more"),
+                value: t(lang, "json_more").replace("{n}", &hidden.to_string()),
                 kind: None,
             },
         }
@@ -201,7 +208,10 @@ mod tests {
         d.on_key(key(KeyCode::Right));
         assert_eq!(d.rows().len(), 4);
         d.on_key(key(KeyCode::Down));
-        assert_eq!(d.row_text(d.rows()[1]).key.as_deref(), Some("id"));
+        assert_eq!(
+            d.row_text(d.rows()[1], Language::En).key.as_deref(),
+            Some("id")
+        );
         assert_eq!(
             d.on_key(key(KeyCode::Char('Y'))),
             JsonKey::Copy {

@@ -135,6 +135,11 @@ impl Language {
     }
 
     pub fn detect() -> Self {
+        // The unit tests check English texts: they must not depend on the language of
+        // the machine running them.
+        if cfg!(test) {
+            return Language::En;
+        }
         // Check environment variables first
         for var in &["LC_ALL", "LC_MESSAGES", "LANG"] {
             if let Ok(val) = std::env::var(var) {

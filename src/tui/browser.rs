@@ -7,6 +7,8 @@
 //! and a name field that filters the list or takes a path, a pattern (`*.log`) or an
 //! archive entry to open directly.
 
+use crate::i18n::Language;
+use crate::i18n_tui::{tx, txf};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -44,11 +46,13 @@ pub struct FileBrowser {
     pub top: usize,
     /// Why the folder is listed in part or not at all.
     pub note: Option<String>,
+    /// The language of the notes.
+    pub lang: Language,
 }
 
 impl FileBrowser {
     /// The browser on `dir` (the drives when `None`).
-    pub fn at(dir: Option<PathBuf>) -> Self {
+    pub fn at(dir: Option<PathBuf>, lang: Language) -> Self {
         let mut b = Self {
             dir: None,
             entries: Vec::new(),
@@ -56,6 +60,7 @@ impl FileBrowser {
             selected: 0,
             top: 0,
             note: None,
+            lang,
         };
         b.go_to(dir);
         b
@@ -71,12 +76,16 @@ impl FileBrowser {
             Some(d) => match read_folder(d) {
                 Ok((entries, cut)) => {
                     if cut {
-                        self.note = Some(format!("Only the first {MAX_ENTRIES} entries"));
+                        self.note = Some(txf(
+                            self.lang,
+                            "Only the first {0} entries",
+                            &[&MAX_ENTRIES],
+                        ));
                     }
                     entries
                 }
                 Err(e) => {
-                    self.note = Some(format!("Cannot read {}: {e}", d.display()));
+                    self.note = Some(txf(self.lang, "Cannot read {0}: {1}", &[&d.display(), &e]));
                     Vec::new()
                 }
             },
@@ -223,7 +232,7 @@ impl FileBrowser {
     pub fn location(&self) -> String {
         match &self.dir {
             Some(d) => d.display().to_string(),
-            None => "Drives".into(),
+            None => tx(self.lang, "Drives").into(),
         }
     }
 }
@@ -325,7 +334,7 @@ mod tests {
     #[test]
     fn folders_come_first_then_files_by_name() {
         let dir = tree();
-        let b = FileBrowser::at(Some(dir.path().to_path_buf()));
+        let b = FileBrowser::at(Some(dir.path().to_path_buf()), Language::En);
         assert_eq!(names(&b), ["..", "Archive", "logs", "a.txt", "b.log"]);
         assert_eq!(b.entries[3].size, 4);
         assert!(b.entries[3].modified.is_some());
@@ -334,7 +343,7 @@ mod tests {
     #[test]
     fn enter_walks_folders_and_returns_a_file() {
         let dir = tree();
-        let mut b = FileBrowser::at(Some(dir.path().to_path_buf()));
+        let mut b = FileBrowser::at(Some(dir.path().to_path_buf()), Language::En);
         b.move_by(2);
         assert_eq!(b.chosen().unwrap().name, "logs");
         assert_eq!(b.activate(), None);
@@ -350,7 +359,7 @@ mod tests {
     #[test]
     fn the_field_filters_or_names_a_path_to_open() {
         let dir = tree();
-        let mut b = FileBrowser::at(Some(dir.path().to_path_buf()));
+        let mut b = FileBrowser::at(Some(dir.path().to_path_buf()), Language::En);
         b.field.insert("LOG");
         b.filter_changed();
         assert_eq!(names(&b), ["..", "logs", "b.log"]);
@@ -376,7 +385,7 @@ mod tests {
     #[test]
     fn an_unreadable_folder_says_why() {
         let dir = tree();
-        let b = FileBrowser::at(Some(dir.path().join("none")));
+        let b = FileBrowser::at(Some(dir.path().join("none")), Language::En);
         assert!(b.note.as_deref().unwrap().starts_with("Cannot read"));
         assert_eq!(names(&b), [".."]);
     }
