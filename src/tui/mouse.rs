@@ -82,8 +82,9 @@ pub enum Target {
     /// The title row of a floating window (its position in `App::floats`): dragged, it
     /// moves the window.
     FloatTitle(usize),
-    /// The bottom-right corner of a floating window: dragged, it resizes the window.
-    FloatCorner(usize),
+    /// A corner or edge of a floating window (its position in `App::floats`): dragged,
+    /// it resizes the window on those sides.
+    FloatEdge(usize, Edges),
     /// The `[x]` of a window (its position in `HitMap::close_buttons`): closes the
     /// stream the window shows.
     Close(usize),
@@ -97,6 +98,47 @@ pub enum Target {
     /// Elsewhere on a window: its border, or below the last row.
     Window(usize),
     Nothing,
+}
+
+/// The sides of a floating window a drag moves: a corner moves two, an edge one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Edges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
+/// The sides of the floating window `r` under (`col`, `row`): the four corners, the
+/// bottom row, the left and right borders. The rest of the top row is the title.
+fn edges_at(r: Rect, col: u16, row: u16) -> Option<Edges> {
+    let left = col <= r.x + 1;
+    let right = col + 2 >= r.right();
+    let top = row == r.y;
+    let bottom = row + 1 == r.bottom();
+    let edges = if top {
+        // Only the corner cells of the title row resize.
+        Edges {
+            left: col == r.x,
+            right: col + 1 == r.right(),
+            top: true,
+            bottom: false,
+        }
+    } else if bottom {
+        Edges {
+            left,
+            right,
+            top: false,
+            bottom: true,
+        }
+    } else {
+        Edges {
+            left: col == r.x,
+            right: col + 1 == r.right(),
+            ..Edges::default()
+        }
+    };
+    (edges.left || edges.right || edges.bottom).then_some(edges)
 }
 
 /// Maps the cell (`col`, `row`) to what the last frame drew there. A dialog sits on top
@@ -144,11 +186,11 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
         if let Some(i) = tab {
             return Target::LeafTab(i);
         }
+        if let Some(edges) = edges_at(*r, col, row) {
+            return Target::FloatEdge(*f, edges);
+        }
         if row == r.y {
             return Target::FloatTitle(*f);
-        }
-        if row + 1 == r.bottom() && col + 2 >= r.right() {
-            return Target::FloatCorner(*f);
         }
         return window_target(map, p);
     }
@@ -297,8 +339,45 @@ mod tests {
         assert_eq!(hit_test(&map, 47, 3), Target::Close(0));
         assert_eq!(hit_test(&map, 77, 1), Target::Close(1));
         assert_eq!(hit_test(&map, 35, 3), Target::FloatTitle(0));
-        assert_eq!(hit_test(&map, 49, 8), Target::FloatCorner(0));
-        assert_eq!(hit_test(&map, 48, 8), Target::FloatCorner(0));
+        // Every corner and edge but the title resizes.
+        let e = |left, right, top, bottom| Edges {
+            left,
+            right,
+            top,
+            bottom,
+        };
+        assert_eq!(
+            hit_test(&map, 49, 8),
+            Target::FloatEdge(0, e(false, true, false, true))
+        );
+        assert_eq!(
+            hit_test(&map, 48, 8),
+            Target::FloatEdge(0, e(false, true, false, true))
+        );
+        assert_eq!(
+            hit_test(&map, 30, 8),
+            Target::FloatEdge(0, e(true, false, false, true))
+        );
+        assert_eq!(
+            hit_test(&map, 40, 8),
+            Target::FloatEdge(0, e(false, false, false, true))
+        );
+        assert_eq!(
+            hit_test(&map, 30, 3),
+            Target::FloatEdge(0, e(true, false, true, false))
+        );
+        assert_eq!(
+            hit_test(&map, 49, 3),
+            Target::FloatEdge(0, e(false, true, true, false))
+        );
+        assert_eq!(
+            hit_test(&map, 30, 5),
+            Target::FloatEdge(0, e(true, false, false, false))
+        );
+        assert_eq!(
+            hit_test(&map, 49, 5),
+            Target::FloatEdge(0, e(false, true, false, false))
+        );
         assert_eq!(hit_test(&map, 40, 5), Target::Row { tab: 2, row: 1 });
         assert_eq!(window_at(&map, 40, 5), Some(2));
         // Outside it, the divider and the windows under it are reached as before.

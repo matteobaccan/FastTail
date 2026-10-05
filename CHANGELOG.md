@@ -67,6 +67,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Terminal interface: a floating window resizes from every corner and side.** Drag any
+  of its four corners, its bottom row or its left or right border; the other sides stay
+  where they are. Docked windows already resize by dragging the borders they share.
 - **Terminal interface: Settings apply at once**, as in the GUI: a new theme, colours,
   polling or any other valid value shows while the dialog is open. `[ OK ]` saves;
   `[ Cancel ]` or `Esc` brings back the values it opened with. The PIN fields, the idle

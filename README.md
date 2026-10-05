@@ -262,7 +262,7 @@ a window beside, `_` below, `<` `>` move a stream between windows, `Alt+arrows` 
 dragged divider resize, a title dragged onto a window's edge splits it and onto its
 centre adds a tab, and dropped anywhere else it becomes a floating window (`Alt+F` does
 the same, and docks it back). A floating window lies over the others: drag its title to
-move it and its bottom-right corner to resize it; every window can float, leaving the
+move it, and any corner, its bottom row or its side borders to resize it; every window can float, leaving the
 dock empty. `[x]` at the top right of a window, or `Ctrl+W`, closes its stream; after the
 last one (or when started with nothing to open) the workspace is empty. `o` opens a file
 through a folder browser, `,` the Settings (changes apply at once; `Esc` goes back), `Shift+T` the next theme, `#` the line numbers of the stream (Settings
