@@ -472,6 +472,8 @@ pub struct App {
     last_engine_poll: Option<Instant>,
     /// Clickable rectangles of the last frame.
     pub hits: HitMap,
+    /// CPU and memory for the top bar (`telemetry_enabled`), read once a second.
+    telemetry: Telemetry,
     clipboard: Clipboard,
     /// Last left click on a row (when, stream, line), to tell a double click.
     last_click: Option<(Instant, usize, usize)>,
@@ -559,6 +561,7 @@ impl App {
             idle_poll: Duration::from_millis(250),
             last_engine_poll: None,
             hits: HitMap::default(),
+            telemetry: Telemetry::default(),
             clipboard: Clipboard::default(),
             last_click: None,
             drag: None,
@@ -803,6 +806,12 @@ impl App {
                 tab.engine.poll_updates();
             }
         }
+        // Without a configuration (tests, the benchmark) there are no meters.
+        let telemetry_on = self
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.config.telemetry_enabled);
+        let telemetry = telemetry_on && self.telemetry.refresh();
         let listed = self.picker.as_mut().is_some_and(|p| p.pull());
         for i in self.visible_tabs() {
             let tab = &mut self.tabs[i];
@@ -872,7 +881,7 @@ impl App {
         let sig = self.signature();
         let changed = sig != self.last_signature;
         self.last_signature = sig;
-        changed || listed || global_applied || idle_locked
+        changed || listed || global_applied || idle_locked || telemetry
     }
 
     /// Background work in flight: the loop then polls a little faster.
@@ -1844,6 +1853,28 @@ impl App {
         self.message = Some(format!("Theme: {}", next.name()));
     }
 
+    /// Play / Pause of the top bar: every stream is watched and follows (a compressed
+    /// one is only watched), or none is, as the GUI's toolbar does.
+    fn play_all(&mut self, on: bool) {
+        for tab in &mut self.tabs {
+            tab.engine.is_watching = on;
+            if !on || tab.engine.compressed.is_none() {
+                tab.engine.follow_tail = on;
+            }
+            if tab.engine.follow_tail {
+                tab.pin_cursor();
+            }
+        }
+        self.message = Some(
+            if on {
+                "Following every stream"
+            } else {
+                "Every stream paused"
+            }
+            .into(),
+        );
+    }
+
     /// The configuration of the run (the defaults when there is none, as in tests).
     fn settings_mut(&mut self) -> &mut crate::tui::workspace::Settings {
         self.settings.get_or_insert_with(Default::default)
@@ -2785,6 +2816,7 @@ impl App {
                 Action::EditGlobal => self.open_global(),
                 Action::ToggleGlobal => self.toggle_global(),
                 Action::CycleTheme => self.cycle_theme(),
+                Action::PlayAll | Action::PauseAll => {}
                 _ => self.message = Some(NO_FILE.into()),
             }
             return;
@@ -2829,6 +2861,7 @@ impl App {
             }
             Action::TimeRange => self.open_time_range(),
             Action::CycleTheme => self.cycle_theme(),
+            Action::PlayAll | Action::PauseAll => self.play_all(action == Action::PlayAll),
             Action::Settings => self.open_settings(),
             Action::EditRules => self.open_rules(),
             Action::Presets => self.open_presets(),
@@ -3087,6 +3120,10 @@ impl App {
                     self.message = None;
                     self.apply(*action);
                 }
+            }
+            Target::TopButton(action) => {
+                self.message = None;
+                self.apply(action);
             }
             Target::ListItem(i) if self.time_range.is_some() => {
                 if let Some(d) = self.time_range.as_mut() {
@@ -3559,12 +3596,14 @@ impl App {
         // The theme's background behind everything (the terminal's own at 16 colours).
         frame.render_widget(Block::default().style(self.palette.screen()), frame.area());
         let strip = if self.tabs.len() > 1 { 1 } else { 0 };
-        let [tabs_area, main_area, status_area] = Layout::vertical([
+        let [top_area, tabs_area, main_area, status_area] = Layout::vertical([
+            Constraint::Length(top_bar_rows(frame.area().height)),
             Constraint::Length(strip),
             Constraint::Min(3),
             Constraint::Length(3),
         ])
         .areas(frame.area());
+        self.draw_top_bar(frame, top_area);
         if strip > 0 {
             self.draw_tabs(frame, tabs_area);
         }
@@ -3618,6 +3657,145 @@ impl App {
         if self.interface_switch.is_some() {
             self.draw_interface_switch(frame, main_area);
         }
+    }
+
+    /// The top bar, as the GUI's title bar and toolbar. First row: the name, version and
+    /// session on the left; the CPU and memory meters (`telemetry_enabled`), the global
+    /// filter and the command palette on the right. Second row (when the terminal has
+    /// room): Open, Sessions, the highlight rules with their count, Play, Pause and
+    /// Settings, and Help on the right. Every button is clickable and names its key.
+    fn draw_top_bar(&mut self, frame: &mut Frame, area: Rect) {
+        if area.height == 0 {
+            return;
+        }
+        let accent = Style::default()
+            .fg(self.palette.accent())
+            .add_modifier(Modifier::BOLD);
+        let dim = Style::default().fg(self.palette.dim());
+        let ascii = self.palette.ascii;
+        let config = self.settings.as_ref().map(|s| &s.config);
+        let mut title = format!(" FastTail v{}", env!("CARGO_PKG_VERSION"));
+        if let Some(file) = config.and_then(|c| c.current_session.as_deref()) {
+            let dot = if ascii { "-" } else { "·" };
+            title.push_str(&format!(
+                " {dot} {}",
+                crate::session::Session::name_of(file)
+            ));
+        }
+        let applied = config.is_some_and(|c| c.global_filter.is_applied());
+        let rules = config.map_or(0, |c| {
+            c.highlight_rules
+                .iter()
+                .filter(|r| r.enabled && !r.pattern.is_empty())
+                .count()
+        });
+        let telemetry = config
+            .is_some_and(|c| c.telemetry_enabled)
+            .then(|| self.telemetry.text(ascii))
+            .flatten();
+
+        let row = Rect::new(area.x, area.y, area.width, 1);
+        let mut right: Vec<TopItem> = Vec::new();
+        if let Some(text) = telemetry {
+            right.push(TopItem::Text(text, dim));
+        }
+        let global = if applied { "Global on" } else { "Global off" };
+        right.push(TopItem::Button(
+            "F",
+            global.into(),
+            Action::EditGlobal,
+            applied,
+        ));
+        right.push(TopItem::Button(
+            ":",
+            "Palette".into(),
+            Action::Palette,
+            false,
+        ));
+        let left = vec![TopItem::Text(title, accent)];
+        self.draw_top_row(frame, row, &left, &right);
+
+        if area.height < 2 {
+            return;
+        }
+        let (play, pause) = if ascii {
+            ("> Play", "|| Pause")
+        } else {
+            ("▶ Play", "⏸ Pause")
+        };
+        let left = vec![
+            TopItem::Button("o", "Open".into(), Action::OpenFile, false),
+            TopItem::Button("O", "Sessions".into(), Action::OpenSession, false),
+            TopItem::Button("r", format!("Rules ({rules})"), Action::EditRules, false),
+            TopItem::Button("", play.into(), Action::PlayAll, false),
+            TopItem::Button("", pause.into(), Action::PauseAll, false),
+            TopItem::Button(",", "Settings".into(), Action::Settings, false),
+        ];
+        let right = vec![TopItem::Button(
+            "?",
+            "Help".into(),
+            Action::ToggleHelp,
+            false,
+        )];
+        let row = Rect::new(area.x, area.y + 1, area.width, 1);
+        self.draw_top_row(frame, row, &left, &right);
+    }
+
+    /// One row of the top bar: `left` from the left edge, `right` against the right one,
+    /// as many items as fit (the right ones first, they hold the state).
+    fn draw_top_row(&mut self, frame: &mut Frame, row: Rect, left: &[TopItem], right: &[TopItem]) {
+        let bracket = Style::default().fg(self.palette.dim());
+        let key = Style::default()
+            .fg(self.palette.accent())
+            .add_modifier(Modifier::BOLD);
+        let on = Style::default()
+            .fg(self.palette.accent())
+            .add_modifier(Modifier::BOLD | Modifier::REVERSED);
+        // The meters go first when the left side would have less than 24 cells.
+        let mut right = right;
+        let width = |items: &[TopItem]| -> u16 { items.iter().map(|i| i.width() + 1).sum() };
+        while right.len() > 1
+            && matches!(right[0], TopItem::Text(..))
+            && width(right) + 24 > row.width
+        {
+            right = &right[1..];
+        }
+        let right_x = row.right().saturating_sub(width(right)).max(row.x);
+        let buf = frame.buffer_mut();
+        let mut place = |items: &[TopItem], mut x: u16, end: u16, hits: &mut HitMap| {
+            for item in items {
+                // Text is cut to the room left; a button is drawn whole or not at all.
+                let w = match item {
+                    TopItem::Text(..) => item.width().min(end.saturating_sub(x)),
+                    TopItem::Button(..) => item.width(),
+                };
+                if w == 0 || x + w > end {
+                    break;
+                }
+                match item {
+                    TopItem::Text(text, style) => {
+                        buf.set_stringn(x, row.y, text, w as usize, *style);
+                    }
+                    TopItem::Button(k, label, action, active) => {
+                        let mut cx = x;
+                        buf.set_string(cx, row.y, "[", bracket);
+                        cx += 1;
+                        if !k.is_empty() {
+                            buf.set_string(cx, row.y, *k, key);
+                            cx += k.chars().count() as u16 + 1;
+                        }
+                        let style = if *active { on } else { Style::default() };
+                        buf.set_string(cx, row.y, label, style);
+                        cx += unicode_width::UnicodeWidthStr::width(label.as_str()) as u16;
+                        buf.set_string(cx, row.y, "]", bracket);
+                        hits.top_buttons.push((Rect::new(x, row.y, w, 1), *action));
+                    }
+                }
+                x += w + 1;
+            }
+        };
+        place(right, right_x + 1, row.right(), &mut self.hits);
+        place(left, row.x, right_x, &mut self.hits);
     }
 
     /// The strip of stream titles, drawn span by span so each title's cells are known
@@ -5527,7 +5705,6 @@ fn panel_name(tab: &DockTab) -> String {
 /// The buttons of the status bar: key, label, command; drawn as `[? help]`, as many as
 /// fit the width.
 const STATUS: &[(&str, &str, Action)] = &[
-    ("?", "help", Action::ToggleHelp),
     ("/", "search", Action::StartSearch),
     ("n", "next", Action::SearchNext),
     ("i", "include", Action::EditInclude),
@@ -5535,11 +5712,102 @@ const STATUS: &[(&str, &str, Action)] = &[
     ("t", "time", Action::TimeRange),
     ("Space", "follow", Action::ToggleFollow),
     ("b", "mark", Action::ToggleBookmark),
-    ("o", "open", Action::OpenFile),
-    (",", "settings", Action::Settings),
     ("Shift+T", "theme", Action::CycleTheme),
     ("q", "quit", Action::Quit),
 ];
+
+/// Rows of the top bar: the title row always, the command row from 16 rows up (a
+/// smaller terminal keeps them for the log; the keys still work).
+fn top_bar_rows(height: u16) -> u16 {
+    if height >= 16 {
+        2
+    } else {
+        1
+    }
+}
+
+/// An item of the top bar: text, or a `[key label]` button (shown reversed when `on`).
+enum TopItem {
+    Text(String, Style),
+    Button(&'static str, String, Action, bool),
+}
+
+impl TopItem {
+    /// Its width in terminal cells.
+    fn width(&self) -> u16 {
+        let w = unicode_width::UnicodeWidthStr::width;
+        match self {
+            TopItem::Text(text, _) => w(text.as_str()) as u16,
+            TopItem::Button(k, label, _, _) => {
+                let key = if k.is_empty() { 0 } else { w(k) + 1 };
+                (2 + key + w(label.as_str())) as u16
+            }
+        }
+    }
+}
+
+/// The CPU and memory meters of the top bar, as the GUI's title bar shows them, read at
+/// most once a second.
+#[derive(Default)]
+struct Telemetry {
+    system: Option<sysinfo::System>,
+    read_at: Option<Instant>,
+    cpu: f32,
+    used_mb: u64,
+    total_mb: u64,
+}
+
+impl Telemetry {
+    /// Reads the meters again when a second has passed. Returns whether what the bar
+    /// shows changed.
+    fn refresh(&mut self) -> bool {
+        if self
+            .read_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+        {
+            return false;
+        }
+        self.read_at = Some(Instant::now());
+        let system = self.system.get_or_insert_with(|| {
+            let mut s = sysinfo::System::new_with_specifics(
+                sysinfo::RefreshKind::nothing()
+                    .with_cpu(sysinfo::CpuRefreshKind::everything())
+                    .with_memory(sysinfo::MemoryRefreshKind::everything()),
+            );
+            s.refresh_cpu_usage();
+            s
+        });
+        system.refresh_cpu_usage();
+        system.refresh_memory();
+        let before = (self.cpu.round() as u32, self.used_mb / 100, self.total_mb);
+        self.cpu = system.global_cpu_usage();
+        self.used_mb = system.used_memory() / (1024 * 1024);
+        self.total_mb = system.total_memory() / (1024 * 1024);
+        before != (self.cpu.round() as u32, self.used_mb / 100, self.total_mb)
+    }
+
+    /// `CPU ██░░░░  12%  RAM ███░░░ 3.1/16 GB`, or nothing before the first reading.
+    fn text(&self, ascii: bool) -> Option<String> {
+        if self.total_mb == 0 {
+            return None;
+        }
+        let (full, empty) = if ascii { ('#', '-') } else { ('█', '░') };
+        let bar = |fraction: f32| -> String {
+            let n = ((fraction.clamp(0.0, 1.0) * 6.0).round() as usize).min(6);
+            std::iter::repeat_n(full, n)
+                .chain(std::iter::repeat_n(empty, 6 - n))
+                .collect()
+        };
+        let used = self.used_mb as f32 / 1024.0;
+        let total = (self.total_mb as f32 / 1024.0).max(1.0);
+        Some(format!(
+            "CPU {} {:>3.0}%  RAM {} {used:.1}/{total:.0} GB",
+            bar(self.cpu / 100.0),
+            self.cpu,
+            bar(used / total),
+        ))
+    }
+}
 
 /// The next entry of the help that runs a command, from `from` in `step` direction
 /// (wrapping); `from` itself when none.
@@ -6147,8 +6415,9 @@ mod tests {
         terminal.draw(|f| app.draw(f)).unwrap();
         let buf = terminal.backend().buffer();
         let reversed = |y: u16| buf[(5, y)].modifier.contains(Modifier::REVERSED);
-        // Rows 1-3 of the screen hold lines 1-3; the cursor is on the second.
-        assert!(!reversed(1) && reversed(2) && !reversed(3));
+        // Rows 2-4 of the screen (under the top bar and the border) hold lines 0-2;
+        // the cursor is on line 1.
+        assert!(!reversed(2) && reversed(3) && !reversed(4));
     }
 
     #[test]
@@ -7262,12 +7531,63 @@ mod tests {
     }
 
     #[test]
+    fn the_top_bar_has_the_title_and_the_guis_commands_which_click() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
+        let screen = render(&mut app, 120, 20);
+        assert!(screen[0].starts_with(" FastTail v"), "{screen:#?}");
+        assert!(
+            screen[0].contains("[F Global off]") && screen[0].ends_with("[: Palette]"),
+            "{screen:#?}"
+        );
+        let tools = &screen[1];
+        for label in [
+            "[o Open]",
+            "[O Sessions]",
+            "[r Rules (0)]",
+            "[▶ Play]",
+            "[⏸ Pause]",
+            "[, Settings]",
+        ] {
+            assert!(tools.contains(label), "{label}: {tools}");
+        }
+        assert!(tools.trim_end().ends_with("[? Help]"), "{tools}");
+        let click_on = |app: &mut App, action: Action| {
+            let (r, _) = *app
+                .hits
+                .top_buttons
+                .iter()
+                .find(|(_, a)| *a == action)
+                .unwrap();
+            app.on_mouse(click(r.x + 1, r.y));
+        };
+        // Pause stops every stream; Play makes them follow again.
+        click_on(&mut app, Action::PauseAll);
+        assert!(app
+            .tabs
+            .iter()
+            .all(|t| !t.engine.follow_tail && !t.engine.is_watching));
+        render(&mut app, 120, 20);
+        click_on(&mut app, Action::PlayAll);
+        assert!(app
+            .tabs
+            .iter()
+            .all(|t| t.engine.follow_tail && t.engine.is_watching));
+        render(&mut app, 120, 20);
+        click_on(&mut app, Action::OpenFile);
+        assert!(app.browser.is_some());
+        // A short terminal keeps only the title row.
+        app.browser = None;
+        let screen = render(&mut app, 120, 12);
+        assert!(screen[0].contains("FastTail v") && !screen[1].contains("[o Open]"));
+    }
+
+    #[test]
     fn the_status_bar_buttons_are_bracketed_and_clickable() {
         let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
         let screen = render(&mut app, 120, 20);
         let bar = &screen[screen.len() - 2];
         assert!(
-            bar.contains("[? help]") && bar.contains("[/ search]"),
+            bar.contains("[/ search]") && bar.contains("[q quit]"),
             "{bar}"
         );
         let (rect, _) = *app
@@ -7292,11 +7612,13 @@ mod tests {
     fn stream_window_has_borders_title_and_counts() {
         let (mut app, _dir) = app_with(&[("test.log", LOG)], false);
         let screen = render(&mut app, 70, 12);
-        // One file: no tab strip, the window starts on the first row, double-bordered.
-        assert!(screen[0].starts_with('╔'), "{screen:#?}");
-        assert!(screen[0].contains("[#1] test.log"), "{screen:#?}");
-        assert!(screen[0].contains("FOLLOW"), "{screen:#?}");
-        assert!(screen[1].starts_with('║') && screen[1].contains("INFO start"));
+        // The top bar's title row (12 rows: no command row), then one file: no tab
+        // strip, the window starts on the second row, double-bordered.
+        assert!(screen[0].contains("FastTail v"), "{screen:#?}");
+        assert!(screen[1].starts_with('╔'), "{screen:#?}");
+        assert!(screen[1].contains("[#1] test.log"), "{screen:#?}");
+        assert!(screen[1].contains("FOLLOW"), "{screen:#?}");
+        assert!(screen[2].starts_with('║') && screen[2].contains("INFO start"));
         assert!(screen.iter().any(|l| l.contains("WARN slow disk")));
         // Bottom border of the window: the counts on the left, the filter state right.
         let bottom = &screen[8];
@@ -7312,8 +7634,8 @@ mod tests {
         let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], true);
         app.apply(Action::SplitRight);
         let screen = render(&mut app, 80, 14);
-        // Tab strip on row 0, then two windows side by side, the focused one with `=`.
-        let (left, right) = screen[1].split_at(40);
+        // The top bar's title row, the tab strip, then two windows side by side, the focused one with `=`.
+        let (left, right) = screen[2].split_at(40);
         assert!(
             left.starts_with("+ [#1] a.log") && left.contains("=="),
             "{screen:#?}"
@@ -7326,7 +7648,7 @@ mod tests {
         // Tab moves the focus: now the right window has the `=` border.
         app.apply(Action::NextTab);
         let screen = render(&mut app, 80, 14);
-        let (left, right) = screen[1].split_at(40);
+        let (left, right) = screen[2].split_at(40);
         assert!(left.contains("--") && right.contains("=="), "{screen:#?}");
         // The search prompt opens as a centred dialog over the windows.
         app.apply(Action::StartSearch);
@@ -7366,13 +7688,13 @@ mod tests {
         assert!(app.on_mouse(click(60, 3)));
         assert_eq!(app.active, 1);
         let screen = render(&mut app, 80, 14);
-        let (left, right) = screen[1].split_at(screen[1].char_indices().nth(40).unwrap().0);
+        let (left, right) = screen[2].split_at(screen[2].char_indices().nth(40).unwrap().0);
         assert!(
             left.starts_with('┌') && right.starts_with('╔'),
             "{screen:#?}"
         );
         // A click on the strip title of stream 1 brings the focus back.
-        assert!(app.on_mouse(click(2, 0)));
+        assert!(app.on_mouse(click(2, 1)));
         assert_eq!(app.active, 0);
     }
 
@@ -7446,7 +7768,7 @@ mod tests {
         assert_eq!(app.dock.find_stream(&c), Some(vec![false]));
         assert_eq!(app.dock.find_stream(&b), Some(vec![true]));
         let screen = render(&mut app, 80, 14);
-        assert!(screen[1].contains("[#1] a.log") && screen[1].contains("3:c.log"));
+        assert!(screen[2].contains("[#1] a.log") && screen[2].contains("3:c.log"));
 
         // The divider between the windows, dragged 8 columns right: 48 of 80.
         app.on_mouse(click(39, 5));
@@ -7459,7 +7781,7 @@ mod tests {
         assert_eq!((row[47], row[48]), ('║', '│'), "{screen:#?}");
 
         // b's title dropped on the left edge of the other window: b goes left of it.
-        assert!(app.on_mouse(click(70, 1)));
+        assert!(app.on_mouse(click(70, 2)));
         assert_eq!(app.active, 1);
         assert!(app.on_mouse(drag(5, 8)));
         let screen = render(&mut app, 80, 14);
@@ -7474,15 +7796,15 @@ mod tests {
 
         // A click on c's tab in the border of the right window shows and focuses it.
         let screen = render(&mut app, 80, 14);
-        let Some(col) = screen[1].find("3:c.log") else {
+        let Some(col) = screen[2].find("3:c.log") else {
             panic!("{screen:#?}");
         };
-        let col = screen[1][..col].chars().count() as u16;
-        assert!(app.on_mouse(click(col + 1, 1)));
-        assert!(app.on_mouse(release(col + 1, 1)));
+        let col = screen[2][..col].chars().count() as u16;
+        assert!(app.on_mouse(click(col + 1, 2)));
+        assert!(app.on_mouse(release(col + 1, 2)));
         assert_eq!(app.active, 2);
         let screen = render(&mut app, 80, 14);
-        assert!(screen[1].contains("[#3] c.log"), "{screen:#?}");
+        assert!(screen[2].contains("[#3] c.log"), "{screen:#?}");
     }
 
     #[test]
@@ -7522,7 +7844,7 @@ mod tests {
         assert_eq!(app.message.as_deref(), Some("One window: nothing to close"));
         // Every stream is still drawn somewhere.
         let screen = render(&mut app, 80, 14);
-        assert!(screen[1].contains("[#3] c.log"), "{screen:#?}");
+        assert!(screen[2].contains("[#3] c.log"), "{screen:#?}");
     }
 
     #[test]
@@ -7637,7 +7959,7 @@ mod tests {
         assert_eq!(app.open_paths(), vec![c.clone()]);
         assert_eq!(app.active, 0);
         let screen = render(&mut app, 80, 14);
-        assert!(screen[0].contains("[#1] c.log"), "{screen:#?}");
+        assert!(screen[1].contains("[#1] c.log"), "{screen:#?}");
         // The last one closes too: an empty workspace, where o opens a file.
         app.apply(Action::CloseStream);
         assert!(app.tabs.is_empty());
@@ -7735,11 +8057,12 @@ mod tests {
         assert!(app.floats.is_empty());
         assert!(app.dock.find_stream(&a).is_some());
         let screen = render(&mut app, 100, 30);
-        let col = screen[1]
+        // Under the top bar's two rows and the tab strip.
+        let col = screen[3]
             .find("[#1] a.log")
-            .map(|i| screen[1][..i].chars().count());
+            .map(|i| screen[3][..i].chars().count());
         let col = col.expect("a's title in the dock") as u16;
-        assert!(app.on_mouse(click(col + 2, 1)));
+        assert!(app.on_mouse(click(col + 2, 3)));
         assert!(app.on_mouse(drag(30, 12)));
         let screen = render(&mut app, 100, 30);
         assert!(
@@ -7758,18 +8081,18 @@ mod tests {
         app.apply(Action::SplitRight);
         let screen = render(&mut app, 80, 14);
         // Each window has its [x], top right, before the corner.
-        let row: Vec<char> = screen[1].chars().collect();
+        let row: Vec<char> = screen[2].chars().collect();
         assert_eq!(row[36..39].iter().collect::<String>(), "[x]", "{screen:#?}");
         assert_eq!(row[76..79].iter().collect::<String>(), "[x]", "{screen:#?}");
         // A click on b's [x] closes b; its window goes with it.
-        assert!(app.on_mouse(click(77, 1)));
+        assert!(app.on_mouse(click(77, 2)));
         assert_eq!(app.tabs.len(), 1);
         assert_eq!(app.tabs[0].title, "a.log");
         assert_eq!(app.dock.leaf_paths(), vec![Vec::<bool>::new()]);
         // The last stream closes too, as with Ctrl+W (one stream: no strip, the window
-        // on row 0).
+        // under the top bar).
         render(&mut app, 80, 14);
-        assert!(app.on_mouse(click(77, 0)));
+        assert!(app.on_mouse(click(77, 1)));
         assert!(app.tabs.is_empty(), "{:?}", app.hits.close_buttons);
         render(&mut app, 80, 14);
         assert!(app.hits.close_buttons.is_empty());

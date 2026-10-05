@@ -116,6 +116,10 @@ pub enum Action {
     PrevError,
     NextWarn,
     PrevWarn,
+    /// The top bar's Play / Pause, as the GUI's toolbar: every stream follows and is
+    /// watched, or none is.
+    PlayAll,
+    PauseAll,
 }
 
 /// Maps a key of the log view. Only presses count: the Windows console also reports
