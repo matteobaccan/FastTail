@@ -1688,7 +1688,7 @@ impl FastTailApp {
                 if let Some(follow) = cli.follow {
                     engine.follow_tail = follow && !engine.is_compressed();
                 }
-                apply_cli_time_window(engine, cli.since.as_deref(), cli.until.as_deref());
+                crate::cli::apply_time_window(engine, cli.since.as_deref(), cli.until.as_deref());
             }
         }
     }
@@ -1760,7 +1760,7 @@ impl FastTailApp {
         if let Some(follow) = options.follow {
             engine.follow_tail = follow;
         }
-        apply_cli_time_window(
+        crate::cli::apply_time_window(
             &mut engine,
             options.since.as_deref(),
             options.until.as_deref(),
@@ -5512,21 +5512,6 @@ impl StdinOptions {
     }
 }
 
-/// Applies `--since` / `--until` to a stream opened from the command line, as if typed in
-/// the time range popup. A relative time (`-3h`, `now`) is turned into the instant it
-/// names now, written as a timestamp with its milliseconds: exact on both sides (a "to"
-/// is not widened to the end of its second), and fixed where it was put, not sliding.
-fn apply_cli_time_window(engine: &mut TailEngine, since: Option<&str>, until: Option<&str>) {
-    if since.is_none() && until.is_none() {
-        return;
-    }
-    // As typed in the popup: a relative value (`-15m`) makes a live window, which slides
-    // with the clock on the stream's display clock.
-    let text = |value: Option<&str>| value.unwrap_or_default().to_string();
-    let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
-    engine.time_range_error = !from_ok || !to_ok;
-}
-
 #[cfg(test)]
 mod tests {
     use super::allowed_while_locked;
@@ -5557,7 +5542,7 @@ mod tests {
         let mut engine = crate::tail_engine::TailEngine::open(&path).unwrap();
         engine.set_time_display(TimeDisplay::Utc);
         engine.ensure_timestamps();
-        super::apply_cli_time_window(&mut engine, Some("-1h"), None);
+        crate::cli::apply_time_window(&mut engine, Some("-1h"), None);
         assert!(!engine.time_range_error);
         let visible: Vec<usize> = (0..engine.visible_line_count())
             .filter_map(|r| engine.get_actual_line_idx(r))
@@ -5566,7 +5551,7 @@ mod tests {
         // Kept as typed: the window opened from the command line slides with the clock.
         assert_eq!(engine.time_from_text, "-1h");
         assert!(engine.time_window_live());
-        super::apply_cli_time_window(&mut engine, Some("nonsense"), None);
+        crate::cli::apply_time_window(&mut engine, Some("nonsense"), None);
         assert!(engine.time_range_error);
     }
 

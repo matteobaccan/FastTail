@@ -2,32 +2,34 @@
 // Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
 // SPDX-License-Identifier: MIT
 
-//! Command line: `fasttail [OPTIONS] [PATH...]`.
+//! Command line: `fasttail [OPTIONS] [PATH...]`, shared by `fasttail` and `fasttail-tui`.
 //!
 //! Hand-written parser: a handful of options and positional paths do not justify a
 //! dependency. Paths are resolved against the current directory at parse time. A PATH of
 //! exactly `-` means standard input (`stdin`), before or after `--` as in `cat`; a file
-//! named `-` is reachable as `./-`.
+//! named `-` is reachable as `./-`. Both executables accept every option: the terminal
+//! options are ignored by the window, `--renderer` by the terminal.
 
 use std::path::{Path, PathBuf};
 
+use crate::config::Interface;
 use crate::log_level::LogLevel;
 use crate::renderer::RendererChoice;
+use crate::theme::CyberTheme;
 
-pub const USAGE: &str = "\
-FastTail - ultra-fast multi-stream log monitor
-
-USAGE:
-    fasttail [OPTIONS] [PATH...]
-    fasttail --print [OPTIONS] [PATH...]
-
+/// The arguments and options both executables list, in the same words.
+macro_rules! shared_usage {
+    () => {
+        "
 ARGS:
     PATH...              Log files to open in addition to the restored workspace
     -                    Read standard input (`command | fasttail -`); piped input is
                          also picked up without it
 
 OPTIONS:
-    --gui                Accepted and ignored: FastTail is GUI-only (kept for old shortcuts)
+    --tui                Start the terminal interface (on Windows run fasttail-tui.exe)
+    --gui                Start the graphical interface, even with interface=tui set in
+                         fasttail.ini
     --fresh              Start with an empty workspace instead of the saved one
     --filter <TEXT>      Include filter applied to the files opened from the command line
                          (given twice, the last one counts)
@@ -39,11 +41,19 @@ OPTIONS:
     --until <TIME>       End of that time window, in the same forms
     --follow             Enable follow mode on the files opened from the command line
     --no-follow          Disable follow mode on those files
-    --renderer <NAME>    Rendering backend: auto (default), glow, wgpu, software
+    --renderer <NAME>    Rendering backend of the window: auto (default), glow, wgpu,
+                         software
     --config <FILE>      Use this configuration file (same as FASTTAIL_CONFIG)
     --session <FILE>     Load this session file (*.fasttail-session.ini) at startup
     -V, --version        Print the version and exit
     -h, --help           Print this help and exit
+
+TERMINAL OPTIONS (used by the terminal interface, ignored by the window):
+    --split              Start with the first two files side by side
+    --search <TEXT>      Search the first file and jump to the first hit
+    --theme <NAME>       tron, matrix, blade, light or commander: overrides fasttail.ini
+    --ascii              Draw borders with +-| instead of box characters
+    --no-mouse           Leave the mouse to the terminal (native text selection)
 
 PRINT MODE:
     --print              Write the lines that pass the filters to standard output and exit,
@@ -63,7 +73,40 @@ PRINT MODE:
     --no-prefix          Do not prefix each line with its file name when several are given
     Exit codes: 0 lines printed, 1 no line matched, 2 usage error, 3 an input could not be
     read (the others are still printed)
-";
+"
+    };
+}
+
+/// The usage of `fasttail`.
+pub const USAGE: &str = concat!(
+    "FastTail - ultra-fast multi-stream log monitor
+
+USAGE:
+    fasttail [OPTIONS] [PATH...]
+    fasttail --print [OPTIONS] [PATH...]
+",
+    shared_usage!()
+);
+
+/// The usage of `fasttail-tui`: the same options, and the environment it reads.
+pub const TUI_USAGE: &str = concat!(
+    "fasttail-tui - FastTail in the terminal
+
+USAGE:
+    fasttail-tui [OPTIONS] [PATH...]
+    command | fasttail-tui [OPTIONS] -
+    fasttail-tui --print [OPTIONS] [PATH...]
+",
+    shared_usage!(),
+    "
+ENVIRONMENT:
+    FASTTAIL_CONFIG      Configuration file, as --config
+    FASTTAIL_TUI_COLORS  16, 256 or truecolor: overrides the colour detection
+    FASTTAIL_TUI_ASCII   set: same as --ascii
+
+Press ? or F1 in the viewer for the keys.
+"
+);
 
 /// When print mode colours its output (`--color`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -143,9 +186,16 @@ pub struct CliArgs {
     pub config: Option<PathBuf>,
     /// Session file to load at startup, replacing the restored workspace.
     pub session: Option<PathBuf>,
-    /// Accepted and ignored: FastTail has been GUI-only since 0.7.1, and the flag is
-    /// kept so shortcuts and scripts written for the older build keep working.
+    /// `--gui` / `--tui`: the interface asked for, over `interface` in `fasttail.ini`
+    /// (`CliArgs::interface`). Both together are a usage error.
     pub gui: bool,
+    pub tui: bool,
+    /// Terminal options: used by the terminal interface, ignored by the window.
+    pub split: bool,
+    pub search: Option<String>,
+    pub theme: Option<CyberTheme>,
+    pub ascii: bool,
+    pub no_mouse: bool,
     pub show_version: bool,
     pub show_help: bool,
 }
@@ -212,6 +262,19 @@ impl CliArgs {
             match name {
                 "--" => only_paths = true,
                 "--gui" => out.gui = true,
+                "--tui" => out.tui = true,
+                "--split" => out.split = true,
+                "--ascii" => out.ascii = true,
+                "--no-mouse" => out.no_mouse = true,
+                "--search" => out.search = Some(value("text")?),
+                "--theme" => {
+                    let v = value("name")?;
+                    out.theme = Some(parse_theme(&v).ok_or_else(|| {
+                        CliError::Usage(format!(
+                            "unknown theme '{v}' (expected tron, matrix, blade, light or commander)"
+                        ))
+                    })?);
+                }
                 "--fresh" => out.fresh = true,
                 "--follow" => out.follow = Some(true),
                 "--no-follow" => out.follow = Some(false),
@@ -300,10 +363,27 @@ impl CliArgs {
         self.exclude.last()
     }
 
-    /// Checks what the options mean together: with `--print`, at most `MAX_FILTER_TERMS`
-    /// terms per side; without it, no print-only option.
+    /// The interface to start: `--tui` or `--gui`, else `configured` (`interface` in
+    /// `fasttail.ini`).
+    pub fn interface(&self, configured: Interface) -> Interface {
+        if self.tui {
+            Interface::Tui
+        } else if self.gui {
+            Interface::Gui
+        } else {
+            configured
+        }
+    }
+
+    /// Checks what the options mean together: one interface at most; with `--print`, at
+    /// most `MAX_FILTER_TERMS` terms per side; without it, no print-only option.
     fn validate(&self) -> Result<(), CliError> {
         use crate::scan_job::MAX_FILTER_TERMS;
+        if self.tui && self.gui {
+            return Err(CliError::Usage(
+                "--tui and --gui cannot be given together".to_string(),
+            ));
+        }
         for (name, terms) in [("--filter", &self.filter), ("--exclude", &self.exclude)] {
             if self.print && terms.len() > MAX_FILTER_TERMS {
                 return Err(CliError::Usage(format!(
@@ -330,6 +410,34 @@ impl CliArgs {
         }
         Ok(())
     }
+}
+
+/// The theme `--theme` names, in any case.
+fn parse_theme(name: &str) -> Option<CyberTheme> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "tron" => Some(CyberTheme::Tron),
+        "matrix" => Some(CyberTheme::Matrix),
+        "blade" => Some(CyberTheme::Blade),
+        "light" => Some(CyberTheme::Light),
+        "commander" => Some(CyberTheme::Commander),
+        _ => None,
+    }
+}
+
+/// Applies `--since` / `--until` to a stream opened from the command line, as typed in
+/// the time range popup: a relative value (`-15m`) makes a live window, which slides with
+/// the clock on the stream's display clock. Both interfaces call it.
+pub fn apply_time_window(
+    engine: &mut crate::tail_engine::TailEngine,
+    since: Option<&str>,
+    until: Option<&str>,
+) {
+    if since.is_none() && until.is_none() {
+        return;
+    }
+    let text = |value: Option<&str>| value.unwrap_or_default().to_string();
+    let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
+    engine.time_range_error = !from_ok || !to_ok;
 }
 
 fn resolve(arg: &str, cwd: &Path) -> PathBuf {
@@ -449,9 +557,82 @@ mod tests {
     }
 
     #[test]
-    fn gui_flag() {
+    fn interface_flags_override_the_ini() {
         let a = CliArgs::parse(["--gui"], &cwd()).unwrap();
-        assert!(a.gui);
+        assert!(a.gui && !a.tui);
+        assert_eq!(a.interface(Interface::Tui), Interface::Gui);
+        let a = CliArgs::parse(["--tui", "app.log"], &cwd()).unwrap();
+        assert_eq!(a.interface(Interface::Gui), Interface::Tui);
+        let a = CliArgs::parse(["app.log"], &cwd()).unwrap();
+        assert_eq!(a.interface(Interface::Tui), Interface::Tui);
+        assert_eq!(a.interface(Interface::Gui), Interface::Gui);
+    }
+
+    #[test]
+    fn tui_and_gui_together_are_a_usage_error() {
+        assert!(usage_error(&["--tui", "--gui"]).contains("--tui and --gui"));
+        assert!(usage_error(&["--gui", "app.log", "--tui"]).contains("--tui and --gui"));
+    }
+
+    #[test]
+    fn terminal_options_are_accepted_by_every_executable() {
+        let a = CliArgs::parse(
+            [
+                "--split",
+                "--search",
+                "timeout",
+                "--theme=Matrix",
+                "--ascii",
+                "--no-mouse",
+                "app.log",
+            ],
+            &cwd(),
+        )
+        .unwrap();
+        assert!(a.split && a.ascii && a.no_mouse);
+        assert_eq!(a.search.as_deref(), Some("timeout"));
+        assert_eq!(a.theme, Some(CyberTheme::Matrix));
+        assert_eq!(a.paths, vec![cwd().join("app.log")]);
+        for (name, theme) in [
+            ("tron", CyberTheme::Tron),
+            ("blade", CyberTheme::Blade),
+            ("LIGHT", CyberTheme::Light),
+            ("commander", CyberTheme::Commander),
+        ] {
+            let a = CliArgs::parse(["--theme", name], &cwd()).unwrap();
+            assert_eq!(a.theme, Some(theme), "{name}");
+        }
+        assert!(usage_error(&["--theme", "neon"]).contains("neon"));
+        assert!(usage_error(&["--search"]).contains("--search"));
+        // The window ignores them, and they leave the rest alone.
+        let a = CliArgs::parse(["--no-mouse"], &cwd()).unwrap();
+        assert!(a.paths.is_empty() && !a.gui && !a.tui);
+    }
+
+    #[test]
+    fn both_usages_list_the_shared_and_terminal_options() {
+        for usage in [USAGE, TUI_USAGE] {
+            for option in [
+                "--tui",
+                "--gui",
+                "--fresh",
+                "--since",
+                "--renderer",
+                "--split",
+                "--search",
+                "--theme",
+                "--ascii",
+                "--no-mouse",
+                "--print",
+            ] {
+                assert!(usage.contains(option), "{option}");
+            }
+        }
+        assert!(TUI_USAGE.starts_with("fasttail-tui"));
+        assert!(
+            TUI_USAGE.contains("FASTTAIL_TUI_COLORS") && TUI_USAGE.contains("FASTTAIL_TUI_ASCII")
+        );
+        assert!(!USAGE.contains("FASTTAIL_TUI_COLORS"));
     }
 
     #[test]

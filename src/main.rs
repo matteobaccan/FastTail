@@ -357,6 +357,14 @@ fn parse_command_line() -> CliArgs {
         fasttail::print_mode::console::release();
         std::process::exit(code);
     }
+    if cli.tui {
+        // The hand-off to the terminal interface comes with tasks 5.2 and 5.4 of
+        // openspec/changes/tui-interface; until then the terminal executable is direct.
+        attach_parent_console();
+        eprintln!("fasttail: --tui: run fasttail-tui for the terminal interface");
+        fasttail::print_mode::console::release();
+        std::process::exit(2);
+    }
     if cli.stdin && fasttail::stdin_source::classify() != fasttail::stdin_source::StdinKind::Piped {
         // Reported now, while the parent console can still be attached; the rest of the
         // startup goes on, as for a missing file.

@@ -62,7 +62,7 @@
 
 ## 5. Interface selection and hand-offs
 
-- [ ] 5.1 `cli.rs`: `--tui`, `--gui`, both a usage error, terminal options accepted everywhere and ignored by the GUI
+- [x] 5.1 `cli.rs`: `--tui`, `--gui`, both a usage error, terminal options accepted everywhere and ignored by the GUI (`fasttail-tui` parses with `CliArgs` too, keeping only its hidden measurement options; `CliArgs::interface` resolves the flags over the ini; `cli::apply_time_window` is shared; until 5.2 to 5.4, `fasttail --tui` and `fasttail-tui --gui` name the other executable and exit 2)
 - [ ] 5.2 Windows `fasttail.exe` to terminal: `CreateProcessW` + `CREATE_NEW_CONSOLE` + `--handoff`; missing or failing executable opens the GUI with the error dialog; refusal with standard input; error-exit key wait after a hand-off
 - [ ] 5.3 Windows `fasttail-tui.exe --gui`: detached start of `fasttail.exe`, exit 0; missing: stderr message and exit 1
 - [ ] 5.4 Linux and macOS: terminal checks (stdout, `TERM`, stdin or `/dev/tty`), GUI fallback with the stderr line for `interface=tui`, exit 1 for `--tui`; terminal-only build answers `--gui` with exit 2 and the archive name

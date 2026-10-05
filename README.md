@@ -177,7 +177,8 @@ fasttail --print [OPTIONS] [PATH...]
   -                  read standard input (`command | fasttail -`); a file named `-`
                      is opened as `./-`
   --fresh            start with an empty workspace instead of the saved one
-  --gui              accepted and ignored (FastTail is GUI-only; kept for old shortcuts)
+  --tui / --gui      the interface to start, over `interface` in fasttail.ini (not
+                     both; for now `fasttail --tui` points to fasttail-tui)
   --filter <TEXT>    include filter for the files opened from the command line
                      (given more than once, the last one counts)
   --exclude <TEXT>   exclude filter for those files
@@ -193,6 +194,13 @@ fasttail --print [OPTIONS] [PATH...]
   -V, --version      print the version and exit
   -h, --help         print the usage and exit
   --                 end of options: what follows is a path (fasttail -- -h)
+
+terminal options, used by fasttail-tui and accepted and ignored by the window:
+  --split            start with the first two files side by side
+  --search <TEXT>    search the first file and jump to the first hit
+  --theme <NAME>     tron, matrix, blade, light or commander, over fasttail.ini
+  --ascii            draw borders with +-| instead of box characters
+  --no-mouse         leave the mouse to the terminal (native text selection)
 ```
 
 Example: `fasttail --fresh --filter ERROR app.log err.log`.
@@ -211,7 +219,11 @@ fasttail-tui app.log err.log          # two streams, as tabs of one window
 fasttail-tui --split app.log err.log  # side by side
 some-command | fasttail-tui           # standard input
 fasttail-tui --ascii --no-mouse app.log
+fasttail-tui --print --filter ERROR app.log  # print mode, as fasttail --print
 ```
+
+`fasttail-tui` takes every option of `fasttail` (`--since`, `--until`, `--follow`,
+`--print`, `--version`, ...); `--renderer` is accepted and ignored.
 
 `?` or `F1` lists every key as a menu (`Enter` runs one); the status bar shows the main
 commands as `[ ]` buttons for the mouse. Windows follow the GUI's dock: `s` or `|` opens
