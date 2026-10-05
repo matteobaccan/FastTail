@@ -115,7 +115,18 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             if e.is_watching { on } else { dim },
             BarChip::Monitor,
         ),
-        chip(if hex { "HEX" } else { "TXT" }.into(), on, BarChip::View),
+        chip(
+            if tab.is_asm() {
+                "ASM"
+            } else if hex {
+                "HEX"
+            } else {
+                "TXT"
+            }
+            .into(),
+            on,
+            BarChip::View,
+        ),
     ];
     if !hex {
         first.push(chip(

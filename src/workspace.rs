@@ -244,6 +244,13 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         engine.search_query = entry.search_query.clone();
         engine.update_search(&entry.search_query);
     }
+    if let Some(arch) = entry
+        .disasm_arch
+        .as_deref()
+        .and_then(crate::disasm::Arch::from_name)
+    {
+        engine.asm.arch = arch;
+    }
     // Context lines come from the matches: after the filters, before the groups.
     if entry.context_lines > 0 {
         engine.set_context_lines(entry.context_lines);
@@ -328,6 +335,8 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
             .is_on()
             .then(|| engine.collapse_mode().name().to_string()),
         context_lines: engine.context_lines(),
+        disasm_arch: (engine.asm.arch != crate::disasm::Arch::default())
+            .then(|| engine.asm.arch.name().to_string()),
         line_numbers: Some(engine.show_line_numbers),
         time_delta: Some(engine.show_time_delta),
         time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
@@ -460,6 +469,7 @@ pub fn save_changes(
         engine.context_lines_dirty = false;
         engine.view_columns_dirty = false;
         engine.fields_dirty = false;
+        engine.asm_dirty = false;
         return false;
     }
     let mut changed = false;
@@ -480,8 +490,10 @@ pub fn save_changes(
         || engine.collapse_mode_dirty
         || engine.context_lines_dirty
         || engine.view_columns_dirty
+        || engine.asm_dirty
         || (engine.fields_dirty && !defer_fields)
     {
+        engine.asm_dirty = false;
         engine.ansi_dirty = false;
         engine.timeline_dirty = false;
         engine.collapse_mode_dirty = false;

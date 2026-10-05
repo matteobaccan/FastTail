@@ -196,7 +196,7 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ 🌐 Global filter [✓]On Aa .* │ All of: [____][✖][+] │ None of: [____] │ ✖            │ ← global filter bar (CTRL + SHIFT + H / 🌐)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ╭[#1] ▶ app.log ● [12]╮╭[#2] ■ db.log ○╮╭🔎 Find results ⏳╮                          │ ← egui_dock tab bar (26 px)
-│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾][± 3] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
+│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX ⚙ ASM 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾][± 3] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
 │ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row (45 % opacity in context)
 │ │ 🏷 Labels:  1 timeout ✕  4 req=42 ✕                                                   │ ← quick labels strip (if any)
 │ │ ◆ Filters suspended: line 1234 shown in the full log  [Back to filtered view]         │ ← context banner (only in the context view)
@@ -342,7 +342,7 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
 
 1. **`▶ Follow` / `■ Follow`** toggle (Space, `CTRL + END`). It is disabled on compressed streams, with a tooltip saying why.
 2. **`▶ Monitor` / `■ Monitor`**: disk watching on or off.
-3. **View mode**: `🔤 TXT` (accent), `🔢 HEX` (`secondary_accent`), `📝 MD` (warn). MD is refused above `markdown_max_mb` with a notice.
+3. **View mode**: `🔤 TXT` (accent), `🔢 HEX` (`secondary_accent`), `⚙ ASM` (`secondary_accent`), `📝 MD` (warn). MD is refused above `markdown_max_mb` with a notice.
 4. Text views only:
    - **`# 123` / `# ---`**: line numbers of this stream only (`TailEngine::show_line_numbers`).
    - **`Δt`**: time-delta column of this stream only (`TailEngine::show_time_delta`); the gap threshold is global. The tooltip explains when timestamps are unreadable. Both start from the `[general]` defaults when the stream opens and are saved with it (`line_numbers=`, `time_delta=`).
@@ -354,8 +354,8 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
    - **`▦ Columns`** toggle (`toggle_button`, Text view, shown only while a parser is active): the column view (`TailEngine::columns_shown`). Rows are drawn by `render_extended_rows` with a `ColumnLayout` (one row per line even with wrap on): marker, line-number, Δt and `×N` cells as usual, then one cell per shown field (`width` character cells + one of gap, text clipped, level keys `level`/`lvl`/`severity`/`log.level`/`loglevel`/`levelname` in the level colour when nothing else colours the row, search hits and rule colours as a cell background), then the message column (`RowFields::message`). A line without the parser's shape runs across from the first cell, at 60 % unless a continuation line. No `[+] JSON` expander, token outline or character selection in this view. **Header** (`render_field_header`, one row + 4 px, `panel_bg`, following the rows' horizontal scroll): field names in the accent colour, drag a name to move the column (a 2 px accent line marks the drop), drag the right edge (resize cursor) to change the width, right-click: Hide column / Move left / Move right, *Fields shown* (checkboxes over the catalogue, 300 px scroll; *More fields not listed* past 256 keys), Reset columns; the last column cannot be hidden.
    - Text only (not MD): the **Collapse** combo (`render_collapse_selector`), whose closed text reads `× Collapse: off|exact|numbers` in 11 pt. Its entries are `off`, `exact` (equal text after the leading timestamp, trailing whitespace ignored) and `numbers` (as exact, with numbers, hex values and ids masked). It is per stream, `CTRL + SHIFT + D` cycles it, and the tooltip explains the modes. Picking a mode detects the groups again from scratch and keeps the line at the top of the view in place.
    - Text only (not MD), right after it: the **context lines** drag value (`render_context_lines_control`), `± N`, 0 to 100, per stream. With `N > 0` and an active filter every match is shown with the `N` file lines before and after it (see *Context rows* in the row anatomy). The tooltip says it works like `grep -C` and that context lines ignore the filters. Without an active filter it is drawn at 45 % opacity and has no effect. Changing it rebuilds the rows without refiltering and keeps the line at the top of the view in place.
-6. HEX only: **`Hex columns: [-8] N [+8]`**, range 8–64.
-7. **`Lines: v / t`** (dim) when rows are filtered, otherwise `Lines: t`. When repeated entries are collapsed and the rows are fewer than the visible lines, ` · R rows shown` follows. In HEX it shows the hex row count.
+6. HEX only: **`Hex columns: [-8] N [+8]`**, range 8–64. ASM only: the architecture combo box (`x86-16`, `x86-32`, `x86-64`), or, for a recognised executable, its `PE x86-64` / `ELF x86-32` label in `secondary_accent` with a tooltip saying it wins.
+7. **`Lines: v / t`** (dim) when rows are filtered, otherwise `Lines: t`. When repeated entries are collapsed and the rows are fewer than the visible lines, ` · R rows shown` follows. In HEX it shows the hex row count; in ASM `0xTOP / 0xSIZE`, the offset of the first row out of the file size (instructions are not counted).
 8. **`🕘 from → to`**, text views only: the time span of the visible lines, and the **time range control** (`time_range::control`). It is a frameless button in 11 pt monospace, underlined under the pointer, with a pointing-hand cursor; a click opens or closes the time range popup (§4.15). The date is written once when both ends share it (`🕘 2026-09-18 14:02:05 → 16:30:12`); a label over 40 characters drops the seconds (`🕘 2026-09-18 14:02 → 2026-09-19 16:30`). Without a span it reads `🕘 … N%` while the stream is being timed, `🕘 no timestamps` (dim) on a timed stream without usable timestamps, and `🕘 —` when no visible line carries a time. Colours: warn while a side of the window cannot be read (`time_range_error`), accent while a window narrows the view, dim for *no timestamps*, `text_primary` otherwise; ` ⏳` follows while the window waits for the timing. The tooltip gives the full span, the window as typed, the pending or invalid state and *Click to set the time range*; with a time display other than "as written" it adds `🌐 Times on the {zone} clock`, and the span, the popup and the histogram are on that clock.
    - Right after it, the **time display menu** (`render_time_display_menu`): a `menu_button` labelled `🌐 as written|UTC|local time|UTC+HH:MM` in 11 pt, dim while "as written" and accent otherwise (tooltip: what it does). Inside: *Show the timestamps* (dim small caption) with selectable `as written`, `UTC`, `local time`; a `○/◉ fixed offset [+02:00] ✔` row (64 px field, `✔` disabled until the text reads as an offset within ±14:00, `Enter` applies too); a separator; *Timestamps without a zone are in* (tooltip: what the source zone means, epoch is UTC) with `local time`, `UTC`, the current offset and the offset typed above; a separator and a dim note *Filters, search, copy and export see the text as written*. The choice is per stream and saved with it.
 9. **`Δ +2.357 · 14 rows`**: elapsed time of a multi-row selection, in accent.
@@ -455,6 +455,14 @@ Empty states are centred and dim: `⏳ indexing...`, `⏳ filtering...`, *Log fi
 - A header row, `OFFSET    00 01 …  |....|`, in strong accent. It scrolls horizontally in sync with the body, with its scroll bar hidden.
 - Each row: `XXXXXXXX` offset (dim at 75 %), bytes in groups of 8, then `|ASCII|` with `·` for non-printable bytes (`secondary_accent`).
 - Search hits use the same yellow and cyan backgrounds.
+
+**ASM view** (`render_asm_stream`):
+
+- No `ScrollArea`: the rows are decoded from `engine.asm.top`, as many as the area holds, and painted with the painter. Columns: address (8 hex digits, 16 when an address needs them; `text_dim`), section name on the first row of a section (accent), the instruction bytes (up to 10, then `…`; `secondary_accent`), the instruction in Intel syntax (`text_primary`; `db` data rows in `warn_color`).
+- Search hits, the current hit and the selection use the row tints of the other views. A click selects a row, `Shift` + click extends; `CTRL + C` copies `address  bytes  instruction` lines.
+- The wheel, `↑` `↓` and `Page Up` / `Page Down` move by rows (moving up re-synchronises over 64 bytes); `CTRL + Home` goes to offset 0, `CTRL + End` and follow keep the end of the file on the last row.
+- A 10 px bar on the right maps the top offset over the file size (thumb in accent at 60 %); a click or a drag there seeks and re-synchronises.
+- Go to (`CTRL + G`) takes an offset, a `0x` address or `entry` (hint text `offset, 0x address, entry`).
 
 **Markdown view:** `egui_commonmark::CommonMarkViewer` inside a `ScrollArea::both`. Embedded HTML is converted to Markdown text.
 
@@ -787,7 +795,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `☆` | marker of an automatic bookmark (a rule's "Bookmark matching lines"); "Remove bookmark" menu entry |
 | `◆` | line shown in context (marker, banner, "Show in context" menu entries) |
 | `×`, `×N` | collapse selector (`× Collapse: …`); badge of a collapsed group (`×57`, `×1.2M`) |
-| `🔤 TXT` `🔢 HEX` `📝 MD` | view modes |
+| `🔤 TXT` `🔢 HEX` `⚙ ASM` `📝 MD` | view modes |
 | `📝` | Bookmark report… (💾 and 🗂 menus) and its dialog |
 | `# 123` / `# ---` | line numbers on / off |
 | `Δt`, `⚓`, `…` | time-delta column toggle, anchor, pending |

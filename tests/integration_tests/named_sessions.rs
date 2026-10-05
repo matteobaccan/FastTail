@@ -22,6 +22,7 @@ fn entry(path: PathBuf) -> StreamEntry {
         timeline: true,
         collapse: Some("numbers".to_string()),
         context_lines: 4,
+        disasm_arch: Some("x86-32".into()),
         line_numbers: Some(false),
         time_delta: Some(true),
         time_display: Some("+02:00".to_string()),

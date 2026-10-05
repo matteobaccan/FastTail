@@ -77,6 +77,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `Ctrl+K` | the row in context (filters off) and back |
 | `Ctrl+G` | go to a line (`N`, `+N`, `-N`) or a time (`14:02`) |
 | `h` | HEX view (go to `1024` or `0x400`) and back |
+| `d`, `Shift+D` | ASM view of x86 code (go to an offset, `0x401000` or `entry`) and back to HEX; the next architecture (16, 32, 64 bit), shown in the window's bottom border |
 | `J` | the cursor row's JSON as a tree (`y` value, `Y` path) |
 | `y` (`Ctrl+C`) | copy the selection or the cursor row |
 | `s` `\|` `_` | new window beside / below |

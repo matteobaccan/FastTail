@@ -82,6 +82,10 @@ pub enum Action {
     Palette,
     /// `h`: the HEX view of the bytes, and back to the lines.
     ToggleHex,
+    /// `d`: the ASM view (x86 instructions), and back to HEX; `D`: its next
+    /// architecture.
+    ToggleAsm,
+    CycleArch,
     /// `a`: how escape sequences show: auto, render, strip, raw.
     CycleAnsi,
     /// `#`: the line numbers of the focused stream, on or off.
@@ -224,6 +228,8 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('J') => Action::JsonTree,
         KeyCode::Char(':') => Action::Palette,
         KeyCode::Char('h') => Action::ToggleHex,
+        KeyCode::Char('d') => Action::ToggleAsm,
+        KeyCode::Char('D') => Action::CycleArch,
         KeyCode::Char('a') => Action::CycleAnsi,
         KeyCode::Char('#') => Action::ToggleLineNumbers,
         KeyCode::Char('L') => Action::LabelPrefix,
@@ -282,6 +288,8 @@ mod tests {
         assert_eq!(k(KeyCode::Char('#'), ctrl_shift), Some(Action::Label(3)));
         assert_eq!(k(KeyCode::Char('L'), none), Some(Action::LabelPrefix));
         assert_eq!(k(KeyCode::Char('h'), none), Some(Action::ToggleHex));
+        assert_eq!(k(KeyCode::Char('d'), none), Some(Action::ToggleAsm));
+        assert_eq!(k(KeyCode::Char('D'), none), Some(Action::CycleArch));
         assert_eq!(k(KeyCode::Char('a'), none), Some(Action::CycleAnsi));
         assert_eq!(k(KeyCode::Char('t'), none), Some(Action::TimeRange));
         assert_eq!(k(KeyCode::Char('o'), none), Some(Action::OpenFile));

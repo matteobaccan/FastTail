@@ -78,6 +78,16 @@ pub enum ViewMode {
     Hex,
     Markdown,
     Filtered,
+    /// x86 machine code (openspec/changes/disassembly-view), read by byte offset.
+    Asm,
+}
+
+impl ViewMode {
+    /// The views that read bytes rather than lines (HEX and ASM): their search steps
+    /// through byte hits.
+    pub fn is_bytes(self) -> bool {
+        matches!(self, ViewMode::Hex | ViewMode::Asm)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1641,6 +1651,13 @@ pub struct TailEngine {
     pub last_searched_query: String,
     /// Byte offset the HEX view should scroll to after F3 / Shift+F3.
     pub scroll_to_byte: Option<usize>,
+    /// The offset of the first byte the HEX view shows, kept by the interfaces so the
+    /// ASM view opens at the same place.
+    pub hex_top_offset: u64,
+    /// The ASM view (`ViewMode::Asm`): its place and architecture.
+    pub asm: crate::disasm::AsmView,
+    /// The architecture changed: the stream state is saved again (`disasm_arch=`).
+    pub asm_dirty: bool,
     /// When the user last typed in the search box (used to debounce the rescan).
     pub search_edited_at: Option<Instant>,
     /// Bumped every time the buffer / line index is rebuilt; keys derived caches.
@@ -2271,6 +2288,9 @@ impl TailEngine {
             current_match_idx: None,
             last_searched_query: String::new(),
             scroll_to_byte: None,
+            hex_top_offset: 0,
+            asm: crate::disasm::AsmView::default(),
+            asm_dirty: false,
             search_edited_at: None,
             buffer_generation: 0,
             reload_generation: 0,
@@ -5979,7 +5999,7 @@ impl TailEngine {
     /// Every visible line matching the active search, the ones past `MAX_SEARCH_MATCHES`
     /// included (those are counted, not listed). Byte hits in HEX view.
     pub fn search_total(&self) -> usize {
-        if self.view_mode == ViewMode::Hex {
+        if self.view_mode.is_bytes() {
             self.search_byte_matches.len()
         } else {
             self.search_total.max(self.search_matches.len())
@@ -5988,7 +6008,7 @@ impl TailEngine {
 
     /// Whether the search matched more lines than it lists (see `MAX_SEARCH_MATCHES`).
     pub fn search_capped(&self) -> bool {
-        self.view_mode != ViewMode::Hex && self.search_total > self.search_matches.len()
+        !self.view_mode.is_bytes() && self.search_total > self.search_matches.len()
     }
 
     /// The part of the view the search covers.
@@ -6205,7 +6225,7 @@ impl TailEngine {
                     }
                 }
             };
-        self.current_match_idx = if self.view_mode == ViewMode::Hex {
+        self.current_match_idx = if self.view_mode.is_bytes() {
             let pos = current_byte.map(|off| {
                 match self
                     .search_byte_matches
@@ -6308,7 +6328,7 @@ impl TailEngine {
 
     /// Number of hits in the list the current view navigates (bytes in HEX, lines otherwise).
     pub fn active_match_count(&self) -> usize {
-        if self.view_mode == ViewMode::Hex {
+        if self.view_mode.is_bytes() {
             self.search_byte_matches.len()
         } else {
             self.search_matches.len()
@@ -6396,18 +6416,20 @@ impl TailEngine {
         if mode != ViewMode::Text {
             self.char_selection = None;
         }
-        if matches!(mode, ViewMode::Hex | ViewMode::Markdown) {
+        if matches!(mode, ViewMode::Hex | ViewMode::Markdown | ViewMode::Asm) {
             self.leave_context();
         }
         self.view_notice = None;
         // The current hit of the text view, carried to the same file bytes in HEX.
-        let text_hit = if mode == ViewMode::Hex && self.view_mode != ViewMode::Hex {
+        let text_hit = if mode.is_bytes() && !self.view_mode.is_bytes() {
             self.current_search_line()
         } else {
             None
         };
+        let entering_asm = mode == ViewMode::Asm && self.view_mode != ViewMode::Asm;
+        let hex_place = (self.view_mode == ViewMode::Hex).then_some(self.hex_top_offset);
         self.view_mode = mode;
-        if mode == ViewMode::Hex
+        if mode.is_bytes()
             && !self.last_searched_query.is_empty()
             && self.search_byte_matches.is_empty()
         {
@@ -6423,8 +6445,16 @@ impl TailEngine {
             if let Some(&(off, _)) = self.search_byte_matches.get(pos) {
                 self.current_match_idx = Some(pos);
                 self.scroll_to_byte = Some(off);
+                if entering_asm {
+                    self.asm_enter(Some(off as u64));
+                }
                 return;
             }
+        }
+        if entering_asm {
+            // From HEX the place it showed; else the place the view had, or the entry
+            // point.
+            self.asm_enter(hex_place.filter(|&o| o > 0));
         }
         let len = self.active_match_count();
         self.current_match_idx = match self.current_match_idx {
@@ -6464,6 +6494,81 @@ impl TailEngine {
                 Some(start as usize + encoded_len(prefix, encoding))
             })
             .flatten()
+    }
+
+    /// Runs `f` on the ASM view with a reader over the file's bytes (the block cache).
+    fn with_asm<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::disasm::AsmView, &dyn Fn(u64, usize) -> Vec<u8>, u64) -> R,
+    ) -> R {
+        let mut asm = std::mem::take(&mut self.asm);
+        let size = self.file_size;
+        let read = |at: u64, len: usize| {
+            let len = len.min(size.saturating_sub(at) as usize);
+            self.get_bytes(at as usize, len).unwrap_or_default()
+        };
+        let out = f(&mut asm, &read, size);
+        self.asm = asm;
+        out
+    }
+
+    /// Places the ASM view at `at`, else where it was, else at the entry point or 0.
+    pub fn asm_enter(&mut self, at: Option<u64>) {
+        self.with_asm(|asm, read, size| asm.enter(at, read, size));
+    }
+
+    /// The rows of an ASM screen `rows` high.
+    pub fn asm_rows(&mut self, rows: usize) -> Vec<crate::disasm::AsmRow> {
+        self.with_asm(|asm, read, size| asm.rows(read, size, rows))
+    }
+
+    /// Moves the ASM view `n` rows down (positive) or up (negative).
+    pub fn asm_scroll(&mut self, n: isize) {
+        self.with_asm(|asm, read, size| {
+            if n >= 0 {
+                asm.down(n as usize, read, size)
+            } else {
+                asm.up(n.unsigned_abs(), read, size)
+            }
+        });
+    }
+
+    /// Puts the end of the file on the last of `rows` rows (follow, End).
+    pub fn asm_bottom(&mut self, rows: usize) {
+        self.with_asm(|asm, read, size| asm.bottom(rows, read, size));
+    }
+
+    /// Goes to an offset, a `0x` address or `entry` (see `AsmView::go_to`).
+    pub fn asm_go_to(&mut self, target: &str) -> bool {
+        self.with_asm(|asm, read, size| asm.go_to(target, read, size))
+    }
+
+    /// The selected ASM rows as copied text.
+    pub fn asm_selection_text(&mut self) -> Option<String> {
+        self.with_asm(|asm, read, size| asm.selection_text(read, size))
+    }
+
+    /// Moves the ASM view to `at` and re-synchronises it on the instruction chain there
+    /// (the scroll bar lands anywhere in the file).
+    pub fn asm_seek(&mut self, at: u64) {
+        self.with_asm(|asm, read, size| {
+            if size == 0 {
+                return;
+            }
+            asm.top = at.min(size - 1);
+            if asm.top > 0 {
+                asm.up(1, read, size);
+                asm.down(1, read, size);
+            }
+        });
+    }
+
+    /// Sets the stream's ASM architecture (saved as `disasm_arch=`).
+    pub fn set_disasm_arch(&mut self, arch: crate::disasm::Arch) {
+        if self.asm.arch != arch {
+            self.asm.arch = arch;
+            self.asm_dirty = true;
+        }
     }
 
     pub fn current_search_byte(&self) -> Option<(usize, usize)> {
@@ -6644,7 +6749,7 @@ impl TailEngine {
             // A line scope starts the scan at its first line.
             self.scope_line_bounds().0,
         );
-        if self.view_mode == ViewMode::Hex {
+        if self.view_mode.is_bytes() {
             let (byte_matches, max_len) = self.find_byte_matches_from(&query, 0, MAX_BYTE_MATCHES);
             self.search_byte_matches = byte_matches;
             self.search_byte_max_len = max_len;
@@ -6737,7 +6842,7 @@ impl TailEngine {
                             self.search_matches.extend(lines.into_iter().take(room));
                             self.search_generation = self.search_generation.wrapping_add(1);
                             if self.current_match_idx.is_none()
-                                && self.view_mode != ViewMode::Hex
+                                && !self.view_mode.is_bytes()
                                 && !self.search_matches.is_empty()
                             {
                                 self.current_match_idx = Some(0);
@@ -6974,7 +7079,7 @@ impl TailEngine {
         // the next moves past all of them.
         if let Some(curr) = self
             .current_match_idx
-            .filter(|_| !wrapped && self.view_mode != ViewMode::Hex && self.collapse_rows())
+            .filter(|_| !wrapped && !self.view_mode.is_bytes() && self.collapse_rows())
         {
             next_idx = self.skip_hidden_hits_forward(next_idx, self.search_matches[curr]);
             if next_idx >= len {
@@ -6995,7 +7100,7 @@ impl TailEngine {
             Some(_) => (len - 1, true),
             None => (len - 1, false),
         };
-        if self.view_mode != ViewMode::Hex && self.collapse_rows() {
+        if !self.view_mode.is_bytes() && self.collapse_rows() {
             let from = self
                 .current_match_idx
                 .filter(|_| !wrapped)
@@ -7020,7 +7125,7 @@ impl TailEngine {
         if idx >= self.active_match_count() {
             return None;
         }
-        if self.view_mode != ViewMode::Hex {
+        if !self.view_mode.is_bytes() {
             self.reveal_line(self.search_matches[idx]);
         }
         Some(self.jump_to_match(idx, false))
@@ -7028,7 +7133,7 @@ impl TailEngine {
 
     fn jump_to_match(&mut self, idx: usize, beep: bool) -> usize {
         self.current_match_idx = Some(idx);
-        let target = if self.view_mode == ViewMode::Hex {
+        let target = if self.view_mode.is_bytes() {
             let offset = self.search_byte_matches[idx].0;
             self.scroll_to_byte = Some(offset);
             offset

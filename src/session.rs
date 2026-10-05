@@ -74,6 +74,9 @@ pub struct StreamEntry {
     /// Lines of context shown around each filter match (`context_lines=N`, written only
     /// when above 0); old files read as 0, off.
     pub context_lines: u8,
+    /// The architecture of the ASM view as `Arch::name` (`disasm_arch=x86-16|x86-32`),
+    /// written only when not the default x86-64; older builds ignore it.
+    pub disasm_arch: Option<String>,
     /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`).
     /// The app always records both; `None`, written as no key, is what a file from an
     /// older version reads as, and follows the `[general]` defaults.
@@ -223,6 +226,9 @@ impl Session {
             }
             if s.context_lines > 0 {
                 sec.set("context_lines", s.context_lines.to_string());
+            }
+            if let Some(arch) = &s.disasm_arch {
+                sec.set("disasm_arch", arch);
             }
             if let Some(show) = s.line_numbers {
                 sec.set("line_numbers", show.to_string());
@@ -403,6 +409,11 @@ impl Session {
                     .and_then(|v| v.trim().parse::<u8>().ok())
                     .unwrap_or(0)
                     .min(crate::context_lines::MAX_CONTEXT_LINES),
+                disasm_arch: sec
+                    .get("disasm_arch")
+                    .and_then(crate::disasm::Arch::from_name)
+                    .filter(|a| *a != crate::disasm::Arch::default())
+                    .map(|a| a.name().to_string()),
                 line_numbers: sec.get("line_numbers").and_then(|v| v.parse().ok()),
                 time_delta: sec.get("time_delta").and_then(|v| v.parse().ok()),
                 time_display: sec
@@ -710,6 +721,48 @@ mod tests {
                 (None, None)
             );
         }
+    }
+
+    #[test]
+    fn disasm_arch_is_written_only_when_not_x86_64_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("a.bin");
+        std::fs::write(&bin, [0x90]).unwrap();
+        let mut entry = StreamEntry::new(bin);
+        let text = |entry: &StreamEntry| {
+            Session {
+                streams: vec![entry.clone()],
+                dock_layout: None,
+            }
+            .serialized(None)
+        };
+        let plain = text(&entry);
+        assert!(!plain.contains("disasm_arch"), "{plain}");
+        entry.disasm_arch = Some("x86-16".into());
+        let written = text(&entry);
+        assert!(written.contains("disasm_arch=x86-16"), "{written}");
+        let read = |s: &str| {
+            Session::read_from(&Ini::load_from_str(s).unwrap(), None)
+                .session
+                .streams[0]
+                .disasm_arch
+                .clone()
+        };
+        assert_eq!(read(&written).as_deref(), Some("x86-16"));
+        // The default, an unknown name and an old file all read as x86-64 (none).
+        for value in ["x86-64", "arm64"] {
+            assert_eq!(
+                read(&plain.replace(
+                    "wrap=",
+                    &format!(
+                        "disasm_arch={value}
+wrap="
+                    )
+                )),
+                None
+            );
+        }
+        assert_eq!(read(&plain), None);
     }
 
     #[test]

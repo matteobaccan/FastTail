@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **ASM view: x86 disassembly of any file.** A fourth view next to TXT, HEX and MD
+  (`d` in the terminal) shows the bytes as x86 instructions (16, 32 or 64 bit, Intel
+  syntax) with address, bytes and section. PE and ELF executables start at their entry
+  point with virtual addresses; invalid bytes are `db` rows. Only the rows on screen are
+  decoded, so the size of the file does not matter. Byte search, go to (offset, `0x`
+  address, `entry`), follow and copy work as in HEX; the architecture is saved per
+  stream (`disasm_arch=`). New dependency: `iced-x86` (decoder and Intel formatter only).
+
 ### Fixed
 
 - **A minimised window keeps tailing (Windows, issue #161).** Minimised, or hidden in the
