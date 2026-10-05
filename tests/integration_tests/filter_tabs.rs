@@ -150,3 +150,36 @@ fn a_filter_tab_is_rebuilt_at_the_next_start_with_its_state_and_bookmarks() {
         "one tab each, the derived one named after its spool"
     );
 }
+
+#[test]
+fn a_session_brings_back_a_filter_tab_and_its_source_with_their_own_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    write_lines(&log, &["INFO a", "ERROR b", "INFO c", "ERROR d"]);
+    let mut app = new_app(dir.path());
+    app.open_log_file(log.clone());
+    app.engines[0].set_include_filter("ERROR");
+    app.engines[0].filter_tab_request = true;
+    app.apply_filter_tab_requests();
+    settle(&mut app, |a| a.engines[1].total_lines() == 2);
+    app.engines[0].set_include_filter("INFO");
+    app.engines[1].set_exclude_filter("b");
+    let file = dir
+        .path()
+        .join(format!("s{}", fasttail::session::SESSION_SUFFIX));
+    app.save_session_as(file.clone()).unwrap();
+
+    let mut other = new_app(dir.path());
+    other.load_session_file(file, true);
+    assert_eq!(other.engines.len(), 2);
+    let d = other
+        .engines
+        .iter()
+        .position(|e| e.derived.is_some())
+        .expect("the filter tab is back");
+    let s = 1 - d;
+    assert_eq!(other.engines[s].include_filter(), "INFO");
+    assert_eq!(other.engines[d].exclude_filter(), "b");
+    settle(&mut other, |a| a.engines[d].total_lines() == 2);
+    assert_eq!(lines_of(&other, d), vec!["ERROR b", "ERROR d"]);
+}

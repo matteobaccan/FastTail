@@ -9,7 +9,7 @@ use crate::i18n::t;
 use crate::lock::LockAttempts;
 use crate::paths::paths_equal;
 use crate::screensaver::MatrixScreensaver;
-use crate::session::{LoadedSession, Session};
+use crate::session::{LoadedSession, Session, StreamEntry};
 use crate::tail_engine::{QuickLabel, TailEngine};
 use crate::theme::CyberTheme;
 use crate::ui::dock::{DockContext, FastTailTab, FastTailTabViewer};
@@ -1058,7 +1058,10 @@ impl FastTailApp {
         }) {
             return Some(existing.path.clone());
         }
-        let filter = self.config.stream_state_for(identity)?.frozen.clone()?;
+        // Opening the source saves the workspace, which drops the states of streams not
+        // open yet: this one's is put back after.
+        let state = self.config.stream_state_for(identity)?.clone();
+        let filter = state.frozen.clone()?;
         let position = |engines: &[TailEngine]| {
             engines
                 .iter()
@@ -1068,6 +1071,7 @@ impl FastTailApp {
             self.open_log_file(source.clone());
         }
         let idx = position(&self.engines)?;
+        self.config.set_stream_state(state);
         let mut engine = self.derived_engine(idx, n, filter).ok()?;
         crate::workspace::restore_stream(&mut engine, &self.config, identity);
         let source_path = self.engines[idx].path.clone();
@@ -1513,18 +1517,27 @@ impl FastTailApp {
         self.floating_window_rects.clear();
         self.config.open_files.clear();
         self.config.streams.clear();
-        // Every state first: a derived stream may open its source before the source's
-        // own entry comes.
+        // Each state just before its stream opens (an opening saves the workspace, which
+        // keeps only the states of open streams). A derived stream may open its source
+        // before the source's own entry comes: the source's state goes in first.
+        let adopt = |config: &mut FastTailConfig, entry: &StreamEntry| {
+            config.set_stream_state(entry.clone());
+            config.set_wrap(&entry.path, entry.wrap);
+            config.set_bookmarks_with_notes(&entry.path, &entry.bookmarks, &entry.bookmark_notes);
+        };
         for entry in &loaded.session.streams {
-            self.config.set_stream_state(entry.clone());
-            self.config.set_wrap(&entry.path, entry.wrap);
-            self.config.set_bookmarks_with_notes(
-                &entry.path,
-                &entry.bookmarks,
-                &entry.bookmark_notes,
-            );
-        }
-        for entry in &loaded.session.streams {
+            if let Some((_, source)) = crate::filter_tab::parse_identity(&entry.path) {
+                let source_entry = loaded
+                    .session
+                    .streams
+                    .iter()
+                    .find(|s| paths_equal(&s.path, &source));
+                let source_open = self.engines.iter().any(|e| paths_equal(&e.path, &source));
+                if let (Some(source_entry), false) = (source_entry, source_open) {
+                    adopt(&mut self.config, source_entry);
+                }
+            }
+            adopt(&mut self.config, entry);
             self.open_log_file(entry.path.clone());
         }
         if let Some(layout) = &loaded.session.dock_layout {
