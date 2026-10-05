@@ -205,12 +205,21 @@ fn find_sibling(name: &str) -> Result<PathBuf, StartError> {
 /// Whether a window can be opened from here: always on Windows and macOS, on other
 /// systems when `DISPLAY` or `WAYLAND_DISPLAY` is set.
 pub fn display_available() -> bool {
-    if cfg!(any(windows, target_os = "macos")) {
-        return true;
-    }
-    ["DISPLAY", "WAYLAND_DISPLAY"]
-        .iter()
-        .any(|v| std::env::var_os(v).is_some_and(|s| !s.is_empty()))
+    let var = |name| std::env::var(name).ok();
+    display_usable(
+        cfg!(any(windows, target_os = "macos")),
+        var("DISPLAY").as_deref(),
+        var("WAYLAND_DISPLAY").as_deref(),
+    )
+}
+
+/// `display_available` as a table: `always` on Windows and macOS, else an X11 or a
+/// Wayland display that is set and not empty.
+pub fn display_usable(always: bool, display: Option<&str>, wayland: Option<&str>) -> bool {
+    always
+        || [display, wayland]
+            .iter()
+            .any(|v| v.is_some_and(|s| !s.is_empty()))
 }
 
 /// Settings "Switch now" in the terminal interface: starts `fasttail --gui` from this
@@ -517,6 +526,80 @@ mod tests {
                 "{stdout} {term:?} {stdin} {dev_tty}"
             );
         }
+    }
+
+    /// Design 3: `--tui` / `--gui` first, then `interface` in `[general]` (`tui` in any
+    /// case, anything else, a typo included, is the window), then the window.
+    #[test]
+    fn interface_resolution_order() {
+        use crate::cli::CliArgs;
+        use crate::config::{FastTailConfig, Interface};
+        let configured =
+            |ini: &str| FastTailConfig::from_ini(&ini::Ini::load_from_str(ini).unwrap()).interface;
+        assert_eq!(configured(""), Interface::Gui);
+        assert_eq!(configured("[general]\ninterface=tui\n"), Interface::Tui);
+        assert_eq!(configured("[general]\ninterface=TUI\n"), Interface::Tui);
+        assert_eq!(configured("[general]\ninterface=gui\n"), Interface::Gui);
+        assert_eq!(
+            configured("[general]\ninterface=terminal\n"),
+            Interface::Gui
+        );
+        // It round-trips through the file.
+        let saved = FastTailConfig {
+            interface: Interface::Tui,
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        saved.to_ini().write_to(&mut buf).unwrap();
+        assert_eq!(configured(&String::from_utf8(buf).unwrap()), Interface::Tui);
+        let cwd = Path::new("/work");
+        let cli = |args: &[&str]| CliArgs::parse(args.iter().copied(), cwd).unwrap();
+        for (args, ini, expected) in [
+            (&[][..], Interface::Gui, Interface::Gui),
+            (&[], Interface::Tui, Interface::Tui),
+            (&["--gui"], Interface::Tui, Interface::Gui),
+            (&["--tui"], Interface::Gui, Interface::Tui),
+            (&["--tui", "app.log"], Interface::Tui, Interface::Tui),
+        ] {
+            assert_eq!(cli(args).interface(ini), expected, "{args:?} {ini:?}");
+        }
+    }
+
+    #[test]
+    fn display_decision_table() {
+        for (always, display, wayland, usable) in [
+            (true, None, None, true),        // Windows, macOS
+            (false, Some(":0"), None, true), // X11
+            (false, None, Some("wayland-0"), true),
+            (false, Some(""), Some(""), false), // set but empty
+            (false, None, None, false),         // SSH, a console
+        ] {
+            assert_eq!(
+                display_usable(always, display, wayland),
+                usable,
+                "{always} {display:?} {wayland:?}"
+            );
+        }
+    }
+
+    /// Both executables are looked for next to the running one, with the platform's
+    /// suffix; a missing one is reported with that full path.
+    #[test]
+    fn executable_lookup_paths() {
+        let suffix = std::env::consts::EXE_SUFFIX;
+        assert_eq!(gui_exe_name(), format!("fasttail{suffix}"));
+        assert_eq!(tui_exe_name(), format!("fasttail-tui{suffix}"));
+        let here = std::env::current_exe().unwrap();
+        let dir = here.parent().unwrap();
+        let name = format!("no-such-fasttail{suffix}");
+        assert_eq!(sibling_exe(&name).unwrap(), dir.join(&name));
+        assert!(!sibling_present(&name));
+        match find_sibling(&name) {
+            Err(StartError::NotFound(path)) => assert_eq!(path, dir.join(&name)),
+            other => panic!("{other:?}"),
+        }
+        let this = here.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(sibling_present(&this));
     }
 
     /// The window's Settings entry and switch dialog. "Terminal" is the same word in

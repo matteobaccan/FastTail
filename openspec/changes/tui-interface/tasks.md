@@ -67,7 +67,7 @@
 - [x] 5.3 Windows `fasttail-tui.exe --gui`: detached start of `fasttail.exe`, exit 0; missing: stderr message and exit 1 (`handoff::start_detached`, every platform with the GUI built in; `--gui` is passed on, see design 3; the terminal-only answer names both archives)
 - [x] 5.4 Linux and macOS: terminal checks (stdout, `TERM`, stdin or `/dev/tty`), GUI fallback with the stderr line for `interface=tui`, exit 1 for `--tui`; terminal-only build answers `--gui` with exit 2 and the archive name (`handoff::terminal_usable`, a pure decision table with its test; `tui::run` in process; the terminal-only answer came with 5.3)
 - [x] 5.5 Settings interface switch in both interfaces: "Switch now" / "At next start", workspace saved before switching; missing executable, no display, or no terminal reported while the current interface keeps running; Graphical disabled in the terminal-only build; Windows warning when the other executable is missing (`handoff::start_gui` / `start_tui_in_new_console` with `StartError`; the GUI entry sits next to the renderer in the Settings window, as that one also applies at start; the terminal app takes its starter as a field so tests never start a real FastTail)
-- [ ] 5.6 Tests: resolution order, argument forwarding, executable lookup paths, the Unix terminal decision table, the display check
+- [x] 5.6 Tests: resolution order, argument forwarding, executable lookup paths, the Unix terminal decision table, the display check (`handoff::tests`, `cli::tests`; the switch dialogs in `tui::app::tests`)
 
 ## 6. Release pipeline
 
