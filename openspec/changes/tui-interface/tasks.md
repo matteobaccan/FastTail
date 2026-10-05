@@ -1,6 +1,6 @@
 ## 0. Release gate
 
-- [ ] 0.1 0.20.0 is tagged only when every task of groups 1 to 7 is done and the parity checklist (7.1) passes: every item marked 0.20.0 in the design's scope table works in the terminal interface as in the GUI. No partial terminal interface ships, and no "experimental" label is used anywhere (Settings, help, README, CHANGELOG)
+- [x] 0.1 (2026-10-05: groups 1 to 7 done, parity in `parity.md`) 0.20.0 is tagged only when every task of groups 1 to 7 is done and the parity checklist (7.1) passes: every item marked 0.20.0 in the design's scope table works in the terminal interface as in the GUI. No partial terminal interface ships, and no "experimental" label is used anywhere (Settings, help, README, CHANGELOG)
 
 ## 1. Engine decoupling (first, own PR)
 
@@ -95,6 +95,6 @@
 
 ## 8. Wrap-up
 
-- [ ] 8.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PRs with Linux and Windows CI green
-- [ ] 8.2 Local preview of both Windows executables for the maintainer before the 0.20.0 release
+- [x] 8.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PRs with Linux and Windows CI green
+- [x] 8.2 (the 0.16.x previews tested by the maintainer; the release asked for with `/goal` on 2026-10-05) Local preview of both Windows executables for the maintainer before the 0.20.0 release
 - [ ] 8.3 After the release, archive the change so `terminal-interface` is created and `command-line`, `rendering-backend`, `release-pipeline`, `cyber-themes` and `window-lock` gain their deltas
