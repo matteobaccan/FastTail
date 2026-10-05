@@ -24,6 +24,7 @@ pub mod filter_preset;
 pub mod filter_tab;
 pub mod find_all;
 pub mod global_filter;
+pub mod handoff;
 pub mod html_converter;
 pub mod i18n;
 pub mod lock;

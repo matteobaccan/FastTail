@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Windows: `fasttail.exe` hands off to the terminal interface.** With `--tui`, or
+  `interface=tui` in `fasttail.ini` (a double click included), `fasttail.exe` starts
+  `fasttail-tui.exe` from its own folder in a new console window, with the same
+  arguments, folder and environment, and closes. If `fasttail-tui.exe` is missing or does
+  not start, the window opens and a dialog names the path and the error. A terminal
+  started this way that exits with an error waits for a key, so the message can be read.
+  Standard input (`-` or a pipe) cannot follow into the new console: `fasttail.exe`
+  refuses it with exit code 2 and points to `fasttail-tui.exe`.
+
 ### Changed
 
 - **One command line for both executables.** `fasttail-tui` now takes every `fasttail`
@@ -15,9 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--`; `--renderer` is accepted and ignored. `fasttail` accepts the terminal options
   (`--split`, `--search`, `--theme`, `--ascii`, `--no-mouse`) and ignores them. `--tui`
   and `--gui` name the interface to start, and giving both is a usage error (exit 2). An
-  unknown `--theme` is now a usage error instead of being silently ignored. The hand-off
-  between the two interfaces comes next: for now `fasttail --tui` and `fasttail-tui --gui`
-  say which executable to run.
+  unknown `--theme` is now a usage error instead of being silently ignored. For now
+  `fasttail-tui --gui`, and `fasttail --tui` on Linux and macOS, say which executable to
+  run.
 
 ## [0.16.1] - 2026-10-05
 

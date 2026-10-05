@@ -98,6 +98,8 @@ fn parse_args(args: impl IntoIterator<Item = String>, cwd: &Path) -> Result<Opti
                     .ok_or("--capture wants WxH, e.g. 100x24")?;
                 opts.capture = Some((number(w.into())? as u16, number(h.into())? as u16));
             }
+            // Read by `run` before parsing; nothing more to do here.
+            crate::handoff::HANDOFF_FLAG => {}
             "--quit-after" => opts.quit_after = Some(number(value(&mut args, &a)?)? as u64),
             "--scroll-test" => opts.scroll_test = Some(number(value(&mut args, &a)?)?),
             _ => rest.push(a),
@@ -118,8 +120,41 @@ fn gui_handoff_message() -> &'static str {
 }
 
 /// Runs the terminal interface with `args` (the command line without the program
-/// name) and returns the process exit code.
+/// name) and returns the process exit code. Started by a hand-off (`--handoff`), in a
+/// console that closes with the process, an error exit waits for a key first so the
+/// message can be read.
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
+    let args: Vec<String> = args.into_iter().collect();
+    let handed_off = args
+        .iter()
+        .take_while(|a| *a != "--")
+        .any(|a| a == crate::handoff::HANDOFF_FLAG);
+    let code = run_args(args);
+    if handed_off && code != 0 {
+        wait_for_key();
+    }
+    code
+}
+
+/// Says that a key closes the console, and waits for one.
+fn wait_for_key() {
+    let lang = crate::config::FastTailConfig::load_read_only().language;
+    eprintln!("\n{}", crate::i18n::t(lang, "handoff_press_key"));
+    if terminal::enable_raw_mode().is_ok() {
+        loop {
+            match event::read() {
+                Ok(Event::Key(key)) if key.kind == event::KeyEventKind::Press => break,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let _ = terminal::disable_raw_mode();
+    } else {
+        let _ = io::stdin().read_line(&mut String::new());
+    }
+}
+
+fn run_args(args: Vec<String>) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let opts = match parse_args(args, &cwd) {
         Ok(o) => o,
@@ -660,5 +695,14 @@ mod tests {
             .contains("--tui and --gui"));
         assert!(parse(&["--bogus"]).unwrap_err().contains("--bogus"));
         assert!(parse(&["--capture", "wide"]).is_err());
+    }
+
+    #[test]
+    fn the_hand_off_flag_is_hidden_and_accepted() {
+        let o = parse(&["--handoff", "app.log"]).unwrap();
+        assert_eq!(o.cli.paths, vec![Path::new("/work").join("app.log")]);
+        assert!(!TUI_USAGE.contains(crate::handoff::HANDOFF_FLAG));
+        // `fasttail` itself does not take it: only a hand-off passes it on.
+        assert!(CliArgs::parse(["--handoff"], Path::new("/work")).is_err());
     }
 }

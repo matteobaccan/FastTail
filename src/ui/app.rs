@@ -127,6 +127,9 @@ pub struct FastTailApp {
     /// Why the last compressed file could not be opened (empty zip, no space...), shown
     /// once in a small window.
     pub open_notice: Option<String>,
+    /// Why the terminal interface asked for at start (`--tui`, `interface=tui`) could not
+    /// be started, so the window opened instead (Windows hand-off, `main.rs`).
+    pub handoff_notice: Option<String>,
     /// Standard input piped without `-`, waiting for its first byte before its stream
     /// (and tab) is created, and the command line options to apply to it then.
     pub pending_stdin: Option<crate::stdin_source::StdinStream>,
@@ -608,6 +611,7 @@ impl FastTailApp {
             tray_badge_sent: None,
             archive_picker: None,
             open_notice: None,
+            handoff_notice: None,
             pending_stdin: None,
             stdin_options: StdinOptions::default(),
             save_notice: None,
@@ -4992,6 +4996,39 @@ impl FastTailApp {
             });
             if close || !is_open {
                 self.open_notice = None;
+            }
+        }
+        if let Some(notice) = self.handoff_notice.clone() {
+            let lang = self.config.language;
+            let theme = self.config.theme;
+            let mut is_open = true;
+            let mut close = false;
+            egui::Window::new(
+                RichText::new(format!("⚠ {}", t(lang, "handoff_failed")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .id(egui::Id::new("fasttail_handoff_notice"))
+            .open(&mut is_open)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                ui.label(
+                    RichText::new(notice)
+                        .monospace()
+                        .size(11.5)
+                        .color(theme.text_primary()),
+                );
+                ui.add_space(8.0);
+                if ui.button(t(lang, "session_ok")).clicked()
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    close = true;
+                }
+            });
+            if close || !is_open {
+                self.handoff_notice = None;
             }
         }
         if let Some(notice) = self.save_notice.clone() {

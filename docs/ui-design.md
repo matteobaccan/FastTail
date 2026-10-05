@@ -61,7 +61,7 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
   - `screensaver`, plus the lock fields `locked`, `lock_entry`, `lock_failed`, `lock_attempts`.
   - `system` (sysinfo), `cpu_usage` and `mem_used_mb` for the telemetry meters.
   - `quick_labels`: memory only.
-  - `pattern_prompt`, `archive_picker`, `open_notice`, `save_notice`, `pending_session_load`, `session_missing`: one-shot dialogs.
+  - `pattern_prompt`, `archive_picker`, `open_notice`, `handoff_notice`, `save_notice`, `pending_session_load`, `session_missing`: one-shot dialogs.
   - `find_all`: the cross-stream search session.
   - `palette`: the command palette (open flag, query, selection, value step, target stream), and `palette_action`, the stream action it picked, handed to the dock for this frame.
   - `global_spec`, `global_edit_at`, `global_key`: the compiled global filter and its debounce state.
@@ -565,6 +565,8 @@ All three are anchored at the centre, not resizable and not collapsible.
 - **`🗂 Unsaved session changes`** (`fasttail_session_confirm`): *The session "name" has unsaved changes…*, with `Load anyway` and `Cancel` (also `Esc`).
 - **`🗂 Streams not opened`** (`fasttail_session_missing`): lists the missing paths as bullets, with `OK` (also `Esc`).
 - **`💾 Session saved`** (`fasttail_save_notice`): explains that the stdin stream was not saved, with `OK`.
+
+The same centred, fixed window says why the terminal interface asked for at start could not be started (Windows): **`⚠ Terminal interface not started`** (`fasttail_handoff_notice`) names the `fasttail-tui.exe` path looked for, the OS error when it failed to start, and that the graphical interface opened instead, with `OK` (also `Esc`).
 
 ### 4.6b Bookmark report — `📝 Bookmark report`
 

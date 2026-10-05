@@ -6,7 +6,8 @@
 
 use eframe::{egui, egui_wgpu::wgpu};
 use fasttail::cli::{CliArgs, USAGE};
-use fasttail::config::FastTailConfig;
+use fasttail::config::{FastTailConfig, Interface};
+use fasttail::i18n::Language;
 use fasttail::renderer::{self, RendererChoice, RendererKind};
 use fasttail::ui::FastTailApp;
 use std::sync::Arc;
@@ -357,14 +358,6 @@ fn parse_command_line() -> CliArgs {
         fasttail::print_mode::console::release();
         std::process::exit(code);
     }
-    if cli.tui {
-        // The hand-off to the terminal interface comes with tasks 5.2 and 5.4 of
-        // openspec/changes/tui-interface; until then the terminal executable is direct.
-        attach_parent_console();
-        eprintln!("fasttail: --tui: run fasttail-tui for the terminal interface");
-        fasttail::print_mode::console::release();
-        std::process::exit(2);
-    }
     if cli.stdin && fasttail::stdin_source::classify() != fasttail::stdin_source::StdinKind::Piped {
         // Reported now, while the parent console can still be attached; the rest of the
         // startup goes on, as for a missing file.
@@ -374,6 +367,68 @@ fn parse_command_line() -> CliArgs {
         cli.stdin = false;
     }
     cli
+}
+
+/// Hands off to `fasttail-tui.exe` in a new console and exits (design 3 of
+/// openspec/changes/tui-interface). Standard input cannot follow it there, so `-` or a
+/// pipe is refused with exit code 2. Returns the notice the window shows when the
+/// terminal executable is missing or does not start: a double-clicked GUI process has
+/// no console, so the window is the only place to say it.
+#[cfg(windows)]
+fn start_terminal_interface(cli: &CliArgs, lang: Language) -> Option<String> {
+    use fasttail::{handoff, i18n::t};
+    let piped = fasttail::stdin_source::classify() == fasttail::stdin_source::StdinKind::Piped;
+    if cli.stdin || piped {
+        attach_parent_console();
+        eprintln!(
+            "fasttail: standard input cannot be handed to the terminal interface; \
+             run fasttail-tui.exe instead (command | fasttail-tui.exe -)"
+        );
+        fasttail::print_mode::console::release();
+        std::process::exit(2);
+    }
+    let name = handoff::tui_exe_name();
+    let exe = handoff::sibling_exe(&name).unwrap_or_else(|| name.clone().into());
+    let failure = |what: &str, detail: String| {
+        Some(format!(
+            "{}\n{}{detail}\n\n{}",
+            t(lang, what),
+            exe.display(),
+            t(lang, "handoff_gui_instead")
+        ))
+    };
+    if !exe.is_file() {
+        return failure("handoff_not_found", String::new());
+    }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = handoff::forwarded_args(&args, "--tui", Some(handoff::HANDOFF_FLAG));
+    match handoff::start_in_new_console(&exe, &args) {
+        Ok(()) => std::process::exit(0),
+        Err(err) => failure("handoff_start_failed", format!("\n{err}")),
+    }
+}
+
+/// On Linux and macOS the terminal interface will run in this process (task 5.4 of
+/// openspec/changes/tui-interface); until then `--tui` names the terminal executable and
+/// `interface=tui` opens the window.
+#[cfg(not(windows))]
+fn start_terminal_interface(cli: &CliArgs, _lang: Language) -> Option<String> {
+    if cli.tui {
+        eprintln!("fasttail: --tui: run fasttail-tui for the terminal interface");
+        std::process::exit(2);
+    }
+    None
+}
+
+/// Builds the window, with the hand-off notice when the terminal could not be started.
+fn app_creator(cli: &CliArgs, handoff_notice: &Option<String>) -> eframe::AppCreator<'static> {
+    let cli = cli.clone();
+    let notice = handoff_notice.clone();
+    Box::new(move |cc| {
+        let mut app = FastTailApp::new(cc, cli);
+        app.handoff_notice = notice;
+        Ok(Box::new(app))
+    })
 }
 
 /// True when the point just inside the top-left corner of a window placed at (`x`, `y`)
@@ -413,6 +468,11 @@ fn main() -> eframe::Result<()> {
 
     let cli = parse_command_line();
     let config = FastTailConfig::load();
+    let handoff_notice = if cli.interface(config.interface) == Interface::Tui {
+        start_terminal_interface(&cli, config.language)
+    } else {
+        None
+    };
 
     let choice = cli
         .renderer
@@ -496,25 +556,27 @@ fn main() -> eframe::Result<()> {
     match choice {
         RendererChoice::Wgpu => {
             renderer::mark_starting(RendererKind::Wgpu, false);
-            eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu, false), {
-                let cli = cli.clone();
-                Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-            })
+            eframe::run_native(
+                &app_title,
+                make_options(eframe::Renderer::Wgpu, false),
+                app_creator(&cli, &handoff_notice),
+            )
         }
         RendererChoice::Glow => {
             renderer::mark_starting(RendererKind::Glow, false);
-            eframe::run_native(&app_title, make_options(eframe::Renderer::Glow, false), {
-                let cli = cli.clone();
-                Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-            })
+            eframe::run_native(
+                &app_title,
+                make_options(eframe::Renderer::Glow, false),
+                app_creator(&cli, &handoff_notice),
+            )
         }
         RendererChoice::Software => {
             renderer::mark_starting(RendererKind::Wgpu, false);
-            let first =
-                eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu, true), {
-                    let cli = cli.clone();
-                    Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-                });
+            let first = eframe::run_native(
+                &app_title,
+                make_options(eframe::Renderer::Wgpu, true),
+                app_creator(&cli, &handoff_notice),
+            );
             match first {
                 Err(err) if !renderer::app_created() => {
                     eprintln!("renderer: wgpu software backend failed to start: {err}");
@@ -523,10 +585,7 @@ fn main() -> eframe::Result<()> {
                     let second = eframe::run_native(
                         &app_title,
                         make_options(eframe::Renderer::Glow, false),
-                        {
-                            let cli = cli.clone();
-                            Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-                        },
+                        app_creator(&cli, &handoff_notice),
                     );
                     match second {
                         Err(err2) if !renderer::app_created() => {
@@ -542,11 +601,11 @@ fn main() -> eframe::Result<()> {
         }
         RendererChoice::Auto => {
             renderer::mark_starting(RendererKind::Wgpu, false);
-            let first =
-                eframe::run_native(&app_title, make_options(eframe::Renderer::Wgpu, false), {
-                    let cli = cli.clone();
-                    Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-                });
+            let first = eframe::run_native(
+                &app_title,
+                make_options(eframe::Renderer::Wgpu, false),
+                app_creator(&cli, &handoff_notice),
+            );
             match first {
                 Err(err) if !renderer::app_created() => {
                     eprintln!("renderer: wgpu backend failed to start: {err}");
@@ -555,10 +614,7 @@ fn main() -> eframe::Result<()> {
                     let second = eframe::run_native(
                         &app_title,
                         make_options(eframe::Renderer::Glow, false),
-                        {
-                            let cli = cli.clone();
-                            Box::new(move |cc| Ok(Box::new(FastTailApp::new(cc, cli))))
-                        },
+                        app_creator(&cli, &handoff_notice),
                     );
                     match second {
                         Err(err2) if !renderer::app_created() => {
