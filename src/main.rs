@@ -408,16 +408,27 @@ fn start_terminal_interface(cli: &CliArgs, lang: Language) -> Option<String> {
     }
 }
 
-/// On Linux and macOS the terminal interface will run in this process (task 5.4 of
-/// openspec/changes/tui-interface); until then `--tui` names the terminal executable and
-/// `interface=tui` opens the window.
+/// On Linux and macOS one executable has both interfaces: the terminal one runs in this
+/// process when there is a terminal to draw in and to read keys from
+/// (`handoff::terminal_available`). Without one, `--tui` fails with exit code 1, and
+/// `interface=tui` from `fasttail.ini` opens the window with a line on stderr.
 #[cfg(not(windows))]
 fn start_terminal_interface(cli: &CliArgs, _lang: Language) -> Option<String> {
-    if cli.tui {
-        eprintln!("fasttail: --tui: run fasttail-tui for the terminal interface");
+    if !fasttail::handoff::terminal_available() {
+        if cli.tui {
+            eprintln!("fasttail: --tui needs a terminal");
+            std::process::exit(1);
+        }
+        eprintln!("fasttail: interface=tui ignored: no terminal");
+        return None;
+    }
+    #[cfg(feature = "tui")]
+    std::process::exit(fasttail::tui::run(std::env::args().skip(1)));
+    #[cfg(not(feature = "tui"))]
+    {
+        eprintln!("fasttail: the terminal interface is not in this build");
         std::process::exit(2);
     }
-    None
 }
 
 /// Builds the window, with the hand-off notice when the terminal could not be started.
