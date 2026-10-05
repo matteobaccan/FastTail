@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Terminal interface: the bell on background alerts.** With *Flash on background alert*
+  on (in the terminal Settings: *Bell when a hidden stream has an alert*), a highlight
+  rule with a sound alert that matches in a stream not on screen rings the terminal bell
+  once. It rings again only for alerts that arrive after that stream was shown.
 - **Terminal interface: a top bar like the GUI's.** The first row shows the version and
   the session, the CPU and RAM meters (with *System telemetry* on), the global filter
   state and the command palette. The second row, in terminals with at least 16 rows, has

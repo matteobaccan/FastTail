@@ -465,6 +465,11 @@ pub struct App {
     pub help_sel: usize,
     help_half: usize,
     pub quit: bool,
+    /// A stream not on screen matched a rule with a sound alert (`flash_on_alert`): the
+    /// loop rings the terminal bell once (`take_bell`).
+    bell: bool,
+    /// The bell rang for the alerts now waiting; it rings again after they were seen.
+    bell_rung: bool,
     /// Mouse capture is on (the help says how to select text natively).
     pub mouse: bool,
     /// How often the files are read (the ini's `poll_interval_ms`).
@@ -557,6 +562,8 @@ impl App {
             help_sel: 0,
             help_half: 0,
             quit: false,
+            bell: false,
+            bell_rung: false,
             mouse: true,
             idle_poll: Duration::from_millis(250),
             last_engine_poll: None,
@@ -802,9 +809,17 @@ impl App {
                 .is_none_or(|at| at.elapsed() >= self.idle_poll);
         if due {
             self.last_engine_poll = Some(Instant::now());
-            for tab in &mut self.tabs {
+            // The engine counts what arrives while a stream is not on screen, and how
+            // severe it is (2: a rule with a sound alert), as in the GUI's tab bar.
+            let shown = self.visible_tabs();
+            for (i, tab) in self.tabs.iter_mut().enumerate() {
+                tab.engine.displayed = shown.contains(&i);
                 tab.engine.poll_updates();
+                if tab.engine.displayed {
+                    tab.engine.mark_seen();
+                }
             }
+            self.check_alerts(&shown);
         }
         // Without a configuration (tests, the benchmark) there are no meters.
         let telemetry_on = self
@@ -1851,6 +1866,34 @@ impl App {
             s.config.theme = next;
         }
         self.message = Some(format!("Theme: {}", next.name()));
+    }
+
+    /// The GUI's "Flash on background alert" in a terminal: while a stream that is not on
+    /// screen has an alert waiting, the bell rings once (`flash_on_alert`); it rings again
+    /// for alerts that come after the waiting ones were seen.
+    fn check_alerts(&mut self, shown: &[usize]) {
+        let waiting = self
+            .tabs
+            .iter()
+            .enumerate()
+            .any(|(i, t)| !shown.contains(&i) && t.engine.unseen_severity >= 2);
+        if !waiting {
+            self.bell_rung = false;
+            return;
+        }
+        let on = self
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.config.flash_on_alert);
+        if on && !self.bell_rung {
+            self.bell = true;
+            self.bell_rung = true;
+        }
+    }
+
+    /// Whether the bell should ring now (once per call that returns true).
+    pub fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.bell)
     }
 
     /// Play / Pause of the top bar: every stream is watched and follows (a compressed
@@ -7528,6 +7571,76 @@ mod tests {
             "2026-09-28 02:01:00",
             "the day changes, the time stays"
         );
+    }
+
+    #[test]
+    fn an_alert_in_a_hidden_stream_rings_the_bell_once_until_it_is_seen() {
+        let (mut app, dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
+        let mut settings = crate::tui::workspace::Settings::default();
+        settings.config.flash_on_alert = true;
+        app.settings = Some(settings);
+        let mut rule =
+            crate::tail_engine::HighlightRule::new("boom", [255, 0, 0], [0, 0, 0], false);
+        rule.sound_alert = crate::audio::SoundAlertPreset::Critical;
+        app.idle_poll = Duration::ZERO;
+        for tab in &mut app.tabs {
+            tab.engine.set_highlight_rules(vec![rule.clone()]);
+            tab.engine.size_check_interval = Duration::ZERO;
+        }
+        app.tick();
+        let append = |text: &str| {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.path().join("b.log"))
+                .unwrap();
+            f.write_all(text.as_bytes()).unwrap();
+        };
+        let ring = |app: &mut App| {
+            for _ in 0..200 {
+                app.tick();
+                if app.take_bell() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            false
+        };
+        // b is not on screen: a plain line stays quiet, an alert line rings once.
+        append(
+            "2026-09-28 10:00:09 INFO fine
+",
+        );
+        assert!(!ring(&mut app));
+        append(
+            "2026-09-28 10:00:10 ERROR boom
+",
+        );
+        assert!(ring(&mut app));
+        append(
+            "2026-09-28 10:00:11 ERROR boom again
+",
+        );
+        assert!(!ring(&mut app), "once until the alerts are seen");
+        // Seen (b shown), then hidden again: the next alert rings.
+        app.focus_tab(1);
+        app.tick();
+        app.focus_tab(0);
+        app.tick();
+        append(
+            "2026-09-28 10:00:12 ERROR boom
+",
+        );
+        assert!(ring(&mut app));
+        // Off in Settings: silent.
+        app.focus_tab(1);
+        app.tick();
+        app.focus_tab(0);
+        app.settings.as_mut().unwrap().config.flash_on_alert = false;
+        append(
+            "2026-09-28 10:00:13 ERROR boom
+",
+        );
+        assert!(!ring(&mut app));
     }
 
     #[test]
