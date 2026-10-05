@@ -32,7 +32,7 @@ disassembly view of what the stream shows, in both the window and the terminal i
 - Only the rows on screen are decoded, read through the block cache: no file is held in
   memory and no background scan is needed.
 
-Target release: **0.23.0** (binary views, after the sources and integrations of 0.22.0),
+Target release: **0.21.0** (re-planned by the maintainer on 2026-10-05, from 0.23.0, with the structured logs and folder sources),
 per the release plan in `docs/competitor-analysis.md` section 8. Priority: **low**
 (maintainer request, niche for a log viewer). Effort: **M (1–3 weeks)**.
 

@@ -120,8 +120,9 @@ Update this section in each release PR.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
   build of `build.yml` on its branch before merging; task 5.0, the downloads grid, is done).
-- Then **0.21.0** analysis (`structured-field-terms`, field statistics, ...),
-  **0.22.0** sources/integrations and **0.23.0** binary views (`disassembly-view`); see
+- Then **0.21.0** (`structured-field-terms`, `merged-timeline-view`, `folder-source`,
+  `disassembly-view`, `linux-tray-icon`), **0.22.0** sources/integrations and **0.23.0** the
+  formats, filters and statistics postponed from 0.21.0 (re-planned 2026-10-05); see
   `docs/competitor-analysis.md` section 8.
 
 ### Handover notes (2026-10-05, 0.16.2 nightly)
