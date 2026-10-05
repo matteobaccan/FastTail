@@ -48,6 +48,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and `--gui` name the interface to start, and giving both is a usage error (exit 2). An
   unknown `--theme` is now a usage error instead of being silently ignored.
 
+### Fixed
+
+- **Column view: the header lines up with the rows again.** Each cell of a row also took
+  the window's item spacing, so the second column's values sat one character right of their
+  name, the third two, and so on. Rows and header now place their columns the same way.
+
 ## [0.16.1] - 2026-10-05
 
 ### Added
