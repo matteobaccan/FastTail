@@ -230,3 +230,4 @@ mod time_display;
 mod search_scope;
 
 mod workspace;
+mod minimised_window;

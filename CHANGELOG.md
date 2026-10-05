@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A minimised window keeps tailing (Windows, issue #161).** Minimised, or hidden in the
+  tray, the window draws nothing and eframe stopped calling the code that reads the
+  streams: rules, sounds, automatic bookmarks and alerts waited for the window to come
+  back. The streams are now read four times a second while nothing is shown, and a rule
+  with a sound alert can flash the taskbar button of a minimised window.
+
 ## [0.20.0] - 2026-10-05
 
 The terminal interface is complete and no longer a preview: `fasttail-tui` (and

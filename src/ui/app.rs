@@ -115,6 +115,9 @@ pub struct FastTailApp {
     hidden_in_tray: bool,
     quitting: bool,
     alert_baseline: u64,
+    /// Set while the window shows nothing: a thread then requests a repaint every
+    /// `BACKGROUND_WAKE`, so `logic` keeps polling (see `background_waker`).
+    background_wake: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     tray_menu_sent: crate::tray::TrayMenu,
     tray_badge_sent: Option<(bool, String)>,
     /// The side marked for compare, and the compare shown in the Compare tab.
@@ -610,6 +613,7 @@ impl FastTailApp {
             hidden_in_tray: false,
             quitting: false,
             alert_baseline: 0,
+            background_wake: None,
             tray_menu_sent: crate::tray::TrayMenu::default(),
             tray_badge_sent: None,
             archive_picker: None,
@@ -2145,6 +2149,53 @@ impl FastTailApp {
             self.global_spec = self.config.global_filter.compile();
         }
         let _ = self.config.save();
+    }
+
+    /// The flag of the thread that wakes the app every `BACKGROUND_WAKE` while the window
+    /// shows nothing (eframe calls `logic` only when a repaint is requested). Started on
+    /// first use; the thread lives as long as the process and sleeps otherwise.
+    fn background_waker(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> &std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.background_wake.get_or_insert_with(|| {
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (ctx, waiting) = (ctx.clone(), flag.clone());
+            let _ = std::thread::Builder::new()
+                .name("fasttail-background-wake".into())
+                .spawn(move || loop {
+                    std::thread::sleep(BACKGROUND_WAKE);
+                    if waiting.load(std::sync::atomic::Ordering::Relaxed) {
+                        ctx.request_repaint();
+                    }
+                });
+            flag
+        })
+    }
+
+    /// The work of a frame that draws nothing, for a minimised or hidden window: the
+    /// streams are read (rules, sounds and automatic bookmarks run with the poll), the
+    /// tools bound to rules run, the tray answers, and a rule with a sound alert asks for
+    /// the user's attention when `flash_on_alert` is on. Nothing is on screen, so every
+    /// stream counts its new lines as unseen.
+    pub fn background_step(&mut self, ctx: &egui::Context) {
+        self.update_tray(ctx);
+        self.poll_pending_stdin();
+        let size_interval =
+            std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
+        for eng in &mut self.engines {
+            eng.displayed = false;
+            eng.size_check_interval = size_interval;
+            eng.poll_updates();
+        }
+        self.run_rule_bound_tools();
+        let alert = self.engines.iter().any(|e| e.unseen_severity >= 2);
+        if self.config.flash_on_alert && alert && !self.attention_requested {
+            self.attention_requested = true;
+            ctx.send_viewport_cmd(ViewportCommand::RequestUserAttention(
+                egui::UserAttentionType::Informational,
+            ));
+        }
     }
 
     pub fn render_ui(&mut self, ui: &mut egui::Ui) {
@@ -5430,6 +5481,19 @@ impl eframe::App for FastTailApp {
         Color32::from(self.config.theme.bg_color()).to_normalized_gamma_f32()
     }
 
+    /// Called before every `ui`, and alone while the window is minimised or hidden (no
+    /// egui pass runs then: on Windows a minimised window gets no `ui` at all, issue #161).
+    /// While the window shows nothing, the streams are polled here, with their rules,
+    /// sounds, tools, alerts and the tray; a waker keeps these calls coming.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let hidden = self.hidden_in_tray || ctx.input(|i| i.viewport().visible() == Some(false));
+        self.background_waker(ctx)
+            .store(hidden, std::sync::atomic::Ordering::Relaxed);
+        if hidden {
+            self.background_step(ctx);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Detect whether this frame is driven purely by pointer movement (no clicks, no keys, no drag)
         let is_pure_mouse_move = ui.input(|i| {
@@ -5729,6 +5793,10 @@ impl FastTailApp {
         }
     }
 }
+
+/// How often a minimised or hidden window wakes to read the streams (issue #161), as the
+/// tray's own timer does.
+const BACKGROUND_WAKE: Duration = Duration::from_millis(250);
 
 /// Structure of the dock (surface, node and tab order) without geometry.
 fn dock_signature(dock: &DockState<FastTailTab>) -> String {
