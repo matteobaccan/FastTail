@@ -23,4 +23,4 @@
 ## 5. Wrap-up
 
 - [x] 5.1 `cargo fmt`, `cargo clippy --all-targets` (both feature sets), focused tests; PR with Linux and Windows CI green
-- [ ] 5.2 Preview build for the maintainer; archive the change after the release
+- [x] 5.2 Preview build for the maintainer; archive the change after the release (0.16.2)

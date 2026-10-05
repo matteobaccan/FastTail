@@ -4,15 +4,19 @@
 Adds structure awareness to raw log lines: inline JSON detection with expandable pretty-printing, grouping of multiline stack traces with their parent entry, log level detection with colouring, a minimum-level filter and counters, and leading-timestamp detection used by the time range filter and go-to-time.
 ## Requirements
 ### Requirement: Inline JSON auto-detection and expansion
-The application SHALL treat a line as a JSON payload when, trimmed, it starts with `{` and ends with `}` or starts with `[` and ends with `]`, and SHALL render an inline toggle (`[+] JSON`, `[-] JSON` once expanded) that expands the payload into an indented, pretty-printed block below the row. A line that only carries JSON after other text (a timestamp, a level) is not detected.
+The application SHALL treat a line as a JSON payload when, trimmed, it starts with `{` and ends with `}` or starts with `[` and ends with `]`, or when a JSON object follows a leading timestamp, and SHALL render an inline toggle (`[+] JSON`, `[-] JSON` once expanded) that expands the payload into a foldable tree below the row. The tree SHALL keep the order of the line; objects and arrays SHALL be nodes showing their key and a summary (`{4 keys}`, `[12 items]`), the first level open and deeper levels folded; scalars SHALL be coloured by type; strings longer than 500 characters SHALL be cut with `…`; a container SHALL show at most its first 200 children followed by a `… N more` row. A payload over 4 MB SHALL NOT be parsed, and malformed JSON SHALL show what was read and where it stopped. The fold state of each line SHALL be kept while the stream is open and cleared when it reloads.
 
 #### Scenario: Line containing valid JSON payload
-- **WHEN** a log line is a JSON object or array
+- **WHEN** a log line is a JSON object or array, or `2026-10-05T10:00:00Z {"level":"error"}`
 - **THEN** the viewer displays a `[+] JSON` toggle next to the line, leaving the collapsed line unchanged by default.
 
 #### Scenario: User clicks expand JSON
-- **WHEN** the user clicks the inline `[+] JSON` toggle
-- **THEN** the line expands inline into indented, pretty-printed key-value pairs without breaking the overall scroll position, and the toggle reads `[-] JSON` until it is clicked again.
+- **WHEN** the user clicks the inline `[+] JSON` toggle of `{"b":1,"a":{"c":[1,2]}}`
+- **THEN** the line expands into a tree listing `b: 1` then `a {1 key}` folded, in the line's order, without breaking the overall scroll position, and the toggle reads `[-] JSON` until it is clicked again.
+
+#### Scenario: Folding a node
+- **WHEN** the user clicks the folded node `a {1 key}`
+- **THEN** it opens and shows `c [2 items]`, folded.
 
 ### Requirement: Multiline stack trace grouping
 The engine SHALL recognize multiline exceptions and stack traces (such as Java, .NET, Python, and Go tracebacks) and associate contiguous trace lines with their parent log entry.
@@ -208,4 +212,18 @@ Each text stream SHALL offer a time display among "as written" (the default), UT
 #### Scenario: As written by default
 - **WHEN** a stream has no `time_display` key
 - **THEN** every row shows its timestamp exactly as the log printed it.
+
+### Requirement: JSON node actions
+Every node of a JSON tree SHALL offer: copy the value (a scalar as its text, an object or array as indented JSON in the line's order), copy the path (`.key` steps for identifier keys, `["key"]` otherwise, `[n]` for array items, without a leading dot), expand all below it (at most 5,000 rows, saying so when cut) and collapse all below it. In the GUI they SHALL be in the node's context menu.
+
+#### Scenario: Copy a path
+- **WHEN** the user copies the path of `id` in the first item of `items` in `{"items":[{"id":7}],"x-req":{"a b":1}}`, then the path of `a b`
+- **THEN** the clipboard holds `items[0].id`, then `["x-req"]["a b"]`.
+
+### Requirement: JSON tree in the terminal interface
+In the terminal interface `J` SHALL open a dialog titled `JSON - line N` with the tree of the cursor row's payload: `↑` / `↓` move, `→`, `Enter` or `Space` unfold, `←` folds the node or goes to its parent, `*` expands all, `-` collapses all, `y` copies the value and `Y` the path through the terminal clipboard, a click toggles a node and `Esc` closes. On a row without JSON, `J` SHALL say so in the status bar.
+
+#### Scenario: Terminal tree
+- **WHEN** the cursor is on `{"user":{"id":7}}` and the user presses `J`, then `→` on `user {1 key}`
+- **THEN** the dialog shows `user {1 key}` open with `id: 7` below it.
 
