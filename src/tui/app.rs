@@ -35,7 +35,7 @@ use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
 use crate::tui::json::{JsonDialog, JsonKey};
 use crate::tui::keys::{self, Action};
-use crate::tui::mouse::{self, DialogHit, HitMap, Target, WindowHit};
+use crate::tui::mouse::{self, DialogHit, Edges, HitMap, Target, WindowHit};
 use crate::tui::palette::{self, CommandPalette, PaletteKey};
 use crate::tui::picker::{refusal_text, EntryPicker};
 use crate::tui::presets::{self, PresetsDialog, PresetsKey};
@@ -363,8 +363,9 @@ enum DockDrag {
     },
     /// The topmost floating window, taken by its title `grab` cells from its corner.
     FloatMove { grab: (u16, u16) },
-    /// The topmost floating window, taken by its bottom-right corner.
-    FloatResize,
+    /// The topmost floating window, taken by a corner or an edge: the sides that move,
+    /// and the window when it was taken (the other sides stay where they were).
+    FloatResize { edges: Edges, from: Rect },
 }
 
 /// What one window shows: the loop redraws only when a signature changes.
@@ -3267,18 +3268,12 @@ impl App {
                 self.dock_dirty = true;
                 true
             }
-            Some(DockDrag::FloatResize) => {
+            Some(DockDrag::FloatResize { edges, from }) => {
                 let main = self.main_area();
                 let Some(f) = self.floats.last_mut() else {
                     return false;
                 };
-                let r = f.rect;
-                let sized = Rect {
-                    width: (col + 1).saturating_sub(r.x).max(dock::MIN_FLOAT.0),
-                    height: (row + 1).saturating_sub(r.y).max(dock::MIN_FLOAT.1),
-                    ..r
-                };
-                f.rect = dock::clamp_into(sized, main);
+                f.rect = dock::clamp_into(dock::resized(from, edges, col, row), main);
                 self.dock_dirty = true;
                 true
             }
@@ -3559,7 +3554,7 @@ impl App {
                     self.close_stream();
                 }
             }
-            Target::FloatTitle(f) | Target::FloatCorner(f) => {
+            Target::FloatTitle(f) | Target::FloatEdge(f, _) => {
                 let Some(&(rect, _)) = self.hits.floats.iter().find(|(_, i)| *i == f) else {
                     return false;
                 };
@@ -3571,12 +3566,11 @@ impl App {
                         self.floats.push(float);
                     }
                 }
-                self.dock_drag = Some(if matches!(target, Target::FloatTitle(_)) {
-                    DockDrag::FloatMove {
+                self.dock_drag = Some(match target {
+                    Target::FloatEdge(_, edges) => DockDrag::FloatResize { edges, from: rect },
+                    _ => DockDrag::FloatMove {
                         grab: (ev.column - rect.x, ev.row - rect.y),
-                    }
-                } else {
-                    DockDrag::FloatResize
+                    },
                 });
             }
             // A title is also where a window is taken to be moved.
@@ -5865,8 +5859,8 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ("wheel", "scroll the window under the pointer", None),
     ("[x]", "top right: close the window's stream", None),
     (
-        "drag corner",
-        "resize a floating window (bottom right)",
+        "drag edge",
+        "resize a floating window (corners, sides)",
         None,
     ),
     ("drag divider", "resize the windows beside it", None),

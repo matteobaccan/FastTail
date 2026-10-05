@@ -202,6 +202,26 @@ pub fn zone_at(area: Rect, col: u16, row: u16) -> Zone {
 /// Smallest floating window: a title, three rows and the bottom border.
 pub const MIN_FLOAT: (u16, u16) = (20, 5);
 
+/// `r` with the sides in `edges` taken to the pointer at (`col`, `row`), the others where
+/// they were, at least `MIN_FLOAT`: a left or top side stops before the right or bottom
+/// one would come too close.
+pub fn resized(r: Rect, edges: crate::tui::mouse::Edges, col: u16, row: u16) -> Rect {
+    let (mut left, mut top, mut right, mut bottom) = (r.x, r.y, r.right(), r.bottom());
+    if edges.left {
+        left = col.min(right.saturating_sub(MIN_FLOAT.0));
+    }
+    if edges.right {
+        right = (col + 1).max(left + MIN_FLOAT.0);
+    }
+    if edges.top {
+        top = row.min(bottom.saturating_sub(MIN_FLOAT.1));
+    }
+    if edges.bottom {
+        bottom = (row + 1).max(top + MIN_FLOAT.1);
+    }
+    Rect::new(left, top, right - left, bottom - top)
+}
+
 /// A new floating window in `bounds`: 60% of it (at least 40 x 10 when there is room),
 /// its title under the pointer.
 pub fn float_rect_at(bounds: Rect, col: u16, row: u16) -> Rect {
@@ -268,6 +288,30 @@ mod tests {
                 second: Box::new(Pane::with_streams(&[PathBuf::from("c")])),
             }),
         }
+    }
+
+    #[test]
+    fn a_floating_window_resizes_from_any_side_and_keeps_its_minimum() {
+        use crate::tui::mouse::Edges;
+        let r = Rect::new(10, 5, 40, 10);
+        let left_top = Edges {
+            left: true,
+            top: true,
+            ..Edges::default()
+        };
+        assert_eq!(resized(r, left_top, 4, 2), Rect::new(4, 2, 46, 13));
+        // Pulled past the opposite side: it stops at the minimum size.
+        assert_eq!(resized(r, left_top, 45, 14), Rect::new(30, 10, 20, 5));
+        let bottom = Edges {
+            bottom: true,
+            ..Edges::default()
+        };
+        assert_eq!(resized(r, bottom, 0, 20), Rect::new(10, 5, 40, 16));
+        let right = Edges {
+            right: true,
+            ..Edges::default()
+        };
+        assert_eq!(resized(r, right, 30, 0), Rect::new(10, 5, 21, 10));
     }
 
     #[test]
