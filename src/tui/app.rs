@@ -419,6 +419,9 @@ pub struct App {
     pub sessions: Option<SessionDialog>,
     /// The Settings dialog (`,`).
     pub settings_form: Option<SettingsForm>,
+    /// The configuration when Settings opened: Cancel goes back to it (every change
+    /// applies at once, as in the GUI).
+    settings_before: Option<crate::config::FastTailConfig>,
     /// The highlight-rule editor (`r`).
     pub rules: Option<RulesDialog>,
     /// The filter presets (`p`).
@@ -539,6 +542,7 @@ impl App {
             browser: None,
             sessions: None,
             settings_form: None,
+            settings_before: None,
             rules: None,
             presets: None,
             global: None,
@@ -958,6 +962,11 @@ impl App {
 
     /// Handles a key; returns true when the screen changed.
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let changed = self.on_key_inner(key);
+        self.settings_live() || changed
+    }
+
+    fn on_key_inner(&mut self, key: crossterm::event::KeyEvent) -> bool {
         // The Windows console also reports releases: only presses (and repeats) act,
         // in every dialog alike, or a key would act twice.
         if key.kind == crossterm::event::KeyEventKind::Release {
@@ -1240,6 +1249,11 @@ impl App {
 
     /// Pasted text (bracketed paste) goes into the field being edited.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        let changed = self.on_paste_inner(text);
+        self.settings_live() || changed
+    }
+
+    fn on_paste_inner(&mut self, text: &str) -> bool {
         // Nothing reaches the screens under the lock, not even pasted text.
         if self.locked.is_some() {
             return false;
@@ -1344,8 +1358,61 @@ impl App {
     }
 
     fn open_settings(&mut self) {
-        let form = SettingsForm::from_config(&self.settings_mut().config);
-        self.settings_form = Some(form);
+        let config = self.settings_mut().config.clone();
+        self.settings_form = Some(SettingsForm::from_config(&config));
+        self.settings_before = Some(config);
+    }
+
+    /// While Settings is open, every valid change reaches the configuration and the
+    /// running interface at once, as the GUI's do. Returns whether anything changed.
+    fn settings_live(&mut self) -> bool {
+        let Some(form) = self.settings_form.as_ref() else {
+            return false;
+        };
+        let settings = self.settings.get_or_insert_with(Default::default);
+        let mut next = settings.config.clone();
+        form.apply_live(&mut next);
+        if next == settings.config {
+            return false;
+        }
+        settings.config = next;
+        self.apply_running_config();
+        true
+    }
+
+    /// Cancel (or `Esc`) of Settings: back to the configuration it opened with. The
+    /// external tools edited from it stay, as their editor saved them.
+    fn cancel_settings(&mut self) {
+        if self.settings_form.take().is_none() {
+            return;
+        }
+        if let Some(mut before) = self.settings_before.take() {
+            let settings = self.settings.get_or_insert_with(Default::default);
+            before.external_tools = settings.config.external_tools.clone();
+            if before != settings.config {
+                settings.config = before;
+                self.apply_running_config();
+            }
+        }
+    }
+
+    /// The configuration reaches the running interface: theme, level colours, polling,
+    /// each stream's settings (the line-number and time delta columns are defaults for
+    /// new streams: each open stream keeps its own, as with the GUI's per-stream
+    /// switches).
+    fn apply_running_config(&mut self) {
+        let Some(settings) = self.settings.as_ref() else {
+            return;
+        };
+        let config = &settings.config;
+        self.palette.theme = config.theme;
+        self.palette.level_colors = config.level_colors;
+        self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
+        for tab in &mut self.tabs {
+            let columns = (tab.engine.show_line_numbers, tab.engine.show_time_delta);
+            crate::workspace::apply_settings(&mut tab.engine, config);
+            (tab.engine.show_line_numbers, tab.engine.show_time_delta) = columns;
+        }
     }
 
     /// `Ctrl+L` (or the idle lock): the PIN screen, when a PIN is set. Without one
@@ -1868,7 +1935,7 @@ impl App {
         }
         match form.on_key(key) {
             FieldKey::Submit => self.submit_settings(),
-            FieldKey::Cancel => self.settings_form = None,
+            FieldKey::Cancel => self.cancel_settings(),
             FieldKey::Edited => {}
             FieldKey::Other => return false,
         }
@@ -1894,21 +1961,13 @@ impl App {
             return;
         }
         self.settings_form = None;
+        self.settings_before = None;
         let config = &settings.config;
         if config.interface == crate::config::Interface::Gui && interface_before != config.interface
         {
             self.interface_switch = Some(InterfaceSwitch::Offer);
         }
-        self.palette.theme = config.theme;
-        self.palette.level_colors = config.level_colors;
-        self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
-        // The line-number and time delta columns are defaults for new streams: each open
-        // stream keeps its own, as with the GUI's per-stream switches.
-        for tab in &mut self.tabs {
-            let columns = (tab.engine.show_line_numbers, tab.engine.show_time_delta);
-            crate::workspace::apply_settings(&mut tab.engine, config);
-            (tab.engine.show_line_numbers, tab.engine.show_time_delta) = columns;
-        }
+        self.apply_running_config();
         self.message = Some("Settings saved".into());
         self.save_config();
     }
@@ -3042,6 +3101,11 @@ impl App {
     /// Handles a mouse event against the last frame; returns true when the screen
     /// changed.
     pub fn on_mouse(&mut self, ev: MouseEvent) -> bool {
+        let changed = self.on_mouse_inner(ev);
+        self.settings_live() || changed
+    }
+
+    fn on_mouse_inner(&mut self, ev: MouseEvent) -> bool {
         self.idle.touch(Instant::now());
         // The mouse does nothing while locked.
         if self.locked.is_some() {
@@ -3456,7 +3520,7 @@ impl App {
                 self.presets = None;
                 self.time_range = None;
                 self.sessions = None;
-                self.settings_form = None;
+                self.cancel_settings();
                 self.confirm_overwrite = None;
                 self.interface_switch = None;
                 self.browser = None;
@@ -7669,6 +7733,11 @@ mod tests {
         };
         focus(&mut app, "Theme");
         press(&mut app, KeyCode::Right);
+        assert_eq!(
+            app.palette.theme,
+            CyberTheme::Matrix,
+            "at once, as in the GUI"
+        );
         focus(&mut app, "Line numbers in new streams");
         press(&mut app, KeyCode::Char(' '));
         focus(&mut app, "Poll interval (ms)");
@@ -7680,12 +7749,16 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.settings_form.is_some(), "kept open");
         assert!(app.message.as_deref().unwrap().contains("50 to 5000"));
-        assert_eq!(app.palette.theme, CyberTheme::Tron, "nothing applied");
+        assert_eq!(
+            app.idle_poll,
+            Duration::from_millis(250),
+            "the invalid field waits"
+        );
 
         keys(&mut app, "00");
         press(&mut app, KeyCode::Enter);
         assert!(app.settings_form.is_none());
-        assert_eq!(app.palette.theme, CyberTheme::Matrix, "applied at once");
+        assert_eq!(app.palette.theme, CyberTheme::Matrix);
         assert_eq!(app.idle_poll, Duration::from_millis(700));
         assert!(
             app.tabs[0].engine.show_line_numbers,
@@ -7710,12 +7783,17 @@ mod tests {
             "no line numbers, only the mark column: {screen:#?}"
         );
 
-        // Esc discards.
+        // Esc goes back to the values Settings opened with.
         app.apply(Action::Settings);
         focus(&mut app, "Theme");
         press(&mut app, KeyCode::Right);
+        assert_eq!(app.palette.theme, CyberTheme::Blade);
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.palette.theme, CyberTheme::Matrix);
+        assert_eq!(
+            app.settings.as_ref().unwrap().config.theme,
+            CyberTheme::Matrix
+        );
     }
 
     #[test]

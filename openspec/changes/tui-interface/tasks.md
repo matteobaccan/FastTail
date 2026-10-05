@@ -61,7 +61,7 @@
 - [x] 4.8 Top bar as the GUI's title bar and toolbar (maintainer request): title, version and session; CPU / RAM meters (`telemetry_enabled`), global filter and palette buttons; Open, Sessions, Rules (N), Play / Pause of every stream, Settings, Help; clickable, the command row from 16 rows up
 - [x] 4.9 Terminal bell for alerts in streams not on screen, with the GUI's `flash_on_alert` (maintainer request)
 - [x] 4.10 Title with the author (`by Matteo Baccan`) and the About window (top bar `[ℹ About]`, palette), as the GUI's (maintainer review of the 0.16.2 preview)
-- [ ] 4.11 Settings apply at once, as in the GUI: each change reaches the running interface (theme, language, colours, polling...) without OK
+- [x] 4.11 Settings apply at once, as in the GUI: each change reaches the running interface (theme, language, colours, polling...) without OK
 - [ ] 4.12 Every terminal string through `i18n` (task 7.3, brought forward), so a language change and *Follow the system language* show at once
 - [ ] 4.13 Window resize from all four corners and from the edges: a floating window by any corner, its bottom row and its left and right borders; a docked window's border moves the divider it touches
 - [ ] 4.14 A short closing effect when a window or dialog closes
