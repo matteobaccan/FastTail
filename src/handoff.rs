@@ -10,6 +10,10 @@
 //! own directory in a new console, with its arguments minus `--tui` plus the hidden
 //! `--handoff` (wait for a key after an error exit, so the console does not vanish), and
 //! exits. The command line is passed on as typed, not re-built from `CliArgs`.
+//!
+//! The other way, `fasttail-tui --gui` starts `fasttail` from its own directory, detached,
+//! and exits. It passes `--gui` on: without it, `interface=tui` in `fasttail.ini` would
+//! send the window straight back to the terminal.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +25,29 @@ pub const HANDOFF_FLAG: &str = "--handoff";
 /// The terminal executable's file name on this platform.
 pub fn tui_exe_name() -> String {
     format!("fasttail-tui{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// The graphical executable's file name on this platform.
+pub fn gui_exe_name() -> String {
+    format!("fasttail{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// What a build without the graphical interface answers to `--gui`: the archive it came
+/// from, and the one that has the window.
+pub fn terminal_only_message() -> String {
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        other => other,
+    };
+    let platform = format!(
+        "{}-{arch}-{}",
+        std::env::consts::OS,
+        env!("CARGO_PKG_VERSION")
+    );
+    format!(
+        "the graphical interface is not in this build (fasttail-tui-{platform}); \
+         use the fasttail-{platform} archive"
+    )
 }
 
 /// `name` in the directory of the running executable (where the archives put both).
@@ -97,6 +124,33 @@ pub fn windows_command_line(program: &Path, args: &[String]) -> String {
         line.push_str(&quote_windows_arg(arg));
     }
     line
+}
+
+/// Starts `program` with `args`, detached from this terminal, and returns without waiting:
+/// no standard handle is passed on, on Windows without a console (`DETACHED_PROCESS`, the
+/// window needs none), elsewhere in a process group of its own, so the window outlives
+/// the terminal's job control. Same working directory and environment.
+pub fn start_detached(program: &Path, args: &[String]) -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn().map(|_| ())
 }
 
 /// Starts `program` with `args` in a new console window (`CREATE_NEW_CONSOLE`), with the
@@ -309,6 +363,18 @@ mod tests {
                 assert_ne!(t(lang, key), english, "{key} in {lang:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_terminal_only_answer_names_both_archives() {
+        let m = terminal_only_message();
+        let version = env!("CARGO_PKG_VERSION");
+        assert!(m.contains("not in this build"), "{m}");
+        assert!(
+            m.contains("(fasttail-tui-") && m.contains("use the fasttail-"),
+            "{m}"
+        );
+        assert!(m.contains(version) && !m.contains("aarch64"), "{m}");
     }
 
     #[test]

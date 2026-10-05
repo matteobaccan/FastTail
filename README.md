@@ -232,6 +232,9 @@ the window opens and says why. From cmd or PowerShell run `fasttail-tui.exe` dir
 `fasttail.exe --tui` works there too, but in a second console window, and it refuses
 standard input (`command | fasttail-tui.exe -` reads it).
 
+`fasttail-tui --gui` goes the other way: it starts `fasttail` from the same folder with the
+same arguments, detached from the terminal, and exits.
+
 `?` or `F1` lists every key as a menu (`Enter` runs one); the status bar shows the main
 commands as `[ ]` buttons for the mouse. Windows follow the GUI's dock: `s` or `|` opens
 a window beside, `_` below, `<` `>` move a stream between windows, `Alt+arrows` or a

@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   started this way that exits with an error waits for a key, so the message can be read.
   Standard input (`-` or a pipe) cannot follow into the new console: `fasttail.exe`
   refuses it with exit code 2 and points to `fasttail-tui.exe`.
+- **`fasttail-tui --gui` opens the window.** It starts `fasttail` (`fasttail.exe`) from its
+  own folder with the same arguments, detached from the terminal, and exits 0; when
+  `fasttail` is not there it says so on stderr and exits 1. A build without the graphical
+  interface answers with the archive that has it and exit code 2.
 
 ### Changed
 
@@ -27,8 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`--split`, `--search`, `--theme`, `--ascii`, `--no-mouse`) and ignores them. `--tui`
   and `--gui` name the interface to start, and giving both is a usage error (exit 2). An
   unknown `--theme` is now a usage error instead of being silently ignored. For now
-  `fasttail-tui --gui`, and `fasttail --tui` on Linux and macOS, say which executable to
-  run.
+  `fasttail --tui` on Linux and macOS says to run `fasttail-tui`.
 
 ## [0.16.1] - 2026-10-05
 
