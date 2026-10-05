@@ -97,4 +97,4 @@
 
 - [x] 8.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PRs with Linux and Windows CI green
 - [x] 8.2 (the 0.16.x previews tested by the maintainer; the release asked for with `/goal` on 2026-10-05) Local preview of both Windows executables for the maintainer before the 0.20.0 release
-- [ ] 8.3 After the release, archive the change so `terminal-interface` is created and `command-line`, `rendering-backend`, `release-pipeline`, `cyber-themes` and `window-lock` gain their deltas
+- [x] 8.3 After the release (0.20.0, 2026-10-05), archive the change so `terminal-interface` is created and `command-line`, `rendering-backend`, `release-pipeline`, `cyber-themes` and `window-lock` gain their deltas

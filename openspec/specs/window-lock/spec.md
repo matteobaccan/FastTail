@@ -2,9 +2,7 @@
 
 ## Purpose
 Puts the window behind a numeric PIN when the operator walks away, so a log left open on screen is not readable by whoever passes by the desk. It is a deterrent, explicitly not a security boundary.
-
 ## Requirements
-
 ### Requirement: PIN definition and storage
 The application SHALL let the user set a PIN of 4 to 12 digits in the settings, SHALL reject anything else, and SHALL let the user remove it. The PIN SHALL NOT be written to `fasttail.ini` in clear: only a scrambled form (`lock_pin`) SHALL be stored, together with the master switch (`lock_enabled`).
 
@@ -21,7 +19,7 @@ The application SHALL let the user set a PIN of 4 to 12 digits in the settings, 
 - **THEN** the stored value is cleared and the master switch is turned off, so the application can never lock itself with a PIN nobody knows.
 
 ### Requirement: Arming the lock
-With a PIN set, the application SHALL lock on demand — a button in the settings and the `Ctrl+L` shortcut — and, when the master switch is on, SHALL lock when the Matrix screensaver ends. Without a PIN set, no action SHALL ever lock the window.
+With a PIN set, the application SHALL lock on demand — a button in the settings and the `Ctrl+L` shortcut — and, when the master switch is on, SHALL lock when the Matrix screensaver ends. Without a PIN set, no action SHALL ever lock the window. The terminal interface SHALL arm the same lock from the same stored PIN: `Ctrl+L` and a "Lock now" entry in its Settings when a PIN is set, and, when the master switch is on, after `screensaver_timeout_mins` minutes without a key or mouse event, going straight to its lock screen without a screensaver. The PIN check, the attempt counter and the cooldown SHALL be the same code in both interfaces.
 
 #### Scenario: Returning from the screensaver
 - **WHEN** the lock is armed, the screensaver is running, and the user moves the mouse or presses a key
@@ -34,6 +32,14 @@ With a PIN set, the application SHALL lock on demand — a button in the setting
 #### Scenario: No PIN set
 - **WHEN** `Ctrl+L` is pressed and no PIN is stored
 - **THEN** nothing happens and the workspace stays usable.
+
+#### Scenario: Idle lock in the terminal
+- **WHEN** the lock is armed with `screensaver_timeout_mins=10` and the terminal interface receives no key or mouse event for 10 minutes
+- **THEN** it shows its full-screen PIN dialog, no screensaver is drawn, and no log text is visible.
+
+#### Scenario: PIN set in the GUI unlocks the terminal
+- **WHEN** the PIN `4821` was set in the GUI and the user locks the terminal interface with `Ctrl+L`
+- **THEN** `4821` unlocks it, and three wrong PINs start the same 60-second cooldown as in the GUI.
 
 ### Requirement: Behaviour while locked
 While locked, the application SHALL cover the window with an **opaque, animated** backdrop (a drifting grid and a sweeping glow, so a locked window reads as deliberately covered rather than frozen) and the modal PIN prompt, so none of the log contents stays readable behind it; SHALL drop every keyboard event the workspace could act on, keeping only what the PIN field needs (text, the editing keys, `Enter`) — a bare `Escape` included, since the workspace behind must not react to it; and SHALL keep tailing every stream so no appended line is missed. Unlocking SHALL restore the exact prior workspace state.
@@ -83,3 +89,4 @@ The application SHALL NOT present the lock as protection for the log contents. A
 #### Scenario: The settings say what the lock is worth
 - **WHEN** the user opens the PIN lock section
 - **THEN** it states that the lock is a deterrent and that the log files remain readable on disk.
+

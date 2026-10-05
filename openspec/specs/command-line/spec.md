@@ -4,7 +4,7 @@
 Defines the startup arguments and options of the fasttail executable: files to open, workspace and filter options, renderer and configuration overrides, help and version output.
 ## Requirements
 ### Requirement: Command Line Paths and Options
-The executable SHALL accept `fasttail [OPTIONS] [PATH...]`. Each PATH SHALL be opened as a stream after the workspace is restored, skipping paths already open and reporting missing files on stderr; relative paths SHALL be resolved against the current directory at startup. A PATH of exactly `-` SHALL mean standard input (see the stream-engine capability), before or after `--`; it SHALL be accepted at most once, a second `-` being a usage error, and a file named `-` SHALL be reachable as `./-`. When `-` is given but standard input is not a pipe or a redirected file, the application SHALL report it on stderr and open no standard-input stream. Without `-`, standard input that is a pipe or a redirected file SHALL be read the same way, the stream being created only once the first byte arrives. Options: `--fresh` (empty workspace), `--filter <text>`, `--exclude <text>` (applied to the streams opened from the command line, the standard-input stream included), `--follow` / `--no-follow`, `--renderer <auto|glow|wgpu|software>`, `--config <path>`, `--session <file>` (load this session file at startup, replacing the restored workspace without confirmation), `--version`, `--help`, and `--` to end option parsing. `--gui` SHALL be accepted and ignored: FastTail has been GUI-only since 0.7.1, and the flag is kept so existing shortcuts and scripts keep working. Unknown options or missing values SHALL print usage to stderr and exit with code 2; `--help` and `--version` SHALL print to the parent console and exit 0.
+The executable SHALL accept `fasttail [OPTIONS] [PATH...]`. Each PATH SHALL be opened as a stream after the workspace is restored, skipping paths already open and reporting missing files on stderr; relative paths SHALL be resolved against the current directory at startup. A PATH of exactly `-` SHALL mean standard input (see the stream-engine capability), before or after `--`; it SHALL be accepted at most once, a second `-` being a usage error, and a file named `-` SHALL be reachable as `./-`. When `-` is given but standard input is not a pipe or a redirected file, the application SHALL report it on stderr and open no standard-input stream. Without `-`, standard input that is a pipe or a redirected file SHALL be read the same way, the stream being created only once the first byte arrives. Options: `--fresh` (empty workspace), `--filter <text>`, `--exclude <text>` (applied to the streams opened from the command line, the standard-input stream included), `--follow` / `--no-follow`, `--renderer <auto|glow|wgpu|software>`, `--config <path>`, `--session <file>` (load this session file at startup, replacing the restored workspace without confirmation), `--tui` (start the terminal interface, see the terminal-interface capability), `--gui` (start the graphical interface even when `interface=tui` is set in `fasttail.ini`; given to the terminal executable, hand off to the graphical one), `--version`, `--help`, and `--` to end option parsing. `--tui` and `--gui` together SHALL be a usage error. The terminal options `--ascii`, `--no-mouse`, `--split`, `--search <text>` and `--theme <tron|matrix|blade|light>` SHALL be accepted by every FastTail executable, used by the terminal interface and ignored by the graphical one; on Windows `fasttail.exe` SHALL pass them on to `fasttail-tui.exe`. Unknown options or missing values SHALL print usage to stderr and exit with code 2; `--help` and `--version` SHALL print to the parent console and exit 0.
 
 #### Scenario: Opening two files from a shell
 - **WHEN** the user runs `fasttail app.log err.log` with a saved workspace holding `other.log`
@@ -33,6 +33,22 @@ The executable SHALL accept `fasttail [OPTIONS] [PATH...]`. Each PATH SHALL be o
 #### Scenario: Dash without piped input
 - **WHEN** the user runs `fasttail - app.log` from a terminal without redirecting standard input
 - **THEN** stderr says that standard input is not a pipe, and the window opens with `app.log` and no `stdin` stream.
+
+#### Scenario: --gui overrides interface=tui
+- **WHEN** `fasttail.ini` holds `interface=tui` and the user runs `fasttail --gui app.log`
+- **THEN** the graphical window opens with `app.log`, and `fasttail.ini` still holds `interface=tui`.
+
+#### Scenario: Both interface options
+- **WHEN** the user runs `fasttail --tui --gui`
+- **THEN** usage is printed to stderr and the process exits with code 2.
+
+#### Scenario: Terminal options passed on by the Windows hand-off
+- **WHEN** the user runs `fasttail.exe --tui --ascii --filter ERROR app.log` with `fasttail-tui.exe` next to it
+- **THEN** `fasttail-tui.exe` starts in a new console with `--ascii --filter ERROR app.log`, draws ASCII borders and shows only `ERROR` rows of `app.log`.
+
+#### Scenario: Terminal options ignored by the GUI
+- **WHEN** the user runs `fasttail --no-mouse app.log` with `interface=gui`
+- **THEN** the graphical window opens with `app.log` and the mouse works as usual.
 
 ### Requirement: Headless Print Mode
 The executable SHALL accept `fasttail --print [OPTIONS] [FILE...]`, which writes to standard output the lines of the inputs that pass the given filters and exits, without opening a window, restoring or saving the workspace, or writing `fasttail.ini`; the configuration SHALL only be read, for the theme and the highlight rules. Each input SHALL be a file, a directory pattern (read from its newest matching file), a single compressed file in gzip, bzip2, xz or zstd format (decompressed as it is read, nothing written to disk), or `-` for standard input; with no FILE, piped standard input SHALL be read, and a terminal as standard input SHALL be a usage error. A zip, tar or 7z archive SHALL be reported on standard error as not supported in print mode. `--filter <TEXT>` and `--exclude <TEXT>` SHALL each be accepted up to 8 times and SHALL combine as a stream's include and exclude terms, with `--regex` and `--case-sensitive` as the stream's toggles; `--level <LEVEL>` SHALL set the minimum level; `--since <TIME>` and `--until <TIME>` SHALL accept everything the time range popup accepts, with the same rules for a bare time and for the end of the unit typed, and relative times (`now`, or `-` followed by number-and-unit pairs with the units `s`, `m`, `h`, `d` and `w`, combined as in `-1h30m`, the syntax of `relative-time-windows`) counted back from the current local time, a relative time being an exact instant on both sides (a relative "to" is not widened to the end of a unit); `--context <N>` (0 to 100) SHALL print `N` lines before and after each match with a `--` line between groups that are not consecutive. The lines printed SHALL be exactly the lines the window shows for the same filters, stack-trace continuation lines following their entry. Inputs SHALL be printed one after the other in the order given; with more than one input each line SHALL be prefixed with the input's name and `:` unless `--no-prefix` is given, and `--line-numbers` SHALL prefix the line number and `:`. Memory use SHALL NOT grow with the size of the inputs: no line index SHALL be built, and the first matching line SHALL be printed as soon as it is read. The exit code SHALL be 0 when at least one line was printed, 1 when none was, 2 for a usage error, and 3 when an input could not be read, the others being printed. The options `--level`, `--context`, `--color`, `--line-numbers`, `--no-prefix`, `--regex` and `--case-sensitive` without `--print` SHALL be a usage error; `--since` and `--until` without `--print` SHALL set the time window of the streams opened in the window with the same syntax, a relative time being turned into the instant it names at start (with its milliseconds, exact on both sides) until `relative-time-windows` makes it slide. Without `--print`, `--filter` and `--exclude` SHALL keep their previous behaviour: given more than once, the last one SHALL count, and the limit of 8 terms SHALL NOT apply.
@@ -101,4 +117,19 @@ Without `--print`, the executable SHALL accept `--since <TIME>` and `--until <TI
 #### Scenario: Unreadable time
 - **WHEN** the user runs `fasttail --since yesterday app.log`
 - **THEN** usage is printed to stderr and the process exits with code 2.
+
+### Requirement: Terminal Executable
+Where `fasttail-tui` is built, it SHALL accept the same paths and options as `fasttail`, SHALL start the terminal interface, SHALL ignore `interface` in `fasttail.ini` and accept `--tui` as a no-op, and SHALL accept `--renderer` and ignore it. `--gui` SHALL hand off to the graphical interface as the terminal-interface capability defines: on Windows start `fasttail.exe` from the same directory and exit 0, or print that `fasttail.exe` was not found and exit 1 when it is missing; in a build without the graphical interface print that the GUI is not in this build and exit 2. Its `--help` SHALL list the terminal options and the environment variables `FASTTAIL_TUI_COLORS` and `FASTTAIL_TUI_ASCII`. On Windows it SHALL be a console-subsystem executable, so a shell waits for it.
+
+#### Scenario: Help of the terminal executable
+- **WHEN** the user runs `fasttail-tui.exe --help` in cmd
+- **THEN** usage with `--ascii`, `--no-mouse`, `--split`, `--search`, `--theme`, `--gui`, `FASTTAIL_TUI_COLORS` and `FASTTAIL_TUI_ASCII` is printed in that console, the exit code is 0, and cmd shows its prompt only afterwards.
+
+#### Scenario: --gui given to the terminal executable
+- **WHEN** the user runs `fasttail-tui.exe --gui --filter ERROR app.log` with `fasttail.exe` next to it
+- **THEN** the graphical window opens with `app.log` filtered on `ERROR`, and `fasttail-tui.exe` exits with code 0 without drawing anything.
+
+#### Scenario: --gui in the terminal-only build
+- **WHEN** the user runs `fasttail-tui --gui` from the Linux terminal-only archive
+- **THEN** stderr says the graphical interface is not in this build and the exit code is 2.
 
