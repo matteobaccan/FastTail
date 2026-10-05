@@ -224,7 +224,8 @@ dock empty. `[x]` at the top right of a window, or `Ctrl+W`, closes its stream; 
 last one (or when started with nothing to open) the workspace is empty. `o` opens a file
 through a folder browser, `,` the Settings, `Shift+T` the next theme, `#` the line numbers of the stream (Settings
 sets them, and the time delta column, for new streams). `r` edits the highlight rules (order, colours, options) and lists the quick labels,
-`Ctrl+Shift+1..9` (or `L` and a digit where the terminal does not send it) turns the
+`Ctrl+Shift+1..9` (sent by terminals with the Kitty keyboard protocol, which is switched
+on when available; elsewhere `L` and a digit) turns the
 search text into a quick label, `p` applies, saves and renames
 filter presets, `F` edits the global filter and `f` switches it on or off, `!` runs an
 external tool on the cursor row (a tool's shortcut and rule-bound runs work too; Settings
