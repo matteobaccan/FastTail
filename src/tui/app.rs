@@ -4028,16 +4028,14 @@ impl App {
                     None => self.message = Some(tx(self.lang, "No bookmark visible").into()),
                 }
             }
-            Action::SearchNext => {
-                if tab.engine.search_next(false).is_none() {
-                    self.message = Some(tx(self.lang, "No search hits").into());
-                }
-            }
-            Action::SearchPrev => {
-                if tab.engine.search_prev(false).is_none() {
-                    self.message = Some(tx(self.lang, "No search hits").into());
-                }
-            }
+            Action::SearchNext => match tab.engine.search_next(false) {
+                Some(_) => {}
+                None => self.message = Some(tx(self.lang, "No search hits").into()),
+            },
+            Action::SearchPrev => match tab.engine.search_prev(false) {
+                Some(_) => {}
+                None => self.message = Some(tx(self.lang, "No search hits").into()),
+            },
             Action::ToggleContext => toggle_context(tab, &mut self.message, self.lang),
             Action::ToggleHex => tab.toggle_hex(),
             Action::ToggleAsm => tab.toggle_asm(),
