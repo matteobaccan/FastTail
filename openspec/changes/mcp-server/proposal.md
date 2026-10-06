@@ -37,7 +37,7 @@ Medium, effort M).
 - New `fasttail.ini` section `[mcp]`: `enabled` (default `false`), `http` (default
   `false`), `port`, `token`, `allow_write` (default `false`), `open_roots`.
 
-Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **0.27.0** (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low–Medium**. Effort: **M**.
 
 ### Non-goals

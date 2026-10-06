@@ -7,7 +7,7 @@
 ## 2. View
 
 - [ ] 2.1 Window: parser selector entry, header names, `⏎` marks, column choice and widths
-- [ ] 2.2 Terminal interface: the same columns
+- [ ] 2.2 Terminal interface: a column view for every parser (stream bar toggle, header row, columns shown / hidden / ordered, `fields_view` / `fields_columns` shared with the window), then the CSV / TSV columns in it
 - [ ] 2.3 Field filter terms, copy as shown and export on cells
 - [ ] 2.4 `csv_separator=`, `csv_header=` per stream; round-trip test
 

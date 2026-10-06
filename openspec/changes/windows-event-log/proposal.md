@@ -35,7 +35,7 @@ common dead end.
 - Sessions, workspace and recent files keep `eventlog://<channel>` with the pre-filter; a
   new `fasttail.ini` key `event_log_initial_events`.
 
-Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **0.26.0** (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **medium**. Effort: **M (about 2 weeks)**.
 
 ### Non-goals

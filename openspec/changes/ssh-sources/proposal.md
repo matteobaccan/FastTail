@@ -49,7 +49,7 @@ change, this change is the full SSH part.
   `remote_spool_max_mb` (default 2048, 64–65536) and `remote_initial_mb` (default 64,
   0–4096; 0 = only new lines).
 
-Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **0.23.0** (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **medium–high**. Effort: **M (2–3 weeks)**.
 
 ### Non-goals

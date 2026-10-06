@@ -159,7 +159,7 @@ live tail with a volume histogram, alerts, and in 2026 MCP servers for AI assist
 - **Structured logs**: the requests with the most votes in lnav (mixed JSON formats, forcing
   a format), klogg (#510) and LogExpert (#197) ask for fields and columns.
 - **Merging files by time** is standard in every tool that is growing (lnav, hl, LogViewPlus,
-  Chipmunk, LogoRRR); FastTail's `merged-timeline-view` is planned for 0.21.0.
+  Chipmunk, LogoRRR); FastTail's `merged-timeline-view` is planned for 0.22.0.
 - **Context lines** became standard in 2026: lnav 0.15 (`:filter-context`) followed
   LogFusion and FastTail 0.13.0.
 - **Tabular and metric data**: lnav 0.15 reads CSV / TSV as a format and draws numeric
@@ -203,33 +203,34 @@ column says where each gap stands after 0.20.0.
 
 | # | Gap | Who has it | Value | Effort | Status after 0.20.0 |
 |---|---|---|---|---|---|
-| 1 | **Structured logs**: parse JSON / logfmt / regex with named groups into fields, a column view, hide / show fields | LogExpert, LogViewPlus, lnav, hl, Seq, Loki | High | L | partly closed: `structured-fields` (0.14.0), JSON tree (0.16.2); field terms in 0.21.0, user formats in 0.23.0 |
-| 2 | **Merged timeline** of several files by timestamp | lnav, Tailviewer, hl, LogViewPlus, Chipmunk | High | L | 0.21.0 |
+| 1 | **Structured logs**: parse JSON / logfmt / regex with named groups into fields, a column view, hide / show fields | LogExpert, LogViewPlus, lnav, hl, Seq, Loki | High | L | partly closed: `structured-fields` (0.14.0), JSON tree (0.16.2); field terms and CSV / TSV in 0.21.0, user formats in 0.22.0 |
+| 2 | **Merged timeline** of several files by timestamp | lnav, Tailviewer, hl, LogViewPlus, Chipmunk | High | L | 0.22.0 |
 | 3 | **Context lines** (±N) around filter matches, `grep -C` style | LogFusion, lnav 0.15 | High | S–M | closed, 0.13.0 |
-| 4 | **Field-scoped and boolean filters** (`status>=500`, OR / NOT) | klogg, hl, Seq, Loki, LogViewPlus | High | M | 0.21.0 (field terms), 0.23.0 (boolean) |
-| 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | 0.22.0 |
-| 6 | **Pattern grouping** of similar lines anywhere in the file (Drain) | gonzo, Loki, Kibana; requested in LogExpert (#654) | Medium | M | 0.23.0 |
+| 4 | **Field-scoped and boolean filters** (`status>=500`, OR / NOT) | klogg, hl, Seq, Loki, LogViewPlus | High | M | 0.21.0 (field terms), 0.22.0 (boolean) |
+| 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | 0.23.0 |
+| 6 | **Pattern grouping** of similar lines anywhere in the file (Drain) | gonzo, Loki, Kibana; requested in LogExpert (#654) | Medium | M | 0.25.0 |
 | 7 | **Headless mode**: `fasttail --print` filters / highlights to stdout | hl, tailspin, lnav, Chipmunk CLI | Medium | S | closed, 0.13.0 |
 | 8 | **Time zones**: show timestamps in UTC / local / a chosen zone; epoch as dates | hl, LogViewPlus | Medium | S–M | closed, 0.13.0 |
 | 9 | **Automatic highlighting** of IPs, UUIDs, URLs, durations, paths | tailspin, lnav | Medium | S | closed, 0.13.0 |
 | 10 | **Selection helpers**: highlight every occurrence of the selected text; jump to the next line of a given rule | LogViewPlus, SnakeTail, LogExpert | Medium | S | closed, 0.13.0 |
 | 11 | **Rule sets** import / export (share highlight rules) | LogFusion, LogViewPlus | Medium | S | closed, 0.13.0 |
-| 12 | **Windows Event Log** source | SnakeTail, LogFusion, LogViewPlus | Medium | M | 0.22.0 |
-| 13 | **TCP / UDP / syslog listener** | LogViewPlus, Chipmunk | Medium | M | 0.22.0 |
-| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | 0.22.0 |
-| 15 | **Top-N and statistics** of a field over the view | angle-grinder, goaccess, lnav (per-column stats in 0.15), LogViewPlus | Medium | M | 0.23.0 |
+| 12 | **Windows Event Log** source | SnakeTail, LogFusion, LogViewPlus | Medium | M | 0.26.0 |
+| 13 | **TCP / UDP / syslog listener** | LogViewPlus, Chipmunk | Medium | M | 0.23.0 |
+| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | 0.26.0 |
+| 15 | **Top-N and statistics** of a field over the view | angle-grinder, goaccess, lnav (per-column stats in 0.15), LogViewPlus | Medium | M | 0.24.0 |
 | 16 | **Markdown report** of bookmarks and notes (incident write-up) | logana, lnav | Medium | S | closed, 0.13.0 |
-| 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | 0.22.0 |
-| 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | 0.23.0 |
+| 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | 0.27.0 |
+| 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | 0.22.0 |
 | 19 | Partial-line selection | requested (SnakeTail #60, Tailviewer #231) | Low–Med | M | closed, 0.14.0 |
-| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray 0.21.0, OutputDebugString and plugin API 0.22.0, cross-line regex 0.23.0 |
+| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray 0.21.0, OutputDebugString 0.23.0, cross-line regex 0.24.0, plugin API 0.26.0 |
 | 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | closed, 0.20.0 (`fasttail-tui`, Linux terminal-only archive) |
 
 ### New candidates for 0.24.0
 
 Found in the 2026-10-05 scan and assigned to 0.24.0 by the maintainer the same evening, each
 now an OpenSpec change (section 8): `open-at-line`, `hide-lines`, `tabular-files`,
-`field-sparkline`, `split-log`, `out-of-order-lines`, `tui-find-all`.
+`field-sparkline`, `split-log`, `out-of-order-lines`, `tui-find-all`. Spread over 0.21.0 to
+0.27.0 by the re-plan of 2026-10-06 (section 8).
 
 | Candidate | Who has it | Value | Effort |
 |---|---|---|---|
@@ -264,7 +265,7 @@ match the filter presets and `--print`.
 These points are folded into the `tui-interface` proposal (PR #132, design decision 7 and
 the Terminal Key Conventions requirement). It shipped in 0.20.0 (archived as the
 `terminal-interface` spec; guide in `docs/tui.md`); remappable keys stay with
-`remappable-shortcuts` (0.22.0).
+`remappable-shortcuts` (0.26.0).
 
 ## 8. Release plan: closing the gap
 
@@ -339,64 +340,91 @@ After 0.14.0 the maintainer moved the terminal interface forward: 0.20.0 holds o
 `tui-interface` (PR #132, the TUI at parity with the window, HEX view included, Markdown
 excluded), completed through the nightly patches (0.15.x, then 0.16.x). The gap changes below resume after it.
 
-### 0.21.0 — structured logs, sources from folders, binary views
+### 0.20.x — nightly patches
 
-Re-planned by the maintainer on 2026-10-05: the disassembly view moves here from 0.23.0;
-user-defined formats, boolean filters, cross-line regex, export formats and the statistics
-group move to 0.23.0.
+Requested by the maintainer on 2026-10-06, one PR each, released as nightly patches:
 
 | Change | Gaps | Effort |
 |---|---|---|
-| `structured-field-terms` — field filter terms, level and time from fields, cell spans, copy as shown | 1, 4 | M |
-| `merged-timeline-view` — several files merged by timestamp | 2 | L |
+| `release-packages` — deb, rpm, AppImage, MSI, dmg (one PR per task group) | platform coverage | M |
+| `tui-movable-dialogs` — terminal Settings and Keys dialogs move, resize, close with `[x]` | requested | S |
+| `tui-cursor-position` — `Ln` / `Col` of the cursor in the terminal window border | requested | XS |
+| `clearer-stream-toggles` — Monitor renamed Auto-update; Follow and Auto-update as check boxes | requested | S |
+| `level-detect-window` — level searched in the first N bytes (global and per stream) | requested | S |
+
+### Release size from 0.21.0 on
+
+Re-planned by the maintainer on 2026-10-06: each minor holds about **one large, two medium
+and three small** changes, so no release waits on too much work. With more medium than
+small changes left, from 0.24.0 a release holds a large one and two medium, or three to
+four medium. `disassembly-view` shipped early in 0.20.1. The order inside a release follows
+the dependencies.
+
+### 0.21.0 — structured data
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `tabular-files` — CSV / TSV as columns, header and separator detection, quoted multi-line cells, and the column view in the terminal for every parser (moved from 0.24.0) | lnav, LogExpert | L |
+| `structured-field-terms` — field filter terms, level and time from fields, cell spans, copy as shown (first: `tabular-files` needs its terms) | 1, 4 | M |
 | `folder-source` — several patterns, subfolders, "open all" | Tailviewer, LogFusion | M |
-| `disassembly-view` — ASM view of a stream: x86 16 / 32 / 64-bit, PE and ELF entry point and sections (a maintainer request; hex editors with a disassembly pane such as Hiew and 010 Editor have it; it extends the HEX view in the window and in the terminal) — **shipped early in 0.20.1** | requested | M |
 | `linux-tray-icon` — the Linux tray backend left open by `tray-icon` | — | S |
+| `open-at-line` — `fasttail app.log:1204`, `--line N`, also for `--print` (from 0.24.0) | LogExpert, Chipmunk | S |
+| `hide-lines` — hide selected lines by hand, listed, restorable, saved per stream (from 0.24.0) | LogExpert | S |
 
-### 0.22.0 — sources and integrations
-
-| Change | Gaps | Effort |
-|---|---|---|
-| `system-sources` — journald, Docker / Kubernetes | 5 | M–L |
-| `ssh-sources` — SSH / SFTP files | 5 | M |
-| `windows-event-log` — Event Log source | 12 | M |
-| `network-listener` — TCP / UDP / syslog | 13 | M |
-| `otlp-receiver` — OTLP logs on top of the listener | gonzo | S |
-| `debug-output-capture` — Windows OutputDebugString | 20 | S |
-| `rule-notifications` — desktop notification when a rule matches | LogExpert | S |
-| `query-language` — SQL-like queries over fields | LogViewPlus, lnav | L |
-| `remappable-shortcuts` — key bindings on the 0.13.0 action registry | 14 | M |
-| `mcp-server` — read-only MCP server for AI assistants, off by default | 17 | M |
-| `web-ui` — read-only local web view, off by default | Seq, Loki | M |
-| `plugin-api` — out-of-process source plugins, bundled formats | 20 | L |
-
-### 0.23.0 — formats, filters and statistics (postponed from 0.21.0)
+### 0.22.0 — time and formats
 
 | Change | Gaps | Effort |
 |---|---|---|
-| `custom-log-formats` — user-defined formats (named groups, timestamp, multiline start) | 1 | M |
-| `boolean-filter-expressions` — AND / OR / NOT, field operands | 4 | M |
-| `cross-line-regex` — regex across lines (plus single-line regex search) | 20 | M |
-| `export-formats` — CSV and HTML export | 18 | S |
-| `field-statistics` — top-N and statistics of a field | 15 | M |
-| `pattern-grouping` — Drain patterns, CTRL + SHIFT + G | 6 | M |
-| `spike-explanation` — what is different in a histogram spike | Loki, Kibana | M |
-| `operation-timeline` — Gantt of operations by an id field | lnav | M |
+| `merged-timeline-view` — several files merged by timestamp (from 0.21.0) | 2 | L |
+| `custom-log-formats` — user-defined formats (named groups, timestamp, multiline start) (from 0.23.0) | 1 | M |
+| `boolean-filter-expressions` — AND / OR / NOT, field operands (from 0.23.0) | 4 | M |
+| `out-of-order-lines` — backward clock jumps marked, counted and walked (from 0.24.0) | nerdlog | S |
+| `split-log` — split a file by lines, size or time (from 0.24.0) | lnav | S |
+| `export-formats` — CSV and HTML export (from 0.23.0) | 18 | S |
 
-### 0.24.0 — scan candidates of 2026-10-05
+### 0.23.0 — remote and system sources
 
-The seven candidates of section 6, assigned by the maintainer on 2026-10-05.
-`field-sparkline` comes after `field-statistics` (0.23.0).
-
-| Change | Who has it | Effort |
+| Change | Gaps | Effort |
 |---|---|---|
-| `open-at-line` — `fasttail app.log:1204`, `--line N`, also for `--print` | LogExpert, Chipmunk | S |
-| `hide-lines` — hide selected lines by hand, listed, restorable, saved per stream | LogExpert | S |
-| `tabular-files` — CSV / TSV as columns, header and separator detection, quoted multi-line cells | lnav, LogExpert | M |
-| `field-sparkline` — a numeric field plotted over the timeline histogram | lnav, gonzo | M |
-| `split-log` — split a file by lines, size or time | lnav | S |
-| `out-of-order-lines` — backward clock jumps marked, counted and walked | nerdlog | S |
-| `tui-find-all` — Search all streams in the terminal interface | FastTail window, Chipmunk | M |
+| `system-sources` — journald, Docker / Kubernetes (from 0.22.0) | 5 | M–L |
+| `ssh-sources` — SSH / SFTP files (from 0.22.0) | 5 | M |
+| `network-listener` — TCP / UDP / syslog (from 0.22.0) | 13 | M |
+| `otlp-receiver` — OTLP logs on top of the listener (from 0.22.0) | gonzo | S |
+| `rule-notifications` — desktop notification when a rule matches (from 0.22.0) | LogExpert | S |
+| `debug-output-capture` — Windows OutputDebugString (from 0.22.0) | 20 | S |
+
+### 0.24.0 — queries and statistics
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `query-language` — SQL-like queries over fields (from 0.22.0; after the boolean filters of 0.22.0) | LogViewPlus, lnav | L |
+| `field-statistics` — top-N and statistics of a field (from 0.23.0) | 15 | M |
+| `cross-line-regex` — regex across lines (plus single-line regex search) (from 0.23.0) | 20 | M |
+
+### 0.25.0 — patterns and analysis
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `pattern-grouping` — Drain patterns, CTRL + SHIFT + G (from 0.23.0) | 6 | M |
+| `spike-explanation` — what is different in a histogram spike (from 0.23.0) | Loki, Kibana | M |
+| `field-sparkline` — a numeric field plotted over the timeline histogram (from 0.24.0; after `field-statistics`) | lnav, gonzo | M |
+| `operation-timeline` — Gantt of operations by an id field (from 0.23.0) | lnav | M |
+
+### 0.26.0 — extensibility
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `plugin-api` — out-of-process source plugins, bundled formats (from 0.22.0) | 20 | L |
+| `windows-event-log` — Event Log source (from 0.22.0) | 12 | M |
+| `remappable-shortcuts` — key bindings on the 0.13.0 action registry (from 0.22.0) | 14 | M |
+
+### 0.27.0 — integrations
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `mcp-server` — read-only MCP server for AI assistants, off by default (from 0.22.0) | 17 | M |
+| `web-ui` — read-only local web view, off by default (from 0.22.0) | Seq, Loki | M |
+| `tui-find-all` — Search all streams in the terminal interface (from 0.24.0) | FastTail window, Chipmunk | M |
 
 Open questions are listed in each change's design.
 

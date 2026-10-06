@@ -18,7 +18,7 @@ one piece at a time (a time range plus **Export visible lines**). lnav 0.15 adde
   in memory; existing files are never overwritten without asking.
 - The terminal interface offers the same dialog from the palette.
 
-Target release: **0.24.0** (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **low**. Effort: **S (under a week)**.
+Target release: **0.22.0** (re-planned by the maintainer on 2026-10-06, from 0.24.0: about one large, two medium and three small changes per release) (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **low**. Effort: **S (under a week)**.
 
 ### Non-goals
 
