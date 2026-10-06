@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Caching transformed string keys in UI pickers and unstable span sorting
+**Learning:** Using `sort_by` with `to_lowercase()` inside the comparison closure allocates string copies O(N log N) times during sorting. Switching to `sort_by_cached_key` reduces string transformation allocations to O(N). Additionally, using `sort_unstable_by_key` on hot layout span lists avoids the allocation/tracking overhead of stable sort when element stability is not required.
+**Action:** Always use `sort_by_cached_key` when sorting collections by derived/transformed string properties, and prefer `sort_unstable_by_key` for sorting layout spans or primitives where key stability is unnecessary.
