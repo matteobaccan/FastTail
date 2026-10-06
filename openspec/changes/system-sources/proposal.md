@@ -37,7 +37,7 @@ journald), and the post-0.12.0 competitor scan ranks remote and system sources g
   (default `journalctl`) are new keys in `fasttail.ini` too.
 - **SSH** (`ssh://host/path`) is **phase 2**, a later release: see the design for why.
 
-Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **0.23.0** (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Effort: **M–L**.
 
 ### Non-goals

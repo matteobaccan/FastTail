@@ -19,7 +19,7 @@ terminal. On a server, looking for a request id across several logs is the commo
   marked stale.
 - Up to 100,000 hits listed per stream, the true total counted, as in the window.
 
-Target release: **0.24.0** (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **medium**. Effort: **M (1–3 weeks)**.
+Target release: **0.27.0** (re-planned by the maintainer on 2026-10-06, from 0.24.0: about one large, two medium and three small changes per release) (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **medium**. Effort: **M (1–3 weeks)**.
 
 ### Non-goals
 

@@ -19,7 +19,7 @@ compute their statistics (`field-statistics`, 0.23.0).
 - The terminal interface draws one plotted field as a braille or block sparkline row under
   its histogram row.
 
-Target release: **0.24.0** (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Depends on `field-statistics` (0.23.0) for numeric field reading. Priority:
+Target release: **0.25.0** (re-planned by the maintainer on 2026-10-06, from 0.24.0: about one large, two medium and three small changes per release) (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Depends on `field-statistics` (0.23.0) for numeric field reading. Priority:
 **medium**. Effort: **M (1–3 weeks)**.
 
 ### Non-goals

@@ -34,7 +34,7 @@ the terminal interface planned for 0.20.0 needs rebindable keys too.
   the arrows and `Home` / `End` inside text fields and lists, `CTRL + A / C / V / X / Z`
   inside text fields.
 
-Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **0.26.0** (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Medium**. Effort: **M**.
 
 ### Non-goals

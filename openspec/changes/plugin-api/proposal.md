@@ -40,7 +40,7 @@ without growing the core, and lets users share formats.
 - **Settings ▸ Plugins**: list (name, version, kind, state, error), enable / disable,
   open the plugins folder, reload.
 
-Target release: **0.22.0** (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **0.26.0** (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low**. Effort: **L**.
 
 ### Non-goals

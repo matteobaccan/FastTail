@@ -20,7 +20,7 @@ FastTail can only exclude by text.
   older builds ignore the key. A truncation, rotation or rewrite of the file clears them,
   since line numbers no longer match.
 
-Target release: **0.24.0** (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **medium**. Effort: **S (under a week)**.
+Target release: **0.21.0** (re-planned by the maintainer on 2026-10-06, from 0.24.0: about one large, two medium and three small changes per release) (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **medium**. Effort: **S (under a week)**.
 
 ### Non-goals
 

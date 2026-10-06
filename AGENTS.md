@@ -110,10 +110,14 @@ Update this section in each release PR.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
   build of `build.yml` on its branch before merging; task 5.0, the downloads grid, is done).
-- Then **0.21.0** (`structured-field-terms`, `merged-timeline-view`, `folder-source`,
-  `linux-tray-icon`; `disassembly-view` shipped early in 0.20.1), **0.22.0** sources/integrations and **0.23.0** the
-  formats, filters and statistics postponed from 0.21.0 (re-planned 2026-10-05); see
-  `docs/competitor-analysis.md` section 8.
+- Also as nightly patches (requested 2026-10-06): `tui-movable-dialogs`,
+  `tui-cursor-position`, `clearer-stream-toggles`, `level-detect-window`.
+- Then, re-planned on 2026-10-06 to about one large, two medium and three small changes
+  per minor: **0.21.0** structured data (`tabular-files` with the terminal column view,
+  `structured-field-terms`, `folder-source`, `linux-tray-icon`, `open-at-line`,
+  `hide-lines`), **0.22.0** time and formats, **0.23.0** remote and system sources,
+  **0.24.0** queries and statistics, **0.25.0** patterns and analysis, **0.26.0**
+  extensibility, **0.27.0** integrations; see `docs/competitor-analysis.md` section 8.
 
 ### Handover notes (2026-10-05, 0.20.1)
 

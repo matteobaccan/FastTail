@@ -44,7 +44,7 @@ half to its own change (its design, decision 6).
   each `[filter_preset_N]` section. Older builds ignore the new keys and fall back to the
   saved include terms.
 
-Target release: **0.23.0** (re-planned by the maintainer on 2026-10-05, from 0.21.0) (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
+Target release: **0.22.0** (re-planned by the maintainer on 2026-10-06, from 0.23.0: about one large, two medium and three small changes per release) (re-planned by the maintainer on 2026-10-05, from 0.21.0) (structured logs and analysis, continued; planned for 0.14.0, moved after the terminal interface of 0.20.0), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **high**. Effort: **M (1–3 weeks)**.
 
 ### Non-goals

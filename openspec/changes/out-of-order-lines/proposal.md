@@ -18,7 +18,7 @@ reading the log top to bottom does not notice. nerdlog 1.12 marks out-of-order r
 - The tolerance is a setting (`out_of_order_tolerance_ms`, 0 turns the marks off).
 - The terminal interface shows the same mark in the gutter and the count in the bar.
 
-Target release: **0.24.0** (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **low–medium**. Effort: **S (under a week)**.
+Target release: **0.22.0** (re-planned by the maintainer on 2026-10-06, from 0.24.0: about one large, two medium and three small changes per release) (candidates of the 2026-10-05 competitor scan, `docs/competitor-analysis.md` section 6, assigned by the maintainer on 2026-10-05), per the release plan in section 8. Priority: **low–medium**. Effort: **S (under a week)**.
 
 ### Non-goals
 
