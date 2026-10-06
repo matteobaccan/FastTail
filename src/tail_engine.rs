@@ -1017,6 +1017,9 @@ pub(crate) fn find_case_insensitive_cb(
         }
         return;
     }
+    if haystack.is_ascii() {
+        return;
+    }
     // Lower-casing can change byte lengths: keep a map from each byte of the lowered
     // text back to the start and end offsets of the original character.
     let mut lowered = String::with_capacity(haystack.len());
@@ -1111,6 +1114,9 @@ pub(crate) fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> b
         }
         false
     } else {
+        if haystack.is_ascii() {
+            return false;
+        }
         haystack.to_lowercase().contains(needle_lower)
     }
 }
@@ -1312,7 +1318,8 @@ pub fn highlight_spans(
             !claim_span(&mut out.spans, s, e, SpanStyle::Token(kind))
         });
     }
-    out.spans.sort_by_key(|s| s.start);
+    // Use unstable sort as spans don't require stable relative order for equal start indices
+    out.spans.sort_unstable_by_key(|s| s.start);
     out
 }
 

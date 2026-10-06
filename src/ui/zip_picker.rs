@@ -129,12 +129,8 @@ impl ArchivePicker {
             .filter(|&i| needle.is_empty() || self.entries[i].name.to_lowercase().contains(&needle))
             .collect();
         match self.sort_by {
-            SortBy::Name => rows.sort_by(|&a, &b| {
-                self.entries[a]
-                    .name
-                    .to_lowercase()
-                    .cmp(&self.entries[b].name.to_lowercase())
-            }),
+            // Cache lowercased name keys during sort to avoid O(N log N) string allocations
+            SortBy::Name => rows.sort_by_cached_key(|&i| self.entries[i].name.to_lowercase()),
             SortBy::Size => rows.sort_by_key(|&i| self.entries[i].size),
         }
         if self.descending {
