@@ -7,15 +7,26 @@
 //! works on the file name only, the directory part is taken literally and nothing is
 //! recursive, so `logs/app-*.log` can never surprise the user by walking subfolders.
 
+use smallvec::SmallVec;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// True when `name` matches `pattern`, where `*` matches any run of characters (including
 /// none) and `?` exactly one. On Windows the comparison ignores ASCII case, like the file
 /// system does.
+///
+/// Performance:
+/// - When both `pattern` and `name` are ASCII (over 99% of file names), `wildcard_match` uses
+///   a direct byte-matching algorithm without any heap allocations.
+/// - For non-ASCII inputs, `SmallVec<[char; 64]>` stack buffers are used, avoiding heap
+///   allocations for file names up to 64 characters long.
 pub fn wildcard_match(pattern: &str, name: &str) -> bool {
-    let p: Vec<char> = pattern.chars().map(fold).collect();
-    let n: Vec<char> = name.chars().map(fold).collect();
+    if pattern.is_ascii() && name.is_ascii() {
+        return wildcard_match_ascii(pattern.as_bytes(), name.as_bytes());
+    }
+
+    let p: SmallVec<[char; 64]> = pattern.chars().map(fold).collect();
+    let n: SmallVec<[char; 64]> = name.chars().map(fold).collect();
     let (mut pi, mut ni) = (0usize, 0usize);
     // Position of the last `*` seen and the name index it was matched against, for
     // backtracking when a later literal fails.
@@ -39,6 +50,42 @@ pub fn wildcard_match(pattern: &str, name: &str) -> bool {
         pi += 1;
     }
     pi == p.len()
+}
+
+#[inline]
+fn fold_ascii(b: u8) -> u8 {
+    if cfg!(windows) {
+        b.to_ascii_lowercase()
+    } else {
+        b
+    }
+}
+
+/// Zero-allocation wildcard matching over ASCII bytes.
+fn wildcard_match_ascii(pattern: &[u8], name: &[u8]) -> bool {
+    let (mut pi, mut ni) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None;
+    while ni < name.len() {
+        if pi < pattern.len()
+            && (pattern[pi] == b'?' || fold_ascii(pattern[pi]) == fold_ascii(name[ni]))
+        {
+            pi += 1;
+            ni += 1;
+        } else if pi < pattern.len() && pattern[pi] == b'*' {
+            star = Some((pi, ni));
+            pi += 1;
+        } else if let Some((sp, sn)) = star {
+            pi = sp + 1;
+            ni = sn + 1;
+            star = Some((sp, sn + 1));
+        } else {
+            return false;
+        }
+    }
+    while pi < pattern.len() && pattern[pi] == b'*' {
+        pi += 1;
+    }
+    pi == pattern.len()
 }
 
 #[cfg(windows)]
@@ -125,6 +172,39 @@ mod tests {
         assert!(wildcard_match("a*b*c", "aXXbYYc"));
         assert!(!wildcard_match("a*b*c", "aXXbYY"));
         assert!(wildcard_match("**x", "x"));
+    }
+
+    #[test]
+    fn matches_non_ascii_and_long_names() {
+        assert!(wildcard_match("log-ñ-*.txt", "log-ñ-1.txt"));
+        assert!(!wildcard_match("log-ñ-*.txt", "log-ñ-1.log"));
+        let long_pattern = format!("app-{}", "x".repeat(100));
+        let long_name = format!("app-{}", "x".repeat(100));
+        assert!(wildcard_match(&long_pattern, &long_name));
+    }
+
+    #[test]
+    fn bench_wildcard_matching() {
+        let pattern = "app-2026-??-*.log";
+        let names = [
+            "app-2026-09-18.log",
+            "app-2026-09-19.log.gz",
+            "app-2026-10-01.log",
+            "other-2026-09-18.log",
+            "app-2026-01-01.txt",
+        ];
+        let start = std::time::Instant::now();
+        let mut matches = 0;
+        for _ in 0..100_000 {
+            for name in &names {
+                if wildcard_match(pattern, name) {
+                    matches += 1;
+                }
+            }
+        }
+        let elapsed = start.elapsed();
+        println!("100k iterations (500k matches): {:?}", elapsed);
+        assert_eq!(matches, 200_000);
     }
 
     #[test]
