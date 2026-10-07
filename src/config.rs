@@ -1727,8 +1727,15 @@ pub const MAX_RULE_SET_BYTES: u64 = 2 * 1024 * 1024;
 /// Reads the rule set file `path`; a file above `MAX_RULE_SET_BYTES` is not a rule set.
 pub fn read_rule_set(path: &Path) -> Result<Vec<HighlightRule>, RuleSetError> {
     use std::io::Read;
-    ensure_regular_or_absent(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
     let file = fs::File::open(path).map_err(|e| RuleSetError::Io(e.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| RuleSetError::Io(e.to_string()))?;
+    if !metadata.is_file() {
+        return Err(RuleSetError::Io(
+            "target path is not a regular file".to_string(),
+        ));
+    }
     let mut bytes = Vec::new();
     file.take(MAX_RULE_SET_BYTES + 1)
         .read_to_end(&mut bytes)

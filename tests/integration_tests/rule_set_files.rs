@@ -125,10 +125,11 @@ fn refusals() {
         read_rule_set(&dir.path().join("missing.ini")),
         Err(RuleSetError::Io(_))
     ));
-    assert!(matches!(
-        read_rule_set(dir.path()),
-        Err(RuleSetError::Io(_))
-    ));
+    let err = read_rule_set(dir.path()).unwrap_err();
+    assert!(
+        matches!(&err, RuleSetError::Io(msg) if msg.contains("not a regular file")),
+        "Expected regular file error, got: {err:?}"
+    );
     // A huge file is refused without being parsed.
     let big = dir.path().join("big.fasttail-rules.ini");
     let mut text = String::from(
