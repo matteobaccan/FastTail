@@ -5115,6 +5115,7 @@ fn render_scope_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
                 selection.is_some(),
                 egui::Button::new(RichText::new(t(lang, "scope_in_selection")).monospace()),
             )
+            .on_disabled_hover_text(t(lang, "scope_no_selection"))
             .clicked()
         {
             if let Some((first, last)) = selection {
