@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - First-byte dispatch for log level token matching
+**Learning:** In log line scanning hot paths, matching token candidates by length alone causes numeric tokens (e.g. 4-digit years like `2026`, hours/minutes `1200`, ports `8080`) to trigger expensive case-insensitive string equality comparisons (`eq_ignore_ascii_case`). Dispatching first on the candidate's initial byte (`word.first()`) immediately filters out numbers and non-level candidates, bypassing string comparisons entirely for ~90% of candidate words.
+**Action:** In Rust keyword/token detection loops, match on `word.first()` to filter out non-letter candidates before length or substring checks.
