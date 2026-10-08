@@ -86,50 +86,76 @@ impl LogLevel {
 
 /// Level of a token (a whole word already isolated), or `None` if it is not a level word.
 fn token_level(word: &[u8]) -> Option<LogLevel> {
-    // Branch on length first to eliminate array scans and limit string comparisons.
-    // Length dispatch turns level matching into an O(1) lookup per scanned word.
-    match word.len() {
-        4 => {
-            if word.eq_ignore_ascii_case(b"WARN") {
-                Some(LogLevel::Warn)
-            } else if word.eq_ignore_ascii_case(b"INFO") {
+    // Dispatch on first byte to bypass eq_ignore_ascii_case comparisons for numbers,
+    // timestamps, and non-level candidate words.
+    let &first = word.first()?;
+    match first {
+        b'I' | b'i' if word.len() == 4 => {
+            if word.eq_ignore_ascii_case(b"INFO") {
                 Some(LogLevel::Info)
             } else {
                 None
             }
         }
-        5 => {
+        b'E' | b'e' if word.len() == 5 => {
             if word.eq_ignore_ascii_case(b"ERROR") {
                 Some(LogLevel::Error)
-            } else if word.eq_ignore_ascii_case(b"DEBUG") {
+            } else {
+                None
+            }
+        }
+        b'W' | b'w' => {
+            if (word.len() == 4 && word.eq_ignore_ascii_case(b"WARN"))
+                || (word.len() == 7 && word.eq_ignore_ascii_case(b"WARNING"))
+            {
+                Some(LogLevel::Warn)
+            } else {
+                None
+            }
+        }
+        b'D' | b'd' if word.len() == 5 => {
+            if word.eq_ignore_ascii_case(b"DEBUG") {
                 Some(LogLevel::Debug)
-            } else if word.eq_ignore_ascii_case(b"TRACE") {
+            } else {
+                None
+            }
+        }
+        b'T' | b't' if word.len() == 5 => {
+            if word.eq_ignore_ascii_case(b"TRACE") {
                 Some(LogLevel::Trace)
-            } else if word.eq_ignore_ascii_case(b"FATAL") {
+            } else {
+                None
+            }
+        }
+        b'F' | b'f' if word.len() == 5 => {
+            if word.eq_ignore_ascii_case(b"FATAL") {
                 Some(LogLevel::Fatal)
             } else {
                 None
             }
         }
-        6 => {
+        b'N' | b'n' if word.len() == 6 => {
             if word.eq_ignore_ascii_case(b"NOTICE") {
                 Some(LogLevel::Info)
-            } else if word.eq_ignore_ascii_case(b"SEVERE") {
+            } else {
+                None
+            }
+        }
+        b'S' | b's' if word.len() == 6 => {
+            if word.eq_ignore_ascii_case(b"SEVERE") {
                 Some(LogLevel::Error)
             } else {
                 None
             }
         }
-        7 => {
-            if word.eq_ignore_ascii_case(b"WARNING") {
-                Some(LogLevel::Warn)
-            } else if word.eq_ignore_ascii_case(b"VERBOSE") {
+        b'V' | b'v' if word.len() == 7 => {
+            if word.eq_ignore_ascii_case(b"VERBOSE") {
                 Some(LogLevel::Trace)
             } else {
                 None
             }
         }
-        8 => {
+        b'C' | b'c' if word.len() == 8 => {
             if word.eq_ignore_ascii_case(b"CRITICAL") {
                 Some(LogLevel::Fatal)
             } else {
