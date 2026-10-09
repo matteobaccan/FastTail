@@ -6297,20 +6297,95 @@ impl TailEngine {
                 _ => break,
             };
             let haystack = &chunk[..n];
+            // SIMD-accelerated byte-level search for HEX view:
+            // Uses memmem::Finder for exact matches and memchr/memchr2 candidate scanning
+            // for case-insensitive matches, avoiding O(N*M) linear window comparisons per chunk.
             for (pattern, ci) in &patterns {
-                if pattern.len() > haystack.len() {
+                let n_len = pattern.len();
+                if n_len > haystack.len() {
                     continue;
                 }
-                for (i, window) in haystack.windows(pattern.len()).enumerate() {
-                    let hit = if *ci {
-                        window.eq_ignore_ascii_case(pattern)
+                if !*ci {
+                    let finder = memchr::memmem::Finder::new(pattern);
+                    let mut cur = 0;
+                    while cur <= haystack.len().saturating_sub(n_len) {
+                        if let Some(rel) = finder.find(&haystack[cur..]) {
+                            let i = cur + rel;
+                            matches.push((pos + i, n_len));
+                            if matches.len() >= limit * 2 {
+                                break 'outer;
+                            }
+                            cur = i + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    let first_lower = pattern[0].to_ascii_lowercase();
+                    let first_upper = first_lower.to_ascii_uppercase();
+
+                    if n_len == 1 {
+                        if first_lower == first_upper {
+                            for rel in memchr::memchr_iter(first_lower, haystack) {
+                                matches.push((pos + rel, 1));
+                                if matches.len() >= limit * 2 {
+                                    break 'outer;
+                                }
+                            }
+                        } else {
+                            let mut cur = 0;
+                            while cur < haystack.len() {
+                                if let Some(rel) =
+                                    memchr::memchr2(first_lower, first_upper, &haystack[cur..])
+                                {
+                                    let i = cur + rel;
+                                    matches.push((pos + i, 1));
+                                    if matches.len() >= limit * 2 {
+                                        break 'outer;
+                                    }
+                                    cur = i + 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
                     } else {
-                        window == pattern.as_slice()
-                    };
-                    if hit {
-                        matches.push((pos + i, pattern.len()));
-                        if matches.len() >= limit * 2 {
-                            break 'outer;
+                        let max_pos = haystack.len() - n_len;
+                        let mut cur = 0;
+                        if first_lower == first_upper {
+                            while cur <= max_pos {
+                                if let Some(rel) =
+                                    memchr::memchr(first_lower, &haystack[cur..=max_pos])
+                                {
+                                    let i = cur + rel;
+                                    if haystack[i..i + n_len].eq_ignore_ascii_case(pattern) {
+                                        matches.push((pos + i, n_len));
+                                        if matches.len() >= limit * 2 {
+                                            break 'outer;
+                                        }
+                                    }
+                                    cur = i + 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                        } else {
+                            while cur <= max_pos {
+                                if let Some(rel) =
+                                    memchr::memchr2(first_lower, first_upper, &haystack[cur..=max_pos])
+                                {
+                                    let i = cur + rel;
+                                    if haystack[i..i + n_len].eq_ignore_ascii_case(pattern) {
+                                        matches.push((pos + i, n_len));
+                                        if matches.len() >= limit * 2 {
+                                            break 'outer;
+                                        }
+                                    }
+                                    cur = i + 1;
+                                } else {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }

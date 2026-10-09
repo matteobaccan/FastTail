@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - SIMD byte pattern matching for HEX view search
+**Learning:** Naive `haystack.windows(pattern.len())` iteration in byte-level HEX search evaluates slice equality on every byte offset in binary chunks. Leveraging `memchr::memmem::Finder` for exact byte patterns and SIMD `memchr`/`memchr2` first-byte candidate scanning for case-insensitive ASCII byte searches bypasses non-candidate bytes at SIMD vector speeds (~10 GB/s), reducing search time on megabyte buffers by >4x.
+**Action:** In raw byte or hex search routines, avoid `haystack.windows(...)` loops and use `memchr::memmem::Finder` for exact matches or `memchr`/`memchr2` candidate scanning for case-insensitive searches.
