@@ -262,7 +262,9 @@ pub fn render(
         ui.add_enabled(
             json_possible,
             egui::Checkbox::new(&mut view.opts.json, t(lang, "compare_opt_json")),
-        );
+        )
+        .on_hover_text(t(lang, "compare_opt_json_tip"))
+        .on_disabled_hover_text(t(lang, "compare_opt_json_disabled_tip"));
         ui.separator();
         if ui
             .add_enabled(has_changes, egui::Button::new("▲"))
