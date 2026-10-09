@@ -289,7 +289,7 @@ pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
         #[cfg(not(windows))]
         let quote_arg = quote_sh_arg;
 
-        let mut line = tool.program.clone();
+        let mut line = quote_arg(&tool.program);
         for a in &args {
             line.push(' ');
             line.push_str(&quote_arg(a));
@@ -755,12 +755,35 @@ mod tests {
         #[cfg(not(windows))]
         {
             assert_eq!(args[0], "-c");
-            assert_eq!(args[1], "echo 'hello; rm -rf /'");
+            assert_eq!(args[1], "'echo' 'hello; rm -rf /'");
         }
         #[cfg(windows)]
         {
             assert_eq!(args[0], "/c");
-            assert_eq!(args[1], "echo \"hello; rm -rf /\"");
+            assert_eq!(args[1], "\"echo\" \"hello; rm -rf /\"");
+        }
+    }
+
+    #[test]
+    fn test_build_command_shell_mode_quotes_program() {
+        let mut tool = ExternalTool::new("injected", "echo; calc.exe", "test");
+        tool.use_shell = true;
+        let ctx = ToolContext::default();
+        let cmd = build_command(&tool, &ctx);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args.len(), 2);
+        #[cfg(not(windows))]
+        {
+            assert_eq!(args[0], "-c");
+            assert_eq!(args[1], "'echo; calc.exe' 'test'");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(args[0], "/c");
+            assert_eq!(args[1], "\"echo; calc.exe\" \"test\"");
         }
     }
 }
