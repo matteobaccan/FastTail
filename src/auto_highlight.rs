@@ -126,7 +126,16 @@ pub fn scan(line: &str, kinds: TokenKinds, mut found: impl FnMut(usize, usize, T
         let c = b[i];
         let starts = i == 0 || !continues_word(b[i - 1]);
         if !starts || !may_start(c) {
-            i += 1;
+            // Optimization: if c continues a word, no position inside this word
+            // can be a token start. Fast-forward past contiguous word bytes.
+            if continues_word(c) {
+                i += 1;
+                while i < b.len() && continues_word(b[i]) {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
             continue;
         }
         match match_at(b, i, kinds) {
@@ -137,7 +146,18 @@ pub fn scan(line: &str, kinds: TokenKinds, mut found: impl FnMut(usize, usize, T
                 i = end;
             }
             Match::SkipTo(end) => i = end.max(i + 1),
-            Match::None => i += 1,
+            Match::None => {
+                // Optimization: match_at found no token starting at 'i'. If 'c' continues
+                // a word, no position inside this word can be a token start either.
+                if continues_word(c) {
+                    i += 1;
+                    while i < b.len() && continues_word(b[i]) {
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
         }
     }
 }
@@ -242,8 +262,15 @@ fn hex_digits(b: &[u8], at: usize, max: usize) -> usize {
 /// `scheme://` then everything up to a space, a quote or an angle bracket, with trailing
 /// sentence punctuation left out.
 fn url(b: &[u8], at: usize) -> Option<usize> {
-    const SCHEMES: [&[u8]; 6] = [b"https", b"http", b"ftp", b"wss", b"ws", b"file"];
-    let scheme = SCHEMES.iter().find(|s| {
+    // Optimization: filter scheme candidates by first byte to avoid trying all 6 schemes
+    // on words starting with non-url letters (e.g. 'a', 'e', 'g', 'i').
+    let candidates: &[&[u8]] = match b.get(at)?.to_ascii_lowercase() {
+        b'h' => &[b"https", b"http"],
+        b'f' => &[b"ftp", b"file"],
+        b'w' => &[b"wss", b"ws"],
+        _ => return None,
+    };
+    let scheme = candidates.iter().find(|s| {
         b.len() >= at + s.len() + 3
             && b[at..at + s.len()].eq_ignore_ascii_case(s)
             && &b[at + s.len()..at + s.len() + 3] == b"://"
@@ -269,6 +296,16 @@ fn url(b: &[u8], at: usize) -> Option<usize> {
 
 /// `8-4-4-4-12` hex digits.
 fn uuid(b: &[u8], at: usize) -> Option<usize> {
+    // Optimization: check minimum UUID length and hyphen positions upfront before
+    // scanning hex digit groups.
+    if b.len() < at + 36
+        || b[at + 8] != b'-'
+        || b[at + 13] != b'-'
+        || b[at + 18] != b'-'
+        || b[at + 23] != b'-'
+    {
+        return None;
+    }
     let mut pos = at;
     for (n, len) in [8usize, 4, 4, 4, 12].iter().enumerate() {
         if n > 0 {
@@ -300,7 +337,11 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
         if len == 0 || len > 3 {
             return None;
         }
-        let value: u32 = std::str::from_utf8(&b[pos..pos + len]).ok()?.parse().ok()?;
+        // Optimization: parse ASCII digits directly without string formatting or UTF-8 checks.
+        let mut value = 0u32;
+        for &d in &b[pos..pos + len] {
+            value = value * 10 + (d - b'0') as u32;
+        }
         if value > 255 {
             return None;
         }
@@ -316,10 +357,10 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
     if b.get(pos) == Some(&b':') {
         let len = digits(b, pos + 1, 6);
         if (1..=5).contains(&len) {
-            let port: u32 = std::str::from_utf8(&b[pos + 1..pos + 1 + len])
-                .ok()?
-                .parse()
-                .ok()?;
+            let mut port = 0u32;
+            for &d in &b[pos + 1..pos + 1 + len] {
+                port = port * 10 + (d - b'0') as u32;
+            }
             if (1..=65535).contains(&port) && ends_token(b, pos + 1 + len) {
                 return Some(pos + 1 + len);
             }

@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Fast-forwarding contiguous word bytes in single-pass token scanners
+**Learning:** In left-to-right token scanners where tokens must start on word boundaries (`!continues_word(b[i - 1])`), evaluating candidate matchers at non-token-start positions or stepping character-by-character through failed matches wastes CPU cycles. Fast-forwarding the index `i` past contiguous word bytes when `continues_word(b[i])` is true skips byte-by-byte checks for entire words in one step.
+**Action:** When scanning logs for tokens with boundary requirements, advance the loop index past contiguous word bytes after a failed match or at non-start positions.
