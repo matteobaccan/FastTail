@@ -6784,9 +6784,11 @@ fn extra_terms_controls(
             list.join("\n")
         ));
     }
+    let can_add = side.terms(engine).len() < MAX_FILTER_TERMS;
     if ui
-        .small_button("+")
+        .add_enabled(can_add, egui::Button::new("+").small())
         .on_hover_text(t(lang, "filter_add_term_tip"))
+        .on_disabled_hover_text(t(lang, "filter_extra_terms_tip"))
         .clicked()
     {
         let mut rows = side.terms(engine).to_vec();
@@ -7332,10 +7334,15 @@ fn render_term_rows(
         rows.remove(i);
         changed = true;
     }
-    if rows.len() < MAX_FILTER_TERMS
-        && ui
-            .small_button(format!("+ {}", t(lang, "filter_add_term")))
-            .clicked()
+    let can_add = rows.len() < MAX_FILTER_TERMS;
+    if ui
+        .add_enabled(
+            can_add,
+            egui::Button::new(format!("+ {}", t(lang, "filter_add_term"))).small(),
+        )
+        .on_hover_text(t(lang, "filter_add_term_tip"))
+        .on_disabled_hover_text(t(lang, "filter_extra_terms_tip"))
+        .clicked()
     {
         rows.push(String::new());
         changed = true;
