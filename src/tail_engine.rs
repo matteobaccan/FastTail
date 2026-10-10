@@ -1312,7 +1312,9 @@ pub fn highlight_spans(
             !claim_span(&mut out.spans, s, e, SpanStyle::Token(kind))
         });
     }
-    out.spans.sort_by_key(|s| s.start);
+    // Optimization: `sort_unstable_by_key` sorts non-overlapping highlight spans in-place
+    // without heap allocation overhead on every row evaluated.
+    out.spans.sort_unstable_by_key(|s| s.start);
     out
 }
 
