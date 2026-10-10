@@ -126,7 +126,17 @@ pub fn scan(line: &str, kinds: TokenKinds, mut found: impl FnMut(usize, usize, T
         let c = b[i];
         let starts = i == 0 || !continues_word(b[i - 1]);
         if !starts || !may_start(c) {
-            i += 1;
+            // Optimization: if current byte is inside a word, subsequent bytes in the same word
+            // cannot start a token (since `starts` requires `!continues_word(b[i-1])`). Fast-forward
+            // past the word to avoid redundant checks.
+            if continues_word(c) {
+                i += 1;
+                while i < b.len() && continues_word(b[i]) {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
             continue;
         }
         match match_at(b, i, kinds) {
@@ -137,7 +147,18 @@ pub fn scan(line: &str, kinds: TokenKinds, mut found: impl FnMut(usize, usize, T
                 i = end;
             }
             Match::SkipTo(end) => i = end.max(i + 1),
-            Match::None => i += 1,
+            Match::None => {
+                // Optimization: if a token matcher fails at word start `c`, fast-forward past
+                // the rest of this word since no token can start inside it.
+                if continues_word(c) {
+                    i += 1;
+                    while i < b.len() && continues_word(b[i]) {
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
         }
     }
 }
