@@ -289,7 +289,7 @@ pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
         #[cfg(not(windows))]
         let quote_arg = quote_sh_arg;
 
-        let mut line = tool.program.clone();
+        let mut line = quote_arg(&tool.program);
         for a in &args {
             line.push(' ');
             line.push_str(&quote_arg(a));
@@ -755,12 +755,12 @@ mod tests {
         #[cfg(not(windows))]
         {
             assert_eq!(args[0], "-c");
-            assert_eq!(args[1], "echo 'hello; rm -rf /'");
+            assert_eq!(args[1], "'echo' 'hello; rm -rf /'");
         }
         #[cfg(windows)]
         {
             assert_eq!(args[0], "/c");
-            assert_eq!(args[1], "echo \"hello; rm -rf /\"");
+            assert_eq!(args[1], "\"echo\" \"hello; rm -rf /\"");
         }
     }
 }
