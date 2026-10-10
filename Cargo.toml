@@ -47,7 +47,7 @@ notify = "9.0.0-rc.5"
 # or deflate) inflated through that same flate2. zip's own `deflate` feature would add
 # the zopfli compressor and the zlib-rs backend, neither needed to read.
 flate2 = "1.1"
-zip = { version = "8.0", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2"] }
 # Tar archives, plain or compressed: the reader walks headers (GNU long names, pax,
 # base-256 sizes); `xattr` (the only default feature) is for unpacking to disk, which
 # FastTail never does.
