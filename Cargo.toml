@@ -11,7 +11,7 @@ readme = "README.md"
 documentation = "https://github.com/matteobaccan/FastTail#readme"
 keywords = ["log", "tail", "logging", "monitoring", "gui"]
 categories = ["command-line-utilities", "gui", "development-tools::debugging"]
-# The oldest toolchain the dependencies build on (sevenz-rust2 0.23 needs 1.93); CI
+# The oldest toolchain the dependencies build on (sevenz-rust2 0.24 needs 1.93); CI
 # builds on stable.
 rust-version = "1.93"
 # The published crate carries the code, the licence and the docs a user reads from
@@ -57,7 +57,7 @@ tar = { version = "0.4", default-features = false }
 bzip2 = "0.6"
 # xz through a pure-Rust LZMA2 decoder; the encoder is a dev-dependency feature only
 # (test fixtures), and the lzip reader is not needed.
-lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz", "optimization"] }
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz", "optimization"] }
 # zstd through a pure-Rust decoder (the C libzstd would need a cross compiler for
 # Linux ARM64); decompression is bounded by the spool's disk writes, not the codec.
 ruzstd = "0.9"
@@ -65,7 +65,7 @@ ruzstd = "0.9"
 # FastTail opens are on (bzip2, deflate, PPMd; LZMA / LZMA2 / BCJ / delta are built in);
 # no AES (encrypted entries are refused, never decrypted), no writer, no zstd / brotli /
 # lz4. `deflate` brings flate2's pure-Rust zlib-rs backend.
-sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
 
 # Data, Serialization & Parsing
 serde = { version = "1.0", features = ["derive"] }
@@ -147,9 +147,9 @@ required-features = ["gui"]
 [dev-dependencies]
 tempfile = "3.17"
 # xz fixtures built inside the tests.
-lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz", "encoder"] }
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz", "encoder"] }
 # 7z fixtures built inside the tests (the writer, and bzip2 blocks).
-sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress", "bzip2"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["compress", "bzip2"] }
 
 # On-demand engine benchmark: built only by `cargo bench` (release-derived
 # `bench` profile), never by `cargo test`. See benches/filter_bench.rs.
