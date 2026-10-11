@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **7z and xz readers updated.** `sevenz-rust2` 0.24 and `lzma-rust2` 0.22, moved together
+  so that one copy of the LZMA decoder ships (Renovate PRs #304 and #305).
+
 ## [0.20.2] - 2026-10-11
 
 A nightly patch: faster HEX byte search, two tooltips and dependency updates.
