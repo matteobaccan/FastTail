@@ -464,6 +464,11 @@ pub fn list_zip_entries(path: &Path) -> std::io::Result<Vec<ArchiveEntryInfo>> {
         if entry.is_dir() {
             continue;
         }
+        // A name that decodes neither as UTF-8 nor as CP437 is listed as read and refused.
+        let decoded = entry.name().ok().map(|n| n.into_owned());
+        let name = decoded
+            .clone()
+            .unwrap_or_else(|| String::from_utf8_lossy(entry.name_raw()).into_owned());
         let method = entry.compression();
         let refusal = if entry.encrypted() {
             Some(EntryRefusal::Encrypted)
@@ -472,13 +477,13 @@ pub fn list_zip_entries(path: &Path) -> std::io::Result<Vec<ArchiveEntryInfo>> {
             zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
         ) {
             Some(EntryRefusal::Method(format!("{method:?}")))
-        } else if entry.enclosed_name().is_none() {
+        } else if decoded.is_none() || entry.enclosed_name().is_none() {
             Some(EntryRefusal::UnsafeName)
         } else {
-            claim_name(entry.name(), &mut opened_keys)
+            claim_name(&name, &mut opened_keys)
         };
         out.push(ArchiveEntryInfo {
-            name: entry.name().to_string(),
+            name,
             size: entry.size(),
             compressed_size: entry.compressed_size(),
             block_size: None,
