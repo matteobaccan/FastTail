@@ -8,20 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-11
+
+A nightly patch: faster HEX byte search, two tooltips and dependency updates.
+
 ### Changed
 
 - **zip 9.** The zip reader moves to `zip` 9 (Renovate PR #292). An entry whose name
   decodes neither as UTF-8 nor as CP437 is now listed with its name as read and refused
   as an unsafe name. On macOS the new version also brings `nix` 0.31 (file-system
   feature only).
-
 - **Faster byte search in the HEX view.** A search over the bytes of a file now uses
   `memchr`'s SIMD searchers instead of comparing every window: about 3 to 5 times faster
   on a 12 MB file (from the Bolt bot PR #295).
-
 - **Tooltips on two disabled controls.** The disabled "in selection" search scope says
   that a row must be selected first, and the disabled JSON option of a comparison says
   that both sides must be one line of valid JSON (from the Palette bot PRs #294 and #297).
+- **Dependency updates.** `toml` 1.1.8, `smallvec` 1.16.3 and `serde_json` 1.0.152
+  (lockfile only).
 
 ## [0.20.1] - 2026-10-05
 
@@ -1501,6 +1505,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.2]: https://github.com/matteobaccan/FastTail/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/matteobaccan/FastTail/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/matteobaccan/FastTail/compare/v0.16.2...v0.20.0
 [0.16.2]: https://github.com/matteobaccan/FastTail/compare/v0.16.1...v0.16.2

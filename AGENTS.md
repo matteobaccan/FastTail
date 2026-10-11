@@ -102,10 +102,11 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.20.1** (2026-10-05, nightly): the ASM view (`disassembly-view`, x86
-  disassembly in both interfaces, `src/disasm.rs`, dependency `iced-x86`) and the fix of
-  issue #161 (streams polled while the window is minimised or in the tray). 0.20.0 made the
-  terminal interface complete.
+- Latest release: **0.20.2** (2026-10-11, nightly): SIMD byte search in the HEX view, tooltips
+  on two disabled GUI controls, `zip` 9 and lockfile updates, taken from the bot PRs after a
+  review (the duplicates and the changes without a measurable gain were closed). 0.20.1
+  brought the ASM view (`disassembly-view`, `src/disasm.rs`, dependency `iced-x86`) and the
+  fix of issue #161; 0.20.0 made the terminal interface complete.
 - Next: nightly patch releases (`0.20.x`); `disassembly-view` is archived after this release.
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
