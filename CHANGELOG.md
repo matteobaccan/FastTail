@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **zip 9.** The zip reader moves to `zip` 9 (Renovate PR #292). An entry whose name
+  decodes neither as UTF-8 nor as CP437 is now listed with its name as read and refused
+  as an unsafe name. On macOS the new version also brings `nix` 0.31 (file-system
+  feature only).
+
 - **Faster byte search in the HEX view.** A search over the bytes of a file now uses
   `memchr`'s SIMD searchers instead of comparing every window: about 3 to 5 times faster
   on a 12 MB file (from the Bolt bot PR #295).
