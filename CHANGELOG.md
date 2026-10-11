@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Faster byte search in the HEX view.** A search over the bytes of a file now uses
+  `memchr`'s SIMD searchers instead of comparing every window: about 3 to 5 times faster
+  on a 12 MB file (from the Bolt bot PR #295).
+
 - **Tooltips on two disabled controls.** The disabled "in selection" search scope says
   that a row must be selected first, and the disabled JSON option of a comparison says
   that both sides must be one line of valid JSON (from the Palette bot PRs #294 and #297).
