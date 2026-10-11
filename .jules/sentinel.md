@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-04-19 - Redundant metadata checks after read-only open on rule set paths
+**Vulnerability:** Attempting to add an additional post-open `file.metadata()?.is_file()` check in `read_rule_set` adds no protection and was rejected.
+**Learning:** `read_rule_set` already calls `ensure_regular_or_absent(path)` prior to opening. If the path is swapped afterwards, FIFOs block during read-only `open`, directories fail on read, and device files are bounded by `MAX_RULE_SET_BYTES` (and fail `parse_rule_set`). Post-open regular file checks on bounded read-only config imports are unnecessary.
+**Prevention:** Do not add redundant post-open metadata checks for bounded read-only configuration readers where pre-checks and read caps are already in place.
