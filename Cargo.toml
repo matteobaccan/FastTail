@@ -65,7 +65,7 @@ ruzstd = "0.9"
 # FastTail opens are on (bzip2, deflate, PPMd; LZMA / LZMA2 / BCJ / delta are built in);
 # no AES (encrypted entries are refused, never decrypted), no writer, no zstd / brotli /
 # lz4. `deflate` brings flate2's pure-Rust zlib-rs backend.
-sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
 
 # Data, Serialization & Parsing
 serde = { version = "1.0", features = ["derive"] }
@@ -149,7 +149,7 @@ tempfile = "3.17"
 # xz fixtures built inside the tests.
 lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz", "encoder"] }
 # 7z fixtures built inside the tests (the writer, and bzip2 blocks).
-sevenz-rust2 = { version = "0.23", default-features = false, features = ["compress", "bzip2"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["compress", "bzip2"] }
 
 # On-demand engine benchmark: built only by `cargo bench` (release-derived
 # `bench` profile), never by `cargo test`. See benches/filter_bench.rs.
