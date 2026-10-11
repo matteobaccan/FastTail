@@ -734,7 +734,7 @@ pub(crate) fn decode_line_ansi(
     truncated: bool,
     strip: bool,
 ) -> String {
-    if !strip {
+    if !strip || !crate::ansi::has_escape(bytes) {
         return decode_line(bytes, encoding, truncated);
     }
     let mut s = crate::ansi::strip_owned(decode_content(bytes, encoding, truncated));
@@ -753,7 +753,11 @@ fn decode_content(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> Stri
             } else {
                 trim_newline_1(bytes)
             };
-            String::from_utf8_lossy(&bytes[..end]).into_owned()
+            let content = &bytes[..end];
+            match std::str::from_utf8(content) {
+                Ok(s) => s.to_owned(),
+                Err(_) => String::from_utf8_lossy(content).into_owned(),
+            }
         }
         FileEncoding::Ascii => {
             let end = if truncated {
@@ -761,10 +765,16 @@ fn decode_content(bytes: &[u8], encoding: FileEncoding, truncated: bool) -> Stri
             } else {
                 trim_newline_1(bytes)
             };
-            bytes[..end]
-                .iter()
-                .map(|&b| if b <= 127 { b as char } else { '?' })
-                .collect()
+            let content = &bytes[..end];
+            if content.is_ascii() {
+                // SAFETY: ASCII bytes (0..=127) are guaranteed to be valid UTF-8.
+                unsafe { String::from_utf8_unchecked(content.to_vec()) }
+            } else {
+                content
+                    .iter()
+                    .map(|&b| if b <= 127 { b as char } else { '?' })
+                    .collect()
+            }
         }
         FileEncoding::Ansi => {
             let end = if truncated {

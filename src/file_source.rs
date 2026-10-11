@@ -309,9 +309,17 @@ impl FileSource {
     fn block<'c>(&self, cache: &'c mut BlockCache, idx: u64) -> Option<&'c [u8]> {
         cache.tick = cache.tick.wrapping_add(1);
         let tick = cache.tick;
-        if let Some(pos) = cache.blocks.iter().position(|b| b.index == idx) {
-            cache.blocks[pos].last_used = tick;
-            return Some(&cache.blocks[pos].data);
+        // Fast path: the most recently used block is kept at the end of the vector.
+        if cache.blocks.last().map(|b| b.index) == Some(idx) {
+            let last = cache.blocks.last_mut().unwrap();
+            last.last_used = tick;
+            return Some(&last.data);
+        }
+        if let Some(pos) = cache.blocks.iter().rposition(|b| b.index == idx) {
+            let mut block = cache.blocks.remove(pos);
+            block.last_used = tick;
+            cache.blocks.push(block);
+            return Some(&cache.blocks.last().unwrap().data);
         }
         let mut data = vec![0u8; BLOCK_SIZE];
         let n = match self.read_direct(idx * BLOCK_SIZE as u64, &mut data) {
