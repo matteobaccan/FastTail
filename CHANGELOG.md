@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Tooltips on two disabled controls.** The disabled "in selection" search scope says
+  that a row must be selected first, and the disabled JSON option of a comparison says
+  that both sides must be one line of valid JSON (from the Palette bot PRs #294 and #297).
+
 ## [0.20.1] - 2026-10-05
 
 A nightly patch: the ASM view (x86 disassembly) and the fix for minimised windows.

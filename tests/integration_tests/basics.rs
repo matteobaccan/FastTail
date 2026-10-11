@@ -605,6 +605,8 @@ fn test_i18n_exhaustive_coverage() {
         "compare_opt_whitespace",
         "compare_opt_case",
         "compare_opt_json",
+        "compare_opt_json_tip",
+        "compare_opt_json_disabled_tip",
         "compare_prev",
         "compare_next",
         "compare_copy_unified",
