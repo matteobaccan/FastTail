@@ -102,7 +102,8 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.20.2** (2026-10-11, nightly): SIMD byte search in the HEX view, tooltips
+- Latest release: **0.20.3** (2026-10-12, nightly): dependency updates (`sevenz-rust2` 0.24
+  with `lzma-rust2` 0.22, `ruzstd`, `serde_json`). 0.20.2 (2026-10-11): SIMD byte search in the HEX view, tooltips
   on two disabled GUI controls, `zip` 9 and lockfile updates, taken from the bot PRs after a
   review (the duplicates and the changes without a measurable gain were closed). 0.20.1
   brought the ASM view (`disassembly-view`, `src/disasm.rs`, dependency `iced-x86`) and the
