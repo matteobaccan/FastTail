@@ -1,3 +1,7 @@
+## 2026-04-20 - Action Tooltips vs Pre-start Disabled State
+**Learning:** When an action button (such as "Stop") is disabled both before an operation starts and after it completes, status tooltips like "stopped" misrepresent the initial pre-start state (where search was never initiated). Disabled hover tooltips on action buttons must make sense in both pre-start and post-completion states.
+**Action:** Avoid state-specific past-tense descriptions on disabled controls if the same disabled state applies before the initial trigger.
+
 ## 2026-04-20 - Disabled Control Tooltips in egui
 **Learning:** In `egui`, standard `.on_hover_text(...)` tooltips are suppressed when a widget is disabled (e.g. `add_enabled(false, ...)`). For interactive controls like "Open" or reordering buttons that can be disabled based on state, users need explicit feedback on why the control is disabled.
 **Action:** Always chain `.on_disabled_hover_text(...)` when disabling interactive buttons in `egui` so users receive clear contextual guidance.
