@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-10-12 - Quote program executable path in shell mode
+**Vulnerability:** When `use_shell` is enabled for external tool commands, concatenating `tool.program` directly as an unquoted string into `sh -c` or `cmd /c` allows command injection or execution failures if the program path contains spaces or shell metacharacters.
+**Learning:** `tool.program` is user-provided configuration. Even when arguments are quoted, failing to quote `tool.program` allows shell metacharacters (e.g. `;`, `&`, `|`) in `tool.program` to break out of the intended binary name.
+**Prevention:** Quote `tool.program` using `quote_arg` (`quote_sh_arg` or `quote_cmd_arg`) when assembling the shell command string.
