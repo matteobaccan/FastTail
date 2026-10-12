@@ -98,7 +98,7 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:arboard", "dep:unicode-width"]
 audio = ["dep:rodio"]
 
 [dependencies.rodio]
-version = "0.22"
+version = "0.23"
 optional = true
 
 # Terminal interface (feature `tui`).
