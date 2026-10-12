@@ -3021,7 +3021,11 @@ impl FastTailApp {
                             }
                             // Every open stream's bookmarks as one Markdown report.
                             if ui
-                                .button(format!("📝 {}", t(lang, "bookmark_report_all")))
+                                .add_enabled(
+                                    !self.engines.is_empty(),
+                                    egui::Button::new(format!("📝 {}", t(lang, "bookmark_report_all"))),
+                                )
+                                .on_disabled_hover_text(t(lang, "status_no_file"))
                                 .clicked()
                             {
                                 report_all = true;
