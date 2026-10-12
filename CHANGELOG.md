@@ -8,10 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-10-12
+
+A nightly patch: dependency updates.
+
 ### Changed
 
 - **7z and xz readers updated.** `sevenz-rust2` 0.24 and `lzma-rust2` 0.22, moved together
   so that one copy of the LZMA decoder ships (Renovate PRs #304 and #305).
+- **Dependency updates.** `ruzstd` 0.9.1 and `serde_json` 1.0.154 (lockfile only).
 
 ## [0.20.2] - 2026-10-11
 
@@ -1510,6 +1515,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.3]: https://github.com/matteobaccan/FastTail/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/matteobaccan/FastTail/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/matteobaccan/FastTail/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/matteobaccan/FastTail/compare/v0.16.2...v0.20.0
