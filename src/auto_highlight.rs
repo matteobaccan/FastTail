@@ -126,7 +126,15 @@ pub fn scan(line: &str, kinds: TokenKinds, mut found: impl FnMut(usize, usize, T
         let c = b[i];
         let starts = i == 0 || !continues_word(b[i - 1]);
         if !starts || !may_start(c) {
-            i += 1;
+            if !starts && continues_word(c) {
+                // Fast path: when inside a word, skip remaining word bytes to jump to the next token start boundary.
+                while i < b.len() && continues_word(b[i]) {
+                    i += 1;
+                }
+                i += 1;
+            } else {
+                i += 1;
+            }
             continue;
         }
         match match_at(b, i, kinds) {
@@ -137,7 +145,17 @@ pub fn scan(line: &str, kinds: TokenKinds, mut found: impl FnMut(usize, usize, T
                 i = end;
             }
             Match::SkipTo(end) => i = end.max(i + 1),
-            Match::None => i += 1,
+            Match::None => {
+                if continues_word(c) {
+                    // Fast path: non-matching word start, skip remaining word bytes to jump to the next token start boundary.
+                    while i < b.len() && continues_word(b[i]) {
+                        i += 1;
+                    }
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
         }
     }
 }
@@ -300,7 +318,10 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
         if len == 0 || len > 3 {
             return None;
         }
-        let value: u32 = std::str::from_utf8(&b[pos..pos + len]).ok()?.parse().ok()?;
+        let mut value = 0u32;
+        for &digit in &b[pos..pos + len] {
+            value = value * 10 + (digit - b'0') as u32;
+        }
         if value > 255 {
             return None;
         }
@@ -316,10 +337,10 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
     if b.get(pos) == Some(&b':') {
         let len = digits(b, pos + 1, 6);
         if (1..=5).contains(&len) {
-            let port: u32 = std::str::from_utf8(&b[pos + 1..pos + 1 + len])
-                .ok()?
-                .parse()
-                .ok()?;
+            let mut port = 0u32;
+            for &digit in &b[pos + 1..pos + 1 + len] {
+                port = port * 10 + (digit - b'0') as u32;
+            }
             if (1..=65535).contains(&port) && ends_token(b, pos + 1 + len) {
                 return Some(pos + 1 + len);
             }
