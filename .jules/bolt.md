@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Auto-highlight token scan runs only on visible rows
+**Learning:** Micro-optimizing `auto_highlight::scan` (e.g. word skipping or character lookup tables) yields no measurable application-level speedup because token auto-highlighting is evaluated on-demand strictly for visible on-screen rows (e.g., 30–60 lines per frame) rather than during line indexing or log scanning hot loops over millions of lines.
+**Action:** Focus performance optimizations on whole-log processing hot paths (indexing, filtering, level detection, search) rather than UI rendering passes for visible rows.
