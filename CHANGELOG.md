@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-10-13
+
+A nightly patch: dependency updates.
+
+### Changed
+
+- **Dependency updates.** `zip` 9.0.2 (bug fixes of the zip reader) and `rodio` 0.23 (only
+  behind the optional `audio` feature, not part of the release builds).
+
 ## [0.20.3] - 2026-10-12
 
 A nightly patch: dependency updates.
@@ -1515,6 +1524,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.4]: https://github.com/matteobaccan/FastTail/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/matteobaccan/FastTail/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/matteobaccan/FastTail/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/matteobaccan/FastTail/compare/v0.20.0...v0.20.1
