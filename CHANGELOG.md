@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Bookmark report (all streams) disabled with no stream open.** The 🗂 menu item no
+  longer opens an empty report; its tooltip says that no file is open (from the Palette bot
+  PR #316).
+
 ## [0.20.4] - 2026-10-13
 
 A nightly patch: dependency updates.

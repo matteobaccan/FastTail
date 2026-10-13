@@ -579,7 +579,7 @@ The same centred, fixed window says why the terminal interface asked for at star
 
 ### 4.6b Bookmark report — `📝 Bookmark report`
 
-`fasttail_bookmark_report`, anchored at the centre, not resizable, min 380 px. Opened by `📝 Bookmark report…` in a stream's 💾 menu (title `📝 Bookmark report`, that stream), by `📝 Bookmark report (all streams)…` at the bottom of the 🗂 menu or by the palette (title `… — all streams`).
+`fasttail_bookmark_report`, anchored at the centre, not resizable, min 380 px. Opened by `📝 Bookmark report…` in a stream's 💾 menu (title `📝 Bookmark report`, that stream), by `📝 Bookmark report (all streams)…` at the bottom of the 🗂 menu (disabled, with the tooltip "No file open", while no stream is open) or by the palette (title `… — all streams`).
 
 - A grid: *Context lines* (slider 0–20), *Order* (radios *by stream* / *by time*), *Tags* (200 px field, hint `#deploy #oom`, warn text when a word is not a tag). Then the *Include automatic bookmarks* checkbox and, when the streams have tags, up to 24 small buttons `#tag (n)` that append the tag to the field.
 - A dim 11 pt summary: `N bookmarks in M streams`, plus `· K streams without bookmarks skipped` for all streams.
