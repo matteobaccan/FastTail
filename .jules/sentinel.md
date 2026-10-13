@@ -5,7 +5,7 @@
 
 ## 2026-04-18 - Enforce regular file validation on file open and reopen
 **Vulnerability:** Opening non-regular files (e.g. directories, FIFOs/named pipes, device nodes, sockets) can lead to Denial of Service (DoS) via thread blocking, infinite loops, or excessive memory allocation when background scan threads attempt to stream data.
-**Learning:** Checking file metadata prior to opening a file path leaves a potential Time-of-Check to Time-of-Use (TOCTOU) race condition if the path target changes between check and open. Validating `metadata.is_file()` on the opened `File` handle directly in `FileSource::open` and `FileSource::reopen` eliminates the race condition and ensures defense in depth across all read paths.
+**Learning:** Checking file metadata prior to opening a file path leaves a potential Time-of-Check to Time-of-Use (TOCTOU] race condition if the path target changes between check and open. Validating `metadata.is_file()` on the opened `File` handle directly in `FileSource::open` and `FileSource::reopen` eliminates the race condition and ensures defense in depth across all read paths.
 **Prevention:** Always inspect file metadata directly on the opened OS handle (`file.metadata()`) rather than checking paths on disk prior to `open`.
 
 ## 2026-04-18 - Quote expanded arguments when spawning external tools in shell mode
@@ -16,14 +16,14 @@
 ## 2026-04-18 - Always enforce restricted directory permissions on spool directory
 **Vulnerability:** Bypassing permission updates (`set_permissions`) when a directory already exists (`dir.is_dir()`) allows temporary spool files containing log content to be exposed if the directory pre-existed with permissive access rights (e.g. 0755 or 0777 in `/tmp`).
 **Learning:** `create_dir_all` in Rust returns `Ok(())` if the directory already exists. Bypassing `set_permissions(dir, 0o700)` via an early `if dir.is_dir()` check leaves existing or pre-created directories insecurely open to local users on multi-user systems.
-**Prevention:** Do not early-return on directory existence when ensuring secure directory permissions; always apply `set_permissions(dir, 0o700)` on Unix.
+**Prevention:** Avoid early-return on directory existence when ensuring secure directory permissions; always apply `set_permissions(dir, 0o700)` on Unix.
 
 ## 2026-04-19 - OpenOptions::new() defaults truncate to false in Rust
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
 
-## 2026-10-12 - Quote program executable path in shell mode
-**Vulnerability:** When `use_shell` is enabled for external tool commands, concatenating `tool.program` directly as an unquoted string into `sh -c` or `cmd /c` allows command injection or execution failures if the program path contains spaces or shell metacharacters.
-**Learning:** `tool.program` is user-provided configuration. Even when arguments are quoted, failing to quote `tool.program` allows shell metacharacters (e.g. `;`, `&`, `|`) in `tool.program` to break out of the intended binary name.
-**Prevention:** Quote `tool.program` using `quote_arg` (`quote_sh_arg` or `quote_cmd_arg`) when assembling the shell command string.
+## 2026-10-12 - Do not quote tool.program in external_tools shell mode
+**Vulnerability:** Attempting to quote `tool.program` in shell mode breaks Windows `cmd /c` (where leading quotes cause argument stripping issues) and breaks custom user shell syntax in `tool.program`.
+**Learning:** `tool.program` is user-provided configuration rather than untrusted log input. Placeholders within arguments are already quoted via `quote_arg`, while `tool.program` is intentionally left unquoted to support user-configured shell syntax and preserve `cmd /c` parsing.
+**Prevention:** Leave `tool.program` unquoted; only quote expanded placeholder values derived from untrusted log contexts in `external_tools.rs`.
