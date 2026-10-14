@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-10-13 - Redundant handle metadata validation in read_rule_set
+**Vulnerability:** Adding `file.metadata()?.is_file()` checks in `read_rule_set` after `fs::File::open` and `ensure_regular_or_absent`.
+**Learning:** The maintainer rejected this extra check because `ensure_regular_or_absent` already checks path metadata, `read_rule_set` reads bounded size (`MAX_RULE_SET_BYTES`), directories fail on read, FIFOs block inside `open`, and existing tests cover non-regular targets.
+**Prevention:** Do not add post-open metadata checks to read-only functions like `read_rule_set` when `ensure_regular_or_absent` and byte limits already restrict read risk.
