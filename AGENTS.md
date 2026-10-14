@@ -102,7 +102,8 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.20.4** (2026-10-13, nightly): `zip` 9.0.2 and `rodio` 0.23. 0.20.3
+- Latest release: **0.20.5** (2026-10-14, nightly): Bookmark report (all streams) disabled with
+  no stream open, `zip` 9.0.3. 0.20.4 (2026-10-13): `zip` 9.0.2 and `rodio` 0.23. 0.20.3
   (2026-10-12, nightly): dependency updates (`sevenz-rust2` 0.24
   with `lzma-rust2` 0.22, `ruzstd`, `serde_json`). 0.20.2 (2026-10-11): SIMD byte search in the HEX view, tooltips
   on two disabled GUI controls, `zip` 9 and lockfile updates, taken from the bot PRs after a
