@@ -8,11 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.5] - 2026-10-14
+
+A nightly patch: one GUI fix and a dependency update.
+
 ### Changed
 
 - **Bookmark report (all streams) disabled with no stream open.** The 🗂 menu item no
   longer opens an empty report; its tooltip says that no file is open (from the Palette bot
   PR #316).
+- **Dependency update.** `zip` 9.0.3 (lockfile only).
 
 ## [0.20.4] - 2026-10-13
 
@@ -1530,6 +1535,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.5]: https://github.com/matteobaccan/FastTail/compare/v0.20.4...v0.20.5
 [0.20.4]: https://github.com/matteobaccan/FastTail/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/matteobaccan/FastTail/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/matteobaccan/FastTail/compare/v0.20.1...v0.20.2
