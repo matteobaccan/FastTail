@@ -386,16 +386,8 @@ pub fn contains_sgr(bytes: &[u8]) -> bool {
 
 /// Applies the parameters of one SGR sequence (`1;31`, `38;5;208`, `38:2::10:20:30`).
 fn apply_sgr(style: &mut AnsiStyle, params: &[u8]) {
-    // Fast path: empty params or "0" is a full style reset (the most common ANSI sequence in logs).
-    if params.is_empty() || params == b"0" {
+    if params.is_empty() {
         *style = AnsiStyle::default();
-        return;
-    }
-    // Fast path: single-parameter sequence without ';' or ':' (e.g., ESC[31m or ESC[1m).
-    // Avoids SmallVec allocation and parameter splitting overhead in hot line-rendering loops.
-    if memchr::memchr2(b';', b':', params).is_none() {
-        let code = number(params);
-        apply_code(style, code);
         return;
     }
     // `;` separates parameters; `:` separates the sub-parameters of one of them. The
@@ -496,37 +488,12 @@ fn apply_code(style: &mut AnsiStyle, code: u32) {
 
 /// Decimal value of a parameter (empty = 0, saturating, digits only).
 fn number(digits: &[u8]) -> u32 {
-    // Fast path for 1- and 2-digit parameter numbers (0..99), avoiding iterator chain overhead.
-    match digits.len() {
-        1 => {
-            let d = digits[0];
-            if d.is_ascii_digit() {
-                (d - b'0') as u32
-            } else {
-                0
-            }
-        }
-        2 => {
-            let d0 = digits[0];
-            let d1 = digits[1];
-            if d0.is_ascii_digit() && d1.is_ascii_digit() {
-                (d0 - b'0') as u32 * 10 + (d1 - b'0') as u32
-            } else {
-                number_fallback(digits)
-            }
-        }
-        _ => number_fallback(digits),
-    }
-}
-
-fn number_fallback(digits: &[u8]) -> u32 {
-    let mut n = 0u32;
-    for &d in digits {
-        if d.is_ascii_digit() {
-            n = n.saturating_mul(10).saturating_add((d - b'0') as u32);
-        }
-    }
-    n
+    digits
+        .iter()
+        .filter(|b| b.is_ascii_digit())
+        .fold(0u32, |n, &d| {
+            n.saturating_mul(10).saturating_add((d - b'0') as u32)
+        })
 }
 
 fn byte(n: u32) -> u8 {
