@@ -164,7 +164,7 @@ impl ArchivePicker {
         PickerOutcome::Open { names, close }
     }
 
-    fn sort_header(&mut self, ui: &mut egui::Ui, label: &str, column: SortBy) {
+    fn sort_header(&mut self, ui: &mut egui::Ui, label: &str, column: SortBy, lang: Language) {
         let arrow = match (self.sort_by == column, self.descending) {
             (true, false) => " ▲",
             (true, true) => " ▼",
@@ -176,6 +176,7 @@ impl ArchivePicker {
                     .monospace()
                     .strong(),
             )
+            .on_hover_text(t(lang, "zip_picker_sort_tip"))
             .clicked()
         {
             if self.sort_by == column {
@@ -303,8 +304,8 @@ impl ArchivePicker {
             });
             ui.separator();
             ui.horizontal(|ui| {
-                self.sort_header(ui, t(lang, "zip_picker_name"), SortBy::Name);
-                self.sort_header(ui, t(lang, "zip_picker_size"), SortBy::Size);
+                self.sort_header(ui, t(lang, "zip_picker_name"), SortBy::Name, lang);
+                self.sort_header(ui, t(lang, "zip_picker_size"), SortBy::Size, lang);
             });
             egui::ScrollArea::vertical()
                 .max_height(320.0)
