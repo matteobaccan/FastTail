@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Sort hint in the archive picker.** The Name and Size headers say that a click sorts by
+  that column (from the Palette bot PR #327).
+
 ## [0.20.5] - 2026-10-14
 
 A nightly patch: one GUI fix and a dependency update.

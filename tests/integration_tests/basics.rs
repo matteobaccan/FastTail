@@ -926,6 +926,7 @@ fn test_i18n_exhaustive_coverage() {
         "zip_picker_name",
         "preset_name",
         "zip_picker_size",
+        "zip_picker_sort_tip",
         "zip_picker_open",
         "zip_picker_no_selection",
         "zip_entry_encrypted",
