@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Direct arithmetic parsing and slice loops for token scanning
+**Learning:** Using `std::str::from_utf8` and `.parse::<u32>()` or iterator adapter chains (`.iter().take().take_while().count()`) inside token matchers (`ipv4`, `digits`, `hex_digits`) in line-by-line log scanning adds unnecessary UTF-8 validation, string formatting error handling, and iterator overhead. Parsing numbers directly via arithmetic over ASCII digit bytes (`val = val * 10 + (d - b'0')`) and scanning slices with direct `while` loops avoids string conversion machinery in hot token highlight paths.
+**Action:** When parsing small numbers or digit counts from verified ASCII byte slices in hot loops, use simple `while` loops and direct arithmetic accumulation instead of `str::from_utf8().parse()`.

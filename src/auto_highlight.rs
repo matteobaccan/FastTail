@@ -224,19 +224,23 @@ fn ends_token(b: &[u8], end: usize) -> bool {
 }
 
 fn digits(b: &[u8], at: usize, max: usize) -> usize {
-    b[at.min(b.len())..]
-        .iter()
-        .take(max)
-        .take_while(|c| c.is_ascii_digit())
-        .count()
+    let slice = &b[at.min(b.len())..];
+    let limit = max.min(slice.len());
+    let mut count = 0;
+    while count < limit && slice[count].is_ascii_digit() {
+        count += 1;
+    }
+    count
 }
 
 fn hex_digits(b: &[u8], at: usize, max: usize) -> usize {
-    b[at.min(b.len())..]
-        .iter()
-        .take(max + 1)
-        .take_while(|c| c.is_ascii_hexdigit())
-        .count()
+    let slice = &b[at.min(b.len())..];
+    let limit = (max + 1).min(slice.len());
+    let mut count = 0;
+    while count < limit && slice[count].is_ascii_hexdigit() {
+        count += 1;
+    }
+    count
 }
 
 /// `scheme://` then everything up to a space, a quote or an angle bracket, with trailing
@@ -300,7 +304,11 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
         if len == 0 || len > 3 {
             return None;
         }
-        let value: u32 = std::str::from_utf8(&b[pos..pos + len]).ok()?.parse().ok()?;
+        // Direct arithmetic parsing over ASCII digit bytes avoids `from_utf8` and `parse()` string machinery.
+        let mut value = 0u32;
+        for &d in &b[pos..pos + len] {
+            value = value * 10 + (d - b'0') as u32;
+        }
         if value > 255 {
             return None;
         }
@@ -316,10 +324,10 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
     if b.get(pos) == Some(&b':') {
         let len = digits(b, pos + 1, 6);
         if (1..=5).contains(&len) {
-            let port: u32 = std::str::from_utf8(&b[pos + 1..pos + 1 + len])
-                .ok()?
-                .parse()
-                .ok()?;
+            let mut port = 0u32;
+            for &d in &b[pos + 1..pos + 1 + len] {
+                port = port * 10 + (d - b'0') as u32;
+            }
             if (1..=65535).contains(&port) && ends_token(b, pos + 1 + len) {
                 return Some(pos + 1 + len);
             }
