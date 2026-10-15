@@ -1,3 +1,7 @@
+## 2026-10-21 - Contextual Disabled Tooltips vs Reused Action Tooltips
+**Learning:** Reusing the enabled action tooltip (e.g. `rules_export_tip`) in `.on_disabled_hover_text(...)` fails to explain to the user why the button is disabled. Disabled hover text should always convey the specific condition or state reason (e.g. `rules_export_empty` or `find_all_idle_tip`).
+**Action:** When chaining `.on_disabled_hover_text(...)` on disabled controls, use a dedicated key that states why the action is currently unavailable.
+
 ## 2026-04-20 - Disabled Control Tooltips in egui
 **Learning:** In `egui`, standard `.on_hover_text(...)` tooltips are suppressed when a widget is disabled (e.g. `add_enabled(false, ...)`). For interactive controls like "Open" or reordering buttons that can be disabled based on state, users need explicit feedback on why the control is disabled.
 **Action:** Always chain `.on_disabled_hover_text(...)` when disabling interactive buttons in `egui` so users receive clear contextual guidance.
