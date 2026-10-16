@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-04-19 - Do not quote tool.program in external_tools shell mode
+**Vulnerability:** Attempting to quote `tool.program` in `ExternalTool` shell mode (`use_shell = true`).
+**Learning:** `tool.program` comes from the user's own local configuration (not from untrusted log file content) and may intentionally contain custom shell syntax or command lines. Automatically quoting `tool.program` breaks intentional shell syntax in that field. Only expanded placeholder arguments derived from untrusted log data require quoting.
+**Prevention:** Leave `tool.program` unquoted in shell mode so user-defined shell syntax is preserved, while continuing to quote expanded placeholder arguments derived from untrusted input.
