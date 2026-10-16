@@ -2304,6 +2304,7 @@ fn render_log_stream(
                 for (tag, count) in suggestions {
                     if ui
                         .small_button(RichText::new(format!("#{tag} ({count})")).monospace())
+                        .on_hover_text(t(lang, "tip_report_tags"))
                         .clicked()
                     {
                         engine.goto_input = format!("#{tag}");

@@ -336,6 +336,7 @@ impl ReportDialog {
                         for (tag, n) in tag_counts.iter().take(24) {
                             if ui
                                 .small_button(RichText::new(format!("#{tag} ({n})")).monospace())
+                                .on_hover_text(t(lang, "tip_report_tags"))
                                 .clicked()
                             {
                                 if !self.tags_text.trim().is_empty() {
