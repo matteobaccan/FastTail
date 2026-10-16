@@ -7773,7 +7773,7 @@ fn render_rule_set_controls(
                 ),
             )
             .on_hover_text(t(lang, "rules_export_tip"))
-            .on_disabled_hover_text(t(lang, "rules_export_tip"))
+            .on_disabled_hover_text(t(lang, "rules_export_empty"))
             .clicked()
         {
             if let Some(target) = rfd::FileDialog::new()

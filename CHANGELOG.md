@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Sort hint in the archive picker.** The Name and Size headers say that a click sorts by
   that column (from the Palette bot PR #327).
+- **Clearer tooltips on two disabled buttons.** Stop in Find results says that no search is
+  running, and Export in the highlight rules says that there is no rule to export (from the
+  Palette bot PR #332).
 
 ## [0.20.5] - 2026-10-14
 

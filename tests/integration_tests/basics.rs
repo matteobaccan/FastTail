@@ -544,6 +544,8 @@ fn test_i18n_exhaustive_coverage() {
         "tip_scope_lines",
         "tip_find_all_time_scope",
         "find_all_skipped_untimed",
+        "find_all_idle_tip",
+        "rules_export_empty",
         "bookmark_report_menu",
         "bookmark_report_all",
         "bookmark_report_title",
