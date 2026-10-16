@@ -102,7 +102,10 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.20.5** (2026-10-14, nightly): Bookmark report (all streams) disabled with
+- Latest release: **0.20.6** (2026-10-16, nightly): tooltips on the archive picker headers and
+  on the disabled Stop / Export buttons, `arboard` 3.7.0, `zip` 9.0.4 (egui 0.37, Renovate
+  #330 / #335, still open: it needs code changes and a preview). 0.20.5 (2026-10-14):
+  Bookmark report (all streams) disabled with
   no stream open, `zip` 9.0.3. 0.20.4 (2026-10-13): `zip` 9.0.2 and `rodio` 0.23. 0.20.3
   (2026-10-12, nightly): dependency updates (`sevenz-rust2` 0.24
   with `lzma-rust2` 0.22, `ruzstd`, `serde_json`). 0.20.2 (2026-10-11): SIMD byte search in the HEX view, tooltips

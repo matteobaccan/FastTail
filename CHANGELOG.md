@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.6] - 2026-10-16
+
+A nightly patch: clearer GUI tooltips and dependency updates.
+
 ### Changed
 
 - **Sort hint in the archive picker.** The Name and Size headers say that a click sorts by
@@ -15,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Clearer tooltips on two disabled buttons.** Stop in Find results says that no search is
   running, and Export in the highlight rules says that there is no rule to export (from the
   Palette bot PR #332).
+- **Dependency updates.** `arboard` 3.7.0 (the terminal interface's clipboard) and `zip`
+  9.0.4 (lockfile only).
 
 ## [0.20.5] - 2026-10-14
 
@@ -1543,6 +1549,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.6]: https://github.com/matteobaccan/FastTail/compare/v0.20.5...v0.20.6
 [0.20.5]: https://github.com/matteobaccan/FastTail/compare/v0.20.4...v0.20.5
 [0.20.4]: https://github.com/matteobaccan/FastTail/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/matteobaccan/FastTail/compare/v0.20.2...v0.20.3
