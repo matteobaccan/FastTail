@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-10-18 - Zero-loop fixed-digit number parsing and O(1) month lookup
+**Learning:** Generic number parsing with dynamic slice iteration in log timestamp parsing hot loops introduces slice slicing, loop counter management, and per-byte digit validation branches. Specialized fixed-width helpers `number_2` and `number_4` using `wrapping_sub(b'0') < 10` perform unrolled digit parsing with a single bounds check. Similarly, `month_from_name` using 3-byte tuple matching on lowercased bytes replaces 12-element slice iteration and `eq_ignore_ascii_case` loops with a direct O(1) branch table lookup.
+**Action:** In timestamp and text header parsing hot loops, replace generic slice iteration with zero-loop fixed-width digit parsers (`number_2`/`number_4`) and direct tuple matching for fixed abbreviation sets.
