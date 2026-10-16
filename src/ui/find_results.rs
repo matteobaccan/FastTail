@@ -151,7 +151,7 @@ pub fn render_find_results(
                 ),
             )
             .on_hover_text(t(lang, "find_all_stop"))
-            .on_disabled_hover_text(t(lang, "find_all_stop"))
+            .on_disabled_hover_text(t(lang, "find_all_idle_tip"))
             .clicked()
         {
             session.stop();
