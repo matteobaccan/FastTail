@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster timestamp detection.** Fixed-width digit fields and month names are read
+  without loops: about 11% faster on mixed ISO 8601, syslog and Apache lines, which the
+  timeline and time-range scans run over every line (from the Bolt bot PR #341).
+
 ## [0.20.6] - 2026-10-16
 
 A nightly patch: clearer GUI tooltips and dependency updates.
