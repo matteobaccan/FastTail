@@ -166,6 +166,10 @@ pub struct FieldSpans {
     logfmt_pairs: usize,
     /// Byte range of the whole match of the last regex scan.
     matched: Option<(usize, usize)>,
+    /// `RegexFields` instance whose group name keys are cached in `scratch`.
+    regex_owner: usize,
+    /// Cached scratch ranges `(ka, kz)` for each group in `r.names`.
+    regex_keys: SmallVec<[(u32, u32); 16]>,
 }
 
 /// A field of a scanned line.
@@ -197,7 +201,9 @@ impl FieldSpans {
 
     pub fn clear(&mut self) {
         self.spans.clear();
-        self.scratch.clear();
+        if self.regex_owner == 0 {
+            self.scratch.clear();
+        }
         self.partial = false;
         self.truncated = false;
         self.logfmt_pairs = 0;
@@ -239,8 +245,16 @@ impl FieldSpans {
     /// Slices key bytes/str directly, short-circuiting on length mismatch.
     fn span_key_matches(&self, line: &str, span: &FieldSpan, key: &str) -> bool {
         match span.key {
-            KeyAt::Line(a, b) => line.get(a as usize..b as usize) == Some(key),
+            KeyAt::Line(a, b) => {
+                if (b - a) as usize != key.len() {
+                    return false;
+                }
+                line.get(a as usize..b as usize) == Some(key)
+            }
             KeyAt::Scratch(a, b) => {
+                if (b - a) as usize != key.len() {
+                    return false;
+                }
                 self.scratch.get(a as usize..b as usize) == Some(key.as_bytes())
             }
         }
@@ -280,6 +294,11 @@ impl FieldSpans {
 /// the parser's shape (a JSON object, at least one logfmt pair, a regex match), even if
 /// partial. Lines longer than 4 GB are not scanned.
 pub fn scan(parser: &FieldParser, line: &str, out: &mut FieldSpans) -> bool {
+    if !matches!(parser, FieldParser::Regex(_)) && out.regex_owner != 0 {
+        out.regex_owner = 0;
+        out.scratch.clear();
+        out.regex_keys.clear();
+    }
     out.clear();
     if line.len() > u32::MAX as usize {
         return false;
@@ -384,6 +403,11 @@ pub fn json_start(line: &str) -> Option<usize> {
 }
 
 fn scan_json(line: &str, out: &mut FieldSpans) -> bool {
+    if out.regex_owner != 0 {
+        out.regex_owner = 0;
+        out.scratch.clear();
+        out.regex_keys.clear();
+    }
     let Some(start) = json_start(line) else {
         return false;
     };
@@ -536,6 +560,11 @@ fn logfmt_pair_key(b: &[u8], pos: usize) -> Option<usize> {
 }
 
 fn scan_logfmt(line: &str, out: &mut FieldSpans) -> bool {
+    if out.regex_owner != 0 {
+        out.regex_owner = 0;
+        out.scratch.clear();
+        out.regex_keys.clear();
+    }
     let b = line.as_bytes();
     if memchr::memchr(b'=', b).is_none() {
         return false;
@@ -616,6 +645,16 @@ fn scan_logfmt(line: &str, out: &mut FieldSpans) -> bool {
 
 fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> bool {
     let id = r as *const RegexFields as usize;
+    if out.regex_owner != id || out.regex_keys.len() != r.names.len() {
+        out.scratch.clear();
+        out.regex_keys.clear();
+        for (_, name) in &r.names {
+            let (ka, kz) = out.scratch_key(name.as_bytes());
+            out.regex_keys.push((ka, kz));
+        }
+        out.regex_owner = id;
+    }
+
     // The address alone could be reused by a later parser: the slot count must match too.
     let mut locs = match out.locs.take() {
         Some((owner, locs)) if owner == id && locs.len() == r.regex.captures_len() => locs,
@@ -624,9 +663,9 @@ fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> bool {
     let matched = r.regex.captures_read(&mut locs, line).is_some();
     if matched {
         out.matched = locs.get(0);
-        for (group, name) in &r.names {
+        for (i, (group, _)) in r.names.iter().enumerate() {
             if let Some((a, z)) = locs.get(*group) {
-                let (ka, kz) = out.scratch_key(name.as_bytes());
+                let (ka, kz) = out.regex_keys[i];
                 out.push(KeyAt::Scratch(ka, kz), (a, z), false);
             }
         }
