@@ -1255,12 +1255,12 @@ fn list_7z(path: &Path, max_entries: usize) -> std::io::Result<SevenZListing> {
     })
 }
 
-/// The parts of an archive entry name: split on `/` and on the `\` some Windows tools write,
-/// without the empty, `.` and `..` parts a path would drop anyway.
+/// The parts of a zip entry name: split on `/` and on the `\` some Windows tools write,
+/// without the empty and `.` parts a path would drop anyway.
 fn entry_parts(entry: &str) -> impl Iterator<Item = &str> {
     entry
         .split(['/', '\\'])
-        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .filter(|p| !p.is_empty() && *p != ".")
 }
 
 /// The name a zip entry is known by in FastTail (its stream identity and the value
@@ -3266,21 +3266,6 @@ mod tests {
             None
         );
         assert!(!source_exists(&dir.path().join("none.log")));
-    }
-
-    #[test]
-    fn entry_parts_filters_out_parent_dir_references() {
-        let dir = Path::new("/var/log");
-        assert_eq!(normalize_entry("../etc/passwd"), "etc/passwd");
-        assert_eq!(normalize_entry("logs/../worker.log"), "logs/worker.log");
-        assert_eq!(
-            entry_path(dir, "logs/../../etc/passwd"),
-            dir.join("logs").join("etc").join("passwd")
-        );
-        assert_eq!(
-            archive_of(&dir.join("logs").join("worker.log"), "logs/../worker.log"),
-            *dir
-        );
     }
 
     #[test]

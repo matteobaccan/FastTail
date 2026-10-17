@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-10-16 - Archive entries with `..` are refused as `EntryRefusal::UnsafeName`
+**Vulnerability:** Attempting to strip `..` parts from archive entry stream identities in `entry_parts`.
+**Learning:** Entries containing `..` are already explicitly refused with `EntryRefusal::UnsafeName` across zip (`enclosed_name`), tar (`is_unsafe_name`), and 7z (`is_unsafe_name`). FastTail stream identities (`entry_path`) are internal virtual paths and FastTail never extracts archive structures directly to disk. Stripping `..` from stream identities would alias distinct entries (e.g. `a/../b` and `b`) instead of properly refusing the unsafe entry.
+**Prevention:** Do not modify `entry_parts` to drop `..` path components; rely on `is_unsafe_name` and `EntryRefusal::UnsafeName` checks to reject unsafe entry names.
