@@ -125,11 +125,11 @@ fn close_bracket(head: &[u8], start: usize, end: usize) -> usize {
 fn skip_zone(b: &[u8], at: usize) -> usize {
     match b.get(at) {
         Some(b'Z') | Some(b'z') => at + 1,
-        Some(b'+') | Some(b'-') if number(b, at + 1, 2).is_some() => {
+        Some(b'+') | Some(b'-') if number_2(b, at + 1).is_some() => {
             let end = at + 3;
-            if b.get(end) == Some(&b':') && number(b, end + 1, 2).is_some() {
+            if b.get(end) == Some(&b':') && number_2(b, end + 1).is_some() {
                 end + 3
-            } else if number(b, end, 2).is_some() {
+            } else if number_2(b, end).is_some() {
                 end + 2
             } else {
                 end
@@ -148,15 +148,15 @@ fn parse_iso8601(head: &[u8]) -> Option<(i64, usize)> {
     if b.len() < 19 {
         return None;
     }
-    let year = number(b, 0, 4)?;
+    let year = number_4(b, 0)?;
     if b[4] != b'-' {
         return None;
     }
-    let month = number(b, 5, 2)?;
+    let month = number_2(b, 5)?;
     if b[7] != b'-' {
         return None;
     }
-    let day = number(b, 8, 2)?;
+    let day = number_2(b, 8)?;
     if b[10] != b'T' && b[10] != b' ' && b[10] != b'_' {
         return None;
     }
@@ -183,7 +183,7 @@ fn parse_syslog(head: &[u8]) -> Option<(i64, usize)> {
     let (day, time_at) = if b[4] == b' ' {
         (number(b, 5, 1)?, 7)
     } else {
-        (number(b, 4, 2)?, 7)
+        (number_2(b, 4)?, 7)
     };
     if b[time_at - 1] != b' ' {
         return None;
@@ -204,7 +204,7 @@ fn parse_apache(head: &[u8]) -> Option<(i64, usize)> {
     if b.len() < 20 {
         return None;
     }
-    let day = number(b, 0, 2)?;
+    let day = number_2(b, 0)?;
     if b[2] != b'/' {
         return None;
     }
@@ -212,7 +212,7 @@ fn parse_apache(head: &[u8]) -> Option<(i64, usize)> {
     if b[6] != b'/' {
         return None;
     }
-    let year = number(b, 7, 4)?;
+    let year = number_4(b, 7)?;
     if b[11] != b':' {
         return None;
     }
@@ -254,15 +254,15 @@ fn parse_clock(b: &[u8], at: usize) -> Option<(i64, usize)> {
     if b.len() < at + 8 {
         return None;
     }
-    let hour = number(b, at, 2)?;
+    let hour = number_2(b, at)?;
     if b[at + 2] != b':' {
         return None;
     }
-    let minute = number(b, at + 3, 2)?;
+    let minute = number_2(b, at + 3)?;
     if b[at + 5] != b':' {
         return None;
     }
-    let second = number(b, at + 6, 2)?;
+    let second = number_2(b, at + 6)?;
     if hour > 23 || minute > 59 || second > 60 {
         return None;
     }
@@ -305,39 +305,89 @@ fn skip_leading_bracket(head: &[u8]) -> usize {
     }
 }
 
-fn number(b: &[u8], at: usize, len: usize) -> Option<u32> {
-    let slice = b.get(at..at + len)?;
-    let mut value = 0u32;
-    for d in slice {
-        if !d.is_ascii_digit() {
-            return None;
-        }
-        value = value * 10 + (d - b'0') as u32;
+/// Parses 2 ASCII digits at `at` in zero-loop bounds-checked form.
+#[inline]
+fn number_2(b: &[u8], at: usize) -> Option<u32> {
+    let slice = b.get(at..at + 2)?;
+    let d0 = slice[0].wrapping_sub(b'0');
+    let d1 = slice[1].wrapping_sub(b'0');
+    if d0 < 10 && d1 < 10 {
+        Some(d0 as u32 * 10 + d1 as u32)
+    } else {
+        None
     }
-    Some(value)
+}
+
+/// Parses 4 ASCII digits at `at` in zero-loop bounds-checked form.
+#[inline]
+fn number_4(b: &[u8], at: usize) -> Option<u32> {
+    let slice = b.get(at..at + 4)?;
+    let d0 = slice[0].wrapping_sub(b'0');
+    let d1 = slice[1].wrapping_sub(b'0');
+    let d2 = slice[2].wrapping_sub(b'0');
+    let d3 = slice[3].wrapping_sub(b'0');
+    if d0 < 10 && d1 < 10 && d2 < 10 && d3 < 10 {
+        Some(d0 as u32 * 1000 + d1 as u32 * 100 + d2 as u32 * 10 + d3 as u32)
+    } else {
+        None
+    }
+}
+
+fn number(b: &[u8], at: usize, len: usize) -> Option<u32> {
+    match len {
+        2 => number_2(b, at),
+        4 => number_4(b, at),
+        _ => {
+            let slice = b.get(at..at + len)?;
+            let mut value = 0u32;
+            for &d in slice {
+                let digit = d.wrapping_sub(b'0');
+                if digit >= 10 {
+                    return None;
+                }
+                value = value * 10 + digit as u32;
+            }
+            Some(value)
+        }
+    }
 }
 
 fn number_i64(b: &[u8], at: usize, len: usize) -> Option<i64> {
     let slice = b.get(at..at + len)?;
     let mut value = 0i64;
-    for d in slice {
-        if !d.is_ascii_digit() {
+    for &d in slice {
+        let digit = d.wrapping_sub(b'0');
+        if digit >= 10 {
             return None;
         }
-        value = value * 10 + (d - b'0') as i64;
+        value = value * 10 + digit as i64;
     }
     Some(value)
 }
 
+/// O(1) 3-byte month name lookup replacing linear slice iteration and `eq_ignore_ascii_case`.
 fn month_from_name(name: &[u8]) -> Option<u32> {
-    const MONTHS: [&[u8; 3]; 12] = [
-        b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov",
-        b"Dec",
-    ];
-    MONTHS
-        .iter()
-        .position(|m| m.eq_ignore_ascii_case(name))
-        .map(|i| i as u32 + 1)
+    if name.len() != 3 {
+        return None;
+    }
+    let b0 = name[0].to_ascii_lowercase();
+    let b1 = name[1].to_ascii_lowercase();
+    let b2 = name[2].to_ascii_lowercase();
+    match (b0, b1, b2) {
+        (b'j', b'a', b'n') => Some(1),
+        (b'f', b'e', b'b') => Some(2),
+        (b'm', b'a', b'r') => Some(3),
+        (b'a', b'p', b'r') => Some(4),
+        (b'm', b'a', b'y') => Some(5),
+        (b'j', b'u', b'n') => Some(6),
+        (b'j', b'u', b'l') => Some(7),
+        (b'a', b'u', b'g') => Some(8),
+        (b's', b'e', b'p') => Some(9),
+        (b'o', b'c', b't') => Some(10),
+        (b'n', b'o', b'v') => Some(11),
+        (b'd', b'e', b'c') => Some(12),
+        _ => None,
+    }
 }
 
 /// Days since the Unix epoch, from Howard Hinnant's `days_from_civil`. Returns `None` for
