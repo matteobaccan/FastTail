@@ -1255,12 +1255,13 @@ fn list_7z(path: &Path, max_entries: usize) -> std::io::Result<SevenZListing> {
     })
 }
 
-/// The parts of a zip entry name: split on `/` and on the `\` some Windows tools write,
-/// without the empty and `.` parts a path would drop anyway.
+/// The parts of an archive entry name: split on `/` and on the `\` some Windows tools write,
+/// without empty, `.`, and `..` parent directory references to prevent path traversal when
+/// constructing entry paths.
 fn entry_parts(entry: &str) -> impl Iterator<Item = &str> {
     entry
         .split(['/', '\\'])
-        .filter(|p| !p.is_empty() && *p != ".")
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
 }
 
 /// The name a zip entry is known by in FastTail (its stream identity and the value
@@ -3666,6 +3667,19 @@ mod tests {
         );
         settle(&mut engine);
         assert_eq!(engine.get_line(0).as_deref(), Some("dot"));
+    }
+
+    #[test]
+    fn entry_parts_and_entry_path_strip_parent_directory_traversal() {
+        let parts: Vec<&str> = entry_parts("../../../foo/./../bar.log").collect();
+        assert_eq!(parts, vec!["foo", "bar.log"]);
+
+        let norm = normalize_entry("../../../foo/./../bar.log");
+        assert_eq!(norm, "foo/bar.log");
+
+        let archive = Path::new("/tmp/test.zip");
+        let path = entry_path(archive, "../../../foo/../bar.log");
+        assert_eq!(path, archive.join("foo").join("bar.log"));
     }
 
     #[test]
