@@ -7,6 +7,7 @@
 //! works on the file name only, the directory part is taken literally and nothing is
 //! recursive, so `logs/app-*.log` can never surprise the user by walking subfolders.
 
+use smallvec::SmallVec;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -14,11 +15,21 @@ use std::time::SystemTime;
 /// none) and `?` exactly one. On Windows the comparison ignores ASCII case, like the file
 /// system does.
 pub fn wildcard_match(pattern: &str, name: &str) -> bool {
-    let p: Vec<char> = pattern.chars().map(fold).collect();
-    let n: Vec<char> = name.chars().map(fold).collect();
+    // Fast path: if both pattern and name are ASCII (typical for log filenames/paths),
+    // match directly on byte slices without allocating `Vec<char>`.
+    if pattern.is_ascii() && name.is_ascii() {
+        return wildcard_match_bytes(pattern.as_bytes(), name.as_bytes());
+    }
+
+    // Fallback path for non-ASCII text using SmallVec to avoid heap allocation
+    // for strings up to 128 characters.
+    let p: SmallVec<[char; 128]> = pattern.chars().map(fold).collect();
+    let n: SmallVec<[char; 128]> = name.chars().map(fold).collect();
+    wildcard_match_slice(&p, &n)
+}
+
+fn wildcard_match_slice(p: &[char], n: &[char]) -> bool {
     let (mut pi, mut ni) = (0usize, 0usize);
-    // Position of the last `*` seen and the name index it was matched against, for
-    // backtracking when a later literal fails.
     let mut star: Option<(usize, usize)> = None;
     while ni < n.len() {
         if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
@@ -39,6 +50,39 @@ pub fn wildcard_match(pattern: &str, name: &str) -> bool {
         pi += 1;
     }
     pi == p.len()
+}
+
+fn wildcard_match_bytes(p: &[u8], n: &[u8]) -> bool {
+    let (mut pi, mut ni) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None;
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == b'?' || bytes_eq(p[pi], n[ni])) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star = Some((pi, ni));
+            pi += 1;
+        } else if let Some((sp, sn)) = star {
+            pi = sp + 1;
+            ni = sn + 1;
+            star = Some((sp, sn + 1));
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+#[inline(always)]
+fn bytes_eq(a: u8, b: u8) -> bool {
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(&b)
+    } else {
+        a == b
+    }
 }
 
 #[cfg(windows)]
@@ -125,6 +169,16 @@ mod tests {
         assert!(wildcard_match("a*b*c", "aXXbYYc"));
         assert!(!wildcard_match("a*b*c", "aXXbYY"));
         assert!(wildcard_match("**x", "x"));
+
+        // Unicode tests
+        assert!(wildcard_match("log-*.txt", "log-αβγ.txt"));
+        assert!(wildcard_match("log-???.txt", "log-αβγ.txt"));
+        assert!(!wildcard_match("log-??.txt", "log-αβγ.txt"));
+
+        // Long string test (> 128 chars for SmallVec)
+        let long_pattern = format!("a*{}", "x".repeat(150));
+        let long_name = format!("aHELLO{}", "x".repeat(150));
+        assert!(wildcard_match(&long_pattern, &long_name));
     }
 
     #[test]

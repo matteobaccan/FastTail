@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-10-18 - Fast path ASCII byte-matching for wildcard file resolution
+**Learning:** In pattern stream resolution and file browsing (`wildcard_match`), converting strings to `Vec<char>` for every file entry in a directory generates significant heap allocation churn. Branching on `pattern.is_ascii() && name.is_ascii()` enables direct byte-slice matching (`&[u8]`) with zero allocations, while using `SmallVec<[char; 128]>` for non-ASCII strings keeps fallback operations stack-allocated for typical path lengths.
+**Action:** When matching glob/wildcard patterns on filenames or paths, use an ASCII byte slice fast path and stack-allocate non-ASCII character buffers with `SmallVec`.

@@ -4029,12 +4029,14 @@ impl App {
                 }
             }
             Action::SearchNext => {
-                if tab.engine.search_next(false).is_none() {
+                let res = tab.engine.search_next(false);
+                if res.is_none() {
                     self.message = Some(tx(self.lang, "No search hits").into());
                 }
             }
             Action::SearchPrev => {
-                if tab.engine.search_prev(false).is_none() {
+                let res = tab.engine.search_prev(false);
+                if res.is_none() {
                     self.message = Some(tx(self.lang, "No search hits").into());
                 }
             }
