@@ -1700,10 +1700,10 @@ fn render_log_stream(
                     .size(11.0),
             );
             if ui
-                .button(" -8 ")
+                .add_enabled(engine.hex_columns > 8, egui::Button::new(" -8 "))
                 .on_hover_text(t(lang, "hex_cols_dec"))
+                .on_disabled_hover_text(t(lang, "already_at_left"))
                 .clicked()
-                && engine.hex_columns > 8
             {
                 engine.hex_columns -= 8;
                 ui.ctx().request_repaint();
@@ -1714,10 +1714,10 @@ fn render_log_stream(
                     .strong(),
             );
             if ui
-                .button(" +8 ")
+                .add_enabled(engine.hex_columns < 64, egui::Button::new(" +8 "))
                 .on_hover_text(t(lang, "hex_cols_inc"))
+                .on_disabled_hover_text(t(lang, "already_at_right"))
                 .clicked()
-                && engine.hex_columns < 64
             {
                 engine.hex_columns += 8;
                 ui.ctx().request_repaint();
