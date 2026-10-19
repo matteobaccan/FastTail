@@ -40,8 +40,17 @@ pub fn contains_html(text: &str) -> bool {
     if !text.contains('<') {
         return false;
     }
-    let without_fences = RE_FENCED_CODE.replace_all(text, "");
-    let without_code = RE_INLINE_CODE.replace_all(&without_fences, "");
+    // Performance optimization: skip regex replacements for code fences when no delimiter exists
+    let without_fences = if text.contains('`') || text.contains('~') {
+        RE_FENCED_CODE.replace_all(text, "")
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    };
+    let without_code = if text.contains('`') {
+        RE_INLINE_CODE.replace_all(&without_fences, "")
+    } else {
+        without_fences
+    };
     RE_OPENING_TAG.is_match(&without_code)
         && (RE_CLOSING_TAG.is_match(&without_code) || RE_VOID_TAG.is_match(&without_code))
 }
@@ -342,6 +351,11 @@ re!(RE_ENTITY_HEX, r"(?i)&#x([0-9a-f]+);");
 /// Decodes standard HTML entities. `&amp;` is decoded last so that an escaped entity such
 /// as `&amp;lt;` yields the literal text `&lt;` instead of being decoded twice.
 pub fn decode_html_entities(text: &str) -> String {
+    // Performance optimization: fast path when text contains no ampersands (no HTML entities)
+    if !text.contains('&') {
+        return text.to_string();
+    }
+
     let mut s = text
         .replace("&nbsp;", " ")
         .replace("&lt;", "<")
@@ -355,30 +369,34 @@ pub fn decode_html_entities(text: &str) -> String {
         .replace("&mdash;", "—")
         .replace("&ndash;", "–");
 
-    // Numeric decimal entities &#123;
-    s = RE_ENTITY_DEC
-        .replace_all(&s, |caps: &regex::Captures| {
-            caps[1]
-                .parse::<u32>()
-                .ok()
-                .and_then(char::from_u32)
-                .map(|ch| ch.to_string())
-                .unwrap_or_else(|| caps[0].to_string())
-        })
-        .into_owned();
+    // Numeric decimal and hex entities &#123; / &#x1F600;
+    if s.contains("&#") {
+        s = RE_ENTITY_DEC
+            .replace_all(&s, |caps: &regex::Captures| {
+                caps[1]
+                    .parse::<u32>()
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|ch| ch.to_string())
+                    .unwrap_or_else(|| caps[0].to_string())
+            })
+            .into_owned();
 
-    // Numeric hex entities &#x1F600;
-    s = RE_ENTITY_HEX
-        .replace_all(&s, |caps: &regex::Captures| {
-            u32::from_str_radix(&caps[1], 16)
-                .ok()
-                .and_then(char::from_u32)
-                .map(|ch| ch.to_string())
-                .unwrap_or_else(|| caps[0].to_string())
-        })
-        .into_owned();
+        s = RE_ENTITY_HEX
+            .replace_all(&s, |caps: &regex::Captures| {
+                u32::from_str_radix(&caps[1], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|ch| ch.to_string())
+                    .unwrap_or_else(|| caps[0].to_string())
+            })
+            .into_owned();
+    }
 
-    s.replace("&amp;", "&")
+    if s.contains("&amp;") {
+        s = s.replace("&amp;", "&");
+    }
+    s
 }
 
 #[cfg(test)]
