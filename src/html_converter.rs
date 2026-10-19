@@ -362,6 +362,7 @@ pub fn decode_html_entities(text: &str) -> String {
                 .parse::<u32>()
                 .ok()
                 .and_then(char::from_u32)
+                .filter(|&ch| ch != '\u{E000}' && ch != '\u{E001}')
                 .map(|ch| ch.to_string())
                 .unwrap_or_else(|| caps[0].to_string())
         })
@@ -373,6 +374,7 @@ pub fn decode_html_entities(text: &str) -> String {
             u32::from_str_radix(&caps[1], 16)
                 .ok()
                 .and_then(char::from_u32)
+                .filter(|&ch| ch != '\u{E000}' && ch != '\u{E001}')
                 .map(|ch| ch.to_string())
                 .unwrap_or_else(|| caps[0].to_string())
         })
@@ -453,5 +455,18 @@ mod tests {
         assert!(!md.contains("\u{E000}"));
         assert!(!md.contains("\u{E001}"));
         assert!(md.contains("let secret = 42;"));
+    }
+
+    #[test]
+    fn test_entity_encoded_placeholder_injection_prevented() {
+        // Decimal entity-encoded delimiter injection
+        let html_dec = "<p>Injection attempt &#57344;PRE0&#57345;</p><pre><code>let secret = 42;</code></pre>";
+        let md_dec = html_to_markdown(html_dec);
+        assert!(!md_dec.contains("let secret = 42;\n```\n\n```"));
+
+        // Hex entity-encoded delimiter injection
+        let html_hex = "<p>Injection attempt &#xE000;PRE0&#xE001;</p><pre><code>let secret = 42;</code></pre>";
+        let md_hex = html_to_markdown(html_hex);
+        assert!(!md_hex.contains("let secret = 42;\n```\n\n```"));
     }
 }

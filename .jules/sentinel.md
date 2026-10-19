@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-04-19 - Filter numeric HTML entities when stripping internal placeholder delimiters
+**Vulnerability:** Stripping internal placeholder delimiter characters (`\u{E000}` and `\u{E001}`) from raw HTML inputs before parking preformatted blocks (`<pre>`) is insufficient if `decode_html_entities` is executed later on the remaining string. Untrusted inputs using numeric HTML entities (`&#57344;` or `&#xE000;`) decode into delimiter characters after raw input sanitization, triggering unintended placeholder substitution and block injection.
+**Learning:** Pre-sanitization of raw strings before multi-stage entity parsing leaves a gap when entity decoders execute later in the pipeline. Numeric entity parsing must explicitly filter out delimiter characters to prevent entity-decoded placeholder collisions.
+**Prevention:** Ensure entity decoding routines filter out internal sentinel/delimiter characters so decoded text cannot inject structural placeholders.
