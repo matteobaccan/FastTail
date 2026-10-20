@@ -315,6 +315,14 @@ pub fn render(
         {
             find_next = true;
         }
+        if !pad.find.is_empty()
+            && ui
+                .small_button("✖")
+                .on_hover_text(t(lang, "clear_search"))
+                .clicked()
+        {
+            pad.find.clear();
+        }
         ui.separator();
         if ui
             .button(format!("💾 {}", t(lang, "scratch_save_as")))
