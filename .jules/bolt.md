@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-10-20 - Zero-allocation Command Palette fuzzy scoring with pre-folded query and SmallVec
+**Learning:** In the Command Palette (`rank`), re-parsing, whitespace-filtering, and case-folding query characters inside `fuzzy_score` for every candidate action repeated query processing $2N$ times per keystroke and allocated temporary character vectors on the heap for every candidate string. Pre-folding query characters once into a slice before ranking candidates and using `SmallVec<[char; 64]>` with double-buffered `swap` for internal DP scoring vectors eliminates heap allocation churn during command palette searches.
+**Action:** Pre-process query characters before candidate ranking loops and use `SmallVec` with buffer swapping for dynamic programming matrix rows in fuzzy scoring routines.

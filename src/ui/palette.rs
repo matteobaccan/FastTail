@@ -64,22 +64,30 @@ pub fn fold_char(c: char) -> char {
 /// character is missing. Every matched character scores, more when it follows the
 /// previous match, starts a word or starts the name; gaps cost a little. Whitespace in
 /// the query is ignored, case and Latin accents are folded (`fold_char`).
+use smallvec::SmallVec;
+
 pub fn fuzzy_score(query: &str, candidate: &str) -> Option<i32> {
-    let q: Vec<char> = query
+    let q: SmallVec<[char; 32]> = query
         .chars()
         .filter(|c| !c.is_whitespace())
         .map(fold_char)
         .collect();
+    fuzzy_score_chars(&q, candidate)
+}
+
+/// Subsequence score of `q` (pre-folded query chars) in `candidate` (fzf style).
+/// Uses inline stack buffers (`SmallVec`) to avoid heap allocations on short candidates.
+pub fn fuzzy_score_chars(q: &[char], candidate: &str) -> Option<i32> {
     if q.is_empty() {
         return Some(0);
     }
-    let orig: Vec<char> = candidate.chars().collect();
-    let c: Vec<char> = orig.iter().map(|&ch| fold_char(ch)).collect();
+    let orig: SmallVec<[char; 64]> = candidate.chars().collect();
+    let c: SmallVec<[char; 64]> = orig.iter().map(|&ch| fold_char(ch)).collect();
     let (m, n) = (q.len(), c.len());
     if m > n {
         return None;
     }
-    let bonus: Vec<i32> = (0..n)
+    let bonus: SmallVec<[i32; 64]> = (0..n)
         .map(|j| {
             if j == 0 {
                 return BONUS_NAME_START;
@@ -96,9 +104,10 @@ pub fn fuzzy_score(query: &str, candidate: &str) -> Option<i32> {
         .collect();
     const NONE: i32 = i32::MIN / 4;
     // `prev[j]`: best score of the query so far with its last character matched at `j`.
-    let mut prev = vec![NONE; n];
+    let mut prev: SmallVec<[i32; 64]> = smallvec::smallvec![NONE; n];
+    let mut cur: SmallVec<[i32; 64]> = smallvec::smallvec![NONE; n];
     for (i, &qc) in q.iter().enumerate() {
-        let mut cur = vec![NONE; n];
+        cur.fill(NONE);
         // Best `prev[k] + k * PENALTY_GAP` over k <= j - 2 (a gap of at least one char).
         let mut best_gap = NONE;
         for j in 0..n {
@@ -129,7 +138,7 @@ pub fn fuzzy_score(query: &str, candidate: &str) -> Option<i32> {
                 cur[j] = best + here;
             }
         }
-        prev = cur;
+        std::mem::swap(&mut prev, &mut cur);
     }
     prev.into_iter().filter(|s| *s > NONE).max()
 }
@@ -157,12 +166,17 @@ pub fn rank(query: &str, candidates: &[Candidate]) -> Vec<usize> {
         order.extend((0..candidates.len()).filter(|i| candidates[*i].recent.is_none()));
         return order;
     }
+    let q: SmallVec<[char; 32]> = query
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(fold_char)
+        .collect();
     let mut scored: Vec<(i32, usize)> = candidates
         .iter()
         .enumerate()
         .filter_map(|(i, c)| {
-            let local = fuzzy_score(query, c.name);
-            let english = fuzzy_score(query, c.english);
+            let local = fuzzy_score_chars(&q, c.name);
+            let english = fuzzy_score_chars(&q, c.english);
             let best = local.max(english)?;
             Some((best + c.recent.map_or(0, |_| RECENT_BONUS), i))
         })
