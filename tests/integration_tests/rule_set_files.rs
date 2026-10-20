@@ -129,6 +129,11 @@ fn refusals() {
         read_rule_set(dir.path()),
         Err(RuleSetError::Io(_))
     ));
+    // Non-regular files (directories) are rejected cleanly.
+    let sub_dir = dir.path().join("dir.fasttail-rules.ini");
+    std::fs::create_dir(&sub_dir).unwrap();
+    assert!(matches!(read_rule_set(&sub_dir), Err(RuleSetError::Io(_))));
+
     // A huge file is refused without being parsed.
     let big = dir.path().join("big.fasttail-rules.ini");
     let mut text = String::from(

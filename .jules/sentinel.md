@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-10-20 - Validate opened handle metadata when reading rule sets
+**Vulnerability:** `read_rule_set` checked path metadata prior to opening via `ensure_regular_or_absent`, but failed to inspect `file.metadata()?.is_file()` directly on the opened `File` handle. This created a TOCTOU race condition where opening a non-regular file (such as a directory, FIFO, or device node) would proceed to `read_to_end`, potentially blocking the thread indefinitely.
+**Learning:** Checking disk path metadata prior to opening a file leaves a TOCTOU gap. Inspecting `file.metadata()?.is_file()` directly on the opened OS handle before reading prevents blocking or reading from non-regular files.
+**Prevention:** Always validate `file.metadata()?.is_file()` directly on the opened file handle before reading or processing contents.
