@@ -9,5 +9,5 @@
 - [x] 2.1 `Ln {0}` and `Col {0}` in every language in `src/i18n_tui.rs`
 - [x] 2.2 Tests: `Ln` follows the cursor with a filter on (file line, not view row), `Col` appears after `→` and goes with `0`, a narrow window drops `Col` first, HEX unchanged, a click opens Go to
 - [x] 2.3 `docs/tui.md`, `docs/ui-design.md`, CHANGELOG `[Unreleased]`
-- [ ] 2.4 `cargo fmt`, clippy (GUI and `--no-default-features --features tui`), focused tests; PR with Linux and Windows CI green
-- [ ] 2.5 Archive the change after the release that ships it
+- [x] 2.4 `cargo fmt`, clippy (GUI and `--no-default-features --features tui`), focused tests; PR with Linux and Windows CI green
+- [x] 2.5 Archive the change after the release that ships it
