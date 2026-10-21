@@ -14,4 +14,4 @@
 
 - [x] 3.1 Integration tests: open at a line in a small file, past the end, on a growing large file, with a saved filter hiding the line
 - [x] 3.2 README (command line), `docs/tui.md`, CHANGELOG
-- [ ] 3.3 `cargo fmt`, clippy, focused tests; PR with Linux and Windows CI green
+- [x] 3.3 `cargo fmt`, clippy, focused tests; PR with Linux and Windows CI green
