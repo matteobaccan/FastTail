@@ -6,10 +6,10 @@
 
 ## 2. Linux packages
 
-- [ ] 2.1 `[package.metadata.deb]`: assets, `$auto` depends, Recommends for the window's run-time libraries, section, priority, extended description
-- [ ] 2.2 `[package.metadata.generate-rpm]`: assets, auto requires, `Recommends` with Fedora names, licence
-- [ ] 2.3 Build steps in the Linux jobs (`cargo deb --no-build`, `cargo generate-rpm`), tools cached; install tests (apt on the runner, dnf in `fedora:latest`), both `--version`, removal
-- [ ] 2.4 AppImage: `AppDir`, `AppRun`, desktop entry and icon, pinned `appimagetool` with checksum; test with `--appimage-extract-and-run --version`
+- [x] 2.1 `[package.metadata.deb]`: assets, `$auto` depends, Recommends for the window's run-time libraries, section, priority, extended description
+- [x] 2.2 `[package.metadata.generate-rpm]`: assets, auto requires, `Recommends` with Fedora names, licence
+- [x] 2.3 Build steps in the Linux jobs (`cargo deb --no-build`, `cargo generate-rpm`), tools cached; install tests (apt on the runner, dnf in `fedora:latest`), both `--version`, removal
+- [x] 2.4 AppImage: `AppDir`, `AppRun`, desktop entry and icon, pinned `appimagetool` with checksum; test with `--appimage-extract-and-run --version`
 
 ## 3. Windows installer
 

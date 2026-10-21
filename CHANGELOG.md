@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Linux packages.** Each release now also carries a `.deb` and an `.rpm` for x86_64 and
+  ARM64 (both executables in `/usr/bin`, the desktop entry and the icons; the window's
+  graphics libraries recommended, not required) and an AppImage per architecture for the
+  window. Every package is installed, run and removed in the release job before it is
+  published (apt on Ubuntu 22.04, dnf in a Fedora container, the AppImage extracted).
+
 ## [0.20.13] - 2026-10-21
 
 ### Changed

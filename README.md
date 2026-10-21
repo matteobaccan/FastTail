@@ -498,11 +498,16 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 | Linux x86_64 | `fasttail-linux-x86_64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
 | Linux ARM64 | `fasttail-linux-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
 | macOS Apple Silicon | `fasttail-macos-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
+| Debian, Ubuntu (x86_64 / ARM64) | `fasttail_<version>-1_amd64.deb` / `_arm64.deb` | both executables in `/usr/bin`, desktop entry and icon; `sudo apt install ./fasttail_*.deb`, removed with `sudo apt remove fasttail` |
+| Fedora, RHEL, openSUSE (x86_64 / ARM64) | `fasttail-<version>-1.x86_64.rpm` / `.aarch64.rpm` | the same files; `sudo dnf install ./fasttail-*.rpm` (`zypper install` on openSUSE), removed with `sudo dnf remove fasttail` |
+| Linux AppImage (x86_64 / ARM64) | `fasttail-linux-x86_64-<version>.AppImage` / `fasttail-linux-arm64-<version>.AppImage` | the window in one file: `chmod +x` and run; `fasttail-tui` is inside (`--appimage-extract`). Graphics drivers come from the system |
 | Linux x86_64 / ARM64, terminal only | `fasttail-tui-linux-<arch>-<version>.tar.gz` | `fasttail-tui` (built without the window), `LICENSE`, `README.md`; its debug info in `fasttail-tui-linux-<arch>-symbols-<version>.tar.gz` |
 
 `fasttail-tui` is the terminal interface (see below); `fasttail` is the window.
 
-The Linux executables need **glibc 2.35 or later**: Ubuntu 22.04+, Debian 12+, Fedora 36+ and
+The packages install the executables without debug info and recommend, without
+requiring, the window's graphics libraries (OpenGL, Vulkan, X11 / Wayland input), so a
+server without a desktop can install them for `fasttail-tui` alone. The Linux executables need **glibc 2.35 or later**: Ubuntu 22.04+, Debian 12+, Fedora 36+ and
 the distributions built on them (older ones, such as RHEL 9 with glibc 2.34, are not covered).
 
 ```bash
