@@ -13,6 +13,7 @@ wins.
 fasttail-tui                          # the saved workspace
 fasttail-tui app.log err.log          # two streams, as tabs of one window
 fasttail-tui --split app.log err.log  # side by side
+fasttail-tui app.log:1204             # cursor on line 1204 (also --line 1204)
 some-command | fasttail-tui -         # standard input
 fasttail-tui --session incident.fasttail-session.ini
 fasttail-tui --ascii --no-mouse app.log

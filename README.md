@@ -181,7 +181,10 @@ Files can also be opened by **drag & drop** onto the window or from the command 
 fasttail [OPTIONS] [PATH...]
 fasttail --print [OPTIONS] [PATH...]
 
-  PATH...            log files to open in addition to the restored workspace
+  PATH...            log files to open in addition to the restored workspace;
+                     PATH:LINE (or PATH:LINE:COLUMN, as compilers and CI logs print
+                     it) opens the file at that line, when PATH exists and the whole
+                     argument does not (C:\a.log and a file named `x:12` stay paths)
   -                  read standard input (`command | fasttail -`); a file named `-`
                      is opened as `./-`
   --fresh            start with an empty workspace instead of the saved one
@@ -194,6 +197,10 @@ fasttail --print [OPTIONS] [PATH...]
                      a timestamp copied from a line, or now / -15m / -1h30m / -2d / -1w
                      (units s, m, h, d, w, back from now)
   --until <TIME>     end of that time window, in the same forms
+  --line <N>         open the first file at line N: selected and centred, follow
+                     paused, as Ctrl+G does (a line the filters hide lands on the next
+                     shown one; past the end, on the last line with a notice; a file
+                     still being indexed is waited for)
   --follow / --no-follow
                      follow mode for those files (ignored for compressed files)
   --renderer <NAME>  auto (default), glow, wgpu or software
@@ -211,7 +218,8 @@ terminal options, used by fasttail-tui and accepted and ignored by the window:
   --no-mouse         leave the mouse to the terminal (native text selection)
 ```
 
-Example: `fasttail --fresh --filter ERROR app.log err.log`.
+Example: `fasttail --fresh --filter ERROR app.log err.log`, or `fasttail build.log:1204` to
+open a log at the line a tool reported.
 
 Without `--print`, `--since` and `--until` fill the time range of the streams opened from the command line (the stdin stream included) as if typed in the popup; a relative time (`-3h`) is kept as typed, so the window slides with the clock like one typed in the popup. A time FastTail cannot read is a usage error (exit code 2).
 
@@ -269,6 +277,7 @@ overrides the colour detection.
   --regex            the terms are regular expressions
   --case-sensitive   the terms match case-sensitively
   --level <LEVEL>    minimum level: trace, debug, info, warn, error, fatal
+  --line <N>         start the output at line N of the first input (PATH:LINE too)
   --level-bytes <N>  look for the level in the first N bytes (16 to 4096; default:
                      the level_detect_bytes setting, 96)
   --since / --until  time window, as above (a bare 14:02 is on the day of the first

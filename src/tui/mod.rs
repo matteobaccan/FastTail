@@ -282,6 +282,10 @@ fn run_args(args: Vec<String>) -> i32 {
             tab.engine.follow_tail = follow;
         }
         crate::cli::apply_time_window(&mut tab.engine, cli.since.as_deref(), cli.until.as_deref());
+        // Last: after the filters, so a line they hide lands as go to does.
+        if let Some(line) = cli.line_of(&tab.engine.path) {
+            tab.engine.open_at_line(line, settings.config.language);
+        }
     }
     // The first stream named on the command line has the focus (standard input wins).
     if !cli.stdin && !piped {

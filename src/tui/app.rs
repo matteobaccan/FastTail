@@ -979,6 +979,11 @@ impl App {
             if let Some(result) = tab.engine.take_goto_time_result() {
                 self.message = goto_target(tab, result, tx(self.lang, "that time"), self.lang);
             }
+            // The engine's notices (a line past the end, a go-to line the filters hide)
+            // go to the status bar: the terminal has no notice row.
+            if let Some(notice) = tab.engine.view_notice.take() {
+                self.message = Some(notice);
+            }
             if let Some(line) = tab.engine.pending_jump.take() {
                 // The context view shows the line it was entered on.
                 if let Some(row) = tab.engine.get_visible_row_of_line(line) {
@@ -8987,6 +8992,23 @@ mod tests {
         let x = app.hits.dialog.unwrap().close.unwrap();
         app.on_mouse(click(x.x, x.y));
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn a_line_from_the_command_line_takes_the_cursor_and_its_notice_shows() {
+        let body = numbered(300);
+        let (mut app, _dir) = app_with(&[("a.log", body.as_str())], false);
+        app.tabs[0].engine.open_at_line(120, Language::En);
+        render(&mut app, 80, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(119));
+        assert!(!app.tabs[0].engine.follow_tail);
+        app.tabs[0].engine.open_at_line(900, Language::En);
+        render(&mut app, 80, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(299));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Line 900 is past the end (300 lines)")
+        );
     }
 
     #[test]

@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Open at a line.** `fasttail app.log:1204` (also `app.log:1204:7`, as compilers and CI
+  logs print locations) and `fasttail --line 1204 app.log` open the file with that line
+  selected and centred and follow paused, in the window and in the terminal interface,
+  as `Ctrl+G` does. The suffix is a line only when the file exists and the whole argument
+  does not, so `C:\logs\a.log` and a file named `trace:12` stay paths. A file still being
+  indexed is waited for; a line past the end lands on the last line with a notice. With
+  `--print`, `--line N` starts the output at line N. First change of the 0.21.0 plan
+  (`open-at-line`).
+
 ### Changed
 
 - **Install, upgrade and remove, per platform.** The README now says how each package is

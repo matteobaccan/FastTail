@@ -31,6 +31,7 @@ mod filter_tabs;
 mod level_detect_window;
 mod line_wrap;
 mod log_levels;
+mod open_at_line;
 mod pattern_streams;
 mod relative_time_windows;
 mod review_regressions;

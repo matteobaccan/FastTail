@@ -1879,6 +1879,10 @@ impl FastTailApp {
                     engine.follow_tail = follow && !engine.is_compressed();
                 }
                 crate::cli::apply_time_window(engine, cli.since.as_deref(), cli.until.as_deref());
+                // Last: after the filters, so a line they hide lands as go to does.
+                if let Some(line) = cli.line_of(path) {
+                    engine.open_at_line(line, self.config.language);
+                }
             }
         }
     }

@@ -1675,6 +1675,9 @@ pub struct TailEngine {
     /// Line a search across streams asked the view to show (see `request_jump`); the
     /// stream viewer centres it on its next frame, when it knows the row geometry.
     pub pending_jump: Option<usize>,
+    /// A line the stream was opened at (`app.log:1204`, 0-based) that the index has not
+    /// reached yet, with the language of the notice when it is past the end.
+    pending_open_line: Option<(usize, crate::i18n::Language)>,
     /// Token picked by a double-click (selection highlight): every exact occurrence in the
     /// drawn rows is outlined. Never persisted; cleared by a reload.
     selection_token: Option<String>,
@@ -2304,6 +2307,7 @@ impl TailEngine {
             buffer_generation: 0,
             reload_generation: 0,
             pending_jump: None,
+            pending_open_line: None,
             selection_token: None,
             rule_cursor: None,
             rule_seek: None,
@@ -3685,6 +3689,7 @@ impl TailEngine {
     pub fn poll_updates(&mut self) {
         self.poll_context_rebuild();
         self.drain_job();
+        self.land_open_line();
         // A live time window slides with the clock.
         if self.time_window_live() && self.live_checked_at.elapsed() >= LIVE_WINDOW_PERIOD {
             self.live_checked_at = Instant::now();
@@ -8273,6 +8278,43 @@ impl TailEngine {
             )
         });
         target
+    }
+
+    /// Opens the view at `line` (1-based, `fasttail app.log:1204`): selected and centred,
+    /// follow paused, as go to line does. While the index is still being built and has
+    /// not reached the line, the landing waits for it (see `poll_updates`); a line past
+    /// the end lands on the last line with a notice.
+    pub fn open_at_line(&mut self, line: usize, lang: crate::i18n::Language) {
+        self.follow_tail = false;
+        self.pending_open_line = Some((line.saturating_sub(1), lang));
+        self.land_open_line();
+    }
+
+    /// Whether a line from the command line still waits for the index.
+    pub fn open_line_pending(&self) -> bool {
+        self.pending_open_line.is_some()
+    }
+
+    fn land_open_line(&mut self) {
+        let Some((line, lang)) = self.pending_open_line else {
+            return;
+        };
+        let total = self.total_lines();
+        if line >= total && self.index_pending {
+            return;
+        }
+        self.pending_open_line = None;
+        if total == 0 {
+            return;
+        }
+        self.request_jump(line, lang);
+        if line >= total {
+            self.view_notice = Some(
+                crate::i18n::t(lang, "line_past_end")
+                    .replace("{line}", &(line + 1).to_string())
+                    .replace("{total}", &total.to_string()),
+            );
+        }
     }
 
     // ----- Row selection, clipboard text and export -----

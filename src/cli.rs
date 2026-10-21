@@ -22,7 +22,9 @@ macro_rules! shared_usage {
     () => {
         "
 ARGS:
-    PATH...              Log files to open in addition to the restored workspace
+    PATH...              Log files to open in addition to the restored workspace;
+                         PATH:LINE (or PATH:LINE:COLUMN, as compilers print it) opens
+                         the file at that line
     -                    Read standard input (`command | fasttail -`); piped input is
                          also picked up without it
 
@@ -39,6 +41,8 @@ OPTIONS:
                          relative time: now, -15m, -3h, -1h30m, -2d, -1w (units s, m, h,
                          d, w, counted back from now; in the window it slides with the clock)
     --until <TIME>       End of that time window, in the same forms
+    --line <N>           Open the first file at line N (selected and centred, follow
+                         paused); with --print, start the output at line N
     --follow             Enable follow mode on the files opened from the command line
     --no-follow          Disable follow mode on those files
     --renderer <NAME>    Rendering backend of the window: auto (default), glow, wgpu,
@@ -119,6 +123,7 @@ pub const VALUE_OPTIONS: &[&str] = &[
     "--until",
     "--level",
     "--level-bytes",
+    "--line",
     "--context",
     "--color",
     "--colour",
@@ -179,6 +184,10 @@ pub fn resolve_time_arg(input: &str, reference: i64, now: i64, until: bool) -> O
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CliArgs {
     pub paths: Vec<PathBuf>,
+    /// The line target of each path, 1-based (`app.log:1204`), in the order of `paths`.
+    pub path_lines: Vec<Option<usize>>,
+    /// `--line N`: the line target of the first path, 1-based.
+    pub line: Option<usize>,
     /// `-` was given: read standard input as a stream.
     pub stdin: bool,
     /// Where `-` stood among the paths (print mode reads the inputs in order).
@@ -266,7 +275,9 @@ impl CliArgs {
                 continue;
             }
             if only_paths || !arg.starts_with('-') {
-                out.paths.push(resolve(arg, cwd));
+                let (path, line) = split_line_target(arg, cwd);
+                out.paths.push(path);
+                out.path_lines.push(line);
                 continue;
             }
             // `--opt=value` form
@@ -350,6 +361,20 @@ impl CliArgs {
                         })?;
                     out.level_bytes = Some(n);
                 }
+                "--line" => {
+                    let v = value("number")?;
+                    let n = v
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|n| *n >= 1)
+                        .ok_or_else(|| {
+                            CliError::Usage(format!(
+                                "invalid line '{v}' (expected a number from 1)"
+                            ))
+                        })?;
+                    out.line = Some(n);
+                }
                 "--context" => {
                     let v = value("number")?;
                     let n = v
@@ -389,6 +414,20 @@ impl CliArgs {
         }
         out.validate()?;
         Ok(out)
+    }
+
+    /// The 1-based line `path` is to open at: its own `:LINE`, else `--line` for the first
+    /// path.
+    pub fn line_of(&self, path: &Path) -> Option<usize> {
+        let at = self
+            .paths
+            .iter()
+            .position(|p| p == path || crate::paths::paths_equal(p, path))?;
+        self.path_lines
+            .get(at)
+            .copied()
+            .flatten()
+            .or(self.line.filter(|_| at == 0))
     }
 
     /// The include term the window applies: the last `--filter` given, as before print
@@ -478,6 +517,40 @@ pub fn apply_time_window(
     let text = |value: Option<&str>| value.unwrap_or_default().to_string();
     let (from_ok, to_ok) = engine.apply_time_range_text(&text(since), &text(until));
     engine.time_range_error = !from_ok || !to_ok;
+}
+
+/// `arg` as a path and its line target: `app.log:1204` or `app.log:1204:7` (as compilers
+/// print locations; the column is ignored) when `app.log` exists and the whole argument
+/// does not, so a drive letter (`C:\logs\a.log`) and a file really named `trace:12` stay
+/// paths. A line 0 or too large for a number is not a target.
+fn split_line_target(arg: &str, cwd: &Path) -> (PathBuf, Option<usize>) {
+    let whole = resolve(arg, cwd);
+    if whole.exists() {
+        return (whole, None);
+    }
+    let number = |s: &str| {
+        (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| s.parse::<usize>().ok())
+            .flatten()
+    };
+    let mut parts = arg.rsplitn(3, ':');
+    let last = parts.next().unwrap_or_default();
+    let (base, line) = match (parts.next(), parts.next()) {
+        // `path:line:column`
+        (Some(line), Some(base)) if number(line).is_some() && number(last).is_some() => {
+            (base, number(line))
+        }
+        // `path:line` (`base` may itself hold a colon, as `C:\a.log:12` does)
+        _ => match arg.rsplit_once(':') {
+            Some((base, line)) if number(line).is_some() => (base, number(line)),
+            _ => return (whole, None),
+        },
+    };
+    let path = resolve(base, cwd);
+    match line.filter(|n| *n >= 1) {
+        Some(n) if !base.is_empty() && path.exists() => (path, Some(n)),
+        _ => (whole, None),
+    }
 }
 
 fn resolve(arg: &str, cwd: &Path) -> PathBuf {
@@ -756,6 +829,56 @@ mod tests {
         .unwrap();
         assert_eq!(a.level, Some(LogLevel::Warn));
         assert_eq!(a.color, Some(ColorChoice::Always));
+    }
+
+    #[test]
+    fn a_line_target_is_split_off_only_when_unambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::write(cwd.join("app.log"), "x\n").unwrap();
+        let parse = |args: &[&str]| CliArgs::parse(args.iter().copied(), cwd).unwrap();
+        let log = cwd.join("app.log");
+
+        let a = parse(&["app.log:1204"]);
+        assert_eq!(
+            (a.paths.clone(), a.line_of(&log)),
+            (vec![log.clone()], Some(1204))
+        );
+        let a = parse(&["app.log:1204:7"]);
+        assert_eq!(a.line_of(&log), Some(1204), "the column is ignored");
+        // Missing file, line 0, a number too large, no digits: the argument is the path.
+        for arg in [
+            "gone.log:12",
+            "app.log:0",
+            "app.log:99999999999999999999999999",
+            "app.log:x",
+            "app.log:",
+        ] {
+            let a = parse(&[arg]);
+            assert_eq!(a.paths, vec![cwd.join(arg)], "{arg}");
+            assert_eq!(a.line_of(&a.paths[0]), None, "{arg}");
+        }
+        // A file really named with a colon and digits is opened as it is.
+        #[cfg(unix)]
+        {
+            std::fs::write(cwd.join("trace:12"), "x\n").unwrap();
+            let a = parse(&["trace:12"]);
+            assert_eq!(a.paths, vec![cwd.join("trace:12")]);
+            assert_eq!(a.line_of(&a.paths[0]), None);
+        }
+        // A drive letter is not a line.
+        let (path, line) = split_line_target(r"C:\logs\a.log", cwd);
+        assert_eq!((path, line), (resolve(r"C:\logs\a.log", cwd), None));
+        // --line: the first path only; a path's own line wins.
+        std::fs::write(cwd.join("b.log"), "x\n").unwrap();
+        let b = cwd.join("b.log");
+        let a = parse(&["--line", "40", "app.log", "b.log"]);
+        assert_eq!((a.line_of(&log), a.line_of(&b)), (Some(40), None));
+        let a = parse(&["--line", "40", "app.log:7", "b.log:9"]);
+        assert_eq!((a.line_of(&log), a.line_of(&b)), (Some(7), Some(9)));
+        assert!(usage_error(&["--line", "0"]).contains("invalid line"));
+        assert!(usage_error(&["--line", "ten"]).contains("ten"));
+        assert!(VALUE_OPTIONS.contains(&"--line"));
     }
 
     #[test]
