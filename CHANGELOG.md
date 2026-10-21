@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **HTML to Markdown: numeric entities of the internal markers.** `&#57344;` / `&#xE000;` (and
+  `E001`) in a page decoded into the converter's code-block placeholder, so text such as
+  `&#57344;PRE0&#57345;` turned into a copy of a code block of the same page; such entities
+  are now kept as written (from the Sentinel bot PR #352).
+
 ### Changed
 
 - **Small GUI control fixes.** The HEX view's -8 / +8 column buttons are disabled at 8 and 64
