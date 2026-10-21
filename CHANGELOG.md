@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.7] - 2026-10-21
+
 ### Fixed
 
 - **HTML to Markdown: numeric entities of the internal markers.** `&#57344;` / `&#xE000;` (and
@@ -1569,6 +1571,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.7]: https://github.com/matteobaccan/FastTail/compare/v0.20.6...v0.20.7
 [0.20.6]: https://github.com/matteobaccan/FastTail/compare/v0.20.5...v0.20.6
 [0.20.5]: https://github.com/matteobaccan/FastTail/compare/v0.20.4...v0.20.5
 [0.20.4]: https://github.com/matteobaccan/FastTail/compare/v0.20.3...v0.20.4
