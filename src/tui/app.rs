@@ -525,6 +525,8 @@ pub struct App {
     global_due: Option<Instant>,
     /// The external tools menu (`!`).
     pub tool_menu: Option<ToolMenu>,
+    /// The list of the lines hidden by hand in the active stream: the range selected.
+    pub hidden_menu: Option<usize>,
     /// The external tools editor (from Settings, or `e` in the menu).
     pub tools_editor: Option<ToolsDialog>,
     /// The command palette (`:`).
@@ -652,6 +654,7 @@ impl App {
             global: None,
             global_due: None,
             tool_menu: None,
+            hidden_menu: None,
             tools_editor: None,
             palette_dialog: None,
             locked: None,
@@ -979,6 +982,16 @@ impl App {
             if let Some(result) = tab.engine.take_goto_time_result() {
                 self.message = goto_target(tab, result, tx(self.lang, "that time"), self.lang);
             }
+            if tab.engine.hidden_cleared {
+                tab.engine.hidden_cleared = false;
+                self.message = Some(
+                    tx(
+                        self.lang,
+                        "The file was rewritten: the hidden lines are shown again",
+                    )
+                    .into(),
+                );
+            }
             // The engine's notices (a line past the end, a go-to line the filters hide)
             // go to the status bar: the terminal has no notice row.
             if let Some(notice) = tab.engine.view_notice.take() {
@@ -1133,6 +1146,9 @@ impl App {
         }
         if self.tool_menu.is_some() {
             return self.on_tool_menu_key(key);
+        }
+        if self.hidden_menu.is_some() {
+            return self.on_hidden_menu_key(key);
         }
         if self.palette_dialog.is_some() {
             return self.on_palette_key(key);
@@ -1746,6 +1762,104 @@ impl App {
             }
             _ => self.apply(action),
         }
+    }
+
+    /// Keys of the hidden lines list: arrows choose, Enter shows the range, `a` shows all.
+    fn on_hidden_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let count = self
+            .tabs
+            .get(self.active)
+            .map_or(0, |t| t.engine.hidden_ranges().len());
+        let Some(selected) = self.hidden_menu.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => self.hidden_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                *selected = (*selected + 1).min(count.saturating_sub(1))
+            }
+            KeyCode::Enter => {
+                let i = *selected;
+                self.show_hidden(Some(i));
+            }
+            KeyCode::Char('a') => self.show_hidden(None),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Shows the hidden range `i` again, or all of them; the list closes with the last.
+    fn show_hidden(&mut self, i: Option<usize>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        match i {
+            Some(i) => tab.engine.show_hidden_range(i),
+            None => tab.engine.show_all_hidden(),
+        }
+        let left = tab.engine.hidden_ranges().len();
+        self.hidden_menu = (left > 0).then(|| self.hidden_menu.unwrap_or(0).min(left - 1));
+    }
+
+    fn draw_hidden_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.hidden_menu else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let rows: Vec<(String, String)> = tab
+            .engine
+            .hidden_ranges()
+            .iter()
+            .map(|&(a, b)| {
+                let lines = if a == b {
+                    group_digits(a + 1)
+                } else {
+                    format!("{}-{}", group_digits(a + 1), group_digits(b + 1))
+                };
+                let first = tab.engine.get_line(a).unwrap_or_default();
+                (lines, view::sanitize(&first))
+            })
+            .collect();
+        let height = (rows.len() as u16 + 6).min(area.height);
+        let inner = self.dialog(
+            frame,
+            area,
+            (78, height),
+            tx(self.lang, "Hidden lines"),
+            false,
+        );
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Enter shows the range again, a shows all, Up/Down choose, Esc closes",
+            ),
+            dim,
+        )];
+        let room = inner.height.saturating_sub(3) as usize;
+        let top = selected.saturating_sub(room.saturating_sub(1));
+        let width = inner.width as usize;
+        for (i, (lines, first)) in rows.iter().enumerate().skip(top).take(room) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let text = format!(" {lines:>15}  {first}");
+            out.push(Line::styled(head_chars(&text, width), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// `!`: the menu of the external tools.
@@ -3029,6 +3143,7 @@ impl App {
             }
             C::Level => self.apply(Action::CycleLevel),
             C::LevelBytes => self.open_prompt(PromptKind::LevelBytes),
+            C::Hidden => self.hidden_menu = Some(0),
             C::Presets => self.apply(Action::Presets),
             C::Global => self.apply(Action::EditGlobal),
         }
@@ -3474,6 +3589,7 @@ impl App {
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
+                    || self.hidden_menu.is_some()
                     || self.palette_dialog.is_some()
                     || self.json_dialog.is_some()
                     || self.show_about
@@ -3781,6 +3897,10 @@ impl App {
                     }
                 }
             }
+            // A click shows that hidden range again.
+            Target::ListItem(i) if self.hidden_menu.is_some() => {
+                self.show_hidden(Some(i));
+            }
             // A click runs the tool.
             Target::ListItem(i) if self.tool_menu.is_some() => {
                 self.tool_menu = None;
@@ -3862,6 +3982,7 @@ impl App {
                     if !self.on_palette_key(enter) {
                         self.palette_dialog = None;
                     }
+                } else if self.hidden_menu.take().is_some() {
                 } else if let Some(m) = self.tool_menu.take() {
                     if m.count > 0 {
                         self.run_tool(m.selected);
@@ -3935,6 +4056,7 @@ impl App {
                 // The global filter's edits are kept, as the GUI's bar keeps them.
                 self.close_global();
                 self.tool_menu = None;
+                self.hidden_menu = None;
                 self.palette_dialog = None;
                 self.json_dialog = None;
                 self.show_about = false;
@@ -4114,6 +4236,22 @@ impl App {
             Action::ScrollLeftFast => tab.hscroll = tab.hscroll.saturating_sub(HSCROLL_FAST),
             Action::ScrollRightFast => tab.hscroll += HSCROLL_FAST,
             Action::ScrollHome => tab.hscroll = 0,
+            // The selection when there is one, else the cursor row (not in context: the
+            // context view shows every line).
+            Action::HideLines if tab.engine.context_line().is_some() || tab.is_hex() => {}
+            Action::HideLines => {
+                let lines: Vec<usize> = if tab.engine.selection.is_empty() {
+                    tab.cursor_line().into_iter().collect()
+                } else {
+                    tab.engine.selection.iter().copied().collect()
+                };
+                let before = tab.engine.hidden_count();
+                tab.engine.hide_lines(lines);
+                let hidden = tab.engine.hidden_count() - before;
+                let rows = tab.row_count();
+                tab.cursor = tab.cursor.min(rows.saturating_sub(1));
+                self.message = Some(txf(self.lang, "{0} lines hidden", &[&hidden]));
+            }
             Action::ToggleBookmark => match tab.cursor_line() {
                 Some(line) => tab.engine.toggle_bookmark(line),
                 None => self.message = Some(tx(self.lang, "No row to bookmark").into()),
@@ -4296,6 +4434,9 @@ impl App {
         }
         if self.tool_menu.is_some() {
             self.draw_tool_menu(frame, main_area);
+        }
+        if self.hidden_menu.is_some() {
+            self.draw_hidden_menu(frame, main_area);
         }
         if self.palette_dialog.is_some() {
             self.draw_palette(frame, main_area);
@@ -6595,9 +6736,17 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         en("clear the search and the selection"),
         Some(Action::ClearSearch),
     ),
-    ("i", en("include filter"), Some(Action::EditInclude)),
-    ("x", en("exclude filter"), Some(Action::EditExclude)),
+    (
+        "i / x",
+        en("include / exclude filter"),
+        Some(Action::EditInclude),
+    ),
     ("l", en("cycle the minimum level"), Some(Action::CycleLevel)),
+    (
+        "H",
+        en("hide the selected lines or the cursor row"),
+        Some(Action::HideLines),
+    ),
     (
         "c",
         en("cycle collapse: off, exact, numbers"),
@@ -9009,6 +9158,49 @@ mod tests {
             app.message.as_deref(),
             Some("Line 900 is past the end (300 lines)")
         );
+    }
+
+    #[test]
+    fn h_hides_the_selection_and_the_chip_lists_it_back() {
+        use crossterm::event::KeyCode;
+        let body = numbered(300);
+        let (mut app, _dir) = app_with(&[("a.log", body.as_str())], false);
+        render(&mut app, 120, 30);
+        // The cursor row alone.
+        app.tabs[0].set_cursor(4);
+        press(&mut app, KeyCode::Char('H'));
+        assert_eq!(app.tabs[0].engine.hidden_ranges(), &[(4, 4)]);
+        assert_eq!(app.message.as_deref(), Some("1 lines hidden"));
+        // A selection of lines 10..=19 (0-based).
+        app.tabs[0].engine.select_row(10);
+        app.tabs[0].engine.extend_selection_to(19);
+        press(&mut app, KeyCode::Char('H'));
+        assert_eq!(app.tabs[0].engine.hidden_count(), 11);
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            // The emoji takes two cells.
+            screen.iter().any(|l| l.contains(" 11 hidden]")),
+            "{screen:#?}"
+        );
+        // The chip opens the list; Enter shows the first range, `a` the rest.
+        let (r, _, _) = *app
+            .hits
+            .bar_chips
+            .iter()
+            .find(|(_, _, c)| *c == crate::tui::bars::BarChip::Hidden)
+            .unwrap();
+        app.on_mouse(click(r.x + 1, r.y));
+        assert_eq!(app.hidden_menu, Some(0));
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("Hidden lines")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tabs[0].engine.hidden_ranges(), &[(10, 19)]);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(app.tabs[0].engine.hidden_ranges().is_empty());
+        assert_eq!(app.hidden_menu, None, "closed with the last range");
     }
 
     #[test]

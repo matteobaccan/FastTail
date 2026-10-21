@@ -80,6 +80,9 @@ pub struct StreamEntry {
     /// The bytes of a line the level is looked for in, when the stream overrides the
     /// `level_detect_bytes` setting (`level_bytes=N`); older builds ignore it.
     pub level_bytes: Option<usize>,
+    /// Lines hidden by hand, as inclusive 0-based ranges, written as `hidden=120-180,4096`
+    /// (1-based, as the gutter shows them) only when some are; older builds ignore it.
+    pub hidden: Vec<(usize, usize)>,
     /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`).
     /// The app always records both; `None`, written as no key, is what a file from an
     /// older version reads as, and follows the `[general]` defaults.
@@ -235,6 +238,9 @@ impl Session {
             }
             if let Some(bytes) = s.level_bytes {
                 sec.set("level_bytes", bytes.to_string());
+            }
+            if !s.hidden.is_empty() {
+                sec.set("hidden", hidden_to_ini(&s.hidden));
             }
             if let Some(show) = s.line_numbers {
                 sec.set("line_numbers", show.to_string());
@@ -420,6 +426,7 @@ impl Session {
                     .and_then(crate::disasm::Arch::from_name)
                     .filter(|a| *a != crate::disasm::Arch::default())
                     .map(|a| a.name().to_string()),
+                hidden: sec.get("hidden").map(hidden_from_ini).unwrap_or_default(),
                 level_bytes: sec
                     .get("level_bytes")
                     .and_then(|v| v.trim().parse().ok())
@@ -587,6 +594,38 @@ fn source_exists(p: &Path) -> bool {
 
 fn same_path(a: &Path, b: &Path) -> bool {
     crate::paths::paths_equal(a, b)
+}
+
+/// `ranges` (0-based, inclusive) as `hidden=` writes them: `120-180,4096`, 1-based.
+pub fn hidden_to_ini(ranges: &[(usize, usize)]) -> String {
+    ranges
+        .iter()
+        .map(|&(a, b)| {
+            if a == b {
+                (a + 1).to_string()
+            } else {
+                format!("{}-{}", a + 1, b + 1)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The ranges `hidden_to_ini` wrote; an entry that cannot be read is skipped.
+pub fn hidden_from_ini(text: &str) -> Vec<(usize, usize)> {
+    let line = |s: &str| {
+        s.trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n >= 1)
+            .map(|n| n - 1)
+    };
+    text.split(',')
+        .filter_map(|part| match part.split_once('-') {
+            Some((a, b)) => Some((line(a)?, line(b)?)).filter(|(a, b)| a <= b),
+            None => line(part).map(|n| (n, n)),
+        })
+        .collect()
 }
 
 #[cfg(test)]

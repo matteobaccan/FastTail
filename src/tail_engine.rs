@@ -1675,6 +1675,13 @@ pub struct TailEngine {
     /// Line a search across streams asked the view to show (see `request_jump`); the
     /// stream viewer centres it on its next frame, when it knows the row geometry.
     pub pending_jump: Option<usize>,
+    /// Lines hidden by hand (`hidden=` per stream): inclusive line ranges, sorted and
+    /// merged, at most `MAX_HIDDEN_RANGES`.
+    hidden: Vec<(usize, usize)>,
+    /// The hidden ranges changed: the stream state is saved again (`hidden=`).
+    pub hidden_dirty: bool,
+    /// A reload cleared the hidden ranges: the interfaces say so once (`hidden_cleared`).
+    pub hidden_cleared: bool,
     /// A line the stream was opened at (`app.log:1204`, 0-based) that the index has not
     /// reached yet, with the language of the notice when it is past the end.
     pending_open_line: Option<(usize, crate::i18n::Language)>,
@@ -2307,6 +2314,9 @@ impl TailEngine {
             buffer_generation: 0,
             reload_generation: 0,
             pending_jump: None,
+            hidden: Vec::new(),
+            hidden_dirty: false,
+            hidden_cleared: false,
             pending_open_line: None,
             selection_token: None,
             rule_cursor: None,
@@ -3056,6 +3066,12 @@ impl TailEngine {
         // and a context view has nothing to return to.
         self.context = None;
         self.reload_generation = self.reload_generation.wrapping_add(1);
+        // Hidden lines are numbers of the old index: they no longer name the same lines.
+        if !self.hidden.is_empty() {
+            self.hidden.clear();
+            self.hidden_dirty = true;
+            self.hidden_cleared = true;
+        }
         // The JSON rows' trees and folds named lines of the old index.
         self.expanded_json_lines.clear();
         self.json_open.clear();
@@ -4277,7 +4293,8 @@ impl TailEngine {
     }
 
     pub fn is_filter_active(&self) -> bool {
-        self.include_terms.iter().any(|t| !t.is_empty())
+        !self.hidden.is_empty()
+            || self.include_terms.iter().any(|t| !t.is_empty())
             || self.exclude_terms.iter().any(|t| !t.is_empty())
             || self.global_filter.is_some()
             || self.min_level != LogLevel::Unknown
@@ -4375,9 +4392,10 @@ impl TailEngine {
         self.scan_lines(start, total, |idx, line| {
             let (visible, next) = self.filter.visible_in_sequence(line, parent_visible);
             parent_visible = next;
-            // The time window is applied by index, on top of the text and level filters:
-            // a continuation line inherits the entry's time, so it travels with it.
-            if visible && self.in_time_range(idx) {
+            // The time window and the hidden lines are applied by index, on top of the text
+            // and level filters: a continuation line inherits the entry's time, so it
+            // travels with it.
+            if visible && self.in_time_range(idx) && !self.is_hidden(idx) {
                 fresh.push(idx);
             }
             true
@@ -5204,7 +5222,7 @@ impl TailEngine {
             // Matches and context lines alike, whatever the filters say about the latter.
             return self.filtered_view().pos_of_line(idx).is_some();
         }
-        if !self.in_time_range(idx) {
+        if !self.in_time_range(idx) || self.is_hidden(idx) {
             return false;
         }
         let Some(line) = self.get_line(idx) else {
@@ -5429,7 +5447,7 @@ impl TailEngine {
         self.scan_lines(start, end, |idx, line| {
             let (visible, next) = self.filter.visible_in_sequence(line, parent_visible);
             parent_visible = next;
-            if visible && self.in_time_range(idx) {
+            if visible && self.in_time_range(idx) && !self.is_hidden(idx) {
                 fresh.push(idx);
             }
             true
@@ -6891,12 +6909,13 @@ impl TailEngine {
         // counts instead. Otherwise the worker lists up to the cap and counts past it.
         // So must it under a search scope, applied in the drain too.
         self.resolve_scope_time();
-        let limit =
-            if (self.is_time_filtered() && !self.has_context()) || !self.search_scope.is_all() {
-                usize::MAX
-            } else {
-                MAX_SEARCH_MATCHES
-            };
+        let limit = if ((self.is_time_filtered() || !self.hidden.is_empty()) && !self.has_context())
+            || !self.search_scope.is_all()
+        {
+            usize::MAX
+        } else {
+            MAX_SEARCH_MATCHES
+        };
         self.start_job(
             JobSpec::Search {
                 query_lower: query.to_lowercase(),
@@ -6979,6 +6998,10 @@ impl TailEngine {
                     let ranged_search = job.kind == ScanKind::Search && self.has_context();
                     if self.is_time_filtered() && !ranged_search {
                         lines.retain(|&idx| self.in_time_range(idx));
+                    }
+                    // The hidden lines too: the job does not know them.
+                    if !self.hidden.is_empty() && !ranged_search {
+                        lines.retain(|&idx| !self.is_hidden(idx));
                     }
                     if job.kind == ScanKind::Search && !self.search_scope.is_all() {
                         lines.retain(|&idx| self.in_search_scope(idx));
@@ -8280,6 +8303,87 @@ impl TailEngine {
         target
     }
 
+    // ----- Lines hidden by hand -----
+
+    /// Hides `lines` (the selected rows, or the cursor row) from the view, as a filter
+    /// would: kept as ranges, so a run of a million lines is one entry.
+    pub fn hide_lines(&mut self, lines: impl IntoIterator<Item = usize>) {
+        let mut added: Vec<(usize, usize)> = Vec::new();
+        for line in lines {
+            match added.last_mut() {
+                Some((_, end)) if line <= *end + 1 && line >= *end => *end = line,
+                _ => added.push((line, line)),
+            }
+        }
+        if added.is_empty() {
+            return;
+        }
+        let mut all = std::mem::take(&mut self.hidden);
+        all.extend(added);
+        self.hidden = merge_ranges(all);
+        self.hidden_changed();
+    }
+
+    /// Shows the hidden range at `index` of `hidden_ranges` again.
+    pub fn show_hidden_range(&mut self, index: usize) {
+        if index < self.hidden.len() {
+            self.hidden.remove(index);
+            self.hidden_changed();
+        }
+    }
+
+    pub fn show_all_hidden(&mut self) {
+        if !self.hidden.is_empty() {
+            self.hidden.clear();
+            self.hidden_changed();
+        }
+    }
+
+    /// The hidden ranges, inclusive, in line order.
+    pub fn hidden_ranges(&self) -> &[(usize, usize)] {
+        &self.hidden
+    }
+
+    /// Restores saved ranges (`hidden=`), dropping the ones past the end of the file
+    /// once it is indexed (while the index is being built, every range is kept).
+    pub fn set_hidden_ranges(&mut self, ranges: Vec<(usize, usize)>) {
+        let total = if self.index_pending {
+            usize::MAX
+        } else {
+            self.total_lines()
+        };
+        let ranges: Vec<_> = ranges
+            .into_iter()
+            .filter(|&(a, b)| a <= b && b < total)
+            .collect();
+        let ranges = merge_ranges(ranges);
+        if ranges != self.hidden {
+            self.hidden = ranges;
+            self.recompute_filtered_lines();
+        }
+    }
+
+    /// How many lines are hidden.
+    pub fn hidden_count(&self) -> usize {
+        self.hidden.iter().map(|&(a, b)| b - a + 1).sum()
+    }
+
+    pub fn is_hidden(&self, idx: usize) -> bool {
+        let i = self.hidden.partition_point(|&(_, end)| end < idx);
+        self.hidden.get(i).is_some_and(|&(start, _)| start <= idx)
+    }
+
+    fn hidden_changed(&mut self) {
+        self.hidden_dirty = true;
+        // A hidden row cannot stay selected.
+        let hidden = &self.hidden;
+        self.selection.retain(|&l| {
+            let i = hidden.partition_point(|&(_, end)| end < l);
+            !hidden.get(i).is_some_and(|&(start, _)| start <= l)
+        });
+        self.recompute_filtered_lines();
+    }
+
     /// Opens the view at `line` (1-based, `fasttail app.log:1204`): selected and centred,
     /// follow paused, as go to line does. While the index is still being built and has
     /// not reached the line, the landing waits for it (see `poll_updates`); a line past
@@ -9123,4 +9227,29 @@ mod context_rebuild_tests {
         let matches: Vec<usize> = (0..100).step_by(10).collect();
         assert_eq!(rows(&engine), grep_c(20, &matches, 100));
     }
+}
+
+/// At most this many hidden ranges per stream: past it the two nearest are joined (the
+/// lines between them are hidden too), so the list and the saved key stay small.
+pub const MAX_HIDDEN_RANGES: usize = 1000;
+
+/// `ranges` sorted, with overlapping and adjacent ones merged, then capped at
+/// `MAX_HIDDEN_RANGES` by joining the ranges with the smallest gap between them.
+pub fn merge_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    ranges.sort_unstable();
+    let mut out: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (a, b) in ranges {
+        match out.last_mut() {
+            Some((_, end)) if a <= end.saturating_add(1) => *end = (*end).max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    while out.len() > MAX_HIDDEN_RANGES {
+        let i = (1..out.len())
+            .min_by_key(|&i| out[i].0 - out[i - 1].1)
+            .unwrap_or(1);
+        out[i - 1].1 = out[i].1;
+        out.remove(i);
+    }
+    out
 }

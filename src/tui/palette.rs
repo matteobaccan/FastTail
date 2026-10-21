@@ -39,6 +39,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::SearchClear => (Action::ClearSearch, "Esc"),
         ActionId::GlobalFilterBar => (Action::EditGlobal, "F"),
         ActionId::ShowContext | ActionId::LeaveContext => (Action::ToggleContext, "Ctrl+K"),
+        ActionId::HideLines => (Action::HideLines, "H"),
         ActionId::BookmarkToggle => (Action::ToggleBookmark, "b"),
         ActionId::BookmarkNext => (Action::NextBookmark, "]"),
         ActionId::BookmarkPrev => (Action::PrevBookmark, "["),

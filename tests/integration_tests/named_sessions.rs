@@ -24,6 +24,7 @@ fn entry(path: PathBuf) -> StreamEntry {
         context_lines: 4,
         disasm_arch: Some("x86-32".into()),
         level_bytes: Some(256),
+        hidden: vec![(119, 179), (4095, 4095)],
         line_numbers: Some(false),
         time_delta: Some(true),
         time_display: Some("+02:00".to_string()),

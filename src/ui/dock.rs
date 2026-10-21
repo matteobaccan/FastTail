@@ -1443,6 +1443,11 @@ fn render_log_stream(
         None => {}
     }
 
+    // A reload cleared the lines hidden by hand: said once.
+    if engine.hidden_cleared {
+        engine.hidden_cleared = false;
+        engine.view_notice = Some(t(lang, "hidden_cleared").to_string());
+    }
     // A result of the search across streams asked for this line (`request_jump`).
     if let Some(line) = engine.pending_jump.take() {
         let target = if engine.view_mode.is_bytes() {
@@ -2253,6 +2258,20 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
+        // Hide lines (CTRL + H): the selected rows, else the anchor row, leave the view.
+        let ctrl_h = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::H);
+        if (act(ActionId::HideLines)
+            || (is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_h))))
+            && engine.context_line().is_none()
+        {
+            if let Some(line) = engine
+                .selection_anchor
+                .or_else(|| engine.selection.iter().next().copied())
+            {
+                hide_selected_or(engine, line);
+            }
+        }
+
         // Show in context (CTRL + K): the selected line in the full log, or back.
         let ctrl_k = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::K);
         if act(ActionId::LeaveContext) {
@@ -3060,6 +3079,12 @@ fn render_log_stream(
                 let show = !engine.show_unknown_levels;
                 engine.set_show_unknown_levels(show);
             }
+        }
+
+        // Lines hidden by hand: how many, and the list of ranges to show again.
+        if !engine.hidden_ranges().is_empty() {
+            ui.separator();
+            render_hidden_menu(ui, engine, theme, lang);
         }
 
         ui.separator();
@@ -4557,6 +4582,66 @@ type RowInteractions = (
     Option<(usize, usize)>,
 );
 
+/// The `🙈 N hidden` button of the filter row: a menu listing each hidden range with the
+/// text of its first line and Show, then Show all.
+fn render_hidden_menu(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let count = engine.hidden_count();
+    let label = RichText::new(format!(
+        "🙈 {}",
+        t(lang, "hidden_count").replace("{count}", &count.to_string())
+    ))
+    .monospace()
+    .size(11.0)
+    .color(theme.warn_color());
+    let mut show: Option<usize> = None;
+    let mut show_all = false;
+    let ranges: Vec<(usize, usize)> = engine.hidden_ranges().to_vec();
+    ui.menu_button(label, |ui| {
+        egui::ScrollArea::vertical()
+            .max_height(320.0)
+            .show(ui, |ui| {
+                for (i, &(a, b)) in ranges.iter().enumerate() {
+                    let lines = if a == b {
+                        format!("{}", a + 1)
+                    } else {
+                        format!("{}-{}", a + 1, b + 1)
+                    };
+                    let first = engine.get_line(a).unwrap_or_default();
+                    let first: String = first.chars().take(60).collect();
+                    ui.horizontal(|ui| {
+                        if ui.small_button(t(lang, "hidden_show")).clicked() {
+                            show = Some(i);
+                        }
+                        ui.label(RichText::new(lines).monospace().strong());
+                        ui.label(RichText::new(first).monospace().color(theme.text_dim()));
+                    });
+                }
+            });
+        ui.separator();
+        if ui.button(t(lang, "hidden_show_all")).clicked() {
+            show_all = true;
+            ui.close();
+        }
+    })
+    .response
+    .on_hover_text(t(lang, "hidden_tip"));
+    if show_all {
+        engine.show_all_hidden();
+    } else if let Some(i) = show {
+        engine.show_hidden_range(i);
+    }
+}
+
+/// Hides the selected rows when `line` is one of them, else `line` alone.
+fn hide_selected_or(engine: &mut TailEngine, line: usize) {
+    if engine.selection.contains(&line) {
+        let lines: Vec<usize> = engine.selection.iter().copied().collect();
+        engine.hide_lines(lines);
+    } else {
+        engine.hide_lines([line]);
+    }
+}
+
 /// Lines picked in a row context menu this frame, applied once the rows are drawn.
 #[derive(Debug, Default)]
 struct RowMenuPicks {
@@ -4581,6 +4666,8 @@ struct RowMenuPicks {
     scratch: Option<(usize, bool)>,
     /// "Open filter as new tab" was picked.
     filter_tab: bool,
+    /// "Hide lines" was picked on this row: the selection when the row is in it.
+    hide: Option<usize>,
     /// Row a compare was asked on, and what it is.
     compare: Option<(usize, crate::compare::CompareRequest)>,
 }
@@ -4589,6 +4676,9 @@ impl RowMenuPicks {
     fn apply(self, ui: &Ui, engine: &mut TailEngine) {
         if let Some(line) = self.anchor {
             engine.toggle_time_anchor(line);
+        }
+        if let Some(line) = self.hide {
+            hide_selected_or(engine, line);
         }
         if let Some(line) = self.context {
             // A derived stream shows the line in its source.
@@ -5526,6 +5616,17 @@ fn row_context_menu(
                 .clicked()
         {
             picks.filter_tab = true;
+            ui.close();
+        }
+        if engine.context_line().is_none()
+            && ui
+                .button(
+                    RichText::new(format!("🙈 {}  (CTRL + H)", t(lang, "hide_lines"))).monospace(),
+                )
+                .on_hover_text(t(lang, "hide_lines_tip"))
+                .clicked()
+        {
+            picks.hide = Some(line);
             ui.close();
         }
         if filtered {

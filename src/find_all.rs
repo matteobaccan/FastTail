@@ -322,7 +322,8 @@ impl FindAllSession {
             let window = engine.time_window();
             // Under a time window the drain drops hits, so the worker must not stop listing
             // at the cap: the drain caps and counts (as the stream's own search does).
-            let limit = if window.is_some() || scope.is_some() {
+            let limit = if window.is_some() || scope.is_some() || !engine.hidden_ranges().is_empty()
+            {
                 usize::MAX
             } else {
                 self.max_hits
@@ -416,6 +417,8 @@ fn drain(g: &mut StreamFind, engine: &TailEngine, max_hits: usize) {
                 for (from, to) in [g.window, g.scope].into_iter().flatten() {
                     lines.retain(|&idx| time_window_contains(engine.line_timestamp(idx), from, to));
                 }
+                // Lines hidden by hand, which the job does not know.
+                lines.retain(|&idx| !engine.is_hidden(idx));
                 g.total += lines.len();
                 let room = max_hits.saturating_sub(g.hits.len());
                 g.hits.extend(lines.into_iter().take(room));
