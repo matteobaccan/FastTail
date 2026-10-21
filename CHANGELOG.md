@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Cursor position in the terminal windows.** The bottom border of a text window shows,
+  after the line counts, the cursor's file line, `Ln 1,234` (the gutter's number, also
+  with filters that skip lines; a click opens Go to), and while the rows are scrolled
+  sideways the first column drawn, `Col 41`. A narrow window leaves out `Col`, then `Ln`;
+  HEX and ASM are unchanged.
+
 ## [0.20.8] - 2026-10-21
 
 ### Changed

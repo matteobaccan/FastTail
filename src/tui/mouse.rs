@@ -59,6 +59,8 @@ pub struct HitMap {
     pub main: Rect,
     /// The `[x]` of each stream window, top right: the window it closes a stream of.
     pub close_buttons: Vec<(Rect, Place)>,
+    /// The `Ln N` of each stream window's bottom border, and the stream: opens Go to.
+    pub goto_links: Vec<(Rect, usize)>,
 }
 
 /// What a cell of the screen is.
@@ -76,6 +78,8 @@ pub enum Target {
     TopButton(Action),
     /// A chip of a window's stream bar or filter row: the stream and the chip.
     BarChip(usize, crate::tui::bars::BarChip),
+    /// The `Ln N` of a window's bottom border: Go to for that stream.
+    GotoLine(usize),
     /// Anywhere else while a dialog is open: closes it, like Esc.
     OutsideDialog,
     /// A title in the stream strip at the top.
@@ -178,6 +182,12 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
         let top = map.windows.iter().rev().find(|w| w.outer.contains(p));
         if top.is_some_and(|w| w.tab == *tab) {
             return Target::BarChip(*tab, *chip);
+        }
+    }
+    if let Some((_, tab)) = map.goto_links.iter().rev().find(|(r, _)| r.contains(p)) {
+        let top = map.windows.iter().rev().find(|w| w.outer.contains(p));
+        if top.is_some_and(|w| w.tab == *tab) {
+            return Target::GotoLine(*tab);
         }
     }
     if let Some((_, tab)) = map.tab_titles.iter().find(|(r, _)| r.contains(p)) {

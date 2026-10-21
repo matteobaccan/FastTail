@@ -3611,6 +3611,11 @@ impl App {
                 self.focus_tab(tab);
                 self.run_chip(chip);
             }
+            Target::GotoLine(tab) => {
+                self.message = None;
+                self.focus_tab(tab);
+                self.apply(Action::GoTo);
+            }
             Target::ListItem(i) if self.time_range.is_some() => {
                 if let Some(d) = self.time_range.as_mut() {
                     if i >= RANGE_DAY {
@@ -4611,21 +4616,27 @@ impl App {
                 .fg(palette.accent())
                 .add_modifier(Modifier::BOLD),
         );
+        let right = view_state_text(e, tab.is_hex(), self.lang);
+        let (left, ln) = bottom_left_text(
+            tab,
+            self.lang,
+            (area.width as usize).saturating_sub(width(&right) + 6),
+        );
+        if let Some((at, w)) = ln {
+            self.hits.goto_links.push((
+                Rect::new(area.x + 2 + at as u16, area.bottom() - 1, w as u16, 1),
+                idx,
+            ));
+        }
         let block = Block::bordered()
             .style(palette.window())
             .border_set(palette.border_set(chrome))
             .border_style(palette.border_style(chrome))
             .title_top(Line::from(title))
             .title_top(Line::from(close).right_aligned())
+            .title_bottom(Line::from(format!(" {left} ")).style(title_style))
             .title_bottom(
-                Line::from(format!(
-                    " {} ",
-                    counts_text(e, tab.is_hex(), tab.hex_width, self.lang)
-                ))
-                .style(title_style),
-            )
-            .title_bottom(
-                Line::from(format!(" {} ", view_state_text(e, tab.is_hex(), self.lang)))
+                Line::from(format!(" {right} "))
                     .style(title_style)
                     .right_aligned(),
             );
@@ -6757,8 +6768,54 @@ fn cast_shadow(buf: &mut ratatui::buffer::Buffer, rect: Rect, style: Style) {
 }
 
 /// Bottom-left of a window: rows and lines, and the background work in progress.
+/// Bottom-left of a window: the counts, the cursor's `Ln` / `Col` (text views) and the
+/// progress, cut to `room` cells by leaving out `Col`, then `Ln`. Also where `Ln` is
+/// (its offset in the text and its width), for the click that opens Go to.
+fn bottom_left_text(tab: &Tab, lang: Language, room: usize) -> (String, Option<(usize, usize)>) {
+    let e = &tab.engine;
+    let counts = counts_text(e, tab.is_hex(), tab.hex_width, lang);
+    let progress = progress_text(e, lang);
+    let ln = tab
+        .cursor_line()
+        .filter(|_| e.visible_line_count() > 0)
+        .map(|l| txf(lang, "Ln {0}", &[&group_digits(l + 1)]));
+    let col = (tab.hscroll > 0 && !tab.is_hex())
+        .then(|| txf(lang, "Col {0}", &[&group_digits(tab.hscroll + 1)]));
+    let compose = |ln: Option<&String>, col: Option<&String>| {
+        let mut s = counts.clone();
+        let mut at = None;
+        if let Some(ln) = ln {
+            s.push_str(" - ");
+            at = Some((width(&s), width(ln)));
+            s.push_str(ln);
+            if let Some(col) = col {
+                s.push(' ');
+                s.push_str(col);
+            }
+        }
+        s.push_str(&progress);
+        (s, at)
+    };
+    let candidates = [
+        compose(ln.as_ref(), col.as_ref()),
+        compose(ln.as_ref(), None),
+        compose(None, None),
+    ];
+    let fits = candidates.iter().position(|(s, _)| width(s) <= room);
+    let [full, no_col, bare] = candidates;
+    match fits {
+        Some(0) => full,
+        Some(1) => no_col,
+        _ => bare,
+    }
+}
+
+fn width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
 fn counts_text(e: &TailEngine, hex: bool, hex_width: usize, lang: Language) -> String {
-    let mut s = if e.view_mode == ViewMode::Asm {
+    let s = if e.view_mode == ViewMode::Asm {
         // Where the screen starts, out of the size (instructions are not counted).
         txf(
             lang,
@@ -6788,6 +6845,12 @@ fn counts_text(e: &TailEngine, hex: bool, hex_width: usize, lang: Language) -> S
             ],
         )
     };
+    s
+}
+
+/// The running scan or decompression of a stream, ` - filtering 40%`, or nothing.
+fn progress_text(e: &TailEngine, lang: Language) -> String {
+    let mut s = String::new();
     if let Some((kind, p, hits)) = e.scan_progress() {
         let name = match kind {
             ScanKind::Index => "indexing",
@@ -7545,6 +7608,66 @@ mod tests {
                 format!("{level} line {i}\n")
             })
             .collect()
+    }
+
+    #[test]
+    fn the_bottom_border_shows_the_cursor_line_and_the_first_column() {
+        let body = errors_every_tenth(200);
+        let (mut app, _dir) = app_with(&[("app.log", body.as_str())], false);
+        app.tabs[0].engine.set_include_filter("ERROR");
+        render(&mut app, 80, 20);
+        // ERROR lines are 10, 20, ...: row 4 is line 50, numbered as the gutter does.
+        app.tabs[0].set_cursor(4);
+        let bottom = |app: &mut App, w: u16| {
+            let screen = render(app, w, 20);
+            screen
+                .iter()
+                .rev()
+                .find(|l| l.contains(" lines"))
+                .cloned()
+                .unwrap_or_else(|| panic!("{screen:#?}"))
+        };
+        let line = bottom(&mut app, 80);
+        assert!(line.contains("20/200 lines - Ln 50 "), "{line}");
+        assert!(!line.contains("Col"), "{line}");
+        // Sideways: the first drawn column, gone again with `0`.
+        app.apply(Action::ScrollRight);
+        app.apply(Action::ScrollRightFast);
+        let line = bottom(&mut app, 80);
+        assert!(line.contains("- Ln 50 Col 12 "), "{line}");
+        // A narrow window leaves out Col first, then Ln, never the counts.
+        let line = bottom(&mut app, 36);
+        assert!(
+            line.contains("20/200 lines - Ln 50") && !line.contains("Col"),
+            "{line}"
+        );
+        let line = bottom(&mut app, 30);
+        assert!(
+            line.contains("20/200 lines") && !line.contains("Ln"),
+            "{line}"
+        );
+        app.apply(Action::ScrollHome);
+        let line = bottom(&mut app, 80);
+        assert!(!line.contains("Col"), "{line}");
+        // A click on `Ln` opens Go to for the stream.
+        let (r, tab) = app.hits.goto_links[0];
+        assert_eq!(tab, 0);
+        let screen = render(&mut app, 80, 20);
+        let cells: String = screen[r.y as usize]
+            .chars()
+            .skip(r.x as usize)
+            .take(r.width as usize)
+            .collect();
+        assert_eq!(cells, "Ln 50");
+        app.on_mouse(click(r.x + 1, r.y));
+        assert_eq!(app.prompt.as_ref().map(|p| p.kind), Some(PromptKind::Goto));
+        // HEX keeps its byte and row counts.
+        app.prompt = None;
+        app.apply(Action::ToggleHex);
+        let screen = render(&mut app, 80, 20);
+        let line = screen.iter().rev().find(|l| l.contains(" bytes,")).unwrap();
+        assert!(!line.contains("Ln ") && !line.contains("Col "), "{line}");
+        assert!(app.hits.goto_links.is_empty());
     }
 
     #[test]

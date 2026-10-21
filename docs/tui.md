@@ -48,6 +48,10 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 - **Windows.** Each stream is a bordered window, as the window's dock lays them out (the
   same `[dock] layout` of `fasttail.ini` and session files): its title, FOLLOW or PAUSED
   and `[x]` in the top border, the line counts and the filter state in the bottom one.
+  After the counts, a text window shows the cursor's file line, `Ln 1,234` (the number
+  the gutter gives it, whatever the filters; a click opens Go to), and while the rows are
+  scrolled sideways the first column drawn, `Col 41`; a narrow window leaves out `Col`,
+  then `Ln`. HEX and ASM show their byte counts instead.
   Inside, the window's two rows: the **stream bar** (the `[x] Follow` and
   `[x] Auto-update` check boxes, TXT / HEX, line numbers, encoding, ANSI mode, collapse, context lines, the time span, which opens the
   time range, and the line counts) and the **filter row** (include, exclude, `Aa`, `.*`,
@@ -66,7 +70,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 |---|---|
 | `↑` `↓` / `j` `k`, `PgUp` `PgDn` (`Ctrl+B` `Ctrl+F`) | cursor row, page |
 | `Home` `g` / `End` `G` | first row / last row and follow |
-| `←` `→`, `Ctrl+←` `Ctrl+→`, `0` | sideways by 1, by 10, back to column 0 |
+| `←` `→`, `Ctrl+←` `Ctrl+→`, `0` | sideways by 1, by 10, back to column 0 (`Col N` in the bottom border while scrolled) |
 | `Shift+↑` `Shift+↓` | extend the selection |
 | `Space` | follow on / off |
 | `/`, `n` `N` (`F3` `Shift+F3`), `Esc` | search, next / previous hit, clear |
