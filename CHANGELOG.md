@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.12] - 2026-10-21
+
 ### Changed
 
 - **New application icon.** The window, taskbar and tray icon is now the hexagon emblem
@@ -1628,6 +1630,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.12]: https://github.com/matteobaccan/FastTail/compare/v0.20.11...v0.20.12
 [0.20.11]: https://github.com/matteobaccan/FastTail/compare/v0.20.10...v0.20.11
 [0.20.10]: https://github.com/matteobaccan/FastTail/compare/v0.20.9...v0.20.10
 [0.20.9]: https://github.com/matteobaccan/FastTail/compare/v0.20.8...v0.20.9
