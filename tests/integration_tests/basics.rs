@@ -226,6 +226,8 @@ fn test_new_i18n_keys() {
         assert_ne!(t(*lang, "tip_size_unit"), "Unknown");
         assert_ne!(t(*lang, "hex_cols_dec"), "Unknown");
         assert_ne!(t(*lang, "hex_cols_inc"), "Unknown");
+        assert_ne!(t(*lang, "hex_cols_min_tip"), "Unknown");
+        assert_ne!(t(*lang, "hex_cols_max_tip"), "Unknown");
         assert_ne!(t(*lang, "font_dec_tip"), "Unknown");
         assert_ne!(t(*lang, "font_inc_tip"), "Unknown");
         assert_ne!(t(*lang, "font_reset_tip"), "Unknown");
@@ -799,6 +801,8 @@ fn test_i18n_exhaustive_coverage() {
         "tip_size_unit",
         "hex_cols_dec",
         "hex_cols_inc",
+        "hex_cols_min_tip",
+        "hex_cols_max_tip",
         "font_dec_tip",
         "font_inc_tip",
         "font_reset_tip",
@@ -3574,4 +3578,15 @@ fn the_engine_queues_its_sounds_for_the_front_end() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(sounds, vec![SoundAlertPreset::Chime]);
+}
+
+#[test]
+fn test_hex_cols_disabled_tooltips_exist() {
+    use fasttail::i18n::{t, Language};
+    for lang in Language::ALL {
+        let min_tip = t(*lang, "hex_cols_min_tip");
+        let max_tip = t(*lang, "hex_cols_max_tip");
+        assert!(!min_tip.is_empty() && min_tip != "Unknown");
+        assert!(!max_tip.is_empty() && max_tip != "Unknown");
+    }
 }
