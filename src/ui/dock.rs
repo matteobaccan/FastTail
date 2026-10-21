@@ -1700,10 +1700,9 @@ fn render_log_stream(
                     .size(11.0),
             );
             if ui
-                .button(" -8 ")
+                .add_enabled(engine.hex_columns > 8, egui::Button::new(" -8 "))
                 .on_hover_text(t(lang, "hex_cols_dec"))
                 .clicked()
-                && engine.hex_columns > 8
             {
                 engine.hex_columns -= 8;
                 ui.ctx().request_repaint();
@@ -1714,10 +1713,9 @@ fn render_log_stream(
                     .strong(),
             );
             if ui
-                .button(" +8 ")
+                .add_enabled(engine.hex_columns < 64, egui::Button::new(" +8 "))
                 .on_hover_text(t(lang, "hex_cols_inc"))
                 .clicked()
-                && engine.hex_columns < 64
             {
                 engine.hex_columns += 8;
                 ui.ctx().request_repaint();
@@ -3301,6 +3299,7 @@ fn render_time_display_menu(
                 let valid = parse_offset(&draft);
                 let apply = ui
                     .add_enabled(valid.is_some(), egui::Button::new("✔"))
+                    .on_hover_text(t(lang, "session_ok"))
                     .on_disabled_hover_text(t(lang, "time_display_offset_tip"));
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if let Some(m) = valid.filter(|_| apply.clicked() || enter) {

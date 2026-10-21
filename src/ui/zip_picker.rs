@@ -278,6 +278,14 @@ impl ArchivePicker {
                         .hint_text(t(lang, "zip_picker_filter"))
                         .desired_width(260.0),
                 );
+                if !self.filter.is_empty()
+                    && ui
+                        .small_button("✖")
+                        .on_hover_text(t(lang, "clear_filter"))
+                        .clicked()
+                {
+                    self.filter.clear();
+                }
                 let visible = self.visible();
                 let has_openable = visible.iter().any(|&i| self.entries[i].refusal.is_none());
                 if ui
@@ -449,6 +457,8 @@ mod tests {
         assert_eq!(picker.visible(), [0, 1, 2]);
         picker.filter = "SER".to_string();
         assert_eq!(picker.visible(), [1]);
+        picker.filter.clear();
+        assert_eq!(picker.visible(), [0, 1, 2]);
         // A refused entry is never opened, even if it ended up selected.
         picker.selected.extend([0, 2]);
         assert_eq!(picker.chosen(), ["worker.log"]);
