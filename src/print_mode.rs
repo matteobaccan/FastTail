@@ -106,7 +106,15 @@ pub fn run(cli: &CliArgs) -> i32 {
         options,
     );
     let follow = cli.follow == Some(true);
-    match print_inputs(inputs, &matcher, &mut printer, follow) {
+    // `--line N` / `app.log:N`: where each input starts printing (1 = from the top).
+    let starts: Vec<u64> = inputs
+        .iter()
+        .map(|spec| match spec {
+            InputSpec::Path(path) => cli.line_of(path).unwrap_or(1) as u64,
+            InputSpec::Stdin => 1,
+        })
+        .collect();
+    match print_inputs(inputs, &starts, &matcher, &mut printer, follow) {
         Ok(failed) => exit_code(printer.printed, failed),
         Err(err) => output_failed(&err),
     }
@@ -158,6 +166,7 @@ fn colour_output(choice: ColorChoice) -> Option<bool> {
 /// whether an input could not be read; an error is a failed write to standard output.
 fn print_inputs(
     inputs: Vec<InputSpec>,
+    starts: &[u64],
     matcher: &Matcher,
     printer: &mut Printer<impl Write>,
     follow: bool,
@@ -165,7 +174,7 @@ fn print_inputs(
     let mut failed = false;
     let mut followed = Vec::new();
     let mut next_id = 0u64;
-    for spec in inputs {
+    for (n, spec) in inputs.into_iter().enumerate() {
         let mut input = match Input::open(spec, follow, &mut next_id) {
             Ok(input) => input,
             Err(msg) => {
@@ -174,6 +183,7 @@ fn print_inputs(
                 continue;
             }
         };
+        input.pipeline.first_line = starts.get(n).copied().unwrap_or(1);
         let hold_partial = input.follow.is_some();
         match input.pump(matcher, printer, !hold_partial) {
             Ok(()) => {}
@@ -760,6 +770,9 @@ struct Pipeline {
     before: VecDeque<HeldLine>,
     /// Lines of context still to print after the last match.
     after: usize,
+    /// The first line printed (`--line N`); the lines before it are still evaluated, so
+    /// stack traces and inherited timestamps carry on across it.
+    first_line: u64,
 }
 
 impl Default for Pipeline {
@@ -772,6 +785,7 @@ impl Default for Pipeline {
             window: None,
             before: VecDeque::new(),
             after: 0,
+            first_line: 1,
         }
     }
 }
@@ -792,6 +806,9 @@ impl Pipeline {
         // The cut bytes hold no newline, so decoding them as a whole line is the same.
         let raw = decode_line(bytes, encoding, false);
         let matched = self.evaluate(matcher, &raw, truncated);
+        if self.number < self.first_line {
+            return Ok(());
+        }
         if matched {
             while let Some(held) = self.before.pop_front() {
                 printer.line(source, held.number, &held.raw, held.truncated)?;
@@ -1377,7 +1394,11 @@ mod tests {
         };
         let mut printer = Printer::new(Vec::new(), None, options);
         let mut splitter = Splitter::default();
-        let mut pipeline = Pipeline::default();
+        let mut pipeline = Pipeline {
+            // A text, not a path: `--line` as for the first input.
+            first_line: cli.line.unwrap_or(1) as u64,
+            ..Pipeline::default()
+        };
         let source = Source { name: "t", id: 0 };
         for part in text.chunks(chunk.max(1)) {
             splitter
@@ -1436,6 +1457,22 @@ mod tests {
         );
         let (out, n) = print_text(&["--filter", "no-such-text"], LOG.as_bytes(), 64);
         assert_eq!((out.as_str(), n), ("", 0));
+    }
+
+    #[test]
+    fn line_starts_the_output_at_that_line() {
+        let text: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+        let (out, _) = print_text(&["--line", "100"], text.as_bytes(), 64);
+        assert!(out.starts_with("line 100\n"), "{out}");
+        assert_eq!(out.lines().count(), 101);
+        let (out, _) = print_text(
+            &["--line", "100", "--line-numbers", "--filter", "line 15"],
+            text.as_bytes(),
+            64,
+        );
+        // "line 15" also matches 150-159; line 15 itself is before the start.
+        let expected: String = (150..=159).map(|i| format!("{i}:line {i}\n")).collect();
+        assert_eq!(out, expected, "filters apply from the line on");
     }
 
     #[test]
