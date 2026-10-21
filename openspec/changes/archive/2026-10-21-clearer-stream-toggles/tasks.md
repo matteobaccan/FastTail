@@ -13,5 +13,5 @@
 - [x] 3.1 New and changed texts in every language (`src/i18n.rs`, `src/i18n_tui.rs`)
 - [x] 3.2 Tests: chip text and state for both toggles, click toggles only its own feature, 80-column capture in German and Japanese
 - [x] 3.3 README, `docs/ui-design.md` (diagram, toggle list, icon table), `docs/tui.md`, CHANGELOG `[Unreleased]`
-- [ ] 3.4 `cargo fmt`, clippy (GUI and `--no-default-features --features tui`), focused tests; PR with Linux and Windows CI green
-- [ ] 3.5 Archive the change after the release that ships it
+- [x] 3.4 `cargo fmt`, clippy (GUI and `--no-default-features --features tui`), focused tests; PR with Linux and Windows CI green
+- [x] 3.5 Archive the change after the release that ships it
