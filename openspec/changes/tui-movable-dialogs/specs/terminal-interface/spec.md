@@ -8,7 +8,7 @@ The Settings dialog and the Keys (help) dialog SHALL show `[x]` right-aligned in
 - **THEN** the dialog is drawn 30 columns to the right and 10 rows lower with the same size, the stream lines it uncovered are visible, and Settings keeps the keyboard.
 
 #### Scenario: Resizing the Keys dialog
-- **WHEN** the Keys dialog shows 3 columns on a 200x50 terminal and the user drags its right border left until the dialog is 90 columns wide
+- **WHEN** the Keys dialog shows 3 columns on a 200x30 terminal and the user drags its right border left until the dialog is 92 columns wide
 - **THEN** the entries are laid out in 2 columns of at least 44 cells, no text crosses the border, and the selected entry stays in view.
 
 #### Scenario: Closing with [x]
