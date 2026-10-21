@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **7z and xz readers updated.** `lzma-rust2` 0.23 with `sevenz-rust2` 0.24.1, moved together
+  so that one copy of the LZMA decoder ships (Renovate PRs #347 and #348); `zip` 9.0.5 and
+  `notify` 9.0.0-rc.6 (lockfile only).
 - **Faster timestamp detection.** Fixed-width digit fields and month names are read
   without loops: about 11% faster on mixed ISO 8601, syslog and Apache lines, which the
   timeline and time-range scans run over every line (from the Bolt bot PR #341).
