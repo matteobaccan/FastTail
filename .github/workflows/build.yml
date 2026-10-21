@@ -364,13 +364,19 @@ jobs:
           }
           # The products Windows Installer has under FastTail's UpgradeCode (what "Installed
           # apps" lists), with their versions; a per-user MSI has no Uninstall key in HKCU.
+          function Prop($obj, $name, $argv) {
+            $obj.GetType().InvokeMember($name, 'GetProperty', $null, $obj, $argv)
+          }
           function Entries {
             $wi = New-Object -ComObject WindowsInstaller.Installer
-            $codes = @($wi.GetType().InvokeMember('RelatedProducts', 'GetProperty', $null, $wi,
-              @('{B4BA8F80-AA08-454A-B937-8A703D33B202}')))
-            @($codes | ForEach-Object {
-              $wi.GetType().InvokeMember('ProductInfo', 'GetProperty', $null, $wi, @($_, 'VersionString'))
-            })
+            $list = Prop $wi 'RelatedProducts' @([string]'{B4BA8F80-AA08-454A-B937-8A703D33B202}')
+            $count = [int](Prop $list 'Count' $null)
+            $versions = @()
+            for ($i = 0; $i -lt $count; $i++) {
+              $code = [string](Prop $list 'Item' @([int]$i))
+              $versions += [string](Prop $wi 'ProductInfo' @($code, [string]'VersionString'))
+            }
+            , $versions
           }
           $dir = Join-Path $env:LOCALAPPDATA 'Programs\FastTail'
           Msi @('/i', $old, '/qn', '/l*v', 'msi-old.log')
