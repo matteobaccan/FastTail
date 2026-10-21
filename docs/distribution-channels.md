@@ -1,11 +1,18 @@
 # Distribution channels — parked, not abandoned
 
-FastTail ships as a GitHub release: an archive per platform, downloaded by hand. Four
-other channels would make it installable with one command, and this page records what
-each of them costs, so the decision can be taken with the facts rather than re-researched.
+FastTail ships as a GitHub release, downloaded by hand: since 0.20.14 not only an archive
+per platform but also installable packages, each built and install-tested by the release
+job (`openspec/changes/release-packages`): `.deb` and `.rpm` for Linux x86_64 and ARM64,
+an AppImage per architecture, a per-user Windows `.msi` and a universal macOS `.dmg` (plus
+the Intel archive). Package *channels* would make it installable and upgradable with one
+command, and this page records what each of them costs, so the decision can be taken with
+the facts rather than re-researched.
 
-**Nothing here is wired up.** The pipeline builds and publishes the GitHub release, full
-stop. The automation described below was written and then parked on purpose: it is easy
+**No channel is wired up.** The pipeline builds and publishes the GitHub release with its
+packages, full stop. Flathub, AUR and Homebrew could now point at the published packages
+or archives (a Flatpak manifest, a `PKGBUILD` repackaging the `.tar.gz`, a cask for the
+`.dmg`); like the channels below they are parked: each is a recipe to keep in step with
+every release. The automation described below was written and then parked on purpose: it is easy
 to bring back (see the history of `.github/workflows/build.yml` between v0.8.0 and v0.9.0,
 pull requests #60 to #62), and bringing it back is a decision about maintenance, not about
 code. Chocolatey was never automated.

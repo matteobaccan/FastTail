@@ -489,7 +489,7 @@ The standalone executable is written to `target/release/fasttail` (`target/relea
 `cargo bench --bench fields` times the field scanners (JSON, logfmt, the Apache regex) on ~100 MB of generated lines in memory, with one field lookup per line (`FASTTAIL_BENCH_BYTES` sets the size).
 
 ### Prebuilt binaries
-Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as one archive per platform. Each name carries the version (`<version>` below, for example `0.12.0`) and each archive holds the program with `LICENSE` and `README.md`:
+Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as archives and installers for each platform (a downloads grid at the top of each release links them). Each name carries the version (`<version>` below, for example `0.12.0`) and each archive holds the program with `LICENSE` and `README.md`:
 
 | Platform | Asset | Contents |
 |---|---|---|
@@ -523,6 +523,22 @@ Expand-Archive fasttail-windows-x86_64-0.12.0.zip -DestinationPath fasttail; .\f
 
 To read a crash report (`fasttail_crash.log`) with function names instead of addresses, unpack `fasttail-windows-x86_64-symbols-<version>.zip` (the same version as the program) and keep `fasttail.pdb` next to `fasttail.exe`.
 
+#### Install, upgrade and remove
+
+| Platform | Install | Upgrade | Remove |
+|---|---|---|---|
+| Windows | double-click the `.msi` (per user: no administrator rights) | run the newer `.msi`, it replaces the installed one | Settings → Apps → Installed apps → FastTail → Uninstall |
+| Debian, Ubuntu | `sudo apt install ./fasttail_<version>-1_amd64.deb` | the same with the newer `.deb` | `sudo apt remove fasttail` |
+| Fedora, RHEL, openSUSE | `sudo dnf install ./fasttail-<version>-1.x86_64.rpm` (`sudo zypper install` on openSUSE) | `sudo dnf upgrade ./fasttail-<new>-1.x86_64.rpm` | `sudo dnf remove fasttail` |
+| Any Linux | `chmod +x fasttail-linux-x86_64-<version>.AppImage` and run it | replace the file | delete the file |
+| macOS | open the `.dmg` and drag `FastTail.app` to Applications | drag the newer app over it | move `FastTail.app` to the bin |
+
+Settings, sessions and rules live in `fasttail.ini` in the user profile: installing,
+upgrading or removing a package never touches them.
+
+The installers are **not signed**. On Windows, SmartScreen may show "Windows protected your
+PC" for the `.msi` or the `.exe`: **More info → Run anyway**. On macOS, see below.
+
 #### macOS: "Apple cannot verify fasttail is free of malware"
 The macOS build is **not signed with an Apple Developer ID**, so the first launch is blocked by Gatekeeper with exactly that message, and the dialog only offers to move the file to the bin. The binary is fine — it is simply unsigned, and macOS quarantines everything downloaded from a browser.
 
@@ -536,7 +552,7 @@ xattr -d com.apple.quarantine ./fasttail   # or: xattr -cr ./fasttail
 
 Or, without the terminal: try to open it once, let it be blocked, then go to **System Settings → Privacy & Security** and press **Open anyway** next to the message about `fasttail`.
 
-Signing and notarizing the build would remove the prompt for everyone, and needs a paid Apple Developer account — see [distribution channels](docs/distribution-channels.md). Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs. FastTail is not published to crates.io, Scoop or winget: [docs/distribution-channels.md](docs/distribution-channels.md) records what each of those would take, for when it is worth deciding.
+Signing and notarizing the build would remove the prompt for everyone, and needs a paid Apple Developer account — see [distribution channels](docs/distribution-channels.md). Every push and pull request runs the test suite in [GitHub Actions](https://github.com/matteobaccan/FastTail/actions); release binaries are built only for `v*` tags and manual workflow runs. The packages above are published as release assets; FastTail is not published to package channels (crates.io, Scoop, winget, Homebrew, Flathub, AUR): [docs/distribution-channels.md](docs/distribution-channels.md) records what each of those would take, for when it is worth deciding.
 
 How the interface is built — window layout, dock and tabs, every dialog and menu, glyphs, the four themes with their palettes, shortcuts and the `fasttail.ini` keys that shape it — is described in the **[UI design document](docs/ui-design.md)**.
 
