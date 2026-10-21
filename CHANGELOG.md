@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Help window can be made narrow.** The key tables did not wrap, so the window could not
+  be shrunk below their longest line; every text of the help now wraps at the window's
+  width.
+
 ## [0.20.12] - 2026-10-21
 
 ### Changed
