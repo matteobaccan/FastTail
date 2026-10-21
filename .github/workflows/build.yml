@@ -153,14 +153,8 @@ jobs:
             tui_binary: fasttail-tui
             tui_only_asset: fasttail-tui-linux-arm64
 
-          # macOS
-          # Temporarily disabled: macOS x86_64 (Intel) build
-          # - name: macOS x86_64 (Intel)
-          #   os: macos-13
-          #   target: x86_64-apple-darwin
-          #   asset: fasttail-macos-x86_64
-          #   ext: tar.gz
-          #   binary: fasttail
+          # macOS: the Apple Silicon runner also cross-builds x86_64-apple-darwin (below)
+          # for the Intel archive and the universal disk image.
 
           - name: 🍎 macOS ARM64 (Apple Silicon)
             os: macos-latest
@@ -302,6 +296,50 @@ jobs:
               [ -f "$f" ] && echo "| $(basename "$f") | $(wc -c < "$f" | tr -d ' ') |"
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Intel Macs: the same SDK builds x86_64-apple-darwin; its archive, then one
+      # universal FastTail.app (lipo of both builds) in a disk image.
+      - name: 🍎 Intel build and universal disk image (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          intel=target/x86_64-apple-darwin/release
+          mkdir -p stage-intel
+          cp "$intel/fasttail" "$intel/fasttail-tui" LICENSE README.md stage-intel/
+          tar -C stage-intel -czf "dist/fasttail-macos-x86_64-$version.tar.gz" fasttail fasttail-tui LICENSE README.md
+          packaging/macos/bundle.sh "target/${{ matrix.target }}/release" "$intel" "$version" \
+            "dist/fasttail-macos-universal-$version.dmg"
+          ls -la dist
+
+      # Mount the image as a user would and check what it holds: both architectures in
+      # each executable, both start (the Intel slice too when Rosetta is there), a valid
+      # ad-hoc signature, the Applications link and the docs.
+      - name: 🧪 Disk image test (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=$(ls dist/fasttail-macos-universal-*.dmg)
+          mnt=$(mktemp -d)
+          hdiutil attach "$dmg" -mountpoint "$mnt" -nobrowse -readonly
+          bin="$mnt/FastTail.app/Contents/MacOS"
+          for b in fasttail fasttail-tui; do
+            archs=$(lipo -archs "$bin/$b")
+            echo "$b: $archs"
+            [[ "$archs" == *x86_64* && "$archs" == *arm64* ]] || { echo "::error::$b is not universal: $archs"; exit 1; }
+            "$bin/$b" --version
+            if arch -x86_64 /usr/bin/true 2>/dev/null; then arch -x86_64 "$bin/$b" --version; fi
+          done
+          codesign --verify --deep --strict "$mnt/FastTail.app"
+          plutil -lint "$mnt/FastTail.app/Contents/Info.plist"
+          test -f "$mnt/FastTail.app/Contents/Resources/FastTail.icns"
+          test -L "$mnt/Applications"
+          test -f "$mnt/README.md" && test -f "$mnt/LICENSE"
+          hdiutil detach "$mnt"
 
       # Windows installer from the binaries just archived. A second MSI of the same
       # package with a lower version (0.0.1) stands for the previous release in the upgrade
