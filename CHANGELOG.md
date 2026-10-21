@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **New application icon.** The window, taskbar and tray icon is now the hexagon emblem
+  of the logo (cyan hexagon, pink-to-gold bolt) instead of the "F" disc, drawn as
+  `assets/icon.svg` and rendered to every size the coming installers need
+  (`packaging/icons/`: PNG 16 to 512, `.ico`, `.icns`), with a Linux desktop entry.
+- **Linux builds need glibc 2.35.** The Linux archives are built on Ubuntu 22.04 instead
+  of 24.04, so they run on Ubuntu 22.04+, Debian 12+ and Fedora 36+ (before: glibc 2.39);
+  the release job checks the floor and starts both executables.
+
 ## [0.20.11] - 2026-10-21
 
 ### Added

@@ -1,8 +1,8 @@
 ## 1. Shared inputs
 
-- [ ] 1.1 `packaging/icons/`: PNG 16–512, `fasttail.ico`, `FastTail.icns` rendered from `assets/logo.svg` by `packaging/icons/render.sh` (committed output)
-- [ ] 1.2 `packaging/linux/fasttail.desktop` (Name, Comment, Exec=fasttail %F, Icon=fasttail, Categories=Utility;Development;System;Monitor, MimeType text/plain and text/x-log)
-- [ ] 1.3 Linux build jobs on `ubuntu-22.04` / `ubuntu-22.04-arm`; check the archives still build and run; README states the glibc 2.35 floor
+- [x] 1.1 `packaging/icons/`: PNG 16–512, `fasttail.ico`, `FastTail.icns` rendered from `assets/icon.svg` (the logo's hexagon emblem, square, chosen by the maintainer on 2026-10-21; the window icon follows it) by `packaging/icons/render.py` (committed output)
+- [x] 1.2 `packaging/linux/fasttail.desktop` (Name, Comment, Exec=fasttail %F, Icon=fasttail, Categories=Utility;Development;System;Monitor, MimeType text/plain and text/x-log)
+- [x] 1.3 Linux build jobs on `ubuntu-22.04` / `ubuntu-22.04-arm`; check the archives still build and run; README states the glibc 2.35 floor
 
 ## 2. Linux packages
 

@@ -176,7 +176,7 @@ Sources: `src/main.rs`, `src/ui/app.rs`
 | Maximized / minimized | Restored from `[window]`. Maximize is set on the builder and again on the first frame; minimize only on the first frame, so the saved geometry is laid out first. On Windows `ShowWindow` is also called. |
 | Decorations | `with_decorations(!borderless)`, switched live with `ViewportCommand::Decorations` |
 | Drag and drop | Enabled (`with_drag_and_drop(true)`) |
-| Icon | The title-bar badge (dark disc, cyan ring, cyan "F"), embedded as raw 128 × 128 RGBA (`assets/icon-128.rgba`, drawn from `assets/icon.png`) and set with `with_icon`. The executable file itself carries no resource icon. |
+| Icon | The hexagon emblem of the logo (cyan hexagon, dark fill, speed lines, pink-to-gold bolt), drawn as `assets/icon.svg` and rendered by `packaging/icons/render.py` to raw 128 × 128 RGBA (`assets/icon-128.rgba`, also `assets/icon.png`), set with `with_icon` and used by the tray. The packages use the same renders (`packaging/icons/`). The executable file itself carries no resource icon. |
 | Always on top | `ViewportCommand::WindowLevel(AlwaysOnTop)` when `always_on_top` is set |
 | Subsystem | `#![windows_subsystem = "windows"]`. `--help` and `--version` attach to the parent console. |
 

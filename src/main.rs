@@ -502,7 +502,7 @@ fn main() -> eframe::Result<()> {
         .with_decorations(!config.borderless)
         .with_drag_and_drop(true)
         // The title-bar badge as the window and taskbar icon: raw 128 × 128 RGBA
-        // (generated from `assets/icon.png`), so no image decoder is linked for it.
+        // (rendered from `assets/icon.svg`), so no image decoder is linked for it.
         .with_icon(egui::IconData {
             rgba: include_bytes!("../assets/icon-128.rgba").to_vec(),
             width: 128,

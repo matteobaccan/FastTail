@@ -502,6 +502,9 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 
 `fasttail-tui` is the terminal interface (see below); `fasttail` is the window.
 
+The Linux executables need **glibc 2.35 or later**: Ubuntu 22.04+, Debian 12+, Fedora 36+ and
+the distributions built on them (older ones, such as RHEL 9 with glibc 2.34, are not covered).
+
 ```bash
 # Linux / macOS
 tar -xzf fasttail-linux-x86_64-0.12.0.tar.gz && ./fasttail app.log

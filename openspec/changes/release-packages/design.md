@@ -69,9 +69,12 @@ vector icon; `assets/icon.png` is 128 px.
    No graphics library is bundled: OpenGL / Vulkan must come from the host driver.
    Names: `fasttail-linux-x86_64-<version>.AppImage`,
    `fasttail-linux-arm64-<version>.AppImage`.
-7. **Icons from `assets/logo.svg`**, rendered once to `packaging/icons/` (PNG 16 to 512,
-   `fasttail.ico`, `FastTail.icns`) with a script (`rsvg-convert`, ImageMagick, `iconutil`
-   or `png2icns`) and committed, so the release jobs do not depend on image tools.
+7. **Icons from `assets/icon.svg`**, the hexagon emblem of `assets/logo.svg` (a banner,
+   not square) cut out on a transparent background with heavier strokes so it reads at
+   16 px, chosen by the maintainer on 2026-10-21. `packaging/icons/render.py` (cairosvg and
+   Pillow) renders it once to `packaging/icons/` (PNG 16 to 512, `fasttail.ico`,
+   `FastTail.icns`) and to the window icon (`assets/icon.png`, `assets/icon-128.rgba`),
+   and the output is committed, so the release jobs do not depend on image tools.
 8. **Install tests before upload.** Linux: `apt-get install ./…deb` on the runner, run both
    `--version`, `apt-get remove`; the `.rpm` in a `fedora:latest` container (x86_64 and
    ARM64 runners both run Docker) with `dnf install`; the AppImage run with
