@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Small GUI control fixes.** The HEX view's -8 / +8 column buttons are disabled at 8 and 64
+  columns, the archive picker filter and the scratchpad find box get a ✖ clear button, the
+  report dialog's tag chips and the time-offset ✔ button get tooltips (from the Palette bot
+  PRs #350, #353 and #355).
 - **7z and xz readers updated.** `lzma-rust2` 0.23 with `sevenz-rust2` 0.24.1, moved together
   so that one copy of the LZMA decoder ships (Renovate PRs #347 and #348); `zip` 9.0.5 and
   `notify` 9.0.0-rc.6 (lockfile only).
