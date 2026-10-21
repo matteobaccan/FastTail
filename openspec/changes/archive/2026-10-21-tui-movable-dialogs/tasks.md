@@ -18,5 +18,5 @@
 - [x] 4.1 Tests in `src/tui/app.rs`: move, resize (Keys 3 to 2 columns), `[x]` on Settings restores the theme, geometry kept on reopen, clamp after a terminal resize, drag released outside keeps the dialog, double click resets
 - [x] 4.2 Terminal texts: none new expected; if any, a row in every language in `src/i18n_tui.rs`
 - [x] 4.3 `docs/tui.md`, `docs/ui-design.md`, README if it lists TUI mouse actions, CHANGELOG `[Unreleased]`
-- [ ] 4.4 `cargo fmt`, clippy (GUI and `--no-default-features --features tui` builds), focused tests; PR with Linux and Windows CI green
-- [ ] 4.5 Archive the change after the release that ships it
+- [x] 4.4 `cargo fmt`, clippy (GUI and `--no-default-features --features tui` builds), focused tests; PR with Linux and Windows CI green
+- [x] 4.5 Archive the change after the release that ships it

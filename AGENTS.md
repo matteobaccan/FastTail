@@ -102,7 +102,7 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.20.9** (2026-10-21, nightly): cursor line and first column (`Ln` / `Col`) in the terminal window border; `tui-cursor-position` archived. 0.20.8 (2026-10-21, nightly): Follow and Auto-update (formerly Monitor) as check boxes in the window and the terminal; `clearer-stream-toggles` archived. 0.20.7 (2026-10-21, nightly): faster timestamp detection, small GUI control fixes, HTML entity fix, `lzma-rust2` 0.23 with `sevenz-rust2` 0.24.1; `disassembly-view` archived. 0.20.6 (2026-10-16, nightly): tooltips on the archive picker headers and
+- Latest release: **0.20.10** (2026-10-21, nightly): Settings and Keys dialogs of the terminal move, resize and close with `[x]`; `tui-movable-dialogs` archived. 0.20.9 (2026-10-21, nightly): cursor line and first column (`Ln` / `Col`) in the terminal window border; `tui-cursor-position` archived. 0.20.8 (2026-10-21, nightly): Follow and Auto-update (formerly Monitor) as check boxes in the window and the terminal; `clearer-stream-toggles` archived. 0.20.7 (2026-10-21, nightly): faster timestamp detection, small GUI control fixes, HTML entity fix, `lzma-rust2` 0.23 with `sevenz-rust2` 0.24.1; `disassembly-view` archived. 0.20.6 (2026-10-16, nightly): tooltips on the archive picker headers and
   on the disabled Stop / Export buttons, `arboard` 3.7.0, `zip` 9.0.4 (egui 0.37, Renovate
   #330 / #335, still open: it needs code changes and a preview). 0.20.5 (2026-10-14):
   Bookmark report (all streams) disabled with
@@ -118,7 +118,7 @@ Update this section in each release PR.
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
   build of `build.yml` on its branch before merging; task 5.0, the downloads grid, is done).
 - Also as nightly patches (requested 2026-10-06; `clearer-stream-toggles` shipped in 0.20.8,
-  `tui-cursor-position` in 0.20.9): `tui-movable-dialogs`, `level-detect-window`.
+  `tui-cursor-position` in 0.20.9, `tui-movable-dialogs` in 0.20.10): `level-detect-window`.
 - Then, re-planned on 2026-10-06 to about one large, two medium and three small changes
   per minor: **0.21.0** structured data (`tabular-files` with the terminal column view,
   `structured-field-terms`, `folder-source`, `linux-tray-icon`, `open-at-line`,
