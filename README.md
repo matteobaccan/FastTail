@@ -493,6 +493,7 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 
 | Platform | Asset | Contents |
 |---|---|---|
+| Windows x86_64 installer | `fasttail-windows-x86_64-<version>.msi` | installs both programs for the current user, no administrator rights: `%LOCALAPPDATA%\Programs\FastTail`, a Start menu shortcut, the folder on the user `PATH` (for `fasttail-tui` in a new console); a newer MSI replaces the installed one; removed from "Installed apps" |
 | Windows x86_64 | `fasttail-windows-x86_64-<version>.zip` | `fasttail.exe`, `fasttail-tui.exe`, `LICENSE`, `README.md` |
 | Windows x86_64 debug symbols | `fasttail-windows-x86_64-symbols-<version>.zip` | `fasttail.pdb`, `fasttail_tui.pdb` (only needed to read a crash dump) |
 | Linux x86_64 | `fasttail-linux-x86_64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |

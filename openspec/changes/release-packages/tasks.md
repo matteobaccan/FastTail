@@ -13,9 +13,9 @@
 
 ## 3. Windows installer
 
-- [ ] 3.1 `packaging/windows/fasttail.wxs` (WiX v5): per-user scope, install folder, Start menu shortcut with icon, user `PATH`, fixed UpgradeCode with `MajorUpgrade`, ARP icon and version from `Cargo.toml`
-- [ ] 3.2 Windows job: pinned `wix` .NET tool, build the `.msi`; install test (`msiexec /qn`, both `--version` from the folder and from `PATH` in a new shell, `msiexec /x`)
-- [ ] 3.3 Upgrade test: install the previous release's MSI, then the new one, one entry left in "Installed apps"
+- [x] 3.1 `packaging/windows/fasttail.wxs` (WiX v5): per-user scope, install folder, Start menu shortcut with icon, user `PATH`, fixed UpgradeCode with `MajorUpgrade`, ARP icon and version from `Cargo.toml`
+- [x] 3.2 Windows job: pinned `wix` .NET tool, build the `.msi`; install test (`msiexec /qn`, both `--version` from the folder and from `PATH` in a new shell, `msiexec /x`)
+- [x] 3.3 Upgrade test: install an older MSI of the same package (built as 0.0.1 in the job, so the first release with an MSI is tested too), then the new one, one product left under the UpgradeCode
 
 ## 4. macOS disk image
 
