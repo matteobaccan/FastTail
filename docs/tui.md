@@ -55,7 +55,9 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
   Inside, the window's two rows: the **stream bar** (the `[x] Follow` and
   `[x] Auto-update` check boxes, TXT / HEX, line numbers, encoding, ANSI mode, collapse, context lines, the time span, which opens the
   time range, and the line counts) and the **filter row** (include, exclude, `Aa`, `.*`,
-  minimum level, presets, and the global filter when it applies). A small window keeps
+  minimum level, `[≤96 B]`, where the level is looked for (a click sets the stream's own
+  value, 16 to 4096 bytes; empty goes back to the setting), presets, and the global
+  filter when it applies). A small window keeps
   only the stream bar, or neither.
 - **Status bar** at the bottom: the stream commands as buttons, and messages.
 - **Tab strip** with two or more streams; `+` marks a stream that is not on screen and
@@ -119,7 +121,8 @@ terminals) selects text natively.
 ## Settings, editors, tools
 
 - **Settings** (`,`): interface, theme, language (or the system's), view, automatic token
-  highlighting, performance and refresh, new-stream defaults, bookmarks, sound and the
+  highlighting, performance and refresh, new-stream defaults (with the bytes the level
+  is looked for in), bookmarks, sound and the
   bell on background alerts, external tools, PIN lock. Changes apply at once; `[ OK ]`
   saves, `Esc` brings back the values Settings opened with.
 - **Highlight rules** (`r`): every field of the window's rules, order, colours, quick

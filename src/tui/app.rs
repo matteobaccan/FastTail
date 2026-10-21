@@ -282,6 +282,8 @@ pub enum PromptKind {
     Goto,
     /// The file to save the open streams to as a session.
     SaveSession,
+    /// The bytes of a line the stream's level is looked for in (empty: the setting).
+    LevelBytes,
 }
 
 pub struct Prompt {
@@ -2705,6 +2707,16 @@ impl App {
             // A note bookmarks the line; an empty one removes the note, not the bookmark.
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
+            PromptKind::LevelBytes if text.is_empty() => tab.engine.set_level_override(None),
+            PromptKind::LevelBytes => {
+                match text.parse().ok().and_then(crate::log_level::valid_window) {
+                    Some(bytes) => tab.engine.set_level_override(Some(bytes)),
+                    None => {
+                        self.message =
+                            Some(txf(self.lang, "\"{0}\": from 16 to 4096 bytes", &[&text]))
+                    }
+                }
+            }
             PromptKind::Goto if tab.is_asm() => {
                 if tab.engine.asm_go_to(&text) {
                     tab.engine.follow_tail = false;
@@ -2750,6 +2762,10 @@ impl App {
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
+            PromptKind::LevelBytes => e
+                .level_override()
+                .map(|b| b.to_string())
+                .unwrap_or_default(),
             PromptKind::SaveSession => {
                 let current = self
                     .settings
@@ -3007,6 +3023,7 @@ impl App {
                 e.refresh_filters();
             }
             C::Level => self.apply(Action::CycleLevel),
+            C::LevelBytes => self.open_prompt(PromptKind::LevelBytes),
             C::Presets => self.apply(Action::Presets),
             C::Global => self.apply(Action::EditGlobal),
         }
@@ -4980,6 +4997,10 @@ impl App {
             }
             PromptKind::Goto => tx(self.lang, "Go to line (N, +N, -N) or time (14:02)"),
             PromptKind::SaveSession => tx(self.lang, "Save session as"),
+            PromptKind::LevelBytes => tx(
+                self.lang,
+                "Level searched in the first N bytes (16 to 4096, empty: the setting)",
+            ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
         let Some(p) = &self.prompt else {
@@ -8968,6 +8989,51 @@ mod tests {
         let x = app.hits.dialog.unwrap().close.unwrap();
         app.on_mouse(click(x.x, x.y));
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn the_level_bytes_chip_sets_the_streams_window() {
+        let late = format!(
+            "{:<150}ERROR boom\n{:<150}INFO fine\n",
+            "host=a pid=1", "host=a pid=1"
+        );
+        let (mut app, _dir) = app_with(&[("a.log", late.as_str())], false);
+        let screen = render(&mut app, 120, 30);
+        assert!(screen.iter().any(|l| l.contains("[≤96 B]")), "{screen:#?}");
+        assert_eq!(app.tabs[0].engine.level_of(0), LogLevel::Unknown);
+        let (r, _, _) = *app
+            .hits
+            .bar_chips
+            .iter()
+            .find(|(_, _, c)| *c == crate::tui::bars::BarChip::LevelBytes)
+            .unwrap();
+        app.on_mouse(click(r.x + 1, r.y));
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::LevelBytes)
+        );
+        // Out of range: refused, nothing changes.
+        app.prompt.as_mut().unwrap().field = TextField::new("8");
+        let prompt = app.prompt.take().unwrap();
+        app.submit_prompt(prompt);
+        assert!(app.message.as_deref().unwrap().contains("16 to 4096"));
+        assert_eq!(app.tabs[0].engine.level_override(), None);
+        // 256: the level at byte 150 is found, the chip shows the stream's value.
+        app.open_prompt(PromptKind::LevelBytes);
+        app.prompt.as_mut().unwrap().field = TextField::new("256");
+        let prompt = app.prompt.take().unwrap();
+        app.submit_prompt(prompt);
+        assert_eq!(app.tabs[0].engine.level_override(), Some(256));
+        assert_eq!(app.tabs[0].engine.level_of(0), LogLevel::Error);
+        let screen = render(&mut app, 120, 30);
+        assert!(screen.iter().any(|l| l.contains("[≤256 B]")), "{screen:#?}");
+        // Empty: back to the setting.
+        app.open_prompt(PromptKind::LevelBytes);
+        assert_eq!(app.prompt.as_ref().unwrap().field.text(), "256");
+        app.prompt.as_mut().unwrap().field = TextField::new("");
+        let prompt = app.prompt.take().unwrap();
+        app.submit_prompt(prompt);
+        assert_eq!(app.tabs[0].engine.level_window(), 96);
     }
 
     #[test]

@@ -33,6 +33,10 @@ pub const STDIN_SPOOL_MAX_MB: RangeInclusive<u32> =
 /// `[general] screensaver_timeout_mins`: idle minutes before the screensaver (GUI) or the
 /// idle lock (terminal); 0 turns it off.
 pub const SCREENSAVER_TIMEOUT_MINS: RangeInclusive<u32> = 0..=120;
+/// `[general] level_detect_bytes` and a stream's `level_bytes`: the bytes of a line the
+/// level is looked for in.
+pub const LEVEL_DETECT_BYTES: RangeInclusive<usize> =
+    crate::log_level::MIN_WINDOW..=crate::log_level::MAX_WINDOW;
 /// `[general] time_delta_gap_ms`: gap the time delta column marks, up to a day.
 pub const TIME_DELTA_GAP_MS: RangeInclusive<u64> = 0..=86_400_000;
 
@@ -147,6 +151,7 @@ mod tests {
         assert!(MAX_FPS_SOFTWARE.contains(&cfg.max_fps_software));
         assert!(MOUSE_THROTTLE_MS.contains(&cfg.mouse_throttle_ms));
         assert!(MARKDOWN_MAX_MB.contains(&cfg.markdown_max_mb));
+        assert!(LEVEL_DETECT_BYTES.contains(&cfg.level_detect_bytes));
         assert!(AUTO_BOOKMARK_MAX.contains(&cfg.auto_bookmark_max));
         assert!(COMPRESSED_MAX_GB.contains(&cfg.compressed_max_gb));
         assert!(STDIN_SPOOL_MAX_MB.contains(&cfg.stdin_spool_max_mb));

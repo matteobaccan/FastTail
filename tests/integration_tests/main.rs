@@ -28,6 +28,7 @@ mod compare_lines;
 mod disassembly_view;
 mod external_tools;
 mod filter_tabs;
+mod level_detect_window;
 mod line_wrap;
 mod log_levels;
 mod pattern_streams;

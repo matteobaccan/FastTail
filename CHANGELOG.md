@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Where the level is looked for.** The level of a line was searched only in its first
+  96 bytes, so logs with a long prefix (host, process, thread, class) before it showed
+  every line as unknown. Settings → **Level searched in the first bytes** (16 to 4,096,
+  default 96, `level_detect_bytes`) sets it for every stream, in the window and in the
+  terminal; one stream overrides it from the level selector's menu (window) or the new
+  `[≤96 B]` chip of the filter row (terminal), saved with the stream as `level_bytes`
+  only when it differs. A change detects every line again (in the background above
+  16 MB) and the level filter, colours and counters follow. `fasttail --print` uses the
+  setting, or `--level-bytes N`. A wider window costs more only on lines without a level
+  (about 10x at 1,024 bytes, `cargo bench --bench level_window`).
+
 ## [0.20.10] - 2026-10-21
 
 ### Added
