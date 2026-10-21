@@ -369,12 +369,11 @@ jobs:
           }
           function Entries {
             $wi = New-Object -ComObject WindowsInstaller.Installer
-            $list = Prop $wi 'RelatedProducts' @([string]'{B4BA8F80-AA08-454A-B937-8A703D33B202}')
-            $count = [int](Prop $list 'Count' $null)
+            # PowerShell unrolls the StringList: none, one string, or several.
+            $codes = @(Prop $wi 'RelatedProducts' @([string]'{B4BA8F80-AA08-454A-B937-8A703D33B202}'))
             $versions = @()
-            for ($i = 0; $i -lt $count; $i++) {
-              $code = [string](Prop $list 'Item' @([int]$i))
-              $versions += [string](Prop $wi 'ProductInfo' @($code, [string]'VersionString'))
+            foreach ($code in $codes) {
+              $versions += [string](Prop $wi 'ProductInfo' @([string]$code, [string]'VersionString'))
             }
             , $versions
           }
