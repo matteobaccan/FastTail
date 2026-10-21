@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-04-19 - Do not filter parent directory references in entry_parts
+**Vulnerability:** Attempting to filter `..` components in `entry_parts` to sanitize archive stream paths.
+**Learning:** Archive entries containing `..` are already safely refused by archive readers (`enclosed_name` / `is_unsafe_name`), and FastTail never extracts files to disk. Furthermore, stripping `..` in `entry_parts` collapses distinct stream identities such as `a/../b` and `b`.
+**Prevention:** Do not modify `entry_parts` to strip `..`; unsafe archive entries are caught at open time by `EntryRefusal::UnsafeName`.
