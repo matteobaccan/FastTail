@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **macOS disk image and Intel Macs.** Each release now carries
+  `fasttail-macos-universal-<version>.dmg`, a universal `FastTail.app` (Apple Silicon and
+  Intel, ad-hoc signed, with the icon) next to an `Applications` link, and
+  `fasttail-macos-x86_64-<version>.tar.gz` for Intel Macs, built on the Apple Silicon
+  runner. The image is mounted and checked in the release job before it is published.
+- **Tooltips on the disabled HEX column buttons.** `-8` at 8 columns and `+8` at 64 say
+  why they are disabled (from the Palette bot PR #378).
+
+### Changed
+
+- **Rule set files are checked after opening too.** Importing a rule set also checks the
+  opened handle is a regular file, closing the gap between the path check and the open
+  (from the Sentinel bot PR #377).
+- The `.wixpdb` debug database of the Windows installer is no longer published with the
+  release assets.
+
 ## [0.20.15] - 2026-10-21
 
 ### Added

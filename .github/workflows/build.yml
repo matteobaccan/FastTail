@@ -371,6 +371,8 @@ jobs:
           Build-Msi $version "dist/${{ matrix.asset }}-$version.msi"
           New-Item -ItemType Directory -Force upgrade-test | Out-Null
           Build-Msi '0.0.1' upgrade-test/fasttail-0.0.1.msi
+          # wix writes its debug database next to the MSI: not a download.
+          Move-Item dist/*.wixpdb upgrade-test/
           Get-ChildItem dist
 
       # Install the older MSI, upgrade to the new one, check what a user gets (files, the

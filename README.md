@@ -498,6 +498,8 @@ Tagged versions are published on the [Releases](https://github.com/matteobaccan/
 | Windows x86_64 debug symbols | `fasttail-windows-x86_64-symbols-<version>.zip` | `fasttail.pdb`, `fasttail_tui.pdb` (only needed to read a crash dump) |
 | Linux x86_64 | `fasttail-linux-x86_64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
 | Linux ARM64 | `fasttail-linux-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
+| macOS (Apple Silicon and Intel) | `fasttail-macos-universal-<version>.dmg` | `FastTail.app` (both programs, universal: `arm64` and `x86_64`), an `Applications` link, `README.md`, `LICENSE`; drag the app to Applications. `fasttail-tui` is in `FastTail.app/Contents/MacOS/` |
+| macOS Intel | `fasttail-macos-x86_64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
 | macOS Apple Silicon | `fasttail-macos-arm64-<version>.tar.gz` | `fasttail`, `fasttail-tui`, `LICENSE`, `README.md` |
 | Debian, Ubuntu (x86_64 / ARM64) | `fasttail_<version>-1_amd64.deb` / `_arm64.deb` | both executables in `/usr/bin`, desktop entry and icon; `sudo apt install ./fasttail_*.deb`, removed with `sudo apt remove fasttail` |
 | Fedora, RHEL, openSUSE (x86_64 / ARM64) | `fasttail-<version>-1.x86_64.rpm` / `.aarch64.rpm` | the same files; `sudo dnf install ./fasttail-*.rpm` (`zypper install` on openSUSE), removed with `sudo dnf remove fasttail` |
