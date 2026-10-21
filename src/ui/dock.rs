@@ -1726,6 +1726,7 @@ fn render_log_stream(
             if ui
                 .add_enabled(engine.hex_columns > 8, egui::Button::new(" -8 "))
                 .on_hover_text(t(lang, "hex_cols_dec"))
+                .on_disabled_hover_text(t(lang, "hex_cols_min_tip"))
                 .clicked()
             {
                 engine.hex_columns -= 8;
@@ -1739,6 +1740,7 @@ fn render_log_stream(
             if ui
                 .add_enabled(engine.hex_columns < 64, egui::Button::new(" +8 "))
                 .on_hover_text(t(lang, "hex_cols_inc"))
+                .on_disabled_hover_text(t(lang, "hex_cols_max_tip"))
                 .clicked()
             {
                 engine.hex_columns += 8;
