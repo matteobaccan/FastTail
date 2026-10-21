@@ -133,8 +133,10 @@ jobs:
           # under emulation and the cross-compiled target had no users.
 
           # Linux
+          # Ubuntu 22.04 runners: the binaries need glibc 2.35 at most (Ubuntu 22.04+,
+          # Debian 12+, Fedora 36+), checked below; the packages inherit the floor.
           - name: 🐧 Linux x86_64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             asset: fasttail-linux-x86_64
             ext: tar.gz
@@ -143,7 +145,7 @@ jobs:
             tui_only_asset: fasttail-tui-linux-x86_64
 
           - name: 🐧 Linux ARM64
-            os: ubuntu-24.04-arm
+            os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             asset: fasttail-linux-arm64
             ext: tar.gz
@@ -205,6 +207,23 @@ jobs:
 
       - name: 🛠️ Build release binary
         run: cargo build --release --target ${{ matrix.target }}
+
+      # The newest glibc symbol the executables need sets the oldest distribution they
+      # run on; both must also start (`--version` opens no window).
+      - name: 🔎 glibc floor and start (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="target/${{ matrix.target }}/release"
+          for bin in "${{ matrix.binary }}" "${{ matrix.tui_binary }}"; do
+            need=$(objdump -T "$out/$bin" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1)
+            echo "$bin needs glibc $need"
+            if [ "$(printf '%s\n' "$need" 2.35 | sort -V | tail -n 1)" != "2.35" ]; then
+              echo "::error::$bin needs glibc $need, above the 2.35 floor"; exit 1
+            fi
+            "$out/$bin" --version
+          done
 
       # Asset names carry the version (fasttail-linux-x86_64-0.10.1.tar.gz), read from
       # Cargo.toml; on a tag run it must match the tag.

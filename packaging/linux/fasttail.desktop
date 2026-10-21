@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=FastTail
+GenericName=Log Viewer
+Comment=Ultra-fast multi-stream log monitor and tail viewer
+Exec=fasttail %F
+Icon=fasttail
+Terminal=false
+Categories=Utility;Development;System;Monitor;
+MimeType=text/plain;text/x-log;
+Keywords=log;tail;monitor;viewer;
+StartupWMClass=fasttail
