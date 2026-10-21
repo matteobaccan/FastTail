@@ -311,7 +311,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          dotnet tool install --global wix --version 5.0.2
+          trap { Write-Host "::error::$($_.InvocationInfo.PositionMessage) $_"; break }
+          $tool = dotnet tool install --global wix --version 5.0.2 2>&1
+          $tool | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "dotnet tool install wix: $tool" }
+          Write-Host "::notice::$(wix --version 2>&1)"
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches[0].Groups[1].Value
           $bin = "target/${{ matrix.target }}/release"
           # wix's messages become annotations, readable without the raw log.
