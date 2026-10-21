@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.14] - 2026-10-21
+
 ### Added
 
 - **Linux packages.** Each release now also carries a `.deb` and an `.rpm` for x86_64 and
@@ -1654,6 +1656,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.14]: https://github.com/matteobaccan/FastTail/compare/v0.20.13...v0.20.14
 [0.20.13]: https://github.com/matteobaccan/FastTail/compare/v0.20.12...v0.20.13
 [0.20.12]: https://github.com/matteobaccan/FastTail/compare/v0.20.11...v0.20.12
 [0.20.11]: https://github.com/matteobaccan/FastTail/compare/v0.20.10...v0.20.11
