@@ -303,6 +303,99 @@ jobs:
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Windows installer from the binaries just archived. A second MSI of the same
+      # package with a lower version (0.0.1) stands for the previous release in the upgrade
+      # test, so the first release that ships an MSI is tested the same way.
+      - name: 📦 Windows installer (MSI)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          trap { Write-Host ("::error::" + ("$_ | line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())" -replace '[\r\n]+', ' ')); break }
+          $tool = dotnet tool install --global wix --version 5.0.2 2>&1
+          $tool | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "dotnet tool install wix: $tool" }
+          Write-Host "::notice::$(wix --version 2>&1)"
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $bin = "target/${{ matrix.target }}/release"
+          # wix's messages become annotations, readable without the raw log.
+          # Not named `Wix`: PowerShell names ignore case, so it would call itself.
+          function Build-Msi($v, $out) {
+            # wix writes its warnings to stderr: collected, not a terminating error.
+            $ErrorActionPreference = 'Continue'
+            $log = wix build packaging/windows/fasttail.wxs -arch x64 -d Version=$v -d BinDir=$bin -o $out 2>&1
+            $log | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+              $log | Where-Object { "$_" -match 'error|warning' } | ForEach-Object { Write-Host ("::error::" + ("$_" -replace '[\r\n]+', ' ')) }
+              throw "wix build failed"
+            }
+          }
+          Build-Msi $version "dist/${{ matrix.asset }}-$version.msi"
+          New-Item -ItemType Directory -Force upgrade-test | Out-Null
+          Build-Msi '0.0.1' upgrade-test/fasttail-0.0.1.msi
+          Get-ChildItem dist
+
+      # Install the older MSI, upgrade to the new one, check what a user gets (files, the
+      # Start menu shortcut, the user PATH seen by a new shell, one "Installed apps" entry
+      # with the new version), then remove it and check that nothing is left.
+      - name: 🧪 Install test (MSI)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          trap { Write-Host "::error::$_"; break }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $msi = (Resolve-Path "dist/${{ matrix.asset }}-$version.msi").Path
+          $old = (Resolve-Path upgrade-test/fasttail-0.0.1.msi).Path
+          function Msi($argv) {
+            $p = Start-Process msiexec.exe -ArgumentList $argv -Wait -PassThru
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              $log = $argv[-1]
+              if (Test-Path $log) {
+                Get-Content $log | Select-String -Pattern 'error|Return value 3' | Select-Object -Last 15 |
+                  ForEach-Object { Write-Host "::error::$_" }
+              }
+              throw "msiexec $argv exited $($p.ExitCode)"
+            }
+          }
+          function Run($exe) {
+            $p = Start-Process $exe -ArgumentList '--version' -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "$exe --version exited $($p.ExitCode)" }
+          }
+          # The products Windows Installer has under FastTail's UpgradeCode (what "Installed
+          # apps" lists), with their versions; a per-user MSI has no Uninstall key in HKCU.
+          function Prop($obj, $name, $argv) {
+            $obj.GetType().InvokeMember($name, 'GetProperty', $null, $obj, $argv)
+          }
+          function Entries {
+            $wi = New-Object -ComObject WindowsInstaller.Installer
+            # PowerShell unrolls the StringList: none, one string, or several.
+            $codes = @(Prop $wi 'RelatedProducts' @([string]'{B4BA8F80-AA08-454A-B937-8A703D33B202}'))
+            $versions = @()
+            foreach ($code in $codes) {
+              $versions += [string](Prop $wi 'ProductInfo' @([string]$code, [string]'VersionString'))
+            }
+            , $versions
+          }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\FastTail'
+          Msi @('/i', $old, '/qn', '/l*v', 'msi-old.log')
+          Msi @('/i', $msi, '/qn', '/l*v', 'msi-new.log')
+          Run (Join-Path $dir 'fasttail.exe')
+          Run (Join-Path $dir 'fasttail-tui.exe')
+          $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\FastTail.lnk'
+          if (-not (Test-Path $lnk)) { throw "no Start menu shortcut" }
+          $entries = Entries
+          if ($entries.Count -ne 1) { throw "$($entries.Count) Installed apps entries after the upgrade" }
+          if ($entries[0] -ne $version) { throw "Installed apps shows $($entries[0])" }
+          # A new shell reads the user PATH the installer wrote.
+          pwsh -NoProfile -Command "`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); `$p = Start-Process fasttail-tui -ArgumentList '--version' -Wait -PassThru -NoNewWindow; exit `$p.ExitCode"
+          if ($LASTEXITCODE -ne 0) { throw "fasttail-tui not found on the user PATH" }
+          Msi @('/x', $msi, '/qn', '/l*v', 'msi-remove.log')
+          if (Test-Path $dir) { throw "$dir left after removal" }
+          if (Test-Path $lnk) { throw "shortcut left after removal" }
+          if ((Entries).Count -ne 0) { throw "Installed apps entry left after removal" }
+          if (([Environment]::GetEnvironmentVariable('Path','User') ?? '') -like "*$dir*") { throw "PATH entry left after removal" }
+
       # Linux packages from the binaries just archived (nothing is compiled again), with
       # the debug info stripped (the archives keep it for crash logs; installed, it would
       # weigh 190 MB). Each is installed, run and removed before it may be uploaded: the

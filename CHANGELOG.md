@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Windows installer.** Each release now carries `fasttail-windows-x86_64-<version>.msi`:
+  a per-user install (no administrator rights or UAC prompt) in
+  `%LOCALAPPDATA%\Programs\FastTail` with a Start menu shortcut and the folder on the user
+  `PATH`, listed in "Installed apps"; a newer MSI replaces the installed one and
+  `fasttail.ini` is never touched. The release job installs an older build, upgrades,
+  checks the shortcut, the `PATH` and the single entry, and removes it before publishing.
+
 ## [0.20.14] - 2026-10-21
 
 ### Added

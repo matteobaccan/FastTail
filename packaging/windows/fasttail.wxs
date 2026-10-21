@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FastTail - Ultra-fast multi-stream log monitor and tail viewer.
+  Copyright (c) Matteo Baccan - https://github.com/matteobaccan/FastTail
+  SPDX-License-Identifier: MIT
+
+  Windows Installer package (WiX Toolset v5), built in the Windows release job:
+
+    wix build packaging/windows/fasttail.wxs -arch x64 -d Version=<x.y.z> -d BinDir=<dir> -o <file>.msi
+
+  Per user: no administrator rights or UAC prompt. It installs fasttail.exe and
+  fasttail-tui.exe in %LOCALAPPDATA%\Programs\FastTail, adds a Start menu shortcut and that
+  folder to the user PATH (for fasttail-tui in a console), and lists FastTail in "Installed
+  apps". The UpgradeCode never changes: a newer MSI replaces the installed one. fasttail.ini
+  lives in the user profile and is never touched.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="FastTail" Manufacturer="Matteo Baccan" Version="$(var.Version)"
+           UpgradeCode="B4BA8F80-AA08-454A-B937-8A703D33B202" Scope="perUser" Language="1033">
+    <SummaryInformation Description="FastTail $(var.Version) - multi-stream log monitor and tail viewer" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of FastTail is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="FastTailIcon" SourceFile="packaging\icons\fasttail.ico" />
+    <Property Id="ARPPRODUCTICON" Value="FastTailIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/matteobaccan/FastTail" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/matteobaccan/FastTail#readme" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserPrograms" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="FastTail" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <!-- Files in the user profile: each component is kept by an HKCU value (ICE38), and
+         the folders it creates are removed again (ICE64). -->
+    <ComponentGroup Id="Program" Directory="INSTALLFOLDER">
+      <!-- A fixed Guid: files with a registry key path cannot have a generated one. -->
+      <Component Id="Executables" Guid="19D1BC54-CCEA-4ED8-BBBA-849A767BDDC0">
+        <File Id="fasttail.exe" Source="$(var.BinDir)\fasttail.exe" />
+        <File Id="fasttail_tui.exe" Source="$(var.BinDir)\fasttail-tui.exe" />
+        <File Id="LICENSE" Source="LICENSE" Name="LICENSE.txt" />
+        <File Id="README" Source="README.md" />
+        <RegistryValue Root="HKCU" Key="Software\FastTail\Installer" Name="Program"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveUserPrograms" Directory="UserPrograms" On="uninstall" />
+      </Component>
+      <Component Id="UserPath">
+        <Environment Id="PathEntry" Name="PATH" Value="[INSTALLFOLDER]" Action="set"
+                     Part="last" System="no" Permanent="no" />
+        <RegistryValue Root="HKCU" Key="Software\FastTail\Installer" Name="Path"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="StartMenu" Directory="ProgramMenuFolder">
+      <Component Id="Shortcut">
+        <Shortcut Id="FastTailShortcut" Name="FastTail" Description="Multi-stream log monitor and tail viewer"
+                  Target="[INSTALLFOLDER]fasttail.exe" WorkingDirectory="INSTALLFOLDER" Icon="FastTailIcon" />
+        <RegistryValue Root="HKCU" Key="Software\FastTail\Installer" Name="Shortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="Program" />
+      <ComponentGroupRef Id="StartMenu" />
+    </Feature>
+  </Package>
+</Wix>
