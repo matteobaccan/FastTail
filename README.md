@@ -34,6 +34,7 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 ## 🚀 Feature Highlights
 
 - **Zero-Lag Streaming Engine**: never holds the file in memory. Rows are read on demand through a 4 MB block cache per stream; the per-file state is the line index (8 bytes per line) plus, once scanned, a level byte and a timestamp per line and the search hits (at most 1,000,000, 8 MB). Appends are indexed incrementally, log rotation, truncation and in-place rewrites are detected without locking the file for the writer, and files above 16 MB run filters, search and the timestamp scan of the time range on a worker thread with progress shown in the stream bar (above 256 MB the initial index too). Ten 50 MB logs growing continuously cost about 60 MB of RAM and a few milliseconds per frame.
+- **Follow and Auto-update**: two independent check boxes in each stream bar. **Follow** keeps the view on the last line; **Auto-update** reads the lines appended to the file as it grows (off: the stream is a frozen snapshot and the disk is not read). Auto-update on with Follow off keeps reading while you stay where you are.
 - **Named Sessions**: save the open streams, filters, layout and bookmarks under a name and switch between projects in one click; session files keep relative paths so a log bundle can move with its session.
 - **Four View Modes per Stream**:
   - **TXT**: virtualized text view with highlight rules, inline JSON trees and stack-trace grouping.

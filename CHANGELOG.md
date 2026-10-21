@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Follow and Auto-update as check boxes.** The stream bar's Monitor toggle is renamed
+  **Auto-update** (tooltip, command palette, status texts; "monitor" still finds it in the
+  palette), and both toggles are drawn as check boxes, `☑` / `☐` in the window and
+  `[x]` / `[ ]` in the terminal, instead of the `▶` / `■` play and stop icons that made them
+  look like a player's Play and Pause. The labels are now translated in the window too.
+  Behaviour, key bindings and saved files do not change.
+
 ## [0.20.7] - 2026-10-21
 
 ### Fixed

@@ -2955,9 +2955,9 @@ impl App {
                 e.is_watching = !e.is_watching;
                 self.message = Some(
                     if e.is_watching {
-                        tx(self.lang, "Monitor on")
+                        tx(self.lang, "Auto-update on")
                     } else {
-                        tx(self.lang, "Monitor off")
+                        tx(self.lang, "Auto-update off")
                     }
                     .into(),
                 );
@@ -8711,10 +8711,10 @@ mod tests {
         let screen = render(&mut app, 120, 30);
         let bar = screen
             .iter()
-            .find(|l| l.contains("[▶ Follow]"))
+            .find(|l| l.contains("[x] Follow"))
             .expect("stream bar");
         for chip in [
-            "[▶ Monitor]",
+            "[x] Auto-update",
             "[TXT]",
             "[# 123]",
             "[UTF-8]",
@@ -9025,6 +9025,66 @@ mod tests {
     }
 
     #[test]
+    fn follow_and_auto_update_are_two_independent_check_boxes() {
+        use crate::tui::bars::BarChip as C;
+        let bar = |app: &mut App, w: u16| {
+            let screen = render(app, w, 30);
+            screen
+                .iter()
+                .find(|l| l.contains("[TXT]"))
+                // A wide character is drawn as two cells, the second one blank.
+                .map(|l| l.replace("  ", " "))
+                .unwrap_or_else(|| panic!("stream bar: {screen:#?}"))
+        };
+        let click_chip = |app: &mut App, chip: C| {
+            let (r, _, _) = *app
+                .hits
+                .bar_chips
+                .iter()
+                .find(|(_, _, c)| *c == chip)
+                .unwrap();
+            app.on_mouse(click(r.x + 1, r.y));
+        };
+        for ascii in [false, true] {
+            let (mut app, _dir) = app_with(&[("a.log", LOG)], ascii);
+            let line = bar(&mut app, 120);
+            assert!(
+                line.contains("[x] Follow") && line.contains("[x] Auto-update"),
+                "{line}"
+            );
+            assert!(!line.contains("Monitor") && !line.contains('▶'), "{line}");
+            // Follow off, auto-update untouched.
+            click_chip(&mut app, C::Follow);
+            assert!(!app.tabs[0].engine.follow_tail && app.tabs[0].engine.is_watching);
+            let line = bar(&mut app, 120);
+            assert!(
+                line.contains("[ ] Follow") && line.contains("[x] Auto-update"),
+                "{line}"
+            );
+            // Auto-update off, follow untouched.
+            click_chip(&mut app, C::Monitor);
+            assert!(!app.tabs[0].engine.follow_tail && !app.tabs[0].engine.is_watching);
+            assert_eq!(app.message.as_deref(), Some("Auto-update off"));
+            let line = bar(&mut app, 120);
+            assert!(line.contains("[ ] Auto-update"), "{line}");
+            click_chip(&mut app, C::Monitor);
+            assert_eq!(app.message.as_deref(), Some("Auto-update on"));
+        }
+        // Long translations still fit an 80-column bar.
+        for (lang, follow, auto) in [
+            (Language::De, "[x] Folgen", "[x] Auto-Aktualisierung"),
+            (Language::Ja, "[x] 追 従", "[x] 自 動 更 新"),
+        ] {
+            let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+            app.settings = Some(crate::tui::workspace::Settings::default());
+            app.settings.as_mut().unwrap().config.language = lang;
+            app.apply_running_config();
+            let line = bar(&mut app, 80);
+            assert!(line.contains(follow) && line.contains(auto), "{line}");
+        }
+    }
+
+    #[test]
     fn the_terminal_speaks_the_language_of_the_ini_and_switches_at_once() {
         let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
         app.settings = Some(crate::tui::workspace::Settings::default());
@@ -9033,7 +9093,7 @@ mod tests {
         let screen = render(&mut app, 120, 30);
         assert!(screen[1].contains("[o Apri]"), "{screen:#?}");
         assert!(
-            screen.iter().any(|l| l.contains("[▶ Segui]")),
+            screen.iter().any(|l| l.contains("[x] Segui")),
             "{screen:#?}"
         );
         app.apply(Action::ToggleHelp);
@@ -9165,7 +9225,7 @@ mod tests {
         assert!(screen[1].contains("FOLLOW"), "{screen:#?}");
         // The stream bar (a 6-row window has room for it, not for the filter row).
         assert!(
-            screen[2].contains("[▶ Follow]") && screen[2].contains("[TXT]"),
+            screen[2].contains("[x] Follow") && screen[2].contains("[TXT]"),
             "{screen:#?}"
         );
         assert!(screen[3].starts_with('║') && screen[3].contains("INFO start"));

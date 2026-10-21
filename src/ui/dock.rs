@@ -1477,22 +1477,23 @@ fn render_log_stream(
 
     // Stream status bar
     ui.horizontal(|ui| {
-        let follow_label = if engine.follow_tail {
-            "▶ Follow"
-        } else {
-            "■ Follow"
-        };
+        let check =
+            |on: bool, key: &str| format!("{} {}", if on { "☑" } else { "☐" }, t(lang, key));
+        let follow_label = check(
+            engine.follow_tail && !engine.is_compressed(),
+            "follow_label",
+        );
         if engine.is_compressed() {
             // A compressed stream is a static snapshot of the archive: nothing to follow.
             ui.add_enabled_ui(false, |ui| {
-                toggle_button(ui, theme, follow_label, false, theme.accent_color().into())
+                toggle_button(ui, theme, &follow_label, false, theme.accent_color().into())
             })
             .inner
             .on_disabled_hover_text(t(lang, "compressed_follow_tip"));
         } else if toggle_button(
             ui,
             theme,
-            follow_label,
+            &follow_label,
             engine.follow_tail,
             theme.accent_color().into(),
         )
@@ -1506,16 +1507,12 @@ fn render_log_stream(
 
         ui.separator();
 
-        // Monitor disk reading toggle (no attivo/sospeso text, using ▶ and ■ with color)
-        let monitor_label = if engine.is_watching {
-            "▶ Monitor"
-        } else {
-            "■ Monitor"
-        };
+        // Auto-update: reads the lines appended to the file (internally "monitor").
+        let monitor_label = check(engine.is_watching, "auto_update");
         if toggle_button(
             ui,
             theme,
-            monitor_label,
+            &monitor_label,
             engine.is_watching,
             theme.accent_color().into(),
         )

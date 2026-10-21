@@ -455,6 +455,21 @@ fn test_every_language_translates_every_key() {
 }
 
 #[test]
+fn the_auto_update_toggle_is_never_called_monitor() {
+    // The toggle that reads appended lines was renamed from Monitor (clearer-stream-toggles).
+    for lang in Language::ALL {
+        for key in ["auto_update", "tip_monitor", "monitor_on", "monitor_off"] {
+            let text = t(*lang, key);
+            assert!(
+                !text.to_lowercase().contains("monitor"),
+                "{lang:?} {key}: {text}"
+            );
+        }
+        assert_ne!(t(*lang, "follow_label"), "follow_label");
+    }
+}
+
+#[test]
 fn test_theme_visuals_generation() {
     let ctx = egui::Context::default();
     for theme in &[CyberTheme::Tron, CyberTheme::Matrix, CyberTheme::Blade] {
