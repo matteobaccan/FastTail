@@ -196,7 +196,7 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ 🌐 Global filter [✓]On Aa .* │ All of: [____][✖][+] │ None of: [____] │ ✖            │ ← global filter bar (CTRL + SHIFT + H / 🌐)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ╭[#1] ▶ app.log ● [12]╮╭[#2] ■ db.log ○╮╭🔎 Find results ⏳╮                          │ ← egui_dock tab bar (26 px)
-│ │ ▶ Follow │ ▶ Monitor │ 🔤 TXT 🔢 HEX ⚙ ASM 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾][± 3] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
+│ │ ☑ Follow │ ☑ Auto-update │ 🔤 TXT 🔢 HEX ⚙ ASM 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾][± 3] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
 │ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row (45 % opacity in context)
 │ │ 🏷 Labels:  1 timeout ✕  4 req=42 ✕                                                   │ ← quick labels strip (if any)
 │ │ ◆ Filters suspended: line 1234 shown in the full log  [Back to filtered view]         │ ← context banner (only in the context view)
@@ -340,8 +340,8 @@ Sources: `src/ui/dock.rs`, `src/ui/app.rs`, `src/ui/find_results.rs`, `src/ui/hi
 
 One `ui.horizontal` row, in this order. `|` stands for a separator.
 
-1. **`▶ Follow` / `■ Follow`** toggle (Space, `CTRL + END`). It is disabled on compressed streams, with a tooltip saying why.
-2. **`▶ Monitor` / `■ Monitor`**: disk watching on or off.
+1. **`☑ Follow` / `☐ Follow`** toggle (Space, `CTRL + END`), a check box mark before the translated label. It is disabled on compressed streams, with a tooltip saying why.
+2. **`☑ Auto-update` / `☐ Auto-update`** (formerly Monitor): on, the lines appended to the file are read as it grows; off, the stream is a frozen snapshot with no disk reads. Independent of Follow (auto-update on, follow off: read while staying in place). In the terminal both are `[x] Follow` / `[ ] Follow` and `[x] Auto-update` / `[ ] Auto-update`.
 3. **View mode**: `🔤 TXT` (accent), `🔢 HEX` (`secondary_accent`), `⚙ ASM` (`secondary_accent`), `📝 MD` (warn). MD is refused above `markdown_max_mb` with a notice.
 4. Text views only:
    - **`# 123` / `# ---`**: line numbers of this stream only (`TailEngine::show_line_numbers`).
@@ -784,7 +784,8 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `📂*` / `📂` | open pattern / pattern stream label; empty-state icon; archive picker "Open" |
 | `🗂` | sessions |
 | `⚡` | Color Filters; Include field; FASTTAIL headers; Performance section |
-| `▶` / `■` | watching / paused (tab title, Follow and Monitor toggles); `▶` also marks the current hit and runs tools |
+| `▶` / `■` | watching / paused (tab title); `▶` also marks the current hit and runs tools |
+| `☑` / `☐` | Follow and Auto-update toggles of the stream bar on / off |
 | `⏸` | Pause |
 | `⚙` / `⚙️` | Settings (the `⚙️` variant is used only by the legacy Settings tab); Manage presets |
 | `❓` `ℹ` | Help, About |

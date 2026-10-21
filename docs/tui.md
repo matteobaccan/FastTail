@@ -48,8 +48,8 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 - **Windows.** Each stream is a bordered window, as the window's dock lays them out (the
   same `[dock] layout` of `fasttail.ini` and session files): its title, FOLLOW or PAUSED
   and `[x]` in the top border, the line counts and the filter state in the bottom one.
-  Inside, the window's two rows: the **stream bar** (follow, monitor, TXT / HEX, line
-  numbers, encoding, ANSI mode, collapse, context lines, the time span, which opens the
+  Inside, the window's two rows: the **stream bar** (the `[x] Follow` and
+  `[x] Auto-update` check boxes, TXT / HEX, line numbers, encoding, ANSI mode, collapse, context lines, the time span, which opens the
   time range, and the line counts) and the **filter row** (include, exclude, `Aa`, `.*`,
   minimum level, presets, and the global filter when it applies). A small window keeps
   only the stream bar, or neither.

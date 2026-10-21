@@ -46,6 +46,8 @@ pub struct Chip {
     pub text: String,
     pub style: Style,
     pub action: Option<BarChip>,
+    /// A check box chip: drawn `[x] text` / `[ ] text` instead of `[text]`.
+    pub check: Option<bool>,
 }
 
 /// Inner rows a window gives to the bars: both from 8 rows (only the stream bar in
@@ -94,27 +96,25 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
         text,
         style,
         action: Some(action),
+        check: None,
+    };
+    let check = |text: &str, checked: bool, action: BarChip| Chip {
+        text: text.into(),
+        style: if checked { on } else { dim },
+        action: Some(action),
+        check: Some(checked),
     };
     let text = |text: String, style: Style| Chip {
         text,
         style,
         action: None,
+        check: None,
     };
-    let (play, stop) = if ascii { (">", "#") } else { ("▶", "■") };
-    let mark = |b: bool| if b { play } else { stop };
     let hex = tab.is_hex();
 
     let mut first = vec![
-        chip(
-            txf(lang, "{0} Follow", &[&mark(e.follow_tail)]),
-            if e.follow_tail { on } else { dim },
-            BarChip::Follow,
-        ),
-        chip(
-            txf(lang, "{0} Monitor", &[&mark(e.is_watching)]),
-            if e.is_watching { on } else { dim },
-            BarChip::Monitor,
-        ),
+        check(tx(lang, "Follow"), e.follow_tail, BarChip::Follow),
+        check(tx(lang, "Auto-update"), e.is_watching, BarChip::Monitor),
         chip(
             if tab.is_asm() {
                 "ASM"
@@ -265,11 +265,24 @@ pub fn draw(
     let mut out = Vec::new();
     let mut x = row.x;
     for c in chips {
-        let w = width(c.text.as_str()) as u16 + if c.action.is_some() { 2 } else { 0 };
+        let w = width(c.text.as_str()) as u16
+            + match (c.check, c.action) {
+                (Some(_), _) => 4,
+                (None, Some(_)) => 2,
+                (None, None) => 0,
+            };
         if x + w > row.right() {
             break;
         }
         match c.action {
+            Some(action) if c.check.is_some() => {
+                let mark = if c.check == Some(true) { "x" } else { " " };
+                buf.set_string(x, row.y, "[", bracket);
+                buf.set_string(x + 1, row.y, mark, c.style);
+                buf.set_string(x + 2, row.y, "]", bracket);
+                buf.set_string(x + 4, row.y, &c.text, c.style);
+                out.push((Rect::new(x, row.y, w, 1), action));
+            }
             Some(action) => {
                 buf.set_string(x, row.y, "[", bracket);
                 buf.set_string(x + 1, row.y, &c.text, c.style);
