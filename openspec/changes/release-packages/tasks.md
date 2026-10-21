@@ -26,7 +26,7 @@
 ## 5. Release and documentation
 
 - [x] 5.0 Downloads grid at the top of the release body, generated from the published assets (`.github/scripts/downloads_table.py`), shipped before the packages so it grows with them
-- [ ] 5.1 Release job publishes the new assets (flattened as today); each group validated by a dispatch run on its branch; to tick once a release shows all of them
+- [x] 5.1 Release job publishes the new assets (flattened as today); each group validated by a dispatch run on its branch; v0.20.16 published all 18 assets
 - [x] 5.2 README: prebuilt binaries table with every asset, install / upgrade / remove per platform, unsigned-installer prompts, glibc floor
 - [x] 5.3 `docs/distribution-channels.md`: packages now published as release assets; channels (Flathub, AUR, Homebrew, Scoop, winget) still parked
 - [x] 5.4 CHANGELOG `[Unreleased]`
