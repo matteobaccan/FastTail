@@ -166,6 +166,57 @@ harness = false
 name = "level_window"
 harness = false
 
+# Linux packages, built in the release jobs from the binaries the archives hold
+# (`cargo deb --no-build`, `cargo generate-rpm`; `--target` maps `target/release` to the
+# target's directory). The window loads its graphics and input libraries at run time, so
+# they are recommended, not required: a server installs the package for `fasttail-tui`.
+[package.metadata.deb]
+maintainer = "Matteo Baccan"
+copyright = "Matteo Baccan"
+section = "utils"
+priority = "optional"
+extended-description = """\
+FastTail follows many log files at once without holding them in memory: filters, \
+highlight rules with sound alerts, search, levels, timelines, HEX and Markdown views, \
+compressed logs and archives. fasttail is the window, fasttail-tui the terminal \
+interface, which needs no graphics library."""
+depends = "$auto"
+recommends = "libgl1, libvulkan1, libxkbcommon0, libwayland-client0, libxcursor1, libxi6, libxrandr2"
+assets = [
+    ["target/release/fasttail", "usr/bin/", "755"],
+    ["target/release/fasttail-tui", "usr/bin/", "755"],
+    ["packaging/linux/fasttail.desktop", "usr/share/applications/", "644"],
+    ["packaging/icons/fasttail-128.png", "usr/share/icons/hicolor/128x128/apps/fasttail.png", "644"],
+    ["packaging/icons/fasttail-256.png", "usr/share/icons/hicolor/256x256/apps/fasttail.png", "644"],
+    ["packaging/icons/fasttail-512.png", "usr/share/icons/hicolor/512x512/apps/fasttail.png", "644"],
+    ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/fasttail.svg", "644"],
+    ["README.md", "usr/share/doc/fasttail/", "644"],
+    ["LICENSE", "usr/share/doc/fasttail/", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Ultra-fast multi-stream log monitor and tail viewer"
+assets = [
+    { source = "target/release/fasttail", dest = "/usr/bin/fasttail", mode = "755" },
+    { source = "target/release/fasttail-tui", dest = "/usr/bin/fasttail-tui", mode = "755" },
+    { source = "packaging/linux/fasttail.desktop", dest = "/usr/share/applications/fasttail.desktop", mode = "644" },
+    { source = "packaging/icons/fasttail-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/fasttail.png", mode = "644" },
+    { source = "packaging/icons/fasttail-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/fasttail.png", mode = "644" },
+    { source = "packaging/icons/fasttail-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/fasttail.png", mode = "644" },
+    { source = "assets/icon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/fasttail.svg", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/fasttail/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/fasttail/LICENSE", mode = "644" },
+]
+
+[package.metadata.generate-rpm.recommends]
+mesa-libGL = "*"
+vulkan-loader = "*"
+libxkbcommon = "*"
+libwayland-client = "*"
+libXcursor = "*"
+libXi = "*"
+libXrandr = "*"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

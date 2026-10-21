@@ -303,6 +303,52 @@ jobs:
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Linux packages from the binaries just archived (nothing is compiled again), with
+      # the debug info stripped (the archives keep it for crash logs; installed, it would
+      # weigh 190 MB). Each is installed, run and removed before it may be uploaded: the
+      # .deb with apt on the runner, the .rpm with dnf in a Fedora container, the
+      # AppImage extracted (no FUSE).
+      - name: 📦 Linux packages (deb, rpm, AppImage)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          case "${{ matrix.target }}" in
+            x86_64-*) appimage_arch=x86_64 ;;
+            aarch64-*) appimage_arch=aarch64 ;;
+          esac
+          strip "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+                "target/${{ matrix.target }}/release/${{ matrix.tui_binary }}"
+          cargo deb --no-build --no-strip --target ${{ matrix.target }} --output dist/
+          cargo generate-rpm --target ${{ matrix.target }} --output dist/
+          packaging/linux/appimage.sh "target/${{ matrix.target }}/release" "$appimage_arch" \
+            "dist/${{ matrix.asset }}-$version.AppImage"
+          ls -la dist
+
+      - name: 🧪 Install test (deb, rpm, AppImage)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y ./dist/fasttail_*.deb
+          fasttail --version
+          fasttail-tui --version
+          test -f /usr/share/applications/fasttail.desktop
+          test -f /usr/share/icons/hicolor/256x256/apps/fasttail.png
+          sudo apt-get remove -y fasttail
+          test ! -e /usr/bin/fasttail
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest sh -euc '
+            dnf install -y --setopt=install_weak_deps=False /dist/fasttail-*.rpm
+            fasttail --version
+            fasttail-tui --version
+            dnf remove -y fasttail
+            test ! -e /usr/bin/fasttail'
+          appimage=$(ls dist/*.AppImage)
+          chmod +x "$appimage"
+          "$appimage" --appimage-extract-and-run --version
+
       - name: ⬆️ Upload build artifact
         uses: actions/upload-artifact@v7
         with:
