@@ -196,7 +196,7 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ 🌐 Global filter [✓]On Aa .* │ All of: [____][✖][+] │ None of: [____] │ ✖            │ ← global filter bar (CTRL + SHIFT + H / 🌐)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ╭[#1] ▶ app.log ● [12]╮╭[#2] ■ db.log ○╮╭🔎 Find results ⏳╮                          │ ← egui_dock tab bar (26 px)
-│ │ ☑ Follow │ ☑ Auto-update │ 🔤 TXT 🔢 HEX ⚙ ASM 📝 MD │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾][± 3] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
+│ │ ☑ Follow │ ☑ Auto-update │ [🔤 TXT▾] │ # 123 Δt ↩ Wrap [UTF-8▾][ANSI: auto → render▾][× Collapse: exact▾][± 3] │ Lines: 9,812 · 9,640 rows shown │ 🕘 14:02:05 → 16:30:12 │ … 🔍[search]🔎 [3/57]▲▼☰🕒✖ │ ✏ Bookmark note, line 1233: [____] │ 💾 │ ← stream bar
 │ │ ⚡ Include (Regex): [_____]✖ +2 + │ 🚫 Exclude: [_____] + │ 📊 🔍 │ Aa .* │ ≥ WARN▾ ? │ Presets ▾ 🌐 │ ← filter row (45 % opacity in context)
 │ │ 🏷 Labels:  1 timeout ✕  4 req=42 ✕                                                   │ ← quick labels strip (if any)
 │ │ ◆ Filters suspended: line 1234 shown in the full log  [Back to filtered view]         │ ← context banner (only in the context view)
@@ -342,7 +342,7 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
 
 1. **`☑ Follow` / `☐ Follow`** toggle (Space, `CTRL + END`), a check box mark before the translated label. It is disabled on compressed streams, with a tooltip saying why.
 2. **`☑ Auto-update` / `☐ Auto-update`** (formerly Monitor): on, the lines appended to the file are read as it grows; off, the stream is a frozen snapshot with no disk reads. Independent of Follow (auto-update on, follow off: read while staying in place). In the terminal both are `[x] Follow` / `[ ] Follow` and `[x] Auto-update` / `[ ] Auto-update`.
-3. **View mode**: `🔤 TXT` (accent), `🔢 HEX` (`secondary_accent`), `⚙ ASM` (`secondary_accent`), `📝 MD` (warn). MD is refused above `markdown_max_mb` with a notice.
+3. **View mode**: one drop-down (84 px) showing the current mode in its colour, `🔤 TXT` (accent), `🔢 HEX` (`secondary_accent`), `⚙ ASM` (`secondary_accent`), `📝 MD` (warn), and listing only the modes the stream can use: MD only while the file is within `markdown_max_mb`; otherwise a disabled line at the end of the list says why. The palette and key actions switch the mode as before (MD above the limit shows the notice).
 4. Text views only:
    - **`# 123` / `# ---`**: line numbers of this stream only (`TailEngine::show_line_numbers`).
    - **`Δt`**: time-delta column of this stream only (`TailEngine::show_time_delta`); the gap threshold is global. The tooltip explains when timestamps are unreadable. Both start from the `[general]` defaults when the stream opens and are saved with it (`line_numbers=`, `time_delta=`).
@@ -797,7 +797,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `☆` | marker of an automatic bookmark (a rule's "Bookmark matching lines"); "Remove bookmark" menu entry |
 | `◆` | line shown in context (marker, banner, "Show in context" menu entries) |
 | `×`, `×N` | collapse selector (`× Collapse: …`); badge of a collapsed group (`×57`, `×1.2M`) |
-| `🔤 TXT` `🔢 HEX` `⚙ ASM` `📝 MD` | view modes |
+| `🔤 TXT` `🔢 HEX` `⚙ ASM` `📝 MD` | view modes (the stream bar drop-down) |
 | `📝` | Bookmark report… (💾 and 🗂 menus) and its dialog |
 | `# 123` / `# ---` | line numbers on / off |
 | `Δt`, `⚓`, `…` | time-delta column toggle, anchor, pending |
