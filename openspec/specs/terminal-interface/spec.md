@@ -124,7 +124,7 @@ Each stream SHALL be drawn as a bordered window whose top border shows `[#N]`, t
 - **THEN** the strip shows `+` next to stream 3's name within 200 ms, and `Alt+3` shows those lines.
 
 ### Requirement: Keyboard Cursor Row
-Each stream window SHALL have a cursor row, drawn reversed, that the keys move: `↑` `↓` / `j` `k` by one row, `PgUp` `PgDn` / `Ctrl+B` `Ctrl+F` by a page, `Home` / `g` to the first row and `End` / `G` to the last row with follow on. The view SHALL scroll to keep the cursor visible, and moving the cursor up SHALL pause follow. `←` `→` SHALL scroll sideways by one cell and `0` SHALL return to the first column, measuring wide characters by their cell width. Row actions (copy, bookmark, note, show in context, external tools) SHALL act on the selection when there is one, otherwise on the cursor row; `Shift+↑` / `Shift+↓` SHALL extend the selection from the cursor. On a collapsed group the cursor row SHALL stand for the whole group, as in the GUI.
+Each stream window SHALL have a cursor row, drawn reversed, that the keys move: `↑` `↓` / `j` `k` by one row, `PgUp` `PgDn` / `Ctrl+B` `Ctrl+F` by a page, `Home` / `g` to the first row and `End` / `G` to the last row with follow on. The view SHALL scroll to keep the cursor visible, and moving the cursor up SHALL pause follow. `←` `→` SHALL scroll sideways by one cell and `0` SHALL return to the first column, measuring wide characters by their cell width. Row actions (copy, bookmark, note, show in context, external tools) SHALL act on the selection when there is one, otherwise on the cursor row; `Shift+↑` / `Shift+↓` SHALL extend the selection from the cursor. On a collapsed group the cursor row SHALL stand for the whole group, as in the GUI. Outside HEX and ASM, the bottom-left border of the window SHALL show, after the line counts, `Ln N` with N the 1-based file line number of the cursor row (the number the line-number gutter shows, whatever the filters; the group's first line on a collapsed group), and, while the rows are scrolled sideways, `Col N` with N the first cell column drawn (1 plus the cells skipped). When the border is too narrow, `Col` and then `Ln` SHALL be left out before the counts are shortened. A click on `Ln` SHALL open Go to for that stream.
 
 #### Scenario: Paging with the cursor
 - **WHEN** a 10,000-line stream shows rows 1 to 40 with the cursor on row 40 and the user presses `PgDn`
@@ -133,6 +133,22 @@ Each stream window SHALL have a cursor row, drawn reversed, that the keys move: 
 #### Scenario: Back to the tail
 - **WHEN** the cursor is on row 120 of a growing file and the user presses `G`
 - **THEN** the cursor is on the last row, follow is on, and appended lines keep the cursor on the new last row.
+
+#### Scenario: Line of the cursor with a filter
+- **WHEN** an include filter shows 50 of 10,000 lines and the cursor is on the third shown row, which is line 1,234 of the file
+- **THEN** the bottom border reads `50/10,000 lines - Ln 1,234` and shows no `Col`.
+
+#### Scenario: Scrolled sideways
+- **WHEN** the user presses `→` 40 times
+- **THEN** the bottom border shows `Col 41`, and after `0` it no longer shows `Col`.
+
+#### Scenario: Narrow window
+- **WHEN** a window is 30 columns wide with the rows scrolled sideways
+- **THEN** `Col` is left out of the bottom border before `Ln`, and `Ln` before the counts.
+
+#### Scenario: HEX unchanged
+- **WHEN** the stream is in HEX
+- **THEN** the bottom border shows the byte and row counts as before, without `Ln` or `Col`.
 
 ### Requirement: Terminal Key Conventions
 The terminal interface SHALL accept less / vim style keys next to FastTail's own: `e` / `E` SHALL move the cursor to the next / previous line of level ERROR or above visible under the active filters, and `w` / `W` to the next / previous WARN line, wrapping around with a status message; a count typed before `j`, `k`, `n`, `N`, `e`, `E`, `w` or `W` SHALL repeat the move that many times (at most 99,999). `?` and `F1` SHALL open the key help even when no stream is open. `:` SHALL open the command palette over the action registry shared with the graphical interface, listing the same actions with the terminal's keys; a number typed in it followed by `Enter` SHALL go to that line. The terminal's default keys SHALL stay its own (less / vim style); rebinding them belongs to `remappable-shortcuts`, which reads the same registry ids into a terminal section of its own so that a GUI rebinding does not change the terminal's keys. When the terminal supports the Kitty keyboard protocol, it SHALL be enabled at start (unambiguous escape codes, so that `Ctrl+Shift+digit` and a lone `Esc` arrive as typed) and restored at exit, also after a panic.
