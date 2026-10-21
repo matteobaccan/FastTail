@@ -37,7 +37,8 @@
     <!-- Files in the user profile: each component is kept by an HKCU value (ICE38), and
          the folders it creates are removed again (ICE64). -->
     <ComponentGroup Id="Program" Directory="INSTALLFOLDER">
-      <Component Id="Executables">
+      <!-- A fixed Guid: files with a registry key path cannot have a generated one. -->
+      <Component Id="Executables" Guid="19D1BC54-CCEA-4ED8-BBBA-849A767BDDC0">
         <File Id="fasttail.exe" Source="$(var.BinDir)\fasttail.exe" />
         <File Id="fasttail_tui.exe" Source="$(var.BinDir)\fasttail-tui.exe" />
         <File Id="LICENSE" Source="LICENSE" Name="LICENSE.txt" />
