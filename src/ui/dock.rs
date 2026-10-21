@@ -2987,7 +2987,9 @@ fn render_log_stream(
                         .add(
                             egui::DragValue::new(&mut bytes)
                                 .range(crate::settings_model::LEVEL_DETECT_BYTES)
-                                .suffix(" B"),
+                                .suffix(" B")
+                                // Typed text applies on Enter, not per key.
+                                .update_while_editing(false),
                         )
                         .on_hover_text(t(lang, "level_detect_bytes_tip"));
                     // Applied once the drag is over: each value detects every line again.

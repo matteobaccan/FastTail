@@ -122,6 +122,10 @@ fn the_override_is_saved_only_when_it_differs_from_the_setting() {
     apply_settings(&mut ea, &cfg);
     assert_eq!((ea.level_window(), ea.level_override()), (256, None));
     assert!(ea.level_bytes_dirty);
+    // ... and the stream keeps its own 256 when the setting moves on.
+    cfg.level_detect_bytes = 96;
+    apply_settings(&mut ea, &cfg);
+    assert_eq!((ea.level_window(), ea.level_override()), (256, Some(256)));
 }
 
 #[test]

@@ -2569,36 +2569,37 @@ impl TailEngine {
         self.level_override.unwrap_or(self.level_default)
     }
 
-    /// The stream's own window (`level_bytes=`), when it differs from the setting.
+    /// The stream's own window (`level_bytes=`), when it differs from the setting: one
+    /// equal to the setting is kept for the run (the setting may move again) but is not
+    /// an override to save.
     pub fn level_override(&self) -> Option<usize> {
-        self.level_override
+        self.level_override.filter(|b| *b != self.level_default)
     }
 
     /// The `level_detect_bytes` setting, used when the stream has no override.
     pub fn set_level_default(&mut self, bytes: usize) {
-        let before = self.level_window();
+        let (window, saved) = (self.level_window(), self.level_override());
         self.level_default =
             bytes.clamp(crate::log_level::MIN_WINDOW, crate::log_level::MAX_WINDOW);
-        // An override equal to the setting is no override.
-        if self.level_override == Some(self.level_default) {
-            self.level_override = None;
+        if self.level_override() != saved {
             self.level_bytes_dirty = true;
         }
-        self.redetect_levels_if(before);
+        self.redetect_levels_if(window);
     }
 
-    /// The stream's own window; `None`, or the setting's value, follows the setting.
+    /// The stream's own window; `None` follows the setting.
     pub fn set_level_override(&mut self, bytes: Option<usize>) {
-        let bytes = bytes
-            .map(|b| b.clamp(crate::log_level::MIN_WINDOW, crate::log_level::MAX_WINDOW))
-            .filter(|b| *b != self.level_default);
+        let bytes =
+            bytes.map(|b| b.clamp(crate::log_level::MIN_WINDOW, crate::log_level::MAX_WINDOW));
         if bytes == self.level_override {
             return;
         }
-        let before = self.level_window();
+        let (window, saved) = (self.level_window(), self.level_override());
         self.level_override = bytes;
-        self.level_bytes_dirty = true;
-        self.redetect_levels_if(before);
+        if self.level_override() != saved {
+            self.level_bytes_dirty = true;
+        }
+        self.redetect_levels_if(window);
     }
 
     /// The window changed from `before`: the levels found with it are dropped and every

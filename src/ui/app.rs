@@ -1021,6 +1021,8 @@ impl FastTailApp {
         let name = crate::find_all::stream_name(source);
         let spool_dir = self.config.compressed_settings().spool_dir;
         let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
+        // The tab's levels are found as its source found them when it was made.
+        let level_window = filter.level_window;
         let feeder = crate::filter_tab::DerivedFeeder::create(
             source, name, n, filter, &spool_dir, max_bytes,
         )
@@ -1028,6 +1030,8 @@ impl FastTailApp {
         let mut engine = TailEngine::open(feeder.spool_path()).map_err(|e| e.to_string())?;
         engine.derived = Some(Box::new(feeder));
         crate::workspace::apply_settings(&mut engine, &self.config);
+        engine.set_level_override(Some(level_window));
+        engine.level_bytes_dirty = false;
         engine.set_quick_labels(&self.quick_labels);
         engine.set_global_filter(self.global_spec.clone());
         engine.follow_tail = true;
@@ -4328,7 +4332,9 @@ impl FastTailApp {
                                 .add(
                                     egui::DragValue::new(&mut self.config.level_detect_bytes)
                                         .range(crate::settings_model::LEVEL_DETECT_BYTES)
-                                        .suffix(" B"),
+                                        .suffix(" B")
+                                        // Typed text applies on Enter, not per key.
+                                        .update_while_editing(false),
                                 )
                                 .on_hover_text(t(lang, "level_detect_bytes_tip"));
                             // Applied once the drag is over: each value detects every line again.
