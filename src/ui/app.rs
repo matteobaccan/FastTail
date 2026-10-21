@@ -4764,6 +4764,10 @@ impl FastTailApp {
                     // dragged (and the one restored from the config) is thrown away.
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // Every text wraps at the window's width, the descriptions in the
+                        // key tables too, so the window can be made narrow.
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        let desc_width = (ui.available_width() - HELP_KEY_WIDTH).max(120.0);
                         ui.vertical_centered(|ui| {
                             ui.label(
                                 RichText::new("⚡ FASTTAIL")
@@ -4796,6 +4800,7 @@ impl FastTailApp {
                             egui::Grid::new("help_zoom_grid")
                                 .num_columns(2)
                                 .spacing([18.0, 6.0])
+                                .max_col_width(desc_width)
                                 .show(ui, |ui| {
                                     ui.label(
                                         RichText::new("CTRL +  /  CTRL =").monospace().strong(),
@@ -4831,6 +4836,7 @@ impl FastTailApp {
                             egui::Grid::new("help_nav_grid")
                                 .num_columns(2)
                                 .spacing([18.0, 6.0])
+                                .max_col_width(desc_width)
                                 .show(ui, |ui| {
                                     ui.label(
                                         RichText::new(t(lang, "help_key_space"))
@@ -5852,6 +5858,10 @@ fn dock_signature(dock: &DockState<FastTailTab>) -> String {
 
 /// Renames the tabs of the derived streams of `engines` in `dock`: to their saved
 /// `filter:` name (`to_saved`), or from it back to their spool.
+/// Room the key column of the help tables takes, plus the gap and the group frame: the
+/// descriptions wrap in what is left of the window.
+const HELP_KEY_WIDTH: f32 = 220.0;
+
 fn rename_derived_tabs(dock: &mut DockState<FastTailTab>, engines: &[TailEngine], to_saved: bool) {
     for (_, tab) in dock.iter_all_tabs_mut() {
         let FastTailTab::LogStream(p) = tab else {
