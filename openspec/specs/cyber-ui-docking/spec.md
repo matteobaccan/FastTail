@@ -196,7 +196,7 @@ Each text stream SHALL offer a wrap toggle (stream bar button and Alt+W) that so
 - **THEN** the window reopens at 130%.
 
 ### Requirement: Stream Toolbar Affordances
-The stream toolbar SHALL show the state of its toggles (follow, monitor, line numbers, wrap, TXT/HEX/MD) with a tinted fill and a border, not with the label colour alone, so the active state is readable on the light theme as well. The TXT/HEX/MD switcher SHALL keep a fixed position in the toolbar, before the controls that appear and disappear with the view mode, so it does not move under the pointer when the mode changes.
+The stream toolbar SHALL show the state of its toggles (follow, auto-update, line numbers, wrap, TXT/HEX/MD) with a tinted fill and a border, not with the label colour alone, so the active state is readable on the light theme as well. Follow and Auto-update SHALL be drawn as check boxes, a checked mark (`☑`) when on and an empty one (`☐`) when off before the translated label, and SHALL NOT use the `▶` / `■` play and stop icons. The toggle that reads appended lines from disk SHALL be labelled "Auto-update" (translated) in the toolbar, its tooltip, the command palette and status texts; its action id, its i18n keys and the saved stream state SHALL stay unchanged. The TXT/HEX/MD switcher SHALL keep a fixed position in the toolbar, before the controls that appear and disappear with the view mode, so it does not move under the pointer when the mode changes.
 
 #### Scenario: Active toggle on the light theme
 - **WHEN** the light theme is active and line wrap is enabled
@@ -205,6 +205,14 @@ The stream toolbar SHALL show the state of its toggles (follow, monitor, line nu
 #### Scenario: Switching to HEX does not move the switcher
 - **WHEN** the user switches a stream from text to HEX, and the line-number and wrap buttons disappear
 - **THEN** the TXT/HEX/MD buttons stay where they were.
+
+#### Scenario: Two independent check boxes
+- **WHEN** a stream has follow off and auto-update on
+- **THEN** the toolbar shows `☐ Follow` and `☑ Auto-update`, and clicking `☐ Follow` turns follow on without changing auto-update.
+
+#### Scenario: Translated label
+- **WHEN** the language is Italian
+- **THEN** the toggle reads the Italian translation of "Auto-update" and no toolbar toggle shows the word "Monitor".
 
 ### Requirement: Named Sessions
 The application SHALL save the workspace (open files and patterns, dock layout, floating windows, per-stream include/exclude filters, search queries, wrap, encoding, explicitly chosen ANSI mode, bookmarks, and for a zip entry the entry name) to a named session file and load it back, replacing the current workspace after confirmation. Global preferences SHALL NOT be part of a session, and neither are the minimum-level filter and the time range of a stream. Saving SHALL refuse a target path that exists and is not a regular file (a directory, a FIFO, a device), reporting the error without truncating it or blocking on it. The title bar SHALL show the session name and a `*` when the workspace differs from the saved session. Paths SHALL be stored absolute and, when possible, relative to the session file so moved bundles still open. Missing files SHALL be skipped with a summary. Recent sessions SHALL be listed in a menu.
@@ -279,4 +287,3 @@ While the window is hidden or unfocused, FastTail SHALL count the lines matching
 #### Scenario: Alert while hidden
 - **WHEN** the window is in the tray and a Critical rule matches 3 lines in `app.log`
 - **THEN** the tray icon shows a critical-coloured dot with `3` and the tooltip mentions `app.log`.
-
