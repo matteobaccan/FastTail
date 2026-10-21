@@ -108,8 +108,12 @@ row and shows a tab; `Shift`+click or a drag selects; a double click toggles a b
 the wheel scrolls the window under the pointer. Drag a divider to resize; drag a title
 onto a window's edge to split it, onto its centre to add a tab, anywhere else to float it.
 A floating window moves by its title and resizes from any corner, its bottom row or its
-side borders. Every bar chip, button, list item and dialog button can be clicked; a click
-outside a dialog closes it. While the mouse is captured, `Shift`+drag (`Option` on macOS
+side borders. Settings and Keys move and resize the same way, show `[x]` in their top
+border (it closes them as `Esc`; Settings brings back the values it opened with) and
+open again where they were left while the interface runs; a double click on their
+title centres them at the default size. Every bar chip, button, list item and dialog
+button can be clicked; a click outside a dialog closes it, a drag released outside does
+not. While the mouse is captured, `Shift`+drag (`Option` on macOS
 terminals) selects text natively.
 
 ## Settings, editors, tools

@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Movable Settings and Keys dialogs in the terminal.** Both move by their title row,
+  resize from their borders and corners (at least 40x8 and 30x6), close with `[x]` in
+  their top border (as `Esc`: Settings brings back the values it opened with) and reopen
+  where they were left while the interface runs; a double click on the title centres
+  them again. Keys lays out its 1 to 3 columns for the dialog's own width. Nothing is
+  saved to `fasttail.ini`.
+
 ## [0.20.9] - 2026-10-21
 
 ### Added

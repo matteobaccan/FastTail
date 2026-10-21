@@ -37,7 +37,7 @@ use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
 use crate::tui::json::{JsonDialog, JsonKey};
 use crate::tui::keys::{self, Action};
-use crate::tui::mouse::{self, DialogHit, Edges, HitMap, Target, WindowHit};
+use crate::tui::mouse::{self, DialogHit, Edges, HitMap, MovableDialog, Target, WindowHit};
 use crate::tui::palette::{self, CommandPalette, PaletteKey};
 use crate::tui::picker::{refusal_text, EntryPicker};
 use crate::tui::presets::{self, PresetsDialog, PresetsKey};
@@ -446,6 +446,17 @@ enum DockDrag {
     /// The topmost floating window, taken by a corner or an edge: the sides that move,
     /// and the window when it was taken (the other sides stay where they were).
     FloatResize { edges: Edges, from: Rect },
+    /// Settings or Keys taken by its title `grab` cells from its corner.
+    DialogMove {
+        which: MovableDialog,
+        grab: (u16, u16),
+    },
+    /// Settings or Keys taken by a corner or an edge, as `FloatResize`.
+    DialogResize {
+        which: MovableDialog,
+        edges: Edges,
+        from: Rect,
+    },
 }
 
 /// What one window shows: the loop redraws only when a signature changes.
@@ -551,6 +562,11 @@ pub struct App {
     /// drawn in two (0 in one column).
     pub help_sel: usize,
     help_half: usize,
+    /// Where Settings and Keys were moved or resized to, for this run (`None`: centred).
+    settings_rect: Option<Rect>,
+    help_rect: Option<Rect>,
+    /// The last click on a movable dialog's title, to tell a double click.
+    last_title_click: Option<Instant>,
     pub quit: bool,
     /// The JSON tree of a row (`J`).
     pub json_dialog: Option<JsonDialog>,
@@ -656,6 +672,9 @@ impl App {
             help_top: 0,
             help_sel: 0,
             help_half: 0,
+            settings_rect: None,
+            help_rect: None,
+            last_title_click: None,
             quit: false,
             bell: false,
             json_dialog: None,
@@ -3588,6 +3607,39 @@ impl App {
                 self.dock_dirty = true;
                 true
             }
+            Some(DockDrag::DialogMove { which, grab }) => {
+                let Some(at) = *self.dialog_rect(which) else {
+                    return false;
+                };
+                let moved = Rect {
+                    x: col.saturating_sub(grab.0),
+                    y: row.saturating_sub(grab.1),
+                    ..at
+                };
+                let screen = self.hits.screen;
+                *self.dialog_rect(which) = Some(fit_dialog(moved, which, screen));
+                true
+            }
+            Some(DockDrag::DialogResize { which, edges, from }) => {
+                let screen = self.hits.screen;
+                let min = dialog_min(which);
+                // At least the dialog's minimum: the moving sides stop there.
+                let mut r = dock::resized(from, edges, col, row);
+                if r.width < min.0 {
+                    if edges.left {
+                        r.x = from.right().saturating_sub(min.0);
+                    }
+                    r.width = min.0;
+                }
+                if r.height < min.1 {
+                    if edges.top {
+                        r.y = from.bottom().saturating_sub(min.1);
+                    }
+                    r.height = min.1;
+                }
+                *self.dialog_rect(which) = Some(fit_dialog(r, which, screen));
+                true
+            }
             None => false,
         }
     }
@@ -3610,6 +3662,39 @@ impl App {
                 self.message = None;
                 self.focus_tab(tab);
                 self.run_chip(chip);
+            }
+            Target::DialogClose => {
+                self.cancel_settings();
+                self.show_help = false;
+            }
+            Target::DialogTitle(which) | Target::DialogEdge(which, _) => {
+                let Some(outer) = self.hits.dialog.map(|d| d.outer) else {
+                    return false;
+                };
+                let now = Instant::now();
+                let double = matches!(target, Target::DialogTitle(_))
+                    && self
+                        .last_title_click
+                        .is_some_and(|at| now.duration_since(at) <= DOUBLE_CLICK);
+                if double {
+                    // Back to the centred default size.
+                    self.last_title_click = None;
+                    *self.dialog_rect(which) = None;
+                    return true;
+                }
+                self.last_title_click = matches!(target, Target::DialogTitle(_)).then_some(now);
+                *self.dialog_rect(which) = Some(outer);
+                self.dock_drag = Some(match target {
+                    Target::DialogEdge(_, edges) => DockDrag::DialogResize {
+                        which,
+                        edges,
+                        from: outer,
+                    },
+                    _ => DockDrag::DialogMove {
+                        which,
+                        grab: (ev.column - outer.x, ev.row - outer.y),
+                    },
+                });
             }
             Target::GotoLine(tab) => {
                 self.message = None;
@@ -4133,6 +4218,7 @@ impl App {
         // The hit map is rebuilt with every frame: a click is tested against what the
         // user saw.
         self.hits = HitMap::default();
+        self.hits.screen = frame.area();
         // Locked: the PIN dialog on a blank screen and nothing else.
         if self.locked.is_some() {
             self.draw_lock(frame);
@@ -4775,7 +4861,50 @@ impl App {
     ) -> Rect {
         let (x, y, w, h) = view::centered(area.width, area.height, size.0, size.1);
         let rect = Rect::new(area.x + x, area.y + y, w, h);
-        let block = Block::bordered()
+        self.dialog_at(frame, rect, title, cancel, None)
+    }
+
+    /// Settings or Keys: where the user moved it (kept inside `area`), else centred at
+    /// `size`; `[x]` in the top border, and the title and borders take a drag.
+    fn movable_dialog(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        which: MovableDialog,
+        size: (u16, u16),
+        title: &str,
+        cancel: bool,
+    ) -> Rect {
+        let rect = match *self.dialog_rect(which) {
+            Some(r) => fit_dialog(r, which, area),
+            None => {
+                let (x, y, w, h) = view::centered(area.width, area.height, size.0, size.1);
+                Rect::new(area.x + x, area.y + y, w, h)
+            }
+        };
+        if self.dialog_rect(which).is_some() {
+            *self.dialog_rect(which) = Some(rect);
+        }
+        self.dialog_at(frame, rect, title, cancel, Some(which))
+    }
+
+    /// Where `which` was moved to (`None`: centred at its default size).
+    fn dialog_rect(&mut self, which: MovableDialog) -> &mut Option<Rect> {
+        match which {
+            MovableDialog::Settings => &mut self.settings_rect,
+            MovableDialog::Help => &mut self.help_rect,
+        }
+    }
+
+    fn dialog_at(
+        &mut self,
+        frame: &mut Frame,
+        rect: Rect,
+        title: &str,
+        cancel: bool,
+        movable: Option<MovableDialog>,
+    ) -> Rect {
+        let mut block = Block::bordered()
             .style(self.palette.dialog())
             .border_set(self.palette.border_set(Chrome::Dialog))
             .border_style(self.palette.border_style(Chrome::Dialog))
@@ -4786,6 +4915,19 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
             );
+        // The `[x]`, as the floating windows draw it: right-aligned, before the corner.
+        let close = (movable.is_some() && rect.width >= 8).then(|| {
+            block = block.clone().title_top(
+                Line::from(Span::styled(
+                    "[x]",
+                    Style::default()
+                        .fg(self.palette.accent())
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .right_aligned(),
+            );
+            Rect::new(rect.right().saturating_sub(4), rect.y, 3, 1)
+        });
         let inner = block.inner(rect);
         frame.render_widget(Clear, rect);
         frame.render_widget(block, rect);
@@ -4815,6 +4957,8 @@ impl App {
             outer: rect,
             ok: rects[0],
             cancel: rects.get(1).copied(),
+            close,
+            movable,
         });
         Rect {
             height: inner.height.saturating_sub(1),
@@ -5740,9 +5884,10 @@ impl App {
             return;
         };
         let height = (lines.len() as u16 + 5).min(area.height);
-        let inner = self.dialog(
+        let inner = self.movable_dialog(
             frame,
             area,
+            MovableDialog::Settings,
             (74, height),
             tx(
                 self.lang,
@@ -6280,8 +6425,20 @@ impl App {
             .map(|(k, d, _)| format!("{:<kw$}{}", tx(lang, k), tx(lang, d)))
             .collect();
         let longest = entries.iter().map(|e| e.chars().count()).max().unwrap_or(0);
-        let room_w = (area.width as usize).saturating_sub(4);
-        let room_h = (area.height as usize).saturating_sub(4);
+        // Moved or resized: the columns fit the dialog's inner area, not the screen.
+        let stored = self
+            .help_rect
+            .map(|r| fit_dialog(r, MovableDialog::Help, area));
+        let (room_w, room_h) = match stored {
+            Some(r) => (
+                (r.width as usize).saturating_sub(2),
+                (r.height as usize).saturating_sub(3),
+            ),
+            None => (
+                (area.width as usize).saturating_sub(4),
+                (area.height as usize).saturating_sub(4),
+            ),
+        };
         let fits = |n: usize| {
             let col = longest.min(room_w.saturating_sub(2 * (n - 1)) / n);
             (col >= 44 || n == 1).then_some(col)
@@ -6302,7 +6459,7 @@ impl App {
         self.help_half = if cols > 1 { per_col } else { 0 };
         let total = per_col + 1;
         let width = (cols * col + 2 * (cols - 1) + 2) as u16;
-        let height = (total as u16 + 3).min(area.height);
+        let height = stored.map_or((total as u16 + 3).min(area.height), |r| r.height);
         let rows = height.saturating_sub(3) as usize;
         // Keep the selected entry's row on screen.
         let sel_row = self.help_sel % per_col.max(1);
@@ -6313,9 +6470,10 @@ impl App {
         }
         self.help_top = self.help_top.min(total.saturating_sub(rows));
         let hidden = total.saturating_sub(self.help_top + rows);
-        let inner = self.dialog(
+        let inner = self.movable_dialog(
             frame,
             area,
+            MovableDialog::Help,
             (width, height),
             tx(self.lang, "Keys - arrows choose, Enter runs, Esc closes"),
             false,
@@ -6768,6 +6926,24 @@ fn cast_shadow(buf: &mut ratatui::buffer::Buffer, rect: Rect, style: Style) {
 }
 
 /// Bottom-left of a window: rows and lines, and the background work in progress.
+/// The smallest a movable dialog is resized to (the screen when smaller).
+fn dialog_min(which: MovableDialog) -> (u16, u16) {
+    match which {
+        MovableDialog::Settings => (40, 8),
+        MovableDialog::Help => (30, 6),
+    }
+}
+
+/// `r` at least `which`'s minimum size and at most `bounds`, moved inside `bounds`.
+fn fit_dialog(r: Rect, which: MovableDialog, bounds: Rect) -> Rect {
+    let min = dialog_min(which);
+    let w = r.width.clamp(min.0.min(bounds.width), bounds.width);
+    let h = r.height.clamp(min.1.min(bounds.height), bounds.height);
+    let x = r.x.clamp(bounds.x, bounds.right().saturating_sub(w));
+    let y = r.y.clamp(bounds.y, bounds.bottom().saturating_sub(h));
+    Rect::new(x, y, w, h)
+}
+
 /// Bottom-left of a window: the counts, the cursor's `Ln` / `Col` (text views) and the
 /// progress, cut to `room` cells by leaving out `Col`, then `Ln`. Also where `Ln` is
 /// (its offset in the text and its width), for the click that opens Go to.
@@ -8671,6 +8847,127 @@ mod tests {
         assert_eq!(app.palette.theme, CyberTheme::Commander, "the blue classic");
         app.apply(Action::CycleTheme);
         assert_eq!(app.palette.theme, CyberTheme::Tron, "back to the first");
+    }
+
+    #[test]
+    fn settings_moves_resizes_and_closes_with_its_x() {
+        use crossterm::event::KeyCode;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, LOG).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let saved = std::fs::read(&ini).unwrap();
+        let mut app = app_over(&ini);
+        app.apply(Action::Settings);
+        let screen = render(&mut app, 200, 80);
+        let d = app.hits.dialog.unwrap();
+        let start = d.outer;
+        let x = d.close.expect("[x]");
+        assert_eq!(x.y, start.y);
+        assert!(screen[x.y as usize].contains("[x]"), "{screen:#?}");
+        // The title row moves it; released outside, it stays open where it was left.
+        app.on_mouse(click(start.x + 5, start.y));
+        app.on_mouse(drag(start.x + 35, start.y + 10));
+        app.on_mouse(release(199, 79));
+        assert!(app.settings_form.is_some(), "a drag never closes it");
+        render(&mut app, 200, 80);
+        let moved = app.hits.dialog.unwrap().outer;
+        assert_eq!(
+            (moved.x, moved.y, moved.width, moved.height),
+            (start.x + 30, start.y + 10, start.width, start.height)
+        );
+        // It keeps the keyboard.
+        let focus = app.settings_form.as_ref().unwrap().focus;
+        press(&mut app, KeyCode::Down);
+        assert_ne!(app.settings_form.as_ref().unwrap().focus, focus);
+        // The bottom-right corner resizes it, not below its minimum.
+        app.on_mouse(click(moved.right() - 1, moved.bottom() - 1));
+        app.on_mouse(drag(moved.x + 2, moved.y + 2));
+        app.on_mouse(release(moved.x + 2, moved.y + 2));
+        render(&mut app, 200, 80);
+        let small = app.hits.dialog.unwrap().outer;
+        assert_eq!(
+            (small.x, small.y, small.width, small.height),
+            (moved.x, moved.y, 40, 8)
+        );
+        // [x] closes as Esc: the theme it opened with is back, nothing written.
+        let theme = app.palette.theme;
+        let f = app.settings_form.as_mut().unwrap();
+        f.focus = f.fields.iter().position(|x| x.label == "Theme").unwrap();
+        press(&mut app, KeyCode::Right);
+        assert_ne!(app.palette.theme, theme);
+        render(&mut app, 200, 80);
+        let x = app.hits.dialog.unwrap().close.unwrap();
+        app.on_mouse(click(x.x + 1, x.y));
+        assert!(app.settings_form.is_none());
+        assert_eq!(app.palette.theme, theme);
+        assert_eq!(std::fs::read(&ini).unwrap(), saved);
+        // Reopened where it was left; kept inside a smaller terminal.
+        app.apply(Action::Settings);
+        render(&mut app, 200, 80);
+        assert_eq!(app.hits.dialog.unwrap().outer, small);
+        render(&mut app, 80, 24);
+        let fit = app.hits.dialog.unwrap().outer;
+        assert!(fit.right() <= 80 && fit.bottom() <= 24, "{fit:?}");
+        // A double click on the title: centred at the default size again.
+        render(&mut app, 200, 80);
+        let t = app.hits.dialog.unwrap().outer;
+        app.on_mouse(click(t.x + 5, t.y));
+        app.on_mouse(release(t.x + 5, t.y));
+        app.on_mouse(click(t.x + 5, t.y));
+        app.on_mouse(release(t.x + 5, t.y));
+        render(&mut app, 200, 80);
+        assert_eq!(app.hits.dialog.unwrap().outer, start);
+    }
+
+    #[test]
+    fn the_keys_dialog_lays_out_its_columns_for_its_own_width() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        let columns = |app: &App| {
+            let mut xs: Vec<u16> = app.hits.list_items.iter().map(|(r, _)| r.x).collect();
+            xs.sort_unstable();
+            xs.dedup();
+            xs.len()
+        };
+        app.apply(Action::ToggleHelp);
+        render(&mut app, 200, 30);
+        let start = app.hits.dialog.unwrap().outer;
+        assert_eq!(columns(&app), 3, "{start:?}");
+        // The right border, dragged left to 92 columns: two columns of 44.
+        app.on_mouse(click(start.right() - 1, start.y + 2));
+        app.on_mouse(drag(start.x + 91, start.y + 2));
+        app.on_mouse(release(start.x + 91, start.y + 2));
+        render(&mut app, 200, 30);
+        let d = app.hits.dialog.unwrap().outer;
+        assert_eq!(d.width, 92);
+        assert_eq!(columns(&app), 2);
+        for (r, _) in &app.hits.list_items {
+            assert!(r.right() < d.right() && r.width >= 44, "{r:?} in {d:?}");
+        }
+        assert!(app.hits.list_items.iter().any(|(_, i)| *i == app.help_sel));
+        // Moved to the top-left corner, closed and reopened: where it was left.
+        app.on_mouse(click(d.x + 5, d.y));
+        app.on_mouse(drag(0, 0));
+        app.on_mouse(release(0, 0));
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert!(!app.show_help);
+        app.apply(Action::ToggleHelp);
+        render(&mut app, 200, 30);
+        let back = app.hits.dialog.unwrap().outer;
+        assert_eq!(
+            (back.x, back.y, back.width, back.height),
+            (0, 0, 92, d.height)
+        );
+        // Its [x] closes it.
+        let x = app.hits.dialog.unwrap().close.unwrap();
+        app.on_mouse(click(x.x, x.y));
+        assert!(!app.show_help);
     }
 
     #[test]

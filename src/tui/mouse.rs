@@ -30,6 +30,17 @@ pub struct DialogHit {
     pub outer: Rect,
     pub ok: Rect,
     pub cancel: Option<Rect>,
+    /// The `[x]` of a dialog that moves and resizes (Settings, Keys).
+    pub close: Option<Rect>,
+    /// Which dialog it is, when it moves and resizes.
+    pub movable: Option<MovableDialog>,
+}
+
+/// The dialogs that move by their title and resize by their borders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovableDialog {
+    Settings,
+    Help,
 }
 
 /// Everything clickable on the last frame.
@@ -61,6 +72,8 @@ pub struct HitMap {
     pub close_buttons: Vec<(Rect, Place)>,
     /// The `Ln N` of each stream window's bottom border, and the stream: opens Go to.
     pub goto_links: Vec<(Rect, usize)>,
+    /// The whole screen of the last frame, where a dialog may be moved.
+    pub screen: Rect,
 }
 
 /// What a cell of the screen is.
@@ -68,6 +81,12 @@ pub struct HitMap {
 pub enum Target {
     DialogOk,
     DialogCancel,
+    /// The `[x]` of a movable dialog: closes it as `Esc`.
+    DialogClose,
+    /// The title row of a movable dialog: dragged, it moves the dialog.
+    DialogTitle(MovableDialog),
+    /// A corner or edge of a movable dialog: dragged, it resizes it on those sides.
+    DialogEdge(MovableDialog, Edges),
     /// Inside a dialog, not on a button: nothing happens.
     DialogBody,
     /// A row of the list in the open dialog (its position in the list).
@@ -155,6 +174,9 @@ fn edges_at(r: Rect, col: u16, row: u16) -> Option<Edges> {
 pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
     let p = Position::new(col, row);
     if let Some(d) = &map.dialog {
+        if d.close.is_some_and(|c| c.contains(p)) {
+            return Target::DialogClose;
+        }
         if d.ok.contains(p) {
             return Target::DialogOk;
         }
@@ -163,6 +185,14 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
         }
         if let Some((_, i)) = map.list_items.iter().find(|(r, _)| r.contains(p)) {
             return Target::ListItem(*i);
+        }
+        if let Some(which) = d.movable.filter(|_| d.outer.contains(p)) {
+            if let Some(edges) = edges_at(d.outer, col, row) {
+                return Target::DialogEdge(which, edges);
+            }
+            if row == d.outer.y {
+                return Target::DialogTitle(which);
+            }
         }
         return if d.outer.contains(p) {
             Target::DialogBody
@@ -409,12 +439,49 @@ mod tests {
     }
 
     #[test]
+    fn a_movable_dialog_has_a_close_box_a_title_and_edges() {
+        let mut map = split_map();
+        map.dialog = Some(DialogHit {
+            outer: Rect::new(10, 3, 60, 10),
+            ok: Rect::new(50, 11, 6, 1),
+            cancel: None,
+            close: Some(Rect::new(66, 3, 3, 1)),
+            movable: Some(MovableDialog::Help),
+        });
+        assert_eq!(hit_test(&map, 67, 3), Target::DialogClose);
+        assert_eq!(
+            hit_test(&map, 30, 3),
+            Target::DialogTitle(MovableDialog::Help)
+        );
+        assert!(matches!(
+            hit_test(&map, 69, 12),
+            Target::DialogEdge(
+                MovableDialog::Help,
+                Edges {
+                    right: true,
+                    bottom: true,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            hit_test(&map, 10, 6),
+            Target::DialogEdge(MovableDialog::Help, Edges { left: true, .. })
+        ));
+        assert_eq!(hit_test(&map, 52, 11), Target::DialogOk);
+        assert_eq!(hit_test(&map, 30, 6), Target::DialogBody);
+        assert_eq!(hit_test(&map, 0, 0), Target::OutsideDialog);
+    }
+
+    #[test]
     fn a_dialog_covers_everything() {
         let mut map = split_map();
         map.dialog = Some(DialogHit {
             outer: Rect::new(10, 3, 60, 5),
             ok: Rect::new(40, 6, 6, 1),
             cancel: Some(Rect::new(48, 6, 10, 1)),
+            close: None,
+            movable: None,
         });
         assert_eq!(hit_test(&map, 42, 6), Target::DialogOk);
         assert_eq!(hit_test(&map, 50, 6), Target::DialogCancel);
