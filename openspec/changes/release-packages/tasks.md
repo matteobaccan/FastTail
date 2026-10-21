@@ -19,9 +19,9 @@
 
 ## 4. macOS disk image
 
-- [ ] 4.1 macOS job builds `x86_64-apple-darwin` too; `lipo` universal executables; `fasttail-macos-x86_64-<version>.tar.gz`
-- [ ] 4.2 `packaging/macos/Info.plist` and the bundle script (`FastTail.app` with both executables and the `.icns`)
-- [ ] 4.3 `hdiutil` `.dmg` with the app, an `Applications` link, README and LICENSE; test: attach, `lipo -archs`, both `--version`, detach
+- [x] 4.1 macOS job builds `x86_64-apple-darwin` too; `lipo` universal executables; `fasttail-macos-x86_64-<version>.tar.gz`
+- [x] 4.2 `packaging/macos/Info.plist` and the bundle script (`FastTail.app` with both executables and the `.icns`)
+- [x] 4.3 `hdiutil` `.dmg` with the app, an `Applications` link, README and LICENSE; test: attach, `lipo -archs`, both `--version`, detach
 
 ## 5. Release and documentation
 

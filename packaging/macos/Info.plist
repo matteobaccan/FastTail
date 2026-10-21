@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- FastTail.app bundle information; packaging/macos/bundle.sh replaces @VERSION@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>FastTail</string>
+  <key>CFBundleDisplayName</key>
+  <string>FastTail</string>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.matteobaccan.fasttail</string>
+  <key>CFBundleExecutable</key>
+  <string>fasttail</string>
+  <key>CFBundleIconFile</key>
+  <string>FastTail</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright (c) Matteo Baccan, MIT licence</string>
+</dict>
+</plist>
