@@ -311,7 +311,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          trap { Write-Host "::error::$($_.InvocationInfo.PositionMessage) $_"; break }
+          trap { Write-Host ("::error::" + ("$_ | line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())" -replace '[\r\n]+', ' ')); break }
           $tool = dotnet tool install --global wix --version 5.0.2 2>&1
           $tool | ForEach-Object { Write-Host $_ }
           if ($LASTEXITCODE -ne 0) { throw "dotnet tool install wix: $tool" }
@@ -325,7 +325,7 @@ jobs:
             $log = wix build packaging/windows/fasttail.wxs -arch x64 -d Version=$v -d BinDir=$bin -o $out 2>&1
             $log | ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -ne 0) {
-              $log | Where-Object { "$_" -match 'error|warning' } | ForEach-Object { Write-Host "::error::$_" }
+              $log | Where-Object { "$_" -match 'error|warning' } | ForEach-Object { Write-Host ("::error::" + ("$_" -replace '[\r\n]+', ' ')) }
               throw "wix build failed"
             }
           }
