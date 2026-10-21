@@ -19,5 +19,5 @@
 - [x] 4.1 New texts in every language (`src/i18n.rs`, `src/i18n_tui.rs`)
 - [x] 4.2 Integration test: a log with the level at byte 150 is `unknown` at 96 and detected at 256; filter and counters follow the change
 - [x] 4.3 README, `docs/ui-design.md`, `docs/tui.md`, CHANGELOG `[Unreleased]`
-- [ ] 4.4 `cargo fmt`, clippy (GUI and TUI builds), focused tests; PR with Linux and Windows CI green
-- [ ] 4.5 Archive the change after the release that ships it
+- [x] 4.4 `cargo fmt`, clippy (GUI and TUI builds), focused tests; PR with Linux and Windows CI green
+- [x] 4.5 Archive the change after the release that ships it
