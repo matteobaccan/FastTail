@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Fast structural anchor pre-checks for token matchers
+**Learning:** In left-to-right token scanning hot loops (`auto_highlight::scan`), invoking full scheme comparisons or hex digit parsers at every word start introduces significant branch and parsing overhead. Pre-checking structural anchor invariants—such as checking if `:` exists at expected scheme offsets (`at+2..=at+5`) or if `-` exists at byte offset 8 for UUIDs, and using direct ASCII digit accumulation for IPv4 numbers—eliminates string slicing and parsing overhead for non-matching tokens.
+**Action:** Before running multi-candidate string comparisons or string-based digit parsing in token matchers, gate execution with fixed-offset structural character checks and perform direct byte arithmetic for ASCII numbers.

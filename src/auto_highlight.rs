@@ -242,6 +242,14 @@ fn hex_digits(b: &[u8], at: usize, max: usize) -> usize {
 /// `scheme://` then everything up to a space, a quote or an angle bracket, with trailing
 /// sentence punctuation left out.
 fn url(b: &[u8], at: usize) -> Option<usize> {
+    // Fast path: scheme length is 2..=5 chars, followed by `://`. If no colon exists at at+2..at+5, it can't be a URL scheme.
+    if !matches!(b.get(at + 2), Some(&b':'))
+        && !matches!(b.get(at + 3), Some(&b':'))
+        && !matches!(b.get(at + 4), Some(&b':'))
+        && !matches!(b.get(at + 5), Some(&b':'))
+    {
+        return None;
+    }
     const SCHEMES: [&[u8]; 6] = [b"https", b"http", b"ftp", b"wss", b"ws", b"file"];
     let scheme = SCHEMES.iter().find(|s| {
         b.len() >= at + s.len() + 3
@@ -269,6 +277,10 @@ fn url(b: &[u8], at: usize) -> Option<usize> {
 
 /// `8-4-4-4-12` hex digits.
 fn uuid(b: &[u8], at: usize) -> Option<usize> {
+    // Fast path: a UUID is 36 bytes long (8-4-4-4-12) with a hyphen at offset 8.
+    if b.len() < at + 36 || b[at + 8] != b'-' {
+        return None;
+    }
     let mut pos = at;
     for (n, len) in [8usize, 4, 4, 4, 12].iter().enumerate() {
         if n > 0 {
@@ -300,7 +312,11 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
         if len == 0 || len > 3 {
             return None;
         }
-        let value: u32 = std::str::from_utf8(&b[pos..pos + len]).ok()?.parse().ok()?;
+        // Direct integer parsing avoids std::str::from_utf8 and string parsing overhead for ASCII digits
+        let mut value = 0u32;
+        for &byte in &b[pos..pos + len] {
+            value = value * 10 + (byte - b'0') as u32;
+        }
         if value > 255 {
             return None;
         }
@@ -316,10 +332,10 @@ fn ipv4(b: &[u8], at: usize) -> Option<usize> {
     if b.get(pos) == Some(&b':') {
         let len = digits(b, pos + 1, 6);
         if (1..=5).contains(&len) {
-            let port: u32 = std::str::from_utf8(&b[pos + 1..pos + 1 + len])
-                .ok()?
-                .parse()
-                .ok()?;
+            let mut port = 0u32;
+            for &byte in &b[pos + 1..pos + 1 + len] {
+                port = port * 10 + (byte - b'0') as u32;
+            }
             if (1..=65535).contains(&port) && ends_token(b, pos + 1 + len) {
                 return Some(pos + 1 + len);
             }

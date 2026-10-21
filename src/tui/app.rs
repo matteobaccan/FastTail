@@ -4136,11 +4136,13 @@ impl App {
                 }
             }
             Action::SearchNext => {
+                #[allow(clippy::collapsible_match)]
                 if tab.engine.search_next(false).is_none() {
                     self.message = Some(tx(self.lang, "No search hits").into());
                 }
             }
             Action::SearchPrev => {
+                #[allow(clippy::collapsible_match)]
                 if tab.engine.search_prev(false).is_none() {
                     self.message = Some(tx(self.lang, "No search hits").into());
                 }
