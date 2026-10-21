@@ -362,9 +362,15 @@ jobs:
             $p = Start-Process $exe -ArgumentList '--version' -Wait -PassThru -NoNewWindow
             if ($p.ExitCode -ne 0) { throw "$exe --version exited $($p.ExitCode)" }
           }
+          # The products Windows Installer has under FastTail's UpgradeCode (what "Installed
+          # apps" lists), with their versions; a per-user MSI has no Uninstall key in HKCU.
           function Entries {
-            @(Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall |
-              Get-ItemProperty | Where-Object { $_.DisplayName -eq 'FastTail' })
+            $wi = New-Object -ComObject WindowsInstaller.Installer
+            $codes = @($wi.GetType().InvokeMember('RelatedProducts', 'GetProperty', $null, $wi,
+              @('{B4BA8F80-AA08-454A-B937-8A703D33B202}')))
+            @($codes | ForEach-Object {
+              $wi.GetType().InvokeMember('ProductInfo', 'GetProperty', $null, $wi, @($_, 'VersionString'))
+            })
           }
           $dir = Join-Path $env:LOCALAPPDATA 'Programs\FastTail'
           Msi @('/i', $old, '/qn', '/l*v', 'msi-old.log')
@@ -375,7 +381,7 @@ jobs:
           if (-not (Test-Path $lnk)) { throw "no Start menu shortcut" }
           $entries = Entries
           if ($entries.Count -ne 1) { throw "$($entries.Count) Installed apps entries after the upgrade" }
-          if ($entries[0].DisplayVersion -ne $version) { throw "Installed apps shows $($entries[0].DisplayVersion)" }
+          if ($entries[0] -ne $version) { throw "Installed apps shows $($entries[0])" }
           # A new shell reads the user PATH the installer wrote.
           pwsh -NoProfile -Command "`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); `$p = Start-Process fasttail-tui -ArgumentList '--version' -Wait -PassThru -NoNewWindow; exit `$p.ExitCode"
           if ($LASTEXITCODE -ne 0) { throw "fasttail-tui not found on the user PATH" }
