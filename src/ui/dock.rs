@@ -1526,58 +1526,85 @@ fn render_log_stream(
 
         ui.separator();
 
-        // Mode Switcher (TXT, HEX, ASM, MD)
-        let current_mode = engine.view_mode;
-        let is_txt = current_mode == crate::tail_engine::ViewMode::Text
-            || current_mode == crate::tail_engine::ViewMode::Filtered;
-        let is_hex = current_mode == crate::tail_engine::ViewMode::Hex;
-        let is_md = current_mode == crate::tail_engine::ViewMode::Markdown;
-        let is_asm = current_mode == crate::tail_engine::ViewMode::Asm;
-
-        if toggle_button(ui, theme, "🔤 TXT", is_txt, theme.accent_color().into())
-            .on_hover_text(t(lang, "tip_mode_txt"))
-            .clicked()
-            || act(ActionId::ViewText)
-        {
-            engine.set_view_mode(crate::tail_engine::ViewMode::Text);
-            ui.ctx().request_repaint();
-        }
-
-        if toggle_button(ui, theme, "🔢 HEX", is_hex, theme.secondary_accent().into())
-            .on_hover_text(t(lang, "tip_mode_hex"))
-            .clicked()
-            || act(ActionId::ViewHex)
-        {
-            engine.set_view_mode(crate::tail_engine::ViewMode::Hex);
-            ui.ctx().request_repaint();
-        }
-
-        if toggle_button(ui, theme, "⚙ ASM", is_asm, theme.secondary_accent().into())
-            .on_hover_text(t(lang, "tip_mode_asm"))
-            .clicked()
-            || act(ActionId::ViewAsm)
-        {
-            engine.set_view_mode(crate::tail_engine::ViewMode::Asm);
-            ui.ctx().request_repaint();
-        }
-
+        // View mode: one drop-down listing the modes the stream can use now (MD only
+        // within the Markdown limit), in a fixed place before the controls that come and
+        // go with the mode. The palette and key actions stay as they were.
+        use crate::tail_engine::ViewMode;
+        let current_mode = match engine.view_mode {
+            ViewMode::Filtered => ViewMode::Text,
+            mode => mode,
+        };
         let md_too_large = engine.markdown_too_large();
         let md_limit_mb = (engine.markdown_max_bytes / (1024 * 1024)).max(1);
         let md_msg = t(lang, "md_too_large").replace("{limit}", &md_limit_mb.to_string());
-        let md_tip = if md_too_large {
-            md_msg.as_str()
-        } else {
-            t(lang, "tip_mode_md")
+        let mode_entry = |mode: ViewMode| -> (&'static str, egui::Color32, &str) {
+            match mode {
+                ViewMode::Hex => (
+                    "🔢 HEX",
+                    theme.secondary_accent().into(),
+                    t(lang, "tip_mode_hex"),
+                ),
+                ViewMode::Asm => (
+                    "⚙ ASM",
+                    theme.secondary_accent().into(),
+                    t(lang, "tip_mode_asm"),
+                ),
+                ViewMode::Markdown => ("📝 MD", theme.warn_color().into(), t(lang, "tip_mode_md")),
+                _ => (
+                    "🔤 TXT",
+                    theme.accent_color().into(),
+                    t(lang, "tip_mode_txt"),
+                ),
+            }
         };
-        if toggle_button(ui, theme, "📝 MD", is_md, theme.warn_color().into())
-            .on_hover_text(md_tip)
-            .clicked()
-            || act(ActionId::ViewMarkdown)
-        {
-            if md_too_large {
+        let (label, colour, tip) = mode_entry(current_mode);
+        let mut chosen: Option<ViewMode> = None;
+        egui::ComboBox::from_id_salt(egui::Id::new("view_mode").with(&engine.path))
+            .selected_text(RichText::new(label).monospace().strong().color(colour))
+            .width(84.0)
+            .show_ui(ui, |ui| {
+                let mut modes = vec![ViewMode::Text, ViewMode::Hex, ViewMode::Asm];
+                if !md_too_large {
+                    modes.push(ViewMode::Markdown);
+                }
+                for mode in modes {
+                    let (label, colour, tip) = mode_entry(mode);
+                    if ui
+                        .selectable_label(
+                            current_mode == mode,
+                            RichText::new(label).monospace().color(colour),
+                        )
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        chosen = Some(mode);
+                    }
+                }
+                if md_too_large {
+                    ui.separator();
+                    ui.add_enabled(
+                        false,
+                        egui::Label::new(RichText::new(format!("📝 MD: {md_msg}")).small()),
+                    );
+                }
+            })
+            .response
+            .on_hover_text(tip);
+        for (action, mode) in [
+            (ActionId::ViewText, ViewMode::Text),
+            (ActionId::ViewHex, ViewMode::Hex),
+            (ActionId::ViewAsm, ViewMode::Asm),
+            (ActionId::ViewMarkdown, ViewMode::Markdown),
+        ] {
+            if act(action) {
+                chosen = Some(mode);
+            }
+        }
+        if let Some(mode) = chosen {
+            if mode == ViewMode::Markdown && md_too_large {
                 engine.view_notice = Some(md_msg);
             } else {
-                engine.set_view_mode(crate::tail_engine::ViewMode::Markdown);
+                engine.set_view_mode(mode);
             }
             ui.ctx().request_repaint();
         }

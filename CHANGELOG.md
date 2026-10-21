@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **View mode as a drop-down.** The stream bar's `🔤 TXT` / `🔢 HEX` / `⚙ ASM` / `📝 MD`
+  buttons are one drop-down that lists only the modes the stream can use: `📝 MD` is left
+  out above the Markdown limit (`markdown_max_mb`, 1 MB by default), and a disabled line
+  says why, instead of a button whose click only showed a notice. The palette and the key
+  bindings switch modes as before.
+
 ### Fixed
 
 - **Help window can be made narrow.** The key tables did not wrap, so the window could not
