@@ -15,9 +15,9 @@
   lives in the user profile and is never touched.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="FastTail" Manufacturer="Matteo Baccan" Version="$(Version)"
+  <Package Name="FastTail" Manufacturer="Matteo Baccan" Version="$(var.Version)"
            UpgradeCode="B4BA8F80-AA08-454A-B937-8A703D33B202" Scope="perUser" Language="1033">
-    <SummaryInformation Description="FastTail $(Version) - multi-stream log monitor and tail viewer" />
+    <SummaryInformation Description="FastTail $(var.Version) - multi-stream log monitor and tail viewer" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of FastTail is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
@@ -38,8 +38,8 @@
          the folders it creates are removed again (ICE64). -->
     <ComponentGroup Id="Program" Directory="INSTALLFOLDER">
       <Component Id="Executables">
-        <File Id="fasttail.exe" Source="$(BinDir)\fasttail.exe" />
-        <File Id="fasttail_tui.exe" Source="$(BinDir)\fasttail-tui.exe" />
+        <File Id="fasttail.exe" Source="$(var.BinDir)\fasttail.exe" />
+        <File Id="fasttail_tui.exe" Source="$(var.BinDir)\fasttail-tui.exe" />
         <File Id="LICENSE" Source="LICENSE" Name="LICENSE.txt" />
         <File Id="README" Source="README.md" />
         <RegistryValue Root="HKCU" Key="Software\FastTail\Installer" Name="Program"

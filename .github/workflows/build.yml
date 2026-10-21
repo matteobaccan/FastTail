@@ -314,11 +314,18 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches[0].Groups[1].Value
           $bin = "target/${{ matrix.target }}/release"
-          wix build packaging/windows/fasttail.wxs -arch x64 -d Version=$version -d BinDir=$bin -o "dist/${{ matrix.asset }}-$version.msi"
-          if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
+          # wix's messages become annotations, readable without the raw log.
+          function Wix($v, $out) {
+            $log = wix build packaging/windows/fasttail.wxs -arch x64 -d Version=$v -d BinDir=$bin -o $out 2>&1
+            $log | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+              $log | Where-Object { "$_" -match 'error|warning' } | ForEach-Object { Write-Host "::error::$_" }
+              throw "wix build failed"
+            }
+          }
+          Wix $version "dist/${{ matrix.asset }}-$version.msi"
           New-Item -ItemType Directory -Force upgrade-test | Out-Null
-          wix build packaging/windows/fasttail.wxs -arch x64 -d Version=0.0.1 -d BinDir=$bin -o upgrade-test/fasttail-0.0.1.msi
-          if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
+          Wix '0.0.1' upgrade-test/fasttail-0.0.1.msi
           Get-ChildItem dist
 
       # Install the older MSI, upgrade to the new one, check what a user gets (files, the
@@ -329,12 +336,20 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          trap { Write-Host "::error::$_"; break }
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches[0].Groups[1].Value
           $msi = (Resolve-Path "dist/${{ matrix.asset }}-$version.msi").Path
           $old = (Resolve-Path upgrade-test/fasttail-0.0.1.msi).Path
           function Msi($argv) {
             $p = Start-Process msiexec.exe -ArgumentList $argv -Wait -PassThru
-            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "msiexec $argv exited $($p.ExitCode)" }
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              $log = $argv[-1]
+              if (Test-Path $log) {
+                Get-Content $log | Select-String -Pattern 'error|Return value 3' | Select-Object -Last 15 |
+                  ForEach-Object { Write-Host "::error::$_" }
+              }
+              throw "msiexec $argv exited $($p.ExitCode)"
+            }
           }
           function Run($exe) {
             $p = Start-Process $exe -ArgumentList '--version' -Wait -PassThru -NoNewWindow
