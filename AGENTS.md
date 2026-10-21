@@ -102,7 +102,7 @@ debug info for crash logs.
 
 Update this section in each release PR.
 
-- Latest release: **0.20.6** (2026-10-16, nightly): tooltips on the archive picker headers and
+- Latest release: **0.20.7** (2026-10-21, nightly): faster timestamp detection, small GUI control fixes, HTML entity fix, `lzma-rust2` 0.23 with `sevenz-rust2` 0.24.1; `disassembly-view` archived. 0.20.6 (2026-10-16, nightly): tooltips on the archive picker headers and
   on the disabled Stop / Export buttons, `arboard` 3.7.0, `zip` 9.0.4 (egui 0.37, Renovate
   #330 / #335, still open: it needs code changes and a preview). 0.20.5 (2026-10-14):
   Bookmark report (all streams) disabled with
@@ -113,7 +113,7 @@ Update this section in each release PR.
   review (the duplicates and the changes without a measurable gain were closed). 0.20.1
   brought the ASM view (`disassembly-view`, `src/disasm.rs`, dependency `iced-x86`) and the
   fix of issue #161; 0.20.0 made the terminal interface complete.
-- Next: nightly patch releases (`0.20.x`); `disassembly-view` is archived after this release.
+- Next: nightly patch releases (`0.20.x`).
 - In parallel, as nightly patches: `openspec/changes/release-packages/` (deb, rpm,
   AppImage, MSI, dmg, one PR per task group, each validated with a `workflow_dispatch`
   build of `build.yml` on its branch before merging; task 5.0, the downloads grid, is done).

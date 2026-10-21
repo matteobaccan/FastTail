@@ -34,4 +34,4 @@
 
 - [x] 6.1 `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test` green; PR with Linux and Windows CI green
 - [x] 6.2 Local preview exe for the maintainer before the release (`target/fasttail-asm-preview.exe`, 2026-10-05)
-- [ ] 6.3 After the release, archive the change so the `disassembly-view` capability is created
+- [x] 6.3 After the release, archive the change so the `disassembly-view` capability is created
