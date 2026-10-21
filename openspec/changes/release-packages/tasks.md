@@ -26,13 +26,13 @@
 ## 5. Release and documentation
 
 - [x] 5.0 Downloads grid at the top of the release body, generated from the published assets (`.github/scripts/downloads_table.py`), shipped before the packages so it grows with them
-- [ ] 5.1 Release job publishes the new assets (flattened as today); a dispatch run on the branch shows all 14 assets before the change merges
-- [ ] 5.2 README: prebuilt binaries table with every asset, install / upgrade / remove per platform, unsigned-installer prompts, glibc floor
-- [ ] 5.3 `docs/distribution-channels.md`: packages now published as release assets; channels (Flathub, AUR, Homebrew, Scoop, winget) still parked
-- [ ] 5.4 CHANGELOG `[Unreleased]`
+- [x] 5.1 Release job publishes the new assets (flattened as today); each group validated by a dispatch run on its branch; v0.20.16 published all 18 assets
+- [x] 5.2 README: prebuilt binaries table with every asset, install / upgrade / remove per platform, unsigned-installer prompts, glibc floor
+- [x] 5.3 `docs/distribution-channels.md`: packages now published as release assets; channels (Flathub, AUR, Homebrew, Scoop, winget) still parked
+- [x] 5.4 CHANGELOG `[Unreleased]`
 
 ## 6. Wrap-up
 
-- [ ] 6.1 `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test` green; PR with Linux and Windows CI green and a green dispatch build of every target
+- [x] 6.1 `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test` green; PR with Linux and Windows CI green and a green dispatch build of every target
 - [ ] 6.2 The next nightly release carries the packages; the maintainer installs the `.msi` and one Linux package from the release page
 - [ ] 6.3 After the release, archive the change so `release-pipeline` is updated

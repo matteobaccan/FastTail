@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Install, upgrade and remove, per platform.** The README now says how each package is
+  installed, upgraded and removed (MSI, deb, rpm, AppImage, dmg), that `fasttail.ini` is
+  never touched, and what the unsigned-installer prompts ask; the distribution channels
+  page records that the packages are published while the channels stay parked.
+
 ## [0.20.16] - 2026-10-21
 
 ### Added
