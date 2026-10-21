@@ -26,7 +26,7 @@ use crate::ansi::{AnsiColor, AnsiStyle, StyleRun};
 use crate::cli::{CliArgs, ColorChoice, USAGE};
 use crate::compressed::{ArchiveKind, Format};
 use crate::config::FastTailConfig;
-use crate::log_level::{detect_level, LogLevel};
+use crate::log_level::{detect_level_in, LogLevel};
 use crate::scan_job::FilterSpec;
 use crate::stdin_source::StdinKind;
 use crate::tail_engine::{
@@ -78,6 +78,8 @@ pub fn run(cli: &CliArgs) -> i32 {
 
     // Read only: the theme and the rules colour the output, nothing is ever written.
     let config = FastTailConfig::load_read_only();
+    // `--level-bytes` over the `level_detect_bytes` setting.
+    let level_window = cli.level_bytes.unwrap_or(config.level_detect_bytes);
     let palette = colour_output(cli.color.unwrap_or_default()).map(|truecolor| Palette {
         theme: config.theme,
         rules: config
@@ -87,9 +89,11 @@ pub fn run(cli: &CliArgs) -> i32 {
             .collect(),
         truecolor,
         levels: config.level_colors,
+        level_window,
         tokens: config.auto_tokens(),
     });
-    let matcher = Matcher::from_cli(cli);
+    let mut matcher = Matcher::from_cli(cli);
+    matcher.filter.level_window = level_window;
     let options = PrinterOptions {
         prefix: inputs.len() > 1 && !cli.no_prefix,
         line_numbers: cli.line_numbers,
@@ -702,7 +706,8 @@ struct Matcher {
 impl Matcher {
     fn from_cli(cli: &CliArgs) -> Self {
         let filter = FilterSpec::build(&cli.filter, &cli.exclude, cli.case_sensitive, cli.regex)
-            .with_levels(cli.level.unwrap_or(LogLevel::Unknown), false);
+            .with_levels(cli.level.unwrap_or(LogLevel::Unknown), false)
+            .with_level_window(cli.level_bytes.unwrap_or(crate::log_level::DEFAULT_WINDOW));
         Self {
             filter,
             since: cli.since.clone(),
@@ -849,6 +854,8 @@ struct Palette {
     rules: Vec<CompiledHighlight>,
     /// Level colours on (`level_colors` in `fasttail.ini`).
     levels: bool,
+    /// The bytes of a line the level is looked for in.
+    level_window: usize,
     /// Automatic token highlighting as in the window (`auto_highlight` and
     /// `auto_highlight_kinds`), `NONE` while it is off.
     tokens: crate::auto_highlight::TokenKinds,
@@ -1039,7 +1046,11 @@ impl<W: Write> Printer<W> {
             &highlight.rest,
             palette
                 .levels
-                .then(|| palette.theme.level_style(detect_level(text)))
+                .then(|| {
+                    palette
+                        .theme
+                        .level_style(detect_level_in(text, palette.level_window))
+                })
                 .flatten(),
         ) {
             (Some(rule), _) => Sgr::of_rule(rule),
@@ -1428,6 +1439,26 @@ mod tests {
     }
 
     #[test]
+    fn level_bytes_finds_a_level_past_the_default_window() {
+        let late = format!(
+            "{} ERROR boom\n{} INFO fine\n",
+            "x".repeat(150),
+            "y".repeat(150)
+        );
+        let (out, _) = print_text(&["--level", "error"], late.as_bytes(), 64);
+        assert_eq!(out, "", "unknown at 96 bytes");
+        let (out, _) = print_text(
+            &["--level", "error", "--level-bytes", "256"],
+            late.as_bytes(),
+            64,
+        );
+        assert!(
+            out.contains("ERROR boom") && !out.contains("INFO fine"),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn level_and_time_window() {
         let (out, _) = print_text(&["--level", "warn"], LOG.as_bytes(), 64);
         assert_eq!(out.lines().count(), 4, "{out}");
@@ -1651,6 +1682,7 @@ mod tests {
     #[test]
     fn colour_uses_rules_levels_and_the_lines_own_ansi() {
         let palette = Palette {
+            level_window: crate::log_level::DEFAULT_WINDOW,
             theme: CyberTheme::Tron,
             rules: vec![CompiledHighlight::compile(
                 &crate::tail_engine::HighlightRule::new("timeout", [255, 0, 0], [0, 0, 0], false),
@@ -1698,6 +1730,7 @@ mod tests {
     fn automatic_tokens_are_coloured_below_the_rules() {
         use crate::auto_highlight::{TokenKind, TokenKinds};
         let palette = Palette {
+            level_window: crate::log_level::DEFAULT_WINDOW,
             theme: CyberTheme::Tron,
             rules: vec![CompiledHighlight::compile(
                 &crate::tail_engine::HighlightRule::new("refused", [255, 0, 0], [0, 0, 0], false),

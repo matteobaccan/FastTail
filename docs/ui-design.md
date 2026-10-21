@@ -396,7 +396,7 @@ Shown in the text and wrapped views. Markdown shows it only while a search is ac
 2. `🚫 Exclude (Regex):` (warn), with the same controls and the hint `healthcheck|ping|DEBUG...`.
 3. `📊` timeline toggle; while the timeline is open, a `🔍` search-lane toggle (`render_timeline_toggles`). The time range itself is set from the stream bar's time span (§3.3, §4.15); the row holds no time fields.
 4. `Aa` (case) and `.*` (regex) toggles: accent and strong when on.
-5. **Level selector** (110 px combo): `All levels` or `≥ LEVEL`, each entry in its level colour. `?` shows lines without a level; it is visible only when the minimum is above TRACE.
+5. **Level selector** (110 px combo): `All levels` or `≥ LEVEL`, each entry in its level colour; below them **Searched in the first `[96 B]`**, the stream's level window (16–4096, applied when the drag ends; `↺` goes back to the setting). The menu closes on a level, not on the field. `?` shows lines without a level; it is visible only when the minimum is above TRACE.
 6. **`Presets ▾`**: dim when nothing matches, `name ▾` in accent when the stream equals a preset, `name * ▾` in warn when modified.
 7. **`🌐` badge** when the global filter applies to this stream. The tooltip lists `+term` / `-term`.
 
@@ -515,6 +515,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
       | Max UI FPS (Software / VM) | 10–120 |
       | Mouse throttle | 0–1000 ms |
       | Max Markdown size | 1–100 MB |
+      | Level searched in the first bytes (`level_detect_bytes`) | 16–4096 B, default 96; every stream without its own value detects its levels again when the drag ends |
       | Max auto-bookmarks per stream (`auto_bookmark_max`) | 100–100 000, default 10 000; the open streams recompute theirs when the drag ends |
       | Max decompressed size | GB |
       | Max standard input spool | MB |
@@ -1298,6 +1299,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `max_fps_software` | 30 | frame cap on software rendering |
 | `mouse_throttle_ms` | 100 | pointer-move frame throttle (0–1000) |
 | `markdown_max_mb` | 1 | MD view size limit |
+| `level_detect_bytes` | 96 | bytes at the start of a line the level is looked for in (16–4096); a stream's `level_bytes=` overrides it |
 | `auto_bookmark_max` | 10000 | automatic bookmarks kept per stream (clamped to 100–100 000); the `ⓘ auto-bookmarks capped at N` notice |
 | `spool_dir`, `compressed_max_gb`, `stdin_spool_max_mb` | temp, 20, 2048 | compressed and stdin spools |
 | `size_unit` | `Bytes` | Bytes, MB, GB or Hex for the 📦 size |
@@ -1318,7 +1320,7 @@ Environment overrides for support: `FASTTAIL_POLL_INTERVAL_MS`, `FASTTAIL_SIZE_C
 | `[search_history]` | `query_N` | search 🕒 menu |
 | `[bookmarks]` | `file_N`, `lines_N`, `note_<N>_<line>` | manual bookmarks (`★`, `✏`) and their notes, one key per note so a note that does not read back loses only itself (at most 50 files × 1000 lines; a note of a line not kept is dropped). Automatic bookmarks are not stored |
 | `[wrapped_files]` | `file_N` | ↩ Wrap per file (at most 50) |
-| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, `line_numbers`, `time_delta`, `context_lines`, `time_display`, `time_source_zone`, … | per-stream state of the default workspace. `context_lines` is written only above 0, `time_display` and `time_source_zone` only when not the default. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. `line_numbers=` and `time_delta=` are always written, so a saved stream never depends on the `[general]` defaults; a missing value (a file from an older version) takes the default. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
+| `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, `line_numbers`, `time_delta`, `context_lines`, `time_display`, `time_source_zone`, `level_bytes`, … | per-stream state of the default workspace. `context_lines` is written only above 0, `level_bytes` only when it differs from `level_detect_bytes`, `time_display` and `time_source_zone` only when not the default. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. `line_numbers=` and `time_delta=` are always written, so a saved stream never depends on the `[general]` defaults; a missing value (a file from an older version) takes the default. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
 | `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only`, `bookmark` | Color Filters; `bookmark=true` is "Bookmark matching lines" (default false) |
 | `[tool.N]` | `name`, `program`, `args`, `shortcut`, `rule`, `shell`, `match` | external tools, menus, shortcuts |
 | `[filter_preset.N]` | `name`, `include.n`, `exclude.n`, `case_sensitive`, `regex`, `min_level`, `show_unknown_levels`, `time_from`, `time_to` | Presets ▾ |

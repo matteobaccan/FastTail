@@ -2949,15 +2949,23 @@ fn render_log_stream(
                 .color(theme.text_dim())
         };
         let mut new_level: Option<LogLevel> = None;
+        // The stream's own level window: `Some(None)` goes back to the setting.
+        let mut new_window: Option<Option<usize>> = None;
+        let window = engine.level_window();
+        let overridden = engine.level_override().is_some();
+        let draft_id = egui::Id::new("level_bytes").with(&engine.path);
         egui::ComboBox::from_id_salt(egui::Id::new("min_level").with(&engine.path))
             .selected_text(level_text)
             .width(110.0)
+            // The window field takes clicks: a level closes the menu, as before.
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show_ui(ui, |ui| {
                 if ui
                     .selectable_label(!level_active, t(lang, "min_level_off"))
                     .clicked()
                 {
                     new_level = Some(LogLevel::Unknown);
+                    ui.close();
                 }
                 for level in LogLevel::ALL {
                     let label = RichText::new(format!("≥ {}", level.name()))
@@ -2968,13 +2976,44 @@ fn render_log_stream(
                         .clicked()
                     {
                         new_level = Some(level);
+                        ui.close();
                     }
                 }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(t(lang, "level_bytes_stream")).monospace());
+                    let mut bytes = ui.data(|d| d.get_temp::<usize>(draft_id)).unwrap_or(window);
+                    let r = ui
+                        .add(
+                            egui::DragValue::new(&mut bytes)
+                                .range(crate::settings_model::LEVEL_DETECT_BYTES)
+                                .suffix(" B"),
+                        )
+                        .on_hover_text(t(lang, "level_detect_bytes_tip"));
+                    // Applied once the drag is over: each value detects every line again.
+                    if r.dragged() {
+                        ui.data_mut(|d| d.insert_temp(draft_id, bytes));
+                    } else if r.drag_stopped() || r.changed() {
+                        ui.data_mut(|d| d.remove::<usize>(draft_id));
+                        new_window = Some(Some(bytes));
+                    }
+                    if overridden
+                        && ui
+                            .small_button("↺")
+                            .on_hover_text(t(lang, "level_bytes_reset"))
+                            .clicked()
+                    {
+                        new_window = Some(None);
+                    }
+                });
             })
             .response
             .on_hover_text(t(lang, "min_level_tip"));
         if let Some(level) = new_level {
             engine.set_min_level(level);
+        }
+        if let Some(bytes) = new_window {
+            engine.set_level_override(bytes);
         }
         if engine.min_level > LogLevel::Trace {
             let unknown_text = if engine.show_unknown_levels {

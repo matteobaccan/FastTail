@@ -142,6 +142,7 @@ pub fn apply_settings(engine: &mut TailEngine, config: &FastTailConfig) {
     engine.size_check_interval =
         std::time::Duration::from_millis(config.size_check_interval_ms as u64);
     engine.set_markdown_max_bytes((config.markdown_max_mb as u64) * 1024 * 1024);
+    engine.set_level_default(config.level_detect_bytes);
     engine.auto_bookmark_max = config.auto_bookmark_max;
     engine.set_highlight_rules(config.highlight_rules.clone());
     engine.size_unit = config.size_unit;
@@ -214,6 +215,9 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         engine.set_field_width(key, *cells);
     }
     engine.fields_dirty = false;
+    // Before the filters, whose level stage uses it.
+    engine.set_level_override(entry.level_bytes);
+    engine.level_bytes_dirty = false;
     // First, so the filters and the search below run once, on the right text.
     if let Some(mode) = entry.ansi.as_deref().and_then(AnsiMode::from_name) {
         engine.set_ansi_mode(mode);
@@ -337,6 +341,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         context_lines: engine.context_lines(),
         disasm_arch: (engine.asm.arch != crate::disasm::Arch::default())
             .then(|| engine.asm.arch.name().to_string()),
+        level_bytes: engine.level_override(),
         line_numbers: Some(engine.show_line_numbers),
         time_delta: Some(engine.show_time_delta),
         time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
@@ -470,6 +475,7 @@ pub fn save_changes(
         engine.view_columns_dirty = false;
         engine.fields_dirty = false;
         engine.asm_dirty = false;
+        engine.level_bytes_dirty = false;
         return false;
     }
     let mut changed = false;
@@ -491,9 +497,11 @@ pub fn save_changes(
         || engine.context_lines_dirty
         || engine.view_columns_dirty
         || engine.asm_dirty
+        || engine.level_bytes_dirty
         || (engine.fields_dirty && !defer_fields)
     {
         engine.asm_dirty = false;
+        engine.level_bytes_dirty = false;
         engine.ansi_dirty = false;
         engine.timeline_dirty = false;
         engine.collapse_mode_dirty = false;

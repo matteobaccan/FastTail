@@ -32,6 +32,9 @@ pub struct FrozenFilter {
     pub is_regex: bool,
     pub min_level: LogLevel,
     pub show_unknown_levels: bool,
+    /// The bytes of a line the level was looked for in (`frozen.level_bytes`, written
+    /// only when not the default 96).
+    pub level_window: usize,
     /// The time window in force (cache milliseconds), either side open.
     pub time_from: Option<i64>,
     pub time_to: Option<i64>,
@@ -53,6 +56,7 @@ impl FrozenFilter {
             is_regex: engine.filter_is_regex,
             min_level: engine.min_level,
             show_unknown_levels: engine.show_unknown_levels,
+            level_window: engine.level_window(),
             time_from,
             time_to,
         }
@@ -79,6 +83,7 @@ impl FrozenFilter {
             self.is_regex,
         )
         .with_levels(self.min_level, self.show_unknown_levels)
+        .with_level_window(self.level_window)
     }
 
     /// The short label of the tab title: the first include term, else the exclusion,
@@ -154,6 +159,9 @@ impl FrozenFilter {
             "frozen.unknown_levels".into(),
             self.show_unknown_levels.to_string(),
         ));
+        if self.level_window != crate::log_level::DEFAULT_WINDOW {
+            out.push(("frozen.level_bytes".into(), self.level_window.to_string()));
+        }
         if let Some(ms) = self.time_from {
             out.push(("frozen.from".into(), ms.to_string()));
         }
@@ -188,6 +196,10 @@ impl FrozenFilter {
             is_regex: flag("frozen.regex"),
             min_level,
             show_unknown_levels: get("frozen.unknown_levels").is_none_or(|v| v.trim() != "false"),
+            level_window: get("frozen.level_bytes")
+                .and_then(|v| v.trim().parse().ok())
+                .and_then(crate::log_level::valid_window)
+                .unwrap_or(crate::log_level::DEFAULT_WINDOW),
             time_from: millis("frozen.from"),
             time_to: millis("frozen.to"),
         };

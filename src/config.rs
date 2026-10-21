@@ -157,6 +157,10 @@ pub struct FastTailConfig {
     /// Maximum file size in megabytes for Markdown rendering (1..=100 MB, default 1).
     #[serde(default = "default_markdown_max_mb")]
     pub markdown_max_mb: u32,
+    /// Bytes at the start of a line the level is looked for in (16..=4096, default 96);
+    /// a stream's `level_bytes=` overrides it.
+    #[serde(default = "default_level_detect_bytes")]
+    pub level_detect_bytes: usize,
     /// Automatic bookmarks kept per stream (see `TailEngine::auto_bookmark_max`).
     #[serde(default = "default_auto_bookmark_max")]
     pub auto_bookmark_max: usize,
@@ -342,6 +346,10 @@ fn default_auto_bookmark_max() -> usize {
     crate::tail_engine::DEFAULT_AUTO_BOOKMARK_MAX
 }
 
+fn default_level_detect_bytes() -> usize {
+    crate::log_level::DEFAULT_WINDOW
+}
+
 fn default_markdown_max_mb() -> u32 {
     1
 }
@@ -395,6 +403,7 @@ impl Default for FastTailConfig {
             max_fps_software: default_max_fps_software(),
             mouse_throttle_ms: default_mouse_throttle_ms(),
             markdown_max_mb: default_markdown_max_mb(),
+            level_detect_bytes: default_level_detect_bytes(),
             auto_bookmark_max: default_auto_bookmark_max(),
             spool_dir: None,
             compressed_max_gb: default_compressed_max_gb(),
@@ -776,6 +785,7 @@ impl FastTailConfig {
             .set("max_fps_software", self.max_fps_software.to_string())
             .set("mouse_throttle_ms", self.mouse_throttle_ms.to_string())
             .set("markdown_max_mb", self.markdown_max_mb.to_string())
+            .set("level_detect_bytes", self.level_detect_bytes.to_string())
             .set("auto_bookmark_max", self.auto_bookmark_max.to_string())
             .set(
                 "spool_dir",
@@ -1136,6 +1146,12 @@ impl FastTailConfig {
                 if let Ok(v) = s.parse::<u64>() {
                     cfg.mouse_throttle_ms =
                         crate::settings_model::clamp(v, &crate::settings_model::MOUSE_THROTTLE_MS);
+                }
+            }
+            if let Some(s) = general.get("level_detect_bytes") {
+                if let Ok(v) = s.trim().parse::<usize>() {
+                    cfg.level_detect_bytes =
+                        crate::settings_model::clamp(v, &crate::settings_model::LEVEL_DETECT_BYTES);
                 }
             }
             if let Some(s) = general.get("markdown_max_mb") {

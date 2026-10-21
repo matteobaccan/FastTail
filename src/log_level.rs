@@ -7,8 +7,18 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Bytes of a line examined for a level token (the header, not the message body).
-pub const DETECT_WINDOW: usize = 96;
+/// Bytes of a line examined for a level token by default (the header, not the message
+/// body); the `level_detect_bytes` setting and a stream's `level_bytes` change it.
+pub const DEFAULT_WINDOW: usize = 96;
+/// The range of the window: below 16 not even `<n>` and a short date fit, above 4 KB the
+/// first token would too often be a word of the message.
+pub const MIN_WINDOW: usize = 16;
+pub const MAX_WINDOW: usize = 4096;
+
+/// `bytes` as a level window: in range, else `None`.
+pub fn valid_window(bytes: usize) -> Option<usize> {
+    (MIN_WINDOW..=MAX_WINDOW).contains(&bytes).then_some(bytes)
+}
 
 /// Severity of a log line, ordered from the least to the most severe. `Unknown` is used
 /// both for lines without a recognised token and as the "off" value of the level filter.
@@ -175,15 +185,20 @@ fn syslog_level(bytes: &[u8]) -> Option<LogLevel> {
     None
 }
 
-/// Detects the level of a line: the first level token, as a whole word, in the first
-/// [`DETECT_WINDOW`] bytes (case-insensitive; brackets, colons, `=` or quotes around the
-/// token are fine), or a syslog `<n>` priority at the start of the line.
+/// [`detect_level_in`] with the default window.
 pub fn detect_level(line: &str) -> LogLevel {
+    detect_level_in(line, DEFAULT_WINDOW)
+}
+
+/// Detects the level of a line: the first level token, as a whole word, in the first
+/// `window` bytes (case-insensitive; brackets, colons, `=` or quotes around the token are
+/// fine), or a syslog `<n>` priority at the start of the line.
+pub fn detect_level_in(line: &str, window: usize) -> LogLevel {
     let bytes = line.as_bytes();
     if let Some(level) = syslog_level(bytes) {
         return level;
     }
-    let window = &bytes[..bytes.len().min(DETECT_WINDOW)];
+    let window = &bytes[..bytes.len().min(window)];
     let mut i = 0;
     while i < window.len() {
         if !is_word_byte(window[i]) {
@@ -265,16 +280,29 @@ mod tests {
 
     #[test]
     fn only_the_first_window_is_examined() {
-        let long = format!("{} ERROR late", "x".repeat(DETECT_WINDOW));
-        assert_eq!(detect_level(&long), LogLevel::Unknown);
-        let cut = format!("{} ERROR", "x".repeat(DETECT_WINDOW - 4));
-        assert_eq!(
-            detect_level(&cut),
-            LogLevel::Unknown,
-            "token cut by the window"
-        );
-        let fits = format!("{} ERROR", "x".repeat(DETECT_WINDOW - 6));
-        assert_eq!(detect_level(&fits), LogLevel::Error);
+        for window in [DEFAULT_WINDOW, MIN_WINDOW, 256, MAX_WINDOW] {
+            let long = format!("{} ERROR late", "x".repeat(window));
+            assert_eq!(
+                detect_level_in(&long, window),
+                LogLevel::Unknown,
+                "{window}"
+            );
+            let cut = format!("{} ERROR", "x".repeat(window - 4));
+            assert_eq!(
+                detect_level_in(&cut, window),
+                LogLevel::Unknown,
+                "token cut by the window ({window})"
+            );
+            let fits = format!("{} ERROR", "x".repeat(window - 6));
+            assert_eq!(detect_level_in(&fits, window), LogLevel::Error, "{window}");
+        }
+        // The default is today's 96 bytes; a wider window finds the late token.
+        let late = format!("{} ERROR boom", "x".repeat(150));
+        assert_eq!(detect_level(&late), LogLevel::Unknown);
+        assert_eq!(detect_level_in(&late, 256), LogLevel::Error);
+        assert_eq!(valid_window(8), None);
+        assert_eq!(valid_window(16), Some(16));
+        assert_eq!(valid_window(4097), None);
     }
 
     #[test]

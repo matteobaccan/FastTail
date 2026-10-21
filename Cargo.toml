@@ -162,6 +162,10 @@ harness = false
 name = "fields"
 harness = false
 
+[[bench]]
+name = "level_window"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "thin"

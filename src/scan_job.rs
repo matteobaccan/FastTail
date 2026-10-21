@@ -21,7 +21,7 @@ use crate::ansi::AnsiMode;
 use crate::collapse::{Detector, Group};
 use crate::context_lines::{Range, RangeCursor};
 use crate::file_source::FileSource;
-use crate::log_level::{detect_level, LogLevel};
+use crate::log_level::{detect_level_in, LogLevel, DEFAULT_WINDOW};
 use crate::tail_engine::{
     contains_case_insensitive, decode_line_ansi, CompiledHighlight, FileEncoding, NO_TIMESTAMP,
 };
@@ -106,6 +106,8 @@ pub struct FilterSpec {
     pub min_level: LogLevel,
     /// With a minimum level set, whether lines without a detectable level are shown.
     pub show_unknown_levels: bool,
+    /// The bytes of a line the level is looked for in (the stream's window).
+    pub level_window: usize,
     /// The global filter every stream combines with its own terms (see `with_global`):
     /// one compiled set shared by all streams and their jobs.
     pub global: Option<Arc<FilterSpec>>,
@@ -132,6 +134,7 @@ impl FilterSpec {
             is_regex,
             min_level: LogLevel::Unknown,
             show_unknown_levels: false,
+            level_window: DEFAULT_WINDOW,
             global: None,
         }
     }
@@ -156,6 +159,12 @@ impl FilterSpec {
         self
     }
 
+    /// The bytes of a line the level is looked for in (`log_level::detect_level_in`).
+    pub fn with_level_window(mut self, window: usize) -> Self {
+        self.level_window = window;
+        self
+    }
+
     pub fn is_active(&self) -> bool {
         self.has_terms() || self.min_level != LogLevel::Unknown || self.global.is_some()
     }
@@ -167,7 +176,7 @@ impl FilterSpec {
         if self.min_level == LogLevel::Unknown {
             return true;
         }
-        match detect_level(line) {
+        match detect_level_in(line, self.level_window) {
             LogLevel::Unknown => self.show_unknown_levels || self.min_level == LogLevel::Trace,
             level => level >= self.min_level,
         }
@@ -378,6 +387,8 @@ pub struct ScanRange {
     pub ansi: AnsiMode,
     /// Visibility of the nearest non-continuation line before `start_line` under the filter.
     pub parent_visible: bool,
+    /// The bytes of a line the level is looked for in (`Levels`, `Timestamps`).
+    pub level_window: usize,
 }
 
 pub struct ScanJob {
@@ -616,7 +627,7 @@ fn run(
             }
             JobSpec::Levels => {
                 line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    levels.push(detect_level(s) as u8);
+                    levels.push(detect_level_in(s, range.level_window) as u8);
                     true
                 });
                 true
@@ -626,7 +637,7 @@ fn run(
                 line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     timing.push(s);
                     if with_level {
-                        levels.push(detect_level(s) as u8);
+                        levels.push(detect_level_in(s, range.level_window) as u8);
                     }
                     true
                 });
@@ -937,6 +948,7 @@ mod tests {
             encoding,
             ansi: AnsiMode::Raw,
             parent_visible: false,
+            level_window: DEFAULT_WINDOW,
         };
         let spec = JobSpec::Timestamps {
             inherited,
@@ -1080,6 +1092,7 @@ mod tests {
             encoding: FileEncoding::Utf8,
             ansi: AnsiMode::Raw,
             parent_visible: false,
+            level_window: DEFAULT_WINDOW,
         };
         let job = ScanJob::spawn(
             7,

@@ -42,6 +42,8 @@ pub enum Key {
     Token(TokenKind),
     TimeDelta,
     TimeDeltaGap,
+    /// `level_detect_bytes`: where the level is looked for in streams without their own.
+    LevelBytes,
     SizeUnit,
     Telemetry,
     PollInterval,
@@ -190,6 +192,10 @@ impl SettingsForm {
             c.auto_bookmark_max as u64,
             *model::AUTO_BOOKMARK_MAX.start() as u64..=*model::AUTO_BOOKMARK_MAX.end() as u64,
         );
+        let level_bytes = NumberField::new(
+            c.level_detect_bytes as u64,
+            *model::LEVEL_DETECT_BYTES.start() as u64..=*model::LEVEL_DETECT_BYTES.end() as u64,
+        );
         let spool = c
             .spool_dir
             .as_ref()
@@ -287,6 +293,11 @@ impl SettingsForm {
                 Key::TimeDelta,
                 en("Time delta column in new streams"),
                 check(c.show_time_delta),
+            ),
+            Field::new(
+                Key::LevelBytes,
+                en("Level searched in the first N bytes"),
+                Widget::Number(level_bytes),
             ),
             Field::new(
                 Key::AutoBookmarkMax,
@@ -490,6 +501,7 @@ impl SettingsForm {
                 Key::Token(kind) => c.auto_highlight_kinds.set(kind, on),
                 Key::TimeDelta => c.show_time_delta = on,
                 Key::TimeDeltaGap => c.time_delta_gap_ms = num(),
+                Key::LevelBytes => c.level_detect_bytes = num() as usize,
                 Key::SizeUnit => c.size_unit = SIZE_UNITS[choice],
                 Key::Telemetry => c.telemetry_enabled = on,
                 Key::PollInterval => c.poll_interval_ms = num() as u32,
@@ -630,6 +642,24 @@ mod tests {
         assert_eq!(c.poll_interval_ms, 900);
         assert_eq!(c.theme, CyberTheme::Matrix);
         assert_eq!(c.sound_enabled, !FastTailConfig::default().sound_enabled);
+    }
+
+    #[test]
+    fn the_level_window_field_takes_16_to_4096_bytes() {
+        let mut c = FastTailConfig::default();
+        let mut form = SettingsForm::from_config(&c);
+        focus_on(&mut form, Key::LevelBytes);
+        form.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        form.on_key(key(KeyCode::Char('8')));
+        let problems = form.apply(&mut c).unwrap_err();
+        assert_eq!(problems[0].1, "16 to 4096");
+        assert_eq!(c.level_detect_bytes, 96, "nothing applied");
+        form.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        for ch in "256".chars() {
+            form.on_key(key(KeyCode::Char(ch)));
+        }
+        form.apply(&mut c).unwrap();
+        assert_eq!(c.level_detect_bytes, 256);
     }
 
     #[test]

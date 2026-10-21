@@ -12,7 +12,7 @@ use crate::context_lines::{
 };
 use crate::fields::{FieldCatalogue, FieldParser, FieldSpans, ParserChoice, RowCache, RowFields};
 use crate::file_source::FileSource;
-use crate::log_level::{detect_level, LogLevel};
+use crate::log_level::{detect_level_in, LogLevel};
 use crate::scan_job::{
     FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange, VisibleSet, MAX_FILTER_TERMS,
 };
@@ -1424,6 +1424,12 @@ pub struct TailEngine {
     /// Minimum-level stage of the filter (`Unknown` = off) and its unknown-level toggle.
     pub min_level: LogLevel,
     pub show_unknown_levels: bool,
+    /// The bytes of a line the level is looked for in: the stream's override
+    /// (`level_bytes=`) when set, else the `level_detect_bytes` setting.
+    level_default: usize,
+    level_override: Option<usize>,
+    /// The override changed: the stream state is saved again (`level_bytes=`).
+    pub level_bytes_dirty: bool,
     /// Detected level of every line (`LogLevel as u8`), a prefix of the line index: lines
     /// `>= levels.len()` have not been examined yet. Filled on append, on open for files up
     /// to the job threshold, and by a background `Levels` job for larger ones.
@@ -2232,6 +2238,9 @@ impl TailEngine {
             live_refiltered_at: None,
             min_level: LogLevel::Unknown,
             show_unknown_levels: false,
+            level_default: crate::log_level::DEFAULT_WINDOW,
+            level_override: None,
+            level_bytes_dirty: false,
             levels: Vec::new(),
             timestamps: Vec::new(),
             timestamp_hint: crate::timestamp::FormatHint::default(),
@@ -2516,6 +2525,7 @@ impl TailEngine {
             self.filter_is_regex,
         )
         .with_levels(self.min_level, self.show_unknown_levels)
+        .with_level_window(self.level_window())
         .with_global(self.global_filter.clone())
     }
 
@@ -2554,6 +2564,69 @@ impl TailEngine {
         }
     }
 
+    /// The bytes of a line the level is looked for in.
+    pub fn level_window(&self) -> usize {
+        self.level_override.unwrap_or(self.level_default)
+    }
+
+    /// The stream's own window (`level_bytes=`), when it differs from the setting.
+    pub fn level_override(&self) -> Option<usize> {
+        self.level_override
+    }
+
+    /// The `level_detect_bytes` setting, used when the stream has no override.
+    pub fn set_level_default(&mut self, bytes: usize) {
+        let before = self.level_window();
+        self.level_default =
+            bytes.clamp(crate::log_level::MIN_WINDOW, crate::log_level::MAX_WINDOW);
+        // An override equal to the setting is no override.
+        if self.level_override == Some(self.level_default) {
+            self.level_override = None;
+            self.level_bytes_dirty = true;
+        }
+        self.redetect_levels_if(before);
+    }
+
+    /// The stream's own window; `None`, or the setting's value, follows the setting.
+    pub fn set_level_override(&mut self, bytes: Option<usize>) {
+        let bytes = bytes
+            .map(|b| b.clamp(crate::log_level::MIN_WINDOW, crate::log_level::MAX_WINDOW))
+            .filter(|b| *b != self.level_default);
+        if bytes == self.level_override {
+            return;
+        }
+        let before = self.level_window();
+        self.level_override = bytes;
+        self.level_bytes_dirty = true;
+        self.redetect_levels_if(before);
+    }
+
+    /// The window changed from `before`: the levels found with it are dropped and every
+    /// line is examined again (here, or as a `Levels` scan above the job threshold); the
+    /// level filter is applied again with the new levels.
+    fn redetect_levels_if(&mut self, before: usize) {
+        if self.level_window() == before {
+            return;
+        }
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|j| j.kind == ScanKind::Levels)
+        {
+            self.job = None;
+        }
+        // A timestamp scan's level batches were made with the old window.
+        self.timing_levels_next = None;
+        self.truncate_levels(0);
+        self.level_counts = Default::default();
+        self.error_blocks.clear();
+        if self.min_level != LogLevel::Unknown {
+            self.refresh_filters();
+        }
+        self.ensure_levels();
+        self.filter_generation = self.filter_generation.wrapping_add(1);
+    }
+
     pub fn set_show_unknown_levels(&mut self, show: bool) {
         if self.show_unknown_levels != show {
             self.show_unknown_levels = show;
@@ -2568,7 +2641,7 @@ impl TailEngine {
             Some(&v) => LogLevel::from_u8(v),
             None => self
                 .get_line(idx)
-                .map(|line| detect_level(&line))
+                .map(|line| detect_level_in(&line, self.level_window()))
                 .unwrap_or(LogLevel::Unknown),
         }
     }
@@ -2863,8 +2936,9 @@ impl TailEngine {
             return;
         }
         let mut fresh = Vec::with_capacity(total - from);
+        let window = self.level_window();
         self.scan_lines(from, total, |_, text| {
-            fresh.push(detect_level(text) as u8);
+            fresh.push(detect_level_in(text, window) as u8);
             true
         });
         self.push_levels(&fresh);
@@ -5178,6 +5252,7 @@ impl TailEngine {
             encoding: self.encoding,
             ansi: self.ansi_effective(),
             parent_visible: false,
+            level_window: self.level_window(),
         };
         (file, range)
     }
@@ -6865,6 +6940,7 @@ impl TailEngine {
             encoding: self.encoding,
             ansi: self.ansi_effective(),
             parent_visible: self.parent_visible_before(start_line),
+            level_window: self.level_window(),
         };
         // The file being tailed: for a pattern stream `path` is the pattern itself.
         let file = self.current_file.as_deref().unwrap_or(&self.path);

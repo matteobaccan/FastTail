@@ -23,6 +23,7 @@ fn entry(path: PathBuf) -> StreamEntry {
         collapse: Some("numbers".to_string()),
         context_lines: 4,
         disasm_arch: Some("x86-32".into()),
+        level_bytes: Some(256),
         line_numbers: Some(false),
         time_delta: Some(true),
         time_display: Some("+02:00".to_string()),
@@ -519,6 +520,7 @@ fn a_derived_stream_round_trips_with_its_frozen_filter_and_follows_a_moved_bundl
         is_regex: false,
         min_level: LogLevel::Warn,
         show_unknown_levels: false,
+        level_window: 256,
         time_from: Some(1_700_000_000_000),
         time_to: None,
     };

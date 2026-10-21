@@ -63,6 +63,8 @@ PRINT MODE:
     --regex              The filter terms are regular expressions
     --case-sensitive     The filter terms match case-sensitively
     --level <LEVEL>      Minimum level: trace, debug, info, warn, error or fatal
+    --level-bytes <N>    Look for the level in the first N bytes of a line (16 to 4096;
+                         default: the level_detect_bytes setting, 96)
     --since, --until     The time window, as above
     --context <N>        Print N lines (0 to 100) before and after each match, `--` between
                          groups
@@ -116,6 +118,7 @@ pub const VALUE_OPTIONS: &[&str] = &[
     "--since",
     "--until",
     "--level",
+    "--level-bytes",
     "--context",
     "--color",
     "--colour",
@@ -195,6 +198,8 @@ pub struct CliArgs {
     pub case_sensitive: bool,
     /// Minimum level (`--level`), never `Unknown`.
     pub level: Option<LogLevel>,
+    /// `--level-bytes N`: the bytes of a line the level is looked for in (print mode).
+    pub level_bytes: Option<usize>,
     pub context: Option<usize>,
     pub color: Option<ColorChoice>,
     pub line_numbers: bool,
@@ -329,6 +334,22 @@ impl CliArgs {
                     }
                     out.level = Some(level);
                 }
+                "--level-bytes" => {
+                    let v = value("number")?;
+                    let n = v
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(crate::log_level::valid_window)
+                        .ok_or_else(|| {
+                            CliError::Usage(format!(
+                                "invalid level window '{v}' (expected {} to {} bytes)",
+                                crate::log_level::MIN_WINDOW,
+                                crate::log_level::MAX_WINDOW
+                            ))
+                        })?;
+                    out.level_bytes = Some(n);
+                }
                 "--context" => {
                     let v = value("number")?;
                     let n = v
@@ -413,6 +434,7 @@ impl CliArgs {
         if !self.print {
             let print_only = [
                 ("--level", self.level.is_some()),
+                ("--level-bytes", self.level_bytes.is_some()),
                 ("--context", self.context.is_some()),
                 ("--color", self.color.is_some()),
                 ("--line-numbers", self.line_numbers),
@@ -734,6 +756,16 @@ mod tests {
         .unwrap();
         assert_eq!(a.level, Some(LogLevel::Warn));
         assert_eq!(a.color, Some(ColorChoice::Always));
+    }
+
+    #[test]
+    fn level_bytes_is_a_print_option_from_16_to_4096() {
+        let a = CliArgs::parse(["--print", "--level-bytes", "256"], &cwd()).unwrap();
+        assert_eq!(a.level_bytes, Some(256));
+        assert!(usage_error(&["--print", "--level-bytes", "8"]).contains("16 to 4096"));
+        assert!(usage_error(&["--print", "--level-bytes", "lots"]).contains("lots"));
+        assert!(usage_error(&["--level-bytes", "256"]).contains("--print"));
+        assert!(VALUE_OPTIONS.contains(&"--level-bytes"));
     }
 
     #[test]

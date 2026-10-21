@@ -77,6 +77,9 @@ pub struct StreamEntry {
     /// The architecture of the ASM view as `Arch::name` (`disasm_arch=x86-16|x86-32`),
     /// written only when not the default x86-64; older builds ignore it.
     pub disasm_arch: Option<String>,
+    /// The bytes of a line the level is looked for in, when the stream overrides the
+    /// `level_detect_bytes` setting (`level_bytes=N`); older builds ignore it.
+    pub level_bytes: Option<usize>,
     /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`).
     /// The app always records both; `None`, written as no key, is what a file from an
     /// older version reads as, and follows the `[general]` defaults.
@@ -229,6 +232,9 @@ impl Session {
             }
             if let Some(arch) = &s.disasm_arch {
                 sec.set("disasm_arch", arch);
+            }
+            if let Some(bytes) = s.level_bytes {
+                sec.set("level_bytes", bytes.to_string());
             }
             if let Some(show) = s.line_numbers {
                 sec.set("line_numbers", show.to_string());
@@ -414,6 +420,10 @@ impl Session {
                     .and_then(crate::disasm::Arch::from_name)
                     .filter(|a| *a != crate::disasm::Arch::default())
                     .map(|a| a.name().to_string()),
+                level_bytes: sec
+                    .get("level_bytes")
+                    .and_then(|v| v.trim().parse().ok())
+                    .and_then(crate::log_level::valid_window),
                 line_numbers: sec.get("line_numbers").and_then(|v| v.parse().ok()),
                 time_delta: sec.get("time_delta").and_then(|v| v.parse().ok()),
                 time_display: sec

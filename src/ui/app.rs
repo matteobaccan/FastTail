@@ -4317,6 +4317,29 @@ impl FastTailApp {
                             }
                         });
 
+                        // Where the level is looked for: the default of every stream
+                        // without its own value (the stream's level menu sets that).
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "level_detect_bytes")))
+                                    .monospace(),
+                            );
+                            let r = ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.level_detect_bytes)
+                                        .range(crate::settings_model::LEVEL_DETECT_BYTES)
+                                        .suffix(" B"),
+                                )
+                                .on_hover_text(t(lang, "level_detect_bytes_tip"));
+                            // Applied once the drag is over: each value detects every line again.
+                            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                                for engine in &mut self.engines {
+                                    engine.set_level_default(self.config.level_detect_bytes);
+                                }
+                                let _ = self.config.save();
+                            }
+                        });
+
                         // Automatic bookmarks kept per stream; the open streams recompute
                         // theirs under the new cap once the drag is over.
                         ui.horizontal(|ui| {

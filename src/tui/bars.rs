@@ -37,6 +37,8 @@ pub enum BarChip {
     Case,
     Regex,
     Level,
+    /// The bytes the level is looked for in (`≤96 B`): opens the field that sets them.
+    LevelBytes,
     Presets,
     Global,
 }
@@ -240,6 +242,16 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
         l => Style::default().fg(palette.level_color(l)),
     };
     second.push(chip(level, level_style, BarChip::Level));
+    let le = if ascii { "<=" } else { "≤" };
+    second.push(chip(
+        format!("{le}{} B", e.level_window()),
+        if e.level_override().is_some() {
+            on
+        } else {
+            dim
+        },
+        BarChip::LevelBytes,
+    ));
     second.push(chip(tx(lang, "Presets").into(), dim, BarChip::Presets));
     if global {
         let globe = if ascii {
