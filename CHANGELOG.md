@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **CSV records over several lines.** In the column view a CSV record whose quoted cell
+  holds line breaks is one row, the cell showing `⏎` where each break was (at most 1,000
+  lines per record, so a broken quote cannot swallow the file); the text view still shows
+  the lines as written. Separator detection reads such records whole.
+
 ## [0.20.26] - 2026-10-22
 
 ### Added

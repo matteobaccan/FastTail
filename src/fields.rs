@@ -513,19 +513,14 @@ pub const DELIMITED_DETECT_LINES: usize = 64;
 /// least 90 % of them, quotes taken into account; `prefer` (from the extension) breaks a
 /// tie. `None` when no separator does.
 pub fn detect_separator(lines: &[&str], prefer: Option<u8>) -> Option<u8> {
-    let lines: Vec<&str> = lines
-        .iter()
-        .filter(|l| !l.trim().is_empty())
-        .take(DELIMITED_DETECT_LINES)
-        .copied()
-        .collect();
+    let lines = records(lines);
     if lines.is_empty() {
         return None;
     }
     let mut best: Option<(usize, u8)> = None;
     for sep in SEPARATORS {
         let mut counts: HashMap<usize, usize> = HashMap::new();
-        for line in &lines {
+        for line in lines.iter() {
             let mut cells = 0;
             delimited_cells(line.trim_end().as_bytes(), sep, |_, _, _| {
                 cells += 1;
@@ -549,6 +544,32 @@ pub fn detect_separator(lines: &[&str], prefer: Option<u8>) -> Option<u8> {
         }
     }
     best.map(|(_, sep)| sep)
+}
+
+/// The first `DELIMITED_DETECT_LINES` non-blank records of `lines`: a line that leaves a
+/// quote open is joined with the next ones up to the line that closes it.
+fn records(lines: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in lines {
+        if open {
+            if let Some(last) = out.last_mut() {
+                last.push('\n');
+                last.push_str(line);
+            }
+            open = !toggles_quote(line);
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        if out.len() >= DELIMITED_DETECT_LINES {
+            break;
+        }
+        out.push(line.to_string());
+        open = toggles_quote(line);
+    }
+    out
 }
 
 /// Whether the first of `lines` names the columns: its cells are non-empty, not numbers,
@@ -990,12 +1011,44 @@ fn one_line(value: &str) -> String {
         .collect()
 }
 
+/// A quoted CSV cell over several lines on one line: each line break becomes `⏎` (a
+/// `\r` before it goes), other control characters spaces.
+fn one_line_marked(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .chars()
+        .map(|c| match c {
+            '\n' => '⏎',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect()
+}
+
+/// Most lines one quoted CSV record may take: a quote left open in a broken file must not
+/// swallow the rest of it.
+pub const MAX_RECORD_LINES: usize = 1000;
+
+/// Whether `line` leaves a CSV quote open or closes one left open: an odd number of
+/// quotes (a `""` inside a cell counts two).
+pub fn toggles_quote(line: &str) -> bool {
+    memchr::memchr_iter(b'"', line.as_bytes()).count() % 2 == 1
+}
+
 /// Scans `line` into owned, decoded `RowFields` (`spans` is the reused scratch).
 pub fn row_fields(parser: &FieldParser, line: &str, spans: &mut FieldSpans) -> RowFields {
     let shaped = scan(parser, line, spans);
     let fields = spans
         .iter(line)
-        .map(|f| (f.key.to_string(), one_line(&f.value())))
+        .map(|f| {
+            let value = f.value();
+            let shown = if f.doubled {
+                one_line_marked(&value)
+            } else {
+                one_line(&value)
+            };
+            (f.key.to_string(), shown)
+        })
         .collect();
     let outside = match spans.matched {
         Some((a, z)) if shaped => {
