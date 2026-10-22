@@ -588,3 +588,67 @@ fn a_global_field_term_uses_each_streams_parser() {
     assert_eq!(visible(&a), vec![1, 2]);
     assert_eq!(visible(&b), vec![0], "text on a stream without a parser");
 }
+
+fn ts(text: &str) -> i64 {
+    fasttail::timestamp::detect_timestamp(text, Default::default())
+        .unwrap()
+        .0
+}
+
+#[test]
+fn level_and_time_come_from_the_fields() {
+    use fasttail::log_level::LogLevel;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("app.json");
+    let lines = [
+        r#"{"msg":"start","ts":"2026-09-28T14:01:00.000Z","level":"info"}"#,
+        r#"{"msg":"disk almost full","severity":"WARNING","ts":"2026-09-28T14:02:05.120Z"}"#,
+        r#"{"msg":"error in text only","ts":"2026-09-28T14:03:00.000Z","level":"debug"}"#,
+        r#"{"msg":"late","ts":"2026-09-28T14:06:00.000Z","level":"error"}"#,
+    ];
+    write_lines(&file, &lines);
+    for thresholds in [None, Some(0)] {
+        let mut e = match thresholds {
+            None => open(&file),
+            Some(t) => {
+                let mut e = TailEngine::open_with_thresholds(&file, t, t).unwrap();
+                wait_for_jobs(&mut e);
+                e
+            }
+        };
+        assert_eq!(kind(&e), "json");
+        e.ensure_timestamps();
+        wait_for_jobs(&mut e);
+        assert_eq!(e.level_of(1), LogLevel::Warn, "{thresholds:?}");
+        assert_eq!(
+            e.level_of(2),
+            LogLevel::Debug,
+            "the field wins over the text"
+        );
+        assert_eq!(e.line_timestamp(1), Some(ts("2026-09-28T14:02:05.120Z")));
+        e.set_min_level(LogLevel::Warn);
+        wait_for_jobs(&mut e);
+        assert_eq!(visible(&e), vec![1, 3], "{thresholds:?}");
+        e.set_min_level(LogLevel::Unknown);
+        e.set_time_range(
+            Some(ts("2026-09-28T14:02:00Z")),
+            Some(ts("2026-09-28T14:05:00Z")),
+        );
+        wait_for_jobs(&mut e);
+        assert_eq!(visible(&e), vec![1, 2], "{thresholds:?}");
+    }
+}
+
+#[test]
+fn turning_the_parser_off_reads_levels_from_the_text_again() {
+    use fasttail::log_level::LogLevel;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("app.json");
+    write_lines(&file, &[r#"{"msg":"ERROR in text","level":"info"}"#]);
+    let mut e = open(&file);
+    assert_eq!(e.level_of(0), LogLevel::Info);
+    e.set_field_choice(ParserChoice::Off);
+    wait_for_jobs(&mut e);
+    assert_eq!(e.level_of(0), LogLevel::Error);
+    assert_eq!(e.total_lines(), 1);
+}

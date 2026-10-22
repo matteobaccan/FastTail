@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Level and time from the fields.** On a stream with a field parser the level of a line
+  is read from its `level`, `lvl`, `severity` or `log.level` field and its time from its
+  `ts`, `time`, `timestamp`, `@timestamp` or `t` field (ISO 8601, epoch seconds or
+  milliseconds), falling back to the text. Level colours and counters, the minimum level,
+  the time range, the timeline histogram, go to time and the Δt column all use them, on
+  small files and in the background scans alike; changing the parser reads them again
+  without re-indexing the file.
+
 ## [0.20.21] - 2026-10-22
 
 ### Added
