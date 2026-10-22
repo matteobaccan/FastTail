@@ -394,6 +394,7 @@ fn field_names_with_ini_delimiters_keep_their_widths_and_spaces() {
     let session = Session {
         streams: vec![entry.clone()],
         dock_layout: None,
+        folders: Vec::new(),
     };
     // Through the file text, as a save and a load do.
     let text = session.serialized(None);

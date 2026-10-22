@@ -513,6 +513,7 @@ fn session_files_keep_the_mode_and_old_files_read_as_off() {
     let session = Session {
         streams: vec![entry.clone(), StreamEntry::new(log.clone())],
         dock_layout: None,
+        folders: Vec::new(),
     };
     session.save_to(&file).unwrap();
     let text = std::fs::read_to_string(&file).unwrap();

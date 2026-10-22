@@ -7,6 +7,7 @@ pub mod calendar;
 pub mod compare_tab;
 pub mod dock;
 pub mod find_results;
+pub mod folder_dialog;
 pub mod global_filter_bar;
 pub mod hit_list;
 pub mod json_view;

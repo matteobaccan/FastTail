@@ -44,6 +44,8 @@ OPTIONS:
     --line <N>           Open the first file at line N (selected and centred, follow
                          paused); with --print, start the output at line N
     --follow             Enable follow mode on the files opened from the command line
+    --all                Open every file a pattern PATH matches as its own stream (in the
+                         window, a folder group that also opens the files created later)
     --no-follow          Disable follow mode on those files
     --renderer <NAME>    Rendering backend of the window: auto (default), glow, wgpu,
                          software
@@ -193,6 +195,8 @@ pub struct CliArgs {
     /// Where `-` stood among the paths (print mode reads the inputs in order).
     pub stdin_at: usize,
     pub fresh: bool,
+    /// `--all`: a pattern path opens every match, not just the newest.
+    pub all: bool,
     /// Include terms in the order given: print mode uses them all (at most
     /// `MAX_FILTER_TERMS`), the window the last one (`window_filter`).
     pub filter: Vec<String>,
@@ -310,6 +314,7 @@ impl CliArgs {
                     })?);
                 }
                 "--fresh" => out.fresh = true,
+                "--all" => out.all = true,
                 "--follow" => out.follow = Some(true),
                 "--no-follow" => out.follow = Some(false),
                 "-V" | "--version" => out.show_version = true,
@@ -688,7 +693,7 @@ mod tests {
             assert!(m.contains(name) && m.contains("needs"), "{name}: {m}");
         }
         for flag in [
-            "--tui", "--gui", "--fresh", "--follow", "--split", "--ascii", "--print",
+            "--tui", "--gui", "--fresh", "--follow", "--split", "--ascii", "--print", "--all",
         ] {
             assert!(!VALUE_OPTIONS.contains(&flag));
             assert!(CliArgs::parse(["--print", flag], &cwd()).is_ok(), "{flag}");

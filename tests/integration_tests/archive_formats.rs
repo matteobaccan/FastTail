@@ -250,6 +250,7 @@ fn a_tar_entry_session_round_trip_restores_its_bookmarks() {
             ..StreamEntry::default()
         }],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("bundle{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();

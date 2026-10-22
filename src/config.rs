@@ -161,6 +161,9 @@ pub struct FastTailConfig {
     /// a stream's `level_bytes=` overrides it.
     #[serde(default = "default_level_detect_bytes")]
     pub level_detect_bytes: usize,
+    /// Streams an Open all folder group opens at most (1..=256, default 32).
+    #[serde(default = "default_folder_max_streams")]
+    pub folder_max_streams: usize,
     /// Automatic bookmarks kept per stream (see `TailEngine::auto_bookmark_max`).
     #[serde(default = "default_auto_bookmark_max")]
     pub auto_bookmark_max: usize,
@@ -180,6 +183,10 @@ pub struct FastTailConfig {
     pub size_unit: SizeUnit,
     #[serde(default)]
     pub open_files: Vec<PathBuf>,
+    /// Open all folder groups, as their pattern paths (`dir/**/*.log;*.txt`), in
+    /// `[folder_groups]`; their files are in `open_files` too.
+    #[serde(default)]
+    pub folder_groups: Vec<PathBuf>,
     pub recent_files: Vec<PathBuf>,
     #[serde(default)]
     pub search_history: Vec<String>,
@@ -346,6 +353,10 @@ fn default_auto_bookmark_max() -> usize {
     crate::tail_engine::DEFAULT_AUTO_BOOKMARK_MAX
 }
 
+fn default_folder_max_streams() -> usize {
+    crate::folder_source::DEFAULT_MAX_STREAMS
+}
+
 fn default_level_detect_bytes() -> usize {
     crate::log_level::DEFAULT_WINDOW
 }
@@ -404,6 +415,8 @@ impl Default for FastTailConfig {
             mouse_throttle_ms: default_mouse_throttle_ms(),
             markdown_max_mb: default_markdown_max_mb(),
             level_detect_bytes: default_level_detect_bytes(),
+            folder_max_streams: default_folder_max_streams(),
+            folder_groups: Vec::new(),
             auto_bookmark_max: default_auto_bookmark_max(),
             spool_dir: None,
             compressed_max_gb: default_compressed_max_gb(),
@@ -786,6 +799,7 @@ impl FastTailConfig {
             .set("mouse_throttle_ms", self.mouse_throttle_ms.to_string())
             .set("markdown_max_mb", self.markdown_max_mb.to_string())
             .set("level_detect_bytes", self.level_detect_bytes.to_string())
+            .set("folder_max_streams", self.folder_max_streams.to_string())
             .set("auto_bookmark_max", self.auto_bookmark_max.to_string())
             .set(
                 "spool_dir",
@@ -808,6 +822,13 @@ impl FastTailConfig {
             let mut sec = conf.with_section(Some("open_files"));
             for (i, p) in self.open_files.iter().enumerate() {
                 sec.set(format!("file_{}", i), p.to_string_lossy().to_string());
+            }
+        }
+
+        if !self.folder_groups.is_empty() {
+            let mut sec = conf.with_section(Some("folder_groups"));
+            for (i, p) in self.folder_groups.iter().enumerate() {
+                sec.set(format!("group_{i}"), p.to_string_lossy().to_string());
             }
         }
 
@@ -1148,6 +1169,12 @@ impl FastTailConfig {
                         crate::settings_model::clamp(v, &crate::settings_model::MOUSE_THROTTLE_MS);
                 }
             }
+            if let Some(s) = general.get("folder_max_streams") {
+                if let Ok(v) = s.trim().parse::<usize>() {
+                    cfg.folder_max_streams =
+                        crate::settings_model::clamp(v, &crate::settings_model::FOLDER_MAX_STREAMS);
+                }
+            }
             if let Some(s) = general.get("level_detect_bytes") {
                 if let Ok(v) = s.trim().parse::<usize>() {
                     cfg.level_detect_bytes =
@@ -1228,6 +1255,20 @@ impl FastTailConfig {
                     cfg.open_files.push(p);
                 }
             }
+        }
+
+        if let Some(sec) = conf.section(Some("folder_groups")) {
+            let mut entries: Vec<_> = sec.iter().collect();
+            entries.sort_by_key(|(k, _)| {
+                k.strip_prefix("group_")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(usize::MAX)
+            });
+            cfg.folder_groups = entries
+                .into_iter()
+                .map(|(_, v)| PathBuf::from(v))
+                .filter(|p| crate::wildcard::is_pattern_path(p))
+                .collect();
         }
 
         if let Some(sec) = conf.section(Some("recent_files")) {

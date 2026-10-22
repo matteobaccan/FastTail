@@ -35,7 +35,7 @@ In Open all mode every matching file SHALL open as its own stream in one new tab
 - **THEN** only `app.log` opens; with the pattern `*.gz` added, `app.log.1.gz` opens decompressed as well.
 
 ### Requirement: Folder Source Persistence
-A Follow newest stream SHALL keep being stored as its `dir/pattern` path, with `folder_patterns` and `folder_recursive` added only when it uses several patterns or subfolders. An Open all group SHALL be stored in the workspace and in session files as a folder entry holding its folder, patterns, subfolder option and cap, with the path relative to the session file when possible; on restore the group SHALL rescan the folder and open the current matches, each file getting back its saved stream state. Workspace and session files written before this change SHALL load unchanged.
+A Follow newest stream SHALL keep being stored as its `dir/pattern` path; several patterns SHALL be written separated by `;` (`dir/*.log;*.txt`) and the subfolder option as a `**` folder before them (`dir/**/app.log`), so the path alone names the stream. An Open all group SHALL be stored in the workspace (`[folder_groups]`) and in session files (`[folder_N]`) as the same pattern path, with the path relative to the session file when possible, while at least one of its tabs is open; on restore the group SHALL rescan the folder and open the current matches, each file getting back its saved stream state. Workspace and session files written before this change SHALL load unchanged.
 
 #### Scenario: Group restored after restart
 - **WHEN** FastTail is closed with an Open all group on `C:\logs` and a file `new.log` is created there before the next start

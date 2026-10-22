@@ -95,7 +95,7 @@ Sources: `src/main.rs`, `src/ui/mod.rs`, `src/ui/app.rs`, `src/renderer.rs`
 14. Applies requests the dock left behind: Find results jumps, `find_all_request` from a stream bar, preset events, closed tabs, changed bookmarks and bookmark notes, wrap, ANSI mode, timeline and collapse-mode flags, search-view preferences, time-delta preferences, and the OS attention request.
 15. Draws the free-floating dialogs:
     - BareTail import, Settings, Filters / Color Filters, About, Help.
-    - The Open pattern prompt, the session confirmation and "missing" dialogs, the archive picker (which pulls the rows its tar scan found before it draws), and the compressed-open and session-save notices.
+    - The Open folder dialog, the session confirmation and "missing" dialogs, the archive picker (which pulls the rows its tar scan found before it draws), and the compressed-open and session-save notices.
 16. Draws the screensaver, then the lock overlay on top of everything.
 17. In borderless mode (not maximized, not locked), adds the resize zones and the 1 px frame with the corner grip.
 
@@ -235,7 +235,7 @@ Fill is `panel_bg`, with a 1 px stroke of accent at 25 % and inner margin 10/6. 
 |---|---|---|
 | `📁 {Open File}` | fill `button_bg`, 1.2 px accent stroke, strong primary text | Native multi-file dialog "Open Log Files" with the filter `Log Files (*.log, *.txt, *.*)` |
 | `🕒` (30 px) | same | Menu: recent files (`📄 name (full path)`, at most 15 kept), separator, `🗑 Clear recent files history` (warn). Shows *No recent files* in italics when empty. The tooltip is the localized "Recent Files". |
-| `📂*` (30 px) | same | Opens the **Open pattern** prompt, prefilled with `<dir of most recent file>\*.log` |
+| `📂*` (30 px) | same | Opens the **Open folder** dialog on the folder of the most recent file, patterns `*.log` |
 | `🗂` (30 px) | same | **Sessions** menu (§4.12) |
 | `⚡ {Color Filters} (N)` | warn text and stroke; fill `#FEF9EB` on Light, `#14120C` on dark | Toggles the Filters / Color Filters window. N is the number of enabled rules with a non-empty pattern. |
 | `▶ Play` | green `#00C864` text and stroke; fill `#EBFCF2` / `#0A1812` | Every engine: `is_watching = true`, and follow on unless the stream is compressed |
@@ -373,7 +373,7 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
     - *the decoder window exceeds the 256 MiB limit* (an xz dictionary or zstd window over `MAX_DECODER_WINDOW`);
     - *decompression failed: {error}*.
 14. **Stdin status**: `⏹ input ended · N lines`, `⚠ cannot read…`, `ⓘ earlier input discarded…`.
-15. **Pattern stream**: `📂* glob ▸ file` (`secondary_accent`), or `▸ waiting…` in warn, followed by `ⓘ switched to name`.
+15. **Pattern stream**: `📂* glob ▸ file` (`secondary_accent`; the patterns joined by `;`, prefixed `**/` with subfolders), or `▸ waiting…` in warn, followed by `ⓘ switched to name`. Any stream whose file was deleted shows `⚠ file removed` in warn (tooltip: its lines stay, a new file of that name is tailed from the start).
 16. **`📦 size`** button, which cycles Bytes → MB → GB → Hex (`0x…`). The chosen unit applies to every stream.
 17. **`Throughput: x.x KB/s`** when greater than 0.
 18. **Search**:
@@ -517,6 +517,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
       | Mouse throttle | 0–1000 ms |
       | Max Markdown size | 1–100 MB |
       | Level searched in the first bytes (`level_detect_bytes`) | 16–4096 B, default 96; every stream without its own value detects its levels again when the drag ends |
+      | Streams per folder (`folder_max_streams`) | 1–256, default 32: the most files an Open all folder group opens |
       | Max auto-bookmarks per stream (`auto_bookmark_max`) | 100–100 000, default 10 000; the open streams recompute theirs when the drag ends |
       | Max decompressed size | GB |
       | Max standard input spool | MB |
@@ -563,11 +564,13 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
   3. **⚡ COLOR FILTERS & VISIBILITY**: six bullet paragraphs (evaluation order, reordering, bold and italic, visibility filters, log levels, recent files).
 - Keys are written in capitals joined with ` + ` (house style).
 
-### 4.5 Open pattern prompt — `📂* Open pattern`
+### 4.5 Open folder dialog — `📂 Open folder`
 
-- **Opened by** the `📂*` toolbar button (prefilled with `<recent dir>\*.log`) or by **dropping a folder** on the window (prefilled with `<folder>\*.log`).
-- **Window:** id `fasttail_pattern_prompt`, not resizable, not collapsible, anchored at the centre. The text field is 420 px, takes focus when opened, and has a hint.
-- **Behaviour:** the text is validated live. The directory part must exist; otherwise `ⓘ invalid` shows in warn. `Open` is disabled while the text is invalid. `Enter` submits and `Esc` cancels.
+Source: `src/ui/folder_dialog.rs` (`FolderPrompt`), groups in `src/folder_source.rs` (`FolderGroup`) and `src/ui/app.rs` (`open_folder_group`, `poll_folder_groups`).
+
+- **Opened by** the `📂*` toolbar button and the palette's *Open folder…* (folder of the most recent file) or by **dropping a folder** on the window (that folder); patterns `*.log`.
+- **Window:** id `fasttail_folder_prompt`, not resizable, not collapsible, anchored at the centre. A grid: **Folder** (340 px text field, focused when opened, and `…` for the system folder picker), **Files** (patterns separated by `;`, hint `*.log`), **Include subfolders** check box, **Mode** radio buttons **Follow newest** / **Open all**, each with a tooltip.
+- **Behaviour:** validated live: the folder must exist, otherwise `ⓘ Needs an existing folder` in warn and `Open` is disabled. `Enter` opens, `Esc` or `Cancel` closes. Follow newest opens the pattern stream `dir/patterns` (`dir/**/patterns` with subfolders). Open all opens the matching files as tabs of one new node, split to the right of the dock (the whole dock when it is empty); later files are appended to the node of the group's last tab with the active tab unchanged. A notice window says how many files the `folder_max_streams` cap skipped, that the scan stopped at 10,000 entries, or that nothing matches yet.
 
 ### 4.6 Session dialogs
 
@@ -784,7 +787,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/hit_list.rs`, `src/ui/overvi
 | `🖥` | CPU meter |
 | `📁` | Open File; spool folder picker |
 | `🕒` | recent files; search history |
-| `📂*` / `📂` | open pattern / pattern stream label; empty-state icon; archive picker "Open" |
+| `📂*` / `📂` | open folder / pattern stream label; empty-state icon; archive picker "Open" |
 | `🗂` | sessions |
 | `⚡` | Color Filters; Include field; FASTTAIL headers; Performance section |
 | `▶` / `■` | watching / paused (tab title); `▶` also marks the current hit and runs tools |
@@ -1109,14 +1112,14 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 - **Hit lists.** When one has focus it locks the arrows and Escape (`set_focus_lock_filter`) so egui's focus navigation does not steal them. `Esc` gives the keyboard back to the stream.
 - **Order of consumption.** App-level shortcuts that could collide with stream shortcuts are **consumed before the dock is drawn**: tool shortcuts, `CTRL + SHIFT + 1..9`, `CTRL + SHIFT + F`, `CTRL + SHIFT + H` and `CTRL + L`. egui matches shortcuts logically, so otherwise `CTRL + F` would also fire on `CTRL + SHIFT + F`.
 - **Lock.** While locked, events are filtered before any handler runs (§4.11).
-- **Auto-focus.** The pattern prompt, the lock PIN field, the preset name field, the Find results query (after `CTRL + SHIFT + F`, with its text selected) and the go-to box take focus when they open.
+- **Auto-focus.** The Open folder dialog's folder field, the lock PIN field, the preset name field, the Find results query (after `CTRL + SHIFT + F`, with its text selected) and the go-to box take focus when they open.
 
 ### 7.2 Keyboard shortcuts
 
 | Shortcut | Scope | Action |
 |---|---|---|
 | `F1` | global | Toggle the Help window |
-| `Esc` | global | Close the topmost of Help, Settings, Filters and About, and end text input. Also closes the pattern prompt, session dialogs, notices and the preset modal; leaves the search box, the go-to box and hit lists; cancels the bookmark note editor; on the rows, stops a rule walk, else clears the outlined word, before leaving the context view when no widget has the focus |
+| `Esc` | global | Close the topmost of Help, Settings, Filters and About, and end text input. Also closes the Open folder dialog, session dialogs, notices and the preset modal; leaves the search box, the go-to box and hit lists; cancels the bookmark note editor; on the rows, stops a rule walk, else clears the outlined word, before leaving the context view when no widget has the focus |
 | `Space` | focused stream | Toggle Follow (not on a compressed stream, not while a text field has the keyboard) |
 | `CTRL + SHIFT + T` | global | Toggle always-on-top |
 | `CTRL + L` | global | Lock behind the PIN (needs a PIN) |
@@ -1157,7 +1160,7 @@ Sources: `src/ui/app.rs`, `src/ui/dock.rs`, `src/ui/find_results.rs`, `src/ui/gl
 | `Enter` | results pane | Make the selected hit current and centre it (pauses follow) |
 | `Enter` | Find results | Toggle the group on a header, or show the hit |
 | `Enter` | Find results query box | Run the search and move focus to the results |
-| `Enter` / `Esc` | pattern prompt, preset modal, lock | Submit / cancel (the lock accepts only `Enter`) |
+| `Enter` / `Esc` | Open folder dialog, preset modal, lock | Submit / cancel (the lock accepts only `Enter`) |
 
 The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL + END`, the arrow keys, Page Up / Page Down and Home / End navigation, or the keys of the note editor.
 
@@ -1184,7 +1187,7 @@ The Help window lists a subset of these. It does not list `CTRL + HOME` / `CTRL 
 - **Stream bar:** click `📦 size` to cycle units; click the toggles.
 - **Drag and drop:**
   - Files open as streams. gzip, bzip2, xz, zstd, zip and tar files are recognised by content; a multi-entry zip or any tar opens the archive picker (§4.8).
-  - A **folder** opens the pattern prompt with `folder\*.log`.
+  - A **folder** opens the Open folder dialog on it.
 - **Any input** (key, pointer move, click, wheel, text) resets the screensaver timer. While the screensaver runs, any raw event dismisses it.
 
 ---
@@ -1302,6 +1305,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `mouse_throttle_ms` | 100 | pointer-move frame throttle (0–1000) |
 | `markdown_max_mb` | 1 | MD view size limit |
 | `level_detect_bytes` | 96 | bytes at the start of a line the level is looked for in (16–4096); a stream's `level_bytes=` overrides it |
+| `folder_max_streams` | 32 | most files an Open all folder group opens (1–256); beyond, the most recently modified open |
 | `auto_bookmark_max` | 10000 | automatic bookmarks kept per stream (clamped to 100–100 000); the `ⓘ auto-bookmarks capped at N` notice |
 | `spool_dir`, `compressed_max_gb`, `stdin_spool_max_mb` | temp, 20, 2048 | compressed and stdin spools |
 | `size_unit` | `Bytes` | Bytes, MB, GB or Hex for the 📦 size |
@@ -1322,6 +1326,7 @@ Environment overrides for support: `FASTTAIL_POLL_INTERVAL_MS`, `FASTTAIL_SIZE_C
 | `[search_history]` | `query_N` | search 🕒 menu |
 | `[bookmarks]` | `file_N`, `lines_N`, `note_<N>_<line>` | manual bookmarks (`★`, `✏`) and their notes, one key per note so a note that does not read back loses only itself (at most 50 files × 1000 lines; a note of a line not kept is dropped). Automatic bookmarks are not stored |
 | `[wrapped_files]` | `file_N` | ↩ Wrap per file (at most 50) |
+| `[folder_groups]` | `group_N` | Open all folder groups as pattern paths (`dir/**/*.log;*.txt`), written only while the group has a tab open; their files are in `[open_files]` too. Older builds ignore the section. Named sessions write `[folder_N]` with `path` and `rel` |
 | `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, `line_numbers`, `time_delta`, `context_lines`, `time_display`, `time_source_zone`, `level_bytes`, `hidden`, … | per-stream state of the default workspace. `context_lines` is written only above 0, `hidden=120-180,4096` (1-based ranges, at most 1,000) only when lines are hidden, `level_bytes` only when it differs from `level_detect_bytes`, `time_display` and `time_source_zone` only when not the default. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. `line_numbers=` and `time_delta=` are always written, so a saved stream never depends on the `[general]` defaults; a missing value (a file from an older version) takes the default. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
 | `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only`, `bookmark` | Color Filters; `bookmark=true` is "Bookmark matching lines" (default false) |
 | `[tool.N]` | `name`, `program`, `args`, `shortcut`, `rule`, `shell`, `match` | external tools, menus, shortcuts |

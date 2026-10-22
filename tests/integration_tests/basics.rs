@@ -1225,6 +1225,28 @@ fn test_i18n_exhaustive_coverage() {
         "act_time_written",
         "act_time_utc",
         "act_time_local",
+        "open_folder",
+        "open_folder_desc",
+        "open_folder_folder",
+        "open_folder_browse",
+        "open_folder_patterns",
+        "open_folder_patterns_tip",
+        "open_folder_recursive",
+        "open_folder_recursive_tip",
+        "open_folder_mode",
+        "open_folder_newest",
+        "open_folder_newest_tip",
+        "open_folder_all",
+        "open_folder_all_tip",
+        "open_folder_invalid",
+        "open_folder_bad_patterns",
+        "folder_waiting",
+        "folder_skipped",
+        "folder_scan_limited",
+        "file_removed",
+        "file_removed_tip",
+        "folder_max_streams",
+        "folder_max_streams_tip",
     ];
 
     for lang in Language::ALL {
@@ -1292,6 +1314,9 @@ fn test_i18n_exhaustive_coverage() {
         // "Stream" (German, Dutch) and "Session" (French, Friulian) are the local words.
         "palette_cat_stream",
         "palette_cat_session",
+        // "Folder" (Polish) and "Mode" (French) are the local words.
+        "open_folder_folder",
+        "open_folder_mode",
     ];
     let fallbacks: Vec<String> = Language::ALL
         .iter()

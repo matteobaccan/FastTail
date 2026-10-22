@@ -37,6 +37,9 @@ pub const SCREENSAVER_TIMEOUT_MINS: RangeInclusive<u32> = 0..=120;
 /// level is looked for in.
 pub const LEVEL_DETECT_BYTES: RangeInclusive<usize> =
     crate::log_level::MIN_WINDOW..=crate::log_level::MAX_WINDOW;
+/// `[general] folder_max_streams`: the streams an Open all folder group opens at most.
+pub const FOLDER_MAX_STREAMS: RangeInclusive<usize> =
+    crate::folder_source::MIN_MAX_STREAMS..=crate::folder_source::MAX_MAX_STREAMS;
 /// `[general] time_delta_gap_ms`: gap the time delta column marks, up to a day.
 pub const TIME_DELTA_GAP_MS: RangeInclusive<u64> = 0..=86_400_000;
 
@@ -152,6 +155,7 @@ mod tests {
         assert!(MOUSE_THROTTLE_MS.contains(&cfg.mouse_throttle_ms));
         assert!(MARKDOWN_MAX_MB.contains(&cfg.markdown_max_mb));
         assert!(LEVEL_DETECT_BYTES.contains(&cfg.level_detect_bytes));
+        assert!(FOLDER_MAX_STREAMS.contains(&cfg.folder_max_streams));
         assert!(AUTO_BOOKMARK_MAX.contains(&cfg.auto_bookmark_max));
         assert!(COMPRESSED_MAX_GB.contains(&cfg.compressed_max_gb));
         assert!(STDIN_SPOOL_MAX_MB.contains(&cfg.stdin_spool_max_mb));

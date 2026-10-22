@@ -700,6 +700,7 @@ fn the_timeline_opens_only_on_its_stream_and_is_saved_with_it() {
     let session = Session {
         streams: vec![entry, StreamEntry::new(b.clone())],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("t{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();

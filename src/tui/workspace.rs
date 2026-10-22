@@ -385,6 +385,7 @@ mod tests {
         let session = Session {
             streams: vec![entry],
             dock_layout: None,
+            folders: Vec::new(),
         };
         let file = dir.path().join("x.fasttail-session.ini");
         session.save_to(&file).unwrap();

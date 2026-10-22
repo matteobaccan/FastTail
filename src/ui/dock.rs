@@ -1953,7 +1953,13 @@ fn render_log_stream(
         render_stdin_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
-        if let Some(glob) = engine.pattern.clone() {
+        if let Some(glob) = engine.folder.as_ref().map(|f| {
+            if f.recursive {
+                format!("**/{}", f.patterns_text())
+            } else {
+                f.patterns_text()
+            }
+        }) {
             ui.separator();
             let label = match engine.current_file_name() {
                 Some(name) => RichText::new(format!("📂* {glob} ▸ {name}"))
@@ -1977,6 +1983,17 @@ fn render_log_stream(
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(500));
             }
+        }
+
+        // The file was deleted: its lines stay until a file of that name comes back.
+        if engine.file_removed {
+            ui.separator();
+            ui.label(
+                RichText::new(format!("⚠ {}", t(lang, "file_removed")))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .on_hover_text(t(lang, "file_removed_tip"));
         }
 
         // Clickable File Size toggle (Bytes -> MB -> GB -> Hex -> Bytes)
