@@ -147,3 +147,64 @@ fn hidden_lines_are_saved_with_the_stream() {
     assert_eq!(again.visible_line_count(), 239);
     assert!(!again.hidden_dirty);
 }
+
+#[test]
+fn context_lines_never_bring_a_hidden_line_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    numbered(&log, 300);
+    let mut engine = TailEngine::open(&log).unwrap();
+    engine.set_context_lines(3);
+    // No text filter: line 150 alone.
+    engine.hide_lines([149]);
+    assert_eq!(engine.visible_line_count(), 299);
+    assert!((0..299).all(|r| engine.get_actual_line_idx(r) != Some(149)));
+    // A filter with context: the line right after an ERROR line stays hidden.
+    engine.set_include_filter("ERROR");
+    engine.hide_lines([20]);
+    let shown: Vec<usize> = (0..engine.visible_line_count())
+        .filter_map(|r| engine.get_actual_line_idx(r))
+        .collect();
+    assert!(shown.contains(&19) && shown.contains(&21), "{shown:?}");
+    assert!(!shown.contains(&20) && !shown.contains(&149), "{shown:?}");
+    engine.update_search("retry");
+    assert_eq!(engine.active_match_count(), shown.len());
+}
+
+#[test]
+fn select_all_and_collapsed_rows_hide_what_is_meant() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    numbered(&log, 100);
+    let mut engine = TailEngine::open(&log).unwrap();
+    engine.set_include_filter("ERROR");
+    engine.select_all_visible();
+    assert_eq!(engine.hide_selection_or_row(None), 10);
+    assert!(!engine.has_selection());
+    engine.set_include_filter("");
+    assert_eq!(engine.visible_line_count(), 90);
+    // The clicked row outside the selection: that row only.
+    engine.select_row(0);
+    assert_eq!(engine.hide_selection_or_row(Some(5)), 1);
+    assert!(engine.is_hidden(5) && !engine.is_hidden(0));
+}
+
+#[test]
+fn many_ranges_are_capped_quickly_and_saved_ones_past_the_end_are_kept() {
+    let start = std::time::Instant::now();
+    let many: Vec<_> = (0..200_000).map(|i| (i * 2, i * 2)).collect();
+    let capped = merge_ranges(many);
+    assert_eq!(capped.len(), fasttail::tail_engine::MAX_HIDDEN_RANGES);
+    assert!(start.elapsed().as_secs() < 2, "{:?}", start.elapsed());
+    // A stream that has not reached a saved range yet keeps it; the count covers only
+    // the lines that exist.
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    numbered(&log, 100);
+    let mut engine = TailEngine::open(&log).unwrap();
+    engine.set_hidden_ranges(vec![(90, 99), (500, 600)]);
+    assert_eq!(engine.hidden_ranges(), &[(90, 99), (500, 600)]);
+    assert_eq!(engine.hidden_count(), 10);
+    engine.set_hidden_ranges(vec![(0, usize::MAX - 1)]);
+    assert_eq!(engine.hidden_count(), 100, "no overflow");
+}

@@ -4636,8 +4636,16 @@ impl TailEngine {
                 return;
             }
         }
-        self.context_ranges = ContextRanges::build(n as usize, &self.filtered_lines);
+        self.context_ranges = self.context_ranges_for(&self.filtered_lines);
         self.context_rows_changed();
+    }
+
+    /// The context ranges of `matches` for the stream's `N`, without its hidden lines.
+    fn context_ranges_for(&self, matches: &[usize]) -> ContextRanges {
+        let mut ranges = ContextRanges::new(self.context_lines as usize)
+            .with_hidden(Arc::from(self.hidden.as_slice()));
+        ranges.extend(matches);
+        ranges
     }
 
     /// Builds the ranges for the current `N` over `matches` (a prefix of `filtered_lines`)
@@ -4645,6 +4653,7 @@ impl TailEngine {
     /// takes the result. False when the thread could not be started.
     fn spawn_context_rebuild(&mut self, matches: Arc<[usize]>) -> bool {
         let n = self.context_lines as usize;
+        let hidden: Arc<[(usize, usize)]> = Arc::from(self.hidden.as_slice());
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (tx, rx) = channel();
         let worker_matches = Arc::clone(&matches);
@@ -4652,7 +4661,8 @@ impl TailEngine {
         let spawned = std::thread::Builder::new()
             .name("fasttail-context".into())
             .spawn(move || {
-                let built = ContextRanges::build_cancellable(n, &worker_matches, &worker_cancel);
+                let built =
+                    ContextRanges::build_cancellable(n, hidden, &worker_matches, &worker_cancel);
                 let _ = tx.send(built);
             });
         if spawned.is_err() {
@@ -4680,7 +4690,7 @@ impl TailEngine {
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             // The worker died: build here, from the first match.
             Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                (ContextRanges::new(self.context_lines as usize), 0)
+                (self.context_ranges_for(&[]), 0)
             }
         };
         ranges.extend(&self.filtered_lines[covered..]);
@@ -4706,7 +4716,7 @@ impl TailEngine {
     /// No match any more: the context ranges go with them.
     fn clear_filtered(&mut self) {
         self.filtered_lines = Vec::new();
-        self.context_ranges = ContextRanges::new(self.context_lines as usize);
+        self.context_ranges = self.context_ranges_for(&[]);
         self.context_rebuild = None;
     }
 
@@ -4718,6 +4728,11 @@ impl TailEngine {
             return;
         }
         self.filtered_lines.truncate(keep);
+        if self.context_ranges.has_hidden() {
+            // Cut around hidden lines, the ranges cannot be shortened in place.
+            self.context_ranges = self.context_ranges_for(&self.filtered_lines);
+            return;
+        }
         self.context_ranges
             .truncate_after(self.filtered_lines.last().copied());
         let covered = self.context_rebuild.as_ref().map(|r| r.covered);
@@ -4727,8 +4742,7 @@ impl TailEngine {
             if !self.spawn_context_rebuild(matches) {
                 // No thread: build here, and let the rows follow once the refresh that
                 // is cutting the matches is over.
-                self.context_ranges =
-                    ContextRanges::build(self.context_lines as usize, &self.filtered_lines);
+                self.context_ranges = self.context_ranges_for(&self.filtered_lines);
                 self.context_rows_stale = true;
             }
         }
@@ -8311,31 +8325,60 @@ impl TailEngine {
         let mut added: Vec<(usize, usize)> = Vec::new();
         for line in lines {
             match added.last_mut() {
-                Some((_, end)) if line <= *end + 1 && line >= *end => *end = line,
+                Some((_, end)) if line <= end.saturating_add(1) && line >= *end => *end = line,
                 _ => added.push((line, line)),
             }
         }
         if added.is_empty() {
             return;
         }
+        // Pruning in place needs the filtered lines to be the visible set already.
+        let was_filtered = self.is_filter_active();
         let mut all = std::mem::take(&mut self.hidden);
         all.extend(added);
         self.hidden = merge_ranges(all);
-        self.hidden_changed();
+        self.hidden_changed(was_filtered);
+    }
+
+    /// Hides what a "Hide lines" command means: the selection when there is one and
+    /// `row_line` (the row the command was given on, if any) is part of it, else the
+    /// row of `row_line`, its whole group when it is a closed one. Returns the number of
+    /// lines newly hidden.
+    pub fn hide_selection_or_row(&mut self, row_line: Option<usize>) -> usize {
+        let before = self.hidden_count();
+        let selection_applies = self.has_selection()
+            && row_line.is_none_or(|l| self.selection_all || self.selection.contains(&l));
+        if selection_applies {
+            if self.selection_all {
+                let rows = self.visible_line_count();
+                let lines: Vec<usize> = (0..rows)
+                    .filter_map(|r| self.row_span(r))
+                    .flat_map(|(a, b)| a..=b)
+                    .collect();
+                self.hide_lines(lines);
+            } else {
+                let lines: Vec<usize> = self.selection.iter().copied().collect();
+                self.hide_lines(lines);
+            }
+        } else if let Some(line) = row_line {
+            let lines = self.row_selection(line);
+            self.hide_lines(lines);
+        }
+        self.hidden_count().saturating_sub(before)
     }
 
     /// Shows the hidden range at `index` of `hidden_ranges` again.
     pub fn show_hidden_range(&mut self, index: usize) {
         if index < self.hidden.len() {
             self.hidden.remove(index);
-            self.hidden_changed();
+            self.hidden_changed(false);
         }
     }
 
     pub fn show_all_hidden(&mut self) {
         if !self.hidden.is_empty() {
             self.hidden.clear();
-            self.hidden_changed();
+            self.hidden_changed(false);
         }
     }
 
@@ -8344,18 +8387,11 @@ impl TailEngine {
         &self.hidden
     }
 
-    /// Restores saved ranges (`hidden=`), dropping the ones past the end of the file
-    /// once it is indexed (while the index is being built, every range is kept).
+    /// Restores saved ranges (`hidden=`). They are all kept, even past the current end:
+    /// a stream still being indexed, decompressed or derived has not reached them yet,
+    /// and the count only covers the lines that exist.
     pub fn set_hidden_ranges(&mut self, ranges: Vec<(usize, usize)>) {
-        let total = if self.index_pending {
-            usize::MAX
-        } else {
-            self.total_lines()
-        };
-        let ranges: Vec<_> = ranges
-            .into_iter()
-            .filter(|&(a, b)| a <= b && b < total)
-            .collect();
+        let ranges: Vec<_> = ranges.into_iter().filter(|&(a, b)| a <= b).collect();
         let ranges = merge_ranges(ranges);
         if ranges != self.hidden {
             self.hidden = ranges;
@@ -8363,9 +8399,14 @@ impl TailEngine {
         }
     }
 
-    /// How many lines are hidden.
+    /// How many existing lines are hidden (a saved range may reach past the end).
     pub fn hidden_count(&self) -> usize {
-        self.hidden.iter().map(|&(a, b)| b - a + 1).sum()
+        let total = self.total_lines();
+        self.hidden
+            .iter()
+            .filter(|&&(a, _)| a < total)
+            .map(|&(a, b)| b.min(total - 1) - a + 1)
+            .fold(0usize, usize::saturating_add)
     }
 
     pub fn is_hidden(&self, idx: usize) -> bool {
@@ -8373,15 +8414,55 @@ impl TailEngine {
         self.hidden.get(i).is_some_and(|&(start, _)| start <= idx)
     }
 
-    fn hidden_changed(&mut self) {
+    /// The hidden ranges changed. `prune`: lines were only hidden, none shown again, and
+    /// the filtered lines were already the visible set, so they can be pruned in place.
+    fn hidden_changed(&mut self, prune: bool) {
         self.hidden_dirty = true;
         // A hidden row cannot stay selected.
-        let hidden = &self.hidden;
-        self.selection.retain(|&l| {
+        let hidden = std::mem::take(&mut self.hidden);
+        let is_hidden = |l: usize| {
             let i = hidden.partition_point(|&(_, end)| end < l);
-            !hidden.get(i).is_some_and(|&(start, _)| start <= l)
-        });
-        self.recompute_filtered_lines();
+            hidden.get(i).is_some_and(|&(start, _)| start <= l)
+        };
+        self.selection.retain(|&l| !is_hidden(l));
+        self.selection_all = false;
+        if self.selection_anchor.is_some_and(is_hidden) {
+            self.selection_anchor = None;
+        }
+        if self
+            .char_selection
+            .as_ref()
+            .is_some_and(|c| is_hidden(c.line))
+        {
+            self.char_selection = None;
+        }
+        self.hidden = hidden;
+        // Hiding only takes lines out: a complete filter result is pruned in place
+        // (no rescan, the view keeps its place); anything else filters again.
+        let complete = self.is_filter_active()
+            && !self.index_pending
+            && !self.pending_filter
+            && self.pending_refresh_from.is_none()
+            && self.job.as_ref().is_none_or(|j| j.kind != ScanKind::Filter)
+            && self.context.is_none()
+            && !self.filtered_lines.is_empty();
+        if prune && complete {
+            let top = self.view_top_line;
+            let hidden = std::mem::take(&mut self.hidden);
+            self.filtered_lines.retain(|&l| {
+                let i = hidden.partition_point(|&(_, end)| end < l);
+                !hidden.get(i).is_some_and(|&(start, _)| start <= l)
+            });
+            self.hidden = hidden;
+            self.context_ranges = self.context_ranges_for(&self.filtered_lines);
+            self.filter_generation = self.filter_generation.wrapping_add(1);
+            self.mark_collapse_dirty(0);
+            self.refresh_search_from(0);
+            self.update_collapse();
+            self.keep_top_line(top);
+        } else {
+            self.recompute_filtered_lines();
+        }
     }
 
     /// Opens the view at `line` (1-based, `fasttail app.log:1204`): selected and centred,
@@ -9244,12 +9325,26 @@ pub fn merge_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
             _ => out.push((a, b)),
         }
     }
-    while out.len() > MAX_HIDDEN_RANGES {
-        let i = (1..out.len())
-            .min_by_key(|&i| out[i].0 - out[i - 1].1)
-            .unwrap_or(1);
-        out[i - 1].1 = out[i].1;
-        out.remove(i);
+    if out.len() > MAX_HIDDEN_RANGES {
+        // Join across the smallest gaps, all chosen at once: the (len - cap) smallest
+        // gaps by `select_nth_unstable`, then one pass (no quadratic merging).
+        let drop = out.len() - MAX_HIDDEN_RANGES;
+        let mut gaps: Vec<(usize, usize)> = (1..out.len())
+            .map(|i| (out[i].0 - out[i - 1].1, i))
+            .collect();
+        gaps.select_nth_unstable(drop - 1);
+        let mut join = vec![false; out.len()];
+        for &(_, i) in &gaps[..drop] {
+            join[i] = true;
+        }
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(MAX_HIDDEN_RANGES);
+        for (i, &(a, b)) in out.iter().enumerate() {
+            match merged.last_mut() {
+                Some((_, end)) if join[i] => *end = b,
+                _ => merged.push((a, b)),
+            }
+        }
+        out = merged;
     }
     out
 }

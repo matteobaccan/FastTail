@@ -522,6 +522,7 @@ fn a_derived_stream_round_trips_with_its_frozen_filter_and_follows_a_moved_bundl
         min_level: LogLevel::Warn,
         show_unknown_levels: false,
         level_window: 256,
+        hidden: vec![(3, 4)],
         time_from: Some(1_700_000_000_000),
         time_to: None,
     };

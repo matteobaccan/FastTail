@@ -2264,12 +2264,11 @@ fn render_log_stream(
             || (is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_h))))
             && engine.context_line().is_none()
         {
-            if let Some(line) = engine
-                .selection_anchor
-                .or_else(|| engine.selection.iter().next().copied())
-            {
-                hide_selected_or(engine, line);
-            }
+            // The selection (Ctrl+A included), else the anchor row.
+            let row = (!engine.has_selection())
+                .then_some(engine.selection_anchor)
+                .flatten();
+            engine.hide_selection_or_row(row);
         }
 
         // Show in context (CTRL + K): the selected line in the full log, or back.
@@ -4632,16 +4631,6 @@ fn render_hidden_menu(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, 
     }
 }
 
-/// Hides the selected rows when `line` is one of them, else `line` alone.
-fn hide_selected_or(engine: &mut TailEngine, line: usize) {
-    if engine.selection.contains(&line) {
-        let lines: Vec<usize> = engine.selection.iter().copied().collect();
-        engine.hide_lines(lines);
-    } else {
-        engine.hide_lines([line]);
-    }
-}
-
 /// Lines picked in a row context menu this frame, applied once the rows are drawn.
 #[derive(Debug, Default)]
 struct RowMenuPicks {
@@ -4678,7 +4667,7 @@ impl RowMenuPicks {
             engine.toggle_time_anchor(line);
         }
         if let Some(line) = self.hide {
-            hide_selected_or(engine, line);
+            engine.hide_selection_or_row(Some(line));
         }
         if let Some(line) = self.context {
             // A derived stream shows the line in its source.

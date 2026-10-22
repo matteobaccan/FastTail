@@ -42,6 +42,8 @@ pub struct ContextRanges {
     ranges: Vec<Range>,
     /// Rows of all the ranges, the last one unclamped.
     rows: usize,
+    /// Lines hidden by hand (inclusive, sorted): never shown as context.
+    hidden: std::sync::Arc<[(usize, usize)]>,
 }
 
 impl ContextRanges {
@@ -51,7 +53,19 @@ impl ContextRanges {
             n,
             ranges: Vec::new(),
             rows: 0,
+            hidden: std::sync::Arc::from(Vec::new()),
         }
+    }
+
+    /// The same, leaving out the lines hidden by hand (`hidden`, inclusive and sorted).
+    pub fn with_hidden(mut self, hidden: std::sync::Arc<[(usize, usize)]>) -> Self {
+        self.hidden = hidden;
+        self
+    }
+
+    /// Whether lines hidden by hand are left out (a cut needs a rebuild then).
+    pub fn has_hidden(&self) -> bool {
+        !self.hidden.is_empty()
     }
 
     /// The ranges of `matches` (sorted line indices) with `n` lines of context each.
@@ -65,10 +79,11 @@ impl ContextRanges {
     /// every 64 Ki matches, so a build a newer `N` superseded stops early.
     pub fn build_cancellable(
         n: usize,
+        hidden: std::sync::Arc<[(usize, usize)]>,
         matches: &[usize],
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Option<Self> {
-        let mut out = Self::new(n);
+        let mut out = Self::new(n).with_hidden(hidden);
         for chunk in matches.chunks(1 << 16) {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
@@ -99,6 +114,12 @@ impl ContextRanges {
             return;
         }
         let n = self.n;
+        if !self.hidden.is_empty() {
+            for &m in new_matches {
+                self.add_unhidden(m.saturating_sub(n), m.saturating_add(n));
+            }
+            return;
+        }
         for &m in new_matches {
             let first = m.saturating_sub(n);
             let last = m.saturating_add(n);
@@ -118,6 +139,63 @@ impl ContextRanges {
                     self.rows += range.rows();
                     self.ranges.push(range);
                 }
+            }
+        }
+    }
+
+    /// Adds `first..=last` without the hidden lines: the part past the last range, cut
+    /// around every hidden range, each piece joining the previous range when they touch.
+    fn add_unhidden(&mut self, first: usize, last: usize) {
+        let mut from = match self.ranges.last() {
+            Some(prev) => first.max(prev.last.saturating_add(1)),
+            None => first,
+        };
+        if from > last {
+            return;
+        }
+        let hidden = std::sync::Arc::clone(&self.hidden);
+        let mut i = hidden.partition_point(|&(_, end)| end < from);
+        while from <= last {
+            let (piece_end, next) = match hidden.get(i) {
+                Some(&(a, b)) if a <= last => {
+                    if a <= from {
+                        // `from` is hidden: skip past this range.
+                        i += 1;
+                        from = match b.checked_add(1) {
+                            Some(f) => f,
+                            None => return,
+                        };
+                        continue;
+                    }
+                    (a - 1, b.checked_add(1))
+                }
+                _ => (last, None),
+            };
+            self.push_piece(from, piece_end.min(last));
+            match next {
+                Some(f) => {
+                    from = f;
+                    i += 1;
+                }
+                None => return,
+            }
+        }
+    }
+
+    fn push_piece(&mut self, first: usize, last: usize) {
+        match self.ranges.last_mut() {
+            Some(prev) if first == prev.last.saturating_add(1) => {
+                self.rows += last - prev.last;
+                prev.last = last;
+            }
+            _ => {
+                let range = Range {
+                    first,
+                    last,
+                    row: self.rows,
+                };
+                self.rows += range.rows();
+                self.ranges.push(range);
             }
         }
     }
@@ -419,11 +497,14 @@ mod tests {
         let matches: Vec<usize> = (0..200_000).map(|i| i * 9).collect();
         let go = AtomicBool::new(false);
         assert_eq!(
-            ContextRanges::build_cancellable(3, &matches, &go),
+            ContextRanges::build_cancellable(3, Default::default(), &matches, &go),
             Some(ContextRanges::build(3, &matches))
         );
         let stop = AtomicBool::new(true);
-        assert_eq!(ContextRanges::build_cancellable(3, &matches, &stop), None);
+        assert_eq!(
+            ContextRanges::build_cancellable(3, Default::default(), &matches, &stop),
+            None
+        );
     }
 
     #[test]

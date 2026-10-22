@@ -4240,16 +4240,20 @@ impl App {
             // context view shows every line).
             Action::HideLines if tab.engine.context_line().is_some() || tab.is_hex() => {}
             Action::HideLines => {
-                let lines: Vec<usize> = if tab.engine.selection.is_empty() {
-                    tab.cursor_line().into_iter().collect()
-                } else {
-                    tab.engine.selection.iter().copied().collect()
-                };
-                let before = tab.engine.hidden_count();
-                tab.engine.hide_lines(lines);
-                let hidden = tab.engine.hidden_count() - before;
+                // The selection, else the cursor row (its whole group when collapsed).
+                let row = (!tab.engine.has_selection())
+                    .then(|| tab.cursor_line())
+                    .flatten();
+                if row.is_none() && !tab.engine.has_selection() {
+                    self.message = Some(tx(self.lang, "No row to hide").into());
+                    return;
+                }
+                let hidden = tab.engine.hide_selection_or_row(row);
+                // A background refilter shows no row yet: the cursor waits for it.
                 let rows = tab.row_count();
-                tab.cursor = tab.cursor.min(rows.saturating_sub(1));
+                if rows > 0 {
+                    tab.cursor = tab.cursor.min(rows - 1);
+                }
                 self.message = Some(txf(self.lang, "{0} lines hidden", &[&hidden]));
             }
             Action::ToggleBookmark => match tab.cursor_line() {
