@@ -1038,7 +1038,8 @@ fn render_fields_selector(
             for format in formats {
                 let item = P::Format(format.name().to_string());
                 let text = field_choice_label(&item, lang);
-                let mut row = ui.selectable_label(choice == item, RichText::new(text).monospace());
+                let on = matches!(&choice, P::Format(n) if n.eq_ignore_ascii_case(format.name()));
+                let mut row = ui.selectable_label(on, RichText::new(text).monospace());
                 if let Some(file) = &format.file {
                     row = row.on_hover_text(file.display().to_string());
                 }

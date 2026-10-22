@@ -1305,10 +1305,12 @@ pub fn parse_with_format(text: &str, format: &TimeFormat) -> Option<i64> {
             TimePart::Second => (second, at) = digits(at, 1, 2)?,
             TimePart::AmPm => {
                 let word = b.get(at..at + 2)?;
-                pm = Some(match word.to_ascii_uppercase().as_slice() {
-                    b"AM" => false,
-                    b"PM" => true,
-                    _ => return None,
+                pm = Some(if word.eq_ignore_ascii_case(b"AM") {
+                    false
+                } else if word.eq_ignore_ascii_case(b"PM") {
+                    true
+                } else {
+                    return None;
                 });
                 at += 2;
             }

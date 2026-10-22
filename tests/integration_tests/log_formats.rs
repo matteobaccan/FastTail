@@ -112,6 +112,11 @@ fn a_saved_format_comes_back_and_a_missing_one_falls_back_to_detection() {
     app.save_dock_layout();
     let entry = app.config.stream_state_for(&log).unwrap();
     assert_eq!(entry.fields_parser.as_deref(), Some("format:Payments"));
+    assert_eq!(
+        ParserChoice::from_name(" Format:Payments ", ""),
+        Some(ParserChoice::Format("Payments".into())),
+        "a hand-edited prefix in another case"
+    );
     let again = FastTailApp::from_config(FastTailConfig {
         spool_dir: Some(dir.path().to_path_buf()),
         ..FastTailConfig::from_ini(&app.config.to_ini())

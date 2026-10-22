@@ -170,8 +170,13 @@ impl ParserChoice {
     /// Reads `fields_parser=` and, for `regex`, `fields_regex=`; unknown names are `None`.
     pub fn from_name(name: &str, regex: &str) -> Option<Self> {
         let prefix = crate::log_format::CHOICE_PREFIX;
-        if let Some(format) = name.trim().strip_prefix(prefix) {
-            return (!format.trim().is_empty()).then(|| ParserChoice::Format(format.trim().into()));
+        let trimmed = name.trim();
+        let has_prefix = trimmed
+            .get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(prefix));
+        if has_prefix {
+            let format = trimmed[prefix.len()..].trim();
+            return (!format.is_empty()).then(|| ParserChoice::Format(format.into()));
         }
         Some(match name.trim().to_ascii_lowercase().as_str() {
             "auto" => ParserChoice::Auto,
@@ -254,8 +259,9 @@ pub struct FieldSpans {
     spans: SmallVec<[FieldSpan; 32]>,
     /// Keys that are not a slice of the line; only UTF-8 is ever appended.
     scratch: Vec<u8>,
-    /// Capture slots of the regex parser, and the regex they belong to.
-    locs: Option<(usize, CaptureLocations)>,
+    /// Capture slots of the regex parsers, each with the regex it belongs to: one per
+    /// pattern of a log format, so lines alternating between patterns reuse theirs.
+    locs: SmallVec<[(usize, CaptureLocations); 2]>,
     /// The line did not scan to its end (JSON syntax error, too many fields, unclosed
     /// quote): the fields found before are kept.
     pub partial: bool,
@@ -953,9 +959,19 @@ fn scan_logfmt(line: &str, out: &mut FieldSpans) -> bool {
 pub(crate) fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> bool {
     let id = r as *const RegexFields as usize;
     // The address alone could be reused by a later parser: the slot count must match too.
-    let mut locs = match out.locs.take() {
-        Some((owner, locs)) if owner == id && locs.len() == r.regex.captures_len() => locs,
-        _ => r.regex.capture_locations(),
+    let at = out
+        .locs
+        .iter()
+        .position(|(owner, locs)| *owner == id && locs.len() == r.regex.captures_len());
+    let mut locs = match at {
+        Some(i) => out.locs.remove(i).1,
+        None => {
+            // Bounded: as many as a format has patterns, the oldest dropped first.
+            if out.locs.len() >= crate::log_format::MAX_PATTERNS {
+                out.locs.remove(0);
+            }
+            r.regex.capture_locations()
+        }
     };
     let matched = r.regex.captures_read(&mut locs, line).is_some();
     if matched {
@@ -967,7 +983,7 @@ pub(crate) fn scan_regex(r: &RegexFields, line: &str, out: &mut FieldSpans) -> b
             }
         }
     }
-    out.locs = Some((id, locs));
+    out.locs.push((id, locs));
     matched
 }
 
@@ -2038,14 +2054,36 @@ mod alloc_count {
             .map(|i| format!(r#"1.2.3.4 - - [01/May/2024:10:00:00 +0000] "GET /{i} HTTP/1.1" 200 {i} "-" "ua""#))
             .collect();
         let regex = ParserChoice::Apache.build().unwrap().unwrap();
+        // A log format whose lines alternate between its two patterns.
+        let two = crate::log_format::LogFormat::compile(crate::log_format::FormatSpec {
+            name: "two".into(),
+            patterns: vec![
+                r"^A (?P<i>\d+) (?P<t>\d\d:\d\d [AP]M)".into(),
+                r"^B (?P<status>\d+) (?P<t>\d\d:\d\d [AaPp][Mm]) (?P<level>\w+)".into(),
+            ],
+            timestamp_field: "t".into(),
+            timestamp_format: "%I:%M %p".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let two = FieldParser::Format(Arc::new(two));
+        let mixed: Vec<String> = (0..500)
+            .map(|i| match i % 2 {
+                0 => format!("A {i} 10:15 AM"),
+                _ => format!("B {i} 11:30 pm warn"),
+            })
+            .collect();
         for (parser, lines) in [
             (&FieldParser::Json, &json),
             (&FieldParser::Logfmt, &logfmt),
             (&*regex, &apache),
+            (&two, &mixed),
         ] {
             let mut spans = FieldSpans::new();
             for line in lines.iter().take(10) {
                 scan(parser, line, &mut spans);
+                line_timestamp(Some(parser), line, Default::default());
+                line_level(Some(parser), line, 256);
             }
             let before = ALLOCATIONS.with(Cell::get);
             let mut fields = 0;
@@ -2055,6 +2093,13 @@ mod alloc_count {
                 assert!(spans.get(line, "i").is_some() || spans.get(line, "status").is_some());
             }
             assert!(fields > 0);
+            // A format's level and time paths scan again and read its fields.
+            if let FieldParser::Format(_) = parser {
+                for line in lines {
+                    assert!(line_timestamp(Some(parser), line, Default::default()).is_some());
+                    line_level(Some(parser), line, 256);
+                }
+            }
             let allocations = ALLOCATIONS.with(Cell::get) - before;
             // The regex crate may still grow its lazy DFA cache now and then: amortized,
             // never one per line. The hand-written scanners allocate nothing.

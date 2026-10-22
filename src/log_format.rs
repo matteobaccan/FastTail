@@ -295,13 +295,9 @@ impl LogFormat {
     /// Scans `line` with the first pattern that matches into `out`.
     pub fn scan(&self, line: &str, out: &mut crate::fields::FieldSpans) -> bool {
         out.clear();
-        match self.patterns.as_slice() {
-            [only] => crate::fields::scan_regex(only, line, out),
-            patterns => match patterns.iter().find(|p| p.is_match(line)) {
-                Some(p) => crate::fields::scan_regex(p, line, out),
-                None => false,
-            },
-        }
+        self.patterns
+            .iter()
+            .any(|p| crate::fields::scan_regex(p, line, out))
     }
 
     /// The level of a line scanned into `spans`: its level field through the level map,
