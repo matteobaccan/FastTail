@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.25] - 2026-10-22
+
 ### Added
 
 - **CSV / TSV files as tables.** A new delimited field parser reads `.csv`, `.tsv` and
@@ -1807,6 +1809,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.25]: https://github.com/matteobaccan/FastTail/compare/v0.20.24...v0.20.25
 [0.20.24]: https://github.com/matteobaccan/FastTail/compare/v0.20.23...v0.20.24
 [0.20.23]: https://github.com/matteobaccan/FastTail/compare/v0.20.22...v0.20.23
 [0.20.22]: https://github.com/matteobaccan/FastTail/compare/v0.20.21...v0.20.22
