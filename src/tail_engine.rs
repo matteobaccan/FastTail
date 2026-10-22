@@ -3519,7 +3519,8 @@ impl TailEngine {
         self.field_choice = choice;
         self.fields_dirty = true;
         self.field_error = None;
-        match self.field_choice.build() {
+        let first = self.first_record_line();
+        match self.field_choice.build_for(first.as_deref()) {
             Ok(parser) => self.set_field_parser(parser),
             Err(e) => {
                 self.field_error = Some(e);
@@ -3725,18 +3726,42 @@ impl TailEngine {
         }
         let sample = self.field_sample();
         self.field_detected_at = Some(total);
-        let found = crate::fields::detect(sample.iter().map(String::as_str));
-        let same_kind = matches!(
-            (&found, self.field_parser.as_deref()),
+        let refs: Vec<&str> = sample.iter().map(String::as_str).collect();
+        let found = crate::fields::detect(refs.iter().copied()).or_else(|| {
+            let ext = self
+                .current_file
+                .as_ref()
+                .unwrap_or(&self.path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            crate::fields::detect_table(&refs, ext.as_deref())
+        });
+        let same_kind = match (&found, self.field_parser.as_deref()) {
             (None, None)
-                | (Some(ParserChoice::Json), Some(FieldParser::Json))
-                | (Some(ParserChoice::Logfmt), Some(FieldParser::Logfmt))
-        );
+            | (Some(ParserChoice::Json), Some(FieldParser::Json))
+            | (Some(ParserChoice::Logfmt), Some(FieldParser::Logfmt)) => true,
+            (Some(ParserChoice::Delimited { sep, header }), Some(FieldParser::Delimited(d))) => {
+                d.sep == *sep && d.header_line.is_some() == *header
+            }
+            _ => false,
+        };
         if !same_kind {
-            let parser = found.as_ref().and_then(|c| c.build().ok().flatten());
+            let first = self.first_record_line();
+            let parser = found
+                .as_ref()
+                .and_then(|c| c.build_for(first.as_deref()).ok().flatten());
             self.set_field_parser(parser);
         }
         self.field_auto = found;
+    }
+
+    /// The first non-blank line of the stream: a CSV header names the columns.
+    fn first_record_line(&self) -> Option<String> {
+        (0..self.total_lines().min(16))
+            .filter_map(|i| self.get_line(i))
+            .find(|l| !l.trim().is_empty())
+            .map(|l| l.into_owned())
     }
 
     pub fn poll_updates(&mut self) {

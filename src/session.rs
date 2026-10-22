@@ -107,6 +107,11 @@ pub struct StreamEntry {
     /// auto, and the pattern of `regex` (`fields_regex=`). Older builds ignore both.
     pub fields_parser: Option<String>,
     pub fields_regex: Option<String>,
+    /// The separator of a forced CSV / TSV parser (`csv_separator=`: `,` `;` `tab` `|`)
+    /// and whether its first row names the columns (`csv_header=`, written only when
+    /// off). Older builds ignore both.
+    pub csv_separator: Option<String>,
+    pub csv_header: Option<bool>,
     /// The column view (`fields_view=true`, written only when on), the columns chosen in
     /// order (`fields_columns=ts,level,msg`, none: the defaults; keys holding a comma are
     /// not saved) and their widths in character cells (`fields_width.<key>=N`).
@@ -263,6 +268,12 @@ impl Session {
             }
             if let Some(regex) = &s.fields_regex {
                 sec.set("fields_regex", ini_value(regex));
+            }
+            if let Some(sep) = &s.csv_separator {
+                sec.set("csv_separator", ini_value(sep));
+            }
+            if s.csv_header == Some(false) {
+                sec.set("csv_header", "false");
             }
             if s.fields_view {
                 sec.set("fields_view", "true");
@@ -493,6 +504,11 @@ impl Session {
                     .and_then(|p| crate::fields::ParserChoice::from_name(p, ""))
                     .filter(|c| *c != crate::fields::ParserChoice::Auto)
                     .map(|c| c.name().to_string()),
+                csv_separator: sec
+                    .get("csv_separator")
+                    .filter(|v| crate::fields::separator_from_name(v).is_some())
+                    .map(str::to_string),
+                csv_header: sec.get("csv_header").and_then(|v| v.parse().ok()),
                 fields_regex: sec
                     .get("fields_regex")
                     .filter(|r| !r.is_empty())

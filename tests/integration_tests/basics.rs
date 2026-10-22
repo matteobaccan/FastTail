@@ -1241,6 +1241,10 @@ fn test_i18n_exhaustive_coverage() {
         "open_folder_invalid",
         "open_folder_bad_patterns",
         "field_term_tip",
+        "fields_csv",
+        "fields_csv_tab",
+        "fields_csv_sep_tip",
+        "fields_csv_header",
         "folder_waiting",
         "folder_skipped",
         "folder_scan_limited",
@@ -1318,6 +1322,9 @@ fn test_i18n_exhaustive_coverage() {
         // "Folder" (Polish) and "Mode" (French) are the local words.
         "open_folder_folder",
         "open_folder_mode",
+        // "CSV / TSV" is a format name; "tab" is the word in several languages.
+        "fields_csv",
+        "fields_csv_tab",
     ];
     let fallbacks: Vec<String> = Language::ALL
         .iter()

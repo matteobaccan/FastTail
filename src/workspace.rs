@@ -204,9 +204,19 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         engine.set_time_display(display);
     }
     engine.view_columns_dirty = false;
-    if let Some(choice) = entry.fields_parser.as_deref().and_then(|name| {
+    if let Some(mut choice) = entry.fields_parser.as_deref().and_then(|name| {
         crate::fields::ParserChoice::from_name(name, entry.fields_regex.as_deref().unwrap_or(""))
     }) {
+        if let crate::fields::ParserChoice::Delimited { sep, header } = &mut choice {
+            if let Some(s) = entry
+                .csv_separator
+                .as_deref()
+                .and_then(crate::fields::separator_from_name)
+            {
+                *sep = s;
+            }
+            *header = entry.csv_header.unwrap_or(true);
+        }
         engine.set_field_choice(choice);
     }
     engine.set_fields_view(entry.fields_view);
@@ -362,6 +372,16 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
             .then(|| engine.field_choice().name().to_string()),
         fields_regex: match engine.field_choice() {
             crate::fields::ParserChoice::Regex(p) if !p.is_empty() => Some(p.clone()),
+            _ => None,
+        },
+        csv_separator: match engine.field_choice() {
+            crate::fields::ParserChoice::Delimited { sep, .. } => {
+                Some(crate::fields::separator_name(*sep).to_string())
+            }
+            _ => None,
+        },
+        csv_header: match engine.field_choice() {
+            crate::fields::ParserChoice::Delimited { header, .. } => Some(*header),
             _ => None,
         },
         fields_view: engine.fields_view(),

@@ -941,6 +941,13 @@ fn field_choice_label(choice: &crate::fields::ParserChoice, lang: Language) -> S
         P::Apache => "(?) Apache".to_string(),
         P::Syslog => "(?) syslog".to_string(),
         P::Regex(_) => format!("(?) {}", t(lang, "fields_regex")),
+        P::Delimited { sep, .. } => format!(
+            "▦ CSV {}",
+            match *sep {
+                b'\t' => t(lang, "fields_csv_tab").to_string(),
+                other => (other as char).to_string(),
+            }
+        ),
     }
 }
 
@@ -1017,6 +1024,38 @@ fn render_fields_selector(
             {
                 picked = Some(item);
                 ui.close();
+            }
+        }
+        // CSV / TSV: the separator, and whether the first row names the columns.
+        ui.separator();
+        let current = match (&choice, engine.field_auto()) {
+            (P::Delimited { sep, header }, _) => Some((*sep, *header)),
+            (P::Auto, Some(P::Delimited { sep, header })) => Some((*sep, *header)),
+            _ => None,
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(t(lang, "fields_csv")).monospace());
+            for sep in crate::fields::SEPARATORS {
+                let text = match sep {
+                    b'\t' => t(lang, "fields_csv_tab").to_string(),
+                    other => (other as char).to_string(),
+                };
+                let on = matches!(choice, P::Delimited { sep: s, .. } if s == sep);
+                if ui
+                    .selectable_label(on, RichText::new(text).monospace())
+                    .on_hover_text(t(lang, "fields_csv_sep_tip"))
+                    .clicked()
+                {
+                    let header = current.is_none_or(|(_, h)| h);
+                    picked = Some(P::Delimited { sep, header });
+                    ui.close();
+                }
+            }
+        });
+        if let Some((sep, header)) = current {
+            let mut on = header;
+            if ui.checkbox(&mut on, t(lang, "fields_csv_header")).clicked() {
+                picked = Some(P::Delimited { sep, header: on });
             }
         }
         ui.separator();

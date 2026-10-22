@@ -29,6 +29,7 @@ fn kind(engine: &TailEngine) -> &'static str {
         Some(FieldParser::Json) => "json",
         Some(FieldParser::Logfmt) => "logfmt",
         Some(FieldParser::Regex(_)) => "regex",
+        Some(FieldParser::Delimited(_)) => "csv",
         None => "none",
     }
 }
@@ -683,4 +684,80 @@ fn copy_as_shown_writes_the_cells_tab_separated() {
     );
     e.select_row(1);
     assert_eq!(e.copy_selection_as_shown().unwrap(), "not json at all");
+}
+
+#[test]
+fn csv_and_tsv_files_open_as_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let orders = dir.path().join("orders.csv");
+    write_lines(
+        &orders,
+        &[
+            "id,customer,total",
+            "1,ann,10",
+            r#"2,"Smith, John",250"#,
+            "3,cy,7",
+        ],
+    );
+    let mut e = open(&orders);
+    assert_eq!(kind(&e), "csv");
+    assert_eq!(e.field_columns(), vec!["id", "customer", "total"]);
+    e.set_fields_view(true);
+    e.select_row(2);
+    assert_eq!(
+        e.copy_selection_as_shown().unwrap(),
+        "2\tSmith, John\t250\t"
+    );
+    e.set_include_filter("total>=10");
+    assert_eq!(visible(&e), vec![1, 2], "the header row is no record");
+
+    // Semicolons, no header: numbered columns.
+    let semi = dir.path().join("data.csv");
+    write_lines(&semi, &["1;2;3", "4;5;6", "7;8;9"]);
+    let mut e = open(&semi);
+    assert_eq!(kind(&e), "csv");
+    assert_eq!(e.field_columns(), vec!["1", "2", "3"]);
+    e.set_include_filter("2=5");
+    assert_eq!(visible(&e), vec![1]);
+
+    // A plain log stays text.
+    let log = dir.path().join("app.log");
+    write_lines(&log, &["INFO a, b", "WARN c, d"]);
+    assert_eq!(kind(&open(&log)), "none");
+}
+
+#[test]
+fn a_forced_separator_and_header_are_saved_with_the_stream() {
+    use fasttail::session::{Session, StreamEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("export.txt");
+    write_lines(&file, &["a|b", "1|2"]);
+    let mut e = open(&file);
+    e.set_field_choice(ParserChoice::Delimited {
+        sep: b'|',
+        header: false,
+    });
+    assert_eq!(e.field_columns(), vec!["1", "2"]);
+    let entry: StreamEntry = fasttail::workspace::stream_entry(&e);
+    assert_eq!(entry.csv_separator.as_deref(), Some("|"));
+    assert_eq!(entry.csv_header, Some(false));
+    let session = Session {
+        streams: vec![entry],
+        ..Default::default()
+    };
+    let text = session.serialized(None);
+    assert!(text.contains("csv_separator=|"), "{text}");
+    let conf = ini::Ini::load_from_str(&text).unwrap();
+    let back = Session::read_from(&conf, None).session.streams.remove(0);
+    let mut cfg = FastTailConfig::default();
+    cfg.set_stream_state(back);
+    let mut reopened = open(&file);
+    fasttail::workspace::restore_stream(&mut reopened, &cfg, &file);
+    assert_eq!(
+        reopened.field_choice(),
+        &ParserChoice::Delimited {
+            sep: b'|',
+            header: false
+        }
+    );
 }

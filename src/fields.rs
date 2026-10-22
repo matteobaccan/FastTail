@@ -73,6 +73,41 @@ pub enum FieldParser {
     Json,
     Logfmt,
     Regex(RegexFields),
+    Delimited(Delimited),
+}
+
+/// A CSV / TSV parser: the separator, and the column names read from the header row
+/// (none: the columns are numbered `1`, `2`, ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delimited {
+    pub sep: u8,
+    pub names: Vec<String>,
+    /// The header row itself, which is not a record.
+    pub header_line: Option<String>,
+}
+
+/// The separators a delimited file may use, in the order detection tries them.
+pub const SEPARATORS: [u8; 4] = *b",;\t|";
+
+/// The name of a separator in `csv_separator=` and the selector.
+pub fn separator_name(sep: u8) -> &'static str {
+    match sep {
+        b';' => ";",
+        b'\t' => "tab",
+        b'|' => "|",
+        _ => ",",
+    }
+}
+
+/// The separator `csv_separator=` names.
+pub fn separator_from_name(name: &str) -> Option<u8> {
+    match name.trim() {
+        "," => Some(b','),
+        ";" => Some(b';'),
+        "tab" | "\\t" => Some(b'\t'),
+        "|" => Some(b'|'),
+        _ => None,
+    }
 }
 
 /// The parser chosen for a stream: automatic detection, none, or one of the parsers.
@@ -87,6 +122,11 @@ pub enum ParserChoice {
     Regex(String),
     Apache,
     Syslog,
+    /// CSV / TSV: the separator and whether the first row names the columns.
+    Delimited {
+        sep: u8,
+        header: bool,
+    },
 }
 
 impl ParserChoice {
@@ -100,6 +140,7 @@ impl ParserChoice {
             ParserChoice::Regex(_) => "regex",
             ParserChoice::Apache => "apache",
             ParserChoice::Syslog => "syslog",
+            ParserChoice::Delimited { .. } => "csv",
         }
     }
 
@@ -113,12 +154,29 @@ impl ParserChoice {
             "regex" => ParserChoice::Regex(regex.to_string()),
             "apache" => ParserChoice::Apache,
             "syslog" => ParserChoice::Syslog,
+            // The separator and the header come from `csv_separator=` / `csv_header=`.
+            "csv" => ParserChoice::Delimited {
+                sep: b',',
+                header: true,
+            },
             _ => return None,
         })
     }
 
     /// The parser of a forced choice: `Ok(None)` for `Auto` and `Off`, `Err` for a regex
-    /// that does not compile or has no named group.
+    /// that does not compile or has no named group. A delimited parser with a header reads
+    /// its names from `first_line`.
+    pub fn build_for(&self, first_line: Option<&str>) -> Result<Option<Arc<FieldParser>>, String> {
+        if let ParserChoice::Delimited { sep, header } = self {
+            return Ok(Some(Arc::new(FieldParser::Delimited(Delimited::new(
+                *sep,
+                header.then_some(first_line).flatten(),
+            )))));
+        }
+        self.build()
+    }
+
+    /// `build_for` without the file: a delimited parser has numbered columns.
     pub fn build(&self) -> Result<Option<Arc<FieldParser>>, String> {
         let regex = |p: &str| RegexFields::new(p).map(|r| Some(Arc::new(FieldParser::Regex(r))));
         match self {
@@ -128,6 +186,9 @@ impl ParserChoice {
             ParserChoice::Regex(p) => regex(p),
             ParserChoice::Apache => regex(APACHE_PATTERN),
             ParserChoice::Syslog => regex(SYSLOG_PATTERN),
+            ParserChoice::Delimited { sep, .. } => Ok(Some(Arc::new(FieldParser::Delimited(
+                Delimited::new(*sep, None),
+            )))),
         }
     }
 }
@@ -146,6 +207,8 @@ struct FieldSpan {
     key: KeyAt,
     value: (u32, u32),
     quoted: bool,
+    /// A CSV quoted cell: `""` stands for one quote.
+    doubled: bool,
 }
 
 /// The fields of one line, reused from line to line.
@@ -177,12 +240,20 @@ pub struct Field<'a> {
     /// Byte range of `raw` in the line.
     pub range: (usize, usize),
     pub quoted: bool,
+    /// A CSV quoted cell, whose `""` stand for one quote.
+    pub doubled: bool,
 }
 
 impl Field<'_> {
     /// The value with its escapes decoded.
     pub fn value(&self) -> Cow<'_, str> {
-        if self.quoted {
+        if self.doubled {
+            if self.raw.contains("\"\"") {
+                Cow::Owned(self.raw.replace("\"\"", "\""))
+            } else {
+                Cow::Borrowed(self.raw)
+            }
+        } else if self.quoted {
             unescape(self.raw)
         } else {
             Cow::Borrowed(self.raw)
@@ -227,6 +298,7 @@ impl FieldSpans {
             raw: line.get(range.0..range.1).unwrap_or(""),
             range,
             quoted: span.quoted,
+            doubled: span.doubled,
         }
     }
 
@@ -264,6 +336,7 @@ impl FieldSpans {
             key,
             value: (value.0 as u32, value.1 as u32),
             quoted,
+            doubled: false,
         });
         true
     }
@@ -288,7 +361,211 @@ pub fn scan(parser: &FieldParser, line: &str, out: &mut FieldSpans) -> bool {
         FieldParser::Json => scan_json(line, out),
         FieldParser::Logfmt => scan_logfmt(line, out),
         FieldParser::Regex(r) => scan_regex(r, line, out),
+        FieldParser::Delimited(d) => scan_delimited(d, line, out),
     }
+}
+
+/// The cells of a delimited `line` as byte ranges, RFC 4180 quoting: a cell opening with
+/// `"` runs to the closing quote (`""` inside is a quote) and may hold the separator. The
+/// ranges are inside the quotes; the flag says the cell was quoted. A quote left open
+/// takes the rest of the line. Calls `f(start, end, quoted)` for each cell, and returns
+/// whether the last quote was left open.
+fn delimited_cells(b: &[u8], sep: u8, mut f: impl FnMut(usize, usize, bool) -> bool) -> bool {
+    let mut pos = 0;
+    loop {
+        if b.get(pos) == Some(&b'"') {
+            let start = pos + 1;
+            let mut i = start;
+            let mut closed = None;
+            while let Some(q) = memchr::memchr(b'"', &b[i..]) {
+                let at = i + q;
+                if b.get(at + 1) == Some(&b'"') {
+                    i = at + 2;
+                    continue;
+                }
+                closed = Some(at);
+                break;
+            }
+            let Some(end) = closed else {
+                f(start, b.len(), true);
+                return true;
+            };
+            if !f(start, end, true) {
+                return false;
+            }
+            // Past the closing quote, to the next separator (stray text is dropped).
+            match memchr::memchr(sep, &b[end + 1..]) {
+                Some(n) => pos = end + 1 + n + 1,
+                None => return false,
+            }
+        } else {
+            let end = memchr::memchr(sep, &b[pos..]).map_or(b.len(), |n| pos + n);
+            if !f(pos, end, false) {
+                return false;
+            }
+            if end >= b.len() {
+                return false;
+            }
+            pos = end + 1;
+        }
+    }
+}
+
+impl Delimited {
+    /// The parser for `sep`, with the column names of `header` when given.
+    pub fn new(sep: u8, header: Option<&str>) -> Self {
+        let names = header
+            .map(|h| {
+                let b = h.trim_end_matches(['\r', '\n']).as_bytes();
+                let mut names = Vec::new();
+                delimited_cells(b, sep, |a, z, quoted| {
+                    let raw = String::from_utf8_lossy(&b[a..z]);
+                    let name = if quoted {
+                        raw.replace("\"\"", "\"")
+                    } else {
+                        raw.trim().to_string()
+                    };
+                    names.push(name);
+                    true
+                });
+                names
+            })
+            .unwrap_or_default();
+        Self {
+            sep,
+            header_line: header.map(|h| h.trim_end_matches(['\r', '\n']).to_string()),
+            names,
+        }
+    }
+}
+
+fn scan_delimited(d: &Delimited, line: &str, out: &mut FieldSpans) -> bool {
+    let line_t = line.trim_end_matches(['\r', '\n']);
+    // The header row names the columns: it is no record.
+    if d.header_line.as_deref() == Some(line_t) {
+        return false;
+    }
+    let b = line_t.as_bytes();
+    let mut n = 0usize;
+    let mut cells = 0usize;
+    let open = delimited_cells(b, d.sep, |a, z, quoted| {
+        cells += 1;
+        let key = match d.names.get(n) {
+            Some(name) => out.scratch_key(name.as_bytes()),
+            None => {
+                let mut buf = itoa_buf(n + 1);
+                out.scratch_key(buf.as_bytes_mut())
+            }
+        };
+        n += 1;
+        if out.spans.len() >= MAX_LINE_FIELDS {
+            out.partial = true;
+            out.truncated = true;
+            return false;
+        }
+        out.spans.push(FieldSpan {
+            key: KeyAt::Scratch(key.0, key.1),
+            value: (a as u32, z as u32),
+            quoted,
+            doubled: quoted,
+        });
+        true
+    });
+    if open {
+        out.partial = true;
+    }
+    cells >= 2
+}
+
+/// `n` in decimal, on the stack.
+fn itoa_buf(n: usize) -> ItoaBuf {
+    let mut buf = ItoaBuf {
+        bytes: [0; 20],
+        start: 20,
+    };
+    let mut n = n;
+    loop {
+        buf.start -= 1;
+        buf.bytes[buf.start] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    buf
+}
+
+struct ItoaBuf {
+    bytes: [u8; 20],
+    start: usize,
+}
+
+impl ItoaBuf {
+    fn as_bytes_mut(&mut self) -> &[u8] {
+        &self.bytes[self.start..]
+    }
+}
+
+/// How many lines detection reads for a delimited file.
+pub const DELIMITED_DETECT_LINES: usize = 64;
+
+/// The separator that splits `lines` into the same number (at least two) of cells on at
+/// least 90 % of them, quotes taken into account; `prefer` (from the extension) breaks a
+/// tie. `None` when no separator does.
+pub fn detect_separator(lines: &[&str], prefer: Option<u8>) -> Option<u8> {
+    let lines: Vec<&str> = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .take(DELIMITED_DETECT_LINES)
+        .copied()
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, u8)> = None;
+    for sep in SEPARATORS {
+        let mut counts: HashMap<usize, usize> = HashMap::new();
+        for line in &lines {
+            let mut cells = 0;
+            delimited_cells(line.trim_end().as_bytes(), sep, |_, _, _| {
+                cells += 1;
+                true
+            });
+            *counts.entry(cells).or_default() += 1;
+        }
+        let Some((&cells, &hits)) = counts.iter().max_by_key(|(c, h)| (**h, **c)) else {
+            continue;
+        };
+        if cells < 2 || hits * 10 < lines.len() * 9 {
+            continue;
+        }
+        let score = hits * 1000 + cells;
+        let better = match best {
+            None => true,
+            Some((s, b)) => score > s || (score == s && Some(sep) == prefer && Some(b) != prefer),
+        };
+        if better {
+            best = Some((score, sep));
+        }
+    }
+    best.map(|(_, sep)| sep)
+}
+
+/// Whether the first of `lines` names the columns: its cells are non-empty, not numbers,
+/// all different, and the row is not repeated as the second one.
+pub fn detect_header(lines: &[&str], sep: u8) -> bool {
+    let Some(first) = lines.iter().find(|l| !l.trim().is_empty()) else {
+        return false;
+    };
+    let d = Delimited::new(sep, Some(first));
+    let distinct: std::collections::HashSet<&str> = d.names.iter().map(String::as_str).collect();
+    let second = lines.iter().filter(|l| !l.trim().is_empty()).nth(1);
+    d.names.len() >= 2
+        && distinct.len() == d.names.len()
+        && d.names
+            .iter()
+            .all(|n| !n.is_empty() && n.trim().parse::<f64>().is_err())
+        && second.is_none_or(|s| s.trim_end() != first.trim_end())
 }
 
 /// Decodes the escapes of a quoted value (JSON's `\" \\ \/ \b \f \n \r \t \uXXXX`,
@@ -888,6 +1165,32 @@ pub fn detect<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<ParserChoi
     }
 }
 
+/// A CSV / TSV parser for `lines` (the first of a stream), when the file says it is a
+/// table: its extension is `csv`, `tsv` or `psv` and a separator splits the lines evenly,
+/// or a separator does and the first row is a header of column-like names (no spaces), so
+/// a plain log with a regular `|` or `,` does not turn into a table by itself.
+pub fn detect_table(lines: &[&str], ext: Option<&str>) -> Option<ParserChoice> {
+    let prefer = match ext {
+        Some("tsv") => Some(b'\t'),
+        Some("psv") => Some(b'|'),
+        Some("csv") => Some(b','),
+        _ => None,
+    };
+    let sep = detect_separator(lines, prefer)?;
+    let header = detect_header(lines, sep);
+    // Without the extension, only a header of column-like names makes a table: a log line
+    // with a regular comma has words with spaces before it.
+    let names_like = || {
+        let first = lines.iter().find(|l| !l.trim().is_empty()).copied();
+        Delimited::new(sep, first)
+            .names
+            .iter()
+            .all(|n| n.len() <= 64 && !n.contains(char::is_whitespace))
+    };
+    let table = prefer.is_some() || (header && lines.len() >= 2 && names_like());
+    table.then_some(ParserChoice::Delimited { sep, header })
+}
+
 /// The fields a line's level is read from, in this order.
 pub const LEVEL_KEYS: [&str; 4] = ["level", "lvl", "severity", "log.level"];
 /// The fields a line's timestamp is read from, in this order.
@@ -1029,11 +1332,16 @@ pub fn unquote(text: &str) -> Option<&str> {
 }
 
 /// The key at the start of `text` (a letter, `_` or `@`, then letters, digits, `_`, `.`,
-/// `@` and `-`) and its length.
+/// `@` and `-`; or only digits, a numbered CSV column) and its length.
 fn key_len(text: &str) -> usize {
     let mut chars = text.char_indices();
     match chars.next() {
         Some((_, c)) if c.is_alphabetic() || c == '_' || c == '@' => {}
+        Some((_, c)) if c.is_ascii_digit() => {
+            return text
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(text.len());
+        }
         _ => return 0,
     }
     for (i, c) in chars {
@@ -1160,6 +1468,95 @@ impl FieldTerm {
 mod tests {
     use super::*;
 
+    fn cells(d: &Delimited, line: &str) -> Vec<(String, String)> {
+        let mut spans = FieldSpans::new();
+        scan(&FieldParser::Delimited(d.clone()), line, &mut spans);
+        spans
+            .iter(line)
+            .map(|f| (f.key.to_string(), f.value().into_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn delimited_cells_follow_rfc_4180() {
+        let d = Delimited::new(b',', Some("id,customer,note"));
+        assert_eq!(d.names, vec!["id", "customer", "note"]);
+        assert_eq!(
+            cells(&d, r#"7,"Smith, John","said ""hi"""#),
+            vec![
+                ("id".into(), "7".into()),
+                ("customer".into(), "Smith, John".into()),
+                ("note".into(), "said \"hi\"".into()),
+            ]
+        );
+        // Empty cells, more cells than names, the header row itself.
+        assert_eq!(
+            cells(&d, "1,,x,extra"),
+            vec![
+                ("id".into(), "1".into()),
+                ("customer".into(), "".into()),
+                ("note".into(), "x".into()),
+                ("4".into(), "extra".into()),
+            ]
+        );
+        let mut spans = FieldSpans::new();
+        assert!(!scan(
+            &FieldParser::Delimited(d.clone()),
+            "id,customer,note",
+            &mut spans
+        ));
+        assert!(!scan(
+            &FieldParser::Delimited(d.clone()),
+            "single",
+            &mut spans
+        ));
+        // An open quote takes the rest of the line.
+        assert!(scan(
+            &FieldParser::Delimited(d.clone()),
+            r#"1,"open, still"#,
+            &mut spans
+        ));
+        assert!(spans.partial);
+        let numbered = Delimited::new(b'\t', None);
+        assert_eq!(cells(&numbered, "a\tb")[1], ("2".into(), "b".into()));
+    }
+
+    #[test]
+    fn separators_and_headers_are_detected() {
+        let csv = [
+            "id,customer,total",
+            "1,ann,10",
+            "2,\"bo, b\",12.5",
+            "3,cy,7",
+        ];
+        assert_eq!(detect_separator(&csv, None), Some(b','));
+        assert!(detect_header(&csv, b','));
+        let semi = ["1;2;3", "4;5;6", "7;8;9"];
+        assert_eq!(detect_separator(&semi, None), Some(b';'));
+        assert!(!detect_header(&semi, b';'), "numbers are no header");
+        assert_eq!(
+            detect_table(&semi, Some("csv")),
+            Some(ParserChoice::Delimited {
+                sep: b';',
+                header: false
+            })
+        );
+        assert_eq!(detect_table(&semi, None), None, "no extension, no header");
+        let tsv = ["a\tb", "1\t2"];
+        assert_eq!(
+            detect_table(&tsv, Some("tsv")),
+            Some(ParserChoice::Delimited {
+                sep: b'\t',
+                header: true
+            })
+        );
+        let log = ["2026-01-01 INFO start", "2026-01-01 WARN x, y"];
+        assert_eq!(detect_table(&log, Some("log")), None);
+        assert_eq!(detect_table(&["INFO a, b", "WARN c, d"], None), None);
+        assert!(detect_table(&["host,status", "a,200"], None).is_some());
+        assert_eq!(separator_from_name(separator_name(b'\t')), Some(b'\t'));
+    }
+
     #[test]
     fn field_terms_parse_their_grammar() {
         let t = |s: &str| FieldTerm::parse(s, false, false).map(|r| r.unwrap());
@@ -1175,6 +1572,7 @@ mod tests {
         assert_eq!(t("a>1").unwrap().op, FieldOp::Gt);
         assert!(t("\"level=error\"").is_none(), "quoted");
         assert!(t("1a=2").is_none(), "a key starts with a letter, _ or @");
+        assert_eq!(t("2>=5").unwrap().key, "2", "a numbered column");
         assert!(t("plain text").is_none());
         assert!(t("a && !b").is_none());
         assert!(FieldTerm::parse("k=(", false, true).unwrap().is_err());
