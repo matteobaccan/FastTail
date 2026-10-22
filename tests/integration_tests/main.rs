@@ -32,6 +32,7 @@ mod folder_sources;
 mod hidden_lines;
 mod level_detect_window;
 mod line_wrap;
+mod log_formats;
 mod log_levels;
 mod merged_views;
 mod open_at_line;

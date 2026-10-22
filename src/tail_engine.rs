@@ -3555,10 +3555,20 @@ impl TailEngine {
                 self.set_field_parser(None);
             }
         }
-        if self.field_choice == ParserChoice::Auto {
+        if self.field_detecting() {
             self.field_auto = None;
             self.field_detected_at = None;
             self.detect_fields();
+        }
+    }
+
+    /// Whether detection picks the parser: automatic, or a saved format that is missing
+    /// (the chip says so).
+    fn field_detecting(&self) -> bool {
+        match &self.field_choice {
+            ParserChoice::Auto => true,
+            ParserChoice::Format(_) => self.field_error.is_some(),
+            _ => false,
         }
     }
 
@@ -3669,8 +3679,16 @@ impl TailEngine {
         &self.field_columns
     }
 
-    /// The columns shown, in order: the chosen ones, else the catalogue's defaults.
+    /// The columns shown, in order: the chosen ones, else the log format's, else the
+    /// catalogue's defaults.
     pub fn field_columns(&self) -> Vec<String> {
+        if let (true, Some(FieldParser::Format(f))) =
+            (self.field_columns.is_empty(), self.field_parser.as_deref())
+        {
+            if !f.spec.columns.is_empty() {
+                return f.spec.columns.clone();
+            }
+        }
         if self.field_columns.is_empty() {
             self.field_catalogue.default_columns()
         } else {
@@ -3759,7 +3777,7 @@ impl TailEngine {
     pub fn detect_fields(&mut self) {
         use crate::fields::DETECT_LINES;
         self.sample_field_catalogue();
-        if self.field_choice != ParserChoice::Auto || self.index_pending {
+        if !self.field_detecting() || self.index_pending {
             return;
         }
         let total = self.total_lines();
@@ -3773,20 +3791,26 @@ impl TailEngine {
         let sample = self.field_sample();
         self.field_detected_at = Some(total);
         let refs: Vec<&str> = sample.iter().map(String::as_str).collect();
-        let found = crate::fields::detect(refs.iter().copied()).or_else(|| {
-            let ext = self
-                .current_file
-                .as_ref()
-                .unwrap_or(&self.path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_ascii_lowercase);
-            crate::fields::detect_table(&refs, ext.as_deref())
-        });
+        let file = self.current_file.as_ref().unwrap_or(&self.path);
+        let file_name = file.file_name().and_then(|n| n.to_str());
+        // User formats first (the file name's own before the others), then JSON, logfmt
+        // and tables.
+        let format = crate::log_format::detect(&crate::log_format::library(), file_name, &refs);
+        let found = format
+            .map(|f| ParserChoice::Format(f.name().to_string()))
+            .or_else(|| crate::fields::detect(refs.iter().copied()))
+            .or_else(|| {
+                let ext = file
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase);
+                crate::fields::detect_table(&refs, ext.as_deref())
+            });
         let same_kind = match (&found, self.field_parser.as_deref()) {
             (None, None)
             | (Some(ParserChoice::Json), Some(FieldParser::Json))
             | (Some(ParserChoice::Logfmt), Some(FieldParser::Logfmt)) => true,
+            (Some(ParserChoice::Format(name)), Some(FieldParser::Format(f))) => f.name() == name,
             (Some(ParserChoice::Delimited { sep, header }), Some(FieldParser::Delimited(d))) => {
                 d.sep == *sep && d.header_line.is_some() == *header
             }

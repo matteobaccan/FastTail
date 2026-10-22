@@ -153,6 +153,8 @@ fn hand_off_to_gui(args: &[String]) -> i32 {
 /// message can be read.
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     let args: Vec<String> = args.into_iter().collect();
+    // The log formats next to `fasttail.ini`, for the parser of every stream.
+    crate::log_format::load_default();
     let handed_off = args
         .iter()
         .take_while(|a| *a != "--")

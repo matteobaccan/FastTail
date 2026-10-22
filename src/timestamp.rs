@@ -1135,6 +1135,310 @@ pub fn display_timestamp_with(
     ))
 }
 
+/// A timestamp format of a log format (`timestamp_format=`): a strftime subset, or a
+/// whole epoch value. Read by `parse_with_format` into the same milliseconds as
+/// `detect_timestamp`, the zone read past and not applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimeFormat {
+    /// `epoch_s`: seconds since the epoch, maybe with a fraction (`1727532131.123`).
+    EpochSeconds,
+    /// `epoch_ms`: milliseconds since the epoch.
+    EpochMillis,
+    Pattern(Vec<TimePart>),
+}
+
+/// One piece of a strftime pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimePart {
+    /// Text that must be there as written.
+    Literal(Box<[u8]>),
+    /// `%Y`: four digits.
+    Year,
+    /// `%y`: two digits, 2000 to 2069 or 1970 to 1999.
+    ShortYear,
+    /// `%m`, `%d`, `%H`, `%I`, `%M`, `%S`: one or two digits.
+    Month,
+    Day,
+    Hour,
+    Hour12,
+    Minute,
+    Second,
+    /// `%e`: the day, space-padded.
+    SpaceDay,
+    /// `%p`: `AM` / `PM`, any case.
+    AmPm,
+    /// `%b`: a three-letter English month name.
+    MonthName,
+    /// `%j`: day of the year, one to three digits.
+    DayOfYear,
+    /// `%z`: `Z`, `+02:00` or `+0200`, read past.
+    Zone,
+    /// `%f`: a fraction of any length; `%3f`, `%6f`, `%9f`: exactly that many digits.
+    Fraction(Option<u8>),
+}
+
+impl TimeFormat {
+    /// Reads a `timestamp_format=` value; `Err` names an unknown directive.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        match spec.trim() {
+            "epoch_s" => return Ok(TimeFormat::EpochSeconds),
+            "epoch_ms" => return Ok(TimeFormat::EpochMillis),
+            "" => return Err("empty timestamp format".to_string()),
+            _ => {}
+        }
+        let mut parts = Vec::new();
+        let mut literal: Vec<u8> = Vec::new();
+        let b = spec.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] != b'%' {
+                literal.push(b[i]);
+                i += 1;
+                continue;
+            }
+            let Some(&d) = b.get(i + 1) else {
+                return Err(format!("'%' at the end (position {})", i + 1));
+            };
+            let (part, used) = match d {
+                b'%' => {
+                    literal.push(b'%');
+                    i += 2;
+                    continue;
+                }
+                b'Y' => (TimePart::Year, 2),
+                b'y' => (TimePart::ShortYear, 2),
+                b'm' => (TimePart::Month, 2),
+                b'd' => (TimePart::Day, 2),
+                b'e' => (TimePart::SpaceDay, 2),
+                b'H' => (TimePart::Hour, 2),
+                b'I' => (TimePart::Hour12, 2),
+                b'M' => (TimePart::Minute, 2),
+                b'S' => (TimePart::Second, 2),
+                b'p' => (TimePart::AmPm, 2),
+                b'b' => (TimePart::MonthName, 2),
+                b'j' => (TimePart::DayOfYear, 2),
+                b'z' => (TimePart::Zone, 2),
+                b'f' => (TimePart::Fraction(None), 2),
+                b'3' | b'6' | b'9' if b.get(i + 2) == Some(&b'f') => {
+                    (TimePart::Fraction(Some(d - b'0')), 3)
+                }
+                _ => {
+                    let directive = spec[i..].chars().take(2).collect::<String>();
+                    return Err(format!(
+                        "unknown directive {directive} (position {})",
+                        i + 1
+                    ));
+                }
+            };
+            if !literal.is_empty() {
+                parts.push(TimePart::Literal(std::mem::take(&mut literal).into()));
+            }
+            parts.push(part);
+            i += used;
+        }
+        if !literal.is_empty() {
+            parts.push(TimePart::Literal(literal.into()));
+        }
+        Ok(TimeFormat::Pattern(parts))
+    }
+}
+
+/// Milliseconds since the epoch of `text` read with `format` from its start (text after
+/// it is ignored); `None` when it does not fit or names a date that does not exist. A
+/// format without a year takes the current one, as syslog does; one without a date reads
+/// as 1970-01-01.
+pub fn parse_with_format(text: &str, format: &TimeFormat) -> Option<i64> {
+    let b = text.trim_start().as_bytes();
+    let parts = match format {
+        TimeFormat::EpochSeconds => return epoch_value(b, 1000),
+        TimeFormat::EpochMillis => return epoch_value(b, 1),
+        TimeFormat::Pattern(parts) => parts,
+    };
+    let (mut year, mut month, mut day) = (None, 1, 1);
+    let mut day_of_year = None;
+    let (mut hour, mut minute, mut second, mut millis) = (0, 0, 0, 0);
+    let mut pm = None;
+    let mut at = 0;
+    // One or two digits (`width` up to three for the day of the year).
+    let digits = |at: usize, min: usize, max: usize| -> Option<(u32, usize)> {
+        let n = b[at.min(b.len())..]
+            .iter()
+            .take(max)
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        if n < min {
+            return None;
+        }
+        let value = b[at..at + n]
+            .iter()
+            .fold(0u32, |v, c| v * 10 + u32::from(c - b'0'));
+        Some((value, at + n))
+    };
+    for part in parts {
+        match part {
+            TimePart::Literal(lit) => {
+                if !b.get(at..)?.starts_with(lit) {
+                    return None;
+                }
+                at += lit.len();
+            }
+            TimePart::Year => {
+                let (v, next) = digits(at, 4, 4)?;
+                year = Some(v);
+                at = next;
+            }
+            TimePart::ShortYear => {
+                let (v, next) = digits(at, 2, 2)?;
+                year = Some(if v < 70 { 2000 + v } else { 1900 + v });
+                at = next;
+            }
+            TimePart::Month => (month, at) = digits(at, 1, 2)?,
+            TimePart::Day => (day, at) = digits(at, 1, 2)?,
+            TimePart::SpaceDay => {
+                if b.get(at) == Some(&b' ') {
+                    at += 1;
+                }
+                (day, at) = digits(at, 1, 2)?;
+            }
+            TimePart::Hour | TimePart::Hour12 => (hour, at) = digits(at, 1, 2)?,
+            TimePart::Minute => (minute, at) = digits(at, 1, 2)?,
+            TimePart::Second => (second, at) = digits(at, 1, 2)?,
+            TimePart::AmPm => {
+                let word = b.get(at..at + 2)?;
+                pm = Some(if word.eq_ignore_ascii_case(b"AM") {
+                    false
+                } else if word.eq_ignore_ascii_case(b"PM") {
+                    true
+                } else {
+                    return None;
+                });
+                at += 2;
+            }
+            TimePart::MonthName => {
+                month = month_from_name(b.get(at..at + 3)?)?;
+                at += 3;
+            }
+            TimePart::DayOfYear => {
+                let (v, next) = digits(at, 1, 3)?;
+                day_of_year = Some(v);
+                at = next;
+            }
+            TimePart::Zone => at += zone_len(&b[at.min(b.len())..])?,
+            TimePart::Fraction(width) => {
+                let (min, max) = match width {
+                    Some(w) => (usize::from(*w), usize::from(*w)),
+                    None => (1, 9),
+                };
+                let n = b[at.min(b.len())..]
+                    .iter()
+                    .take(max)
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
+                if n < min {
+                    return None;
+                }
+                // The first three digits are the milliseconds.
+                millis = b[at..at + n]
+                    .iter()
+                    .chain(b"000".iter())
+                    .take(3)
+                    .fold(0u32, |v, c| v * 10 + u32::from(c - b'0'));
+                at += n;
+            }
+        }
+    }
+    if let Some(pm) = pm {
+        if !(1..=12).contains(&hour) {
+            return None;
+        }
+        hour = hour % 12 + if pm { 12 } else { 0 };
+    }
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let has_date = parts.iter().any(|p| {
+        matches!(
+            p,
+            TimePart::Year
+                | TimePart::ShortYear
+                | TimePart::Month
+                | TimePart::Day
+                | TimePart::SpaceDay
+                | TimePart::MonthName
+                | TimePart::DayOfYear
+        )
+    });
+    let days = if !has_date {
+        0
+    } else {
+        let year = year.unwrap_or_else(current_year);
+        match day_of_year {
+            Some(doy) => {
+                let leap = u32::from(is_leap(year));
+                if doy == 0 || doy > 365 + leap {
+                    return None;
+                }
+                days_from_civil(year, 1, 1)? + i64::from(doy) - 1
+            }
+            None => days_from_civil(year, month, day)?,
+        }
+    };
+    Some(
+        days * 86_400_000
+            + i64::from(hour) * 3_600_000
+            + i64::from(minute) * 60_000
+            + i64::from(second) * 1000
+            + i64::from(millis),
+    )
+}
+
+/// An epoch value at the start of `b` in units of `scale` milliseconds, a fraction after
+/// a dot read for seconds.
+fn epoch_value(b: &[u8], scale: i64) -> Option<i64> {
+    let n = b.iter().take_while(|c| c.is_ascii_digit()).count();
+    if n == 0 || n > 16 {
+        return None;
+    }
+    let whole = b[..n]
+        .iter()
+        .fold(0i64, |v, c| v * 10 + i64::from(c - b'0'));
+    let mut value = whole.checked_mul(scale)?;
+    if scale == 1000 && b.get(n) == Some(&b'.') {
+        let digits = b[n + 1..]
+            .iter()
+            .take(3)
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        value += b[n + 1..n + 1 + digits]
+            .iter()
+            .chain(b"000".iter())
+            .take(3)
+            .fold(0i64, |v, c| v * 10 + i64::from(c - b'0'));
+    }
+    Some(value)
+}
+
+/// Length of a zone at the start of `b`: `Z`, `+02:00`, `+0200` or `+02`.
+fn zone_len(b: &[u8]) -> Option<usize> {
+    match b.first()? {
+        b'Z' | b'z' => Some(1),
+        b'+' | b'-' => {
+            let digit = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
+            if !(digit(1) && digit(2)) {
+                return None;
+            }
+            if b.get(3) == Some(&b':') && digit(4) && digit(5) {
+                Some(6)
+            } else if digit(3) && digit(4) {
+                Some(5)
+            } else {
+                Some(3)
+            }
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1783,5 +2087,82 @@ mod zone_tests {
             assert!(off.abs() <= 14 * H, "{off}");
             assert_eq!(off % (15 * 60_000), 0, "{off}");
         }
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    fn read(spec: &str, text: &str) -> Option<i64> {
+        parse_with_format(text, &TimeFormat::parse(spec).unwrap())
+    }
+
+    fn at(y: i64, mo: u32, d: u32, h: i64, mi: i64, s: i64, ms: i64) -> i64 {
+        date_to_days(y, mo, d).unwrap() * 86_400_000 + h * 3_600_000 + mi * 60_000 + s * 1000 + ms
+    }
+
+    #[test]
+    fn each_directive_reads_its_part() {
+        let want = at(2026, 9, 28, 14, 2, 11, 123);
+        assert_eq!(
+            read("%d.%m.%y %H:%M:%S,%3f", "28.09.26 14:02:11,123 x"),
+            Some(want)
+        );
+        assert_eq!(
+            read("%Y-%m-%dT%H:%M:%S.%f%z", "2026-09-28T14:02:11.123456+02:00"),
+            Some(want)
+        );
+        assert_eq!(
+            read("%Y%m%d %H%M%S %z", "20260928 140211 +0200"),
+            Some(want - 123)
+        );
+        assert_eq!(
+            read("%d/%b/%Y:%H:%M:%S", "28/sep/2026:14:02:11"),
+            Some(want - 123)
+        );
+        assert_eq!(
+            read("%m/%e/%Y %I:%M:%S %p", "9/ 8/2026 02:02:11 PM"),
+            Some(at(2026, 9, 8, 14, 2, 11, 0))
+        );
+        assert_eq!(read("%I:%M %p", "12:30 am"), Some(30 * 60_000));
+        assert_eq!(
+            read("%Y.%j %H:%M:%S", "2026.271 14:02:11"),
+            Some(want - 123)
+        );
+        assert_eq!(
+            read("[%H:%M:%S.%6f] 100%%", "[14:02:11.123456] 100%"),
+            Some(want - date_to_days(2026, 9, 28).unwrap() * 86_400_000)
+        );
+        assert_eq!(read("%y", "99"), Some(at(1999, 1, 1, 0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn epoch_values_and_year_less_formats() {
+        assert_eq!(
+            read("epoch_s", "1727532131.5 rest"),
+            Some(1_727_532_131_500)
+        );
+        assert_eq!(read("epoch_s", "1727532131"), Some(1_727_532_131_000));
+        assert_eq!(read("epoch_ms", "1727532131123"), Some(1_727_532_131_123));
+        let year = i64::from(current_year());
+        assert_eq!(
+            read("%b %e %H:%M:%S", "Sep  8 14:02:05"),
+            Some(at(year, 9, 8, 14, 2, 5, 0))
+        );
+    }
+
+    #[test]
+    fn invalid_input_and_formats_are_refused() {
+        assert_eq!(read("%d.%m.%y", "31.02.26"), None, "no such date");
+        assert_eq!(read("%H:%M", "25:00"), None);
+        assert_eq!(read("%I %p", "13 PM"), None);
+        assert_eq!(read("%Y-%m-%d", "2026/09/28"), None, "literal differs");
+        assert_eq!(read("%3f", "12"), None, "too few digits");
+        assert_eq!(read("epoch_ms", "abc"), None);
+        assert_eq!(read("%Y.%j", "2026.366"), None, "not a leap year");
+        assert!(TimeFormat::parse("%Q").unwrap_err().contains("%Q"));
+        assert!(TimeFormat::parse("%Y %").is_err());
+        assert!(TimeFormat::parse(" ").is_err());
     }
 }

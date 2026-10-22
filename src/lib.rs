@@ -32,6 +32,7 @@ pub mod i18n;
 pub mod i18n_tui;
 pub mod json_tree;
 pub mod lock;
+pub mod log_format;
 pub mod log_level;
 pub mod merged_stream;
 pub mod paths;

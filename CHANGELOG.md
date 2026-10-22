@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Log formats.** Named formats in `*.fasttail-format.ini` files in a `formats` folder
+  next to `fasttail.ini`: line regexes with named groups, the time field with an optional
+  strftime-style `timestamp_format` (or `epoch_s` / `epoch_ms`), the level field with a
+  level map, the message field, file name globs, default columns and samples. Detection
+  tries them before JSON and logfmt (the file's own format first); the parser chip names
+  the format and its menu forces one (`fields_parser=format:<name>`). The Apache / nginx
+  and syslog presets are built-in formats. First part of `custom-log-formats`; the entry
+  start pattern and the formats dialog follow.
+
 ## [0.21.2] - 2026-10-22
 
 ### Added

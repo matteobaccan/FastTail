@@ -30,6 +30,7 @@ fn kind(engine: &TailEngine) -> &'static str {
         Some(FieldParser::Logfmt) => "logfmt",
         Some(FieldParser::Regex(_)) => "regex",
         Some(FieldParser::Delimited(_)) => "csv",
+        Some(FieldParser::Format(_)) => "format",
         None => "none",
     }
 }
@@ -117,7 +118,7 @@ fn a_forced_parser_wins_over_detection() {
     assert_eq!(engine.field_error(), None);
 
     engine.set_field_choice(ParserChoice::Syslog);
-    assert_eq!(kind(&engine), "regex");
+    assert_eq!(kind(&engine), "format", "the preset is the built-in format");
     engine.set_field_choice(ParserChoice::Auto);
     assert_eq!(kind(&engine), "json", "back to auto detects again");
 }
