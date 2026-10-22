@@ -225,8 +225,23 @@ impl SplitDialog {
                     && p.pieces > 0
                     && !no_space
                     && (p.existing.is_empty() || self.replace);
+                let disabled_tip = if busy || p.waiting_for_timestamps {
+                    t(lang, "split_waiting").to_string()
+                } else if p.no_timestamps {
+                    t(lang, "split_no_timestamps").to_string()
+                } else if no_space {
+                    t(lang, "split_no_space")
+                        .replace("{0}", &size)
+                        .replace("{1}", &crate::ui::zip_picker::human_size(free.unwrap_or(0)))
+                } else if !p.existing.is_empty() && !self.replace {
+                    t(lang, "split_existing").replace("{0}", &p.existing.len().to_string())
+                } else {
+                    t(lang, "split_tip").to_string()
+                };
                 if ui
                     .add_enabled(ready, egui::Button::new(t(lang, "split_start")))
+                    .on_hover_text(t(lang, "split_tip"))
+                    .on_disabled_hover_text(disabled_tip)
                     .clicked()
                 {
                     self.notice = None;

@@ -9098,7 +9098,7 @@ impl TailEngine {
             let hidden = std::mem::take(&mut self.hidden);
             self.filtered_lines.retain(|&l| {
                 let i = hidden.partition_point(|&(_, end)| end < l);
-                !hidden.get(i).is_some_and(|&(start, _)| start <= l)
+                hidden.get(i).is_none_or(|&(start, _)| start > l)
             });
             self.hidden = hidden;
             self.context_ranges = self.context_ranges_for(&self.filtered_lines);
