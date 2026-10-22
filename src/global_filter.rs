@@ -45,6 +45,9 @@ pub struct GlobalFilter {
     /// the include terms are kept for the way back.
     pub expr_mode: bool,
     pub expression: String,
+    /// The last expression that compiled: what filters while the one typed does not, as
+    /// a stream's does (`note_expression`). Not saved.
+    pub last_valid_expression: String,
 }
 
 impl GlobalFilter {
@@ -52,7 +55,7 @@ impl GlobalFilter {
     /// expression in place of the include terms).
     pub fn has_terms(&self) -> bool {
         let include = if self.expr_mode {
-            !self.expression.trim().is_empty()
+            !self.effective_expression().trim().is_empty()
         } else {
             self.include.iter().any(|t| !t.is_empty())
         };
@@ -84,6 +87,25 @@ impl GlobalFilter {
             self.expression = crate::filter_expr::from_terms(&self.include, false);
         }
         self.expr_mode = on;
+        self.note_expression();
+    }
+
+    /// Records the expression as the last valid one when it compiles (after an edit).
+    pub fn note_expression(&mut self) {
+        let compiles =
+            crate::filter_expr::FilterExpr::compile(&self.expression, self.toggles()).is_ok();
+        if compiles {
+            self.last_valid_expression = self.expression.clone();
+        }
+    }
+
+    /// The expression that filters: the one typed when it compiles, else the last one
+    /// that did.
+    pub fn effective_expression(&self) -> &str {
+        match crate::filter_expr::FilterExpr::compile(&self.expression, self.toggles()) {
+            Ok(_) => &self.expression,
+            Err(_) => &self.last_valid_expression,
+        }
     }
 
     /// Whether the streams apply it now: switched on, with at least one term.
@@ -98,7 +120,9 @@ impl GlobalFilter {
         let include: &[String] = if self.expr_mode { &none } else { &self.include };
         let expr = self
             .expr_mode
-            .then(|| crate::filter_expr::FilterExpr::compile(&self.expression, self.toggles()))
+            .then(|| {
+                crate::filter_expr::FilterExpr::compile(self.effective_expression(), self.toggles())
+            })
             .and_then(Result::ok)
             .flatten()
             .map(Arc::new);
@@ -123,7 +147,8 @@ impl GlobalFilter {
                     non_empty(&self.include)
                 },
                 non_empty(&self.exclude),
-                self.expr_mode.then(|| self.expression.trim().to_string()),
+                self.expr_mode
+                    .then(|| self.effective_expression().trim().to_string()),
             )
         })
     }
@@ -144,6 +169,7 @@ impl GlobalFilter {
             && !self.has_terms()
             && self.include.iter().all(|t| t.is_empty())
             && self.expression.is_empty()
+            && !self.expr_mode
         {
             return;
         }
@@ -178,7 +204,7 @@ impl GlobalFilter {
                 .map(str::to_string)
                 .collect()
         };
-        Self {
+        let mut out = Self {
             enabled: flag("enabled"),
             bar_open: flag("bar_open"),
             case_sensitive: flag("case_sensitive"),
@@ -189,7 +215,10 @@ impl GlobalFilter {
                 .get("mode")
                 .is_some_and(|m| m.trim().eq_ignore_ascii_case("expr")),
             expression: sec.get("expression").unwrap_or("").to_string(),
-        }
+            last_valid_expression: String::new(),
+        };
+        out.note_expression();
+        out
     }
 }
 
@@ -230,6 +259,7 @@ mod tests {
             exclude: terms(&["healthcheck"]),
             expr_mode: true,
             expression: r#"(a OR "b c") NOT /d\/e/"#.into(),
+            last_valid_expression: r#"(a OR "b c") NOT /d\/e/"#.into(),
         };
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fasttail.ini");

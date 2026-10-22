@@ -5822,15 +5822,29 @@ impl App {
             ),
             false,
         );
+        // In expression mode (set in the window) the include rows do not apply: say so.
+        let expression = {
+            let gf = &self.settings_mut().config.global_filter;
+            gf.expr_mode.then(|| gf.expression.clone())
+        };
+        let hint = match &expression {
+            Some(expr) => txf(
+                self.lang,
+                "Expression mode (set in the window): {0}; the include rows do not apply",
+                &[expr],
+            ),
+            None => tx(
+                self.lang,
+                "Tab/Up/Down move, Space ticks, type a term; applied as you type. Enter/Esc close",
+            )
+            .to_string(),
+        };
         let Some(d) = self.global.as_ref() else {
             return;
         };
         let mut out = vec![Line::styled(
-            tx(
-                self.lang,
-                "Tab/Up/Down move, Space ticks, type a term; applied as you type. Enter/Esc close",
-            ),
-            dim,
+            hint,
+            if expression.is_some() { error } else { dim },
         )];
         let mut cursor = None;
         for (k, row) in rows.iter().enumerate() {
@@ -7437,7 +7451,7 @@ fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
         return format!("{view}  /{query} {current}/{}", e.search_byte_matches.len());
     }
     let mut parts = Vec::new();
-    let inc = e.include_filter();
+    let inc = e.include_display();
     let exc = e.exclude_filter();
     if !inc.is_empty() {
         parts.push(format!("+{inc}"));
@@ -11171,6 +11185,36 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         let saved = crate::tui::workspace::Settings::read(&ini).config;
         assert!(saved.filter_presets.is_empty());
+    }
+
+    #[test]
+    fn the_global_dialog_says_when_the_window_set_an_expression() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, "payment\nrefund\nother\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        let mut config = crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        };
+        config.global_filter.enabled = true;
+        config.global_filter.expr_mode = true;
+        config.global_filter.expression = "payment OR refund".into();
+        config.save_to(&ini).unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::EditGlobal);
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("Expression mode (set in the window): payment OR refund")),
+            "{screen:#?}"
+        );
+        // The bar shows a stream's own expression in place of its include term.
+        app.tabs[0].engine.set_filter_expr("refund");
+        app.tabs[0].engine.set_filter_expr_mode(true);
+        assert_eq!(app.tabs[0].engine.include_display(), "refund");
     }
 
     #[test]

@@ -3080,6 +3080,16 @@ impl TailEngine {
         &self.include_terms
     }
 
+    /// The include side as the bars show it in one line: the expression in expression
+    /// mode, else the first include term.
+    pub fn include_display(&self) -> &str {
+        if self.filter_expr_mode {
+            &self.filter_expr
+        } else {
+            self.include_filter()
+        }
+    }
+
     /// Whether the include side is an expression (`filter_expr`).
     pub fn filter_expr_mode(&self) -> bool {
         self.filter_expr_mode

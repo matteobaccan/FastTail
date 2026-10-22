@@ -65,9 +65,10 @@ impl FilterState {
                     engine.time_to_text.trim().to_string(),
                 )
             }),
+            // The expression that filters (the last valid one while the text is broken).
             expr: engine
                 .filter_expr_mode()
-                .then(|| engine.filter_expr().trim().to_string()),
+                .then(|| engine.applied_expr().unwrap_or_default().trim().to_string()),
         }
     }
 
@@ -77,7 +78,10 @@ impl FilterState {
     pub fn matches_engine(&self, engine: &TailEngine) -> bool {
         let unknown_matters = self.min_level > LogLevel::Trace;
         let include_side = match &self.expr {
-            Some(expr) => engine.filter_expr_mode() && expr == engine.filter_expr().trim(),
+            Some(expr) => {
+                engine.filter_expr_mode()
+                    && expr.as_str() == engine.applied_expr().unwrap_or_default().trim()
+            }
             None => !engine.filter_expr_mode() && self.include == effective(engine.include_terms()),
         };
         include_side

@@ -231,7 +231,7 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
         let pad = 18usize.saturating_sub(shown.chars().count());
         format!("{shown}{}", " ".repeat(pad))
     };
-    let include = e.include_filter();
+    let include = e.include_display();
     let exclude = e.exclude_filter();
     let mut second = vec![
         text(tx(lang, "Include").into(), accent),

@@ -7515,7 +7515,7 @@ fn render_global_filter_badge(
 }
 
 /// The terms of a compiled global filter, `+term` for an include and `-term` for an
-/// exclude, one per line.
+/// exclude, one per line; its expression first as `ƒx …`.
 pub fn global_terms_text(global: &crate::scan_job::FilterSpec) -> String {
     let side = |terms: &[crate::scan_job::FilterTerm], sign: char| -> Vec<String> {
         terms
@@ -7524,7 +7524,12 @@ pub fn global_terms_text(global: &crate::scan_job::FilterSpec) -> String {
             .map(|t| format!("{sign}{}", t.text))
             .collect()
     };
-    let mut lines = side(&global.include, '+');
+    let mut lines: Vec<String> = global
+        .expr
+        .iter()
+        .map(|e| format!("ƒx {}", e.text))
+        .collect();
+    lines.extend(side(&global.include, '+'));
     lines.extend(side(&global.exclude, '-'));
     lines.join("\n")
 }
@@ -8033,7 +8038,7 @@ fn render_expr_field(
 }
 
 /// `message at character N (detail)` for an expression error.
-fn expr_error_text(lang: Language, text: &str, e: &crate::filter_expr::ExprError) -> String {
+pub fn expr_error_text(lang: Language, text: &str, e: &crate::filter_expr::ExprError) -> String {
     let column = text.char_indices().take_while(|(i, _)| *i < e.pos).count() + 1;
     let mut out = t(lang, "expr_error_at")
         .replace("{0}", t(lang, e.key))

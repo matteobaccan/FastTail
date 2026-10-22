@@ -107,21 +107,23 @@ pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Lang
                     edit = edit.text_color(theme.warn_color().into());
                 }
                 let mut resp = ui.add(edit);
-                if let Some(e) = &broken {
-                    let column = gf
-                        .expression
-                        .char_indices()
-                        .take_while(|(i, _)| *i < e.pos)
-                        .count()
-                        + 1;
-                    resp = resp.on_hover_text(
-                        t(lang, "expr_error_at")
-                            .replace("{0}", t(lang, e.key))
-                            .replace("{1}", &column.to_string()),
-                    );
+                let message = broken
+                    .as_ref()
+                    .map(|e| crate::ui::dock::expr_error_text(lang, &gf.expression, e));
+                if let Some(message) = &message {
+                    resp = resp.on_hover_text(message);
                 }
                 if resp.changed() {
+                    gf.note_expression();
                     out.terms_edited = true;
+                }
+                if let Some(message) = message {
+                    ui.label(
+                        RichText::new(format!("⚠ {message}"))
+                            .monospace()
+                            .size(10.5)
+                            .color(theme.warn_color()),
+                    );
                 }
                 ui.separator();
                 continue;
