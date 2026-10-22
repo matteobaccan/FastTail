@@ -488,7 +488,7 @@ pub fn read_file(path: &Path) -> Result<LogFormat, String> {
 pub fn write_file(dir: &Path, spec: &FormatSpec) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(spec.file_name());
-    std::fs::write(&path, spec.to_ini())?;
+    crate::config::overwrite_regular_file(&path, spec.to_ini().as_bytes())?;
     Ok(path)
 }
 
