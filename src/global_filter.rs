@@ -25,8 +25,9 @@ pub const APPLY_DELAY_MS: u64 = 300;
 /// others follow on the next frames instead of freezing one.
 pub const SYNC_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 
-/// What decides the compiled set: two filters with the same key hide the same lines.
-pub type AppliedKey = (bool, bool, Vec<String>, Vec<String>);
+/// What decides the compiled set: two filters with the same key hide the same lines (the
+/// toggles, the include terms or the expression, the exclude terms).
+pub type AppliedKey = (bool, bool, Vec<String>, Vec<String>, Option<String>);
 
 /// What the user set in the global filter bar. Term rows are kept as typed (empty rows
 /// included) while editing; only the non-empty ones are saved and applied.
@@ -40,15 +41,49 @@ pub struct GlobalFilter {
     pub is_regex: bool,
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+    /// Expression mode: the include side is `expression` (`mode=expr`, `expression=`);
+    /// the include terms are kept for the way back.
+    pub expr_mode: bool,
+    pub expression: String,
 }
 
 impl GlobalFilter {
-    /// Whether any include or exclude term is non-empty.
+    /// Whether any include or exclude term is non-empty (in expression mode, the
+    /// expression in place of the include terms).
     pub fn has_terms(&self) -> bool {
-        self.include
-            .iter()
-            .chain(&self.exclude)
-            .any(|t| !t.is_empty())
+        let include = if self.expr_mode {
+            !self.expression.trim().is_empty()
+        } else {
+            self.include.iter().any(|t| !t.is_empty())
+        };
+        include || self.exclude.iter().any(|t| !t.is_empty())
+    }
+
+    /// The toggles the expression is compiled with.
+    fn toggles(&self) -> crate::filter_expr::Toggles {
+        crate::filter_expr::Toggles {
+            case_sensitive: self.case_sensitive,
+            is_regex: self.is_regex,
+            fields: false,
+        }
+    }
+
+    /// Why the expression does not compile, in expression mode (its include side then
+    /// filters nothing).
+    pub fn expr_error(&self) -> Option<crate::filter_expr::ExprError> {
+        if !self.expr_mode {
+            return None;
+        }
+        crate::filter_expr::FilterExpr::compile(&self.expression, self.toggles()).err()
+    }
+
+    /// Switches between include terms and an expression; the first switch to an empty
+    /// expression builds it from the include terms.
+    pub fn set_expr_mode(&mut self, on: bool) {
+        if on && self.expression.trim().is_empty() {
+            self.expression = crate::filter_expr::from_terms(&self.include, false);
+        }
+        self.expr_mode = on;
     }
 
     /// Whether the streams apply it now: switched on, with at least one term.
@@ -59,12 +94,16 @@ impl GlobalFilter {
     /// The terms compiled with the bar's toggles, whether or not the filter is on (the
     /// bar flags a regex that does not compile from it).
     pub fn spec(&self) -> FilterSpec {
-        FilterSpec::build(
-            &self.include,
-            &self.exclude,
-            self.case_sensitive,
-            self.is_regex,
-        )
+        let none: [String; 0] = [];
+        let include: &[String] = if self.expr_mode { &none } else { &self.include };
+        let expr = self
+            .expr_mode
+            .then(|| crate::filter_expr::FilterExpr::compile(&self.expression, self.toggles()))
+            .and_then(Result::ok)
+            .flatten()
+            .map(Arc::new);
+        FilterSpec::build(include, &self.exclude, self.case_sensitive, self.is_regex)
+            .with_expr(expr)
     }
 
     /// The key of the set the streams apply (`None` when off or without a term): the
@@ -78,8 +117,13 @@ impl GlobalFilter {
             (
                 self.case_sensitive,
                 self.is_regex,
-                non_empty(&self.include),
+                if self.expr_mode {
+                    Vec::new()
+                } else {
+                    non_empty(&self.include)
+                },
                 non_empty(&self.exclude),
+                self.expr_mode.then(|| self.expression.trim().to_string()),
             )
         })
     }
@@ -98,6 +142,8 @@ impl GlobalFilter {
             && !self.case_sensitive
             && !self.is_regex
             && !self.has_terms()
+            && self.include.iter().all(|t| t.is_empty())
+            && self.expression.is_empty()
         {
             return;
         }
@@ -110,6 +156,12 @@ impl GlobalFilter {
             for (n, term) in terms.iter().filter(|t| !t.is_empty()).enumerate() {
                 sec.set(format!("{side}.{}", n + 1), ini_value(term));
             }
+        }
+        if self.expr_mode {
+            sec.set("mode", "expr");
+        }
+        if !self.expression.is_empty() {
+            sec.set("expression", ini_value(&self.expression));
         }
     }
 
@@ -133,6 +185,10 @@ impl GlobalFilter {
             is_regex: flag("regex"),
             include: terms("include"),
             exclude: terms("exclude"),
+            expr_mode: sec
+                .get("mode")
+                .is_some_and(|m| m.trim().eq_ignore_ascii_case("expr")),
+            expression: sec.get("expression").unwrap_or("").to_string(),
         }
     }
 }
@@ -172,6 +228,8 @@ mod tests {
             is_regex: false,
             include: terms(&["\"status\":500", " ERROR "]),
             exclude: terms(&["healthcheck"]),
+            expr_mode: true,
+            expression: r#"(a OR "b c") NOT /d\/e/"#.into(),
         };
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fasttail.ini");

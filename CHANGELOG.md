@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Filter expressions in the window.** The `ƒx` toggle beside the Include field (and in
+  the Filters window) switches a stream to an expression, with the error and its
+  character shown while it does not compile (`ƒx ⚠`). The global filter bar has its own
+  `ƒx` and expression, combined with each stream's filter; filter presets save the mode
+  and the expression and switch the stream when applied. Help entry. Last part of
+  `boolean-filter-expressions`.
+
 ## [0.21.6] - 2026-10-22
 
 ### Added

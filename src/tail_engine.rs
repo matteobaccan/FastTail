@@ -3215,6 +3215,15 @@ impl TailEngine {
         exclude.truncate(MAX_FILTER_TERMS);
         self.include_terms = include;
         self.exclude_terms = exclude;
+        // A preset in expression mode brings its expression; one in term mode switches
+        // back to the terms and keeps the stream's expression for later.
+        match &state.expr {
+            Some(expr) => {
+                self.filter_expr = expr.clone();
+                self.filter_expr_mode = true;
+            }
+            None => self.filter_expr_mode = false,
+        }
         self.filter_case_sensitive = state.case_sensitive;
         self.filter_is_regex = state.is_regex;
         self.min_level = state.min_level;
