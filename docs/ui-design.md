@@ -572,6 +572,10 @@ Source: `src/ui/folder_dialog.rs` (`FolderPrompt`), groups in `src/folder_source
 - **Window:** id `fasttail_folder_prompt`, not resizable, not collapsible, anchored at the centre. A grid: **Folder** (340 px text field, focused when opened, and `…` for the system folder picker), **Files** (patterns separated by `;`, hint `*.log`), **Include subfolders** check box, **Mode** radio buttons **Follow newest** / **Open all**, each with a tooltip.
 - **Behaviour:** validated live: the folder must exist, otherwise `ⓘ Needs an existing folder` in warn and `Open` is disabled. `Enter` opens, `Esc` or `Cancel` closes. Follow newest opens the pattern stream `dir/patterns` (`dir/**/patterns` with subfolders). Open all opens the matching files as tabs of one new node, split to the right of the dock (the whole dock when it is empty); later files are appended to the node of the group's last tab with the active tab unchanged. A notice window says how many files the `folder_max_streams` cap skipped, that the scan stopped at 10,000 entries, or that nothing matches yet.
 
+### 4.5b New merged view dialog — `⋈ New merged view`
+
+Source: `src/ui/merge_dialog.rs` (`MergePrompt`), the feeder in `src/merged_stream.rs`, `FastTailApp::open_merged_view` / `apply_merged_views`. Opened by **⋈ New merged view…** in the stream menu (that stream ticked) or the palette (the focused stream ticked). Window id `fasttail_merge_prompt`, anchored at the centre: a description, a check box per open stream (not merged views), greyed out with `ⓘ no timestamps: cannot be merged` in warn when its first 200 lines carry no timestamp, **Create** (disabled below two ticked streams) and **Cancel** (`Esc`). The merged tab is titled `⋈ a.log + b.log` (`+N` past three); its rows have a `▌` chip in the source colour (8-colour palette `MERGED_SOURCE_COLORS`) before the line number, which is the source's; its stream bar lists the sources as check boxes in their colours and, once stopped, `⋈ source closed: no longer following`.
+
 ### 4.6 Session dialogs
 
 All three are anchored at the centre, not resizable and not collapsible.

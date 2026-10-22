@@ -458,6 +458,9 @@ pub fn stream_name(engine: &TailEngine) -> String {
     if let Some(d) = &engine.derived {
         return format!("{} ▸ {}", d.source_name, d.filter.label());
     }
+    if let Some(m) = &engine.merged {
+        return m.title();
+    }
     if engine.is_stdin() {
         return crate::stdin_source::STDIN_TITLE.to_string();
     }

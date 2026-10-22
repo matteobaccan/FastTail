@@ -87,6 +87,8 @@ pub struct FastTailApp {
     pub quick_labels: Vec<QuickLabel>,
     /// The Open folder dialog while it is shown (`None` when closed).
     pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
+    /// The New merged view dialog while it is shown.
+    pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
     /// The open-all folder groups: each opens the new files of its folder as tabs.
     pub folder_groups: Vec<crate::folder_source::FolderGroup>,
     /// Spawns external tools and enforces the rule-bound throttle and cap.
@@ -598,6 +600,7 @@ impl FastTailApp {
             attention_requested: false,
             quick_labels: Vec::new(),
             folder_prompt: None,
+            merge_prompt: None,
             folder_groups: Vec::new(),
             tool_runner: ToolRunner::default(),
             filters_focus: None,
@@ -1111,6 +1114,82 @@ impl FastTailApp {
             self.place_derived_tab(&source_path, spool.clone());
         }
         Some(spool)
+    }
+
+    /// Opens a merged view of the streams `sources` (two or more, by path) in a new tab and
+    /// returns its path; `None` when its spool cannot be created (the notice says why).
+    pub fn open_merged_view(&mut self, sources: &[PathBuf]) -> Option<PathBuf> {
+        let named: Vec<(PathBuf, String)> = sources
+            .iter()
+            .filter_map(|p| self.engines.iter().find(|e| paths_equal(&e.path, p)))
+            .map(|e| (e.path.clone(), crate::find_all::stream_name(e)))
+            .collect();
+        if named.len() < 2 {
+            return None;
+        }
+        let n = 1 + self
+            .engines
+            .iter()
+            .filter_map(|e| e.merged.as_ref().map(|m| m.n))
+            .max()
+            .unwrap_or(0);
+        let spool_dir = self.config.compressed_settings().spool_dir;
+        let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
+        let opened = crate::merged_stream::MergedFeeder::create(n, named, &spool_dir, max_bytes)
+            .and_then(|feeder| {
+                let mut engine = TailEngine::open(feeder.spool_path())?;
+                engine.merged = Some(Box::new(feeder));
+                Ok(engine)
+            });
+        let mut engine = match opened {
+            Ok(engine) => engine,
+            Err(e) => {
+                self.open_notice = Some(e.to_string());
+                return None;
+            }
+        };
+        crate::workspace::apply_settings(&mut engine, &self.config);
+        engine.set_quick_labels(&self.quick_labels);
+        engine.set_global_filter(self.global_spec.clone());
+        engine.follow_tail = true;
+        let path = engine.path.clone();
+        self.engines.push(engine);
+        self.add_stream_tab(path.clone());
+        self.save_dock_layout();
+        Some(path)
+    }
+
+    /// Feeds the merged views from their sources (a few milliseconds each per frame) and
+    /// opens the dialog a stream menu asked for. Returns whether anything changed.
+    pub fn apply_merged_views(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(idx) = self.engines.iter().position(|e| e.merged_request) {
+            self.engines[idx].merged_request = false;
+            let first = self.engines[idx].path.clone();
+            self.merge_prompt = Some(crate::ui::merge_dialog::MergePrompt::starting_with(Some(
+                first,
+            )));
+            changed = true;
+        }
+        for m in 0..self.engines.len() {
+            let Some(mut feeder) = self.engines[m].merged.take() else {
+                continue;
+            };
+            let engines: Vec<Option<&TailEngine>> = feeder
+                .sources
+                .iter()
+                .map(|s| {
+                    self.engines
+                        .iter()
+                        .find(|e| e.merged.is_none() && paths_equal(&e.path, &s.path))
+                })
+                .collect();
+            if feeder.step(&engines, std::time::Duration::from_millis(4)) {
+                changed = true;
+            }
+            self.engines[m].merged = Some(feeder);
+        }
+        changed
     }
 
     /// Feeds the derived streams from their sources (a few milliseconds each per frame)
@@ -2455,6 +2534,8 @@ impl FastTailApp {
     pub fn background_step(&mut self, ctx: &egui::Context) {
         self.update_tray(ctx);
         self.poll_pending_stdin();
+        // Merged views follow their sources while the window shows nothing too.
+        self.apply_merged_views();
         let size_interval =
             std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
         self.poll_folder_groups();
@@ -4016,6 +4097,9 @@ impl FastTailApp {
         if self.apply_filter_tab_requests() {
             ctx.request_repaint();
         }
+        if self.apply_merged_views() {
+            ctx.request_repaint();
+        }
         if self.apply_compare_requests() {
             ctx.request_repaint();
         }
@@ -5387,6 +5471,19 @@ impl FastTailApp {
             }
         }
 
+        // 11a. New merged view dialog
+        if let Some(prompt) = self.merge_prompt.as_mut() {
+            use crate::ui::merge_dialog::MergeChoice;
+            match prompt.show(&ctx, &self.engines, self.config.language, self.config.theme) {
+                Some(MergeChoice::Create(sources)) => {
+                    self.merge_prompt = None;
+                    self.open_merged_view(&sources);
+                }
+                Some(MergeChoice::Cancel) => self.merge_prompt = None,
+                None => {}
+            }
+        }
+
         // 11b. Open folder dialog (folder drop, 📂* button)
         if let Some(prompt) = self.folder_prompt.as_mut() {
             use crate::ui::folder_dialog::FolderChoice;
@@ -6040,6 +6137,11 @@ impl FastTailApp {
             }
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
+            A::MergedView => {
+                let first = self.focused_stream_path();
+                self.merge_prompt =
+                    Some(crate::ui::merge_dialog::MergePrompt::starting_with(first));
+            }
             A::ClearRecentFiles => self.config.recent_files.clear(),
             A::SessionSaveAs => self.run_session_action(SessionAction::SaveAs),
             A::SessionSave => self.run_session_action(SessionAction::Save),

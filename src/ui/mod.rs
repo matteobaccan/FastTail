@@ -12,6 +12,7 @@ pub mod global_filter_bar;
 pub mod hit_list;
 pub mod json_view;
 pub mod keys;
+pub mod merge_dialog;
 pub mod overview_strip;
 pub mod palette;
 pub mod report_dialog;

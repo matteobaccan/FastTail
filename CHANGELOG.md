@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Merged timeline view.** *New merged view…* (stream menu, palette) interleaves two or
+  more open streams by timestamp in one tab, following them live; each row carries a
+  chip in its source's colour, the source's name in the tooltip and its own line number,
+  and a check box per source in the stream bar leaves a source out. Streams without
+  timestamps are refused with a hint. Filters, search, rules, bookmarks and export work
+  as on any stream. Not yet saved in the workspace.
+
 ## [0.21.0] - 2026-10-22
 
 The **structured data** milestone: the six changes of the 0.21.0 plan, shipped one by one

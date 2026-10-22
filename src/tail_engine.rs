@@ -1731,6 +1731,11 @@ pub struct TailEngine {
     pub scratch_request: Option<bool>,
     /// A derived stream ("Open filter as new tab") feeds its spool from its source.
     pub derived: Option<Box<crate::filter_tab::DerivedFeeder>>,
+    /// A merged view feeds its spool from its sources, interleaved by timestamp.
+    pub merged: Option<Box<crate::merged_stream::MergedFeeder>>,
+    /// The stream menu asked for a merged view starting with this stream (applied by the
+    /// app, which opens its dialog).
+    pub merged_request: bool,
     /// The stream menu asked for its filter as a new tab (applied by the app).
     pub filter_tab_request: bool,
     /// The row menu asked for a compare (applied by the app).
@@ -2374,6 +2379,8 @@ impl TailEngine {
             rows_wrapped: None,
             scratch_request: None,
             derived: None,
+            merged: None,
+            merged_request: false,
             filter_tab_request: false,
             compare_request: None,
             source_context_request: None,
@@ -4182,6 +4189,9 @@ impl TailEngine {
 
     /// The line number shown for line `idx`: the source's for a derived stream (1-based).
     pub fn shown_line_number(&self, idx: usize) -> usize {
+        if let Some((_, line)) = self.merged.as_ref().and_then(|m| m.source_of(idx)) {
+            return line + 1;
+        }
         self.derived
             .as_ref()
             .and_then(|d| d.source_line(idx))
