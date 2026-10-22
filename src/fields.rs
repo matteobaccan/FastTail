@@ -888,9 +888,236 @@ pub fn detect<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<ParserChoi
     }
 }
 
+/// The comparison of a field term.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldOp {
+    /// `=`: the value equals one of the alternatives.
+    Eq,
+    /// `!=`: the value equals none of them.
+    Ne,
+    /// `~=`: the value contains the text.
+    Contains,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+}
+
+impl FieldOp {
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            FieldOp::Eq => "=",
+            FieldOp::Ne => "!=",
+            FieldOp::Contains => "~=",
+            FieldOp::Gt => ">",
+            FieldOp::Ge => ">=",
+            FieldOp::Lt => "<",
+            FieldOp::Le => "<=",
+        }
+    }
+
+    fn is_numeric(&self) -> bool {
+        matches!(self, FieldOp::Gt | FieldOp::Ge | FieldOp::Lt | FieldOp::Le)
+    }
+}
+
+/// A filter term on a field (`status>=500`, `level=error|fatal`, `user~=bot`), read from
+/// an include or exclude term of a stream that has a parser. A line without the field
+/// fails it, on either side.
+#[derive(Debug, Clone)]
+pub struct FieldTerm {
+    pub key: String,
+    pub op: FieldOp,
+    /// The `|` alternatives of `=` / `!=` (one value for the other operators), as typed.
+    pub values: Vec<String>,
+    /// Their lower-case forms, for the case-insensitive comparison.
+    lower: Vec<String>,
+    /// In regex mode, the alternatives (anchored for `=` / `!=`) or the `~=` text.
+    regexes: Vec<Regex>,
+    /// The number of a numeric comparison; `None` when the term's value is not one.
+    number: Option<f64>,
+    case_sensitive: bool,
+    is_regex: bool,
+}
+
+/// `text` without its surrounding double quotes, when it has them: a quoted term is
+/// literal text on a stream with a parser.
+pub fn unquote(text: &str) -> Option<&str> {
+    text.strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .filter(|_| text.len() >= 2)
+}
+
+/// The key at the start of `text` (a letter, `_` or `@`, then letters, digits, `_`, `.`,
+/// `@` and `-`) and its length.
+fn key_len(text: &str) -> usize {
+    let mut chars = text.char_indices();
+    match chars.next() {
+        Some((_, c)) if c.is_alphabetic() || c == '_' || c == '@' => {}
+        _ => return 0,
+    }
+    for (i, c) in chars {
+        if !(c.is_alphanumeric() || matches!(c, '_' | '.' | '@' | '-')) {
+            return i;
+        }
+    }
+    text.len()
+}
+
+impl FieldTerm {
+    /// Reads `text` as a field term under the stream's toggles; `None` when it is not one
+    /// (no operator after a key, or quoted). A regex that does not compile is `Err`.
+    pub fn parse(text: &str, case_sensitive: bool, is_regex: bool) -> Option<Result<Self, ()>> {
+        if unquote(text).is_some() {
+            return None;
+        }
+        let text = text.trim_start();
+        let n = key_len(text);
+        if n == 0 {
+            return None;
+        }
+        let key = &text[..n];
+        let rest = text[n..].trim_start();
+        let (op, value) = [
+            ("!=", FieldOp::Ne),
+            ("~=", FieldOp::Contains),
+            (">=", FieldOp::Ge),
+            ("<=", FieldOp::Le),
+            ("=", FieldOp::Eq),
+            (">", FieldOp::Gt),
+            ("<", FieldOp::Lt),
+        ]
+        .iter()
+        .find_map(|(sym, op)| rest.strip_prefix(sym).map(|v| (*op, v.trim())))?;
+        let values: Vec<String> = match op {
+            FieldOp::Eq | FieldOp::Ne => value.split('|').map(|v| v.trim().to_string()).collect(),
+            _ => vec![value.to_string()],
+        };
+        let mut regexes = Vec::new();
+        if is_regex && !op.is_numeric() {
+            for v in &values {
+                let pattern = if op == FieldOp::Contains {
+                    v.clone()
+                } else {
+                    format!("^(?:{v})$")
+                };
+                match regex::RegexBuilder::new(&pattern)
+                    .case_insensitive(!case_sensitive)
+                    .build()
+                {
+                    Ok(re) => regexes.push(re),
+                    Err(_) => return Some(Err(())),
+                }
+            }
+        }
+        Some(Ok(Self {
+            key: key.to_string(),
+            op,
+            lower: values.iter().map(|v| v.to_lowercase()).collect(),
+            number: op.is_numeric().then(|| value.parse::<f64>().ok()).flatten(),
+            values,
+            regexes,
+            case_sensitive,
+            is_regex,
+        }))
+    }
+
+    /// Whether the field's `value` passes the term; `None` (no such field) fails.
+    pub fn eval(&self, value: Option<&str>) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        match self.op {
+            FieldOp::Eq => self.equals_any(value),
+            FieldOp::Ne => !self.equals_any(value),
+            FieldOp::Contains => {
+                if self.is_regex {
+                    self.regexes.iter().any(|re| re.is_match(value))
+                } else if self.case_sensitive {
+                    value.contains(self.values[0].as_str())
+                } else {
+                    crate::tail_engine::contains_case_insensitive(value, &self.lower[0])
+                }
+            }
+            op => {
+                let (Some(bound), Ok(v)) = (self.number, value.trim().parse::<f64>()) else {
+                    return false;
+                };
+                match op {
+                    FieldOp::Gt => v > bound,
+                    FieldOp::Ge => v >= bound,
+                    FieldOp::Lt => v < bound,
+                    _ => v <= bound,
+                }
+            }
+        }
+    }
+
+    fn equals_any(&self, value: &str) -> bool {
+        if self.is_regex {
+            self.regexes.iter().any(|re| re.is_match(value))
+        } else if self.case_sensitive {
+            self.values.iter().any(|v| v == value)
+        } else {
+            self.lower
+                .iter()
+                .any(|l| value.chars().flat_map(char::to_lowercase).eq(l.chars()))
+        }
+    }
+
+    /// The term as read, for the tooltip of its row: `key`, the operator and the values.
+    pub fn describe(&self) -> String {
+        format!(
+            "{} {} {}",
+            self.key,
+            self.op.symbol(),
+            self.values.join(" | ")
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn field_terms_parse_their_grammar() {
+        let t = |s: &str| FieldTerm::parse(s, false, false).map(|r| r.unwrap());
+        let a = t("http.status >= 500").unwrap();
+        assert_eq!((a.key.as_str(), a.op), ("http.status", FieldOp::Ge));
+        assert_eq!(a.describe(), "http.status >= 500");
+        let b = t("level=error|fatal").unwrap();
+        assert_eq!(b.values, vec!["error", "fatal"]);
+        assert_eq!(t("@timestamp!=x").unwrap().op, FieldOp::Ne);
+        assert_eq!(t("user~=bot").unwrap().op, FieldOp::Contains);
+        assert_eq!(t("a<1").unwrap().op, FieldOp::Lt);
+        assert_eq!(t("a<=1").unwrap().op, FieldOp::Le);
+        assert_eq!(t("a>1").unwrap().op, FieldOp::Gt);
+        assert!(t("\"level=error\"").is_none(), "quoted");
+        assert!(t("1a=2").is_none(), "a key starts with a letter, _ or @");
+        assert!(t("plain text").is_none());
+        assert!(t("a && !b").is_none());
+        assert!(FieldTerm::parse("k=(", false, true).unwrap().is_err());
+        assert_eq!(unquote("\"x=1\""), Some("x=1"));
+        assert_eq!(unquote("\""), None);
+    }
+
+    #[test]
+    fn field_terms_evaluate_values() {
+        let t = |s: &str, cs: bool, re: bool| FieldTerm::parse(s, cs, re).unwrap().unwrap();
+        assert!(t("level=ERROR|fatal", false, false).eval(Some("Error")));
+        assert!(!t("level=ERROR", true, false).eval(Some("Error")));
+        assert!(t("level!=info", false, false).eval(Some("warn")));
+        assert!(!t("level!=info", false, false).eval(None), "missing fails");
+        assert!(t("s>=500", false, false).eval(Some(" 502 ")));
+        assert!(!t("s>=500", false, false).eval(Some("n/a")));
+        assert!(!t("s>=x", false, false).eval(Some("600")));
+        assert!(t("s<1.5", false, false).eval(Some("1.25")));
+        assert!(t("u~=Bot", false, false).eval(Some("my-bot-7")));
+        assert!(t("u=b.t", false, true).eval(Some("bot")));
+        assert!(!t("u=b.t", false, true).eval(Some("robot")), "anchored");
+        assert!(t("u~=b.t", false, true).eval(Some("robot")));
+    }
 
     fn fields(parser: &FieldParser, line: &str) -> (Vec<(String, String)>, bool) {
         let mut spans = FieldSpans::new();

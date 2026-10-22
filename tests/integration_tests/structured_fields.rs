@@ -446,3 +446,145 @@ fn an_expanded_json_row_keeps_its_folds_until_the_stream_reloads() {
     }
     assert!(engine.json_open.is_empty());
 }
+
+fn visible(engine: &TailEngine) -> Vec<usize> {
+    (0..engine.total_lines())
+        .filter(|&i| engine.is_line_visible(i))
+        .collect()
+}
+
+const JSON_LINES: &[&str] = &[
+    r#"{"level":"info","msg":"ok","http":{"status":200},"duration_ms":503}"#,
+    r#"{"level":"error","msg":"bad gateway","http":{"status":502},"env":"prod"}"#,
+    r#"{"level":"error","msg":"teapot","http":{"status":418},"env":"test"}"#,
+    r#"{"level":"fatal","msg":"down","http":{"status":"n/a"}}"#,
+    r#"{"level":"warn","msg":"level=error in text","http":{"status":503}}"#,
+];
+
+#[test]
+fn field_terms_filter_json_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("app.json");
+    write_lines(&file, JSON_LINES);
+    let mut e = open(&file);
+    assert_eq!(kind(&e), "json");
+    e.set_include_filter("http.status>=500");
+    assert_eq!(visible(&e), vec![1, 4], "duration_ms 503 does not count");
+    assert!(e.include_term_field(0).is_some());
+    e.set_include_filter("level=error|FATAL");
+    assert_eq!(visible(&e), vec![1, 2, 3]);
+    e.set_include_filter("level!=error");
+    assert_eq!(visible(&e), vec![0, 3, 4]);
+    e.set_include_filter("msg~=GATE");
+    assert_eq!(visible(&e), vec![1]);
+    e.set_include_filter("http.status<500");
+    assert_eq!(visible(&e), vec![0, 2], "a value that is no number fails");
+    // A missing field fails the term: not shown on the include side, not hidden on the
+    // exclude side.
+    e.set_include_filter("env=prod");
+    assert_eq!(visible(&e), vec![1]);
+    e.set_include_filter("");
+    e.set_exclude_filter("env=test");
+    assert_eq!(visible(&e), vec![0, 1, 3, 4]);
+    // Quoted: literal text.
+    e.set_exclude_filter("");
+    e.set_include_filter("\"level=error\"");
+    assert!(e.include_term_field(0).is_none());
+    assert_eq!(visible(&e), vec![4]);
+}
+
+#[test]
+fn field_terms_need_a_parser_and_follow_the_toggles() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.log");
+    write_lines(
+        &plain,
+        &[
+            "INFO retry=0 done",
+            "WARN retry=3 again",
+            "a && !b",
+            "ERROR x",
+        ],
+    );
+    let mut e = open(&plain);
+    assert_eq!(kind(&e), "none");
+    e.set_exclude_filter("retry=0");
+    assert_eq!(visible(&e), vec![1, 2, 3], "text, as before field terms");
+    assert!(e.exclude_term_field(0).is_none());
+    e.set_exclude_filter("");
+    e.set_include_filter("a && !b");
+    assert_eq!(visible(&e), vec![2]);
+
+    let logfmt = dir.path().join("app.logfmt");
+    write_lines(
+        &logfmt,
+        &[
+            "level=error user=alice msg=a",
+            "level=fatal user=botnet msg=b",
+            "level=info user=carol msg=c",
+            "level=Error user=dave msg=d",
+        ],
+    );
+    let mut e = open(&logfmt);
+    assert_eq!(kind(&e), "logfmt");
+    e.set_filter_terms(vec!["level=error|fatal".into()], vec!["user~=bot".into()]);
+    assert_eq!(visible(&e), vec![0, 3]);
+    e.filter_case_sensitive = true;
+    e.refresh_filters();
+    assert_eq!(visible(&e), vec![0]);
+    e.filter_case_sensitive = false;
+    e.filter_is_regex = true;
+    e.set_filter_terms(vec!["level=err.*".into()], vec![]);
+    assert_eq!(visible(&e), vec![0, 3]);
+    e.set_filter_terms(vec!["level=(".into()], vec![]);
+    assert!(e.include_term_invalid(0));
+    assert!(visible(&e).is_empty());
+}
+
+#[test]
+fn a_background_field_filter_equals_the_synchronous_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("big.json");
+    let lines: Vec<String> = (0..3000)
+        .map(|i| {
+            format!(
+                r#"{{"level":"info","status":{},"msg":"m{i}"}}"#,
+                200 + (i % 7) * 50
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    write_lines(&file, &refs);
+    let mut sync = open(&file);
+    sync.set_include_filter("status>=450");
+    let expected = visible(&sync);
+    assert!(!expected.is_empty() && expected.len() < 3000);
+    let mut job = TailEngine::open_with_thresholds(&file, 0, 0).unwrap();
+    wait_for_jobs(&mut job);
+    assert_eq!(kind(&job), "json");
+    job.set_include_filter("status>=450");
+    wait_for_jobs(&mut job);
+    assert_eq!(visible(&job), expected);
+}
+
+#[test]
+fn a_global_field_term_uses_each_streams_parser() {
+    use fasttail::global_filter::GlobalFilter;
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("a.json");
+    write_lines(&json, JSON_LINES);
+    let plain = dir.path().join("b.log");
+    write_lines(&plain, &["level=error in text", "other"]);
+    let global = GlobalFilter {
+        enabled: true,
+        include: vec!["level=error".into()],
+        ..GlobalFilter::default()
+    };
+    let spec = global.compile();
+    let mut a = open(&json);
+    let mut b = open(&plain);
+    a.set_global_filter(spec.clone());
+    b.set_global_filter(spec);
+    assert_eq!(visible(&a), vec![1, 2]);
+    assert_eq!(visible(&b), vec![0], "text on a stream without a parser");
+}

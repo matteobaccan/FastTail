@@ -6900,6 +6900,14 @@ impl TermSide {
         }
     }
 
+    /// The field term row `row` reads as, if any.
+    fn field(self, engine: &TailEngine, row: usize) -> Option<&crate::fields::FieldTerm> {
+        match self {
+            TermSide::Include => engine.include_term_field(row),
+            TermSide::Exclude => engine.exclude_term_field(row),
+        }
+    }
+
     /// Replaces this side's rows, keeping the other side.
     fn set(self, engine: &mut TailEngine, rows: Vec<String>) {
         let (include, exclude) = match self {
@@ -6918,6 +6926,27 @@ impl TermSide {
     }
 }
 
+/// The `ƒ` badge of a term that reads as a field term, its key, operator and values in
+/// the tooltip.
+fn field_term_badge(
+    ui: &mut Ui,
+    theme: &CyberTheme,
+    lang: Language,
+    field: &crate::fields::FieldTerm,
+) {
+    ui.label(
+        RichText::new("ƒ")
+            .monospace()
+            .strong()
+            .color(theme.secondary_accent()),
+    )
+    .on_hover_text(format!(
+        "{}\n{}",
+        t(lang, "field_term_tip"),
+        field.describe()
+    ));
+}
+
 /// The `+N` badge of a stream bar filter field (further terms active, listed in its
 /// tooltip) and the `+` button that adds a term row and opens the Filters window on it.
 fn extra_terms_controls(
@@ -6932,6 +6961,10 @@ fn extra_terms_controls(
         TermSide::Include => engine.extra_include_terms(),
         TermSide::Exclude => engine.extra_exclude_terms(),
     };
+    // The term in the field reads as a field term: marked, with what it compares.
+    if let Some(field) = side.field(engine, 0) {
+        field_term_badge(ui, theme, lang, field);
+    }
     if extra > 0 {
         let list: Vec<String> = side
             .terms(engine)
@@ -7491,6 +7524,9 @@ fn render_term_rows(
                 .clicked()
             {
                 remove = Some(i);
+            }
+            if let Some(field) = side.field(engine, i) {
+                field_term_badge(ui, theme, lang, field);
             }
             if side.invalid(engine, i) {
                 ui.label(

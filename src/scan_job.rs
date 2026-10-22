@@ -20,6 +20,7 @@ use regex::Regex;
 use crate::ansi::AnsiMode;
 use crate::collapse::{Detector, Group};
 use crate::context_lines::{Range, RangeCursor};
+use crate::fields::{FieldParser, FieldSpans, FieldTerm};
 use crate::file_source::FileSource;
 use crate::log_level::{detect_level_in, LogLevel, DEFAULT_WINDOW};
 use crate::tail_engine::{
@@ -50,22 +51,51 @@ pub enum ScanKind {
 /// Most include terms, and most exclude terms, a stream can hold.
 pub const MAX_FILTER_TERMS: usize = 8;
 
-/// One include or exclude term: the text as typed, its lower-case form for the
-/// case-insensitive plain search, and the compiled regex in regex mode.
+/// One include or exclude term: the text as typed, the text it looks for (the same, or
+/// without the quotes of a quoted term on a stream with a parser), its lower-case form
+/// for the case-insensitive plain search, the compiled regex in regex mode, and the field
+/// term it reads as on a stream with a parser (`status>=500`).
 #[derive(Debug, Clone, Default)]
 pub struct FilterTerm {
     pub text: String,
+    pub needle: String,
     pub lower: String,
     pub regex: Option<Regex>,
     /// Regex mode and the text does not compile: the term matches nothing, and its row
     /// says so.
     pub invalid: bool,
+    pub field: Option<FieldTerm>,
 }
 
 impl FilterTerm {
-    fn build(text: &str, case_sensitive: bool, is_regex: bool) -> Self {
-        let regex = if is_regex && !text.is_empty() {
-            regex::RegexBuilder::new(text)
+    /// `fields`: the stream has a parser, so `key=value` forms are field terms and a
+    /// quoted term is the text inside its quotes.
+    fn build(text: &str, case_sensitive: bool, is_regex: bool, fields: bool) -> Self {
+        if fields {
+            match FieldTerm::parse(text, case_sensitive, is_regex) {
+                Some(Ok(field)) => {
+                    return Self {
+                        text: text.to_string(),
+                        field: Some(field),
+                        ..Self::default()
+                    }
+                }
+                Some(Err(())) => {
+                    return Self {
+                        text: text.to_string(),
+                        invalid: true,
+                        ..Self::default()
+                    }
+                }
+                None => {}
+            }
+        }
+        let needle = fields
+            .then(|| crate::fields::unquote(text))
+            .flatten()
+            .unwrap_or(text);
+        let regex = if is_regex && !needle.is_empty() {
+            regex::RegexBuilder::new(needle)
                 .case_insensitive(!case_sensitive)
                 .build()
                 .ok()
@@ -74,21 +104,63 @@ impl FilterTerm {
         };
         Self {
             text: text.to_string(),
-            lower: text.to_lowercase(),
-            invalid: is_regex && !text.is_empty() && regex.is_none(),
+            needle: needle.to_string(),
+            lower: needle.to_lowercase(),
+            invalid: is_regex && !needle.is_empty() && regex.is_none(),
             regex,
+            field: None,
         }
     }
 
     /// Whether `line` contains the term under the spec's toggles. An invalid regex
-    /// matches nothing.
-    fn matches(&self, line: &str, case_sensitive: bool, is_regex: bool) -> bool {
-        if is_regex {
+    /// matches nothing; a field term looks at its field (`fields`).
+    fn matches(
+        &self,
+        line: &str,
+        case_sensitive: bool,
+        is_regex: bool,
+        fields: &mut LineFields,
+    ) -> bool {
+        if let Some(field) = &self.field {
+            return fields.passes(line, field);
+        }
+        if self.invalid {
+            false
+        } else if is_regex {
             self.regex.as_ref().is_some_and(|re| re.is_match(line))
         } else if case_sensitive {
-            line.contains(&self.text)
+            line.contains(&self.needle)
         } else {
             contains_case_insensitive(line, &self.lower)
+        }
+    }
+}
+
+thread_local! {
+    /// The field spans of the line being filtered, one buffer per thread (the window's
+    /// and each job's), so a field term costs no allocation per line.
+    static SPANS: std::cell::RefCell<FieldSpans> = std::cell::RefCell::new(FieldSpans::new());
+}
+
+/// The fields of the line being filtered, scanned on the first field term that asks.
+pub struct LineFields<'a> {
+    parser: Option<&'a FieldParser>,
+    spans: &'a mut FieldSpans,
+    scanned: bool,
+}
+
+impl LineFields<'_> {
+    fn passes(&mut self, line: &str, term: &FieldTerm) -> bool {
+        let Some(parser) = self.parser else {
+            return false;
+        };
+        if !self.scanned {
+            crate::fields::scan(parser, line, self.spans);
+            self.scanned = true;
+        }
+        match self.spans.get(line, &term.key) {
+            Some(f) => term.eval(Some(&f.value())),
+            None => term.eval(None),
         }
     }
 }
@@ -109,8 +181,13 @@ pub struct FilterSpec {
     /// The bytes of a line the level is looked for in (the stream's window).
     pub level_window: usize,
     /// The global filter every stream combines with its own terms (see `with_global`):
-    /// one compiled set shared by all streams and their jobs.
+    /// one compiled set shared by all streams and their jobs, or, on a stream with a
+    /// parser whose global terms hold a field term, a copy compiled with that parser.
     pub global: Option<Arc<FilterSpec>>,
+    /// The stream's field parser (see `with_parser`): its terms may be field terms.
+    pub parser: Option<Arc<FieldParser>>,
+    /// Whether a term, of the stream or of the global filter, is a field term.
+    pub has_field_terms: bool,
 }
 
 impl FilterSpec {
@@ -124,7 +201,7 @@ impl FilterSpec {
         let terms = |list: &[S]| -> Vec<FilterTerm> {
             list.iter()
                 .take(MAX_FILTER_TERMS)
-                .map(|t| FilterTerm::build(t.as_ref(), case_sensitive, is_regex))
+                .map(|t| FilterTerm::build(t.as_ref(), case_sensitive, is_regex, false))
                 .collect()
         };
         Self {
@@ -136,14 +213,91 @@ impl FilterSpec {
             show_unknown_levels: false,
             level_window: DEFAULT_WINDOW,
             global: None,
+            parser: None,
+            has_field_terms: false,
         }
     }
 
     /// Adds the global filter: its exclude terms hide a line as the stream's own do, and
-    /// its include terms must match as well as the stream's.
+    /// its include terms must match as well as the stream's. On a stream with a parser,
+    /// global terms that read as field terms are compiled with it.
     pub fn with_global(mut self, global: Option<Arc<FilterSpec>>) -> Self {
         self.global = global.filter(|g| g.has_terms());
+        if self.parser.is_some() {
+            self.global = self.global.take().map(|g| self.with_stream_parser(g));
+        }
+        self.has_field_terms =
+            self.own_field_terms() || self.global.as_ref().is_some_and(|g| g.has_field_terms);
         self
+    }
+
+    /// Reads the terms with the stream's field `parser`: on a stream with one, `key=value`
+    /// forms are field terms and quoted terms literal text; without, every term is text.
+    pub fn with_parser(mut self, parser: Option<Arc<FieldParser>>) -> Self {
+        let fields = parser.is_some();
+        let (cs, re) = (self.case_sensitive, self.is_regex);
+        for t in self.include.iter_mut().chain(self.exclude.iter_mut()) {
+            *t = FilterTerm::build(&t.text, cs, re, fields);
+        }
+        self.parser = parser;
+        let global = self.global.take();
+        self.with_global(global)
+    }
+
+    /// `global` compiled with this stream's parser, when one of its terms reads as a field
+    /// term or a quoted one; otherwise the shared set itself.
+    fn with_stream_parser(&self, global: Arc<FilterSpec>) -> Arc<FilterSpec> {
+        let changes = global.include.iter().chain(global.exclude.iter()).any(|t| {
+            crate::fields::unquote(&t.text).is_some()
+                || FieldTerm::parse(&t.text, global.case_sensitive, global.is_regex).is_some()
+        });
+        if !changes {
+            return global;
+        }
+        let mut copy = (*global).clone();
+        let (cs, re) = (copy.case_sensitive, copy.is_regex);
+        for t in copy.include.iter_mut().chain(copy.exclude.iter_mut()) {
+            *t = FilterTerm::build(&t.text, cs, re, true);
+        }
+        copy.parser = self.parser.clone();
+        copy.has_field_terms = copy.own_field_terms();
+        Arc::new(copy)
+    }
+
+    fn own_field_terms(&self) -> bool {
+        self.include
+            .iter()
+            .chain(self.exclude.iter())
+            .any(|t| t.field.is_some())
+    }
+
+    /// Runs `f` with the fields of the line to filter: a thread's own buffer when a term
+    /// needs fields, none otherwise.
+    fn with_fields<R>(&self, f: impl FnOnce(&mut LineFields) -> R) -> R {
+        if !self.has_field_terms {
+            let mut empty = FieldSpans::new();
+            return f(&mut LineFields {
+                parser: None,
+                spans: &mut empty,
+                scanned: true,
+            });
+        }
+        SPANS.with(|cell| match cell.try_borrow_mut() {
+            Ok(mut spans) => f(&mut LineFields {
+                parser: self.parser.as_deref(),
+                spans: &mut spans,
+                scanned: false,
+            }),
+            // Re-entered on this thread: a buffer of its own.
+            Err(_) => {
+                let mut spans = FieldSpans::new();
+                f(&mut LineFields {
+                    parser: self.parser.as_deref(),
+                    spans: &mut spans,
+                    scanned: false,
+                })
+            }
+        })
     }
 
     /// Whether any include or exclude term is non-empty.
@@ -185,39 +339,60 @@ impl FilterSpec {
     /// True when any non-empty exclude term, of the stream or of the global filter,
     /// matches `line`.
     pub fn excluded(&self, line: &str) -> bool {
-        self.exclude
-            .iter()
-            .any(|t| !t.text.is_empty() && t.matches(line, self.case_sensitive, self.is_regex))
-            || self.global.as_ref().is_some_and(|g| g.excluded(line))
+        self.with_fields(|fields| self.excluded_in(line, fields))
     }
 
     /// True when every non-empty include term, of the stream and of the global filter,
     /// matches `line` (with none, every line).
     pub fn included(&self, line: &str) -> bool {
-        self.include
-            .iter()
-            .all(|t| t.text.is_empty() || t.matches(line, self.case_sensitive, self.is_regex))
-            && self.global.as_ref().is_none_or(|g| g.included(line))
+        self.with_fields(|fields| self.included_in(line, fields))
+    }
+
+    fn excluded_in(&self, line: &str, fields: &mut LineFields) -> bool {
+        self.exclude.iter().any(|t| {
+            !t.text.is_empty() && t.matches(line, self.case_sensitive, self.is_regex, fields)
+        }) || self
+            .global
+            .as_ref()
+            .is_some_and(|g| g.excluded_in(line, fields))
+    }
+
+    fn included_in(&self, line: &str, fields: &mut LineFields) -> bool {
+        self.include.iter().all(|t| {
+            t.text.is_empty() || t.matches(line, self.case_sensitive, self.is_regex, fields)
+        }) && self
+            .global
+            .as_ref()
+            .is_none_or(|g| g.included_in(line, fields))
     }
 
     /// Exclude wins over include; an empty include lets every non-excluded line through;
     /// the minimum level is checked last.
     pub fn matches(&self, line: &str) -> bool {
-        !self.excluded(line) && self.included(line) && self.level_passes(line)
+        self.with_fields(|fields| {
+            !self.excluded_in(line, fields)
+                && self.included_in(line, fields)
+                && self.level_passes(line)
+        })
     }
 
     /// Visibility of a line in a sequential scan: a stack trace continuation line that is
     /// not excluded follows its parent (`parent_visible`) unless it matches on its own.
     /// Returns the visibility and the parent state to carry to the next line.
     pub fn visible_in_sequence(&self, line: &str, parent_visible: bool) -> (bool, bool) {
-        if crate::tail_engine::TailEngine::is_stacktrace_continuation(line) {
-            let v = !self.excluded(line)
-                && ((self.included(line) && self.level_passes(line)) || parent_visible);
-            (v, parent_visible)
-        } else {
-            let v = self.matches(line);
-            (v, v)
-        }
+        self.with_fields(|fields| {
+            if crate::tail_engine::TailEngine::is_stacktrace_continuation(line) {
+                let v = !self.excluded_in(line, fields)
+                    && ((self.included_in(line, fields) && self.level_passes(line))
+                        || parent_visible);
+                (v, parent_visible)
+            } else {
+                let v = !self.excluded_in(line, fields)
+                    && self.included_in(line, fields)
+                    && self.level_passes(line);
+                (v, v)
+            }
+        })
     }
 }
 

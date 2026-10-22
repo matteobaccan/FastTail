@@ -342,7 +342,8 @@ impl DerivedFeeder {
             pending_bookmarks: Vec::new(),
             pending_notes: BTreeMap::new(),
             source_name,
-            spec: filter.spec(),
+            // Field terms read with the source's parser, as in the source.
+            spec: filter.spec().with_parser(source.field_parser().cloned()),
             filter,
             spool,
             out: Some(out),
