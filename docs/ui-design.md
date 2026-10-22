@@ -394,7 +394,7 @@ Shown in the text and wrapped views. Markdown shows it only while a search is ac
 
 1. `⚡ Include (Regex):` (accent), then the `ƒx` toggle (`text_dim` off, accent and strong on, `ƒx ⚠` in warn while the expression does not compile; tooltip with the syntax). In expression mode a 260 px monospace expression field (hint `(payment OR refund) NOT retry`, warn text and `⚠ message at character N` after it while it does not compile, the error also in its tooltip) and `✖` replace the term field and its `+N` / `+`; the Filters window shows `ƒx` above the include side and the expression field in place of its rows (`render_expr_field`). The global filter bar has the same `ƒx` and a 260 px expression field. Otherwise a 180 px field with the hint `ERROR|CRITICAL|Exception...`, `✖`, `ƒ` when the term in the field reads as a field term (tooltip as in the Filters window), `+N` (accent; the extra terms are listed in the tooltip) and `+` (adds a term row and opens the Filters window on this stream).
 2. `🚫 Exclude (Regex):` (warn), with the same controls and the hint `healthcheck|ping|DEBUG...`.
-3. `📊` timeline toggle; while the timeline is open, a `🔍` search-lane toggle (`render_timeline_toggles`). The time range itself is set from the stream bar's time span (§3.3, §4.15); the row holds no time fields.
+3. `📊` timeline toggle; while the timeline is open, a `🔍` search-lane toggle (`render_timeline_toggles`). Then, when lines go back in time, `↶ N out of order` in warn (click: next, right-click: previous, `render_out_of_order_chip`; `⇅ Timestamps go backwards` as a label when most of the log does); such rows get `↶` in warn before the line number (the jump in the tooltip), or in place of the `│` in wrapped rows. The time range itself is set from the stream bar's time span (§3.3, §4.15); the row holds no time fields.
 4. `Aa` (case) and `.*` (regex) toggles: accent and strong when on.
 5. **Level selector** (110 px combo): `All levels` or `≥ LEVEL`, each entry in its level colour; below them **Searched in the first `[96 B]`**, the stream's level window (16–4096, applied when the drag ends; `↺` goes back to the setting). The menu closes on a level, not on the field. `?` shows lines without a level; it is visible only when the minimum is above TRACE.
 5b. **`🙈 N hidden ▾`** (warn), only while lines are hidden by hand: a menu listing each hidden range (`120-180`, or one line) with `Show` and the first line's text, scrolling past 320 px, then `Show all`. Hidden lines leave the view like filtered ones (search, counters, overview strip, export, Find results); a reload that changes the line numbers clears them with the notice *The file was rewritten: the hidden lines are shown again*.
@@ -517,6 +517,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
       | Mouse throttle | 0–1000 ms |
       | Max Markdown size | 1–100 MB |
       | Level searched in the first bytes (`level_detect_bytes`) | 16–4096 B, default 96; every stream without its own value detects its levels again when the drag ends |
+      | Out-of-order tolerance (`out_of_order_tolerance_ms`) | 0–3,600,000 ms, default 1000; every stream finds its out-of-order lines again |
       | Streams per folder (`folder_max_streams`) | 1–256, default 32: the most files an Open all folder group opens |
       | Max auto-bookmarks per stream (`auto_bookmark_max`) | 100–100 000, default 10 000; the open streams recompute theirs when the drag ends |
       | Max decompressed size | GB |
@@ -902,6 +903,7 @@ Source: `src/ui/timeline_strip.rs`
 
 - The full width of the tab, **56 px** high. Background `panel_bg` at 85 % with a border.
 - A 5 px **search lane** at the top: warn marks in the columns that hold hits.
+- A 2 px mark in the error colour at the top of the bars of the columns that received lines out of order (`TimelineCache::out_of_order`, from `TailEngine::out_of_order_lines`), with a note in the tooltip; none when the whole log goes backwards.
 - **Stacked bars**, bottom-up:
 
   | Level group | Colour |
@@ -1313,6 +1315,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `mouse_throttle_ms` | 100 | pointer-move frame throttle (0–1000) |
 | `markdown_max_mb` | 1 | MD view size limit |
 | `level_detect_bytes` | 96 | bytes at the start of a line the level is looked for in (16–4096); a stream's `level_bytes=` overrides it |
+| `out_of_order_tolerance_ms` | 1000 | a line whose timestamp is this much earlier than the line above's is marked out of order (0–3,600,000; 0: no marks) |
 | `folder_max_streams` | 32 | most files an Open all folder group opens (1–256); beyond, the most recently modified open |
 | `auto_bookmark_max` | 10000 | automatic bookmarks kept per stream (clamped to 100–100 000); the `ⓘ auto-bookmarks capped at N` notice |
 | `spool_dir`, `compressed_max_gb`, `stdin_spool_max_mb` | temp, 20, 2048 | compressed and stdin spools |

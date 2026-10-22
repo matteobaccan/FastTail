@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Lines out of order.** A line whose timestamp goes back past a tolerance (1 s,
+  `out_of_order_tolerance_ms`, 0: off) is marked `↶` with the jump in its tooltip; the
+  stream bar counts them and walks them (click / right-click, palette), the timeline
+  marks their columns and the time range popup counts them. A log written in reverse gets
+  one notice instead. The terminal shows `<`, the count chip and the palette entries.
+
 ## [0.21.7] - 2026-10-22
 
 ### Added

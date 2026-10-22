@@ -3295,6 +3295,7 @@ impl App {
             C::Level => self.apply(Action::CycleLevel),
             C::LevelBytes => self.open_prompt(PromptKind::LevelBytes),
             C::Hidden => self.hidden_menu = Some(0),
+            C::OutOfOrder => self.apply(Action::NextOutOfOrder),
             C::Columns => self.apply(Action::ToggleColumns),
             C::Fields => self.columns_menu = Some(0),
             C::Presets => self.apply(Action::Presets),
@@ -3581,6 +3582,8 @@ impl App {
             Action::ToggleBookmark
                 | Action::NextBookmark
                 | Action::PrevBookmark
+                | Action::NextOutOfOrder
+                | Action::PrevOutOfOrder
                 | Action::EditNote
                 | Action::ToggleContext
                 | Action::SelectUp
@@ -4429,6 +4432,24 @@ impl App {
                 Some(line) => tab.engine.toggle_bookmark(line),
                 None => self.message = Some(tx(self.lang, "No row to bookmark").into()),
             },
+            Action::NextOutOfOrder | Action::PrevOutOfOrder => {
+                let forward = action == Action::NextOutOfOrder;
+                match tab.engine.walk_out_of_order(forward) {
+                    Some(line) => {
+                        if let Some(row) = tab.engine.get_visible_row_of_line(line) {
+                            tab.set_cursor(row);
+                        }
+                        if let Some(jump) = tab.engine.out_of_order_jump(line) {
+                            self.message = Some(txf(
+                                self.lang,
+                                "Out of order: {0} back from the line above",
+                                &[&crate::timestamp::format_jump(jump)],
+                            ));
+                        }
+                    }
+                    None => self.message = Some(tx(self.lang, "No line out of order").into()),
+                }
+            }
             Action::NextBookmark | Action::PrevBookmark => {
                 let from = tab.cursor_line().unwrap_or(0);
                 let forward = action == Action::NextBookmark;
@@ -7768,15 +7789,7 @@ fn render_cells_row(
     } else {
         Style::default().fg(palette.dim())
     };
-    let mark = if bookmarked && engine.is_auto_bookmark(line_idx) {
-        'o'
-    } else if bookmarked {
-        '*'
-    } else if hit {
-        '>'
-    } else {
-        ' '
-    };
+    let mark = row_mark(engine, line_idx, hit, bookmarked);
     let mut spans = vec![Span::styled(
         if gutter == 0 {
             mark.to_string()
@@ -7992,6 +8005,22 @@ fn asm_rows(
     (lines, drawn)
 }
 
+/// The mark after a row's number: `o` an automatic bookmark, `*` a bookmark, `>` a
+/// search hit, `<` a time earlier than the line above's (a clock jumping back).
+fn row_mark(engine: &TailEngine, line_idx: usize, hit: bool, bookmarked: bool) -> char {
+    if bookmarked && engine.is_auto_bookmark(line_idx) {
+        'o'
+    } else if bookmarked {
+        '*'
+    } else if hit {
+        '>'
+    } else if engine.out_of_order_jump(line_idx).is_some() && !engine.timestamps_go_backwards() {
+        '<'
+    } else {
+        ' '
+    }
+}
+
 /// One row of the log view: gutter, collapse badge, then the text in its level colour
 /// with the search hits painted over it.
 #[allow(clippy::too_many_arguments)]
@@ -8012,15 +8041,7 @@ pub fn render_row(
     } else {
         Style::default().fg(palette.dim())
     };
-    let mark = if bookmarked && engine.is_auto_bookmark(line_idx) {
-        'o'
-    } else if bookmarked {
-        '*'
-    } else if hit {
-        '>'
-    } else {
-        ' '
-    };
+    let mark = row_mark(engine, line_idx, hit, bookmarked);
     spans.push(Span::styled(
         if gutter == 0 {
             mark.to_string()
@@ -11185,6 +11206,44 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         let saved = crate::tui::workspace::Settings::read(&ini).config;
         assert!(saved.filter_presets.is_empty());
+    }
+
+    #[test]
+    fn a_line_out_of_order_is_marked_counted_and_walked() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(
+            &a,
+            "2026-09-28 14:00:00 a\n2026-09-28 14:10:00 b\n2026-09-28 14:04:00 back\n",
+        )
+        .unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        let e = &mut app.tabs[0].engine;
+        e.ensure_timestamps();
+        while !e.timestamps_complete() {
+            e.fill_timestamps();
+        }
+        assert_eq!(e.out_of_order_count(), 1);
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("1 out of order")),
+            "{screen:#?}"
+        );
+        assert!(screen.iter().any(|l| l.contains("3<")), "{screen:#?}");
+        app.apply(Action::NextOutOfOrder);
+        assert_eq!(app.tabs[0].cursor_line(), Some(2));
+        assert!(app
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("-00:06:00")));
     }
 
     #[test]

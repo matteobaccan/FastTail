@@ -103,6 +103,8 @@ pub enum ActionId {
     // Bookmarks
     BookmarkToggle,
     BookmarkNext,
+    OutOfOrderNext,
+    OutOfOrderPrev,
     BookmarkPrev,
     BookmarkNote,
     BookmarkRemove,
@@ -394,6 +396,8 @@ pub const ACTIONS: &[Action] = &[
     // Bookmarks
     action(A::BookmarkToggle, "bookmark.toggle", "act_bookmark_toggle", C::Bookmarks, S::Stream, Some("CTRL + F2"), &[]),
     action(A::BookmarkNext, "bookmark.next", "act_bookmark_next", C::Bookmarks, S::Stream, Some("F2"), &[N::Bookmarks]),
+    action(A::OutOfOrderNext, "view.out_of_order.next", "act_ooo_next", C::View, S::Stream, None, &[]),
+    action(A::OutOfOrderPrev, "view.out_of_order.prev", "act_ooo_prev", C::View, S::Stream, None, &[]),
     action(A::BookmarkPrev, "bookmark.prev", "act_bookmark_prev", C::Bookmarks, S::Stream, Some("SHIFT + F2"), &[N::Bookmarks]),
     action(A::BookmarkNote, "bookmark.note", "bookmark_note_menu", C::Bookmarks, S::Stream, None, &[N::Row]),
     action(A::BookmarkRemove, "bookmark.remove", "bookmark_remove", C::Bookmarks, S::Stream, None, &[N::RowBookmarked]),

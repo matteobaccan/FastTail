@@ -79,6 +79,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `/`, `n` `N` (`F3` `Shift+F3`), `Esc` | search, next / previous hit, clear |
 | `i`, `x`, `l`, `c`, `a`, `#` | include, exclude, minimum level, collapse, ANSI mode, line numbers |
 | `H` | hide the selected lines (or the cursor row); `[🙈 N hidden]` in the filter row lists them: `Enter` shows a range again, `a` all |
+| palette | *Next / Previous line out of order*: a line whose time is earlier than the line above's shows `<` after its number, and `[↶ N out of order]` in the filter row goes to the next one |
 | `C` | column view of the fields (JSON, logfmt, regex presets, CSV / TSV) on or off, also `[x] Columns` in the stream bar: a header row of the field names over one row per line, each field as wide as its widest cell on screen (at most 40 cells), then the message; a line that does not parse runs across, dimmed. `[Fields...]` lists every known field: `Space` shows or hides one, `Shift+Up/Down` moves it, `r` resets. Saved in the same `fields_view` / `fields_columns` keys as the window |
 | `t` | time range (fields, calendar, time) |
 | `e` `E`, `w` `W` (`10j`, `3e`: counts) | next / previous ERROR, WARN line |

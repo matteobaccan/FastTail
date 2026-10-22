@@ -4882,6 +4882,31 @@ impl FastTailApp {
                             }
                         });
 
+                        // How far back a timestamp may go before its line is marked.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "ooo_tolerance"))).monospace(),
+                            );
+                            let r = ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut self.config.out_of_order_tolerance_ms,
+                                    )
+                                    .range(crate::settings_model::OUT_OF_ORDER_TOLERANCE_MS)
+                                    .suffix(" ms")
+                                    .update_while_editing(false),
+                                )
+                                .on_hover_text(t(lang, "ooo_tolerance_tip"));
+                            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                                for engine in &mut self.engines {
+                                    engine.set_out_of_order_tolerance(
+                                        self.config.out_of_order_tolerance_ms as i64,
+                                    );
+                                }
+                                let _ = self.config.save();
+                            }
+                        });
+
                         // Streams an Open all folder group opens at most.
                         ui.horizontal(|ui| {
                             ui.label(

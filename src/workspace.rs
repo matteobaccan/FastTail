@@ -143,6 +143,7 @@ pub fn apply_settings(engine: &mut TailEngine, config: &FastTailConfig) {
         std::time::Duration::from_millis(config.size_check_interval_ms as u64);
     engine.set_markdown_max_bytes((config.markdown_max_mb as u64) * 1024 * 1024);
     engine.set_level_default(config.level_detect_bytes);
+    engine.set_out_of_order_tolerance(config.out_of_order_tolerance_ms as i64);
     engine.auto_bookmark_max = config.auto_bookmark_max;
     engine.set_highlight_rules(config.highlight_rules.clone());
     engine.size_unit = config.size_unit;

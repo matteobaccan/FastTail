@@ -44,6 +44,8 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::BookmarkToggle => (Action::ToggleBookmark, "b"),
         ActionId::BookmarkNext => (Action::NextBookmark, "]"),
         ActionId::BookmarkPrev => (Action::PrevBookmark, "["),
+        ActionId::OutOfOrderNext => (Action::NextOutOfOrder, ""),
+        ActionId::OutOfOrderPrev => (Action::PrevOutOfOrder, ""),
         ActionId::BookmarkNote => (Action::EditNote, "m"),
         ActionId::PresetSave | ActionId::PresetManage => (Action::Presets, "p"),
         ActionId::OpenFile => (Action::OpenFile, "o"),

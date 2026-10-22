@@ -75,6 +75,9 @@ pub enum Action {
     ToggleBookmark,
     /// `]` / F2 and `[` / SHIFT + F2: next / previous visible bookmark, wrapping around.
     NextBookmark,
+    /// The next / previous line whose time goes back (palette, the bar's chip).
+    NextOutOfOrder,
+    PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.
     EditNote,
