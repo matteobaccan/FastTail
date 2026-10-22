@@ -42,6 +42,8 @@ pub enum Action {
     CycleLevel,
     /// Hide the selected lines (or the cursor row) from the view.
     HideLines,
+    /// The column view of the fields on or off.
+    ToggleColumns,
     /// `s` `|`: the focused window splits side by side; `_`: stacked. A window with
     /// several tabs gives its shown one to the new window, a window with one takes the
     /// next stream.
@@ -219,6 +221,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('c') => Action::CycleCollapse,
         KeyCode::Char('l') => Action::CycleLevel,
         KeyCode::Char('H') => Action::HideLines,
+        KeyCode::Char('C') => Action::ToggleColumns,
         KeyCode::Char('s') | KeyCode::Char('|') => Action::SplitRight,
         KeyCode::Char('_') => Action::SplitDown,
         KeyCode::Char('<') => Action::MovePrevPane,

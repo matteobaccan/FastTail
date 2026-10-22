@@ -1241,6 +1241,7 @@ fn test_i18n_exhaustive_coverage() {
         "open_folder_invalid",
         "open_folder_bad_patterns",
         "field_term_tip",
+        "act_columns",
         "fields_csv",
         "fields_csv_tab",
         "fields_csv_sep_tip",

@@ -5045,6 +5045,10 @@ fn apply_row_action(
             engine.timeline_open = !engine.timeline_open;
             engine.timeline_dirty = true;
         }
+        // The column view, on a stream with a field parser.
+        ActionId::ColumnView if engine.field_parser().is_some() => {
+            engine.set_fields_view(!engine.fields_view());
+        }
         ActionId::PresetSave => {
             let name = match crate::filter_preset::preset_label(presets, engine) {
                 PresetLabel::Matches(name) | PresetLabel::Modified(name) => name.to_string(),
