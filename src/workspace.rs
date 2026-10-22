@@ -219,7 +219,10 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         }
         engine.set_field_choice(choice);
     }
-    engine.set_fields_view(entry.fields_view);
+    // Only a saved choice: without one a CSV / TSV stream opens in the column view.
+    if entry.fields_view || entry.fields_view_set {
+        engine.set_fields_view(entry.fields_view);
+    }
     engine.set_field_columns(entry.fields_columns.clone());
     for (key, cells) in &entry.fields_widths {
         engine.set_field_width(key, *cells);
@@ -385,6 +388,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
             _ => None,
         },
         fields_view: engine.fields_view(),
+        fields_view_set: engine.field_view_chosen,
         fields_columns: engine.chosen_field_columns().to_vec(),
         fields_widths: engine.field_widths().clone(),
         frozen: engine.derived.as_ref().map(|f| f.filter.clone()),

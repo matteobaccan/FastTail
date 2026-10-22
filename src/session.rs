@@ -116,6 +116,9 @@ pub struct StreamEntry {
     /// order (`fields_columns=ts,level,msg`, none: the defaults; keys holding a comma are
     /// not saved) and their widths in character cells (`fields_width.<key>=N`).
     pub fields_view: bool,
+    /// The view was chosen (`fields_view=false` is then written when off), so a CSV /
+    /// TSV stream the user turned to text stays text.
+    pub fields_view_set: bool,
     pub fields_columns: Vec<String>,
     pub fields_widths: BTreeMap<String, u16>,
     /// The frozen filter of a derived stream ("Open filter as new tab"), whose `path` is
@@ -277,6 +280,8 @@ impl Session {
             }
             if s.fields_view {
                 sec.set("fields_view", "true");
+            } else if s.fields_view_set {
+                sec.set("fields_view", "false");
             }
             let columns: Vec<&str> = s
                 .fields_columns
@@ -517,6 +522,9 @@ impl Session {
                     .get("fields_view")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(false),
+                fields_view_set: sec
+                    .get("fields_view")
+                    .is_some_and(|v| v.parse::<bool>().is_ok()),
                 fields_columns: sec
                     .get("fields_columns")
                     .map(|c| {

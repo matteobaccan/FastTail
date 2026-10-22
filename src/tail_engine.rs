@@ -1647,6 +1647,9 @@ pub struct TailEngine {
     /// Column view of the fields (a layout of the Text view), the columns chosen in
     /// order (empty: the catalogue's defaults) and their widths in character cells.
     field_view: bool,
+    /// The column view was set by the user or by a saved state: a CSV / TSV parser then
+    /// leaves it as it is instead of turning it on.
+    pub field_view_chosen: bool,
     field_columns: Vec<String>,
     field_widths: BTreeMap<String, u16>,
     /// Keys seen in the lines (sampled when the parser changes, then from the rows
@@ -2361,6 +2364,7 @@ impl TailEngine {
             parser_generation: 0,
             fields_dirty: false,
             field_view: false,
+            field_view_chosen: false,
             field_columns: Vec::new(),
             field_widths: BTreeMap::new(),
             field_catalogue: FieldCatalogue::default(),
@@ -3558,6 +3562,12 @@ impl TailEngine {
             _ => false,
         };
         if !same {
+            // A table opens in the column view, unless the view was chosen already.
+            if matches!(parser.as_deref(), Some(FieldParser::Delimited(_)))
+                && !self.field_view_chosen
+            {
+                self.show_fields_view(true);
+            }
             self.field_parser = parser;
             self.parser_generation = self.parser_generation.wrapping_add(1);
             // Another parser gives other keys: sample them again.
@@ -3625,6 +3635,12 @@ impl TailEngine {
     }
 
     pub fn set_fields_view(&mut self, on: bool) {
+        self.field_view_chosen = true;
+        self.show_fields_view(on);
+    }
+
+    /// `set_fields_view` without marking the choice as the user's.
+    fn show_fields_view(&mut self, on: bool) {
         if self.field_view != on {
             self.field_view = on;
             self.fields_dirty = true;

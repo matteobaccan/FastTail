@@ -32,7 +32,6 @@ without loading the file.
 - [Misdetected separator] → the selector lets the user pick it; saved per stream.
 - [Huge single records] → capped at 1,000 lines.
 
-## Open Questions
-
-- Should a CSV open in the column view by default, or stay as text with the parser
-  ready? Proposed: column view by default for `.csv` / `.tsv`.
+5. **Column view by default** (maintainer, 2026-10-22): a stream read with the CSV / TSV
+   parser opens in the column view unless the view was chosen (by the user or a saved
+   `fields_view=`); turning it off saves `fields_view=false`.

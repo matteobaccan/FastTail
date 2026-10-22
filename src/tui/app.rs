@@ -8910,6 +8910,10 @@ mod tests {
         let (mut app, _dir) = app_with(&[("export.csv", csv)], true);
         render(&mut app, 120, 20);
         assert!(app.tabs[0].engine.field_parser().is_some());
+        // A CSV opens in the column view; C turns it off and on.
+        assert!(app.tabs[0].engine.columns_shown());
+        keys(&mut app, "C");
+        assert!(!app.tabs[0].engine.columns_shown());
         keys(&mut app, "C");
         assert!(app.tabs[0].engine.columns_shown());
         let screen = render(&mut app, 120, 20).join("\n");

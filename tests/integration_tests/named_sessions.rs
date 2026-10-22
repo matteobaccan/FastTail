@@ -37,6 +37,7 @@ fn entry(path: PathBuf) -> StreamEntry {
         csv_separator: None,
         csv_header: None,
         fields_view: true,
+        fields_view_set: true,
         fields_columns: vec!["ts".to_string(), "http.status".to_string()],
         fields_widths: [("http.status".to_string(), 6), ("ts".to_string(), 24)]
             .into_iter()
