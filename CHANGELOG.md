@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Column view: wrapped message and cell selection.** With wrap on, the column view wraps
+  its message column and keeps the other cells on the row's first line (it used to stay
+  one row per line). A drag selects characters inside the cell where it starts, and
+  `Ctrl + C` copies them.
+
 ## [0.20.23] - 2026-10-22
 
 ### Added

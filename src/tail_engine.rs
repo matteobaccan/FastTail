@@ -6646,7 +6646,7 @@ impl TailEngine {
 
     /// Whether the Text view wraps its rows: wrap is on and the rows are not columns.
     pub fn wraps_rows(&self) -> bool {
-        self.wrap_lines && !self.columns_shown()
+        self.wrap_lines
     }
 
     /// Called by the Text view each frame before it moves: when the rows switch between

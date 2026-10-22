@@ -77,9 +77,13 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_lines(LOG)
+    }
+
+    fn with_lines(lines: &[&str]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sel.log");
-        super::write_lines(&path, LOG);
+        super::write_lines(&path, lines);
         let engines = vec![TailEngine::open(&path).unwrap()];
         let dock = egui_dock::DockState::new(vec![FastTailTab::LogStream(path.clone())]);
         Self {
@@ -358,4 +362,33 @@ fn a_shift_click_selects_rows_and_ctrl_c_copies_them_again() {
         h.copied.as_deref(),
         Some(format!("{}\n{}", LOG[0], LOG[1]).as_str())
     );
+}
+
+#[test]
+fn in_the_column_view_a_selection_stays_inside_its_cell() {
+    let lines = [r#"{"level":"error","status":502,"msg":"payment failed"}"#];
+    for wrap in [false, true] {
+        let mut h = Harness::with_lines(&lines);
+        {
+            let e = &mut h.engines[0];
+            e.set_field_choice(fasttail::fields::ParserChoice::Json);
+            e.set_fields_view(true);
+            e.set_field_columns(vec!["level".into(), "status".into()]);
+            e.set_wrap_lines(wrap, 0);
+        }
+        h.frame(Vec::new());
+        h.frame(Vec::new());
+        // From the second letter of "error" to the end of the message: kept in the cell.
+        let from = h.char_pos("error", 1);
+        let to = h.char_pos("payment failed", 10);
+        h.drag(from, to);
+        assert_eq!(h.selected().as_deref(), Some("rror"), "wrap {wrap}");
+        // Inside the message.
+        let (from, to) = (
+            h.char_pos("payment failed", 0),
+            h.char_pos("payment failed", 7),
+        );
+        h.drag(from, to);
+        assert_eq!(h.selected().as_deref(), Some("payment"), "wrap {wrap}");
+    }
 }
