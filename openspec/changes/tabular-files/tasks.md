@@ -15,4 +15,4 @@
 
 - [x] 3.1 i18n keys in every language; README, `docs/ui-design.md`, `docs/tui.md`, CHANGELOG
 - [x] 3.2 Integration tests (comma, semicolon, tab, no header, quoted newlines, growing file)
-- [ ] 3.3 `cargo fmt`, clippy, focused tests; PR with Linux and Windows CI green
+- [x] 3.3 `cargo fmt`, clippy, focused tests; PR with Linux and Windows CI green

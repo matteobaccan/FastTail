@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.27] - 2026-10-22
+
 ### Added
 
 - **CSV records over several lines.** In the column view a CSV record whose quoted cell
@@ -1829,6 +1831,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.27]: https://github.com/matteobaccan/FastTail/compare/v0.20.26...v0.20.27
 [0.20.26]: https://github.com/matteobaccan/FastTail/compare/v0.20.25...v0.20.26
 [0.20.25]: https://github.com/matteobaccan/FastTail/compare/v0.20.24...v0.20.25
 [0.20.24]: https://github.com/matteobaccan/FastTail/compare/v0.20.23...v0.20.24
