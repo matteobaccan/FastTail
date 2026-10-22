@@ -10,11 +10,29 @@ The renderer, filters and search all talk to `TailEngine` through a small read-s
 
 ## Decisions
 
-- **Extract a `StreamView` trait** from `TailEngine`'s read side and implement it for both the engine and the merged stream, so `show_rows`, filters and search code paths are shared rather than duplicated.
-- **Order vector of (source, line) pairs**, rebuilt incrementally: on append, new lines from a source are merged into the tail of the order vector (logs are near-ordered, so the insertion point is found by a backward scan bounded to 10,000 entries, then binary search). Truncation of a source rebuilds the order from scratch.
-- **Filters and search run on the merged view's own state**, evaluating each row's text through the source engine's `get_line`; highlight rules come from the global rules.
-- **Attribution** via a 2-character colour chip per source in the marker column plus the short name in a tooltip; the source colour follows a fixed 8-colour palette per theme.
-- **Persistence** stores the source paths; on restart the merged view is recreated once all sources are open.
+- **A spool, not a second read-side** (changed at implementation, 2026-10-22): instead of
+  extracting a `StreamView` trait from the 9,000-line engine, a merged view is an ordinary
+  `TailEngine` on a spool file, as the derived streams of "Open filter as new tab" are.
+  `MergedFeeder` (`src/merged_stream.rs`) writes the sources' lines into it in time order,
+  so filters, search, highlight rules, bookmarks, export, the column view and the time
+  features work unchanged. `map: Vec<(source, line)>` (9 bytes a row) gives the chip and
+  the source line number of every row.
+- **Streaming k-way merge**: each source's next line is read with its timestamp (text, or
+  the time field with a field parser; a line without one inherits the entry's); the
+  smallest is written. A source with no next line holds the merge while it is growing
+  and stops holding once quiet for `SETTLED` (2 s), so a late line of a writing source
+  is not overtaken, at most 10 s (`MAX_HOLD`: a line that grows without ever ending must
+  not stop the view). On equal timestamps the source written last goes on, which keeps a
+  stack trace with its entry. A reloaded source, a source turned on or off, and a line
+  written before its newline whose source then grew, write the spool again from the
+  start; that step writes nothing more, so the merged engine sees the spool empty first.
+  A view that stopped (full, every source closed) follows again after a restart. Lines
+  of a source closed in the meantime are not in the rewritten view.
+- **Attribution** via a `▌` chip in the source's colour (fixed 8-colour palette) before
+  the line number, the source name in its tooltip, and the source's own line numbers in
+  the gutter; one check box per source in the stream bar turns it on or off.
+- **Persistence** (next part): the merged view is not saved yet; it is rebuilt from its
+  source paths in a following patch.
 
 ## Risks / Trade-offs
 

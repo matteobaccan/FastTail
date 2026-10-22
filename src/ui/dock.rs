@@ -305,6 +305,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                         _ if engine.derived.is_some() => {
                             format!("⧉ {}", crate::find_all::stream_name(engine))
                         }
+                        _ if engine.merged.is_some() => {
+                            format!("⋈ {}", crate::find_all::stream_name(engine))
+                        }
                         Some(current) if engine.is_pattern() => {
                             format!("{file_name} ▸ {current}")
                         }
@@ -2179,6 +2182,46 @@ fn render_log_stream(
         }
 
         render_scope_chip(ui, engine, theme, lang);
+        // A merged view: one check box per source, in its chip colour.
+        if let Some(merged) = engine.merged.as_mut() {
+            ui.separator();
+            let mut toggle = None;
+            for (i, s) in merged.sources.iter().enumerate() {
+                let mut on = s.enabled;
+                let label = RichText::new(format!("▌{}", s.name))
+                    .monospace()
+                    .size(11.0)
+                    .color(merged_source_color(i));
+                if ui
+                    .checkbox(&mut on, label)
+                    .on_hover_text(format!(
+                        "{}\n{}",
+                        s.path.display(),
+                        t(lang, "merge_source_tip")
+                    ))
+                    .changed()
+                {
+                    toggle = Some((i, on));
+                }
+            }
+            if let Some((i, on)) = toggle {
+                merged.set_enabled(i, on);
+                ui.ctx().request_repaint();
+            }
+            if let Some(stopped) = merged.stopped {
+                let key = match stopped {
+                    crate::filter_tab::Stopped::SourceClosed => "filter_tab_source_closed",
+                    crate::filter_tab::Stopped::Full => "filter_tab_full",
+                    crate::filter_tab::Stopped::WriteFailed => "filter_tab_write_failed",
+                };
+                ui.label(
+                    RichText::new(format!("⋈ {}", t(lang, key)))
+                        .monospace()
+                        .size(11.0)
+                        .color(theme.warn_color()),
+                );
+            }
+        }
         if let Some(stopped) = engine.derived.as_ref().and_then(|d| d.stopped) {
             let key = match stopped {
                 crate::filter_tab::Stopped::SourceClosed => "filter_tab_source_closed",
@@ -2592,6 +2635,15 @@ fn render_log_stream(
                 .clicked()
             {
                 engine.filter_tab_request = true;
+                ui.close();
+            }
+            if engine.merged.is_none()
+                && ui
+                    .button(RichText::new(format!("⋈ {}", t(lang, "merge_open"))).monospace())
+                    .on_hover_text(t(lang, "merge_desc"))
+                    .clicked()
+            {
+                engine.merged_request = true;
                 ui.close();
             }
             if engine.has_bookmarks() {
@@ -3911,6 +3963,18 @@ fn render_extended_rows(
                                 bookmark,
                                 engine.context_line() == Some(actual_line_idx),
                             );
+                        }
+
+                        // A merged view: the row's source chip, its name in the tooltip.
+                        if let Some((src, name)) = merged_source(engine, actual_line_idx) {
+                            ui.label(
+                                RichText::new("▌")
+                                    .monospace()
+                                    .strong()
+                                    .size(font_size)
+                                    .color(merged_source_color(src)),
+                            )
+                            .on_hover_text(name);
                         }
 
                         // Line number
@@ -6465,13 +6529,25 @@ fn render_wrapped_rows(
                 } else {
                     theme.text_dim().gamma_multiply(0.6)
                 };
+                let chip = merged_source(eng, line);
+                let bar = if chip.is_some() { " " } else { "│" };
                 painter.text(
                     egui::pos2(origin.x + left_pad + marker_w, text_top),
                     egui::Align2::LEFT_TOP,
-                    format!("{:>6} │", eng.shown_line_number(line)),
+                    format!("{:>6} {bar}", eng.shown_line_number(line)),
                     font_id.clone(),
                     num_color.into(),
                 );
+                // A merged view: the source chip where the separator is.
+                if let Some((src, _)) = chip {
+                    painter.text(
+                        egui::pos2(origin.x + left_pad + marker_w + char_w * 7.0, text_top),
+                        egui::Align2::LEFT_TOP,
+                        "▌",
+                        font_id.clone(),
+                        merged_source_color(src),
+                    );
+                }
             }
             if let Some((text, color)) =
                 time_delta.and_then(|gap_ms| time_delta_cell(eng, row, gap_ms, theme))
@@ -7259,6 +7335,30 @@ impl TermSide {
             TermSide::Exclude => "filter_terms_none_of",
         }
     }
+}
+
+/// The colours of the sources of a merged view, in order (then round again).
+const MERGED_SOURCE_COLORS: [Color32; 8] = [
+    Color32::from_rgb(0, 200, 255),
+    Color32::from_rgb(255, 120, 200),
+    Color32::from_rgb(120, 220, 90),
+    Color32::from_rgb(255, 170, 40),
+    Color32::from_rgb(170, 130, 255),
+    Color32::from_rgb(255, 90, 90),
+    Color32::from_rgb(60, 200, 170),
+    Color32::from_rgb(220, 220, 80),
+];
+
+/// The chip colour of source `i` of a merged view.
+fn merged_source_color(i: usize) -> Color32 {
+    MERGED_SOURCE_COLORS[i % MERGED_SOURCE_COLORS.len()]
+}
+
+/// The source of line `idx` of a merged view: its index and short name.
+fn merged_source(engine: &TailEngine, idx: usize) -> Option<(usize, String)> {
+    let merged = engine.merged.as_ref()?;
+    let (src, _) = merged.source_of(idx)?;
+    Some((src, merged.sources.get(src)?.name.clone()))
 }
 
 /// The `ƒ` badge of a term that reads as a field term, its key, operator and values in

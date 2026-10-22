@@ -294,7 +294,7 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
 /// spool goes with the process). A derived stream of "Open filter as new tab" is kept
 /// under its `filter:` name and rebuilt from its source (see `persisted_path`).
 pub fn is_persisted(engine: &TailEngine) -> bool {
-    !engine.is_stdin()
+    !engine.is_stdin() && engine.merged.is_none()
 }
 
 /// The path a stream is saved under: its own, or for a derived stream the
@@ -426,6 +426,13 @@ pub fn snapshot<'a>(
             continue;
         }
         // A derived stream's tab names its spool: it is saved under its `filter:` name.
+        // A merged view is not kept (yet): its spool goes with the process.
+        if engines
+            .iter()
+            .any(|e| e.merged.is_some() && e.path == *path)
+        {
+            continue;
+        }
         let path = match engines
             .iter()
             .find(|e| e.derived.is_some() && e.path == *path)
