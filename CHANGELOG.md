@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.19] - 2026-10-22
+
 ### Added
 
 - **Tray icon on Linux.** Settings → **Tray icon**, **Minimise to tray** and **Close to
@@ -1731,6 +1733,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.19]: https://github.com/matteobaccan/FastTail/compare/v0.20.18...v0.20.19
 [0.20.18]: https://github.com/matteobaccan/FastTail/compare/v0.20.17...v0.20.18
 [0.20.17]: https://github.com/matteobaccan/FastTail/compare/v0.20.16...v0.20.17
 [0.20.16]: https://github.com/matteobaccan/FastTail/compare/v0.20.15...v0.20.16
