@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Split button of the Split file dialog has a tooltip, and when it is off the tooltip
+  says why (timestamps still being read, no timestamps, not enough space, files to replace).
+
 ## [0.21.10] - 2026-10-22
 
 ### Added
