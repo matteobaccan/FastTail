@@ -26,6 +26,7 @@ mod bookmark_report;
 mod char_selection;
 mod compare_lines;
 mod disassembly_view;
+mod export_formats;
 mod external_tools;
 mod filter_expressions;
 mod filter_tabs;

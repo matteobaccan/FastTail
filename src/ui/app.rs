@@ -89,6 +89,8 @@ pub struct FastTailApp {
     pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
     /// The New merged view dialog while it is shown.
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
+    /// The Export dialog, while it is shown.
+    pub export_dialog: Option<crate::ui::export_dialog::ExportDialog>,
     /// The Split file dialog, while it is shown.
     pub split_dialog: Option<crate::ui::split_dialog::SplitDialog>,
     /// The Log formats dialog, while it is shown.
@@ -607,6 +609,7 @@ impl FastTailApp {
             merge_prompt: None,
             log_formats: None,
             split_dialog: None,
+            export_dialog: None,
             folder_groups: Vec::new(),
             tool_runner: ToolRunner::default(),
             filters_focus: None,
@@ -1299,6 +1302,14 @@ impl FastTailApp {
 
     /// Opens the Log formats dialog a row menu asked for, with the lines picked.
     fn apply_format_requests(&mut self) {
+        if let Some(idx) = self.engines.iter().position(|e| e.export_request.is_some()) {
+            let scope = self.engines[idx].export_request.take().expect("a request");
+            self.export_dialog = Some(crate::ui::export_dialog::ExportDialog::new(
+                self.engines[idx].path.clone(),
+                scope,
+                &self.config,
+            ));
+        }
         if let Some(idx) = self.engines.iter().position(|e| e.split_request) {
             self.engines[idx].split_request = false;
             self.open_split_dialog(idx);
@@ -5715,6 +5726,19 @@ impl FastTailApp {
                 }
                 Some(MergeChoice::Cancel) => self.merge_prompt = None,
                 None => {}
+            }
+        }
+
+        // 11a'''. Export dialog: closed when its stream goes.
+        if let Some(dialog) = self.export_dialog.as_mut() {
+            match self.engines.iter().find(|e| e.path == dialog.source) {
+                Some(engine) => {
+                    let lang = self.config.language;
+                    if dialog.show(&ctx, engine, &mut self.config, lang) {
+                        self.export_dialog = None;
+                    }
+                }
+                None => self.export_dialog = None,
             }
         }
 

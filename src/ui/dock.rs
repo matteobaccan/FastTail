@@ -216,53 +216,6 @@ pub use crate::workspace::tool_context_for_row;
 
 pub use crate::paths::create_export_file;
 
-/// "Export visible lines…" / "Export search matches…" of the stream menu (and of the
-/// command palette): asks for a file and writes the lines to it; a failure is shown in
-/// the stream bar, a GUI build having no console for stderr.
-pub fn export_stream_lines(engine: &mut TailEngine, lang: Language, matches_only: bool) {
-    let title = t(
-        lang,
-        if matches_only {
-            "export_matches"
-        } else {
-            "export_visible"
-        },
-    );
-    let suggested = format!(
-        "{}-{}.txt",
-        if engine.is_stdin() {
-            Some(crate::stdin_source::STDIN_TITLE)
-        } else {
-            engine.path.file_stem().and_then(|s| s.to_str())
-        }
-        .unwrap_or("fasttail"),
-        if matches_only { "matches" } else { "export" }
-    );
-    if let Some(target) = rfd::FileDialog::new()
-        .set_title(title)
-        .set_file_name(suggested)
-        .add_filter("Text (*.txt, *.log)", &["txt", "log"])
-        .save_file()
-    {
-        let result = create_export_file(&target).and_then(|f| {
-            let mut w = std::io::BufWriter::new(f);
-            if matches_only {
-                engine.export_search_matches(&mut w)
-            } else {
-                engine.export_visible(&mut w)
-            }
-        });
-        if let Err(err) = result {
-            eprintln!("fasttail: export to {} failed: {err}", target.display());
-            engine.view_notice = Some(format!(
-                "{} ({}): {err}",
-                t(lang, "export_failed"),
-                target.display()
-            ));
-        }
-    }
-}
-
 /// Runs a tool on a row from a user gesture; a spawn failure becomes a stream notice.
 pub fn run_tool_on_row(
     engine: &mut TailEngine,
@@ -2628,10 +2581,10 @@ fn render_log_stream(
 
         // Export menu: visible lines, or the search matches, to a text file
         if act(ActionId::ExportVisible) {
-            export_stream_lines(engine, lang, false);
+            engine.export_request = Some(crate::export::Scope::Visible);
         }
         if act(ActionId::ExportMatches) {
-            export_stream_lines(engine, lang, true);
+            engine.export_request = Some(crate::export::Scope::Matches);
         }
         if act(ActionId::BookmarkReport) {
             engine.report_request = true;
@@ -2642,7 +2595,7 @@ fn render_log_stream(
                 .button(RichText::new(t(lang, "export_visible")).monospace())
                 .clicked()
             {
-                export_stream_lines(engine, lang, false);
+                engine.export_request = Some(crate::export::Scope::Visible);
                 ui.close();
             }
             if has_query
@@ -2650,7 +2603,7 @@ fn render_log_stream(
                     .button(RichText::new(t(lang, "export_matches")).monospace())
                     .clicked()
             {
-                export_stream_lines(engine, lang, true);
+                engine.export_request = Some(crate::export::Scope::Matches);
                 ui.close();
             }
             if ui
@@ -4522,7 +4475,7 @@ fn field_header_id(engine: &TailEngine) -> egui::Id {
 /// The spans of a cell's text: the rules' and labels' spans of that text, with the search
 /// query's occurrences (`query_lower`, case-insensitive) drawn over them as hits. At most
 /// `MAX_ROW_SPANS`, sorted and non-overlapping.
-fn cell_spans(
+pub(crate) fn cell_spans(
     mut rule_spans: Vec<HighlightSpan>,
     text: &str,
     query_lower: &str,
@@ -6127,7 +6080,7 @@ fn row_highlight(
 }
 
 /// The level palette entry of a row, when level colouring is on.
-fn level_fallback(
+pub(crate) fn level_fallback(
     engine: &TailEngine,
     theme: &CyberTheme,
     level_colors: bool,
