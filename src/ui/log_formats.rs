@@ -342,7 +342,8 @@ impl FormatsDialog {
             }
         };
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-        std::fs::write(&path, spec.to_ini()).map_err(|e| e.to_string())?;
+        crate::config::overwrite_regular_file(&path, spec.to_ini().as_bytes())
+            .map_err(|e| e.to_string())?;
         if let Some(old) = own.filter(|o| !crate::paths::paths_equal(o, &path)) {
             std::fs::remove_file(old).map_err(|e| e.to_string())?;
         }
@@ -362,7 +363,8 @@ impl FormatsDialog {
             return Err(format!("{}: exists", path.display()));
         }
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-        std::fs::write(&path, format.spec.to_ini()).map_err(|e| e.to_string())?;
+        crate::config::overwrite_regular_file(&path, format.spec.to_ini().as_bytes())
+            .map_err(|e| e.to_string())?;
         self.draft = Draft::from_spec(&format.spec);
         self.editing = Editing::File(path.clone());
         self.confirm_delete = None;
@@ -372,7 +374,7 @@ impl FormatsDialog {
 
     /// Writes the draft as a format file at `to`.
     pub fn export(&self, to: &Path) -> std::io::Result<()> {
-        std::fs::write(to, self.draft.to_spec().to_ini())
+        crate::config::overwrite_regular_file(to, self.draft.to_spec().to_ini().as_bytes())
     }
 
     /// Removes the format file `path` and starts a new draft.
@@ -747,5 +749,30 @@ impl FormatsDialog {
                     }
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_and_save_reject_non_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub_dir = dir.path().join("sub");
+        std::fs::create_dir(&sub_dir).unwrap();
+
+        let mut dialog = FormatsDialog::new(dir.path().to_path_buf(), Vec::new());
+        dialog.draft.name = "TestFormat".to_string();
+        dialog.draft.patterns = r"^(?P<msg>.*)$".to_string();
+
+        // Exporting to a directory target must fail
+        let res = dialog.export(&sub_dir);
+        assert!(res.is_err(), "exporting to a directory must fail");
+
+        // Saving when the target path is a directory must fail
+        dialog.editing = Editing::File(sub_dir.clone());
+        let save_res = dialog.save(&Library::default());
+        assert!(save_res.is_err(), "saving to a directory must fail");
     }
 }
