@@ -20,6 +20,6 @@
 
 ## 4. Wrap-up
 
-- [ ] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 4.2 Local preview exe for the maintainer before the release
-- [ ] 4.3 After the release, archive the change so `folder-source` becomes a spec
+- [x] 4.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
+- [ ] 4.2 Local preview exe for the maintainer before the release (with the 0.21.0 preview)
+- [x] 4.3 After the release, archive the change so `folder-source` becomes a spec
