@@ -19,8 +19,9 @@ decisions and adds the parts that did not ship in 0.14.0.
 3. **Level and timestamp from fields** (decision 7): first level field through
    `log_level::token_level`, first time field through the existing parsers; `JobSpec`
    carries the parser; a parser change resets the level and timestamp caches.
-4. **Cells** (decision 8): hit tints and rule spans mapped to cells by byte range, split
-   at cell boundaries, within the 64-span budget; whole-row styles colour the row. Copy as
+4. **Cells** (decision 8): hit tints and rule spans computed on each cell's shown text
+   (the values are decoded, so byte ranges of the line do not map onto them; a match
+   spanning two fields is not tinted), within the 64-span budget; whole-row styles colour the row. Copy as
    shown writes the cells with tabs. The character selection is clipped to the cell it
    starts in. The last column wraps using the wrap layout of the Text view, the other
    cells drawn on the first line of the row.

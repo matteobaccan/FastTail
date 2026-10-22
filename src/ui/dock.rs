@@ -3904,10 +3904,10 @@ fn render_extended_rows(
                             if aligned_x > here {
                                 ui.add_space(aligned_x - here);
                             }
+                            // A matching row is marked in its marker column and its
+                            // hits tinted in the cells; the current hit keeps its row.
                             let (text, bg) = if is_active_search {
                                 (Color32::BLACK, Some(SEARCH_ACTIVE_BG))
-                            } else if matches_search {
-                                (Color32::BLACK, Some(SEARCH_MATCH_BG))
                             } else if let Some(hl) = highlight {
                                 (
                                     hl.fg.into(),
@@ -3926,6 +3926,14 @@ fn render_extended_rows(
                                 // Level colours only where nothing else colours the row.
                                 level_colors: level_colors && bg.is_none() && highlight.is_none(),
                             };
+                            let query_lower = engine.search_query.to_lowercase();
+                            let spans_of = |text: &str| {
+                                cell_spans(
+                                    engine.match_highlight_spans(text).spans,
+                                    text,
+                                    &query_lower,
+                                )
+                            };
                             draw_field_cells(
                                 ui,
                                 layout,
@@ -3933,6 +3941,7 @@ fn render_extended_rows(
                                 raw_line,
                                 &style,
                                 theme,
+                                &spans_of,
                             );
                             return;
                         }
@@ -4303,9 +4312,75 @@ fn field_header_id(engine: &TailEngine) -> egui::Id {
     egui::Id::new("fields_header").with(&engine.path)
 }
 
+/// The spans of a cell's text: the rules' and labels' spans of that text, with the search
+/// query's occurrences (`query_lower`, case-insensitive) drawn over them as hits. At most
+/// `MAX_ROW_SPANS`, sorted and non-overlapping.
+fn cell_spans(
+    mut rule_spans: Vec<HighlightSpan>,
+    text: &str,
+    query_lower: &str,
+) -> Vec<HighlightSpan> {
+    let mut hits: Vec<(usize, usize)> = Vec::new();
+    if !query_lower.is_empty() {
+        let lower = text.to_lowercase();
+        // Byte offsets carry over only while lower-casing keeps every length.
+        if lower.len() == text.len() {
+            let mut from = 0;
+            while let Some(at) = lower[from..].find(query_lower) {
+                let start = from + at;
+                let end = start + query_lower.len();
+                hits.push((start, end));
+                from = end;
+                if hits.len() >= crate::tail_engine::MAX_ROW_SPANS {
+                    break;
+                }
+            }
+        }
+    }
+    if hits.is_empty() {
+        return rule_spans;
+    }
+    let hit_style = SpanStyle::Rule(HighlightStyle {
+        fg: Color32::BLACK.into(),
+        bg: SEARCH_MATCH_BG.into(),
+        bold: false,
+        italic: false,
+    });
+    let mut out: Vec<HighlightSpan> = Vec::new();
+    // A rule span keeps the parts no hit covers.
+    for sp in rule_spans.drain(..) {
+        let mut start = sp.start;
+        for &(h0, h1) in hits
+            .iter()
+            .filter(|(h0, h1)| *h1 > sp.start && *h0 < sp.end)
+        {
+            if h0 > start {
+                out.push(HighlightSpan {
+                    start,
+                    end: h0,
+                    ..sp
+                });
+            }
+            start = start.max(h1);
+        }
+        if start < sp.end {
+            out.push(HighlightSpan { start, ..sp });
+        }
+    }
+    out.extend(hits.iter().map(|&(start, end)| HighlightSpan {
+        start,
+        end,
+        style: hit_style,
+    }));
+    out.sort_by_key(|sp| sp.start);
+    out.truncate(crate::tail_engine::MAX_ROW_SPANS);
+    out
+}
+
 /// The cells of one row: each shown field clipped to its column, then the message.
 /// A line without the parser's shape (or a continuation line) runs across the columns,
-/// dimmed when it is not a continuation.
+/// dimmed when it is not a continuation. `spans` gives a cell text its rule, label and
+/// search spans.
 fn draw_field_cells(
     ui: &mut Ui,
     layout: &ColumnLayout,
@@ -4313,13 +4388,17 @@ fn draw_field_cells(
     line: &str,
     style: &CellStyle,
     theme: &CyberTheme,
+    spans: &dyn Fn(&str) -> Vec<HighlightSpan>,
 ) {
+    let format = |color: Color32| egui::TextFormat {
+        font_id: style.font_id.clone(),
+        color,
+        background: style.bg.unwrap_or(Color32::TRANSPARENT),
+        ..Default::default()
+    };
     let label = |ui: &mut Ui, text: &str, color: Color32| {
-        let mut rich = RichText::new(text).font(style.font_id.clone()).color(color);
-        if let Some(bg) = style.bg {
-            rich = rich.background_color(bg);
-        }
-        ui.add(egui::Label::new(rich).wrap_mode(egui::TextWrapMode::Extend));
+        let job = span_layout_job(text, style.font_id, format(color), &spans(text), theme);
+        ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend));
     };
     let Some(fields) = fields.filter(|f| f.shaped) else {
         let color = if TailEngine::is_stacktrace_continuation(line) || style.bg.is_some() {
@@ -4353,13 +4432,10 @@ fn draw_field_cells(
         let clip = rect
             .with_max_x(rect.max.x - layout.char_w)
             .intersect(ui.clip_rect());
-        ui.painter().with_clip_rect(clip).text(
-            egui::pos2(rect.left(), rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            value,
-            style.font_id.clone(),
-            color,
-        );
+        let job = span_layout_job(value, style.font_id, format(color), &spans(value), theme);
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let pos = egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0);
+        ui.painter().with_clip_rect(clip).galley(pos, galley, color);
     }
     label(ui, &fields.message(&layout.keys), style.text);
 }
@@ -8707,6 +8783,27 @@ fn render_markdown_stream(
 mod column_tests {
     use super::*;
 
+    #[test]
+    fn cell_spans_put_search_hits_over_rule_spans() {
+        let rule = |start, end| HighlightSpan {
+            start,
+            end,
+            style: SpanStyle::Label(1),
+        };
+        // "payment failed: timeout" with a label on "failed: time".
+        let text = "payment failed: timeout";
+        let out = cell_spans(vec![rule(8, 20)], text, "timeout");
+        let ranges: Vec<(usize, usize)> = out.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(ranges, vec![(8, 16), (16, 23)]);
+        assert!(matches!(out[0].style, SpanStyle::Label(1)));
+        assert!(matches!(out[1].style, SpanStyle::Rule(_)));
+        assert_eq!(cell_spans(vec![rule(0, 3)], "abc", "").len(), 1);
+        assert_eq!(
+            cell_spans(Vec::new(), "Timeout x TIMEOUT", "timeout").len(),
+            2
+        );
+    }
+
     /// Where a row of the column view draws each cell's text, relative to where its
     /// cells start, laid out in a horizontal row with egui's default item spacing, as
     /// the text view draws its rows.
@@ -8735,7 +8832,15 @@ mod column_tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.horizontal(|ui| {
                 start = ui.cursor().left();
-                draw_field_cells(ui, layout, Some(&fields), "", &style, &CyberTheme::Tron);
+                draw_field_cells(
+                    ui,
+                    layout,
+                    Some(&fields),
+                    "",
+                    &style,
+                    &CyberTheme::Tron,
+                    &|_| Vec::new(),
+                );
             });
         });
         // The font atlas comes back as a texture delta egui wants consumed.

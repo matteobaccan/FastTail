@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Column view: search and rules in the cells, copy as columns.** In the column view the
+  search hits and the colours of highlight rules and quick labels are drawn inside the
+  cells (a matching row is marked, not painted whole), and **Copy as shown** writes each
+  parsed row as its shown cells and message separated by tabs; Copy and the exports keep
+  the original lines.
+
 ## [0.20.22] - 2026-10-22
 
 ### Added

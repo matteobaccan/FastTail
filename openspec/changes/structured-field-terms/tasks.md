@@ -13,9 +13,9 @@
 
 ## 3. Search, rules and copy in the column view
 
-- [ ] 3.1 Hit tints and rule spans mapped to cells by byte range (split across cells), whole-row styles on the row, 64-span budget unchanged
-- [ ] 3.2 "Copy as shown" writes the shown cells tab-separated in the column view; copy and export keep writing raw lines
-- [ ] 3.3 Tests: span mapping across cell boundaries; copy as shown TSV; export unchanged
+- [x] 3.1 Hit tints and rule spans in the cells (computed on each cell's text), whole-row styles on the row, 64-span budget unchanged
+- [x] 3.2 "Copy as shown" writes the shown cells tab-separated in the column view; copy and export keep writing raw lines
+- [x] 3.3 Tests: span mapping across cell boundaries; copy as shown TSV; export unchanged
 - [ ] 3.4 Character selection kept inside the cell it starts in (from `partial-line-selection` task 2.6)
 - [ ] 3.5 Wrap mode: the last column wraps, the other cells on the row's first line; scroll and jumps through the wrap layout
 
