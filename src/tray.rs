@@ -4,13 +4,14 @@
 
 //! The notification-area (tray) icon.
 //!
-//! Windows only for now: a `Shell_NotifyIconW` icon owned by a message-only window on a
-//! thread of its own, with a native popup menu. Clicks and menu picks reach the app
-//! through a channel (and a repaint request); the app hands the menu labels, the stream
-//! names and the alert badge back. While the window is hidden in the tray, the thread
-//! wakes the app every `WAKE_INTERVAL`: a hidden window gets no redraw on its own, and
-//! the streams must keep being polled. Elsewhere `Tray::start` returns `None` and the
-//! options say the tray is not available.
+//! Windows: a `Shell_NotifyIconW` icon owned by a message-only window on a thread of its
+//! own, with a native popup menu. Linux: a StatusNotifierItem over D-Bus (`ksni`, pure
+//! Rust), where a host is running (KDE, XFCE, Cinnamon, GNOME with the AppIndicator
+//! extension). Clicks and menu picks reach the app through a channel (and a repaint
+//! request); the app hands the menu labels, the stream names and the alert badge back.
+//! While the window is hidden in the tray, a thread wakes the app every `WAKE_INTERVAL`:
+//! a hidden window gets no redraw on its own, and the streams must keep being polled.
+//! Elsewhere `Tray::start` returns `None` and the options say the tray is not available.
 
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -102,6 +103,8 @@ pub struct Tray {
     events: Receiver<TrayEvent>,
     #[cfg(windows)]
     inner: win::Handle,
+    #[cfg(target_os = "linux")]
+    inner: linux::Handle,
 }
 
 impl Tray {
@@ -120,15 +123,35 @@ impl Tray {
             let (inner, events) = win::start(ctx, scale_icon(icon, size, 32), tooltip, menu)?;
             Some(Self { events, inner })
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let (inner, events) = linux::start(
+                ctx,
+                scale_icon(icon, size, 32),
+                scale_icon(icon, size, 16),
+                tooltip,
+                menu,
+            )?;
+            Some(Self { events, inner })
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             None
         }
     }
 
-    /// Whether this system has a tray FastTail can use.
+    /// Whether this system has a tray FastTail can use: always on Windows; on Linux when
+    /// a StatusNotifierItem host owns `org.kde.StatusNotifierWatcher` on the session bus
+    /// (asked once).
     pub fn available() -> bool {
-        cfg!(windows)
+        #[cfg(target_os = "linux")]
+        {
+            linux::available()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            cfg!(windows)
+        }
     }
 
     /// The events since the last call.
@@ -139,22 +162,234 @@ impl Tray {
     /// Replaces the menu's labels and state.
     #[allow(unused_variables)]
     pub fn set_menu(&self, menu: TrayMenu) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         self.inner.set_menu(menu);
     }
 
     /// Sets the badge (a dot of `color`, none with `None`) and the tooltip.
     #[allow(unused_variables)]
     pub fn set_badge(&self, color: Option<[u8; 3]>, tooltip: &str) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         self.inner.set_badge(color, tooltip);
     }
 
     /// Whether the window is hidden in the tray: the thread wakes the app while it is.
     #[allow(unused_variables)]
     pub fn set_hidden(&self, hidden: bool) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         self.inner.set_hidden(hidden);
+    }
+}
+
+/// `rgba` (RGBA bytes) as ARGB32 in network byte order, the pixmap format of the
+/// StatusNotifierItem protocol.
+pub fn rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| [a, r, g, b])
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{rgba_to_argb, with_badge, TrayEvent, TrayMenu, WAKE_INTERVAL};
+    use ksni::blocking::TrayMethods;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::Arc;
+
+    /// The most stream entries the menu lists, as on Windows.
+    const MAX_STREAMS: usize = 30;
+
+    /// Whether a StatusNotifierItem host is running: the watcher has an owner on the
+    /// session bus. Asked once; no bus means no tray.
+    pub fn available() -> bool {
+        static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *AVAILABLE.get_or_init(|| {
+            let ask = || -> zbus::Result<bool> {
+                let conn = zbus::blocking::Connection::session()?;
+                let dbus = zbus::blocking::fdo::DBusProxy::new(&conn)?;
+                let name = zbus::names::BusName::try_from("org.kde.StatusNotifierWatcher")
+                    .map_err(zbus::Error::from)?;
+                Ok(dbus.name_has_owner(name)?)
+            };
+            ask().unwrap_or(false)
+        })
+    }
+
+    /// The state the StatusNotifierItem shows; `ksni` asks it for the icon, tooltip and
+    /// menu on its own thread.
+    struct Item {
+        tx: Sender<TrayEvent>,
+        ctx: egui::Context,
+        menu: TrayMenu,
+        /// The app icon at 32 and 16 px (RGBA).
+        base: [(usize, Vec<u8>); 2],
+        badge: Option<[u8; 3]>,
+        tooltip: String,
+    }
+
+    impl Item {
+        fn send(&self, event: TrayEvent) {
+            let _ = self.tx.send(event);
+            self.ctx.request_repaint();
+        }
+    }
+
+    impl ksni::Tray for Item {
+        fn id(&self) -> String {
+            "fasttail".into()
+        }
+
+        fn title(&self) -> String {
+            "FastTail".into()
+        }
+
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            self.base
+                .iter()
+                .map(|(size, rgba)| {
+                    let rgba = match self.badge {
+                        Some(color) => with_badge(rgba, *size, color),
+                        None => rgba.clone(),
+                    };
+                    ksni::Icon {
+                        width: *size as i32,
+                        height: *size as i32,
+                        data: rgba_to_argb(&rgba),
+                    }
+                })
+                .collect()
+        }
+
+        fn tool_tip(&self) -> ksni::ToolTip {
+            ksni::ToolTip {
+                title: self.tooltip.clone(),
+                ..Default::default()
+            }
+        }
+
+        /// Left click: show or hide the window.
+        fn activate(&mut self, _x: i32, _y: i32) {
+            self.send(TrayEvent::Toggle);
+        }
+
+        fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+            use ksni::menu::{CheckmarkItem, MenuItem, StandardItem};
+            let item = |label: &str, event: TrayEvent| -> MenuItem<Self> {
+                StandardItem {
+                    label: label.to_string(),
+                    activate: Box::new(move |this: &mut Self| this.send(event)),
+                    ..Default::default()
+                }
+                .into()
+            };
+            let m = &self.menu;
+            let mut out = vec![
+                item(if m.visible { &m.hide } else { &m.show }, TrayEvent::Toggle),
+                MenuItem::Separator,
+                item(&m.follow_all, TrayEvent::FollowAll),
+                item(&m.pause_all, TrayEvent::PauseAll),
+                CheckmarkItem {
+                    label: m.mute.clone(),
+                    checked: m.muted,
+                    activate: Box::new(|this: &mut Self| this.send(TrayEvent::ToggleMute)),
+                    ..Default::default()
+                }
+                .into(),
+            ];
+            if !m.streams.is_empty() {
+                out.push(MenuItem::Separator);
+                for (i, name) in m.streams.iter().enumerate().take(MAX_STREAMS) {
+                    out.push(item(name, TrayEvent::Stream(i)));
+                }
+            }
+            out.push(MenuItem::Separator);
+            out.push(item(&m.quit, TrayEvent::Quit));
+            out
+        }
+    }
+
+    /// The app's side of the tray: the `ksni` service and the wake-up thread.
+    pub struct Handle {
+        tray: ksni::blocking::Handle<Item>,
+        hidden: Arc<AtomicBool>,
+        stop: Arc<AtomicBool>,
+        waker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Handle {
+        pub fn set_menu(&self, menu: TrayMenu) {
+            self.tray.update(|t| t.menu = menu);
+        }
+
+        pub fn set_badge(&self, color: Option<[u8; 3]>, tooltip: &str) {
+            let tooltip = tooltip.to_string();
+            self.tray.update(|t| {
+                t.badge = color;
+                t.tooltip = tooltip;
+            });
+        }
+
+        pub fn set_hidden(&self, hidden: bool) {
+            self.hidden.store(hidden, Ordering::Relaxed);
+        }
+    }
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(waker) = self.waker.take() {
+                let _ = waker.join();
+            }
+            self.tray.shutdown().wait();
+        }
+    }
+
+    pub fn start(
+        ctx: egui::Context,
+        base32: Vec<u8>,
+        base16: Vec<u8>,
+        tooltip: &str,
+        menu: TrayMenu,
+    ) -> Option<(Handle, Receiver<TrayEvent>)> {
+        let (tx, rx) = channel();
+        let item = Item {
+            tx,
+            ctx: ctx.clone(),
+            menu,
+            base: [(32, base32), (16, base16)],
+            badge: None,
+            tooltip: tooltip.to_string(),
+        };
+        // No host, or no bus: no tray (Settings says why).
+        let tray = item.spawn().ok()?;
+        let hidden = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let waker = {
+            let (hidden, stop) = (Arc::clone(&hidden), Arc::clone(&stop));
+            std::thread::Builder::new()
+                .name("fasttail-tray-wake".into())
+                .spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::thread::sleep(WAKE_INTERVAL);
+                        if hidden.load(Ordering::Relaxed) {
+                            ctx.request_repaint();
+                        }
+                    }
+                })
+                .ok()
+        };
+        Some((
+            Handle {
+                tray,
+                hidden,
+                stop,
+                waker,
+            },
+            rx,
+        ))
     }
 }
 
@@ -750,6 +985,16 @@ mod tests {
 
     #[test]
     fn availability_follows_the_platform() {
-        assert_eq!(Tray::available(), cfg!(windows));
+        if !cfg!(target_os = "linux") {
+            assert_eq!(Tray::available(), cfg!(windows));
+        }
+    }
+
+    #[test]
+    fn pixmaps_are_argb_in_network_order() {
+        let rgba = [10u8, 20, 30, 255, 1, 2, 3, 0];
+        assert_eq!(rgba_to_argb(&rgba), vec![255, 10, 20, 30, 0, 1, 2, 3]);
+        let icon = vec![7u8; 32 * 32 * 4];
+        assert_eq!(rgba_to_argb(&scale_icon(&icon, 32, 16)).len(), 16 * 16 * 4);
     }
 }

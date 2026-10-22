@@ -589,13 +589,13 @@ The same centred, fixed window says why the terminal interface asked for at star
 - An 11 pt status line: *Report copied to the clipboard* / *Report saved to path* (accent), *Too large for the clipboard…* / save errors (warn).
 - The choices are written back to `report_context`, `report_auto`, `report_order`.
 
-### 4.6f Tray icon (Windows)
+### 4.6f Tray icon (Windows, Linux)
 
-Source: `src/tray.rs` (a `Shell_NotifyIconW` icon on a message-only window of its own thread), `src/ui/app.rs` (`update_tray`, `hide_to_tray`, `show_from_tray`, `quit`). Settings (after *Flash on alert*): **Tray icon**, and under it **Minimise to tray** and **Close to tray** (enabled with the tray on); all greyed out with *The tray icon is available on Windows in this version* elsewhere.
+Source: `src/tray.rs` (Windows: a `Shell_NotifyIconW` icon on a message-only window of its own thread; Linux: a `ksni` StatusNotifierItem with ARGB32 pixmaps at 32 and 16 px, available when `org.kde.StatusNotifierWatcher` has an owner on the session bus, checked once), `src/ui/app.rs` (`update_tray`, `hide_to_tray`, `show_from_tray`, `quit`). Settings (after *Flash on alert*): **Tray icon**, and under it **Minimise to tray** and **Close to tray** (enabled with the tray on); all greyed out with *No tray on this desktop: Linux needs a StatusNotifierItem host (KDE, or GNOME with the AppIndicator extension); macOS: not yet* when no tray is available.
 
 - **Icon:** the app icon scaled to 32 × 32; a red dot ringed in black in the top-right corner while alerts sounded with the window hidden or unfocused. **Tooltip:** `FastTail — N streams` plus ` · M alerts` (`99+`).
 - **Clicks:** left click toggles the window, double click shows it. **Menu** (right click): Show / Hide FastTail, Follow all, Pause all, Mute sounds (checked when muted), the open streams (up to 30; a pick shows the window with that stream focused), Quit.
-- **Hidden:** `ViewportCommand::Visible(false)`; the tray thread wakes the app every 250 ms so the streams keep being polled (a minimised window gets no frames on Windows, see issue #161). Close to tray cancels the close (`CancelClose`) after saving the workspace. `CTRL + Q` and Quit really quit.
+- **Hidden:** `ViewportCommand::Visible(false)`; the tray thread wakes the app every 250 ms so the streams keep being polled (a minimised window gets no frames on Windows, see issue #161; the Linux backend runs the same wake-up thread). Close to tray cancels the close (`CancelClose`) after saving the workspace. `CTRL + Q` and Quit really quit.
 
 ### 4.6e Compare tab — `⇄ Compare`
 
@@ -1280,7 +1280,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `always_on_top` | false | window level; 📌 |
 | `flash_on_alert` | false | taskbar attention for background errors |
 | `level_colors` | true | colour rows by level |
-| `tray_icon`, `minimize_to_tray`, `close_to_tray` | false, false, false | notification-area icon (Windows) and hiding the window in it on minimise / close |
+| `tray_icon`, `minimize_to_tray`, `close_to_tray` | false, false, false | notification-area icon (Windows, Linux) and hiding the window in it on minimise / close |
 | `auto_highlight`, `auto_highlight_kinds` | false, `ip,uuid,url,duration,path` | automatic token highlighting and the kinds it paints |
 | `report_context`, `report_auto`, `report_order` | 3, false, `stream` | bookmark report dialog: context lines (0–20), automatic bookmarks, `stream` or `time` order |
 | `search_pane`, `search_pane_height` | false, 180 | results pane on or off, and its height (accepted 40–4000) |
