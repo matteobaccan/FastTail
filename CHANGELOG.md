@@ -13,6 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The Split button of the Split file dialog has a tooltip, and when it is off the tooltip
   says why (timestamps still being read, no timestamps, not enough space, files to replace).
 
+### Fixed
+
+- Saving, creating or exporting a log format file, and writing the pieces of a split,
+  refuse a target that is not a regular file (a folder, a pipe, a device) instead of
+  opening it.
+
 ## [0.21.10] - 2026-10-22
 
 ### Added
