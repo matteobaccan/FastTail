@@ -26,6 +26,17 @@ columns = ts,level
 sample.1 = 28.09.26 14:02:11,123 [main] E card declined
 "#;
 
+/// A device log whose entries carry XML bodies over several lines: a line starting with
+/// `DEV ` starts an entry, any other continues it.
+const DEVICE: &str = r#"[format]
+name = Device
+regex = ^DEV (?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (?P<level>[A-Z]+) (?P<msg>.*)$
+timestamp_field = ts
+level_field = level
+entry_start = ^DEV 
+files = device-*.log
+"#;
+
 const LINES: [&str; 4] = [
     "28.09.26 14:02:11,123 [main] I card check",
     "28.09.26 14:02:12,000 [pool-1] E card declined",
@@ -39,6 +50,7 @@ fn install(dir: &Path) {
     let formats = dir.join("formats");
     std::fs::create_dir_all(&formats).unwrap();
     std::fs::write(formats.join("payments.fasttail-format.ini"), PAYMENTS).unwrap();
+    std::fs::write(formats.join("device.fasttail-format.ini"), DEVICE).unwrap();
     let lib = Library::load(&formats);
     assert!(lib.errors.is_empty(), "{:?}", lib.errors);
     log_format::set_library(lib);
@@ -152,4 +164,77 @@ fn the_presets_are_the_builtin_formats() {
     let text = e.get_line(0).unwrap().into_owned();
     let row = e.row_fields(0, &text).unwrap();
     assert_eq!(row.get("app"), Some("sshd"));
+}
+
+/// Two equal entries of five lines (header, XML body with a date and an ERROR word that
+/// the stack-trace heuristic would take for entries of their own), then another entry.
+const DEVICE_LINES: [&str; 12] = [
+    "DEV 2026-09-28 14:02:11 INFO sent order",
+    "<order>",
+    "  <when>2026-09-29 10:00:00</when>",
+    "ERROR in the body, not an entry",
+    "</order>",
+    "DEV 2026-09-28 14:02:11 INFO sent order",
+    "<order>",
+    "  <when>2026-09-29 10:00:00</when>",
+    "ERROR in the body, not an entry",
+    "</order>",
+    "DEV 2026-09-28 14:02:15 WARN other",
+    "detail",
+];
+
+#[test]
+fn an_entry_start_pattern_keeps_multi_line_entries_together() {
+    use fasttail::collapse::CollapseMode;
+    let dir = tempfile::tempdir().unwrap();
+    install(dir.path());
+    let file = dir.path().join("device-1.log");
+    write_lines(&file, &DEVICE_LINES);
+    // The synchronous path, then the background jobs.
+    for thresholds in [None, Some(0)] {
+        let mut e = match thresholds {
+            None => open(&file),
+            Some(t) => {
+                let mut e = TailEngine::open_with_thresholds(&file, t, t).unwrap();
+                e.size_check_interval = std::time::Duration::ZERO;
+                wait_for_jobs(&mut e);
+                e.poll_updates();
+                wait_for_jobs(&mut e);
+                e
+            }
+        };
+        assert_eq!(format_name(&e).as_deref(), Some("Device"), "{thresholds:?}");
+        e.ensure_timestamps();
+        wait_for_jobs(&mut e);
+        let header = ms(28, 14, 2, 11, 0);
+        assert_eq!(
+            e.line_timestamp(2),
+            Some(header),
+            "the body's date is no entry"
+        );
+        assert_eq!(e.line_timestamp(4), Some(header));
+        assert_eq!(e.level_of(3), LogLevel::Unknown, "{thresholds:?}");
+        assert_eq!(e.level_of(10), LogLevel::Warn);
+
+        // The header matches: its body comes along; only the other entry's line: its own.
+        e.set_include_filter("other");
+        wait_for_jobs(&mut e);
+        let shown: Vec<usize> = (0..e.visible_line_count())
+            .filter_map(|r| e.get_actual_line_idx(r))
+            .collect();
+        assert_eq!(shown, vec![10, 11], "{thresholds:?}");
+        e.set_include_filter("sent");
+        wait_for_jobs(&mut e);
+        assert_eq!(e.visible_line_count(), 10, "{thresholds:?}");
+
+        // The two equal entries of five lines collapse into one group.
+        e.set_include_filter("");
+        e.set_collapse_mode(CollapseMode::Exact);
+        wait_for_jobs(&mut e);
+        let groups: Vec<(usize, u32)> = (0..e.visible_line_count())
+            .filter_map(|r| e.collapsed_row(r))
+            .map(|c| (c.first_line, c.count))
+            .collect();
+        assert_eq!(groups, vec![(0, 2)], "{thresholds:?}");
+    }
 }

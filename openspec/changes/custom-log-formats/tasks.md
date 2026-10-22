@@ -8,9 +8,9 @@
 ## 2. Engine integration
 
 - [x] 2.1 `FieldParser::Format(Arc<LogFormat>)` in `src/fields.rs`; captures, level map and timestamp format in the level and time field paths
-- [ ] 2.2 `EntryRule { Heuristic, Pattern }` per stream replacing the static `is_stacktrace_continuation` in the filter, timestamp, level and collapse paths and their `scan_job` specs; rebuild on format change
+- [x] 2.2 `EntryRule { Heuristic, Pattern }` per stream replacing the static `is_stacktrace_continuation` in the filter, timestamp, level and collapse paths and their `scan_job` specs; rebuild on format change
 - [x] 2.3 Detection: glob-matched formats, then user formats, then JSON / logfmt; 80 % rule and tie-breaks; skipped when `fields_parser` is saved; fallback when a saved format is missing
-- [ ] 2.4 Tests: detection order and ties, entry start on a multi-line fixture (filter keeps whole entries, timestamps inherited, collapse groups entries), level map, custom timestamp feeding the time range and histogram, synchronous and job paths identical
+- [x] 2.4 Tests: detection order and ties, entry start on a multi-line fixture (filter keeps whole entries, timestamps inherited, collapse groups entries), level map, custom timestamp feeding the time range and histogram, synchronous and job paths identical
 
 ## 3. UI and persistence
 

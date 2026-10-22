@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Entry start pattern of a log format.** `entry_start=` in a format file: a line matching
+  it starts an entry and any other line continues the one above, in place of the
+  stack-trace heuristic, for the filters (an entry is shown whole), the time continuation
+  lines inherit, their level (none of their own) and collapse, on the synchronous and
+  background paths alike.
+
 ## [0.21.3] - 2026-10-22
 
 ### Added

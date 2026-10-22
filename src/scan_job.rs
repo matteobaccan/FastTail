@@ -390,7 +390,7 @@ impl FilterSpec {
     /// Returns the visibility and the parent state to carry to the next line.
     pub fn visible_in_sequence(&self, line: &str, parent_visible: bool) -> (bool, bool) {
         self.with_fields(|fields| {
-            if crate::tail_engine::TailEngine::is_stacktrace_continuation(line) {
+            if crate::fields::is_continuation(self.parser.as_deref(), line) {
                 let v = !self.excluded_in(line, fields)
                     && ((self.included_in(line, fields) && self.level_passes_in(line, fields))
                         || parent_visible);
