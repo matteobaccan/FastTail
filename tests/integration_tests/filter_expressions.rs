@@ -165,3 +165,135 @@ fn an_empty_expression_stays_empty_through_a_restart_and_a_filter_tab() {
     assert_eq!(e.filter_expr(), "", "not rebuilt from the terms");
     assert_eq!(visible(e).len(), LOG.len());
 }
+
+fn frame(app: &mut FastTailApp, ctx: &egui::Context) {
+    let mut out = ctx.run_ui(Default::default(), |ui| app.render_ui(ui));
+    out.textures_delta.clear();
+}
+
+#[test]
+fn the_global_filter_takes_an_expression_combined_with_each_stream() {
+    use fasttail::global_filter::GlobalFilter;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    write_lines(&log, &LOG);
+    let mut app = FastTailApp::from_config(FastTailConfig {
+        spool_dir: Some(dir.path().join("spool")),
+        ..Default::default()
+    });
+    app.open_log_file(log.clone());
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx);
+    let mut gf = GlobalFilter {
+        enabled: true,
+        include: vec!["payment".into()],
+        ..Default::default()
+    };
+    gf.set_expr_mode(true);
+    assert_eq!(gf.expression, "payment", "built from the terms");
+    gf.expression = "payment OR refund".into();
+    gf.note_expression();
+    app.config.global_filter = gf;
+    app.apply_global_filter();
+    frame(&mut app, &ctx);
+    assert_eq!(visible(&app.engines[0]), vec![0, 1, 2, 3, 4]);
+    // AND with the stream's own expression.
+    app.engines[0].set_filter_expr("timeout");
+    app.engines[0].set_filter_expr_mode(true);
+    assert_eq!(visible(&app.engines[0]), vec![1, 2, 3]);
+    // A broken global expression says why, and the last valid one keeps filtering
+    // without a new apply.
+    let key = app.config.global_filter.applied_key();
+    app.config.global_filter.expression = "payment OR".into();
+    app.config.global_filter.note_expression();
+    assert!(app.config.global_filter.expr_error().is_some());
+    assert_eq!(
+        app.config.global_filter.applied_key(),
+        key,
+        "nothing to apply"
+    );
+    app.apply_global_filter();
+    frame(&mut app, &ctx);
+    assert_eq!(visible(&app.engines[0]), vec![1, 2, 3]);
+    let tip = fasttail::ui::dock::global_terms_text(app.engines[0].global_filter().unwrap());
+    assert_eq!(
+        tip, "ƒx payment OR refund",
+        "the expression in the badge's tooltip"
+    );
+
+    // Saved in `[global_filter]` and read back.
+    let text = app.config.to_ini();
+    let back = FastTailConfig::from_ini(&text).global_filter;
+    assert!(back.expr_mode);
+    assert_eq!(back.expression, "payment OR");
+    // ƒx on with no text is kept too.
+    let only_mode = fasttail::global_filter::GlobalFilter {
+        expr_mode: true,
+        ..Default::default()
+    };
+    let mut conf = ini::Ini::new();
+    only_mode.write(&mut conf);
+    assert!(fasttail::global_filter::GlobalFilter::read(&conf).expr_mode);
+}
+
+#[test]
+fn a_preset_carries_the_mode_and_the_expression() {
+    use fasttail::filter_preset::{read_presets, write_presets, FilterPreset, FilterState};
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    write_lines(&log, &LOG);
+    let mut a = open(&log, None);
+    a.set_filter_expr("refund AND NOT refused");
+    a.set_filter_expr_mode(true);
+    // Saved while broken, a preset keeps the expression that filters.
+    a.set_filter_expr("refund AND NOT refused OR");
+    let state = FilterState::of_engine(&a, false);
+    assert_eq!(state.expr.as_deref(), Some("refund AND NOT refused"));
+    assert!(state.matches_engine(&a));
+    let preset = FilterPreset {
+        name: "refunds".into(),
+        state,
+    };
+    let mut conf = ini::Ini::new();
+    write_presets(&mut conf, std::slice::from_ref(&preset));
+    assert_eq!(read_presets(&conf), vec![preset.clone()]);
+
+    // Applied to a stream in term mode: it switches to the expression.
+    let mut b = open(&log, None);
+    b.set_include_filter("INFO");
+    assert!(!preset.state.matches_engine(&b));
+    preset.apply_to(&mut b);
+    assert!(b.filter_expr_mode());
+    assert_eq!(visible(&b), vec![3]);
+    assert!(preset.state.matches_engine(&b));
+    // A term-mode preset switches back and keeps the expression.
+    let terms = FilterState {
+        include: vec!["done".into()],
+        ..Default::default()
+    };
+    b.set_filter_state(&terms);
+    assert!(!b.filter_expr_mode());
+    assert_eq!(b.filter_expr(), "refund AND NOT refused");
+    assert_eq!(visible(&b), vec![6]);
+}
+
+#[test]
+fn the_stream_bar_and_the_filters_window_draw_expression_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    write_lines(&log, &LOG);
+    let mut app = FastTailApp::from_config(FastTailConfig {
+        spool_dir: Some(dir.path().join("spool")),
+        ..Default::default()
+    });
+    app.open_log_file(log);
+    app.engines[0].set_filter_expr_mode(true);
+    app.engines[0].set_filter_expr("(payment OR");
+    app.config.global_filter.bar_open = true;
+    app.config.global_filter.expr_mode = true;
+    app.config.global_filter.expression = "\"open".into();
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx);
+    frame(&mut app, &ctx);
+    assert!(app.engines[0].expr_error().is_some());
+}

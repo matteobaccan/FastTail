@@ -9,24 +9,24 @@
 ## 2. Engine and filter pipeline
 
 - [x] 2.1 `FilterSpec.expr: Option<Arc<FilterExpr>>`; `included` evaluates it in place of the include terms; `is_active` counts it
-- [ ] 2.2 Engine: filter mode, stored terms and expression, `last_valid_expr`, 150 ms debounce, `refresh_filters` on change
-- [ ] 2.3 Global filter: mode and expression in `GlobalFilter`, compiled into the shared global `FilterSpec`
-- [ ] 2.4 Tests: background filter job equal to the synchronous path (thresholds at 0); continuation line under an exclude term in expression mode; Find results honour a stream expression and a global expression; collapse and context lines over an expression-filtered view
+- [x] 2.2 Engine: filter mode, stored terms and expression, `last_valid_expr`, 150 ms debounce, `refresh_filters` on change
+- [x] 2.3 Global filter: mode and expression in `GlobalFilter`, compiled into the shared global `FilterSpec`
+- [x] 2.4 Tests: background filter job equal to the synchronous path (thresholds at 0); continuation line under an exclude term in expression mode; Find results honour a stream expression and a global expression; collapse and context lines over an expression-filtered view
 - [x] 2.5 Bench: 4 text operands against 4 terms in `benches/filter_bench.rs`
 
 ## 3. UI, presets, command line and persistence
 
-- [ ] 3.1 `ƒx` toggle beside the Include field; expression field with error caret and `ƒx ⚠` badge; syntax tooltip; Filters window shows the expression in place of the include rows
-- [ ] 3.2 Mode switch filling the expression from the terms the first time, restoring the terms on the way back
-- [ ] 3.3 Global filter bar: `ƒx` toggle and expression field
-- [ ] 3.4 Presets: `mode` and `expression` keys; applying a preset switches the mode
+- [x] 3.1 `ƒx` toggle beside the Include field; expression field with error caret and `ƒx ⚠` badge; syntax tooltip; Filters window shows the expression in place of the include rows
+- [x] 3.2 Mode switch filling the expression from the terms the first time, restoring the terms on the way back
+- [x] 3.3 Global filter bar: `ƒx` toggle and expression field
+- [x] 3.4 Presets: `mode` and `expression` keys; applying a preset switches the mode
 - [x] 3.5 `--filter-expr` in `cli.rs` (usage error with `--filter`, syntax error exits 2 before the window opens); CLI parse tests
-- [ ] 3.6 Persistence: `filter_mode` / `filter_expr` per stream (workspace, sessions), `[global_filter] mode` / `expression`; round-trip and old-file tests
+- [x] 3.6 Persistence: `filter_mode` / `filter_expr` per stream (workspace, sessions), `[global_filter] mode` / `expression`; round-trip and old-file tests
 
 ## 4. Texts and documentation
 
-- [ ] 4.1 New i18n keys (toggle, tooltip with syntax, error messages, badge) in every language, added to the exhaustive i18n test
-- [ ] 4.2 Help dialog entry; README filters section and FAQ; `--filter-expr` in the command-line section; CHANGELOG `[Unreleased]`
+- [x] 4.1 New i18n keys (toggle, tooltip with syntax, error messages, badge) in every language, added to the exhaustive i18n test
+- [x] 4.2 Help dialog entry; README filters section and FAQ; `--filter-expr` in the command-line section; CHANGELOG `[Unreleased]`
 
 ## 5. Wrap-up
 

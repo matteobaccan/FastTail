@@ -71,8 +71,9 @@ when the stream has a field parser.
    `cli.rs` and compiled when the stream is created; a syntax error is reported on stderr
    before the window opens and exits with code 2, like an unknown option.
 
-Threads and memory: parsing and compiling run on the UI thread on each (debounced, 150 ms)
-edit, microseconds for 32 operands. Evaluation runs where filters run today: UI thread up
+Threads and memory: parsing and compiling run on the UI thread on each edit (*as built:*
+no debounce of its own, as the term fields have none; the global filter keeps its 300 ms
+delay), microseconds for 32 operands. Evaluation runs where filters run today: UI thread up
 to 16 MB, `Filter` job above; the expression is shared through the `Arc` in `FilterSpec`.
 Memory: one compiled expression per stream (≤ 32 compiled terms), nothing per line.
 Growing files evaluate appended lines with the same spec; truncation and rotation rebuild

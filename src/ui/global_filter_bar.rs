@@ -76,7 +76,58 @@ pub fn render(ui: &mut Ui, gf: &mut GlobalFilter, theme: &CyberTheme, lang: Lang
             out.switched = true;
         }
         ui.separator();
+        // The include side as an expression (`ƒx`).
+        let broken = gf.expr_error();
+        let fx_color = match (gf.expr_mode, broken.is_some()) {
+            (true, true) => theme.warn_color(),
+            (true, false) => theme.accent_color(),
+            _ => theme.text_dim(),
+        };
+        let fx = if gf.expr_mode && broken.is_some() {
+            "ƒx ⚠"
+        } else {
+            "ƒx"
+        };
+        if ui
+            .selectable_label(gf.expr_mode, RichText::new(fx).monospace().color(fx_color))
+            .on_hover_text(t(lang, "expr_toggle_tip"))
+            .clicked()
+        {
+            let on = !gf.expr_mode;
+            gf.set_expr_mode(on);
+            out.switched = true;
+        }
         for exclude in [false, true] {
+            if !exclude && gf.expr_mode {
+                let mut edit = egui::TextEdit::singleline(&mut gf.expression)
+                    .font(egui::TextStyle::Monospace)
+                    .hint_text("(payment OR refund) NOT retry")
+                    .desired_width(260.0);
+                if broken.is_some() {
+                    edit = edit.text_color(theme.warn_color().into());
+                }
+                let mut resp = ui.add(edit);
+                let message = broken
+                    .as_ref()
+                    .map(|e| crate::ui::dock::expr_error_text(lang, &gf.expression, e));
+                if let Some(message) = &message {
+                    resp = resp.on_hover_text(message);
+                }
+                if resp.changed() {
+                    gf.note_expression();
+                    out.terms_edited = true;
+                }
+                if let Some(message) = message {
+                    ui.label(
+                        RichText::new(format!("⚠ {message}"))
+                            .monospace()
+                            .size(10.5)
+                            .color(theme.warn_color()),
+                    );
+                }
+                ui.separator();
+                continue;
+            }
             let (key, color) = if exclude {
                 ("filter_terms_none_of", theme.warn_color())
             } else {

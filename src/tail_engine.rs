@@ -3080,6 +3080,16 @@ impl TailEngine {
         &self.include_terms
     }
 
+    /// The include side as the bars show it in one line: the expression in expression
+    /// mode, else the first include term.
+    pub fn include_display(&self) -> &str {
+        if self.filter_expr_mode {
+            &self.filter_expr
+        } else {
+            self.include_filter()
+        }
+    }
+
     /// Whether the include side is an expression (`filter_expr`).
     pub fn filter_expr_mode(&self) -> bool {
         self.filter_expr_mode
@@ -3215,6 +3225,15 @@ impl TailEngine {
         exclude.truncate(MAX_FILTER_TERMS);
         self.include_terms = include;
         self.exclude_terms = exclude;
+        // A preset in expression mode brings its expression; one in term mode switches
+        // back to the terms and keeps the stream's expression for later.
+        match &state.expr {
+            Some(expr) => {
+                self.filter_expr = expr.clone();
+                self.filter_expr_mode = true;
+            }
+            None => self.filter_expr_mode = false,
+        }
         self.filter_case_sensitive = state.case_sensitive;
         self.filter_is_regex = state.is_regex;
         self.min_level = state.min_level;

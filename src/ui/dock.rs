@@ -3030,26 +3030,31 @@ fn render_log_stream(
                 t(lang, "context_banner").replace("{line}", &(line + 1).to_string()),
             );
         }
-        let mut inc = engine.include_filter().to_string();
-        if ui
-            .add(
-                egui::TextEdit::singleline(&mut inc)
-                    .hint_text("ERROR|CRITICAL|Exception...")
-                    .desired_width(180.0),
-            )
-            .changed()
-        {
-            engine.set_include_filter(&inc);
+        expr_mode_toggle(ui, engine, theme, lang);
+        if engine.filter_expr_mode() {
+            render_expr_field(ui, engine, theme, lang, 260.0);
+        } else {
+            let mut inc = engine.include_filter().to_string();
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut inc)
+                        .hint_text("ERROR|CRITICAL|Exception...")
+                        .desired_width(180.0),
+                )
+                .changed()
+            {
+                engine.set_include_filter(&inc);
+            }
+            if !engine.include_filter().is_empty()
+                && ui
+                    .button("✖")
+                    .on_hover_text(t(lang, "clear_filter"))
+                    .clicked()
+            {
+                engine.set_include_filter("");
+            }
+            extra_terms_controls(ui, engine, theme, lang, TermSide::Include, preset_events);
         }
-        if !engine.include_filter().is_empty()
-            && ui
-                .button("✖")
-                .on_hover_text(t(lang, "clear_filter"))
-                .clicked()
-        {
-            engine.set_include_filter("");
-        }
-        extra_terms_controls(ui, engine, theme, lang, TermSide::Include, preset_events);
 
         ui.separator();
 
@@ -7510,7 +7515,7 @@ fn render_global_filter_badge(
 }
 
 /// The terms of a compiled global filter, `+term` for an include and `-term` for an
-/// exclude, one per line.
+/// exclude, one per line; its expression first as `ƒx …`.
 pub fn global_terms_text(global: &crate::scan_job::FilterSpec) -> String {
     let side = |terms: &[crate::scan_job::FilterTerm], sign: char| -> Vec<String> {
         terms
@@ -7519,7 +7524,12 @@ pub fn global_terms_text(global: &crate::scan_job::FilterSpec) -> String {
             .map(|t| format!("{sign}{}", t.text))
             .collect()
     };
-    let mut lines = side(&global.include, '+');
+    let mut lines: Vec<String> = global
+        .expr
+        .iter()
+        .map(|e| format!("ƒx {}", e.text))
+        .collect();
+    lines.extend(side(&global.include, '+'));
     lines.extend(side(&global.exclude, '-'));
     lines.join("\n")
 }
@@ -7957,8 +7967,91 @@ fn render_preset_manager(
     });
 }
 
+/// The `ƒx` toggle of a stream's include side: term rows or one expression. `ƒx ⚠` in
+/// the warning colour while the expression as typed does not compile.
+fn expr_mode_toggle(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let on = engine.filter_expr_mode();
+    let broken = on && engine.expr_error().is_some();
+    let (text, color) = match (on, broken) {
+        (true, true) => ("ƒx ⚠", theme.warn_color()),
+        (true, false) => ("ƒx", theme.accent_color()),
+        _ => ("ƒx", theme.text_dim()),
+    };
+    let text = RichText::new(text).monospace().size(11.0).color(color);
+    let text = if on { text.strong() } else { text };
+    if ui
+        .button(text)
+        .on_hover_text(t(lang, "expr_toggle_tip"))
+        .clicked()
+    {
+        engine.set_filter_expr_mode(!on);
+    }
+}
+
+/// The expression field of a stream in expression mode: the text in the warning colour
+/// while it does not compile, with the error and where it is under it (the last valid
+/// expression filters meanwhile).
+fn render_expr_field(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+    width: f32,
+) {
+    let mut text = engine.filter_expr().to_string();
+    let error = engine.expr_error().cloned();
+    let mut edit = egui::TextEdit::singleline(&mut text)
+        .font(egui::TextStyle::Monospace)
+        .hint_text("(payment OR refund) NOT retry")
+        .desired_width(width);
+    if error.is_some() {
+        edit = edit.text_color(theme.warn_color().into());
+    }
+    let mut response = ui.add(edit);
+    if let Some(e) = &error {
+        response = response.on_hover_text(expr_error_text(lang, engine.filter_expr(), e));
+    } else {
+        response = response.on_hover_text(t(lang, "expr_toggle_tip"));
+    }
+    if response.changed() {
+        engine.set_filter_expr(&text);
+    }
+    if !engine.filter_expr().is_empty()
+        && ui
+            .button("✖")
+            .on_hover_text(t(lang, "clear_filter"))
+            .clicked()
+    {
+        engine.set_filter_expr("");
+    }
+    if let Some(e) = &error {
+        ui.label(
+            RichText::new(format!(
+                "⚠ {}",
+                expr_error_text(lang, engine.filter_expr(), e)
+            ))
+            .monospace()
+            .size(10.5)
+            .color(theme.warn_color()),
+        );
+    }
+}
+
+/// `message at character N (detail)` for an expression error.
+pub fn expr_error_text(lang: Language, text: &str, e: &crate::filter_expr::ExprError) -> String {
+    let column = text.char_indices().take_while(|(i, _)| *i < e.pos).count() + 1;
+    let mut out = t(lang, "expr_error_at")
+        .replace("{0}", t(lang, e.key))
+        .replace("{1}", &column.to_string());
+    if let Some(detail) = &e.detail {
+        out.push_str(&format!(" ({detail})"));
+    }
+    out
+}
+
 /// The term rows of one side of a stream: each row a field, its remove button and its
-/// invalid-regex flag, then "add term" while fewer than `MAX_FILTER_TERMS`.
+/// invalid-regex flag, then "add term" while fewer than `MAX_FILTER_TERMS`. In
+/// expression mode the include side is the expression field.
 fn render_term_rows(
     ui: &mut Ui,
     engine: &mut TailEngine,
@@ -7966,6 +8059,22 @@ fn render_term_rows(
     theme: &CyberTheme,
     lang: Language,
 ) {
+    if side == TermSide::Include {
+        ui.horizontal(|ui| {
+            expr_mode_toggle(ui, engine, theme, lang);
+            if engine.filter_expr_mode() {
+                ui.label(
+                    RichText::new(format!("{}:", t(lang, "expr_heading")))
+                        .monospace()
+                        .color(theme.accent_color()),
+                );
+            }
+        });
+        if engine.filter_expr_mode() {
+            ui.horizontal_wrapped(|ui| render_expr_field(ui, engine, theme, lang, 360.0));
+            return;
+        }
+    }
     let (hint, color) = match side {
         TermSide::Include => ("ERROR|CRITICAL|Exception...", theme.accent_color()),
         TermSide::Exclude => ("healthcheck|ping|DEBUG...", theme.warn_color()),

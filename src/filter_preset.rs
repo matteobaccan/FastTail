@@ -34,6 +34,9 @@ pub struct FilterState {
     /// Time range as typed (`from`, `to`), only when saved with "include time range":
     /// kept as text so a bare `14:02` follows the day of the log it is applied to.
     pub time: Option<(String, String)>,
+    /// Expression mode with this expression (`mode=expr`, `expression=`); applying the
+    /// preset switches the stream to it. `None`: term mode.
+    pub expr: Option<String>,
 }
 
 /// Non-empty terms of a row list, in order.
@@ -62,6 +65,10 @@ impl FilterState {
                     engine.time_to_text.trim().to_string(),
                 )
             }),
+            // The expression that filters (the last valid one while the text is broken).
+            expr: engine
+                .filter_expr_mode()
+                .then(|| engine.applied_expr().unwrap_or_default().trim().to_string()),
         }
     }
 
@@ -70,7 +77,14 @@ impl FilterState {
     /// `TRACE`), and the time range only when this state carries one.
     pub fn matches_engine(&self, engine: &TailEngine) -> bool {
         let unknown_matters = self.min_level > LogLevel::Trace;
-        self.include == effective(engine.include_terms())
+        let include_side = match &self.expr {
+            Some(expr) => {
+                engine.filter_expr_mode()
+                    && expr.as_str() == engine.applied_expr().unwrap_or_default().trim()
+            }
+            None => !engine.filter_expr_mode() && self.include == effective(engine.include_terms()),
+        };
+        include_side
             && self.exclude == effective(engine.exclude_terms())
             && self.case_sensitive == engine.filter_case_sensitive
             && self.is_regex == engine.filter_is_regex
@@ -206,6 +220,10 @@ pub fn write_presets(conf: &mut Ini, presets: &[FilterPreset]) {
             sec.set("time_from", from);
             sec.set("time_to", to);
         }
+        if let Some(expr) = &s.expr {
+            sec.set("mode", "expr");
+            sec.set("expression", ini_value(expr));
+        }
     }
 }
 
@@ -243,6 +261,10 @@ pub fn read_presets(conf: &Ini) -> Vec<FilterPreset> {
                 min_level: LogLevel::parse(sec.get("min_level").unwrap_or("")),
                 show_unknown_levels: flag("show_unknown_levels"),
                 time,
+                expr: sec
+                    .get("mode")
+                    .is_some_and(|m| m.trim().eq_ignore_ascii_case("expr"))
+                    .then(|| sec.get("expression").unwrap_or("").to_string()),
             },
         });
     }

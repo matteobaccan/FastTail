@@ -5631,6 +5631,11 @@ impl FastTailApp {
                                     .color(theme.text_primary()),
                             );
                             ui.label(
+                                RichText::new(t(lang, "help_filter_expr"))
+                                    .monospace()
+                                    .color(theme.text_primary()),
+                            );
+                            ui.label(
                                 RichText::new(t(lang, "help_filter_levels"))
                                     .monospace()
                                     .color(theme.warn_color()),
