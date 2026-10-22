@@ -1,9 +1,9 @@
 ## 1. Field terms
 
-- [ ] 1.1 `FieldTerm` grammar and evaluation (`=`, `!=`, `~=`, `>`, `>=`, `<`, `<=`, `|` alternatives, quoted literal terms, `Aa` and `.*` toggles, missing field fails); `FilterTerm.field`, `FilterSpec.fields`, one field scan per line per call, text pre-check for `=` / `~=`
-- [ ] 1.2 Engine: rebuild the `FilterSpec` and refresh filters when the parser changes; the global filter's terms compiled per stream with that stream's parser
-- [ ] 1.3 `ƒ` badge on field terms in the stream bar and the Filters window; tooltip with the parsed key, operator and values
-- [ ] 1.4 Tests: each operator; alternatives; missing field on include and exclude sides; quoted literal; stream without a parser keeps text semantics (`a && !b` scenario unchanged); background filter job equal to the synchronous path (thresholds at 0); presets and Find results with field terms; global field term on streams with and without a parser
+- [x] 1.1 `FieldTerm` grammar and evaluation (`=`, `!=`, `~=`, `>`, `>=`, `<`, `<=`, `|` alternatives, quoted literal terms, `Aa` and `.*` toggles, missing field fails); `FilterTerm.field`, `FilterSpec.fields`, one field scan per line per call, text pre-check for `=` / `~=`
+- [x] 1.2 Engine: rebuild the `FilterSpec` and refresh filters when the parser changes; the global filter's terms compiled per stream with that stream's parser
+- [x] 1.3 `ƒ` badge on field terms in the stream bar and the Filters window; tooltip with the parsed key, operator and values
+- [x] 1.4 Tests: each operator; alternatives; missing field on include and exclude sides; quoted literal; stream without a parser keeps text semantics (`a && !b` scenario unchanged); background filter job equal to the synchronous path (thresholds at 0); presets and Find results with field terms; global field term on streams with and without a parser
 
 ## 2. Level and timestamp from fields
 

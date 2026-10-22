@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Field filter terms.** On a stream with a field parser (JSON, logfmt, regex, Apache,
+  syslog), an include or exclude term `key` operator `value` filters on that field:
+  `level=error|fatal`, `env!=test`, `user~=bot`, `http.status>=500`, `>`, `<`, `<=`. The
+  case-sensitive and regex toggles apply to the values; a line without the field fails the
+  term on either side; a term in double quotes stays text, and a stream without a parser
+  reads every term as text, as before. Field terms are marked `ƒ` in the stream bar and
+  the Filters window, run in the background on large files like any filter, apply to the
+  global filter with each stream's parser, and carry into Open filter as new tab.
+
 ## [0.20.20] - 2026-10-22
 
 ### Added

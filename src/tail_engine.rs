@@ -2554,6 +2554,7 @@ impl TailEngine {
         .with_levels(self.min_level, self.show_unknown_levels)
         .with_level_window(self.level_window())
         .with_global(self.global_filter.clone())
+        .with_parser(self.field_parser.clone())
     }
 
     /// Sets the global filter this stream combines with its own (`None`: off, or no
@@ -3038,6 +3039,15 @@ impl TailEngine {
 
     pub fn exclude_term_invalid(&self, i: usize) -> bool {
         self.filter.exclude.get(i).is_some_and(|t| t.invalid)
+    }
+
+    /// The field term include term `i` reads as (`status>=500`), on a stream with a parser.
+    pub fn include_term_field(&self, i: usize) -> Option<&crate::fields::FieldTerm> {
+        self.filter.include.get(i).and_then(|t| t.field.as_ref())
+    }
+
+    pub fn exclude_term_field(&self, i: usize) -> Option<&crate::fields::FieldTerm> {
+        self.filter.exclude.get(i).and_then(|t| t.field.as_ref())
     }
 
     /// Replaces the terms, the case and regex toggles and the level stage of the filter
@@ -3528,6 +3538,12 @@ impl TailEngine {
             self.field_rows.clear();
             self.field_catalogue_due = self.field_parser.is_some();
             self.sample_field_catalogue();
+            // Terms read as field terms with a parser only: the filter is read again.
+            let terms = self.filter.has_terms()
+                || self.global_filter.as_ref().is_some_and(|g| g.has_terms());
+            if terms {
+                self.refresh_filters();
+            }
         }
     }
 

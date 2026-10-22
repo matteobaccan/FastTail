@@ -392,7 +392,7 @@ Because it is a single row, the bar can grow wider than the panel on narrow wind
 
 Shown in the text and wrapped views. Markdown shows it only while a search is active, with a `📝 Search active: source lines` label above it. HEX does not show it.
 
-1. `⚡ Include (Regex):` (accent), a 180 px field with the hint `ERROR|CRITICAL|Exception...`, `✖`, `+N` (accent; the extra terms are listed in the tooltip) and `+` (adds a term row and opens the Filters window on this stream).
+1. `⚡ Include (Regex):` (accent), a 180 px field with the hint `ERROR|CRITICAL|Exception...`, `✖`, `ƒ` when the term in the field reads as a field term (tooltip as in the Filters window), `+N` (accent; the extra terms are listed in the tooltip) and `+` (adds a term row and opens the Filters window on this stream).
 2. `🚫 Exclude (Regex):` (warn), with the same controls and the hint `healthcheck|ping|DEBUG...`.
 3. `📊` timeline toggle; while the timeline is open, a `🔍` search-lane toggle (`render_timeline_toggles`). The time range itself is set from the stream bar's time span (§3.3, §4.15); the row holds no time fields.
 4. `Aa` (case) and `.*` (regex) toggles: accent and strong when on.
@@ -534,7 +534,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
      - A `🌐 Global filter active:` note with its terms, when the global filter applies.
      - **⭐ Filter presets** manager: `⬆` `⬇` reorder, name (the tooltip is a summary), `✏` rename inline (`✔` / `✖`, with a "name already used" warning), `🗑` delete with an inline confirmation (`Delete preset "x"?`, `Delete` / `Cancel`).
      - One `CollapsingHeader` per stream, `📄 file`, open by default when it has more than one term. Inside:
-       - `All of:` and `None of:` numbered term rows, 260 px, each with `✖` and a `⚠ invalid regex` flag.
+       - `All of:` and `None of:` numbered term rows, 260 px, each with `✖`, a `ƒ` badge (`secondary_accent`, tooltip: field term, key, operator and values) when the row reads as a field term on a stream with a parser, and a `⚠ invalid regex` flag.
        - `+ Add term`, up to 8 per side.
        - `Aa` and `.*` toggles.
   2. A separator.
