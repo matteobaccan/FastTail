@@ -35,6 +35,8 @@ pub struct FrozenFilter {
     /// The bytes of a line the level was looked for in (`frozen.level_bytes`, written
     /// only when not the default 96).
     pub level_window: usize,
+    /// The lines hidden by hand in the source (`frozen.hidden`, as `hidden=` writes them).
+    pub hidden: Vec<(usize, usize)>,
     /// The time window in force (cache milliseconds), either side open.
     pub time_from: Option<i64>,
     pub time_to: Option<i64>,
@@ -57,6 +59,7 @@ impl FrozenFilter {
             min_level: engine.min_level,
             show_unknown_levels: engine.show_unknown_levels,
             level_window: engine.level_window(),
+            hidden: engine.hidden_ranges().to_vec(),
             time_from,
             time_to,
         }
@@ -69,6 +72,13 @@ impl FrozenFilter {
             || self.min_level != LogLevel::Unknown
             || self.time_from.is_some()
             || self.time_to.is_some()
+            || !self.hidden.is_empty()
+    }
+
+    /// Whether the source's line `idx` was hidden by hand when the tab was made.
+    fn hides(&self, idx: usize) -> bool {
+        let i = self.hidden.partition_point(|&(_, end)| end < idx);
+        self.hidden.get(i).is_some_and(|&(start, _)| start <= idx)
     }
 
     fn has_window(&self) -> bool {
@@ -98,6 +108,9 @@ impl FrozenFilter {
         if self.min_level != LogLevel::Unknown {
             return format!("≥{}", self.min_level.name());
         }
+        if !self.has_window() && !self.hidden.is_empty() {
+            return "🙈".to_string();
+        }
         "🕘".to_string()
     }
 
@@ -118,6 +131,12 @@ impl FrozenFilter {
         }
         if self.min_level != LogLevel::Unknown {
             parts.push(format!("≥ {}", self.min_level.name()));
+        }
+        if !self.hidden.is_empty() {
+            parts.push(format!(
+                "🙈 {}",
+                crate::session::hidden_to_ini(&self.hidden)
+            ));
         }
         if self.has_window() {
             let side = |ms: Option<i64>| {
@@ -162,6 +181,12 @@ impl FrozenFilter {
         if self.level_window != crate::log_level::DEFAULT_WINDOW {
             out.push(("frozen.level_bytes".into(), self.level_window.to_string()));
         }
+        if !self.hidden.is_empty() {
+            out.push((
+                "frozen.hidden".into(),
+                crate::session::hidden_to_ini(&self.hidden),
+            ));
+        }
         if let Some(ms) = self.time_from {
             out.push(("frozen.from".into(), ms.to_string()));
         }
@@ -200,6 +225,9 @@ impl FrozenFilter {
                 .and_then(|v| v.trim().parse().ok())
                 .and_then(crate::log_level::valid_window)
                 .unwrap_or(crate::log_level::DEFAULT_WINDOW),
+            hidden: get("frozen.hidden")
+                .map(|v| crate::tail_engine::merge_ranges(crate::session::hidden_from_ini(&v)))
+                .unwrap_or_default(),
             time_from: millis("frozen.from"),
             time_to: millis("frozen.to"),
         };
@@ -443,7 +471,7 @@ impl DerivedFeeder {
                     self.filter.time_from,
                     self.filter.time_to,
                 );
-            if visible && in_window {
+            if visible && in_window && !self.filter.hides(idx) {
                 let bytes = text.len() as u64 + 1;
                 if self.written + bytes > self.max_bytes {
                     self.stopped = Some(Stopped::Full);

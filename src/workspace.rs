@@ -255,6 +255,12 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
     {
         engine.asm.arch = arch;
     }
+    // After the encoding (a new one rebuilds the index and drops them) and with the
+    // filters, whose visible lines they take out.
+    if !entry.hidden.is_empty() {
+        engine.set_hidden_ranges(entry.hidden.clone());
+        engine.hidden_dirty = false;
+    }
     // Context lines come from the matches: after the filters, before the groups.
     if entry.context_lines > 0 {
         engine.set_context_lines(entry.context_lines);
@@ -342,6 +348,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         disasm_arch: (engine.asm.arch != crate::disasm::Arch::default())
             .then(|| engine.asm.arch.name().to_string()),
         level_bytes: engine.level_override(),
+        hidden: engine.hidden_ranges().to_vec(),
         line_numbers: Some(engine.show_line_numbers),
         time_delta: Some(engine.show_time_delta),
         time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
@@ -476,6 +483,7 @@ pub fn save_changes(
         engine.fields_dirty = false;
         engine.asm_dirty = false;
         engine.level_bytes_dirty = false;
+        engine.hidden_dirty = false;
         return false;
     }
     let mut changed = false;
@@ -498,10 +506,12 @@ pub fn save_changes(
         || engine.view_columns_dirty
         || engine.asm_dirty
         || engine.level_bytes_dirty
+        || engine.hidden_dirty
         || (engine.fields_dirty && !defer_fields)
     {
         engine.asm_dirty = false;
         engine.level_bytes_dirty = false;
+        engine.hidden_dirty = false;
         engine.ansi_dirty = false;
         engine.timeline_dirty = false;
         engine.collapse_mode_dirty = false;

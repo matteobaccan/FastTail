@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Hide lines by hand.** `Ctrl + H`, **Hide lines** in the row menu and the command
+  palette (`H` in the terminal) hide the selected lines, or the clicked / cursor row, from
+  the view as a filter would: search, counters, the overview strip, export and Find results
+  skip them, and Show in context still shows them. They are kept as line ranges (merged,
+  at most 1,000), listed under **🙈 N hidden** in the filter row with **Show** per range and
+  **Show all**, and saved per stream as `hidden=120-180,4096` in `fasttail.ini` and session
+  files (older builds ignore it). Appends keep them; a truncation, rotation or rewrite
+  clears them with a notice. In the terminal the help joins `i` and `x` in one row. Second
+  change of the 0.21.0 plan (`hide-lines`).
+
 ## [0.20.17] - 2026-10-21
 
 ### Added

@@ -814,6 +814,7 @@ mod tests {
             (ActionId::FindAll, M::CTRL.plus(M::SHIFT), Key::F),
             (ActionId::GlobalFilterBar, M::CTRL.plus(M::SHIFT), Key::H),
             (ActionId::ShowContext, M::COMMAND, Key::K),
+            (ActionId::HideLines, M::COMMAND, Key::H),
             (ActionId::BookmarkToggle, M::COMMAND, Key::F2),
             (ActionId::BookmarkNext, M::NONE, Key::F2),
             (ActionId::BookmarkPrev, M::SHIFT, Key::F2),

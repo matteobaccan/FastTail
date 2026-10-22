@@ -39,6 +39,8 @@ pub enum BarChip {
     Level,
     /// The bytes the level is looked for in (`≤96 B`): opens the field that sets them.
     LevelBytes,
+    /// The lines hidden by hand (`🙈 61 hidden`): opens their list.
+    Hidden,
     Presets,
     Global,
 }
@@ -252,6 +254,15 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
         },
         BarChip::LevelBytes,
     ));
+    let hidden = e.hidden_count();
+    if hidden > 0 {
+        let text = txf(lang, "{0} hidden", &[&hidden]);
+        second.push(chip(
+            if ascii { text } else { format!("🙈 {text}") },
+            warn,
+            BarChip::Hidden,
+        ));
+    }
     second.push(chip(tx(lang, "Presets").into(), dim, BarChip::Presets));
     if global {
         let globe = if ascii {

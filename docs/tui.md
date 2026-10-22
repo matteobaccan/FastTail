@@ -78,6 +78,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `Space` | follow on / off |
 | `/`, `n` `N` (`F3` `Shift+F3`), `Esc` | search, next / previous hit, clear |
 | `i`, `x`, `l`, `c`, `a`, `#` | include, exclude, minimum level, collapse, ANSI mode, line numbers |
+| `H` | hide the selected lines (or the cursor row); `[🙈 N hidden]` in the filter row lists them: `Enter` shows a range again, `a` all |
 | `t` | time range (fields, calendar, time) |
 | `e` `E`, `w` `W` (`10j`, `3e`: counts) | next / previous ERROR, WARN line |
 | `b` (`Ctrl+F2`), `]` `[` (`F2` `Shift+F2`), `m` | bookmark, next / previous, note |
