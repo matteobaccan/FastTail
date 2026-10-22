@@ -944,6 +944,7 @@ fn field_choice_label(choice: &crate::fields::ParserChoice, lang: Language) -> S
         P::Apache => "(?) Apache".to_string(),
         P::Syslog => "(?) syslog".to_string(),
         P::Regex(_) => format!("(?) {}", t(lang, "fields_regex")),
+        P::Format(name) => format!("◇ {name}"),
         P::Delimited { sep, .. } => format!(
             "▦ CSV {}",
             match *sep {
@@ -1029,6 +1030,24 @@ fn render_fields_selector(
                 ui.close();
             }
         }
+        // The user's log formats (the `formats` folder next to `fasttail.ini`).
+        let library = crate::log_format::library();
+        let formats: Vec<_> = library.formats.iter().filter(|f| !f.builtin).collect();
+        if !formats.is_empty() {
+            ui.separator();
+            for format in formats {
+                let item = P::Format(format.name().to_string());
+                let text = field_choice_label(&item, lang);
+                let mut row = ui.selectable_label(choice == item, RichText::new(text).monospace());
+                if let Some(file) = &format.file {
+                    row = row.on_hover_text(file.display().to_string());
+                }
+                if row.clicked() {
+                    picked = Some(item);
+                    ui.close();
+                }
+            }
+        }
         // CSV / TSV: the separator, and whether the first row names the columns.
         ui.separator();
         let current = match (&choice, engine.field_auto()) {
@@ -1095,8 +1114,17 @@ fn render_fields_selector(
         }
     });
     let mut tip = t(lang, "tip_fields").to_string();
-    if let Some(error) = engine.field_error() {
-        tip = format!("{tip}\n{}: {error}", t(lang, "fields_regex_invalid"));
+    match (&choice, engine.field_error()) {
+        (P::Format(name), Some(_)) => {
+            tip = format!(
+                "{tip}\n{}",
+                t(lang, "fields_format_missing").replace("{0}", name)
+            );
+        }
+        (_, Some(error)) => {
+            tip = format!("{tip}\n{}: {error}", t(lang, "fields_regex_invalid"));
+        }
+        _ => {}
     }
     menu.on_hover_text(tip);
     ui.ctx()
@@ -9177,6 +9205,7 @@ mod column_tests {
                 .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect(),
             outside: String::new(),
+            message_key: None,
         };
         let font_id = egui::FontId::monospace(13.0);
         let style = CellStyle {

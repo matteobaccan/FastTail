@@ -388,7 +388,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         bookmark_notes,
         archive_entry: engine.compressed.as_ref().and_then(|c| c.entry.clone()),
         fields_parser: (*engine.field_choice() != crate::fields::ParserChoice::Auto)
-            .then(|| engine.field_choice().name().to_string()),
+            .then(|| engine.field_choice().saved_name()),
         fields_regex: match engine.field_choice() {
             crate::fields::ParserChoice::Regex(p) if !p.is_empty() => Some(p.clone()),
             _ => None,

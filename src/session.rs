@@ -103,7 +103,7 @@ pub struct StreamEntry {
     /// `compressed::entry_path`), and the file stores the archive path and the entry.
     pub archive_entry: Option<String>,
     /// The field parser forced for the stream as `ParserChoice::name` (`off`, `json`,
-    /// `logfmt`, `regex`, `apache`, `syslog`), written as `fields_parser=` only when not
+    /// `logfmt`, `regex`, `apache`, `syslog`, `csv`, `format:<name>`), written as `fields_parser=` only when not
     /// auto, and the pattern of `regex` (`fields_regex=`). Older builds ignore both.
     pub fields_parser: Option<String>,
     pub fields_regex: Option<String>,
@@ -525,7 +525,7 @@ impl Session {
                     .get("fields_parser")
                     .and_then(|p| crate::fields::ParserChoice::from_name(p, ""))
                     .filter(|c| *c != crate::fields::ParserChoice::Auto)
-                    .map(|c| c.name().to_string()),
+                    .map(|c| c.saved_name()),
                 csv_separator: sec
                     .get("csv_separator")
                     .filter(|v| crate::fields::separator_from_name(v).is_some())

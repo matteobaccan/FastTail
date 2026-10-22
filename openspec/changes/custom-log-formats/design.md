@@ -37,6 +37,13 @@ through `log_level::token_level`), `message_field`, `entry_start`, `files`
 compiles, has at least one named group, and every field role names a group of every
 pattern that defines it; a timestamp format parses at least one sample when samples exist.
 
+### D2b. Implementation notes (first part)
+The library of formats is process-wide (`log_format::library()`), loaded at start by both
+front ends (`load_default`) so `ParserChoice::Format(name)` builds without the config at
+hand; tests install their own with `set_library`. `timestamp_zone` is read and validated;
+applying it to the stream's source zone comes with the dialog. A missing saved format keeps
+the choice (saved back unchanged) while detection picks the parser.
+
 ### D3. Timestamp formats
 A strftime subset: `%Y %y %m %d %e %H %I %M %S %p %b %j %z %f %3f %6f %9f %%`, plus the
 whole-value forms `epoch_s` and `epoch_ms`. Parsed by a hand-written matcher in

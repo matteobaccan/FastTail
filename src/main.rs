@@ -482,6 +482,8 @@ fn saved_position_is_visible(x: f32, y: f32) -> bool {
 
 fn main() -> eframe::Result<()> {
     fasttail::crash_handler::install_crash_handler();
+    // The log formats next to `fasttail.ini`, for the parser of every stream.
+    fasttail::log_format::load_default();
 
     let cli = parse_command_line();
     let config = FastTailConfig::load();

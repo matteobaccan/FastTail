@@ -656,6 +656,7 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex",
         "fields_regex_hint",
         "fields_regex_invalid",
+        "fields_format_missing",
         "fields_regex_apply",
         "fields_none",
         "tip_fields",
