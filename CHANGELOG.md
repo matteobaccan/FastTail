@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.21.4] - 2026-10-22
+
 ### Added
 
 - **Entry start pattern of a log format.** `entry_start=` in a format file: a line matching
@@ -1903,6 +1905,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.21.4]: https://github.com/matteobaccan/FastTail/compare/v0.21.3...v0.21.4
 [0.21.3]: https://github.com/matteobaccan/FastTail/compare/v0.21.2...v0.21.3
 [0.21.2]: https://github.com/matteobaccan/FastTail/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/matteobaccan/FastTail/compare/v0.21.0...v0.21.1
