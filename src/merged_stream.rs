@@ -56,6 +56,43 @@ pub fn is_merged_path(path: &Path) -> bool {
     crate::spool::owner_pid(name).is_some() && name.splitn(3, '-').nth(2) == Some("merged")
 }
 
+/// Prefix of the name a merged view is saved under: `merged:<n>:<source>|<source>...`,
+/// each source by the name it is saved under itself. It is never a file, so an older
+/// build skips it.
+pub const IDENTITY_PREFIX: &str = "merged:";
+
+/// Separates the sources in a saved name (not allowed in a Windows path; a source whose
+/// saved name holds one is not saved).
+const SOURCE_SEPARATOR: char = '|';
+
+/// The saved name of merged view `n` of `sources`; `None` when there are fewer than two or
+/// one holds the separator.
+pub fn identity(n: usize, sources: &[PathBuf]) -> Option<PathBuf> {
+    let names: Vec<String> = sources
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    if names.len() < 2
+        || names
+            .iter()
+            .any(|s| s.is_empty() || s.contains(SOURCE_SEPARATOR))
+    {
+        return None;
+    }
+    let joined = names.join(&SOURCE_SEPARATOR.to_string());
+    Some(PathBuf::from(format!("{IDENTITY_PREFIX}{n}:{joined}")))
+}
+
+/// The number and the sources of a saved name made by `identity`.
+pub fn parse_identity(path: &Path) -> Option<(usize, Vec<PathBuf>)> {
+    let rest = path.to_str()?.strip_prefix(IDENTITY_PREFIX)?;
+    let (n, sources) = rest.split_once(':')?;
+    let n = n.parse().ok()?;
+    let sources: Vec<PathBuf> = sources.split(SOURCE_SEPARATOR).map(PathBuf::from).collect();
+    (sources.len() >= 2 && sources.iter().all(|p| !p.as_os_str().is_empty()))
+        .then_some((n, sources))
+}
+
 /// One stream of a merged view and how far it has been read.
 #[derive(Debug, Clone)]
 pub struct MergedSource {
@@ -138,6 +175,9 @@ pub struct MergedFeeder {
     written: u64,
     max_bytes: u64,
     pub stopped: Option<Stopped>,
+    /// The sources by the names they are saved under (see `identity`); empty: the view is
+    /// not saved (a source is standard input).
+    pub saved_sources: Vec<PathBuf>,
 }
 
 impl MergedFeeder {
@@ -166,7 +206,14 @@ impl MergedFeeder {
             written: 0,
             max_bytes,
             stopped: None,
+            saved_sources: Vec::new(),
         })
+    }
+
+    /// The name the view is saved under in the workspace and sessions, `None` when it is
+    /// not saved.
+    pub fn identity(&self) -> Option<PathBuf> {
+        identity(self.n, &self.saved_sources)
     }
 
     /// The spool the merged engine reads.
@@ -605,5 +652,22 @@ mod tests {
         let text = spool_text(&f);
         assert!(text.starts_with("2026-01-01T09:00:00Z new a\n"), "{text}");
         assert!(!text.contains("old a"));
+    }
+
+    #[test]
+    fn the_saved_name_holds_the_sources() {
+        let sources = vec![
+            PathBuf::from("/l/a.log"),
+            PathBuf::from("filter:1:/l/b.log"),
+        ];
+        let name = identity(3, &sources).unwrap();
+        assert_eq!(name, PathBuf::from("merged:3:/l/a.log|filter:1:/l/b.log"));
+        assert_eq!(parse_identity(&name), Some((3, sources)));
+        assert_eq!(identity(1, &[PathBuf::from("/a")]), None, "one source");
+        let piped = [PathBuf::from("/a|b"), PathBuf::from("/c")];
+        assert_eq!(identity(1, &piped), None);
+        assert_eq!(parse_identity(Path::new("merged:x:/a|/b")), None);
+        assert_eq!(parse_identity(Path::new("merged:1:/a")), None);
+        assert_eq!(parse_identity(Path::new("/var/log/merged:1:/a|/b")), None);
     }
 }

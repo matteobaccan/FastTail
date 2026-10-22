@@ -672,6 +672,15 @@ impl FastTailApp {
                 let spool = app.restore_filter_tab(tab, false);
                 rename_tab(&mut app.dock_state, tab, spool);
             }
+            // Merged views, saved under their `merged:` name, after the derived streams
+            // they may merge.
+            for tab in tabs
+                .iter()
+                .filter(|t| crate::merged_stream::parse_identity(t).is_some())
+            {
+                let spool = app.restore_merged_view(tab, false);
+                rename_tab(&mut app.dock_state, tab, spool);
+            }
             // Open files the layout has no tab for (opened in the terminal interface) join
             // the main area.
             for path in app.config.open_files.clone() {
@@ -761,6 +770,7 @@ impl FastTailApp {
                 }
             }
         }
+        let all: Vec<&TailEngine> = self.engines.iter().collect();
         let streams = paths
             .iter()
             .filter_map(|p| {
@@ -768,6 +778,9 @@ impl FastTailApp {
                     .iter()
                     .find(|e| paths_equal(&e.path, p))
                     .filter(|e| crate::workspace::is_persisted(e))
+                    .filter(|e| {
+                        crate::workspace::sources_open(&crate::workspace::persisted_path(e), &all)
+                    })
                     .map(crate::workspace::stream_entry)
             })
             .collect();
@@ -1120,24 +1133,49 @@ impl FastTailApp {
     /// Opens a merged view of the streams `sources` (two or more, by path) in a new tab and
     /// returns its path; `None` when its spool cannot be created (the notice says why).
     pub fn open_merged_view(&mut self, sources: &[PathBuf]) -> Option<PathBuf> {
-        let named: Vec<(PathBuf, String)> = sources
-            .iter()
-            .filter_map(|p| self.engines.iter().find(|e| paths_equal(&e.path, p)))
-            .map(|e| (e.path.clone(), crate::find_all::stream_name(e)))
-            .collect();
-        if named.len() < 2 {
-            return None;
-        }
         let n = 1 + self
             .engines
             .iter()
             .filter_map(|e| e.merged.as_ref().map(|m| m.n))
             .max()
             .unwrap_or(0);
+        let engine = self.merged_engine(n, sources)?;
+        let path = engine.path.clone();
+        self.engines.push(engine);
+        self.add_stream_tab(path.clone());
+        self.save_dock_layout();
+        Some(path)
+    }
+
+    /// The engine of merged view `n` of the open streams `sources` (by path), `None` with
+    /// fewer than two of them open or when its spool cannot be created (the notice says
+    /// why).
+    fn merged_engine(&mut self, n: usize, sources: &[PathBuf]) -> Option<TailEngine> {
+        let found: Vec<&TailEngine> = sources
+            .iter()
+            .filter_map(|p| self.engines.iter().find(|e| paths_equal(&e.path, p)))
+            .collect();
+        if found.len() < 2 {
+            return None;
+        }
+        let named: Vec<(PathBuf, String)> = found
+            .iter()
+            .map(|e| (e.path.clone(), crate::find_all::stream_name(e)))
+            .collect();
+        // Saved by the names its sources are saved under; with standard input it is not.
+        let saved: Vec<PathBuf> = if found.iter().all(|e| crate::workspace::is_persisted(e)) {
+            found
+                .iter()
+                .map(|e| crate::workspace::persisted_path(e))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let spool_dir = self.config.compressed_settings().spool_dir;
         let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
         let opened = crate::merged_stream::MergedFeeder::create(n, named, &spool_dir, max_bytes)
-            .and_then(|feeder| {
+            .and_then(|mut feeder| {
+                feeder.saved_sources = saved;
                 let mut engine = TailEngine::open(feeder.spool_path())?;
                 engine.merged = Some(Box::new(feeder));
                 Ok(engine)
@@ -1153,11 +1191,54 @@ impl FastTailApp {
         engine.set_quick_labels(&self.quick_labels);
         engine.set_global_filter(self.global_spec.clone());
         engine.follow_tail = true;
-        let path = engine.path.clone();
+        Some(engine)
+    }
+
+    /// Rebuilds the merged view saved as `identity` (`merged:<n>:<sources>`) from its
+    /// sources, opening the ones that are not open, with the state saved for it. `place`
+    /// gives it a tab; without it the caller has one for it already. Returns the spool
+    /// path, `None` when fewer than two sources open.
+    fn restore_merged_view(&mut self, identity: &Path, place: bool) -> Option<PathBuf> {
+        let (n, saved) = crate::merged_stream::parse_identity(identity)?;
+        if let Some(existing) = self.engines.iter().find(|e| {
+            e.merged
+                .as_ref()
+                .and_then(|m| m.identity())
+                .is_some_and(|i| i == identity)
+        }) {
+            return Some(existing.path.clone());
+        }
+        // Opening a source saves the workspace, which drops the states of streams not
+        // open yet: this one's is put back after.
+        let state = self.config.stream_state_for(identity).cloned();
+        let find = |engines: &[TailEngine], s: &Path| {
+            engines
+                .iter()
+                .find(|e| paths_equal(&crate::workspace::persisted_path(e), s))
+                .map(|e| e.path.clone())
+        };
+        let mut sources = Vec::new();
+        for source in &saved {
+            if find(&self.engines, source).is_none() {
+                if crate::filter_tab::parse_identity(source).is_some() {
+                    self.restore_filter_tab(source, true);
+                } else {
+                    self.open_log_file(source.clone());
+                }
+            }
+            sources.extend(find(&self.engines, source));
+        }
+        if let Some(state) = state {
+            self.config.set_stream_state(state);
+        }
+        let mut engine = self.merged_engine(n, &sources)?;
+        crate::workspace::restore_stream(&mut engine, &self.config, identity);
+        let spool = engine.path.clone();
         self.engines.push(engine);
-        self.add_stream_tab(path.clone());
-        self.save_dock_layout();
-        Some(path)
+        if place {
+            self.add_stream_tab(spool.clone());
+        }
+        Some(spool)
     }
 
     /// Feeds the merged views from their sources (a few milliseconds each per frame) and
@@ -1637,13 +1718,23 @@ impl FastTailApp {
             config.set_bookmarks_with_notes(&entry.path, &entry.bookmarks, &entry.bookmark_notes);
         };
         for entry in &loaded.session.streams {
-            if let Some((_, source)) = crate::filter_tab::parse_identity(&entry.path) {
+            // A derived stream's source, a merged view's sources, by their saved names.
+            let sources = match crate::filter_tab::parse_identity(&entry.path) {
+                Some((_, source)) => vec![source],
+                None => crate::merged_stream::parse_identity(&entry.path)
+                    .map(|(_, sources)| sources)
+                    .unwrap_or_default(),
+            };
+            for source in &sources {
                 let source_entry = loaded
                     .session
                     .streams
                     .iter()
-                    .find(|s| paths_equal(&s.path, &source));
-                let source_open = self.engines.iter().any(|e| paths_equal(&e.path, &source));
+                    .find(|s| paths_equal(&s.path, source));
+                let source_open = self
+                    .engines
+                    .iter()
+                    .any(|e| paths_equal(&crate::workspace::persisted_path(e), source));
                 if let (Some(source_entry), false) = (source_entry, source_open) {
                     adopt(&mut self.config, source_entry);
                 }
@@ -2395,6 +2486,13 @@ impl FastTailApp {
         // A saved derived stream ("Open filter as new tab") is rebuilt from its source.
         if crate::filter_tab::parse_identity(&path).is_some() {
             if self.restore_filter_tab(&path, true).is_some() {
+                self.save_dock_layout();
+            }
+            return None;
+        }
+        // A saved merged view is rebuilt from its sources.
+        if crate::merged_stream::parse_identity(&path).is_some() {
+            if self.restore_merged_view(&path, true).is_some() {
                 self.save_dock_layout();
             }
             return None;
@@ -6188,19 +6286,20 @@ fn dock_signature(dock: &DockState<FastTailTab>) -> String {
     out
 }
 
-/// Renames the tabs of the derived streams of `engines` in `dock`: to their saved
-/// `filter:` name (`to_saved`), or from it back to their spool.
 /// Room the key column of the help tables takes, plus the gap and the group frame: the
 /// descriptions wrap in what is left of the window.
 const HELP_KEY_WIDTH: f32 = 220.0;
 
+/// Renames the tabs of the derived streams and saved merged views of `engines` in
+/// `dock`: to their saved `filter:` / `merged:` name (`to_saved`), or from it back to
+/// their spool.
 fn rename_derived_tabs(dock: &mut DockState<FastTailTab>, engines: &[TailEngine], to_saved: bool) {
     for (_, tab) in dock.iter_all_tabs_mut() {
         let FastTailTab::LogStream(p) = tab else {
             continue;
         };
         let found = engines.iter().find_map(|e| {
-            let identity = e.derived.as_ref()?.identity();
+            let identity = crate::workspace::saved_identity(e)?;
             if to_saved && e.path == *p {
                 Some(identity)
             } else if !to_saved && identity == *p {

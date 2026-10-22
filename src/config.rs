@@ -1246,11 +1246,18 @@ impl FastTailConfig {
                 // A pattern entry (`logs/app-*.log`) never exists as a file: it is kept
                 // and resolved again to the newest match at the next start.
                 // A zip entry (`bundle.zip/server.log`) is kept while its archive exists.
-                // A derived stream (`filter:1:<source>`) is kept while its source is.
-                let source = crate::filter_tab::parse_identity(&p).map_or(p.clone(), |(_, s)| s);
-                let keep = source.exists()
-                    || crate::wildcard::is_pattern_path(&source)
-                    || crate::compressed::source_exists(&source);
+                // A derived stream (`filter:1:<source>`) is kept while its source is, a
+                // merged view (`merged:1:<a>|<b>`) while two of its sources are.
+                let kept = |p: &PathBuf| {
+                    let source = crate::filter_tab::parse_identity(p).map_or(p.clone(), |(_, s)| s);
+                    source.exists()
+                        || crate::wildcard::is_pattern_path(&source)
+                        || crate::compressed::source_exists(&source)
+                };
+                let keep = match crate::merged_stream::parse_identity(&p) {
+                    Some((_, sources)) => sources.iter().filter(|s| kept(s)).count() >= 2,
+                    None => kept(&p),
+                };
                 if keep && !cfg.open_files.contains(&p) {
                     cfg.open_files.push(p);
                 }

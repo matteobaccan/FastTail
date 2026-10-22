@@ -12,7 +12,7 @@
 ## 3. UI and config
 
 - [x] 3.1 "New merged view..." dialog listing open streams with timestamp status; source chips and tooltips in the marker column; source toggles in the stream bar
-- [ ] 3.2 Persist merged views by source paths and recreate at startup
+- [x] 3.2 Persist merged views by source paths and recreate at startup
 - [x] 3.3 i18n keys in all 16 languages; add them to the exhaustive i18n test
 
 ## 4. Docs
