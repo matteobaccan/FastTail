@@ -377,7 +377,24 @@ impl Session {
             let frozen =
                 crate::filter_tab::FrozenFilter::from_ini(|key| sec.get(key).map(str::to_string));
             let is_derived = derived.is_some();
-            let resolved = if let Some((n, source)) = derived {
+            let merged = absolute
+                .as_deref()
+                .and_then(crate::merged_stream::parse_identity);
+            let resolved = if let Some((n, sources)) = merged {
+                // Rebuilt from the sources still there (each maybe a derived stream).
+                let there = |p: &PathBuf| {
+                    let source = crate::filter_tab::parse_identity(p).map_or(p.clone(), |(_, s)| s);
+                    source_exists(&source) || crate::compressed::source_exists(&source)
+                };
+                let sources: Vec<PathBuf> = sources.into_iter().filter(there).collect();
+                match crate::merged_stream::identity(n, &sources) {
+                    Some(identity) => identity,
+                    None => {
+                        out.missing.push(written);
+                        continue;
+                    }
+                }
+            } else if let Some((n, source)) = derived {
                 if frozen.is_none() {
                     continue;
                 }

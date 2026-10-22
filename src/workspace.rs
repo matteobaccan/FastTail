@@ -292,24 +292,40 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
 
 /// Whether a stream is kept in the workspace and in sessions: not standard input (its
 /// spool goes with the process). A derived stream of "Open filter as new tab" is kept
-/// under its `filter:` name and rebuilt from its source (see `persisted_path`).
+/// under its `filter:` name and rebuilt from its source, a merged view under its
+/// `merged:` name and rebuilt from its sources (see `persisted_path`).
 pub fn is_persisted(engine: &TailEngine) -> bool {
-    !engine.is_stdin() && engine.merged.is_none()
+    !engine.is_stdin()
+        && engine
+            .merged
+            .as_ref()
+            .is_none_or(|m| m.identity().is_some())
 }
 
-/// The path a stream is saved under: its own, or for a derived stream the
-/// `filter:<n>:<source>` name, since its spool goes with the process.
-pub fn persisted_path(engine: &TailEngine) -> PathBuf {
-    match &engine.derived {
-        Some(feeder) => feeder.identity(),
-        None => engine.path.clone(),
+/// The saved name of a stream whose spool goes with the process: a derived stream's
+/// `filter:<n>:<source>`, a saved merged view's `merged:<n>:<sources>`.
+pub fn saved_identity(engine: &TailEngine) -> Option<PathBuf> {
+    match (&engine.derived, &engine.merged) {
+        (Some(feeder), _) => Some(feeder.identity()),
+        (None, Some(feeder)) => feeder.identity(),
+        (None, None) => None,
     }
+}
+
+/// The path a stream is saved under: its own, or its saved name (`saved_identity`).
+pub fn persisted_path(engine: &TailEngine) -> PathBuf {
+    saved_identity(engine).unwrap_or_else(|| engine.path.clone())
 }
 
 /// The bookmarks and notes of `engine` as they are saved. A derived stream's are
 /// stored by source line, so they find their lines again when it is rebuilt; the ones
 /// still waiting for the fill are kept.
 fn saved_bookmarks(engine: &TailEngine) -> (Vec<usize>, BTreeMap<usize, String>) {
+    // A merged view's lines are numbered again at each rebuild: its bookmarks stay with
+    // the process.
+    if engine.merged.is_some() {
+        return (Vec::new(), BTreeMap::new());
+    }
     let Some(feeder) = &engine.derived else {
         return (
             engine.bookmarks.iter().copied().collect(),
@@ -425,20 +441,23 @@ pub fn snapshot<'a>(
         if crate::stdin_source::is_stdin_path(path) {
             continue;
         }
-        // A derived stream's tab names its spool: it is saved under its `filter:` name.
-        // A merged view is not kept (yet): its spool goes with the process.
-        if engines
-            .iter()
-            .any(|e| e.merged.is_some() && e.path == *path)
-        {
-            continue;
-        }
+        // A derived stream's or a merged view's tab names its spool: it is saved under
+        // its `filter:` or `merged:` name (a merged view of standard input is not).
         let path = match engines
             .iter()
-            .find(|e| e.derived.is_some() && e.path == *path)
+            .find(|e| (e.derived.is_some() || e.merged.is_some()) && e.path == *path)
         {
-            Some(engine) => persisted_path(engine),
-            None if crate::filter_tab::is_derived_path(path) => continue,
+            Some(engine) => match saved_identity(engine) {
+                // A merged view whose sources were closed would open them again.
+                Some(identity) if !sources_open(&identity, &engines) => continue,
+                Some(identity) => identity,
+                None => continue,
+            },
+            None if crate::filter_tab::is_derived_path(path)
+                || crate::merged_stream::is_merged_path(path) =>
+            {
+                continue
+            }
             None => path.clone(),
         };
         if !open_files.iter().any(|p| paths_equal(p, &path)) {
@@ -456,17 +475,31 @@ pub fn snapshot<'a>(
     }
 }
 
+/// Whether every source of the merged view saved as `identity` is among `engines` (any
+/// other saved name: yes).
+pub fn sources_open(identity: &Path, engines: &[&TailEngine]) -> bool {
+    crate::merged_stream::parse_identity(identity).is_none_or(|(_, sources)| {
+        sources
+            .iter()
+            .all(|s| engines.iter().any(|e| paths_equal(&persisted_path(e), s)))
+    })
+}
+
 impl WorkspaceState {
-    /// Keeps the derived streams of `previous` (the open files as saved before) whose
-    /// source is still open: a front end without derived streams (the terminal
+    /// Keeps the derived streams and merged views of `previous` (the open files as saved
+    /// before) whose sources are still open: a front end without them (the terminal
     /// interface) leaves them for the next one that has them.
     pub fn keep_derived(&mut self, previous: &[PathBuf]) {
         for path in previous {
-            let Some((_, source)) = crate::filter_tab::parse_identity(path) else {
-                continue;
+            let sources = match crate::filter_tab::parse_identity(path) {
+                Some((_, source)) => vec![source],
+                None => match crate::merged_stream::parse_identity(path) {
+                    Some((_, sources)) => sources,
+                    None => continue,
+                },
             };
-            let source_open = self.open_files.iter().any(|p| paths_equal(p, &source));
-            if source_open && !self.open_files.iter().any(|p| p == path) {
+            let open = |s: &PathBuf| self.open_files.iter().any(|p| paths_equal(p, s));
+            if sources.iter().all(open) && !self.open_files.iter().any(|p| p == path) {
                 self.open_files.push(path.clone());
             }
         }

@@ -142,6 +142,13 @@ pub struct Plan {
     pub dock_layout: Option<String>,
 }
 
+/// Whether `path` is the saved name of a stream only the GUI rebuilds: a derived stream
+/// (`filter:`) or a merged view (`merged:`).
+fn is_gui_only(path: &Path) -> bool {
+    crate::filter_tab::parse_identity(path).is_some()
+        || crate::merged_stream::parse_identity(path).is_some()
+}
+
 /// The streams of the GUI's default workspace (`open_files`, in its tab order), keeping
 /// pattern streams, whose newest match is resolved when they open.
 pub fn workspace_plan(settings: &Settings) -> Plan {
@@ -150,9 +157,9 @@ pub fn workspace_plan(settings: &Settings) -> Plan {
         ..Plan::default()
     };
     for entry in Session::from_config(&settings.config).streams {
-        // The GUI's derived streams ("Open filter as new tab") are not opened here; the
-        // saved workspace keeps them (see `WorkspaceState::keep_derived`).
-        if crate::filter_tab::parse_identity(&entry.path).is_some() {
+        // The GUI's derived streams ("Open filter as new tab") and merged views are not
+        // opened here; the saved workspace keeps them (see `WorkspaceState::keep_derived`).
+        if is_gui_only(&entry.path) {
             continue;
         }
         if exists(&entry.path) {
@@ -177,7 +184,7 @@ pub fn session_plan(settings: &mut Settings, file: &Path) -> Result<Plan, String
             .streams
             .into_iter()
             .map(|s| s.path)
-            .filter(|p| crate::filter_tab::parse_identity(p).is_none())
+            .filter(|p| !is_gui_only(p))
             .collect(),
         missing: loaded.missing,
         dock_layout: loaded.session.dock_layout,

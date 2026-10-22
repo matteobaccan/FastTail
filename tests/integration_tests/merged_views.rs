@@ -7,7 +7,9 @@ use fasttail::config::FastTailConfig;
 use fasttail::filter_tab::Stopped;
 use fasttail::ui::merge_dialog::{mergeable, MergePrompt};
 use fasttail::ui::FastTailApp;
+use fasttail::workspace::WorkspaceState;
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 fn new_app(dir: &std::path::Path) -> FastTailApp {
@@ -93,13 +95,17 @@ fn two_services_read_as_one_timeline_that_follows_them() {
     settle(&mut app, |a| a.engines[m].total_lines() == 2);
     assert!(lines_of(&app, m).iter().all(|l| l.contains("pay")));
 
-    // Not kept in the workspace or in a session: its spool goes with the process.
+    // Saved under its `merged:` name, not its spool.
+    let identity = fasttail::merged_stream::identity(1, &[gw.clone(), pay.clone()]).unwrap();
     app.save_dock_layout();
     assert!(!app.config.open_files.contains(&merged));
+    assert!(app.config.open_files.contains(&identity));
     assert!(fasttail::merged_stream::is_merged_path(&merged));
     let session = app.capture_session();
-    assert!(session.streams.iter().all(|s| s.path != merged));
-    assert!(!session.dock_layout.unwrap_or_default().contains("merged"));
+    assert!(session.streams.iter().any(|s| s.path == identity));
+    let layout = session.dock_layout.unwrap_or_default();
+    assert!(layout.contains("merged:1:"), "{layout}");
+    assert!(!layout.contains(&*merged.to_string_lossy()));
 
     // Every source closed: it stops following.
     app.engines.retain(|e| e.merged.is_some());
@@ -120,4 +126,97 @@ fn the_stream_menu_opens_the_dialog_with_that_stream_ticked() {
     app.engines[0].merged_request = true;
     assert!(app.apply_merged_views());
     assert_eq!(app.merge_prompt.as_ref().unwrap().picked, vec![a]);
+}
+
+/// A workspace with two logs and their merged view, filtered to `pay`.
+fn merged_workspace(dir: &std::path::Path) -> (FastTailApp, std::path::PathBuf) {
+    let gw = dir.join("gateway.log");
+    let pay = dir.join("payment.log");
+    write_lines(&gw, &["2026-09-28T14:02:05.100Z INFO gw request 42"]);
+    write_lines(&pay, &["2026-09-28T14:02:05.250Z INFO pay request 42"]);
+    let mut app = new_app(dir);
+    app.open_log_file(gw.clone());
+    app.open_log_file(pay.clone());
+    app.open_merged_view(&[gw.clone(), pay.clone()]).unwrap();
+    let m = app.engines.iter().position(|e| e.merged.is_some()).unwrap();
+    app.engines[m].set_include_filter("pay");
+    let identity = fasttail::merged_stream::identity(1, &[gw, pay]).unwrap();
+    (app, identity)
+}
+
+fn merged_index(app: &FastTailApp) -> usize {
+    app.engines
+        .iter()
+        .position(|e| e.merged.is_some())
+        .expect("the merged view is back")
+}
+
+#[test]
+fn a_merged_view_is_rebuilt_at_the_next_start_with_its_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, identity) = merged_workspace(dir.path());
+    let mut config = app.config.clone();
+    for engine in app.engines.iter_mut() {
+        fasttail::workspace::save_changes(engine, &mut config, false);
+    }
+    app.config = config;
+    app.save_dock_layout();
+
+    let mut again = FastTailApp::from_config(app.config.clone());
+    assert_eq!(again.engines.len(), 3);
+    let m = merged_index(&again);
+    settle(&mut again, |a| a.engines[m].total_lines() == 2);
+    let engine = &again.engines[m];
+    assert_eq!(engine.merged.as_ref().unwrap().identity(), Some(identity));
+    assert_eq!(engine.include_filter(), "pay");
+    assert_eq!(
+        again.dock_state.iter_all_tabs().count(),
+        3,
+        "one tab each, the merged one named after its spool"
+    );
+}
+
+#[test]
+fn a_session_brings_back_a_merged_view_with_its_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, _) = merged_workspace(dir.path());
+    let file = dir
+        .path()
+        .join(format!("s{}", fasttail::session::SESSION_SUFFIX));
+    app.save_session_as(file.clone()).unwrap();
+
+    let mut other = new_app(dir.path());
+    other.load_session_file(file, true);
+    assert_eq!(other.engines.len(), 3);
+    let m = merged_index(&other);
+    assert_eq!(other.engines[m].include_filter(), "pay");
+    settle(&mut other, |a| a.engines[m].total_lines() == 2);
+
+    // A merged view whose source was closed is not saved: it would open it again.
+    other.engines.retain(|e| !e.path.ends_with("gateway.log"));
+    other.save_dock_layout();
+    assert!(!other
+        .config
+        .open_files
+        .iter()
+        .any(|p| fasttail::merged_stream::parse_identity(p).is_some()));
+}
+
+#[test]
+fn the_terminal_keeps_a_merged_view_while_its_sources_are_open() {
+    let (a, b) = (PathBuf::from("/l/a.log"), PathBuf::from("/l/b.log"));
+    let saved = fasttail::merged_stream::identity(1, &[a.clone(), b.clone()]).unwrap();
+    let previous = vec![a.clone(), b.clone(), saved.clone()];
+    let mut both = WorkspaceState {
+        open_files: vec![a.clone(), b.clone()],
+        streams: Vec::new(),
+    };
+    both.keep_derived(&previous);
+    assert_eq!(both.open_files, previous);
+    let mut one = WorkspaceState {
+        open_files: vec![a],
+        streams: Vec::new(),
+    };
+    one.keep_derived(&previous);
+    assert!(!one.open_files.contains(&saved));
 }

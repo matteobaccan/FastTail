@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Merged views are saved.** A merged view comes back at the next start and with a
+  session, rebuilt from its sources (opened when they are not) with its filters; its
+  bookmarks and source toggles are not kept. A view over standard input or with a
+  closed source is not saved.
+
 ## [0.21.1] - 2026-10-22
 
 ### Added

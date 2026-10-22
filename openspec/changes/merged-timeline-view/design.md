@@ -31,8 +31,14 @@ The renderer, filters and search all talk to `TailEngine` through a small read-s
 - **Attribution** via a `▌` chip in the source's colour (fixed 8-colour palette) before
   the line number, the source name in its tooltip, and the source's own line numbers in
   the gutter; one check box per source in the stream bar turns it on or off.
-- **Persistence** (next part): the merged view is not saved yet; it is rebuilt from its
-  source paths in a following patch.
+- **Persistence** like a derived stream's: the view is saved in the workspace and in
+  sessions under `merged:<n>:<a>|<b>...`, each source by the name it is saved under itself
+  (a file, a pattern, a `filter:` derived stream), and rebuilt at startup after its
+  sources, opening the ones not open; its filters and view state are kept, its bookmarks
+  (merged row numbers change at each rebuild) and source toggles are not. It is not saved
+  with standard input among its sources or once a source is closed (it would open it
+  again); a session drops the sources that are gone and keeps the view while two remain.
+  The terminal interface does not open it and leaves it in the workspace.
 
 ## Risks / Trade-offs
 
