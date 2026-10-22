@@ -40,8 +40,9 @@ pattern that defines it; a timestamp format parses at least one sample when samp
 ### D2b. Implementation notes (first part)
 The library of formats is process-wide (`log_format::library()`), loaded at start by both
 front ends (`load_default`) so `ParserChoice::Format(name)` builds without the config at
-hand; tests install their own with `set_library`. `timestamp_zone` is read and validated;
-applying it to the stream's source zone comes with the dialog. A missing saved format keeps
+hand; tests install their own with `set_library`. `timestamp_zone` is the stream's clock
+while its own source zone is `local` (`TailEngine::effective_source_zone`); it is never
+written into the stream's saved state, so editing or deleting the format reaches it. A missing saved format keeps
 the choice (saved back unchanged) while detection picks the parser.
 
 ### D3. Timestamp formats

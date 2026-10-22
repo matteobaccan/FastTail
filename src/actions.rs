@@ -53,6 +53,7 @@ pub enum ActionId {
     OpenFile,
     OpenPattern,
     MergedView,
+    LogFormats,
     ClearRecentFiles,
     // Session
     SessionSaveAs,
@@ -405,6 +406,7 @@ pub const ACTIONS: &[Action] = &[
     action(A::OpenFile, "window.open_file", "open_file", C::Window, S::Window, None, &[]),
     action(A::OpenPattern, "window.open_pattern", "act_open_pattern", C::Window, S::Window, None, &[]),
     action(A::MergedView, "window.merged_view", "act_merge", C::Window, S::Window, None, &[]),
+    action(A::LogFormats, "window.log_formats", "act_log_formats", C::Window, S::Window, None, &[]),
     action(A::ClearRecentFiles, "window.recent_files.clear", "clear_recent", C::Window, S::Window, None, &[]),
     action(A::PlayAll, "window.play_all", "act_play_all", C::Window, S::Window, None, &[]),
     action(A::PauseAll, "window.pause_all", "act_pause_all", C::Window, S::Window, None, &[]),

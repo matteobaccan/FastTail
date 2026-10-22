@@ -35,6 +35,7 @@ timestamp_field = ts
 level_field = level
 entry_start = ^DEV 
 files = device-*.log
+timestamp_zone = utc
 "#;
 
 const LINES: [&str; 4] = [
@@ -204,6 +205,16 @@ fn an_entry_start_pattern_keeps_multi_line_entries_together() {
             }
         };
         assert_eq!(format_name(&e).as_deref(), Some("Device"), "{thresholds:?}");
+        assert_eq!(
+            e.effective_source_zone(),
+            fasttail::timestamp::SourceZone::Utc,
+            "the format's clock"
+        );
+        assert_eq!(
+            e.time_source_zone(),
+            fasttail::timestamp::SourceZone::Local,
+            "not the stream's own, so not saved"
+        );
         e.ensure_timestamps();
         wait_for_jobs(&mut e);
         let header = ms(28, 14, 2, 11, 0);
@@ -236,5 +247,176 @@ fn an_entry_start_pattern_keeps_multi_line_entries_together() {
             .map(|c| (c.first_line, c.count))
             .collect();
         assert_eq!(groups, vec![(0, 2)], "{thresholds:?}");
+    }
+}
+
+mod dialog {
+    use super::*;
+    use fasttail::ui::log_formats::{preview, Editing, FormatsDialog};
+
+    fn lines(text: &[&str]) -> Vec<String> {
+        text.iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn the_preview_reads_samples_and_stream_lines_without_touching_the_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let stream = lines(&[
+            "2026-09-28 14:02:11 ERROR boom",
+            "2026-09-28 14:02:12 INFO fine",
+            "  at Foo.bar(Foo.java:1)",
+            "garbage line",
+        ]);
+        let mut d = FormatsDialog::from_lines(
+            dir.path().join("formats"),
+            stream,
+            &lines(&["2026-09-28 14:02:10 WARN first"]),
+        );
+        assert_eq!(d.draft.samples, "2026-09-28 14:02:10 WARN first");
+        let p = &d.preview;
+        assert_eq!(p.error, None);
+        assert_eq!(p.rows.len(), 5);
+        assert!(p.rows[0].sample);
+        assert_eq!(p.entries, 4, "the trace line starts no entry");
+        assert_eq!(p.matched, 3);
+        assert_eq!(p.ratio(), 75);
+        assert_eq!(p.rows[1].level, LogLevel::Error);
+        assert_eq!(p.rows[1].time, Some(ms(28, 14, 2, 11, 0)));
+        assert!(p.rows[1]
+            .fields
+            .contains(&("msg".to_string(), "boom".to_string())));
+        assert!(!p.rows[4].matched, "unmatched");
+
+        // A pattern that does not compile says why, with its position.
+        d.draft.patterns = "^(?P<ts>\\S+".into();
+        d.refresh_preview();
+        assert!(d.preview.error.as_deref().unwrap().contains("pattern 1"));
+        // An entry start that matches nearly nothing is flagged.
+        let mut spec = d.draft.to_spec();
+        spec.patterns = vec![r"^(?P<msg>.*)$".into()];
+        spec.entry_start = "^NEVER".into();
+        spec.timestamp_field.clear();
+        spec.level_field.clear();
+        assert!(preview(&spec, &lines(&["a", "b"])).few_entries());
+    }
+
+    #[test]
+    fn save_duplicate_import_export_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let formats = dir.path().join("formats");
+        let mut d = FormatsDialog::new(formats.clone(), Vec::new());
+        d.draft.name = "Orders".into();
+        let lib = Library::load(&formats);
+        let path = d.save(&lib).unwrap();
+        assert_eq!(path, formats.join("Orders.fasttail-format.ini"));
+        assert_eq!(d.editing, Editing::File(path.clone()));
+        let lib = Library::load(&formats);
+        let saved = lib.find("Orders").unwrap();
+        assert_eq!(saved.spec.timestamp_field, "ts");
+
+        // A rename moves the format to the file of its new name.
+        d.draft.name = "Sales".into();
+        let renamed = d.save(&lib).unwrap();
+        assert_eq!(renamed, formats.join("Sales.fasttail-format.ini"));
+        assert!(!path.exists());
+        d.draft.name = "Orders".into();
+        let lib = Library::load(&formats);
+        assert_eq!(d.save(&lib).unwrap(), path, "and back");
+        assert!(!renamed.exists());
+        let lib = Library::load(&formats);
+        let saved = lib.find("Orders").unwrap();
+
+        // Saving again rewrites the same file; a new format with the name is refused.
+        d.draft.level_map = "E=error".into();
+        assert_eq!(d.save(&lib).unwrap(), path);
+        d.new_format();
+        d.draft.name = "orders".into();
+        assert!(d.save(&lib).unwrap_err().ends_with("exists"));
+        // A built-in format is read-only.
+        d.select(lib.find(log_format::SYSLOG_NAME).unwrap());
+        assert!(!d.editable());
+        assert!(d.save(&lib).is_err());
+        d.duplicate();
+        assert_eq!(d.draft.name, "Syslog copy");
+        assert!(d.editable());
+
+        // Export, then import into another folder.
+        d.select(saved);
+        let out = dir.path().join("orders-export.ini");
+        d.export(&out).unwrap();
+        let other = dir.path().join("elsewhere");
+        let mut d2 = FormatsDialog::new(other.clone(), Vec::new());
+        let imported = d2.import(&Library::load(&other), &out).unwrap();
+        assert!(Library::load(&other).find("Orders").is_some());
+        assert_eq!(imported, other.join("Orders.fasttail-format.ini"));
+        assert!(
+            d2.import(&Library::load(&other), &out).is_err(),
+            "already there"
+        );
+
+        // The dialog draws, its preview and editor included.
+        let ctx = egui::Context::default();
+        let lib = Library::load(&formats);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let action = d.show(
+                ui.ctx(),
+                &lib,
+                fasttail::i18n::Language::En,
+                fasttail::theme::CyberTheme::Tron,
+            );
+            assert_eq!(action, None);
+        });
+        out.textures_delta.clear();
+
+        d.delete(&path).unwrap();
+        assert!(Library::load(&formats).find("Orders").is_none());
+        assert_eq!(d.editing, Editing::New);
+    }
+
+    #[test]
+    fn the_row_menu_opens_a_draft_with_the_lines_and_a_reload_refreshes_the_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        install(dir.path());
+        let log = dir.path().join("app.log");
+        write_lines(&log, &LINES);
+        let mut app = FastTailApp::from_config(FastTailConfig {
+            spool_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        });
+        app.open_log_file(log.clone());
+        app.engines[0].select_row(1);
+        app.engines[0].format_request = Some(1);
+        app.apply_merged_views();
+        let dialog = app.log_formats.as_ref().expect("the dialog opened");
+        assert_eq!(dialog.draft.samples, LINES[1]);
+        assert_eq!(dialog.stream_lines.len(), LINES.len(), "the focused stream");
+
+        // An unchanged format is kept as it is; a changed one is read with its new version,
+        // on a stream that chose it and on one that detected it.
+        let formats = dir.path().join("formats");
+        write_lines(&dir.path().join("payments-1.log"), &LINES);
+        app.open_log_file(dir.path().join("payments-1.log"));
+        assert_eq!(app.engines.len(), 2);
+        let auto = 1;
+        assert_eq!(app.engines[auto].field_choice(), &ParserChoice::Auto);
+        app.engines[auto].poll_updates();
+        app.engines[0].set_field_choice(ParserChoice::Format("Payments".into()));
+        let before = app.engines[0].field_parser().cloned().unwrap();
+        app.reload_log_formats(&formats);
+        let same = app.engines[0].field_parser().cloned().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &same), "nothing to rebuild");
+        let edited = PAYMENTS.replace("I=info", "I=debug");
+        std::fs::write(formats.join("payments.fasttail-format.ini"), edited).unwrap();
+        app.reload_log_formats(&formats);
+        for idx in [0, auto] {
+            match app.engines[idx].field_parser().map(|p| &**p) {
+                Some(FieldParser::Format(f)) => {
+                    assert!(f.spec.level_map.contains("I=debug"), "stream {idx}")
+                }
+                other => panic!("stream {idx}: {other:?}"),
+            }
+        }
+        // Back as the other tests expect it.
+        install(dir.path());
     }
 }

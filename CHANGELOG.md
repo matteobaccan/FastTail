@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Log formats dialog.** *◇ Log formats…* (Settings, palette) lists the built-in and user
+  formats and the files that did not load, with New, Duplicate, Delete, Import and Export,
+  and edits a format as a draft with a live preview of its samples and the focused
+  stream's first 200 lines (match share, unmatched lines, time and level read, captures,
+  cost per line, an entry start warning). Save writes the file and refreshes the streams.
+  *◇ Create format from these lines…* in the row menu starts a draft with the selected
+  lines as samples. A format's `timestamp_zone` now gives the clock of a stream read with it
+  while the stream's own source zone is local. Last part of `custom-log-formats`.
+
 ## [0.21.4] - 2026-10-22
 
 ### Added
