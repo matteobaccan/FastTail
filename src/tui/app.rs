@@ -2504,6 +2504,8 @@ impl App {
         let session = crate::session::Session {
             streams,
             dock_layout: Some(self.dock_ron()),
+            // The terminal opens no folder groups; the window keeps its own.
+            folders: Vec::new(),
         };
         if let Err(e) = session.save_to(file) {
             self.message = Some(txf(

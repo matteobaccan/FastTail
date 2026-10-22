@@ -60,7 +60,14 @@ const PATTERN_SCAN_INTERVAL: Duration = crate::tail_engine::PATTERN_SCAN_INTERVA
 pub fn run(cli: &CliArgs) -> i32 {
     console::attach_if_missing();
 
-    let mut inputs: Vec<InputSpec> = cli.paths.iter().cloned().map(InputSpec::Path).collect();
+    // Read only: the theme and the rules colour the output, nothing is ever written.
+    let config = FastTailConfig::load_read_only();
+    let paths = if cli.all {
+        crate::folder_source::expand_all(&cli.paths, config.folder_max_streams)
+    } else {
+        cli.paths.clone()
+    };
+    let mut inputs: Vec<InputSpec> = paths.into_iter().map(InputSpec::Path).collect();
     let piped = crate::stdin_source::classify() == StdinKind::Piped;
     if cli.stdin {
         if !piped {
@@ -76,8 +83,6 @@ pub fn run(cli: &CliArgs) -> i32 {
         inputs.push(InputSpec::Stdin);
     }
 
-    // Read only: the theme and the rules colour the output, nothing is ever written.
-    let config = FastTailConfig::load_read_only();
     // `--level-bytes` over the `level_detect_bytes` setting.
     let level_window = cli.level_bytes.unwrap_or(config.level_detect_bytes);
     let palette = colour_output(cli.color.unwrap_or_default()).map(|truecolor| Palette {
@@ -262,8 +267,8 @@ enum Stop {
 struct Follow {
     /// The file being read (the newest match of a pattern).
     path: PathBuf,
-    /// Directory and file-name pattern of a pattern input.
-    pattern: Option<(PathBuf, String)>,
+    /// The folder and file-name patterns of a pattern input.
+    pattern: Option<crate::wildcard::FolderSpec>,
     /// Bytes read from the file so far.
     offset: u64,
     /// The first `FINGERPRINT_LEN` bytes read, to recognise a rewrite.
@@ -274,7 +279,7 @@ struct Follow {
 impl Follow {
     fn watched_dir(&self) -> PathBuf {
         match &self.pattern {
-            Some((dir, _)) => dir.clone(),
+            Some(spec) => spec.dir.clone(),
             None => self
                 .path
                 .parent()
@@ -332,9 +337,10 @@ impl Input {
             }
             InputSpec::Path(path) => path,
         };
-        let pattern = crate::wildcard::split_pattern(&path);
+        let pattern = crate::wildcard::FolderSpec::parse(&path);
         let file_path = match &pattern {
-            Some((dir, glob)) => crate::wildcard::resolve_newest(dir, glob)
+            Some(spec) => spec
+                .newest()
                 .ok_or_else(|| format!("no file matches {}", display_name(&path)))?,
             None => path.clone(),
         };
@@ -479,11 +485,11 @@ impl Input {
         let switch = match self.follow.as_mut() {
             None => return Ok(()),
             Some(follow) => match &follow.pattern {
-                Some((dir, glob)) if follow.last_rescan.elapsed() >= PATTERN_SCAN_INTERVAL => {
+                Some(spec) if follow.last_rescan.elapsed() >= PATTERN_SCAN_INTERVAL => {
                     follow.last_rescan = Instant::now();
-                    crate::wildcard::resolve_newest(dir, glob)
+                    spec.newest()
                         .filter(|newest| !crate::paths::paths_equal(newest, &follow.path))
-                        .map(|newest| (dir.join(glob), newest))
+                        .map(|newest| (spec.path(), newest))
                 }
                 _ => None,
             },

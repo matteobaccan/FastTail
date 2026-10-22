@@ -166,6 +166,7 @@ fn notes_round_trip_through_a_session_file() {
     let session = Session {
         streams: vec![entry.clone()],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("incident{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();

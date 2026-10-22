@@ -433,6 +433,7 @@ fn mode_is_persisted_in_sessions_and_the_workspace() {
     let session = Session {
         streams: vec![entry.clone()],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join("s.fasttail-session.ini");
     session.save_to(&file).unwrap();
@@ -466,6 +467,7 @@ fn mode_is_persisted_in_sessions_and_the_workspace() {
     let auto = Session {
         streams: vec![StreamEntry::new(log)],
         dock_layout: None,
+        folders: Vec::new(),
     };
     assert!(!auto.serialized(None).contains("ansi"));
 }

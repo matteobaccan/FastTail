@@ -16,7 +16,7 @@
 use crate::config::{overwrite_regular_file, FastTailConfig};
 use crate::filter_preset::ini_value;
 use crate::scan_job::MAX_FILTER_TERMS;
-use crate::wildcard::{is_pattern_path, split_pattern};
+use crate::wildcard::FolderSpec;
 use ini::Ini;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -133,6 +133,10 @@ impl StreamEntry {
 pub struct Session {
     pub streams: Vec<StreamEntry>,
     pub dock_layout: Option<String>,
+    /// Open all folder groups as pattern paths (`dir/**/*.log;*.txt`), written as
+    /// `[folder_N]` with `path` and `rel`; their files are streams as well. Older builds
+    /// ignore the sections and reopen the files alone.
+    pub folders: Vec<PathBuf>,
 }
 
 /// A session read from disk, with the streams that could not be resolved.
@@ -290,6 +294,44 @@ impl Session {
                 if s.bookmarks.binary_search(line).is_ok() {
                     sec.set(format!("bookmark_note.{line}"), ini_value(text));
                 }
+            }
+        }
+        self.write_folders(conf, base_dir);
+    }
+
+    /// Writes the `[folder_N]` sections.
+    fn write_folders(&self, conf: &mut Ini, base_dir: Option<&Path>) {
+        for (i, f) in self.folders.iter().enumerate() {
+            let mut sec = conf.with_section(Some(format!("folder_{i}")));
+            sec.set("path", f.to_string_lossy().to_string());
+            if let Some(rel) = base_dir.and_then(|b| relative_under(f, b)) {
+                sec.set("rel", rel);
+            }
+        }
+    }
+
+    /// Reads the `[folder_N]` sections: the relative path first, as for streams; a group
+    /// whose folder is gone is reported missing.
+    fn read_folders(conf: &Ini, base_dir: Option<&Path>, out: &mut LoadedSession) {
+        let mut i = 0;
+        while let Some(sec) = conf.section(Some(format!("folder_{i}"))) {
+            i += 1;
+            let absolute = sec.get("path").filter(|p| !p.is_empty()).map(PathBuf::from);
+            let relative = sec.get("rel").filter(|p| !p.is_empty()).map(PathBuf::from);
+            let Some(written) = absolute.clone().or_else(|| relative.clone()) else {
+                continue;
+            };
+            if !crate::wildcard::is_pattern_path(&written) {
+                continue;
+            }
+            let found = base_dir
+                .zip(relative)
+                .map(|(b, r)| b.join(r))
+                .filter(|p| source_exists(p))
+                .or_else(|| absolute.filter(|p| source_exists(p)));
+            match found {
+                Some(p) => out.session.folders.push(p),
+                None => out.missing.push(written),
             }
         }
     }
@@ -485,6 +527,7 @@ impl Session {
                 frozen: if is_derived { frozen } else { None },
             });
         }
+        Self::read_folders(conf, base_dir, &mut out);
         if out.relocated {
             out.session.dock_layout = None;
         }
@@ -540,6 +583,7 @@ impl Session {
         Self {
             streams,
             dock_layout: cfg.dock_layout.clone(),
+            folders: cfg.folder_groups.clone(),
         }
     }
 
@@ -547,6 +591,7 @@ impl Session {
     pub fn apply_to_config(&self, cfg: &mut FastTailConfig) {
         cfg.open_files = self.streams.iter().map(|s| s.path.clone()).collect();
         cfg.dock_layout = self.dock_layout.clone();
+        cfg.folder_groups = self.folders.clone();
         cfg.streams.clear();
         for s in &self.streams {
             cfg.set_stream_state(s.clone());
@@ -583,12 +628,9 @@ pub fn relative_under(path: &Path, base: &Path) -> Option<String> {
 
 /// A file that exists, or a pattern whose directory exists.
 fn source_exists(p: &Path) -> bool {
-    if is_pattern_path(p) {
-        split_pattern(p)
-            .map(|(dir, _)| dir.is_dir())
-            .unwrap_or(false)
-    } else {
-        p.is_file()
+    match FolderSpec::parse(p) {
+        Some(spec) => spec.dir.is_dir(),
+        None => p.is_file(),
     }
 }
 
@@ -697,6 +739,7 @@ mod tests {
             Session {
                 streams: vec![entry.clone()],
                 dock_layout: None,
+                folders: Vec::new(),
             }
             .serialized(None)
         };
@@ -733,6 +776,7 @@ mod tests {
             Session {
                 streams: vec![entry.clone()],
                 dock_layout: None,
+                folders: Vec::new(),
             }
             .serialized(None)
         };
@@ -782,6 +826,7 @@ mod tests {
             Session {
                 streams: vec![entry.clone()],
                 dock_layout: None,
+                folders: Vec::new(),
             }
             .serialized(None)
         };
@@ -824,6 +869,7 @@ wrap="
             Session {
                 streams: vec![entry.clone()],
                 dock_layout: None,
+                folders: Vec::new(),
             }
             .serialized(None)
         };

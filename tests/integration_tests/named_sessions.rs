@@ -52,6 +52,7 @@ fn every_session_field_round_trips_through_the_file() {
     let mut session = Session {
         streams: vec![entry(log.clone()), StreamEntry::new(pattern.clone())],
         dock_layout: Some("(layout)".to_string()),
+        folders: Vec::new(),
     };
     session.streams[1].wrap = false;
     let file = dir.path().join(format!("incident{SESSION_SUFFIX}"));
@@ -83,6 +84,7 @@ fn filter_terms_and_search_keep_quotes_and_edge_spaces_in_the_file() {
     let session = Session {
         streams: vec![stream],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("quotes{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();
@@ -125,6 +127,7 @@ fn compressed_streams_are_saved_as_the_archive_and_the_entry() {
     let session = Session {
         streams: vec![zipped, entry(gz.clone())],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("bundle{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();
@@ -178,6 +181,7 @@ fn a_backslash_zip_entry_survives_a_session_round_trip() {
     let session = Session {
         streams: vec![zipped],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("win{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();
@@ -238,6 +242,7 @@ fn a_7z_entry_survives_a_session_round_trip() {
     let session = Session {
         streams: vec![stream],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("logs{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();
@@ -279,6 +284,7 @@ fn files_that_no_longer_exist_are_listed_and_skipped() {
             StreamEntry::new(pattern.clone()),
         ],
         dock_layout: Some("(layout)".to_string()),
+        folders: Vec::new(),
     }
     .save_to(&file)
     .unwrap();
@@ -325,6 +331,7 @@ fn a_moved_bundle_opens_through_the_relative_path() {
     Session {
         streams: vec![entry(log.clone())],
         dock_layout: Some("(layout)".to_string()),
+        folders: Vec::new(),
     }
     .save_to(&file)
     .unwrap();
@@ -364,6 +371,7 @@ fn missing_files_are_skipped_and_reported() {
             StreamEntry::new(no_dir_pattern.clone()),
         ],
         dock_layout: None,
+        folders: Vec::new(),
     }
     .save_to(&file)
     .unwrap();
@@ -378,6 +386,7 @@ fn serialized_text_detects_changes() {
     let a = Session {
         streams: vec![entry(PathBuf::from("C:/x/a.log"))],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let mut b = a.clone();
     assert_eq!(a.serialized(None), b.serialized(None));
@@ -450,6 +459,7 @@ fn apply_to_config_replaces_the_default_workspace() {
     let session = Session {
         streams: vec![entry(PathBuf::from("C:/new/a.log"))],
         dock_layout: Some("(new)".to_string()),
+        folders: Vec::new(),
     };
     session.apply_to_config(&mut cfg);
     assert_eq!(cfg.open_files, vec![PathBuf::from("C:/new/a.log")]);
@@ -533,6 +543,7 @@ fn a_derived_stream_round_trips_with_its_frozen_filter_and_follows_a_moved_bundl
     let session = Session {
         streams: vec![StreamEntry::new(log.clone()), derived.clone()],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = bundle.join(format!("incident{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();

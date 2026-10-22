@@ -85,8 +85,10 @@ pub struct FastTailApp {
     pub attention_requested: bool,
     /// Quick colour labels (Ctrl+Shift+1..9), in memory only, pushed to every engine.
     pub quick_labels: Vec<QuickLabel>,
-    /// Text of the "open pattern" prompt while it is shown (`None` when closed).
-    pub pattern_prompt: Option<String>,
+    /// The Open folder dialog while it is shown (`None` when closed).
+    pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
+    /// The open-all folder groups: each opens the new files of its folder as tabs.
+    pub folder_groups: Vec<crate::folder_source::FolderGroup>,
     /// Spawns external tools and enforces the rule-bound throttle and cap.
     pub tool_runner: ToolRunner,
     /// Stream whose term rows the Filters window opens and scrolls to (a `+` button or
@@ -594,7 +596,8 @@ impl FastTailApp {
             applied_on_top: false,
             attention_requested: false,
             quick_labels: Vec::new(),
-            pattern_prompt: None,
+            folder_prompt: None,
+            folder_groups: Vec::new(),
             tool_runner: ToolRunner::default(),
             filters_focus: None,
             session_saved: String::new(),
@@ -680,6 +683,11 @@ impl FastTailApp {
             }
         }
 
+        // Folder groups: the files created since the last run join their tabs.
+        for path in app.config.folder_groups.clone() {
+            app.restore_folder_group(&path);
+        }
+
         // A named session restored from the previous run: what is on screen now is what
         // fasttail.ini kept, which may already differ from the file; the snapshot is
         // taken from the file itself so the `*` is right from the first frame.
@@ -752,9 +760,16 @@ impl FastTailApp {
                     .map(crate::workspace::stream_entry)
             })
             .collect();
+        let folders = self
+            .folder_groups
+            .iter()
+            .filter(|g| self.engines.iter().any(|e| g.offered(&e.path)))
+            .map(|g| g.path())
+            .collect();
         Session {
             streams,
             dock_layout: self.dock_layout_ron(),
+            folders,
         }
     }
 
@@ -1521,6 +1536,7 @@ impl FastTailApp {
             .position(|e| e.is_stdin())
             .map(|i| self.engines.remove(i));
         self.engines.clear();
+        self.folder_groups.clear();
         self.dock_state = DockState::new(vec![]);
         self.floating_window_rects.clear();
         self.config.open_files.clear();
@@ -1578,6 +1594,10 @@ impl FastTailApp {
                     self.dock_state = ds;
                 }
             }
+        }
+        // After the layout, which names only the files saved: new ones join their group.
+        for path in &loaded.session.folders {
+            self.restore_folder_group(path);
         }
         if let Some(engine) = stdin {
             self.add_stream_tab(engine.path.clone());
@@ -1823,6 +1843,13 @@ impl FastTailApp {
             })
             .collect();
         crate::workspace::snapshot(&order, &self.engines).write_into(&mut self.config);
+        // The groups with a tab open; one still waiting for its first file is not kept.
+        self.config.folder_groups = self
+            .folder_groups
+            .iter()
+            .filter(|g| self.engines.iter().any(|e| g.offered(&e.path)))
+            .map(|g| g.path())
+            .collect();
 
         prune_floating_window_rects(&self.dock_state, &mut self.floating_window_rects);
         let mut dock_to_save = self.dock_state.clone();
@@ -1856,34 +1883,64 @@ impl FastTailApp {
     /// the command line filters and follow flag to those streams only.
     pub fn apply_cli(&mut self, cli: &crate::cli::CliArgs) {
         for path in &cli.paths {
-            let pattern_dir_exists = crate::wildcard::split_pattern(path)
-                .map(|(dir, _)| dir.is_dir())
-                .unwrap_or(false);
+            let pattern_dir_exists =
+                crate::wildcard::FolderSpec::parse(path).is_some_and(|spec| spec.dir.is_dir());
             if !path.exists() && !pattern_dir_exists {
                 eprintln!("fasttail: {} not found, skipped", path.display());
                 continue;
             }
-            self.open_log_file(path.clone());
-            if let Some(engine) = self
-                .engines
-                .iter_mut()
-                .find(|e| e.path == *path || paths_equal(&e.path, path))
+            // `--all`: the pattern opens as a folder group, its streams get the options.
+            if let Some(spec) = cli
+                .all
+                .then(|| crate::wildcard::FolderSpec::parse(path))
+                .flatten()
             {
-                if let Some(f) = cli.window_filter() {
-                    engine.set_include_filter(f);
+                let group = spec.path();
+                self.open_folder_group(spec);
+                let members: Vec<PathBuf> = self
+                    .folder_groups
+                    .iter()
+                    .filter(|g| paths_equal(&g.path(), &group))
+                    .flat_map(|g| {
+                        self.engines
+                            .iter()
+                            .filter(|e| g.offered(&e.path))
+                            .map(|e| e.path.clone())
+                    })
+                    .collect();
+                for member in members {
+                    self.apply_cli_to(&member, cli);
                 }
-                if let Some(x) = cli.window_exclude() {
-                    engine.set_exclude_filter(x);
-                }
-                if let Some(follow) = cli.follow {
-                    engine.follow_tail = follow && !engine.is_compressed();
-                }
-                crate::cli::apply_time_window(engine, cli.since.as_deref(), cli.until.as_deref());
-                // Last: after the filters, so a line they hide lands as go to does.
-                if let Some(line) = cli.line_of(path) {
-                    engine.open_at_line(line, self.config.language);
-                }
+                continue;
             }
+            self.open_log_file(path.clone());
+            self.apply_cli_to(path, cli);
+        }
+    }
+
+    /// The command-line filters, follow flag, time window and line of the stream `path`.
+    fn apply_cli_to(&mut self, path: &Path, cli: &crate::cli::CliArgs) {
+        let lang = self.config.language;
+        let Some(engine) = self
+            .engines
+            .iter_mut()
+            .find(|e| e.path == path || paths_equal(&e.path, path))
+        else {
+            return;
+        };
+        if let Some(f) = cli.window_filter() {
+            engine.set_include_filter(f);
+        }
+        if let Some(x) = cli.window_exclude() {
+            engine.set_exclude_filter(x);
+        }
+        if let Some(follow) = cli.follow {
+            engine.follow_tail = follow && !engine.is_compressed();
+        }
+        crate::cli::apply_time_window(engine, cli.since.as_deref(), cli.until.as_deref());
+        // Last: after the filters, so a line they hide lands as go to does.
+        if let Some(line) = cli.line_of(path) {
+            engine.open_at_line(line, lang);
         }
     }
 
@@ -1989,9 +2046,9 @@ impl FastTailApp {
         }
     }
 
-    /// Opens the "open pattern" prompt, prefilled with `text`.
+    /// Opens the Open folder dialog, filled from `text` (a pattern path or a folder).
     pub fn prompt_pattern(&mut self, text: String) {
-        self.pattern_prompt = Some(text);
+        self.folder_prompt = Some(crate::ui::folder_dialog::FolderPrompt::from_text(&text));
     }
 
     /// Default pattern offered for a directory: every `.log` file in it.
@@ -2053,16 +2110,194 @@ impl FastTailApp {
     }
 
     pub fn open_log_file(&mut self, path: PathBuf) {
+        if let Some(opened) = self.attach_stream(path, false) {
+            self.add_stream_tab(opened);
+            self.save_dock_layout();
+        }
+    }
+
+    /// "Open all": every matching file of `spec` as a tab of a new dock node, and the
+    /// files created later as tabs of the same node (see `poll_folder_groups`). A group
+    /// already open on the same folder and patterns is brought to the front instead.
+    pub fn open_folder_group(&mut self, spec: crate::wildcard::FolderSpec) {
+        let path = spec.path();
+        if let Some(group) = self
+            .folder_groups
+            .iter()
+            .find(|g| paths_equal(&g.path(), &path))
+        {
+            let first = self.engines.iter().find(|e| group.offered(&e.path));
+            if let Some(locator) = first.and_then(|e| {
+                self.dock_state
+                    .find_tab(&FastTailTab::LogStream(e.path.clone()))
+            }) {
+                let _ = self.dock_state.set_active_tab(locator);
+            }
+            return;
+        }
+        let wake = Self::make_wake(&self.egui_ctx);
+        let (group, scan) = crate::folder_source::FolderGroup::start(
+            spec,
+            self.config.folder_max_streams,
+            Some(wake),
+        );
+        let lang = self.config.language;
+        if scan.open.is_empty() && scan.skipped == 0 {
+            self.open_notice = Some(format!(
+                "{}: {}",
+                group.spec.dir.display(),
+                t(lang, "folder_waiting")
+            ));
+        }
+        self.folder_groups.push(group);
+        self.open_group_files(self.folder_groups.len() - 1, scan, true);
+        crate::audio::play_sound(
+            crate::audio::CyberSound::BlipAttach,
+            self.config.sound_enabled,
+        );
+        self.save_dock_layout();
+    }
+
+    /// Reopens a saved folder group: the files that are not open yet join the node of its
+    /// open tabs (or a new one).
+    pub fn restore_folder_group(&mut self, path: &Path) {
+        let Some(spec) = crate::wildcard::FolderSpec::parse(path).filter(|s| s.dir.is_dir()) else {
+            return;
+        };
+        if self
+            .folder_groups
+            .iter()
+            .any(|g| paths_equal(&g.path(), &spec.path()))
+        {
+            return;
+        }
+        let wake = Self::make_wake(&self.egui_ctx);
+        let (group, scan) = crate::folder_source::FolderGroup::start(
+            spec,
+            self.config.folder_max_streams,
+            Some(wake),
+        );
+        let has_tab = self.engines.iter().any(|e| group.offered(&e.path));
+        self.folder_groups.push(group);
+        self.open_group_files(self.folder_groups.len() - 1, scan, !has_tab);
+    }
+
+    /// Opens the files a scan of group `index` found, as tabs of a new dock node
+    /// (`new_node`) or of the node holding the group's last tab, without changing the
+    /// active tab; says how many the cap left out.
+    fn open_group_files(
+        &mut self,
+        index: usize,
+        scan: crate::folder_source::GroupScan,
+        new_node: bool,
+    ) {
+        let lang = self.config.language;
+        let mut notes = Vec::new();
+        if scan.skipped > 0 {
+            notes.push(
+                t(lang, "folder_skipped")
+                    .replace("{n}", &scan.skipped.to_string())
+                    .replace("{max}", &self.folder_groups[index].max_streams.to_string()),
+            );
+        }
+        if scan.truncated {
+            notes.push(
+                t(lang, "folder_scan_limited")
+                    .replace("{n}", &crate::wildcard::MAX_ENTRIES.to_string()),
+            );
+        }
+        if !notes.is_empty() {
+            self.open_notice = Some(format!(
+                "{}: {}",
+                self.folder_groups[index].spec.dir.display(),
+                notes.join(" ")
+            ));
+        }
+        let mut tabs = Vec::new();
+        for path in scan.open {
+            if let Some(opened) = self.attach_stream(path, true) {
+                tabs.push(FastTailTab::LogStream(opened));
+            }
+        }
+        if tabs.is_empty() {
+            return;
+        }
+        let group = &self.folder_groups[index];
+        // The node of the group's last tab still in the dock.
+        let anchor = self
+            .dock_state
+            .iter_all_tabs()
+            .filter(|(_, t)| matches!(t, FastTailTab::LogStream(p) if group.offered(p) && !tabs.contains(t)))
+            .map(|(at, _)| (at.surface, at.node))
+            .last();
+        match anchor {
+            Some((surface, node)) if !new_node => {
+                if let Some(leaf) = self.dock_state[surface][node].get_leaf_mut() {
+                    let active = leaf.active;
+                    leaf.tabs.extend(tabs);
+                    leaf.active = active;
+                }
+            }
+            _ if self.dock_state.iter_all_tabs().count() == 0 => {
+                self.dock_state = DockState::new(tabs);
+            }
+            _ if self.dock_state.main_surface().num_tabs() == 0 => {
+                for tab in tabs {
+                    self.dock_state.main_surface_mut().push_to_first_leaf(tab);
+                }
+            }
+            _ => {
+                self.dock_state.main_surface_mut().split_right(
+                    egui_dock::NodeIndex::root(),
+                    0.5,
+                    tabs,
+                );
+            }
+        }
+    }
+
+    /// Scans the folder groups that are due and opens their new files. A group whose
+    /// tabs were all closed ends.
+    pub fn poll_folder_groups(&mut self) {
+        let open = |g: &crate::folder_source::FolderGroup, engines: &[TailEngine]| {
+            engines.iter().any(|e| g.offered(&e.path))
+        };
+        let mut changed = false;
+        let mut i = 0;
+        while i < self.folder_groups.len() {
+            let had_tab = open(&self.folder_groups[i], &self.engines);
+            let scan = self.folder_groups[i].poll();
+            if !scan.open.is_empty() {
+                // A group waiting for its first file opens it in a node of its own.
+                self.open_group_files(i, scan, !had_tab);
+                changed = true;
+            } else if !had_tab && self.folder_groups[i].opened() > 0 {
+                self.folder_groups.remove(i);
+                changed = true;
+                continue;
+            }
+            i += 1;
+        }
+        if changed {
+            self.save_dock_layout();
+        }
+    }
+
+    /// Opens the stream of `path` without its tab and returns the path of the engine
+    /// added, `None` when nothing was added (already open, missing, a picker or a derived
+    /// stream, which places its own tab). `quiet` (files of a folder group) plays no
+    /// sound, selects nothing, keeps the recent files and does not save.
+    fn attach_stream(&mut self, path: PathBuf, quiet: bool) -> Option<PathBuf> {
         // A saved derived stream ("Open filter as new tab") is rebuilt from its source.
         if crate::filter_tab::parse_identity(&path).is_some() {
             if self.restore_filter_tab(&path, true).is_some() {
                 self.save_dock_layout();
             }
-            return;
+            return None;
         }
         let is_pattern = crate::wildcard::is_pattern_path(&path);
         if !is_pattern && !crate::compressed::source_exists(&path) {
-            return;
+            return None;
         }
 
         // Avoid duplicate tabs for same path
@@ -2070,10 +2305,10 @@ impl FastTailApp {
             if eng.path == path || paths_equal(&eng.path, &path) {
                 // Already open, select tab
                 let tab = FastTailTab::LogStream(eng.path.clone());
-                if let Some(locator) = self.dock_state.find_tab(&tab) {
+                if let (Some(locator), false) = (self.dock_state.find_tab(&tab), quiet) {
                     let _ = self.dock_state.set_active_tab(locator);
                 }
-                return;
+                return None;
             }
         }
 
@@ -2081,19 +2316,19 @@ impl FastTailApp {
         let wake = Self::make_wake(&self.egui_ctx);
         let mut engine = match crate::workspace::open_target(&path, &self.config, Some(wake)) {
             OpenOutcome::Opened(engine) => *engine,
-            OpenOutcome::Missing => return,
+            OpenOutcome::Missing => return None,
             // A plain file that fails to open is skipped silently, as it always was; a
             // compressed one says why.
             OpenOutcome::Failed { error, report } => {
                 if report {
                     self.open_notice = Some(self.open_error_text(&path, &error));
                 }
-                return;
+                return None;
             }
-            OpenOutcome::OpenEntry(entry) => return self.open_log_file(entry),
+            OpenOutcome::OpenEntry(entry) => return self.attach_stream(entry, quiet),
             OpenOutcome::EmptyArchive(archive) => {
                 self.open_notice = Some(format!("{}: {}", archive.display(), t(lang, "zip_empty")));
-                return;
+                return None;
             }
             OpenOutcome::ChooseEntries {
                 archive,
@@ -2103,7 +2338,7 @@ impl FastTailApp {
                 let mut picker = crate::ui::zip_picker::ArchivePicker::new(archive, entries);
                 picker.partial = partial;
                 self.archive_picker = Some(picker);
-                return;
+                return None;
             }
             // A tar opens the entry picker at once while its headers are scanned in the
             // background.
@@ -2116,12 +2351,12 @@ impl FastTailApp {
                 self.archive_picker = Some(crate::ui::zip_picker::ArchivePicker::scanning(
                     archive, scan,
                 ));
-                return;
+                return None;
             }
             OpenOutcome::ListFailed { archive, error } => {
                 let reason = crate::ui::zip_picker::io_error_text(lang, &error);
                 self.open_notice = Some(format!("{}: {reason}", archive.display()));
-                return;
+                return None;
             }
         };
         crate::workspace::apply_settings(&mut engine, &self.config);
@@ -2129,22 +2364,20 @@ impl FastTailApp {
         crate::workspace::restore_stream(&mut engine, &self.config, &path);
         self.engines.push(engine);
 
-        crate::audio::play_sound(
-            crate::audio::CyberSound::BlipAttach,
-            self.config.sound_enabled,
-        );
-
         // Add to open_files
         if !self.config.open_files.iter().any(|p| paths_equal(p, &path)) {
             self.config.open_files.push(path.clone());
         }
-
-        // Keep recent files in MRU order (most recent at top, max 15)
-        self.config.add_recent_file(&path);
-        let _ = self.config.save();
-
-        self.add_stream_tab(path);
-        self.save_dock_layout();
+        if !quiet {
+            crate::audio::play_sound(
+                crate::audio::CyberSound::BlipAttach,
+                self.config.sound_enabled,
+            );
+            // Keep recent files in MRU order (most recent at top, max 15)
+            self.config.add_recent_file(&path);
+            let _ = self.config.save();
+        }
+        Some(path)
     }
 
     /// Compiles the global filter as it stands and saves it; the streams pick the new set
@@ -2191,6 +2424,7 @@ impl FastTailApp {
         self.poll_pending_stdin();
         let size_interval =
             std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
+        self.poll_folder_groups();
         for eng in &mut self.engines {
             eng.displayed = false;
             eng.size_check_interval = size_interval;
@@ -2357,8 +2591,9 @@ impl FastTailApp {
                 for file in &i.raw.dropped_files {
                     let path = file.path().to_path_buf();
                     if path.is_dir() {
-                        // A folder: ask which files to follow (newest match is tailed).
-                        self.pattern_prompt = Some(Self::default_pattern_for(&path));
+                        // A folder: ask which files to follow, and how.
+                        self.folder_prompt =
+                            Some(crate::ui::folder_dialog::FolderPrompt::for_folder(&path));
                     } else {
                         self.open_log_file(path);
                     }
@@ -2412,6 +2647,7 @@ impl FastTailApp {
         self.poll_pending_stdin();
         let size_interval =
             std::time::Duration::from_millis(self.config.size_check_interval_ms as u64);
+        self.poll_folder_groups();
         for eng in &mut self.engines {
             eng.size_check_interval = size_interval;
             eng.poll_updates();
@@ -4350,6 +4586,24 @@ impl FastTailApp {
                             }
                         });
 
+                        // Streams an Open all folder group opens at most.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "folder_max_streams")))
+                                    .monospace(),
+                            );
+                            let r = ui
+                                .add(
+                                    egui::DragValue::new(&mut self.config.folder_max_streams)
+                                        .range(crate::settings_model::FOLDER_MAX_STREAMS)
+                                        .update_while_editing(false),
+                                )
+                                .on_hover_text(t(lang, "folder_max_streams_tip"));
+                            if r.changed() {
+                                let _ = self.config.save();
+                            }
+                        });
+
                         // Automatic bookmarks kept per stream; the open streams recompute
                         // theirs under the new cap once the drag is over.
                         ui.horizontal(|ui| {
@@ -5100,82 +5354,20 @@ impl FastTailApp {
             }
         }
 
-        // 11b. "Open pattern" prompt (folder drop, 📂* button)
-        if self.pattern_prompt.is_some() {
-            let lang = self.config.language;
-            let theme = self.config.theme;
-            let mut is_open = true;
-            let mut submit = false;
-            let mut cancel = false;
-            let mut error: Option<String> = None;
-            let text_id = egui::Id::new("fasttail_pattern_prompt_text");
-            egui::Window::new(
-                RichText::new(format!("📂* {}", t(lang, "open_pattern")))
-                    .monospace()
-                    .color(theme.accent_color()),
-            )
-            .id(egui::Id::new("fasttail_pattern_prompt"))
-            .open(&mut is_open)
-            .resizable(false)
-            .collapsible(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(&ctx, |ui| {
-                ui.label(
-                    RichText::new(t(lang, "open_pattern_desc"))
-                        .monospace()
-                        .size(11.5)
-                        .color(theme.text_dim()),
-                );
-                ui.add_space(6.0);
-                let text = self.pattern_prompt.get_or_insert_with(String::new);
-                let resp = ui.add(
-                    egui::TextEdit::singleline(text)
-                        .hint_text(t(lang, "open_pattern_hint"))
-                        .desired_width(420.0)
-                        .id(text_id),
-                );
-                // Take the keyboard focus when the prompt opens, without stealing it later.
-                if !resp.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
-                    resp.request_focus();
+        // 11b. Open folder dialog (folder drop, 📂* button)
+        if let Some(prompt) = self.folder_prompt.as_mut() {
+            use crate::ui::folder_dialog::FolderChoice;
+            match prompt.show(&ctx, self.config.language, self.config.theme) {
+                Some(FolderChoice::FollowNewest(spec)) => {
+                    self.folder_prompt = None;
+                    self.open_log_file(spec.path());
                 }
-                let enter = resp.has_focus()
-                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-                let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-                let valid = crate::wildcard::split_pattern(std::path::Path::new(text.trim()))
-                    .map(|(dir, _)| dir.is_dir())
-                    .unwrap_or(false);
-                if !text.trim().is_empty() && !valid {
-                    error = Some(t(lang, "open_pattern_invalid").to_string());
+                Some(FolderChoice::OpenAll(spec)) => {
+                    self.folder_prompt = None;
+                    self.open_folder_group(spec);
                 }
-                if let Some(err) = &error {
-                    ui.label(
-                        RichText::new(format!("ⓘ {err}"))
-                            .monospace()
-                            .size(11.0)
-                            .color(theme.warn_color()),
-                    );
-                }
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(valid, egui::Button::new(t(lang, "open_pattern_go")))
-                        .on_disabled_hover_text(t(lang, "open_pattern_invalid"))
-                        .clicked()
-                        || (enter && valid)
-                    {
-                        submit = true;
-                    }
-                    if ui.button(t(lang, "open_pattern_cancel")).clicked() || esc {
-                        cancel = true;
-                    }
-                });
-            });
-            if submit {
-                if let Some(text) = self.pattern_prompt.take() {
-                    self.open_log_file(PathBuf::from(text.trim()));
-                }
-            } else if cancel || !is_open {
-                self.pattern_prompt = None;
+                Some(FolderChoice::Cancel) => self.folder_prompt = None,
+                None => {}
             }
         }
 
@@ -5676,7 +5868,7 @@ impl FastTailApp {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .map(|d| Self::default_pattern_for(&d))
             .unwrap_or_default();
-        self.pattern_prompt = Some(seed);
+        self.prompt_pattern(seed);
     }
 
     /// CTRL + SHIFT + P opens or closes the palette (never while the window is locked);

@@ -49,12 +49,16 @@ name reappears it is tailed from the start as a rotation. Follow-newest streams 
 switching to the next newest match, as today.
 
 ### D5. Persistence
-Stream entries gain `folder_patterns=` (the `;` list) and `folder_recursive=` only when
-they differ from the single-pattern form. Open-all groups are stored as
-`[folder_N]` sections (`dir`, `patterns`, `recursive`, `max_streams`) in the workspace and
-in sessions, paths relative to the session file as for streams; on restore the group
-rescans and opens the current matches, and each file's saved state (filters, bookmarks)
-applies by file path as for any stream.
+The pattern path names the whole spec: patterns separated by `;` (`dir/*.log;*.txt`) and
+a `**` folder before them for subfolders (`dir/**/app.log`). A single pattern without
+subfolders is the path pattern streams always had, so old files and command lines are
+unchanged, and no extra stream keys are needed (an older build reads a multi-pattern or
+recursive path as a pattern that matches nothing, or a folder that does not exist).
+Open-all groups are stored as `[folder_groups] group_N=<pattern path>` in `fasttail.ini`
+and as `[folder_N]` sections (`path`, `rel`) in sessions, only while a tab of the group is
+open; the cap is the global `folder_max_streams`. On restore the group rescans and opens
+the current matches, and each file's saved state (filters, bookmarks) applies by file path
+as for any stream. A group ends when its last tab is closed.
 
 ## Risks / Trade-offs
 

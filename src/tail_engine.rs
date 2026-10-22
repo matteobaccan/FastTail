@@ -17,7 +17,7 @@ use crate::scan_job::{
     FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange, VisibleSet, MAX_FILTER_TERMS,
 };
 use crate::time_histogram::TimeHistogram;
-use crate::wildcard::{resolve_newest, split_pattern};
+use crate::wildcard::FolderSpec;
 use crate::wrap_layout::{WrapAnchor, WrapScroll};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
@@ -1373,7 +1373,15 @@ pub struct TailEngine {
     /// the stable identity of the stream, and `current_file` the resolved file being
     /// tailed (`None` while nothing matches yet).
     pub pattern: Option<String>,
+    /// The folder and patterns of a pattern stream (`pattern` is their `;` list).
+    pub folder: Option<FolderSpec>,
+    /// A file was created or renamed in the folder of a recursive pattern stream since
+    /// the last scan: the next scan comes after `FOLDER_EVENT_DEBOUNCE`.
+    folder_dirty: bool,
     pub current_file: Option<PathBuf>,
+    /// The file being tailed was deleted: its lines stay, and the stream bar says so
+    /// until a file of that name appears again (tailed from the start, as a rotation).
+    pub file_removed: bool,
     /// Minimum time between two directory scans of a pattern stream (2 s; tests use 0).
     pub pattern_scan_interval: Duration,
     last_pattern_scan: Instant,
@@ -1791,6 +1799,11 @@ pub struct TailEngine {
 
 /// Directory scan cadence of a pattern stream.
 pub const PATTERN_SCAN_INTERVAL: Duration = Duration::from_secs(2);
+/// How many `pattern_scan_interval`s apart the full walks of a recursive pattern stream
+/// are (10 s): its watcher asks for a scan as soon as a file appears.
+pub const RECURSIVE_SCAN_FACTOR: u32 = 5;
+/// The wait between a file appearing in a recursive folder and the scan it triggers.
+pub const FOLDER_EVENT_DEBOUNCE: Duration = Duration::from_millis(250);
 /// Minimum cadence between fallback size checks via filesystem metadata (500 ms).
 pub const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 pub const SWITCH_NOTICE_DURATION: Duration = Duration::from_secs(5);
@@ -1921,24 +1934,30 @@ impl TailEngine {
         index_job_threshold_bytes: u64,
         wake: Option<WakeFn>,
     ) -> Result<Self, std::io::Error> {
-        let pattern_path = pattern_path.as_ref().to_path_buf();
-        let Some((dir, glob)) = split_pattern(&pattern_path) else {
+        let Some(spec) = FolderSpec::parse(pattern_path.as_ref()) else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Not a file-name pattern",
             ));
         };
-        if !dir.is_dir() {
+        if !spec.dir.is_dir() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "Pattern directory does not exist",
             ));
         }
+        let pattern_path = pattern_path.as_ref().to_path_buf();
 
         let (tx, rx) = channel();
         let mut watcher = Self::watcher_with_wake(wake, tx);
         if let Some(ref mut w) = watcher {
-            let _ = w.watch(&dir, RecursiveMode::NonRecursive);
+            // A tree too large to watch is still walked on its timer.
+            let mode = if spec.recursive {
+                RecursiveMode::Recursive
+            } else {
+                RecursiveMode::NonRecursive
+            };
+            let _ = w.watch(&spec.dir, mode);
         }
 
         let mut engine = Self::assemble(
@@ -1953,8 +1972,10 @@ impl TailEngine {
             job_threshold_bytes,
             index_job_threshold_bytes,
         );
-        engine.pattern = Some(glob.clone());
-        if let Some(newest) = resolve_newest(&dir, &glob) {
+        engine.pattern = Some(spec.patterns_text());
+        let newest = spec.newest();
+        engine.folder = Some(spec);
+        if let Some(newest) = newest {
             engine.switch_to(newest)?;
             engine.switch_notice = None;
         }
@@ -2005,14 +2026,8 @@ impl TailEngine {
     /// from the file being tailed. Returns true when a switch happened.
     pub fn rescan_pattern(&mut self) -> bool {
         self.last_pattern_scan = Instant::now();
-        let Some(glob) = self.pattern.clone() else {
-            return false;
-        };
-        let dir = match self.path.parent() {
-            Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
-        let Some(newest) = resolve_newest(&dir, &glob) else {
+        self.folder_dirty = false;
+        let Some(newest) = self.folder.as_ref().and_then(FolderSpec::newest) else {
             // Nothing matches (any more): keep the current file, if there is one.
             return false;
         };
@@ -2177,7 +2192,10 @@ impl TailEngine {
         let mut engine = Self {
             path: path_buf,
             pattern: None,
+            folder: None,
+            folder_dirty: false,
             current_file: None,
+            file_removed: false,
             pattern_scan_interval: PATTERN_SCAN_INTERVAL,
             last_pattern_scan: Instant::now(),
             size_check_interval: Duration::ZERO,
@@ -3739,14 +3757,33 @@ impl TailEngine {
                 if event.kind.is_modify() || event.kind.is_create() {
                     needs_refresh = true;
                 }
+                if event.kind.is_create()
+                    || matches!(
+                        event.kind,
+                        notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                    )
+                {
+                    self.folder_dirty = true;
+                }
             }
         }
 
-        // Pattern stream: look for a newer match on directory activity and every 2 s.
-        if self.pattern.is_some()
-            && (needs_refresh || self.last_pattern_scan.elapsed() >= self.pattern_scan_interval)
-            && self.rescan_pattern()
-        {
+        // Pattern stream: look for a newer match on directory activity and every 2 s; a
+        // recursive one on a file appearing (debounced) and every 10 s, since any write in
+        // the tree is activity.
+        let scan_due = match &self.folder {
+            None => false,
+            Some(spec) if spec.recursive => {
+                let since = self.last_pattern_scan.elapsed();
+                (self.folder_dirty
+                    && since >= FOLDER_EVENT_DEBOUNCE.min(self.pattern_scan_interval))
+                    || since >= self.pattern_scan_interval * RECURSIVE_SCAN_FACTOR
+            }
+            Some(_) => {
+                needs_refresh || self.last_pattern_scan.elapsed() >= self.pattern_scan_interval
+            }
+        };
+        if scan_due && self.rescan_pattern() {
             // The switch rebuilt everything from the new file.
             needs_refresh = false;
         }
@@ -3759,7 +3796,11 @@ impl TailEngine {
         if do_size_check {
             self.last_size_check = Instant::now();
             if let Some(current) = &self.current_file {
-                if let Ok(metadata) = std::fs::metadata(current) {
+                let found = std::fs::metadata(current);
+                // Removed, as opposed to unreadable for a moment (a locked file).
+                self.file_removed = matches!(&found, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+                    && self.stdin.is_none();
+                if let Ok(metadata) = found {
                     let current_len = metadata.len();
                     if current_len != self.file_size
                         || metadata.modified().ok() != self.last_modified

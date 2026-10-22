@@ -430,6 +430,7 @@ fn extra_terms_round_trip_and_old_files_load_with_one_term() {
     let session = Session {
         streams: vec![entry],
         dock_layout: None,
+        folders: Vec::new(),
     };
     let file = dir.path().join(format!("terms{SESSION_SUFFIX}"));
     session.save_to(&file).unwrap();
