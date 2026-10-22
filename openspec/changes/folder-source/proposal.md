@@ -28,10 +28,10 @@ lacks (section 2).
   thirty decompressions.
 - A file of an open-all group that is deleted keeps its tab and lines; its stream bar says
   the file was removed.
-- Scans: the existing 2-second rescan of the folder for a flat folder; with subfolders, a
-  file-system watcher triggers a rescan at once and a full walk runs every 10 seconds at
-  most, bounded at 10 000 entries; symbolic links and junctions to folders are not
-  followed.
+- Scans: the existing 2-second rescan of the folder for a flat folder; with subfolders,
+  the watcher on the folder itself triggers a rescan (at most every 2 seconds) and a full
+  walk runs every 10 seconds, bounded at 10 000 entries; symbolic links and junctions to
+  folders are not followed, and no recursive watch is set.
 - Persistence: a follow-newest stream keeps its `dir/pattern` path (unchanged for one
   pattern without subfolders; `dir/*.log;*.txt` for several, `dir/**/app.log` with
   subfolders); an open-all group is stored in the workspace and in sessions as the same

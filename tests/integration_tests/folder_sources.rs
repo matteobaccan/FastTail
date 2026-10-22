@@ -118,9 +118,12 @@ fn a_group_opens_by_name_caps_by_age_and_skips_archives() {
     // A skipped file is never offered again, and a full group opens nothing more.
     group.scan_interval = Duration::ZERO;
     std::fs::write(dir.path().join("job-1.log"), "x\n").unwrap();
-    let later = group.poll();
+    let later = group.poll(2);
     assert!(later.open.is_empty());
     assert_eq!(later.skipped, 1);
+    // A closed tab makes room for the next new file.
+    std::fs::write(dir.path().join("job-2.log"), "x\n").unwrap();
+    assert_eq!(names(&group.poll(1).open), vec!["job-2.log"]);
 }
 
 #[test]
@@ -130,14 +133,14 @@ fn a_group_reports_files_created_later_once() {
     let spec = FolderSpec::new(dir.path().to_path_buf(), "*.log", false);
     let (mut group, scan) = FolderGroup::start(spec, 32, None);
     assert_eq!(names(&scan.open), vec!["api.log"]);
-    assert!(group.poll().open.is_empty(), "not due yet");
+    assert!(group.poll(1).open.is_empty(), "not due yet");
     group.scan_interval = Duration::ZERO;
     std::fs::write(dir.path().join("job-1234.log"), "x\n").unwrap();
     std::fs::write(dir.path().join("job-1234.txt"), "x\n").unwrap();
-    assert_eq!(names(&group.poll().open), vec!["job-1234.log"]);
-    assert!(group.poll().open.is_empty());
+    assert_eq!(names(&group.poll(1).open), vec!["job-1234.log"]);
+    assert!(group.poll(2).open.is_empty());
     assert!(group.offered(&dir.path().join("job-1234.log")));
-    assert_eq!(group.opened(), 2);
+    assert!(!group.has_members(), "the app adopts the streams it opens");
 }
 
 #[test]
@@ -250,4 +253,49 @@ fn open_all_puts_the_files_in_one_new_node_and_adds_new_ones_without_focus() {
         .unwrap();
     assert_eq!(leaf.active, active_before);
     assert_eq!(leaf.tabs.len(), 3);
+}
+
+#[test]
+fn a_saved_group_comes_back_at_start_with_the_files_created_since() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    std::fs::create_dir(&logs).unwrap();
+    std::fs::write(logs.join("api.log"), "x\n").unwrap();
+    let group = FolderSpec::new(logs.clone(), "*.log", false).path();
+    std::fs::write(logs.join("new.log"), "x\n").unwrap();
+    // No dock layout: the streams reopen one by one, each saving the workspace.
+    let app = FastTailApp::from_config(FastTailConfig {
+        open_files: vec![logs.join("api.log")],
+        folder_groups: vec![group.clone()],
+        ..FastTailConfig::default()
+    });
+    assert_eq!(app.folder_groups.len(), 1);
+    assert_eq!(app.config.folder_groups, vec![group]);
+    assert!(app.engines.iter().any(|e| e.path == logs.join("new.log")));
+    assert!(app.folder_groups[0].is_member(&logs.join("api.log")));
+}
+
+#[test]
+fn a_waiting_group_opens_its_first_file_without_taking_the_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other.txt");
+    std::fs::write(&other, "x\n").unwrap();
+    let logs = dir.path().join("logs");
+    std::fs::create_dir(&logs).unwrap();
+    let mut app = FastTailApp::from_config(FastTailConfig::default());
+    app.open_log_file(other.clone());
+    app.open_folder_group(FolderSpec::new(logs.clone(), "*.log", false));
+    app.open_notice = None;
+    assert_eq!(app.folder_groups.len(), 1);
+    assert!(
+        app.config.folder_groups.is_empty(),
+        "nothing open yet, nothing kept"
+    );
+    let focused = app.dock_state.focused_leaf();
+    app.folder_groups[0].scan_interval = Duration::ZERO;
+    std::fs::write(logs.join("first.log"), "x\n").unwrap();
+    app.poll_folder_groups();
+    assert!(app.engines.iter().any(|e| e.path == logs.join("first.log")));
+    assert_eq!(app.dock_state.focused_leaf(), focused);
+    assert_eq!(app.config.folder_groups.len(), 1);
 }

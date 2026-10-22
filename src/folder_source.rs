@@ -24,8 +24,10 @@ pub const MAX_MAX_STREAMS: usize = 256;
 /// Rescan cadence of a flat folder, and of a folder with its subfolders.
 pub const FLAT_SCAN_INTERVAL: Duration = Duration::from_secs(2);
 pub const RECURSIVE_SCAN_INTERVAL: Duration = Duration::from_secs(10);
-/// The wait between a watcher event and the scan it triggers.
+/// The wait between a watcher event and the scan it triggers: short for a flat folder,
+/// longer with subfolders, whose walk costs more.
 pub const EVENT_DEBOUNCE: Duration = Duration::from_millis(250);
+pub const RECURSIVE_EVENT_DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// Extensions of compressed files and archives, skipped unless a pattern names them.
 const COMPRESSED_EXTENSIONS: &[&str] = &[
@@ -51,7 +53,9 @@ pub struct FolderGroup {
     /// Rescan cadence (`FLAT_SCAN_INTERVAL` or `RECURSIVE_SCAN_INTERVAL`; tests use 0).
     pub scan_interval: Duration,
     offered: HashSet<PathBuf>,
-    opened: usize,
+    /// The stream paths of the files the app opened for the group (or found open), as
+    /// the engines hold them: membership is by these, not by the scanned paths.
+    members: Vec<PathBuf>,
     last_scan: Instant,
     dirty: Arc<AtomicBool>,
     _watcher: Option<RecommendedWatcher>,
@@ -69,8 +73,9 @@ pub fn is_compressed_name(name: &str) -> bool {
 impl FolderGroup {
     /// Starts a group on `spec` and lists what to open first: every eligible match, the
     /// `max_streams` most recently modified when there are more, sorted by name. A watcher
-    /// on the folder (with its subfolders when the spec includes them) calls `wake` and
-    /// brings the next scan forward; without one the timed scan alone runs.
+    /// on the folder itself (never recursive: a recursive watch walks the whole tree, links
+    /// included, before it returns) calls `wake` and brings the next scan forward; files
+    /// deeper down are found by the timed walk.
     pub fn start(spec: FolderSpec, max_streams: usize, wake: Option<WakeFn>) -> (Self, GroupScan) {
         let dirty = Arc::new(AtomicBool::new(false));
         let watcher = {
@@ -93,16 +98,13 @@ impl FolderGroup {
                         }
                     }
                 },
-                notify::Config::default(),
+                notify::Config::default().with_follow_symlinks(false),
             )
             .ok()
             .and_then(|mut w| {
-                let mode = if spec.recursive {
-                    RecursiveMode::Recursive
-                } else {
-                    RecursiveMode::NonRecursive
-                };
-                w.watch(&spec.dir, mode).ok().map(|()| w)
+                w.watch(&spec.dir, RecursiveMode::NonRecursive)
+                    .ok()
+                    .map(|()| w)
             })
         };
         let scan_interval = if spec.recursive {
@@ -115,12 +117,12 @@ impl FolderGroup {
             max_streams: max_streams.clamp(MIN_MAX_STREAMS, MAX_MAX_STREAMS),
             scan_interval,
             offered: HashSet::new(),
-            opened: 0,
+            members: Vec::new(),
             last_scan: Instant::now(),
             dirty,
             _watcher: watcher,
         };
-        let first = group.scan();
+        let first = group.scan(0);
         (group, first)
     }
 
@@ -129,31 +131,49 @@ impl FolderGroup {
         self.spec.path()
     }
 
-    /// How many files the group opened so far.
-    pub fn opened(&self) -> usize {
-        self.opened
-    }
-
     /// Whether `path` is a file this group offered.
     pub fn offered(&self, path: &std::path::Path) -> bool {
         self.offered.contains(path)
     }
 
+    /// Records the stream `path` as one of the group's.
+    pub fn adopt(&mut self, path: PathBuf) {
+        if !self.members.contains(&path) {
+            self.members.push(path);
+        }
+    }
+
+    /// Whether the stream `path` is one of the group's.
+    pub fn is_member(&self, path: &std::path::Path) -> bool {
+        self.members.iter().any(|m| m == path)
+    }
+
+    /// Whether the group ever had a stream (one waiting for its first file has none).
+    pub fn has_members(&self) -> bool {
+        !self.members.is_empty()
+    }
+
     /// The files created since the last scan, when a scan is due: after a watcher event
-    /// (debounced) or every `scan_interval`. Empty otherwise.
-    pub fn poll(&mut self) -> GroupScan {
+    /// (debounced) or every `scan_interval`. Empty otherwise. `open_now` is how many of
+    /// the group's streams are open: the cap counts those, so closing tabs makes room.
+    pub fn poll(&mut self, open_now: usize) -> GroupScan {
         let since = self.last_scan.elapsed();
-        let due = (self.dirty.load(Ordering::Relaxed)
-            && since >= EVENT_DEBOUNCE.min(self.scan_interval))
+        let debounce = if self.spec.recursive {
+            RECURSIVE_EVENT_DEBOUNCE
+        } else {
+            EVENT_DEBOUNCE
+        };
+        let due = (self.dirty.load(Ordering::Relaxed) && since >= debounce.min(self.scan_interval))
             || since >= self.scan_interval;
         if !due {
             return GroupScan::default();
         }
-        self.scan()
+        self.scan(open_now)
     }
 
-    /// Lists the folder and offers the files not seen yet, up to the cap.
-    pub fn scan(&mut self) -> GroupScan {
+    /// Lists the folder and offers the files not seen yet, up to the cap (`open_now`
+    /// streams of the group being open).
+    pub fn scan(&mut self, open_now: usize) -> GroupScan {
         self.last_scan = Instant::now();
         self.dirty.store(false, Ordering::Relaxed);
         let listing = self.spec.list();
@@ -162,12 +182,11 @@ impl FolderGroup {
             .into_iter()
             .filter(|m| !self.offered.contains(&m.path))
             .collect();
-        let room = self.max_streams.saturating_sub(self.opened);
+        let room = self.max_streams.saturating_sub(open_now);
         let (open, skipped) = pick(&self.spec, fresh, room);
         // Skipped files are offered too: they never open later.
         self.offered.extend(open.iter().cloned());
         self.offered.extend(skipped.iter().cloned());
-        self.opened += open.len();
         GroupScan {
             open,
             skipped: skipped.len(),

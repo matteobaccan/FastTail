@@ -12,14 +12,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Folder sources.** The `📂*` button and a dropped folder open the new **Open folder**
   dialog: a folder, file-name patterns separated by `;` (`*.log;*.txt`), **Include
-  subfolders** (8 levels, 10,000 entries per scan, links to folders not followed) and a
+  subfolders** (8 levels, 10,000 entries per walk, links to folders not followed) and a
   mode. **Follow newest** is the pattern stream, now across several patterns and
   subfolders (written `dir/*.log;*.txt` and `dir/**/app.log`; a single pattern stays
   `dir/app-*.log`). **Open all** opens every matching file as a tab of one new tab group,
   sorted by name, and a file created later as a new tab of that group without taking the
-  focus. At most `folder_max_streams` files per folder (Settings → *Streams per folder*,
-  1–256, default 32; the newest open, a notice counts the rest); compressed files only
-  when a pattern names their extension. Groups are saved in `fasttail.ini`
+  focus. At most `folder_max_streams` open streams per group (Settings → *Streams per
+  folder*, 1–256, default 32; the newest open, a notice counts the rest, closing tabs
+  makes room); compressed files only when a pattern names their extension. Groups are saved in `fasttail.ini`
   (`[folder_groups]`) and in sessions (`[folder_N]`), and rescanned on restore; older
   builds ignore them. `--all` opens a pattern argument as a group (the terminal interface
   and print mode open its current matches).

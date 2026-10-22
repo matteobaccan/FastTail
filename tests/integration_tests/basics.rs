@@ -1239,6 +1239,7 @@ fn test_i18n_exhaustive_coverage() {
         "open_folder_all",
         "open_folder_all_tip",
         "open_folder_invalid",
+        "open_folder_bad_patterns",
         "folder_waiting",
         "folder_skipped",
         "folder_scan_limited",

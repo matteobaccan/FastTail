@@ -1,7 +1,7 @@
 ## 1. Matching and scanning
 
 - [x] 1.1 `FolderSpec` in `src/wildcard.rs`: several patterns, subfolders to depth 8, 10 000 entries per scan, no link following; `resolve_newest` over a spec; single-pattern form serialises to `dir/pattern`
-- [x] 1.2 Pattern streams in `src/tail_engine.rs` take a `FolderSpec`; recursive rescan through a `notify` watcher (debounced) plus a walk every 10 s, flat folders unchanged (2 s)
+- [x] 1.2 Pattern streams in `src/tail_engine.rs` take a `FolderSpec`; recursive rescan on the folder's own watcher (at most every 2 s) plus a walk every 10 s, flat folders unchanged (2 s)
 - [x] 1.3 `src/folder_source.rs`: `FolderGroup` with known files, cap `folder_max_streams`, compressed files skipped unless named, new-file events
 - [x] 1.4 "File removed" stream state that keeps the lines; reappearing file tailed as a rotation
 - [x] 1.5 Tests: multi-pattern and case rules, depth limit, entry limit, symlink loop not followed, newest across subfolders, group cap keeps the newest, new file detected, compressed skip, deleted file keeps lines

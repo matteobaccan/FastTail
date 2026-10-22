@@ -25,12 +25,13 @@ subfolders up to depth 8 count. A single pattern without subfolders serialises t
 existing `dir/pattern` path, so today's files and command lines are unchanged.
 
 ### D2. Bounded walk
-`list_matches` walks breadth-first, stops at 10 000 directory entries per scan (notice
-"folder too large, scan limited") and does not follow symbolic links or junctions to
-folders (loops, and surprise network shares). Flat folders keep the 2 s rescan. With
-subfolders, a recursive `notify` watcher on `dir` triggers a rescan on create / rename
-events (debounced 250 ms) and a full walk runs at most every 10 s to catch what the
-watcher misses (network drives, overflowed event queues).
+`list` walks breadth-first, stops at 10 000 directory entries per walk (notice "folder
+too large, scan limited") and does not follow symbolic links or junctions to folders
+(loops, and surprise network shares). A flat folder is read whole, as before, and keeps
+the 2 s rescan. With subfolders, the watcher stays on the folder itself (a recursive
+`notify` watch walks the whole tree, links included, inside `watch()` and takes one
+inotify watch per directory); a file or folder appearing there triggers a rescan (at most
+every 2 s) and a full walk runs every 10 s.
 
 ### D3. Open all as a folder group
 `FolderGroup` owns the spec and the set of files it has opened. On open it lists the
@@ -64,8 +65,8 @@ as for any stream. A group ends when its last tab is closed.
 
 - [A folder of hundreds of logs opens hundreds of tabs] → the per-group cap (32 by
   default) and the notice.
-- [Recursive watching of a huge tree costs handles / inotify watches] → the watcher is
-  optional: if it cannot be created, the timed walk alone is used and nothing fails.
+- [Recursive watching of a huge tree costs handles / inotify watches] → no recursive
+  watch: the folder itself is watched, the subfolders are walked on the 10 s timer.
 - [Bookmarks on a follow-newest stream are still reset on switch] → unchanged behaviour,
   documented.
 

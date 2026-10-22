@@ -8,7 +8,7 @@
 //! directory part is taken literally. A pattern path is `dir/pattern`, several patterns
 //! are separated by `;` (`logs/*.log;*.txt`), and a `**` folder just before them
 //! (`logs/**/app.log`) includes the subfolders of `dir`, walked breadth-first to
-//! `MAX_DEPTH` and at most `MAX_ENTRIES` entries per scan, never through a symbolic link
+//! `MAX_DEPTH` and at most `MAX_ENTRIES` entries per walk, never through a symbolic link
 //! or junction to a folder.
 
 use std::collections::VecDeque;
@@ -162,12 +162,29 @@ impl FolderSpec {
         })
     }
 
+    /// Whether the file `path` is one this spec can match: its name matches, in the
+    /// folder itself or, with subfolders, below it.
+    pub fn covers(&self, path: &Path) -> bool {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        let inside = if self.recursive {
+            parent.starts_with(&self.dir)
+        } else {
+            crate::paths::paths_equal(parent, &self.dir)
+        };
+        inside && self.matches(name)
+    }
+
     /// Every regular file that matches, in walk order (folder by folder, breadth-first).
     pub fn list(&self) -> FolderListing {
         self.list_limited(MAX_ENTRIES)
     }
 
-    /// `list` reading at most `max_entries` directory entries.
+    /// `list` reading at most `max_entries` directory entries when walking subfolders.
     pub fn list_limited(&self, max_entries: usize) -> FolderListing {
         let mut out = FolderListing::default();
         let mut queue = VecDeque::from([(self.dir.clone(), 0usize)]);
@@ -177,11 +194,15 @@ impl FolderSpec {
                 continue;
             };
             for entry in entries.flatten() {
-                if seen >= max_entries {
-                    out.truncated = true;
-                    return out;
+                // Only a walk is bounded: a flat folder is read whole, as pattern
+                // streams always did (its entries come in no particular order).
+                if self.recursive {
+                    if seen >= max_entries {
+                        out.truncated = true;
+                        return out;
+                    }
+                    seen += 1;
                 }
-                seen += 1;
                 // The entry's own type: a link to a folder is not a folder here.
                 let Ok(kind) = entry.file_type() else {
                     continue;

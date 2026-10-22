@@ -451,6 +451,12 @@ impl WorkspaceState {
         }
         let open = config.open_files.clone();
         config.retain_stream_state_of(&open);
+        // A folder group none of whose files is open any more ends (the terminal, which
+        // runs no groups, closed them).
+        config.folder_groups.retain(|g| {
+            crate::wildcard::FolderSpec::parse(g)
+                .is_some_and(|spec| open.iter().any(|f| spec.covers(f)))
+        });
     }
 }
 

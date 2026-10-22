@@ -485,7 +485,16 @@ impl Input {
         let switch = match self.follow.as_mut() {
             None => return Ok(()),
             Some(follow) => match &follow.pattern {
-                Some(spec) if follow.last_rescan.elapsed() >= PATTERN_SCAN_INTERVAL => {
+                // A walk of subfolders every 10 s, a flat folder every 2 s.
+                Some(spec)
+                    if follow.last_rescan.elapsed()
+                        >= PATTERN_SCAN_INTERVAL
+                            * if spec.recursive {
+                                crate::tail_engine::RECURSIVE_SCAN_FACTOR
+                            } else {
+                                1
+                            } =>
+                {
                     follow.last_rescan = Instant::now();
                     spec.newest()
                         .filter(|newest| !crate::paths::paths_equal(newest, &follow.path))

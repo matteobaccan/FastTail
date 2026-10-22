@@ -60,13 +60,21 @@ impl FolderPrompt {
         }
     }
 
-    /// The spec the fields describe, when the folder exists.
+    /// The spec the fields describe, when the folder exists and the patterns name files
+    /// (no folder separator) that a pattern path can hold: with a wildcard, or several,
+    /// or subfolders (a single plain name in one folder would read back as that file).
     pub fn spec(&self) -> Option<FolderSpec> {
         let dir = PathBuf::from(self.folder.trim());
-        if self.folder.trim().is_empty() || !dir.is_dir() {
+        if self.folder.trim().is_empty() || !dir.is_dir() || !self.patterns_valid() {
             return None;
         }
-        Some(FolderSpec::new(dir, &self.patterns, self.recursive))
+        let spec = FolderSpec::new(dir, &self.patterns, self.recursive);
+        (FolderSpec::parse(&spec.path()).as_ref() == Some(&spec)).then_some(spec)
+    }
+
+    /// The patterns hold no folder separator.
+    fn patterns_valid(&self) -> bool {
+        !self.patterns.contains('/') && !self.patterns.contains('\\')
     }
 
     /// The choice the fields make on Open.
@@ -159,9 +167,14 @@ impl FolderPrompt {
                     ui.end_row();
                 });
             let choice = self.choice();
+            let problem = if !PathBuf::from(self.folder.trim()).is_dir() {
+                "open_folder_invalid"
+            } else {
+                "open_folder_bad_patterns"
+            };
             if !self.folder.trim().is_empty() && choice.is_none() {
                 ui.label(
-                    RichText::new(format!("ⓘ {}", t(lang, "open_folder_invalid")))
+                    RichText::new(format!("ⓘ {}", t(lang, problem)))
                         .monospace()
                         .size(11.0)
                         .color(theme.warn_color()),
@@ -176,7 +189,7 @@ impl FolderPrompt {
                         choice.is_some(),
                         egui::Button::new(t(lang, "open_pattern_go")),
                     )
-                    .on_disabled_hover_text(t(lang, "open_folder_invalid"))
+                    .on_disabled_hover_text(t(lang, problem))
                     .clicked();
                 if open || enter {
                     if let Some(choice) = choice.clone() {
@@ -222,6 +235,23 @@ mod tests {
         }
         prompt.folder = dir.path().join("missing").to_string_lossy().to_string();
         assert!(prompt.choice().is_none());
+        prompt.folder = dir.path().to_string_lossy().to_string();
+        prompt.recursive = false;
+        prompt.patterns = "sub/*.log".into();
+        assert!(prompt.choice().is_none(), "a folder separator");
+        prompt.patterns = "app.log".into();
+        assert!(
+            prompt.choice().is_none(),
+            "one plain name reads back as a file"
+        );
+        prompt.recursive = true;
+        assert!(
+            prompt.choice().is_some(),
+            "in subfolders it is a pattern path"
+        );
+        prompt.recursive = false;
+        prompt.patterns = "app.log;err.log".into();
+        assert!(prompt.choice().is_some());
     }
 
     #[test]

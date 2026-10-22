@@ -487,6 +487,7 @@ impl FastTailApp {
             // Empty workspace: no restored streams, no saved dock layout.
             config.open_files.clear();
             config.dock_layout = None;
+            config.folder_groups.clear();
         }
         config.theme.apply(&cc.egui_ctx);
         // egui owns the zoom factor (it scales the whole UI); restore the saved one
@@ -641,6 +642,9 @@ impl FastTailApp {
         app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
 
+        // Taken now: the openings below save the workspace, which keeps only the groups
+        // already running (none yet).
+        let saved_groups = app.config.folder_groups.clone();
         let has_restored_tabs = app.dock_state.iter_all_tabs().count() > 0;
         if has_restored_tabs {
             // Restore engines for tabs already positioned in the dock layout without altering dock tree
@@ -684,8 +688,11 @@ impl FastTailApp {
         }
 
         // Folder groups: the files created since the last run join their tabs.
-        for path in app.config.folder_groups.clone() {
-            app.restore_folder_group(&path);
+        for path in &saved_groups {
+            app.restore_folder_group(path);
+        }
+        if !app.folder_groups.is_empty() {
+            app.save_dock_layout();
         }
 
         // A named session restored from the previous run: what is on screen now is what
@@ -763,7 +770,7 @@ impl FastTailApp {
         let folders = self
             .folder_groups
             .iter()
-            .filter(|g| self.engines.iter().any(|e| g.offered(&e.path)))
+            .filter(|g| self.engines.iter().any(|e| g.is_member(&e.path)))
             .map(|g| g.path())
             .collect();
         Session {
@@ -1847,7 +1854,7 @@ impl FastTailApp {
         self.config.folder_groups = self
             .folder_groups
             .iter()
-            .filter(|g| self.engines.iter().any(|e| g.offered(&e.path)))
+            .filter(|g| self.engines.iter().any(|e| g.is_member(&e.path)))
             .map(|g| g.path())
             .collect();
 
@@ -1904,7 +1911,7 @@ impl FastTailApp {
                     .flat_map(|g| {
                         self.engines
                             .iter()
-                            .filter(|e| g.offered(&e.path))
+                            .filter(|e| g.is_member(&e.path))
                             .map(|e| e.path.clone())
                     })
                     .collect();
@@ -2126,7 +2133,7 @@ impl FastTailApp {
             .iter()
             .find(|g| paths_equal(&g.path(), &path))
         {
-            let first = self.engines.iter().find(|e| group.offered(&e.path));
+            let first = self.engines.iter().find(|e| group.is_member(&e.path));
             if let Some(locator) = first.and_then(|e| {
                 self.dock_state
                     .find_tab(&FastTailTab::LogStream(e.path.clone()))
@@ -2177,19 +2184,19 @@ impl FastTailApp {
             self.config.folder_max_streams,
             Some(wake),
         );
-        let has_tab = self.engines.iter().any(|e| group.offered(&e.path));
         self.folder_groups.push(group);
-        self.open_group_files(self.folder_groups.len() - 1, scan, !has_tab);
+        self.open_group_files(self.folder_groups.len() - 1, scan, false);
     }
 
-    /// Opens the files a scan of group `index` found, as tabs of a new dock node
-    /// (`new_node`) or of the node holding the group's last tab, without changing the
-    /// active tab; says how many the cap left out.
+    /// Opens the files a scan of group `index` found and makes them (and those already
+    /// open) the group's streams. New tabs join the node of the group's last tab, or a new
+    /// node split to the right; the active tab and the focused node change only with
+    /// `focus` (the user's own Open all). Says how many files the cap left out.
     fn open_group_files(
         &mut self,
         index: usize,
         scan: crate::folder_source::GroupScan,
-        new_node: bool,
+        focus: bool,
     ) {
         let lang = self.config.language;
         let mut notes = Vec::new();
@@ -2215,7 +2222,14 @@ impl FastTailApp {
         }
         let mut tabs = Vec::new();
         for path in scan.open {
+            // Already open (under this or an equal path): it joins the group as it is.
+            if let Some(open) = self.engines.iter().find(|e| paths_equal(&e.path, &path)) {
+                let open = open.path.clone();
+                self.folder_groups[index].adopt(open);
+                continue;
+            }
             if let Some(opened) = self.attach_stream(path, true) {
+                self.folder_groups[index].adopt(opened.clone());
                 tabs.push(FastTailTab::LogStream(opened));
             }
         }
@@ -2223,30 +2237,35 @@ impl FastTailApp {
             return;
         }
         let group = &self.folder_groups[index];
-        // The node of the group's last tab still in the dock.
+        // The node of the group's last tab already in the dock.
         let anchor = self
             .dock_state
             .iter_all_tabs()
-            .filter(|(_, t)| matches!(t, FastTailTab::LogStream(p) if group.offered(p) && !tabs.contains(t)))
+            .filter(|(_, t)| {
+                matches!(t, FastTailTab::LogStream(p) if group.is_member(p) && !tabs.contains(t))
+            })
             .map(|(at, _)| (at.surface, at.node))
             .last();
+        let focused = self.dock_state.focused_leaf();
         match anchor {
-            Some((surface, node)) if !new_node => {
+            Some((surface, node)) => {
                 if let Some(leaf) = self.dock_state[surface][node].get_leaf_mut() {
                     let active = leaf.active;
                     leaf.tabs.extend(tabs);
-                    leaf.active = active;
+                    if !focus {
+                        leaf.active = active;
+                    }
                 }
             }
-            _ if self.dock_state.iter_all_tabs().count() == 0 => {
+            None if self.dock_state.iter_all_tabs().count() == 0 => {
                 self.dock_state = DockState::new(tabs);
             }
-            _ if self.dock_state.main_surface().num_tabs() == 0 => {
+            None if self.dock_state.main_surface().num_tabs() == 0 => {
                 for tab in tabs {
                     self.dock_state.main_surface_mut().push_to_first_leaf(tab);
                 }
             }
-            _ => {
+            None => {
                 self.dock_state.main_surface_mut().split_right(
                     egui_dock::NodeIndex::root(),
                     0.5,
@@ -2254,24 +2273,29 @@ impl FastTailApp {
                 );
             }
         }
+        // A split or a push focuses the new node: give the focus back.
+        if let (false, Some(path)) = (focus, focused) {
+            self.dock_state.set_focused_node_and_surface(path);
+        }
     }
 
     /// Scans the folder groups that are due and opens their new files. A group whose
     /// tabs were all closed ends.
     pub fn poll_folder_groups(&mut self) {
-        let open = |g: &crate::folder_source::FolderGroup, engines: &[TailEngine]| {
-            engines.iter().any(|e| g.offered(&e.path))
-        };
         let mut changed = false;
         let mut i = 0;
         while i < self.folder_groups.len() {
-            let had_tab = open(&self.folder_groups[i], &self.engines);
-            let scan = self.folder_groups[i].poll();
-            if !scan.open.is_empty() {
-                // A group waiting for its first file opens it in a node of its own.
-                self.open_group_files(i, scan, !had_tab);
+            let group = &self.folder_groups[i];
+            let open_now = self
+                .engines
+                .iter()
+                .filter(|e| group.is_member(&e.path))
+                .count();
+            let scan = self.folder_groups[i].poll(open_now);
+            if !scan.open.is_empty() || scan.skipped > 0 {
+                self.open_group_files(i, scan, false);
                 changed = true;
-            } else if !had_tab && self.folder_groups[i].opened() > 0 {
+            } else if open_now == 0 && self.folder_groups[i].has_members() {
                 self.folder_groups.remove(i);
                 changed = true;
                 continue;
@@ -2328,6 +2352,15 @@ impl FastTailApp {
             OpenOutcome::OpenEntry(entry) => return self.attach_stream(entry, quiet),
             OpenOutcome::EmptyArchive(archive) => {
                 self.open_notice = Some(format!("{}: {}", archive.display(), t(lang, "zip_empty")));
+                return None;
+            }
+            // A folder group opens no pickers: an archive of several entries is left for
+            // the user to open by hand.
+            OpenOutcome::ChooseEntries { .. }
+            | OpenOutcome::ScanTar { .. }
+            | OpenOutcome::ListFailed { .. }
+                if quiet =>
+            {
                 return None;
             }
             OpenOutcome::ChooseEntries {

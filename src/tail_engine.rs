@@ -1802,8 +1802,6 @@ pub const PATTERN_SCAN_INTERVAL: Duration = Duration::from_secs(2);
 /// How many `pattern_scan_interval`s apart the full walks of a recursive pattern stream
 /// are (10 s): its watcher asks for a scan as soon as a file appears.
 pub const RECURSIVE_SCAN_FACTOR: u32 = 5;
-/// The wait between a file appearing in a recursive folder and the scan it triggers.
-pub const FOLDER_EVENT_DEBOUNCE: Duration = Duration::from_millis(250);
 /// Minimum cadence between fallback size checks via filesystem metadata (500 ms).
 pub const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 pub const SWITCH_NOTICE_DURATION: Duration = Duration::from_secs(5);
@@ -1951,13 +1949,10 @@ impl TailEngine {
         let (tx, rx) = channel();
         let mut watcher = Self::watcher_with_wake(wake, tx);
         if let Some(ref mut w) = watcher {
-            // A tree too large to watch is still walked on its timer.
-            let mode = if spec.recursive {
-                RecursiveMode::Recursive
-            } else {
-                RecursiveMode::NonRecursive
-            };
-            let _ = w.watch(&spec.dir, mode);
+            // The folder itself only, also with subfolders: a recursive watch walks the
+            // whole tree, links included, before it returns. Deeper files are found by
+            // the timed walk.
+            let _ = w.watch(&spec.dir, RecursiveMode::NonRecursive);
         }
 
         let mut engine = Self::assemble(
@@ -3769,14 +3764,13 @@ impl TailEngine {
         }
 
         // Pattern stream: look for a newer match on directory activity and every 2 s; a
-        // recursive one on a file appearing (debounced) and every 10 s, since any write in
-        // the tree is activity.
+        // recursive one, whose walk costs more, on a file appearing in the folder (at most
+        // every 2 s) and every 10 s.
         let scan_due = match &self.folder {
             None => false,
             Some(spec) if spec.recursive => {
                 let since = self.last_pattern_scan.elapsed();
-                (self.folder_dirty
-                    && since >= FOLDER_EVENT_DEBOUNCE.min(self.pattern_scan_interval))
+                (self.folder_dirty && since >= self.pattern_scan_interval)
                     || since >= self.pattern_scan_interval * RECURSIVE_SCAN_FACTOR
             }
             Some(_) => {
