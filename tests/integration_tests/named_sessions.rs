@@ -34,6 +34,8 @@ fn entry(path: PathBuf) -> StreamEntry {
         archive_entry: None,
         fields_parser: Some("regex".to_string()),
         fields_regex: Some(r" ^(?P<lvl>\w+) ".to_string()),
+        csv_separator: None,
+        csv_header: None,
         fields_view: true,
         fields_columns: vec!["ts".to_string(), "http.status".to_string()],
         fields_widths: [("http.status".to_string(), 6), ("ts".to_string(), 24)]

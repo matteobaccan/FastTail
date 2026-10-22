@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **CSV / TSV files as tables.** A new delimited field parser reads `.csv`, `.tsv` and
+  `.psv` files (and other files whose first row is a header of column-like names) with the
+  separator detected among `,` `;` tab `|`, the header naming the columns (numbered
+  without one) and RFC 4180 quoting. The field parser chip shows `▦ CSV ,` and its menu
+  picks the separator or turns the header off (saved as `fields_parser=csv`,
+  `csv_separator=`, `csv_header=`; older builds ignore them). The column view, field
+  filter terms (also on numbered columns, `2>=5`) and Copy as shown work on the cells.
+
 ## [0.20.24] - 2026-10-22
 
 ### Added
