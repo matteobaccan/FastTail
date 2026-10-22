@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.21.5] - 2026-10-22
+
 ### Added
 
 - **Log formats dialog.** *◇ Log formats…* (Settings, palette) lists the built-in and user
@@ -1916,6 +1918,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.21.5]: https://github.com/matteobaccan/FastTail/compare/v0.21.4...v0.21.5
 [0.21.4]: https://github.com/matteobaccan/FastTail/compare/v0.21.3...v0.21.4
 [0.21.3]: https://github.com/matteobaccan/FastTail/compare/v0.21.2...v0.21.3
 [0.21.2]: https://github.com/matteobaccan/FastTail/compare/v0.21.1...v0.21.2
