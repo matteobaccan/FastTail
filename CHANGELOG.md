@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **CSV / TSV files open in the column view.** A stream read with the CSV / TSV parser
+  (detected or chosen) turns the column view on by itself; once the user turns it off,
+  `fields_view=false` is saved and the stream reopens as text. Other parsers keep the
+  text view by default.
+
 ## [0.20.27] - 2026-10-22
 
 ### Added

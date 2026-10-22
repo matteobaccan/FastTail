@@ -701,6 +701,7 @@ fn csv_and_tsv_files_open_as_tables() {
     );
     let mut e = open(&orders);
     assert_eq!(kind(&e), "csv");
+    assert!(e.columns_shown(), "a CSV opens in the column view");
     assert_eq!(e.field_columns(), vec!["id", "customer", "total"]);
     e.set_fields_view(true);
     e.select_row(2);
@@ -778,7 +779,9 @@ fn a_quoted_newline_keeps_its_record_on_one_row() {
     let mut e = open(&file);
     assert_eq!(kind(&e), "csv");
     e.poll_updates();
-    // The text view keeps every line.
+    // A CSV opens in the column view; the text view keeps every line.
+    assert!(e.columns_shown());
+    e.set_fields_view(false);
     assert_eq!(visible(&e), vec![0, 1, 2, 3]);
     e.set_fields_view(true);
     assert_eq!(
@@ -816,4 +819,40 @@ fn an_unclosed_quote_takes_at_most_1000_lines() {
     assert!(shown.contains(&1));
     assert!(!shown.contains(&1000));
     assert!(shown.contains(&1001), "{:?}", &shown[..3]);
+}
+
+#[test]
+fn a_csv_turned_to_text_stays_text_when_reopened() {
+    use fasttail::session::Session;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("orders.csv");
+    write_lines(&file, &["id,total", "1,10", "2,20"]);
+    let mut e = open(&file);
+    assert!(e.columns_shown());
+    e.set_fields_view(false);
+    let session = Session {
+        streams: vec![fasttail::workspace::stream_entry(&e)],
+        ..Default::default()
+    };
+    let text = session.serialized(None);
+    assert!(text.contains("fields_view=false"), "{text}");
+    let conf = ini::Ini::load_from_str(&text).unwrap();
+    let back = Session::read_from(&conf, None).session.streams.remove(0);
+    let mut cfg = FastTailConfig::default();
+    cfg.set_stream_state(back);
+    let mut reopened = TailEngine::open(&file).unwrap();
+    fasttail::workspace::restore_stream(&mut reopened, &cfg, &file);
+    wait_for_jobs(&mut reopened);
+    assert_eq!(kind(&reopened), "csv");
+    assert!(!reopened.columns_shown());
+    // A JSON log does not turn the column view on by itself.
+    let json = dir.path().join("a.json");
+    let lines: Vec<String> = (0..5)
+        .map(|i| format!(r#"{{"level":"info","n":{i}}}"#))
+        .collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    write_lines(&json, &refs);
+    let j = open(&json);
+    assert_eq!(kind(&j), "json");
+    assert!(!j.columns_shown());
 }
