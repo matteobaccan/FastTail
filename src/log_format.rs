@@ -50,7 +50,8 @@ pub struct FormatSpec {
     /// A strftime subset or `epoch_s` / `epoch_ms` (see `timestamp::TimeFormat`); empty:
     /// the built-in timestamp detection reads the field.
     pub timestamp_format: String,
-    /// `local`, `utc` or `+HH:MM`: the clock the log writes (empty: local).
+    /// `local`, `utc` or `+HH:MM`: the clock the log writes (empty: local). It becomes the
+    /// source zone of a stream read with the format, unless the stream has one set.
     pub timestamp_zone: String,
     pub level_field: String,
     /// `token=level` pairs separated by commas (`W=warn,E=error`), any case.
@@ -363,18 +364,10 @@ fn parse_level_map(text: &str) -> Result<Vec<(String, LogLevel)>, String> {
     Ok(out)
 }
 
-/// `local`, `utc` or `+HH:MM` / `-HH:MM` (empty is local).
+/// `local`, `utc` or `+HH:MM` / `-HH:MM`, as the stream's source zone reads it (empty is
+/// local).
 fn valid_zone(zone: &str) -> bool {
-    let z = zone.trim();
-    if z.is_empty() || z.eq_ignore_ascii_case("local") || z.eq_ignore_ascii_case("utc") {
-        return true;
-    }
-    let b = z.as_bytes();
-    b.len() == 6
-        && matches!(b[0], b'+' | b'-')
-        && b[1..3].iter().all(u8::is_ascii_digit)
-        && b[3] == b':'
-        && b[4..6].iter().all(u8::is_ascii_digit)
+    zone.trim().is_empty() || crate::timestamp::SourceZone::from_config(zone).is_some()
 }
 
 /// The built-in Apache / nginx combined format.

@@ -14,15 +14,15 @@
 
 ## 3. UI and persistence
 
-- [ ] 3.1 Log formats dialog: list (built-in locked, invalid files with errors), new / duplicate / delete / import / export
-- [ ] 3.2 Pattern editor with live preview (captures, match ratio, unmatched lines, time and level read, µs per line, entry count warning)
-- [ ] 3.3 Row menu "Create format from these lines…"; parser menu and chip list formats by name
+- [x] 3.1 Log formats dialog: list (built-in locked, invalid files with errors), new / duplicate / delete / import / export
+- [x] 3.2 Pattern editor with live preview (captures, match ratio, unmatched lines, time and level read, µs per line, entry count warning)
+- [x] 3.3 Row menu "Create format from these lines…"; parser menu and chip list formats by name
 - [x] 3.4 `fields_parser=format:<name>` in `StreamEntry`; round-trip and missing-format tests
 
 ## 4. Texts and documentation
 
-- [ ] 4.1 New i18n keys (dialog, editor, errors, menu entries) in all 16 languages; add them to the exhaustive i18n test
-- [ ] 4.2 README (log formats section with an example file, comparison table), a sample format under `docs/`, CHANGELOG `[Unreleased]`
+- [x] 4.1 New i18n keys (dialog, editor, errors, menu entries) in all 16 languages; add them to the exhaustive i18n test
+- [x] 4.2 README (log formats section with an example file, comparison table), a sample format under `docs/`, CHANGELOG `[Unreleased]`
 
 ## 5. Wrap-up
 

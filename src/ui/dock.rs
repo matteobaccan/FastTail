@@ -4989,6 +4989,8 @@ struct RowMenuPicks {
     filter_tab: bool,
     /// "Hide lines" was picked on this row: the selection when the row is in it.
     hide: Option<usize>,
+    /// "Create format from these lines" was picked on this row.
+    format: Option<usize>,
     /// Row a compare was asked on, and what it is.
     compare: Option<(usize, crate::compare::CompareRequest)>,
 }
@@ -5012,6 +5014,9 @@ impl RowMenuPicks {
         }
         if self.filter_tab {
             engine.filter_tab_request = true;
+        }
+        if let Some(line) = self.format {
+            engine.format_request = Some(line);
         }
         if let Some((line, request)) = self.compare {
             // A menu opened outside the selection selects that row, as the other row
@@ -5952,6 +5957,14 @@ fn row_context_menu(
                 .clicked()
         {
             picks.hide = Some(line);
+            ui.close();
+        }
+        if ui
+            .button(RichText::new(format!("◇ {}", t(lang, "fmt_from_lines"))).monospace())
+            .on_hover_text(t(lang, "fmt_from_lines_tip"))
+            .clicked()
+        {
+            picks.format = Some(line);
             ui.close();
         }
         if filtered {

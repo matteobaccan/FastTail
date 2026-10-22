@@ -89,6 +89,8 @@ pub struct FastTailApp {
     pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
     /// The New merged view dialog while it is shown.
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
+    /// The Log formats dialog, while it is shown.
+    pub log_formats: Option<crate::ui::log_formats::FormatsDialog>,
     /// The open-all folder groups: each opens the new files of its folder as tabs.
     pub folder_groups: Vec<crate::folder_source::FolderGroup>,
     /// Spawns external tools and enforces the rule-bound throttle and cap.
@@ -601,6 +603,7 @@ impl FastTailApp {
             quick_labels: Vec::new(),
             folder_prompt: None,
             merge_prompt: None,
+            log_formats: None,
             folder_groups: Vec::new(),
             tool_runner: ToolRunner::default(),
             filters_focus: None,
@@ -1241,9 +1244,63 @@ impl FastTailApp {
         Some(spool)
     }
 
+    /// Opens the Log formats dialog on the formats folder next to `fasttail.ini`, its
+    /// preview reading the focused stream; with `lines`, a new format whose samples they
+    /// are ("Create format from these lines").
+    pub fn open_log_formats(&mut self, lines: Option<Vec<String>>) {
+        use crate::ui::log_formats::{FormatsDialog, PREVIEW_LINES};
+        let focused = self.focused_stream_path();
+        let stream_lines: Vec<String> = focused
+            .and_then(|p| self.engines.iter().find(|e| e.path == p))
+            .map(|e| {
+                (0..e.total_lines().min(PREVIEW_LINES))
+                    .filter_map(|i| e.get_line(i).map(|l| l.into_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let dir = crate::log_format::default_dir();
+        self.log_formats = Some(match lines {
+            Some(lines) => FormatsDialog::from_lines(dir, stream_lines, &lines),
+            None => FormatsDialog::new(dir, stream_lines),
+        });
+    }
+
+    /// Loads the formats folder `dir` again and gives every stream the new formats: a
+    /// stream on a format reads with its new version, an automatic one is detected again.
+    pub fn reload_log_formats(&mut self, dir: &Path) {
+        crate::log_format::set_library(crate::log_format::Library::load(dir));
+        for engine in &mut self.engines {
+            engine.reload_field_parser();
+        }
+    }
+
+    /// Opens the Log formats dialog a row menu asked for, with the lines picked.
+    fn apply_format_requests(&mut self) {
+        let Some(idx) = self.engines.iter().position(|e| e.format_request.is_some()) else {
+            return;
+        };
+        let Some(row) = self.engines[idx].format_request.take() else {
+            return;
+        };
+        let engine = &self.engines[idx];
+        let picked = if engine.is_selected(row) {
+            engine
+                .selected_lines_capped(crate::log_format::MAX_SAMPLES)
+                .0
+        } else {
+            vec![row]
+        };
+        let lines: Vec<String> = picked
+            .into_iter()
+            .filter_map(|i| engine.get_line(i).map(|l| l.into_owned()))
+            .collect();
+        self.open_log_formats(Some(lines));
+    }
+
     /// Feeds the merged views from their sources (a few milliseconds each per frame) and
     /// opens the dialog a stream menu asked for. Returns whether anything changed.
     pub fn apply_merged_views(&mut self) -> bool {
+        self.apply_format_requests();
         let mut changed = false;
         if let Some(idx) = self.engines.iter().position(|e| e.merged_request) {
             self.engines[idx].merged_request = false;
@@ -4444,6 +4501,7 @@ impl FastTailApp {
             let prev_lang = self.config.language;
             let mut test_screensaver = false;
             let mut popup_lock_now = false;
+            let mut open_formats = false;
             let mut overview_strip = self.config.overview_strip;
             let mut time_delta = crate::ui::dock::TimeDeltaPrefs {
                 show: self.config.show_time_delta,
@@ -4504,6 +4562,15 @@ impl FastTailApp {
                             &mut overview_strip,
                             &mut time_delta,
                         );
+
+                        // Log formats: their own dialog.
+                        ui.add_space(6.0);
+                        if ui
+                            .button(format!("◇ {}", t(self.config.language, "fmt_open")))
+                            .clicked()
+                        {
+                            open_formats = true;
+                        }
 
                         // Rendering backend: applies at the next start.
                         ui.add_space(6.0);
@@ -4936,6 +5003,9 @@ impl FastTailApp {
             }
             if popup_lock_now {
                 self.lock();
+            }
+            if open_formats {
+                self.open_log_formats(None);
             }
 
             if test_screensaver {
@@ -5579,6 +5649,20 @@ impl FastTailApp {
                     self.open_merged_view(&sources);
                 }
                 Some(MergeChoice::Cancel) => self.merge_prompt = None,
+                None => {}
+            }
+        }
+
+        // 11a'. Log formats dialog
+        if let Some(dialog) = self.log_formats.as_mut() {
+            use crate::ui::log_formats::FormatsAction;
+            let lib = crate::log_format::library();
+            match dialog.show(&ctx, &lib, self.config.language, self.config.theme) {
+                Some(FormatsAction::Changed) => {
+                    let dir = dialog.dir.clone();
+                    self.reload_log_formats(&dir);
+                }
+                Some(FormatsAction::Close) => self.log_formats = None,
                 None => {}
             }
         }
@@ -6236,6 +6320,7 @@ impl FastTailApp {
             }
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
+            A::LogFormats => self.open_log_formats(None),
             A::MergedView => {
                 let first = self.focused_stream_path();
                 self.merge_prompt =

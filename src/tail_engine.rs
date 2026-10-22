@@ -1736,6 +1736,9 @@ pub struct TailEngine {
     /// The stream menu asked for a merged view starting with this stream (applied by the
     /// app, which opens its dialog).
     pub merged_request: bool,
+    /// "Create format from these lines" on this row (applied by the app, which opens the
+    /// Log formats dialog with the row, or the selection holding it).
+    pub format_request: Option<usize>,
     /// The stream menu asked for its filter as a new tab (applied by the app).
     pub filter_tab_request: bool,
     /// The row menu asked for a compare (applied by the app).
@@ -2381,6 +2384,7 @@ impl TailEngine {
             derived: None,
             merged: None,
             merged_request: false,
+            format_request: None,
             filter_tab_request: false,
             compare_request: None,
             source_context_request: None,
@@ -3562,6 +3566,24 @@ impl TailEngine {
         }
     }
 
+    /// Builds the parser again after the log formats changed: a stream on a format reads
+    /// with the format's new version (or detection, when it is gone), an automatic one is
+    /// detected again.
+    pub fn reload_field_parser(&mut self) {
+        match self.field_choice.clone() {
+            ParserChoice::Auto => {
+                self.field_auto = None;
+                self.field_detected_at = None;
+                self.detect_fields();
+            }
+            choice @ (ParserChoice::Format(_) | ParserChoice::Apache | ParserChoice::Syslog) => {
+                self.field_choice = ParserChoice::Off;
+                self.set_field_choice(choice);
+            }
+            _ => {}
+        }
+    }
+
     /// Whether detection picks the parser: automatic, or a saved format that is missing
     /// (the chip says so).
     fn field_detecting(&self) -> bool {
@@ -3597,6 +3619,15 @@ impl TailEngine {
             // start over, the line index staying as it is.
             self.filter = self.build_filter();
             self.line_text_changed();
+            // A log format says which clock the log writes, unless the stream was told.
+            if let Some(FieldParser::Format(f)) = self.field_parser.as_deref() {
+                let zone = crate::timestamp::SourceZone::from_config(&f.spec.timestamp_zone);
+                if let (Some(zone), crate::timestamp::SourceZone::Local) =
+                    (zone, self.time_source_zone)
+                {
+                    self.set_time_source_zone(zone);
+                }
+            }
         }
     }
 
