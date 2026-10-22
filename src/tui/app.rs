@@ -527,6 +527,8 @@ pub struct App {
     pub tool_menu: Option<ToolMenu>,
     /// The list of the lines hidden by hand in the active stream: the range selected.
     pub hidden_menu: Option<usize>,
+    /// The list of the active stream's fields for the column view: the row selected.
+    pub columns_menu: Option<usize>,
     /// The external tools editor (from Settings, or `e` in the menu).
     pub tools_editor: Option<ToolsDialog>,
     /// The command palette (`:`).
@@ -655,6 +657,7 @@ impl App {
             global_due: None,
             tool_menu: None,
             hidden_menu: None,
+            columns_menu: None,
             tools_editor: None,
             palette_dialog: None,
             locked: None,
@@ -1149,6 +1152,9 @@ impl App {
         }
         if self.hidden_menu.is_some() {
             return self.on_hidden_menu_key(key);
+        }
+        if self.columns_menu.is_some() {
+            return self.on_columns_menu_key(key);
         }
         if self.palette_dialog.is_some() {
             return self.on_palette_key(key);
@@ -1791,6 +1797,149 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// The rows of the columns list: the columns shown, in order and ticked, then the
+    /// other fields known for the stream (at most `fields::MAX_CATALOGUE`).
+    fn column_menu_rows(engine: &TailEngine) -> Vec<(String, bool)> {
+        let shown = engine.field_columns();
+        let mut rows: Vec<(String, bool)> = shown.iter().map(|k| (k.clone(), true)).collect();
+        for key in engine.field_catalogue().keys() {
+            if !shown.contains(key) && rows.len() < crate::fields::MAX_CATALOGUE {
+                rows.push((key.clone(), false));
+            }
+        }
+        rows
+    }
+
+    fn on_columns_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let Some(selected) = self.columns_menu else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            self.columns_menu = None;
+            return true;
+        };
+        let rows = Self::column_menu_rows(&tab.engine);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let mut shown: Vec<String> = rows.iter().filter(|r| r.1).map(|r| r.0.clone()).collect();
+        let moved = |shown: &mut Vec<String>, up: bool| -> Option<usize> {
+            if selected >= shown.len() {
+                return None;
+            }
+            let to = if up {
+                selected.checked_sub(1)?
+            } else {
+                (selected + 1 < shown.len()).then_some(selected + 1)?
+            };
+            shown.swap(selected, to);
+            Some(to)
+        };
+        match key.code {
+            KeyCode::Esc => self.columns_menu = None,
+            KeyCode::Up | KeyCode::Char('K') if shift || key.code == KeyCode::Char('K') => {
+                if let Some(to) = moved(&mut shown, true) {
+                    tab.engine.set_field_columns(shown);
+                    self.columns_menu = Some(to);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('J') if shift || key.code == KeyCode::Char('J') => {
+                if let Some(to) = moved(&mut shown, false) {
+                    tab.engine.set_field_columns(shown);
+                    self.columns_menu = Some(to);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.columns_menu = Some(selected.saturating_sub(1))
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.columns_menu = Some((selected + 1).min(rows.len().saturating_sub(1)))
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => self.toggle_column(selected),
+            KeyCode::Char('r') => {
+                tab.engine.reset_field_columns();
+                self.columns_menu = Some(0);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Shows or hides the field of row `i` of the columns list. The last shown column
+    /// stays: an empty list would mean the default columns again.
+    fn toggle_column(&mut self, i: usize) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let rows = Self::column_menu_rows(&tab.engine);
+        let Some((key, on)) = rows.get(i).cloned() else {
+            return;
+        };
+        let mut shown: Vec<String> = rows.iter().filter(|r| r.1).map(|r| r.0.clone()).collect();
+        if on {
+            if shown.len() <= 1 {
+                return;
+            }
+            shown.retain(|k| *k != key);
+        } else {
+            shown.push(key.clone());
+        }
+        tab.engine.set_field_columns(shown);
+        // The row follows its field to its new place in the list.
+        let rows = Self::column_menu_rows(&tab.engine);
+        self.columns_menu = rows.iter().position(|r| r.0 == key).or(Some(0));
+    }
+
+    fn draw_columns_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.columns_menu else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let rows = Self::column_menu_rows(&tab.engine);
+        let height = (rows.len() as u16 + 6).min(area.height);
+        let inner = self.dialog(frame, area, (60, height), tx(self.lang, "Columns"), false);
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Space shows or hides, Shift+Up/Down moves, r resets, Esc closes",
+            ),
+            dim,
+        )];
+        let room = inner.height.saturating_sub(3) as usize;
+        let top = selected.saturating_sub(room.saturating_sub(1));
+        let width = inner.width as usize;
+        let ascii = self.palette.ascii;
+        for (i, (key, on)) in rows.iter().enumerate().skip(top).take(room) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else if *on {
+                Style::default()
+            } else {
+                dim
+            };
+            let mark = match (on, ascii) {
+                (true, true) => "[x]",
+                (false, true) => "[ ]",
+                (true, false) => "☑",
+                (false, false) => "☐",
+            };
+            out.push(Line::styled(
+                head_chars(&format!(" {mark} {key}"), width),
+                style,
+            ));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// Shows the hidden range `i` again, or all of them; the list closes with the last.
@@ -3146,6 +3295,8 @@ impl App {
             C::Level => self.apply(Action::CycleLevel),
             C::LevelBytes => self.open_prompt(PromptKind::LevelBytes),
             C::Hidden => self.hidden_menu = Some(0),
+            C::Columns => self.apply(Action::ToggleColumns),
+            C::Fields => self.columns_menu = Some(0),
             C::Presets => self.apply(Action::Presets),
             C::Global => self.apply(Action::EditGlobal),
         }
@@ -3592,6 +3743,7 @@ impl App {
                     || self.global.is_some()
                     || self.tool_menu.is_some()
                     || self.hidden_menu.is_some()
+                    || self.columns_menu.is_some()
                     || self.palette_dialog.is_some()
                     || self.json_dialog.is_some()
                     || self.show_about
@@ -3903,6 +4055,11 @@ impl App {
             Target::ListItem(i) if self.hidden_menu.is_some() => {
                 self.show_hidden(Some(i));
             }
+            // A click shows or hides that column.
+            Target::ListItem(i) if self.columns_menu.is_some() => {
+                self.columns_menu = Some(i);
+                self.toggle_column(i);
+            }
             // A click runs the tool.
             Target::ListItem(i) if self.tool_menu.is_some() => {
                 self.tool_menu = None;
@@ -3984,7 +4141,7 @@ impl App {
                     if !self.on_palette_key(enter) {
                         self.palette_dialog = None;
                     }
-                } else if self.hidden_menu.take().is_some() {
+                } else if self.hidden_menu.take().is_some() || self.columns_menu.take().is_some() {
                 } else if let Some(m) = self.tool_menu.take() {
                     if m.count > 0 {
                         self.run_tool(m.selected);
@@ -4059,6 +4216,7 @@ impl App {
                 self.close_global();
                 self.tool_menu = None;
                 self.hidden_menu = None;
+                self.columns_menu = None;
                 self.palette_dialog = None;
                 self.json_dialog = None;
                 self.show_about = false;
@@ -4240,6 +4398,15 @@ impl App {
             Action::ScrollHome => tab.hscroll = 0,
             // The selection when there is one, else the cursor row (not in context: the
             // context view shows every line).
+            Action::ToggleColumns => {
+                if tab.engine.field_parser().is_some() {
+                    let on = !tab.engine.fields_view();
+                    tab.engine.set_fields_view(on);
+                } else {
+                    self.message =
+                        Some(tx(self.lang, "No fields: the lines are plain text").into());
+                }
+            }
             Action::HideLines if tab.engine.context_line().is_some() || tab.is_hex() => {}
             Action::HideLines => {
                 // The selection, else the cursor row (its whole group when collapsed).
@@ -4440,6 +4607,9 @@ impl App {
         }
         if self.tool_menu.is_some() {
             self.draw_tool_menu(frame, main_area);
+        }
+        if self.columns_menu.is_some() {
+            self.draw_columns_menu(frame, main_area);
         }
         if self.hidden_menu.is_some() {
             self.draw_hidden_menu(frame, main_area);
@@ -4948,6 +5118,14 @@ impl App {
                 inner.height as usize,
                 self.lang,
             )
+        } else if tab.engine.columns_shown() && inner.height > 1 {
+            // The column view: a header row of the field names over the rows.
+            let (header, lines, drawn) =
+                column_rows(tab, &palette, inner.height as usize - 1, self.lang);
+            frame.render_widget(Paragraph::new(header), Rect { height: 1, ..inner });
+            inner.y += 1;
+            inner.height -= 1;
+            (lines, drawn)
         } else {
             stream_rows(tab, &palette, inner.height as usize, self.lang)
         };
@@ -6754,6 +6932,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::HideLines),
     ),
     (
+        "C",
+        en("column view of the fields on or off"),
+        Some(Action::ToggleColumns),
+    ),
+    (
         "c",
         en("cycle collapse: off, exact, numbers"),
         Some(Action::CycleCollapse),
@@ -6919,8 +7102,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         en("copy selection or row (Ctrl+C: else quit)"),
         Some(Action::Copy),
     ),
-    ("?  F1", en("this help"), None),
-    ("q", en("quit"), Some(Action::Quit)),
+    (
+        "q  ?  F1",
+        en("quit; ? or F1: this help"),
+        Some(Action::Quit),
+    ),
 ];
 
 /// The first `n` characters of `s`, the last one an ellipsis when it is cut.
@@ -7390,6 +7576,233 @@ fn stream_rows(
         lines.push(Line::styled(text, Style::default().fg(palette.dim())));
     }
     (lines, drawn)
+}
+
+/// Widest a terminal column grows to fit its cells.
+const COLUMN_MAX_CELLS: usize = 40;
+
+/// The column view's rows of a window `height` rows tall, and its header row: each shown
+/// field in a column as wide as its widest cell among the rows drawn (at most
+/// `COLUMN_MAX_CELLS`, or the width set for it), then the message. Only these rows are
+/// parsed. Also returns how many rows were drawn, for the mouse.
+fn column_rows(
+    tab: &mut Tab,
+    palette: &Palette,
+    height: usize,
+    lang: Language,
+) -> (Line<'static>, Vec<Line<'static>>, usize) {
+    tab.height = height;
+    tab.pin_cursor();
+    let rows = tab.engine.visible_line_count();
+    if tab.engine.follow_tail {
+        tab.top = view::follow_top(rows, height);
+    }
+    tab.top = view::clamp_top(tab.top, height, rows);
+    let range = view::visible_range(tab.top, height, rows);
+    let engine = &mut tab.engine;
+    let keys = engine.field_columns();
+    // The rows drawn, with their fields.
+    let mut drawn: Vec<(
+        usize,
+        usize,
+        Option<std::sync::Arc<crate::fields::RowFields>>,
+    )> = Vec::with_capacity(range.len());
+    for row in range {
+        let Some(line_idx) = engine.get_actual_line_idx(row) else {
+            break;
+        };
+        let text = engine
+            .get_line(line_idx)
+            .map(|t| t.into_owned())
+            .unwrap_or_default();
+        let fields = engine.row_fields(line_idx, &text).filter(|f| f.shaped);
+        drawn.push((row, line_idx, fields));
+    }
+    let set = engine.field_widths().clone();
+    let widths: Vec<usize> = keys
+        .iter()
+        .map(|k| match set.get(k) {
+            Some(w) => *w as usize,
+            None => drawn
+                .iter()
+                .filter_map(|(_, _, f)| f.as_ref()?.get(k).map(width))
+                .chain(std::iter::once(width(k)))
+                .max()
+                .unwrap_or(1)
+                .min(COLUMN_MAX_CELLS),
+        })
+        .collect();
+    let engine = &tab.engine;
+    let gutter = if engine.show_line_numbers {
+        view::gutter_width(engine.total_lines())
+    } else {
+        0
+    };
+    let message = tx(lang, "message");
+    let mut head = String::new();
+    for (k, w) in keys.iter().zip(&widths) {
+        head.push_str(&pad_cell(k, *w));
+        head.push(' ');
+    }
+    head.push_str(message);
+    let head: String = view::skip_cells(vec![(head, Paint::Plain)], tab.hscroll)
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    let header = Line::from(vec![
+        Span::raw(" ".repeat(gutter + 1)),
+        Span::styled(
+            head,
+            Style::default()
+                .fg(palette.accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let query = engine.search_query.trim().to_string();
+    let has_search = !query.is_empty() && engine.active_match_count() > 0;
+    let mut lines = Vec::with_capacity(drawn.len());
+    for (row, line_idx, fields) in &drawn {
+        let line = match fields {
+            Some(fields) => {
+                let mut text = String::new();
+                for (k, w) in keys.iter().zip(&widths) {
+                    text.push_str(&pad_cell(fields.get(k).unwrap_or(""), *w));
+                    text.push(' ');
+                }
+                text.push_str(&fields.message(&keys));
+                render_cells_row(
+                    engine,
+                    palette,
+                    *row,
+                    *line_idx,
+                    gutter,
+                    &query,
+                    has_search,
+                    tab.hscroll,
+                    &text,
+                )
+            }
+            // A line without the parser's shape runs across the columns, dimmed.
+            None => render_row(
+                engine,
+                palette,
+                *row,
+                *line_idx,
+                gutter,
+                &query,
+                has_search,
+                tab.hscroll,
+            )
+            .patch_style(Style::default().add_modifier(Modifier::DIM)),
+        };
+        lines.push(if *row == tab.cursor {
+            line.patch_style(Style::default().add_modifier(Modifier::REVERSED))
+        } else {
+            line
+        });
+    }
+    let count = lines.len();
+    if lines.is_empty() {
+        let text = if engine.total_lines() == 0 {
+            tx(lang, "(empty file, or still loading)")
+        } else {
+            tx(lang, "(no line matches the filters)")
+        };
+        lines.push(Line::styled(text, Style::default().fg(palette.dim())));
+    }
+    (header, lines, count)
+}
+
+/// `text` cut or padded to `cells` terminal cells.
+fn pad_cell(text: &str, cells: usize) -> String {
+    let text: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w > cells {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push_str(&" ".repeat(cells - used));
+    out
+}
+
+/// A row of the column view: the gutter as `render_row` draws it, then `text` (the
+/// padded cells and the message) in the level or rule colour of the line, search hits
+/// tinted.
+#[allow(clippy::too_many_arguments)]
+fn render_cells_row(
+    engine: &TailEngine,
+    palette: &Palette,
+    row: usize,
+    line_idx: usize,
+    gutter: usize,
+    query: &str,
+    has_search: bool,
+    hscroll: usize,
+    text: &str,
+) -> Line<'static> {
+    let (hit, active, bookmarked) = engine.row_marks(row, line_idx, has_search);
+    let gutter_style = if active {
+        palette.active_hit()
+    } else {
+        Style::default().fg(palette.dim())
+    };
+    let mark = if bookmarked && engine.is_auto_bookmark(line_idx) {
+        'o'
+    } else if bookmarked {
+        '*'
+    } else if hit {
+        '>'
+    } else {
+        ' '
+    };
+    let mut spans = vec![Span::styled(
+        if gutter == 0 {
+            mark.to_string()
+        } else {
+            format!("{:>gutter$}{mark}", line_idx + 1)
+        },
+        gutter_style,
+    )];
+    let raw = engine.get_line(line_idx).unwrap_or_default();
+    let base = match engine.match_highlight(&raw) {
+        Some(rule) => palette.rule_style(&rule),
+        None => palette.level_style(engine.level_of(line_idx)),
+    };
+    let hits = if hit && !query.is_empty() {
+        view::hit_ranges(text, query)
+    } else {
+        Vec::new()
+    };
+    let segs: Vec<(String, Paint)> = view::segments(text, &hits, &[])
+        .into_iter()
+        .map(|(s, p)| (view::sanitize(s), p))
+        .collect();
+    let hit_style = if active {
+        palette.active_hit()
+    } else {
+        palette.hit()
+    };
+    for (s, paint) in view::skip_cells(segs, hscroll) {
+        let style = match paint {
+            Paint::Hit => hit_style,
+            _ => base,
+        };
+        spans.push(Span::styled(s, style));
+    }
+    let line = Line::from(spans);
+    if engine.is_selected(line_idx) {
+        line.style(palette.selection())
+    } else {
+        line
+    }
 }
 
 /// The HEX rows of a window `width` x `height`: only the bytes of these rows are read,
@@ -8491,6 +8904,108 @@ mod tests {
     }
 
     #[test]
+    fn c_shows_the_fields_as_columns_and_the_list_hides_them() {
+        use crossterm::event::KeyCode;
+        let csv = "level,proto,timestamp,message\nerror,tcp,10:00,boom\ninfo,udp,10:01,fine\n";
+        let (mut app, _dir) = app_with(&[("export.csv", csv)], true);
+        render(&mut app, 120, 20);
+        assert!(app.tabs[0].engine.field_parser().is_some());
+        keys(&mut app, "C");
+        assert!(app.tabs[0].engine.columns_shown());
+        let screen = render(&mut app, 120, 20).join("\n");
+        let header = screen
+            .lines()
+            .find(|l| l.contains("level") && l.contains("proto") && l.contains("timestamp"))
+            .unwrap_or_else(|| panic!("no header in {screen}"));
+        assert!(header.contains("message"), "{header}");
+        assert!(
+            screen.lines().any(|l| l.contains("error tcp   10:00")),
+            "{screen}"
+        );
+
+        // The list: untick proto and timestamp; the window keeps level only.
+        let (r, _, _) = *app
+            .hits
+            .bar_chips
+            .iter()
+            .find(|(_, _, c)| *c == crate::tui::bars::BarChip::Fields)
+            .expect("the Fields chip");
+        app.on_mouse(click(r.x + 1, r.y));
+        assert_eq!(app.columns_menu, Some(0));
+        render(&mut app, 120, 20);
+        press(&mut app, KeyCode::Down);
+        keys(&mut app, " ");
+        assert_eq!(
+            app.tabs[0].engine.chosen_field_columns(),
+            ["level", "timestamp"]
+        );
+        // The row followed proto to the unticked part of the list; timestamp is row 1.
+        press(&mut app, KeyCode::Up);
+        keys(&mut app, " ");
+        assert_eq!(app.tabs[0].engine.chosen_field_columns(), ["level"]);
+        app.columns_menu = Some(0);
+        keys(&mut app, " ");
+        assert_eq!(
+            app.tabs[0].engine.chosen_field_columns(),
+            ["level"],
+            "the last column stays"
+        );
+        // The header names level only (proto joins the message as `proto=tcp`).
+        let screen = render(&mut app, 120, 20).join("\n");
+        assert!(
+            screen.lines().any(|l| l.contains("level message")),
+            "{screen}"
+        );
+        assert!(
+            screen.lines().any(|l| l.contains("boom proto=tcp")),
+            "{screen}"
+        );
+        // Tick proto again, then Shift+Up moves it before level.
+        let rows = App::column_menu_rows(&app.tabs[0].engine);
+        let proto = rows.iter().position(|r| r.0 == "proto").unwrap();
+        app.columns_menu = Some(proto);
+        keys(&mut app, " ");
+        assert_eq!(
+            app.tabs[0].engine.chosen_field_columns(),
+            ["level", "proto"]
+        );
+        let shift_up = crossterm::event::KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT);
+        app.on_key(shift_up);
+        assert_eq!(
+            app.tabs[0].engine.chosen_field_columns(),
+            ["proto", "level"]
+        );
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.columns_menu, None);
+        // The same keys the window saves.
+        let entry = crate::workspace::stream_entry(&app.tabs[0].engine);
+        assert!(entry.fields_view);
+        assert_eq!(entry.fields_columns, ["proto", "level"]);
+    }
+
+    #[test]
+    fn a_line_without_fields_runs_across_the_columns() {
+        let log = "{\"level\":\"info\",\"msg\":\"a\"}\nplain text here\n{\"level\":\"warn\",\"msg\":\"b\"}\n";
+        let (mut app, _dir) = app_with(&[("app.json", log)], true);
+        render(&mut app, 100, 16);
+        app.tabs[0]
+            .engine
+            .set_field_choice(crate::fields::ParserChoice::Json);
+        app.tabs[0].engine.set_fields_view(true);
+        let screen = render(&mut app, 100, 16).join("\n");
+        assert!(screen.contains("plain text here"), "{screen}");
+        assert!(screen
+            .lines()
+            .any(|l| l.contains("warn") && l.contains("b")));
+        // Without fields, C says why and changes nothing.
+        let (mut plain, _d) = app_with(&[("p.log", "just text\n")], true);
+        render(&mut plain, 80, 10);
+        keys(&mut plain, "C");
+        assert!(!plain.tabs[0].engine.fields_view());
+        assert!(plain.message.is_some());
+    }
+
+    #[test]
     fn the_time_range_dialog_checks_both_sides_and_esc_keeps_the_range() {
         use crossterm::event::KeyCode;
         let (mut app, _dir) = app_with(&[("t.log", LOG)], false);
@@ -9562,7 +10077,7 @@ mod tests {
             assert!(screen[3..8].iter().all(|l| l.ends_with('║')), "{screen:#?}");
             app.apply(Action::ToggleHelp);
             let help = render(&mut app, 120, 30);
-            assert!(has(&help, "this help"), "{help:#?}");
+            assert!(has(&help, "quit; ? or F1: this help"), "{help:#?}");
         }
     }
 

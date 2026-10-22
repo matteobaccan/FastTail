@@ -41,6 +41,10 @@ pub enum BarChip {
     LevelBytes,
     /// The lines hidden by hand (`🙈 61 hidden`): opens their list.
     Hidden,
+    /// The column view on or off (a stream with a field parser).
+    Columns,
+    /// The columns shown: opens their list.
+    Fields,
     Presets,
     Global,
 }
@@ -158,6 +162,17 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             accent
         };
         first.push(chip(ansi, ansi_style, BarChip::Ansi));
+        // The column view, on a stream whose lines have fields.
+        if e.field_parser().is_some() {
+            first.push(check(
+                tx(lang, "Columns"),
+                e.fields_view(),
+                BarChip::Columns,
+            ));
+            if e.columns_shown() {
+                first.push(chip(tx(lang, "Fields...").into(), accent, BarChip::Fields));
+            }
+        }
         let collapse = e.collapse_mode();
         let x = if ascii { "x" } else { "×" };
         first.push(chip(

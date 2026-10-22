@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Column view in the terminal interface.** `C`, the `[x] Columns` chip or the palette's
+  *Toggle column view* shows the fields of a JSON, logfmt, regex or CSV / TSV stream as
+  columns under a header row, each as wide as its widest cell on screen (at most 40
+  cells), then the message; lines that do not parse run across, dimmed. `[Fields...]`
+  lists the known fields to show, hide (`Space`) and reorder (`Shift+Up/Down`). The
+  choice is saved in the same keys as the window's column view, so both interfaces show
+  the same columns. The window's palette gets the same *Toggle column view* entry. In
+  the terminal help `q` and `?` / `F1` share a row.
+
 ## [0.20.25] - 2026-10-22
 
 ### Added
