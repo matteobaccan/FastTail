@@ -3473,7 +3473,7 @@ fn render_time_display_menu(
     use crate::timestamp::{format_offset, parse_offset, SourceZone, TimeDisplay};
     engine.refresh_time_zone_sample();
     let display = engine.time_display();
-    let source = engine.time_source_zone();
+    let source = engine.effective_source_zone();
     let color = if display == TimeDisplay::Written {
         theme.text_dim()
     } else {

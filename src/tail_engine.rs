@@ -1717,6 +1717,9 @@ pub struct TailEngine {
     /// means (per stream, saved as `time_display` / `time_source_zone`).
     time_display: crate::timestamp::TimeDisplay,
     time_source_zone: crate::timestamp::SourceZone,
+    /// The clock the stream's log format says the log writes (`timestamp_zone`): what a
+    /// timestamp means while the stream's own zone is local. Never saved.
+    format_zone: Option<crate::timestamp::SourceZone>,
     /// Zone the stream's timestamps state (sampled from its first timed lines) and the
     /// reload generation it was read at: what the time controls convert with.
     time_zone_sample: Option<(u64, Option<i32>, crate::timestamp::FormatHint)>,
@@ -2360,6 +2363,7 @@ impl TailEngine {
             rule_seek: None,
             time_display: crate::timestamp::TimeDisplay::Written,
             time_source_zone: crate::timestamp::SourceZone::Local,
+            format_zone: None,
             time_zone_sample: None,
             find_all_request: false,
             report_request: false,
@@ -3570,13 +3574,30 @@ impl TailEngine {
     /// with the format's new version (or detection, when it is gone), an automatic one is
     /// detected again.
     pub fn reload_field_parser(&mut self) {
+        // Whether the format read with now is gone or was changed.
+        let stale = match self.field_parser.as_deref() {
+            Some(FieldParser::Format(f)) => crate::log_format::library()
+                .find(f.name())
+                .is_none_or(|new| new.spec != f.spec || new.builtin != f.builtin),
+            _ => false,
+        };
         match self.field_choice.clone() {
             ParserChoice::Auto => {
+                if stale {
+                    self.set_field_parser(None);
+                }
                 self.field_auto = None;
                 self.field_detected_at = None;
                 self.detect_fields();
             }
-            choice @ (ParserChoice::Format(_) | ParserChoice::Apache | ParserChoice::Syslog) => {
+            ParserChoice::Format(_) if self.field_error.is_some() => {
+                // A missing format may be back.
+                let choice = std::mem::replace(&mut self.field_choice, ParserChoice::Off);
+                self.set_field_choice(choice);
+            }
+            choice @ (ParserChoice::Format(_) | ParserChoice::Apache | ParserChoice::Syslog)
+                if stale =>
+            {
                 self.field_choice = ParserChoice::Off;
                 self.set_field_choice(choice);
             }
@@ -3619,14 +3640,18 @@ impl TailEngine {
             // start over, the line index staying as it is.
             self.filter = self.build_filter();
             self.line_text_changed();
-            // A log format says which clock the log writes, unless the stream was told.
-            if let Some(FieldParser::Format(f)) = self.field_parser.as_deref() {
-                let zone = crate::timestamp::SourceZone::from_config(&f.spec.timestamp_zone);
-                if let (Some(zone), crate::timestamp::SourceZone::Local) =
-                    (zone, self.time_source_zone)
-                {
-                    self.set_time_source_zone(zone);
+            // A log format says which clock the log writes, unless the stream was told
+            // (`effective_source_zone`).
+            let zone = match self.field_parser.as_deref() {
+                Some(FieldParser::Format(f)) => {
+                    crate::timestamp::SourceZone::from_config(&f.spec.timestamp_zone)
+                        .filter(|z| *z != crate::timestamp::SourceZone::Local)
                 }
+                _ => None,
+            };
+            if zone != self.format_zone {
+                self.format_zone = zone;
+                self.reread_time_window();
             }
         }
     }
@@ -5806,6 +5831,15 @@ impl TailEngine {
         self.time_source_zone
     }
 
+    /// The zone timestamps are read in: the stream's own, or while it is local the one its
+    /// log format names.
+    pub fn effective_source_zone(&self) -> crate::timestamp::SourceZone {
+        match (self.time_source_zone, self.format_zone) {
+            (crate::timestamp::SourceZone::Local, Some(zone)) => zone,
+            (own, _) => own,
+        }
+    }
+
     /// Sets the time display; the timestamp cache is untouched (it keeps the printed
     /// clock), a time window set from typed text is read again on the new clock.
     pub fn set_time_display(&mut self, display: crate::timestamp::TimeDisplay) {
@@ -5877,7 +5911,12 @@ impl TailEngine {
             return printed;
         }
         let local = crate::timestamp::local_offset_millis;
-        let utc = stamp_to_utc(printed, self.sampled_zone(), self.time_source_zone, &local);
+        let utc = stamp_to_utc(
+            printed,
+            self.sampled_zone(),
+            self.effective_source_zone(),
+            &local,
+        );
         utc_to_display(utc, self.time_display, &local)
     }
 
@@ -5908,7 +5947,12 @@ impl TailEngine {
         }
         let local = crate::timestamp::local_offset_millis;
         let utc = display_to_utc(shown, self.time_display, &local);
-        utc_to_stamp(utc, self.sampled_zone(), self.time_source_zone, &local)
+        utc_to_stamp(
+            utc,
+            self.sampled_zone(),
+            self.effective_source_zone(),
+            &local,
+        )
     }
 
     /// The leading timestamp of a drawn row's `text` as the time display shows it: the
@@ -5925,7 +5969,7 @@ impl TailEngine {
             text,
             hint,
             hint == FormatHint::Epoch,
-            self.time_source_zone,
+            self.effective_source_zone(),
             self.time_display,
             &crate::timestamp::local_offset_millis,
         )

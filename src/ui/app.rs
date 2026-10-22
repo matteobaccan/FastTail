@@ -1245,13 +1245,18 @@ impl FastTailApp {
     }
 
     /// Opens the Log formats dialog on the formats folder next to `fasttail.ini`, its
-    /// preview reading the focused stream; with `lines`, a new format whose samples they
-    /// are ("Create format from these lines").
-    pub fn open_log_formats(&mut self, lines: Option<Vec<String>>) {
+    /// preview reading stream `source` (the focused one when `None`); with `lines`, a new
+    /// format whose samples they are ("Create format from these lines").
+    pub fn open_log_formats(&mut self, lines: Option<Vec<String>>, source: Option<usize>) {
         use crate::ui::log_formats::{FormatsDialog, PREVIEW_LINES};
-        let focused = self.focused_stream_path();
-        let stream_lines: Vec<String> = focused
-            .and_then(|p| self.engines.iter().find(|e| e.path == p))
+        let source = match source {
+            Some(idx) => Some(idx),
+            None => self
+                .focused_stream_path()
+                .and_then(|p| self.engines.iter().position(|e| e.path == p)),
+        };
+        let stream_lines: Vec<String> = source
+            .and_then(|idx| self.engines.get(idx))
             .map(|e| {
                 (0..e.total_lines().min(PREVIEW_LINES))
                     .filter_map(|i| e.get_line(i).map(|l| l.into_owned()))
@@ -1294,7 +1299,7 @@ impl FastTailApp {
             .into_iter()
             .filter_map(|i| engine.get_line(i).map(|l| l.into_owned()))
             .collect();
-        self.open_log_formats(Some(lines));
+        self.open_log_formats(Some(lines), Some(idx));
     }
 
     /// Feeds the merged views from their sources (a few milliseconds each per frame) and
@@ -5005,7 +5010,7 @@ impl FastTailApp {
                 self.lock();
             }
             if open_formats {
-                self.open_log_formats(None);
+                self.open_log_formats(None, None);
             }
 
             if test_screensaver {
@@ -6320,7 +6325,7 @@ impl FastTailApp {
             }
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
-            A::LogFormats => self.open_log_formats(None),
+            A::LogFormats => self.open_log_formats(None, None),
             A::MergedView => {
                 let first = self.focused_stream_path();
                 self.merge_prompt =

@@ -16,8 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stream's first 200 lines (match share, unmatched lines, time and level read, captures,
   cost per line, an entry start warning). Save writes the file and refreshes the streams.
   *◇ Create format from these lines…* in the row menu starts a draft with the selected
-  lines as samples. A format's `timestamp_zone` now sets the stream's source zone when
-  the stream has none. Last part of `custom-log-formats`.
+  lines as samples. A format's `timestamp_zone` now gives the clock of a stream read with it
+  while the stream's own source zone is local. Last part of `custom-log-formats`.
 
 ## [0.21.4] - 2026-10-22
 

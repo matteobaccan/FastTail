@@ -206,9 +206,14 @@ fn an_entry_start_pattern_keeps_multi_line_entries_together() {
         };
         assert_eq!(format_name(&e).as_deref(), Some("Device"), "{thresholds:?}");
         assert_eq!(
-            e.time_source_zone(),
+            e.effective_source_zone(),
             fasttail::timestamp::SourceZone::Utc,
             "the format's clock"
+        );
+        assert_eq!(
+            e.time_source_zone(),
+            fasttail::timestamp::SourceZone::Local,
+            "not the stream's own, so not saved"
         );
         e.ensure_timestamps();
         wait_for_jobs(&mut e);
@@ -309,6 +314,18 @@ mod dialog {
         let saved = lib.find("Orders").unwrap();
         assert_eq!(saved.spec.timestamp_field, "ts");
 
+        // A rename moves the format to the file of its new name.
+        d.draft.name = "Sales".into();
+        let renamed = d.save(&lib).unwrap();
+        assert_eq!(renamed, formats.join("Sales.fasttail-format.ini"));
+        assert!(!path.exists());
+        d.draft.name = "Orders".into();
+        let lib = Library::load(&formats);
+        assert_eq!(d.save(&lib).unwrap(), path, "and back");
+        assert!(!renamed.exists());
+        let lib = Library::load(&formats);
+        let saved = lib.find("Orders").unwrap();
+
         // Saving again rewrites the same file; a new format with the name is refused.
         d.draft.level_map = "E=error".into();
         assert_eq!(d.save(&lib).unwrap(), path);
@@ -374,11 +391,32 @@ mod dialog {
         assert_eq!(dialog.draft.samples, LINES[1]);
         assert_eq!(dialog.stream_lines.len(), LINES.len(), "the focused stream");
 
+        // An unchanged format is kept as it is; a changed one is read with its new version,
+        // on a stream that chose it and on one that detected it.
+        let formats = dir.path().join("formats");
+        write_lines(&dir.path().join("payments-1.log"), &LINES);
+        app.open_log_file(dir.path().join("payments-1.log"));
+        assert_eq!(app.engines.len(), 2);
+        let auto = 1;
+        assert_eq!(app.engines[auto].field_choice(), &ParserChoice::Auto);
+        app.engines[auto].poll_updates();
         app.engines[0].set_field_choice(ParserChoice::Format("Payments".into()));
         let before = app.engines[0].field_parser().cloned().unwrap();
-        app.reload_log_formats(&dir.path().join("formats"));
-        let after = app.engines[0].field_parser().cloned().unwrap();
-        assert!(!std::sync::Arc::ptr_eq(&before, &after), "the new version");
-        assert_eq!(format_name(&app.engines[0]).as_deref(), Some("Payments"));
+        app.reload_log_formats(&formats);
+        let same = app.engines[0].field_parser().cloned().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &same), "nothing to rebuild");
+        let edited = PAYMENTS.replace("I=info", "I=debug");
+        std::fs::write(formats.join("payments.fasttail-format.ini"), edited).unwrap();
+        app.reload_log_formats(&formats);
+        for idx in [0, auto] {
+            match app.engines[idx].field_parser().map(|p| &**p) {
+                Some(FieldParser::Format(f)) => {
+                    assert!(f.spec.level_map.contains("I=debug"), "stream {idx}")
+                }
+                other => panic!("stream {idx}: {other:?}"),
+            }
+        }
+        // Back as the other tests expect it.
+        install(dir.path());
     }
 }

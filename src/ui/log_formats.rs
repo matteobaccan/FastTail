@@ -199,6 +199,16 @@ pub fn preview(spec: &FormatSpec, stream: &[String]) -> Preview {
     out
 }
 
+/// The text of an error of `save` / `import`: a name or file that is taken, or why the
+/// format does not load, after a translated prefix.
+fn error_text(lang: Language, error: &str, name: &str) -> String {
+    if error.ends_with(": exists") {
+        t(lang, "fmt_exists").replace("{0}", name)
+    } else {
+        format!("{}: {error}", t(lang, "fmt_invalid"))
+    }
+}
+
 /// What the dialog did that the app has to follow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormatsAction {
@@ -275,6 +285,7 @@ impl FormatsDialog {
             ..Draft::default()
         };
         self.editing = Editing::New;
+        self.confirm_delete = None;
         self.refresh_preview();
     }
 
@@ -282,6 +293,7 @@ impl FormatsDialog {
     pub fn duplicate(&mut self) {
         self.draft.name = format!("{} copy", self.draft.name.trim());
         self.editing = Editing::New;
+        self.confirm_delete = None;
         self.refresh_preview();
     }
 
@@ -310,11 +322,20 @@ impl FormatsDialog {
                 return Err(format!("{}: {}", spec.name, "exists"));
             }
         }
-        let path = match own {
-            Some(p) => p,
-            None => {
+        // A renamed format moves to the file of its new name.
+        let path = match &own {
+            Some(p)
+                if p.file_name()
+                    .is_some_and(|n| n.to_string_lossy() == spec.file_name()) =>
+            {
+                p.clone()
+            }
+            _ => {
                 let p = self.dir.join(spec.file_name());
-                if p.exists() {
+                let same = own
+                    .as_deref()
+                    .is_some_and(|o| crate::paths::paths_equal(o, &p));
+                if p.exists() && !same {
                     return Err(format!("{}: {}", p.display(), "exists"));
                 }
                 p
@@ -322,6 +343,9 @@ impl FormatsDialog {
         };
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         std::fs::write(&path, spec.to_ini()).map_err(|e| e.to_string())?;
+        if let Some(old) = own.filter(|o| !crate::paths::paths_equal(o, &path)) {
+            std::fs::remove_file(old).map_err(|e| e.to_string())?;
+        }
         self.editing = Editing::File(path.clone());
         Ok(path)
     }
@@ -341,6 +365,7 @@ impl FormatsDialog {
         std::fs::write(&path, format.spec.to_ini()).map_err(|e| e.to_string())?;
         self.draft = Draft::from_spec(&format.spec);
         self.editing = Editing::File(path.clone());
+        self.confirm_delete = None;
         self.refresh_preview();
         Ok(path)
     }
@@ -496,7 +521,10 @@ impl FormatsDialog {
                             ));
                             action = Some(FormatsAction::Changed);
                         }
-                        Err(e) => self.notice = Some((e, true)),
+                        Err(e) => {
+                            let name = e.strip_suffix(": exists").unwrap_or("").to_string();
+                            self.notice = Some((error_text(lang, &e, &name), true));
+                        }
                     }
                 }
             }
@@ -627,12 +655,8 @@ impl FormatsDialog {
                         action = Some(FormatsAction::Changed);
                     }
                     Err(e) => {
-                        let text = if e.ends_with("exists") {
-                            t(lang, "fmt_exists").replace("{0}", self.draft.name.trim())
-                        } else {
-                            e
-                        };
-                        self.notice = Some((text, true));
+                        let name = self.draft.name.trim().to_string();
+                        self.notice = Some((error_text(lang, &e, &name), true));
                     }
                 }
             }
