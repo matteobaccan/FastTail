@@ -94,6 +94,12 @@ impl LogLevel {
     }
 }
 
+/// Level a whole word names (`error`, `WARNING`, `info`...), as the text detection reads
+/// it; `None` for any other word. Used for the value of a level field.
+pub fn level_word(word: &str) -> Option<LogLevel> {
+    token_level(word.trim().as_bytes())
+}
+
 /// Level of a token (a whole word already isolated), or `None` if it is not a level word.
 fn token_level(word: &[u8]) -> Option<LogLevel> {
     // Branch on length first to eliminate array scans and limit string comparisons.

@@ -12,7 +12,7 @@ use crate::context_lines::{
 };
 use crate::fields::{FieldCatalogue, FieldParser, FieldSpans, ParserChoice, RowCache, RowFields};
 use crate::file_source::FileSource;
-use crate::log_level::{detect_level_in, LogLevel};
+use crate::log_level::LogLevel;
 use crate::scan_job::{
     FilterSpec, JobSpec, ScanBatch, ScanJob, ScanKind, ScanRange, VisibleSet, MAX_FILTER_TERMS,
 };
@@ -2670,7 +2670,13 @@ impl TailEngine {
             Some(&v) => LogLevel::from_u8(v),
             None => self
                 .get_line(idx)
-                .map(|line| detect_level_in(&line, self.level_window()))
+                .map(|line| {
+                    crate::fields::line_level(
+                        self.field_parser.as_deref(),
+                        &line,
+                        self.level_window(),
+                    )
+                })
                 .unwrap_or(LogLevel::Unknown),
         }
     }
@@ -2889,9 +2895,11 @@ impl TailEngine {
         let mut parsed = 0usize;
         let mut unordered = false;
         let mut fresh = Vec::with_capacity(to - from);
+        let parser = self.field_parser.clone();
+        let parser = parser.as_deref();
         self.scan_lines(from, to, |_, text| {
             // A line without a timestamp of its own belongs to the entry above it.
-            if let Some((millis, format)) = crate::timestamp::detect_timestamp(text, hint) {
+            if let Some((millis, format)) = crate::fields::line_timestamp(parser, text, hint) {
                 hint = format;
                 parsed += 1;
                 if inherited != NO_TIMESTAMP && millis < inherited {
@@ -2966,8 +2974,9 @@ impl TailEngine {
         }
         let mut fresh = Vec::with_capacity(total - from);
         let window = self.level_window();
+        let parser = self.field_parser.clone();
         self.scan_lines(from, total, |_, text| {
-            fresh.push(detect_level_in(text, window) as u8);
+            fresh.push(crate::fields::line_level(parser.as_deref(), text, window) as u8);
             true
         });
         self.push_levels(&fresh);
@@ -3538,12 +3547,11 @@ impl TailEngine {
             self.field_rows.clear();
             self.field_catalogue_due = self.field_parser.is_some();
             self.sample_field_catalogue();
-            // Terms read as field terms with a parser only: the filter is read again.
-            let terms = self.filter.has_terms()
-                || self.global_filter.as_ref().is_some_and(|g| g.has_terms());
-            if terms {
-                self.refresh_filters();
-            }
+            // The terms read as field terms with a parser only, and the levels and
+            // timestamps come from the fields: the filter is built again and both caches
+            // start over, the line index staying as it is.
+            self.filter = self.build_filter();
+            self.line_text_changed();
         }
     }
 
@@ -5342,6 +5350,7 @@ impl TailEngine {
             ansi: self.ansi_effective(),
             parent_visible: false,
             level_window: self.level_window(),
+            parser: self.field_parser.clone(),
         };
         (file, range)
     }
@@ -5948,7 +5957,8 @@ impl TailEngine {
             return self.line_timestamp(idx);
         }
         let line = self.get_line(idx)?;
-        crate::timestamp::detect_timestamp(&line, self.timestamp_hint).map(|(millis, _)| millis)
+        crate::fields::line_timestamp(self.field_parser.as_deref(), &line, self.timestamp_hint)
+            .map(|(millis, _)| millis)
     }
 
     // ----- Time delta column, time anchor and selection elapsed time -----
@@ -5996,7 +6006,8 @@ impl TailEngine {
             return TimeDelta::Pending;
         }
         let own = self.get_line(line).is_some_and(|text| {
-            crate::timestamp::detect_timestamp(&text, self.timestamp_hint).is_some()
+            crate::fields::line_timestamp(self.field_parser.as_deref(), &text, self.timestamp_hint)
+                .is_some()
         });
         let Some(millis) = self.line_timestamp(line).filter(|_| own) else {
             return TimeDelta::Blank;
@@ -7031,6 +7042,7 @@ impl TailEngine {
             ansi: self.ansi_effective(),
             parent_visible: self.parent_visible_before(start_line),
             level_window: self.level_window(),
+            parser: self.field_parser.clone(),
         };
         // The file being tailed: for a pattern stream `path` is the pattern itself.
         let file = self.current_file.as_deref().unwrap_or(&self.path);
@@ -8155,8 +8167,12 @@ impl TailEngine {
                 // The cache when the line is timed; else the line's own timestamp.
                 let millis = self.line_timestamp(line).or_else(|| {
                     self.get_line(line).and_then(|text| {
-                        crate::timestamp::detect_timestamp(&text, self.timestamp_hint)
-                            .map(|(millis, _)| millis)
+                        crate::fields::line_timestamp(
+                            self.field_parser.as_deref(),
+                            &text,
+                            self.timestamp_hint,
+                        )
+                        .map(|(millis, _)| millis)
                     })
                 });
                 ReportBookmark {

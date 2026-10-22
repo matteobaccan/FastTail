@@ -888,6 +888,86 @@ pub fn detect<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<ParserChoi
     }
 }
 
+/// The fields a line's level is read from, in this order.
+pub const LEVEL_KEYS: [&str; 4] = ["level", "lvl", "severity", "log.level"];
+/// The fields a line's timestamp is read from, in this order.
+pub const TIME_KEYS: [&str; 5] = ["ts", "time", "timestamp", "@timestamp", "t"];
+
+thread_local! {
+    /// The field spans of the line being read for a filter, a level or a timestamp: one
+    /// buffer per thread (the window's and each job's), so it costs no allocation per line.
+    static SPANS: std::cell::RefCell<FieldSpans> = std::cell::RefCell::new(FieldSpans::new());
+}
+
+/// Runs `f` with this thread's field buffer (a fresh one when it is in use already).
+pub fn with_spans<R>(f: impl FnOnce(&mut FieldSpans) -> R) -> R {
+    SPANS.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut spans) => f(&mut spans),
+        Err(_) => f(&mut FieldSpans::new()),
+    })
+}
+
+/// The level named by the first level field of `line`, already scanned into `spans`.
+pub fn level_in(spans: &FieldSpans, line: &str) -> Option<crate::log_level::LogLevel> {
+    LEVEL_KEYS.iter().find_map(|key| {
+        spans
+            .get(line, key)
+            .and_then(|f| crate::log_level::level_word(&f.value()))
+    })
+}
+
+/// The timestamp of the first time field of `line` (scanned into `spans`) that the line
+/// parsers recognise: ISO 8601, epoch seconds or milliseconds.
+pub fn timestamp_in(
+    spans: &FieldSpans,
+    line: &str,
+    hint: crate::timestamp::FormatHint,
+) -> Option<(i64, crate::timestamp::FormatHint)> {
+    TIME_KEYS.iter().find_map(|key| {
+        spans
+            .get(line, key)
+            .and_then(|f| crate::timestamp::detect_timestamp(f.value().trim(), hint))
+    })
+}
+
+/// The level of `line`: from its fields when `parser` is set and a level field names a
+/// level, otherwise detected from the first `window` bytes of the text.
+pub fn line_level(
+    parser: Option<&FieldParser>,
+    line: &str,
+    window: usize,
+) -> crate::log_level::LogLevel {
+    if let Some(parser) = parser {
+        let found = with_spans(|spans| {
+            scan(parser, line, spans);
+            level_in(spans, line)
+        });
+        if let Some(level) = found {
+            return level;
+        }
+    }
+    crate::log_level::detect_level_in(line, window)
+}
+
+/// The timestamp of `line`: from its fields when `parser` is set and a time field holds
+/// one, otherwise detected at the start of the text.
+pub fn line_timestamp(
+    parser: Option<&FieldParser>,
+    line: &str,
+    hint: crate::timestamp::FormatHint,
+) -> Option<(i64, crate::timestamp::FormatHint)> {
+    if let Some(parser) = parser {
+        let found = with_spans(|spans| {
+            scan(parser, line, spans);
+            timestamp_in(spans, line, hint)
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
+    crate::timestamp::detect_timestamp(line, hint)
+}
+
 /// The comparison of a field term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldOp {

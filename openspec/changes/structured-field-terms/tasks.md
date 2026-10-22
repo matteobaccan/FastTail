@@ -7,9 +7,9 @@
 
 ## 2. Level and timestamp from fields
 
-- [ ] 2.1 Level from the first level field (`level`, `lvl`, `severity`, `log.level`) through `log_level::token_level` (made `pub(crate)`), falling back to `detect_level`; time from the first time field (`ts`, `time`, `timestamp`, `@timestamp`, `t`) through the existing parsers, falling back to `detect_timestamp`
-- [ ] 2.2 `JobSpec::Levels` / `JobSpec::Timestamps` carry the parser; parser change resets the level and timestamp caches without rebuilding the line index
-- [ ] 2.3 Tests: JSON log with the time inside the object works with the time range, the histogram and the delta column; background and synchronous caches identical
+- [x] 2.1 Level from the first level field (`level`, `lvl`, `severity`, `log.level`) through `log_level::level_word` (the text detection's word table), falling back to `detect_level`; time from the first time field (`ts`, `time`, `timestamp`, `@timestamp`, `t`) through the existing parsers, falling back to `detect_timestamp`
+- [x] 2.2 `JobSpec::Levels` / `JobSpec::Timestamps` carry the parser; parser change resets the level and timestamp caches without rebuilding the line index
+- [x] 2.3 Tests: JSON log with the time inside the object works with the time range, the histogram and the delta column; background and synchronous caches identical
 
 ## 3. Search, rules and copy in the column view
 

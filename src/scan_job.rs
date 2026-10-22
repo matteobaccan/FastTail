@@ -26,7 +26,7 @@ use crate::log_level::{detect_level_in, LogLevel, DEFAULT_WINDOW};
 use crate::tail_engine::{
     contains_case_insensitive, decode_line_ansi, CompiledHighlight, FileEncoding, NO_TIMESTAMP,
 };
-use crate::timestamp::{detect_timestamp, FormatHint};
+use crate::timestamp::FormatHint;
 
 const CHUNK: usize = 1024 * 1024;
 /// Hits accumulated before a batch is sent (keeps the channel traffic low).
@@ -136,12 +136,6 @@ impl FilterTerm {
     }
 }
 
-thread_local! {
-    /// The field spans of the line being filtered, one buffer per thread (the window's
-    /// and each job's), so a field term costs no allocation per line.
-    static SPANS: std::cell::RefCell<FieldSpans> = std::cell::RefCell::new(FieldSpans::new());
-}
-
 /// The fields of the line being filtered, scanned on the first field term that asks.
 pub struct LineFields<'a> {
     parser: Option<&'a FieldParser>,
@@ -150,13 +144,31 @@ pub struct LineFields<'a> {
 }
 
 impl LineFields<'_> {
-    fn passes(&mut self, line: &str, term: &FieldTerm) -> bool {
+    /// Scans the line on first use; false without a parser.
+    fn ready(&mut self, line: &str) -> bool {
         let Some(parser) = self.parser else {
             return false;
         };
         if !self.scanned {
             crate::fields::scan(parser, line, self.spans);
             self.scanned = true;
+        }
+        true
+    }
+
+    /// The level of the line: its level field, else the text's.
+    fn level(&mut self, line: &str, window: usize) -> LogLevel {
+        if self.ready(line) {
+            if let Some(level) = crate::fields::level_in(self.spans, line) {
+                return level;
+            }
+        }
+        detect_level_in(line, window)
+    }
+
+    fn passes(&mut self, line: &str, term: &FieldTerm) -> bool {
+        if !self.ready(line) {
+            return false;
         }
         match self.spans.get(line, &term.key) {
             Some(f) => term.eval(Some(&f.value())),
@@ -274,7 +286,9 @@ impl FilterSpec {
     /// Runs `f` with the fields of the line to filter: a thread's own buffer when a term
     /// needs fields, none otherwise.
     fn with_fields<R>(&self, f: impl FnOnce(&mut LineFields) -> R) -> R {
-        if !self.has_field_terms {
+        let needs =
+            self.parser.is_some() && (self.has_field_terms || self.min_level != LogLevel::Unknown);
+        if !needs {
             let mut empty = FieldSpans::new();
             return f(&mut LineFields {
                 parser: None,
@@ -282,21 +296,12 @@ impl FilterSpec {
                 scanned: true,
             });
         }
-        SPANS.with(|cell| match cell.try_borrow_mut() {
-            Ok(mut spans) => f(&mut LineFields {
+        crate::fields::with_spans(|spans| {
+            f(&mut LineFields {
                 parser: self.parser.as_deref(),
-                spans: &mut spans,
+                spans,
                 scanned: false,
-            }),
-            // Re-entered on this thread: a buffer of its own.
-            Err(_) => {
-                let mut spans = FieldSpans::new();
-                f(&mut LineFields {
-                    parser: self.parser.as_deref(),
-                    spans: &mut spans,
-                    scanned: false,
-                })
-            }
+            })
         })
     }
 
@@ -323,14 +328,18 @@ impl FilterSpec {
         self.has_terms() || self.min_level != LogLevel::Unknown || self.global.is_some()
     }
 
-    /// Third stage after exclude and include: the line's detected level must reach
-    /// `min_level`. Lines without a level pass when the threshold is off or `TRACE`, or
-    /// when `show_unknown_levels` is set.
+    /// Third stage after exclude and include: the line's level (its level field on a
+    /// stream with a parser, else detected) must reach `min_level`. Lines without a level
+    /// pass when the threshold is off or `TRACE`, or when `show_unknown_levels` is set.
     pub fn level_passes(&self, line: &str) -> bool {
+        self.with_fields(|fields| self.level_passes_in(line, fields))
+    }
+
+    fn level_passes_in(&self, line: &str, fields: &mut LineFields) -> bool {
         if self.min_level == LogLevel::Unknown {
             return true;
         }
-        match detect_level_in(line, self.level_window) {
+        match fields.level(line, self.level_window) {
             LogLevel::Unknown => self.show_unknown_levels || self.min_level == LogLevel::Trace,
             level => level >= self.min_level,
         }
@@ -372,7 +381,7 @@ impl FilterSpec {
         self.with_fields(|fields| {
             !self.excluded_in(line, fields)
                 && self.included_in(line, fields)
-                && self.level_passes(line)
+                && self.level_passes_in(line, fields)
         })
     }
 
@@ -383,13 +392,13 @@ impl FilterSpec {
         self.with_fields(|fields| {
             if crate::tail_engine::TailEngine::is_stacktrace_continuation(line) {
                 let v = !self.excluded_in(line, fields)
-                    && ((self.included_in(line, fields) && self.level_passes(line))
+                    && ((self.included_in(line, fields) && self.level_passes_in(line, fields))
                         || parent_visible);
                 (v, parent_visible)
             } else {
                 let v = !self.excluded_in(line, fields)
                     && self.included_in(line, fields)
-                    && self.level_passes(line);
+                    && self.level_passes_in(line, fields);
                 (v, v)
             }
         })
@@ -564,6 +573,9 @@ pub struct ScanRange {
     pub parent_visible: bool,
     /// The bytes of a line the level is looked for in (`Levels`, `Timestamps`).
     pub level_window: usize,
+    /// The stream's field parser: levels and timestamps come from its fields when they
+    /// hold them (`Levels`, `Timestamps`).
+    pub parser: Option<Arc<FieldParser>>,
 }
 
 pub struct ScanJob {
@@ -647,12 +659,14 @@ struct Timing {
     unordered: bool,
     inherited: i64,
     hint: FormatHint,
+    parser: Option<Arc<FieldParser>>,
 }
 
 impl Timing {
     /// One line, exactly as `TailEngine::fill_timestamps` times it.
     fn push(&mut self, line: &str) {
-        if let Some((millis, format)) = detect_timestamp(line, self.hint) {
+        let found = crate::fields::line_timestamp(self.parser.as_deref(), line, self.hint);
+        if let Some((millis, format)) = found {
             self.hint = format;
             self.parsed += 1;
             if self.inherited != NO_TIMESTAMP && millis < self.inherited {
@@ -751,6 +765,7 @@ fn run(
         unordered: false,
         inherited,
         hint,
+        parser: range.parser.clone(),
     };
 
     // A `Collapse` job: the detector, and the next entry of the visible list to meet.
@@ -802,7 +817,11 @@ fn run(
             }
             JobSpec::Levels => {
                 line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    levels.push(detect_level_in(s, range.level_window) as u8);
+                    levels.push(crate::fields::line_level(
+                        range.parser.as_deref(),
+                        s,
+                        range.level_window,
+                    ) as u8);
                     true
                 });
                 true
@@ -812,7 +831,11 @@ fn run(
                 line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     timing.push(s);
                     if with_level {
-                        levels.push(detect_level_in(s, range.level_window) as u8);
+                        levels.push(crate::fields::line_level(
+                            range.parser.as_deref(),
+                            s,
+                            range.level_window,
+                        ) as u8);
                     }
                     true
                 });
@@ -1095,6 +1118,7 @@ fn trim_cr(bytes: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::timestamp::detect_timestamp;
     use std::time::{Duration, Instant};
 
     fn millis(text: &str) -> i64 {
@@ -1124,6 +1148,7 @@ mod tests {
             ansi: AnsiMode::Raw,
             parent_visible: false,
             level_window: DEFAULT_WINDOW,
+            parser: None,
         };
         let spec = JobSpec::Timestamps {
             inherited,
@@ -1268,6 +1293,7 @@ mod tests {
             ansi: AnsiMode::Raw,
             parent_visible: false,
             level_window: DEFAULT_WINDOW,
+            parser: None,
         };
         let job = ScanJob::spawn(
             7,
