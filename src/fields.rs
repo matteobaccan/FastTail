@@ -351,12 +351,15 @@ impl FieldSpans {
     }
 
     /// Checks whether `span`'s key matches `key` without slicing the value or constructing `Field`.
-    /// Slices key bytes/str directly, short-circuiting on length mismatch.
+    /// Short-circuits on key length mismatch before checking slice content.
     fn span_key_matches(&self, line: &str, span: &FieldSpan, key: &str) -> bool {
         match span.key {
-            KeyAt::Line(a, b) => line.get(a as usize..b as usize) == Some(key),
+            KeyAt::Line(a, b) => {
+                (b - a) as usize == key.len() && line.get(a as usize..b as usize) == Some(key)
+            }
             KeyAt::Scratch(a, b) => {
-                self.scratch.get(a as usize..b as usize) == Some(key.as_bytes())
+                (b - a) as usize == key.len()
+                    && self.scratch.get(a as usize..b as usize) == Some(key.as_bytes())
             }
         }
     }
@@ -1593,10 +1596,13 @@ impl FieldTerm {
             self.regexes.iter().any(|re| re.is_match(value))
         } else if self.case_sensitive {
             self.values.iter().any(|v| v == value)
+        } else if value.is_ascii() {
+            // SIMD-accelerated ASCII case-insensitive comparison without char iterator overhead.
+            self.lower.iter().any(|l| value.eq_ignore_ascii_case(l))
         } else {
-            self.lower
-                .iter()
-                .any(|l| value.chars().flat_map(char::to_lowercase).eq(l.chars()))
+            // Lowercase non-ASCII string once instead of re-iterating chars per alternative.
+            let val_lower = value.to_lowercase();
+            self.lower.contains(&val_lower)
         }
     }
 

@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Fast-path ASCII equality and key-length short-circuiting in field term filtering
+**Learning:** In structured log line field filtering (`level=error|warn`), using `value.chars().flat_map(char::to_lowercase).eq(l.chars())` creates char iterators and allocation overhead for every term comparison. Branching on `value.is_ascii()` to use `value.eq_ignore_ascii_case(l)` leverages SIMD byte comparisons for ASCII field values. Additionally, checking `(b - a) as usize == key.len()` upfront in `span_key_matches` short-circuits key matching on length mismatch before attempting string slice extraction and UTF-8 boundary checks.
+**Action:** When filtering structured log fields, branch `value.is_ascii()` to call `value.eq_ignore_ascii_case(l)` and perform integer length checks before string slicing.
