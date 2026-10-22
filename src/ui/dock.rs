@@ -2846,6 +2846,12 @@ fn render_log_stream(
                     engine.select_row(target);
                     ui.ctx().request_repaint();
                 }
+            } else if act(ActionId::OutOfOrderNext) || act(ActionId::OutOfOrderPrev) {
+                let forward = act(ActionId::OutOfOrderNext);
+                if let Some(target) = engine.walk_out_of_order(forward) {
+                    scroll_to_target(engine, target);
+                    ui.ctx().request_repaint();
+                }
             }
             // F4 / SHIFT + F4: next / previous line of the navigation rule, from the
             // selected row or the top row (the walk itself runs at the top of the frame).
@@ -3088,6 +3094,7 @@ fn render_log_stream(
         ui.separator();
 
         render_timeline_toggles(ui, engine, theme, lang, search_view);
+        render_out_of_order_chip(ui, engine, theme, lang);
 
         ui.separator();
 
@@ -4009,6 +4016,21 @@ fn render_extended_rows(
                                     .color(merged_source_color(src)),
                             )
                             .on_hover_text(name);
+                        }
+
+                        // A timestamp earlier than the line above's: `↶` and the jump.
+                        if let Some(jump) = out_of_order_mark(engine, actual_line_idx) {
+                            ui.label(
+                                RichText::new("↶")
+                                    .monospace()
+                                    .strong()
+                                    .size(font_size)
+                                    .color(theme.warn_color()),
+                            )
+                            .on_hover_text(
+                                t(lang, "ooo_jump")
+                                    .replace("{0}", &crate::timestamp::format_jump(jump)),
+                            );
                         }
 
                         // Line number
@@ -6577,7 +6599,14 @@ fn render_wrapped_rows(
                     theme.text_dim().gamma_multiply(0.6)
                 };
                 let chip = merged_source(eng, line);
-                let bar = if chip.is_some() { " " } else { "│" };
+                let out_of_order = out_of_order_mark(eng, line).is_some();
+                let bar = if chip.is_some() {
+                    " "
+                } else if out_of_order {
+                    "↶"
+                } else {
+                    "│"
+                };
                 painter.text(
                     egui::pos2(origin.x + left_pad + marker_w, text_top),
                     egui::Align2::LEFT_TOP,
@@ -7397,6 +7426,55 @@ const MERGED_SOURCE_COLORS: [Color32; 8] = [
 ];
 
 /// The chip colour of source `i` of a merged view.
+/// The jump back of line `idx` when it is out of order and marked (not when the whole
+/// log goes backwards: the stream bar says that once).
+fn out_of_order_mark(engine: &TailEngine, idx: usize) -> Option<i64> {
+    if engine.timestamps_go_backwards() {
+        return None;
+    }
+    engine.out_of_order_jump(idx)
+}
+
+/// The stream bar's out-of-order chip: `↶ N out of order` (click: next, right-click:
+/// previous), or the notice that the timestamps go backwards.
+fn render_out_of_order_chip(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    let count = engine.out_of_order_count();
+    if count == 0 {
+        return;
+    }
+    if engine.timestamps_go_backwards() {
+        ui.label(
+            RichText::new(format!("⇅ {}", t(lang, "ooo_backwards")))
+                .monospace()
+                .size(11.0)
+                .color(theme.warn_color()),
+        );
+        return;
+    }
+    let text = format!(
+        "↶ {}",
+        t(lang, "ooo_count").replace("{0}", &count.to_string())
+    );
+    let response = ui
+        .button(
+            RichText::new(text)
+                .monospace()
+                .size(11.0)
+                .color(theme.warn_color()),
+        )
+        .on_hover_text(t(lang, "ooo_tip"));
+    if response.clicked() {
+        engine.walk_out_of_order(true);
+    } else if response.secondary_clicked() {
+        engine.walk_out_of_order(false);
+    }
+}
+
 fn merged_source_color(i: usize) -> Color32 {
     MERGED_SOURCE_COLORS[i % MERGED_SOURCE_COLORS.len()]
 }

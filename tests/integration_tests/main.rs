@@ -37,6 +37,7 @@ mod log_formats;
 mod log_levels;
 mod merged_views;
 mod open_at_line;
+mod out_of_order_lines;
 mod pattern_streams;
 mod relative_time_windows;
 mod review_regressions;

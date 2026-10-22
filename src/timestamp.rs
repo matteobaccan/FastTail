@@ -477,6 +477,19 @@ pub fn format_millis(millis: i64) -> String {
     format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{sec:02}")
 }
 
+/// A jump in time as `-HH:MM:SS` (`-HH:MM:SS.mmm` under a minute), for the lines whose
+/// time goes back.
+pub fn format_jump(ms: i64) -> String {
+    let a = ms.unsigned_abs();
+    let (h, m, s, milli) = (a / 3_600_000, a / 60_000 % 60, a / 1000 % 60, a % 1000);
+    let sign = if ms < 0 { "-" } else { "+" };
+    if a < 60_000 {
+        format!("{sign}{h:02}:{m:02}:{s:02}.{milli:03}")
+    } else {
+        format!("{sign}{h:02}:{m:02}:{s:02}")
+    }
+}
+
 /// Time of day only (`HH:MM:SS`), for places where the date is already clear.
 pub fn format_clock(millis: i64) -> String {
     let rest = millis.rem_euclid(86_400_000);

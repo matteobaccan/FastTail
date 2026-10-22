@@ -40,6 +40,9 @@ pub const LEVEL_DETECT_BYTES: RangeInclusive<usize> =
 /// `[general] folder_max_streams`: the streams an Open all folder group opens at most.
 pub const FOLDER_MAX_STREAMS: RangeInclusive<usize> =
     crate::folder_source::MIN_MAX_STREAMS..=crate::folder_source::MAX_MAX_STREAMS;
+/// `[general] out_of_order_tolerance_ms`: how far back a timestamp may go before its line
+/// is marked out of order, up to an hour (0: no marks).
+pub const OUT_OF_ORDER_TOLERANCE_MS: RangeInclusive<u64> = 0..=3_600_000;
 /// `[general] time_delta_gap_ms`: gap the time delta column marks, up to a day.
 pub const TIME_DELTA_GAP_MS: RangeInclusive<u64> = 0..=86_400_000;
 
@@ -161,6 +164,7 @@ mod tests {
         assert!(STDIN_SPOOL_MAX_MB.contains(&cfg.stdin_spool_max_mb));
         assert!(SCREENSAVER_TIMEOUT_MINS.contains(&cfg.screensaver_timeout_mins));
         assert!(TIME_DELTA_GAP_MS.contains(&cfg.time_delta_gap_ms));
+        assert!(OUT_OF_ORDER_TOLERANCE_MS.contains(&cfg.out_of_order_tolerance_ms));
     }
 
     #[test]

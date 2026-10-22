@@ -41,6 +41,8 @@ pub enum BarChip {
     LevelBytes,
     /// The lines hidden by hand (`🙈 61 hidden`): opens their list.
     Hidden,
+    /// The lines whose time goes back (`3 out of order`): goes to the next.
+    OutOfOrder,
     /// The column view on or off (a stream with a field parser).
     Columns,
     /// The columns shown: opens their list.
@@ -269,6 +271,19 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
         },
         BarChip::LevelBytes,
     ));
+    let out_of_order = e.out_of_order_count();
+    if out_of_order > 0 {
+        let text = if e.timestamps_go_backwards() {
+            tx(lang, "timestamps go backwards").to_string()
+        } else {
+            txf(lang, "{0} out of order", &[&out_of_order])
+        };
+        second.push(chip(
+            if ascii { text } else { format!("↶ {text}") },
+            warn,
+            BarChip::OutOfOrder,
+        ));
+    }
     let hidden = e.hidden_count();
     if hidden > 0 {
         let text = txf(lang, "{0} hidden", &[&hidden]);

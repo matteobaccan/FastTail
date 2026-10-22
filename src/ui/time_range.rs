@@ -463,6 +463,25 @@ fn popup_contents(
         .on_hover_text(t(lang, "time_range_unavailable_tip"));
     }
 
+    // Lines whose time goes back: the window places each by its own time.
+    let out_of_order = engine.out_of_order_count();
+    if out_of_order > 0 {
+        let text = if engine.timestamps_go_backwards() {
+            format!("⇅ {}", t(lang, "ooo_backwards"))
+        } else {
+            format!(
+                "↶ {}",
+                t(lang, "ooo_range_note").replace("{0}", &out_of_order.to_string())
+            )
+        };
+        ui.label(
+            RichText::new(text)
+                .monospace()
+                .size(10.5)
+                .color(theme.warn_color()),
+        );
+    }
+
     let readable = side_readable(&draft.from, reference) && side_readable(&draft.to, reference);
     let mut outcome = None;
     ui.horizontal(|ui| {

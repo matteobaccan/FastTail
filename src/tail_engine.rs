@@ -116,6 +116,12 @@ pub const MAX_ROW_SPANS: usize = 64;
 
 /// Timestamp of a line that has none and inherits none (before the first timed line).
 pub const NO_TIMESTAMP: i64 = i64::MIN;
+
+/// A line is out of order when its timestamp is this much earlier than the line above's
+/// (`out_of_order_tolerance_ms`; 0 turns the marks off).
+pub const DEFAULT_OUT_OF_ORDER_TOLERANCE_MS: i64 = 1000;
+/// Out-of-order lines listed at most; the others are only counted.
+pub const MAX_OUT_OF_ORDER: usize = 1_000_000;
 /// Lines timed per call of `fill_timestamps`, the unit `ensure_timestamps` loops over.
 pub const TIMESTAMP_FILL_BUDGET: usize = 200_000;
 /// Below this share of timed lines that can be placed in time (a timestamp of their own
@@ -1463,6 +1469,13 @@ pub struct TailEngine {
     timestamps_parsed: usize,
     /// Set when a timed line goes back in time: go-to-time then scans instead of bisecting.
     timestamps_unordered: bool,
+    /// Lines whose timestamp is earlier than the line above's by more than
+    /// `out_of_order_tolerance_ms` (a clock jumping back), with the jump in milliseconds
+    /// (negative), in line order; at most `MAX_OUT_OF_ORDER`, the others counted.
+    out_of_order: Vec<(usize, i64)>,
+    out_of_order_more: usize,
+    /// 0: no detection.
+    out_of_order_tolerance_ms: i64,
     /// Someone needs the whole stream timed (a time window, a time jump) and the
     /// background scan has not finished yet: started, or resumed from the prefix, as soon
     /// as the running job allows it (see `request_timestamps`).
@@ -1582,6 +1595,8 @@ pub struct TailEngine {
     /// Bookmarked line indices, the last bookmark jumped to, and a dirty flag for persistence.
     pub bookmarks: BTreeSet<usize>,
     pub bookmark_cursor: Option<usize>,
+    /// The out-of-order line the walk stopped at last.
+    pub out_of_order_cursor: Option<usize>,
     pub bookmarks_dirty: bool,
     /// Bumped whenever the bookmark set changes (keys the overview strip).
     pub bookmarks_generation: u64,
@@ -2246,6 +2261,7 @@ impl TailEngine {
             view_notice: None,
             bookmarks: BTreeSet::new(),
             bookmark_cursor: None,
+            out_of_order_cursor: None,
             bookmarks_dirty: false,
             bookmarks_generation: 0,
             bookmark_notes: BTreeMap::new(),
@@ -2304,6 +2320,9 @@ impl TailEngine {
             timestamp_hint: crate::timestamp::FormatHint::default(),
             timestamps_parsed: 0,
             timestamps_unordered: false,
+            out_of_order: Vec::new(),
+            out_of_order_more: 0,
+            out_of_order_tolerance_ms: DEFAULT_OUT_OF_ORDER_TOLERANCE_MS,
             timestamps_wanted: false,
             time_anchor: None,
             pending_window: None,
@@ -2994,6 +3013,7 @@ impl TailEngine {
             true
         });
         self.timestamps.extend_from_slice(&fresh);
+        self.note_out_of_order(from);
         self.timestamp_hint = hint;
         self.timestamps_parsed += parsed;
         self.timestamps_unordered |= unordered;
@@ -3011,6 +3031,10 @@ impl TailEngine {
         // rewritten tail is small compared to the file: start the rate over from what is
         // left rather than carry a wrong one.
         self.timestamps.truncate(keep);
+        self.out_of_order.retain(|&(line, _)| line < keep);
+        if keep == 0 {
+            self.out_of_order_more = 0;
+        }
         self.timestamps_parsed = self.timestamps_parsed.min(keep);
         if keep == 0 {
             self.timestamp_hint = crate::timestamp::FormatHint::default();
@@ -5893,6 +5917,96 @@ impl TailEngine {
             .filter(|&ts| ts != NO_TIMESTAMP)
     }
 
+    /// Records the lines from `from` on that go back in time past the tolerance, comparing
+    /// each timestamp with the line above's (a line without one carries the entry's, so it
+    /// never jumps).
+    fn note_out_of_order(&mut self, from: usize) {
+        let tolerance = self.out_of_order_tolerance_ms;
+        if tolerance <= 0 {
+            return;
+        }
+        for i in from.max(1)..self.timestamps.len() {
+            let (prev, cur) = (self.timestamps[i - 1], self.timestamps[i]);
+            if prev == NO_TIMESTAMP || cur == NO_TIMESTAMP || prev - cur <= tolerance {
+                continue;
+            }
+            if self.out_of_order.len() < MAX_OUT_OF_ORDER {
+                self.out_of_order.push((i, cur - prev));
+            } else {
+                self.out_of_order_more += 1;
+            }
+        }
+    }
+
+    /// Sets the tolerance of the out-of-order marks and finds them again (0: none).
+    pub fn set_out_of_order_tolerance(&mut self, ms: i64) {
+        let ms = ms.max(0);
+        if ms == self.out_of_order_tolerance_ms {
+            return;
+        }
+        self.out_of_order_tolerance_ms = ms;
+        self.out_of_order.clear();
+        self.out_of_order_more = 0;
+        self.note_out_of_order(1);
+    }
+
+    /// The out-of-order lines found so far with their jump back (negative milliseconds).
+    pub fn out_of_order_lines(&self) -> &[(usize, i64)] {
+        &self.out_of_order
+    }
+
+    /// How many lines go back in time, the ones past the list's cap included.
+    pub fn out_of_order_count(&self) -> usize {
+        self.out_of_order.len() + self.out_of_order_more
+    }
+
+    /// The jump back of line `idx` when it is out of order.
+    pub fn out_of_order_jump(&self, idx: usize) -> Option<i64> {
+        self.out_of_order
+            .binary_search_by_key(&idx, |&(line, _)| line)
+            .ok()
+            .map(|i| self.out_of_order[i].1)
+    }
+
+    /// Whether the timestamps go backwards through most of the log (a file written in
+    /// reverse order): the marks would cover it, so one notice says it instead.
+    pub fn timestamps_go_backwards(&self) -> bool {
+        let count = self.out_of_order_count();
+        count >= 10 && count * 2 > self.timestamps_parsed
+    }
+
+    /// The next (or, `forward` false, previous) visible out-of-order line after `from`,
+    /// wrapping around.
+    pub fn next_out_of_order(&self, from: Option<usize>, forward: bool) -> Option<usize> {
+        let visible = |&&(line, _): &&(usize, i64)| self.get_visible_row_of_line(line).is_some();
+        let list = &self.out_of_order;
+        if forward {
+            let start = from.map_or(0, |f| list.partition_point(|&(l, _)| l <= f));
+            list[start..]
+                .iter()
+                .find(visible)
+                .or_else(|| list[..start].iter().find(visible))
+        } else {
+            let end = from.map_or(list.len(), |f| list.partition_point(|&(l, _)| l < f));
+            list[..end]
+                .iter()
+                .rev()
+                .find(visible)
+                .or_else(|| list[end..].iter().rev().find(visible))
+        }
+        .map(|&(line, _)| line)
+    }
+
+    /// Goes to the next (or previous) visible out-of-order line and selects it.
+    pub fn walk_out_of_order(&mut self, forward: bool) -> Option<usize> {
+        let target = self.next_out_of_order(self.out_of_order_cursor, forward)?;
+        self.out_of_order_cursor = Some(target);
+        self.select_row(target);
+        self.scroll_to_line = Some(target);
+        self.reveal_line(target);
+        Some(target)
+    }
+
     /// Whether a timestamp of the timed lines goes back in time, which makes the first
     /// and last timestamps something other than the earliest and the latest.
     pub fn timestamps_unordered(&self) -> bool {
@@ -7510,7 +7624,9 @@ impl TailEngine {
                     hint,
                 } => {
                     // What `fill_timestamps` does at the end of a pass.
+                    let from = self.timestamps.len();
                     self.timestamps.extend_from_slice(&values);
+                    self.note_out_of_order(from);
                     self.timestamps_parsed += parsed;
                     self.timestamps_unordered |= unordered;
                     self.timestamp_hint = hint;

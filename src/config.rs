@@ -161,6 +161,10 @@ pub struct FastTailConfig {
     /// a stream's `level_bytes=` overrides it.
     #[serde(default = "default_level_detect_bytes")]
     pub level_detect_bytes: usize,
+    /// A line whose timestamp is this many milliseconds earlier than the line above's is
+    /// marked out of order (0: no marks; default 1,000).
+    #[serde(default = "default_out_of_order_tolerance_ms")]
+    pub out_of_order_tolerance_ms: u64,
     /// Streams an Open all folder group opens at most (1..=256, default 32).
     #[serde(default = "default_folder_max_streams")]
     pub folder_max_streams: usize,
@@ -361,6 +365,10 @@ fn default_level_detect_bytes() -> usize {
     crate::log_level::DEFAULT_WINDOW
 }
 
+fn default_out_of_order_tolerance_ms() -> u64 {
+    crate::tail_engine::DEFAULT_OUT_OF_ORDER_TOLERANCE_MS as u64
+}
+
 fn default_markdown_max_mb() -> u32 {
     1
 }
@@ -415,6 +423,7 @@ impl Default for FastTailConfig {
             mouse_throttle_ms: default_mouse_throttle_ms(),
             markdown_max_mb: default_markdown_max_mb(),
             level_detect_bytes: default_level_detect_bytes(),
+            out_of_order_tolerance_ms: default_out_of_order_tolerance_ms(),
             folder_max_streams: default_folder_max_streams(),
             folder_groups: Vec::new(),
             auto_bookmark_max: default_auto_bookmark_max(),
@@ -799,6 +808,10 @@ impl FastTailConfig {
             .set("mouse_throttle_ms", self.mouse_throttle_ms.to_string())
             .set("markdown_max_mb", self.markdown_max_mb.to_string())
             .set("level_detect_bytes", self.level_detect_bytes.to_string())
+            .set(
+                "out_of_order_tolerance_ms",
+                self.out_of_order_tolerance_ms.to_string(),
+            )
             .set("folder_max_streams", self.folder_max_streams.to_string())
             .set("auto_bookmark_max", self.auto_bookmark_max.to_string())
             .set(
@@ -1173,6 +1186,14 @@ impl FastTailConfig {
                 if let Ok(v) = s.trim().parse::<usize>() {
                     cfg.folder_max_streams =
                         crate::settings_model::clamp(v, &crate::settings_model::FOLDER_MAX_STREAMS);
+                }
+            }
+            if let Some(s) = general.get("out_of_order_tolerance_ms") {
+                if let Ok(v) = s.trim().parse::<u64>() {
+                    cfg.out_of_order_tolerance_ms = crate::settings_model::clamp(
+                        v,
+                        &crate::settings_model::OUT_OF_ORDER_TOLERANCE_MS,
+                    );
                 }
             }
             if let Some(s) = general.get("level_detect_bytes") {

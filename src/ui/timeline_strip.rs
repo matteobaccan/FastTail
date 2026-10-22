@@ -76,6 +76,8 @@ struct CacheKey {
     lane: bool,
     search_generation: u64,
     buffer_generation: u64,
+    /// Out-of-order lines found so far.
+    out_of_order: usize,
 }
 
 /// Per-stream cache kept in egui memory, plus the column a drag started from.
@@ -85,6 +87,8 @@ pub struct TimelineCache {
     built_at: Option<Instant>,
     pub columns: Vec<Column>,
     pub lane: Vec<bool>,
+    /// The columns that received out-of-order lines (marked under the search lane).
+    pub out_of_order: Vec<bool>,
     /// Tallest column, the scale of the bars.
     pub peak: u64,
     drag_from: Option<usize>,
@@ -109,6 +113,7 @@ impl TimelineCache {
             lane,
             search_generation: engine.search_generation,
             buffer_generation: engine.buffer_generation,
+            out_of_order: engine.out_of_order_count(),
         };
         if self.key == Some(key) {
             return None;
@@ -135,6 +140,16 @@ impl TimelineCache {
             })
         } else {
             Vec::new()
+        };
+        self.out_of_order = if engine.timestamps_go_backwards() {
+            Vec::new()
+        } else {
+            let lines: Vec<usize> = engine
+                .out_of_order_lines()
+                .iter()
+                .map(|&(l, _)| l)
+                .collect();
+            search_lane(histogram, width, &lines, |line| engine.line_timestamp(line))
         };
         self.key = Some(key);
         self.built_at = Some(Instant::now());
@@ -317,6 +332,19 @@ pub fn show(
         );
     }
 
+    // Out-of-order lines: a thin mark at the top of the bars of their columns.
+    for (c, _) in cache.out_of_order.iter().enumerate().filter(|(_, &on)| on) {
+        let x0 = rect.left() + c as f32 * col_w;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(x0, bars.top()),
+                egui::pos2(x0 + col_w.max(1.5), bars.top() + 2.0),
+            ),
+            0.0,
+            theme.level_color(LogLevel::Error),
+        );
+    }
+
     let status = if let Some(progress) = timing {
         Some(format!(
             "⏳ {} {:.0}%",
@@ -401,6 +429,10 @@ pub fn show(
         if lane_on && !engine.last_searched_query.is_empty() {
             tip.push_str("\n\n");
             tip.push_str(t(lang, "timeline_lane_note"));
+        }
+        if cache.out_of_order.iter().any(|&on| on) {
+            tip.push_str("\n\n");
+            tip.push_str(t(lang, "ooo_strip_note"));
         }
         response.clone().on_hover_text_at_pointer(tip);
     }
