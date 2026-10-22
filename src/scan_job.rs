@@ -70,7 +70,7 @@ pub struct FilterTerm {
 impl FilterTerm {
     /// `fields`: the stream has a parser, so `key=value` forms are field terms and a
     /// quoted term is the text inside its quotes.
-    fn build(text: &str, case_sensitive: bool, is_regex: bool, fields: bool) -> Self {
+    pub(crate) fn build(text: &str, case_sensitive: bool, is_regex: bool, fields: bool) -> Self {
         if fields {
             match FieldTerm::parse(text, case_sensitive, is_regex) {
                 Some(Ok(field)) => {
@@ -114,7 +114,7 @@ impl FilterTerm {
 
     /// Whether `line` contains the term under the spec's toggles. An invalid regex
     /// matches nothing; a field term looks at its field (`fields`).
-    fn matches(
+    pub(crate) fn matches(
         &self,
         line: &str,
         case_sensitive: bool,
@@ -200,6 +200,9 @@ pub struct FilterSpec {
     pub parser: Option<Arc<FieldParser>>,
     /// Whether a term, of the stream or of the global filter, is a field term.
     pub has_field_terms: bool,
+    /// Expression mode: the include side is this expression instead of the include terms
+    /// (`filter_expr`); the exclude terms still apply.
+    pub expr: Option<Arc<crate::filter_expr::FilterExpr>>,
 }
 
 impl FilterSpec {
@@ -227,6 +230,29 @@ impl FilterSpec {
             global: None,
             parser: None,
             has_field_terms: false,
+            expr: None,
+        }
+    }
+
+    /// Expression mode: `expr` is the include side (none: every line passes it).
+    pub fn with_expr(mut self, expr: Option<Arc<crate::filter_expr::FilterExpr>>) -> Self {
+        self.expr = expr;
+        self.has_field_terms =
+            self.own_field_terms() || self.global.as_ref().is_some_and(|g| g.has_field_terms);
+        self
+    }
+
+    /// Whether the spec is in expression mode.
+    pub fn expression_mode(&self) -> bool {
+        self.expr.is_some()
+    }
+
+    /// The toggles the expression's operands are evaluated with.
+    fn toggles(&self) -> crate::filter_expr::Toggles {
+        crate::filter_expr::Toggles {
+            case_sensitive: self.case_sensitive,
+            is_regex: self.is_regex,
+            fields: self.parser.is_some(),
         }
     }
 
@@ -252,17 +278,31 @@ impl FilterSpec {
             *t = FilterTerm::build(&t.text, cs, re, fields);
         }
         self.parser = parser;
+        self.expr = self.expr.take().map(|e| self.recompiled(e));
         let global = self.global.take();
         self.with_global(global)
+    }
+
+    /// `expr` compiled again with this spec's toggles and parser (kept as it is when it
+    /// no longer compiles).
+    fn recompiled(
+        &self,
+        expr: Arc<crate::filter_expr::FilterExpr>,
+    ) -> Arc<crate::filter_expr::FilterExpr> {
+        match crate::filter_expr::FilterExpr::compile(&expr.text, self.toggles()) {
+            Ok(Some(e)) => Arc::new(e),
+            _ => expr,
+        }
     }
 
     /// `global` compiled with this stream's parser, when one of its terms reads as a field
     /// term or a quoted one; otherwise the shared set itself.
     fn with_stream_parser(&self, global: Arc<FilterSpec>) -> Arc<FilterSpec> {
-        let changes = global.include.iter().chain(global.exclude.iter()).any(|t| {
-            crate::fields::unquote(&t.text).is_some()
-                || FieldTerm::parse(&t.text, global.case_sensitive, global.is_regex).is_some()
-        });
+        let changes = global.expr.is_some()
+            || global.include.iter().chain(global.exclude.iter()).any(|t| {
+                crate::fields::unquote(&t.text).is_some()
+                    || FieldTerm::parse(&t.text, global.case_sensitive, global.is_regex).is_some()
+            });
         if !changes {
             return global;
         }
@@ -272,6 +312,7 @@ impl FilterSpec {
             *t = FilterTerm::build(&t.text, cs, re, true);
         }
         copy.parser = self.parser.clone();
+        copy.expr = copy.expr.take().map(|e| copy.recompiled(e));
         copy.has_field_terms = copy.own_field_terms();
         Arc::new(copy)
     }
@@ -281,6 +322,7 @@ impl FilterSpec {
             .iter()
             .chain(self.exclude.iter())
             .any(|t| t.field.is_some())
+            || self.expr.as_ref().is_some_and(|e| e.has_field_terms())
     }
 
     /// Runs `f` with the fields of the line to filter: a thread's own buffer when a term
@@ -307,7 +349,8 @@ impl FilterSpec {
 
     /// Whether any include or exclude term is non-empty.
     pub fn has_terms(&self) -> bool {
-        self.include.iter().any(|t| !t.text.is_empty())
+        self.expr.is_some()
+            || self.include.iter().any(|t| !t.text.is_empty())
             || self.exclude.iter().any(|t| !t.text.is_empty())
     }
 
@@ -367,9 +410,13 @@ impl FilterSpec {
     }
 
     fn included_in(&self, line: &str, fields: &mut LineFields) -> bool {
-        self.include.iter().all(|t| {
-            t.text.is_empty() || t.matches(line, self.case_sensitive, self.is_regex, fields)
-        }) && self
+        let own = match &self.expr {
+            Some(expr) => expr.eval(line, self.toggles(), fields),
+            None => self.include.iter().all(|t| {
+                t.text.is_empty() || t.matches(line, self.case_sensitive, self.is_regex, fields)
+            }),
+        };
+        own && self
             .global
             .as_ref()
             .is_none_or(|g| g.included_in(line, fields))

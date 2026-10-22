@@ -197,6 +197,7 @@ fasttail --print [OPTIONS] [PATH...]
   --filter <TEXT>    include filter for the files opened from the command line
                      (given more than once, the last one counts)
   --exclude <TEXT>   exclude filter for those files
+  --filter-expr <E>  include side as an expression for those files, instead of --filter
   --since <TIME>     start of the time window of those files: 14:02, 2026-09-28 14:02,
                      a timestamp copied from a line, or now / -15m / -1h30m / -2d / -1w
                      (units s, m, h, d, w, back from now)
@@ -282,6 +283,7 @@ overrides the colour detection.
 ```text
   --filter <TEXT>    include term, up to 8 times: every term must match
   --exclude <TEXT>   exclude term, up to 8 times: any term hides the line
+  --filter-expr <E>  the include side as an expression ("(a OR b) NOT c"), instead of --filter
   --regex            the terms are regular expressions
   --case-sensitive   the terms match case-sensitively
   --level <LEVEL>    minimum level: trace, debug, info, warn, error, fatal
@@ -401,6 +403,8 @@ Settings → **Automatic token highlighting** (off by default; also a "Toggle" c
 
 ### Filters and presets
 The stream bar has an **Include** and an **Exclude** field; each takes plain text or a regular expression, under the stream's `Aa` (case-sensitive) and `.*` (regex) toggles. A condition that needs two words on the same line — "payment" *and* "timeout", without "healthcheck" *or* "retry=0" — does not need a regex: the `+` next to a field adds another term row and opens the Filters window on that stream, where every stream lists its terms under **All of** (include: a line must contain every one) and **None of** (exclude: a line containing any of them is hidden), up to 8 per side. The stream bar keeps showing the first term of each side, with a `+N` badge (the other terms in its tooltip) so a hidden condition is never invisible. Terms are matched exactly as typed — `a && !b` finds the text `a && !b`; there is no operator syntax. For OR inside one term use a regex such as `timeout|refused`, and for a single case-insensitive term in a case-sensitive stream the inline flag `(?i)`. A regex term that does not compile is flagged in its row and matches nothing. The minimum level and the time range then apply as before, and a stack-trace line still follows its entry unless an exclude term matches it. Every term is saved per stream in the workspace and in session files (`include`, then `include.2`, `include.3`…, so an older FastTail still reads the first).
+
+**Filter expressions.** In expression mode the include side of a stream is one expression instead of the term rows: operands joined by `AND`, `OR`, `NOT` (upper case only; lower-case `not found` is two words) and parentheses, two operands side by side meaning `AND`, precedence `NOT` > `AND` > `OR`. An operand is a word, a `"quoted phrase"` (`\"` for a quote), a `/regex/` (always a regex), or on a stream with a field parser a field term (`status>=500`); words and phrases follow the `Aa` and `.*` toggles like terms. `((payment OR refund) AND timeout) OR "circuit open"`, `error NOT retry`, `(status>=500 OR "circuit open") NOT env=test`. The exclude terms still apply, and a stack-trace line still follows its entry unless an exclude term matches it. Limits: 1,024 characters, 32 operands, 16 levels of nesting. While the expression as typed does not compile, the last one that did keeps filtering. The first switch to expression mode builds the expression from the include terms; switching back shows the terms again, and both are kept. Saved per stream as `filter_mode=expr` and `filter_expr=` (older builds use the include terms), frozen into Open filter as new tab, and set from the command line with `--filter-expr`, in the window, the terminal and print mode (not together with `--filter`; a syntax error is a usage error, exit code 2).
 
 `Presets ▾` in the stream bar saves the stream's filter state under a name — include and exclude terms, the `Aa` / `.*` toggles, the minimum level and its `?` toggle, and, when **Include the time range** is ticked, the two sides of the time range as typed, so a bare `14:02` follows the day of whichever log the preset is applied to. Click a preset to apply it to the stream, or **all** beside it to apply it to every open stream; a preset without a time range leaves each stream's window as it is. The drop-down shows the name of the preset the stream currently equals, and `name *` once the stream has been edited after applying it, with **Update "name" from this stream** in the menu. **Manage presets…** opens the Filters window, where presets are renamed, reordered and deleted (after a confirmation). Presets are global preferences stored in `fasttail.ini` as `[filter_preset.N]` sections, not in sessions.
 

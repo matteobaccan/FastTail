@@ -40,6 +40,9 @@ pub struct FrozenFilter {
     /// The time window in force (cache milliseconds), either side open.
     pub time_from: Option<i64>,
     pub time_to: Option<i64>,
+    /// The include side as an expression, when the source was in expression mode
+    /// (`frozen.expr`); `include` is then empty.
+    pub expr: Option<String>,
 }
 
 impl FrozenFilter {
@@ -51,8 +54,16 @@ impl FrozenFilter {
         if crate::tail_engine::is_relative_time(&engine.time_to_text) {
             time_to = None;
         }
+        let expr = (engine.filter_expr_mode() && engine.filter_is_active_expr())
+            .then(|| engine.applied_expr().unwrap_or_default());
         Self {
-            include: nonempty(engine.include_terms()),
+            // In expression mode the include terms do not filter the source.
+            include: if engine.filter_expr_mode() {
+                Vec::new()
+            } else {
+                nonempty(engine.include_terms())
+            },
+            expr,
             exclude: nonempty(engine.exclude_terms()),
             case_sensitive: engine.filter_case_sensitive,
             is_regex: engine.filter_is_regex,
@@ -68,6 +79,7 @@ impl FrozenFilter {
     /// Whether it filters anything at all.
     pub fn is_active(&self) -> bool {
         !self.include.is_empty()
+            || self.expr.is_some()
             || !self.exclude.is_empty()
             || self.min_level != LogLevel::Unknown
             || self.time_from.is_some()
@@ -94,11 +106,25 @@ impl FrozenFilter {
         )
         .with_levels(self.min_level, self.show_unknown_levels)
         .with_level_window(self.level_window)
+        .with_expr(self.expr.as_deref().and_then(|text| {
+            let toggles = crate::filter_expr::Toggles {
+                case_sensitive: self.case_sensitive,
+                is_regex: self.is_regex,
+                fields: false,
+            };
+            crate::filter_expr::FilterExpr::compile(text, toggles)
+                .ok()
+                .flatten()
+                .map(std::sync::Arc::new)
+        }))
     }
 
     /// The short label of the tab title: the first include term, else the exclusion,
     /// the level or the time window.
     pub fn label(&self) -> String {
+        if let Some(expr) = &self.expr {
+            return expr.clone();
+        }
         if let Some(term) = self.include.first() {
             return term.clone();
         }
@@ -165,6 +191,9 @@ impl FrozenFilter {
                 ));
             }
         }
+        if let Some(expr) = &self.expr {
+            out.push(("frozen.expr".into(), crate::filter_preset::ini_value(expr)));
+        }
         if self.case_sensitive {
             out.push(("frozen.case".into(), "true".into()));
         }
@@ -217,6 +246,7 @@ impl FrozenFilter {
         let filter = Self {
             include: terms("include"),
             exclude: terms("exclude"),
+            expr: get("frozen.expr").filter(|e| !e.trim().is_empty()),
             case_sensitive: flag("frozen.case"),
             is_regex: flag("frozen.regex"),
             min_level,

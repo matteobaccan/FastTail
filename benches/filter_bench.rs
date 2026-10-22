@@ -372,6 +372,31 @@ fn main() {
         }),
     );
 
+    // Four text terms, then the same four as an expression (the target: at least 80 %
+    // of the terms' speed).
+    engine.set_exclude_filter("");
+    let four = ["e", "o", "a", "i"];
+    report(
+        "4 terms",
+        best(rounds, || {
+            engine.set_filter_terms(Vec::new(), Vec::new());
+            engine.set_filter_terms(four.iter().map(|t| t.to_string()).collect(), Vec::new());
+            engine.visible_line_count()
+        }),
+    );
+    engine.set_filter_terms(Vec::new(), Vec::new());
+    engine.set_filter_expr_mode(true);
+    report(
+        "4-operand expression",
+        best(rounds, || {
+            engine.set_filter_expr("");
+            engine.set_filter_expr("e AND o AND a AND i");
+            engine.visible_line_count()
+        }),
+    );
+    engine.set_filter_expr("");
+    engine.set_filter_expr_mode(false);
+
     // Minimum log level (the third filter stage, after exclude and include), no text.
     engine.set_exclude_filter("");
     engine.set_include_filter("");

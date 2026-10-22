@@ -21,6 +21,7 @@ pub mod dock_layout;
 pub mod external_tools;
 pub mod fields;
 pub mod file_source;
+pub mod filter_expr;
 pub mod filter_preset;
 pub mod filter_tab;
 pub mod find_all;
