@@ -18,6 +18,7 @@ pub mod context_lines;
 pub mod crash_handler;
 pub mod disasm;
 pub mod dock_layout;
+pub mod export;
 pub mod external_tools;
 pub mod fields;
 pub mod file_source;

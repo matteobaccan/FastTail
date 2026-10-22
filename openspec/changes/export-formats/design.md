@@ -58,6 +58,12 @@ running export. Memory: one chunk of ranges (1.6 MB) plus the writer buffer.
 A file that grows during the export: the export covers the lines present when it started.
 A file truncated during the export: the export stops and reports it.
 
+*As built:* every format runs as one job a few milliseconds per frame on the UI thread
+(like the split and the bookmark report) over the engine's rows and caches, so it needs no
+snapshot of rules and theme for another thread and reads exactly what the view shows; the
+lines past the end of a truncated file are skipped. The CSV time is the line's own
+timestamp on the clock the log printed (no zone suffix, no display conversion).
+
 ## Risks / Trade-offs
 
 - [HTML spans differ from the screen when styles change mid-export] → snapshot (D5).

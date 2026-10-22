@@ -1764,6 +1764,8 @@ pub struct TailEngine {
     pub merged_request: bool,
     /// "Split file..." in the stream menu (applied by the app, which opens its dialog).
     pub split_request: bool,
+    /// An export item of the stream menu (applied by the app, which opens its dialog).
+    pub export_request: Option<crate::export::Scope>,
     /// "Create format from these lines" on this row (applied by the app, which opens the
     /// Log formats dialog with the row, or the selection holding it).
     pub format_request: Option<usize>,
@@ -2422,6 +2424,7 @@ impl TailEngine {
             merged: None,
             merged_request: false,
             split_request: false,
+            export_request: None,
             format_request: None,
             filter_tab_request: false,
             compare_request: None,

@@ -165,6 +165,16 @@ pub struct FastTailConfig {
     /// marked out of order (0: no marks; default 1,000).
     #[serde(default = "default_out_of_order_tolerance_ms")]
     pub out_of_order_tolerance_ms: u64,
+    /// The Export dialog's last format (`export_format=text|csv|html`) and CSV options
+    /// (`export_csv_separator=comma|semicolon|tab`, `export_csv_bom`, `export_csv_protect`).
+    #[serde(default = "default_export_format")]
+    pub export_format: String,
+    #[serde(default = "default_export_csv_separator")]
+    pub export_csv_separator: String,
+    #[serde(default = "default_true")]
+    pub export_csv_bom: bool,
+    #[serde(default = "default_true")]
+    pub export_csv_protect: bool,
     /// Streams an Open all folder group opens at most (1..=256, default 32).
     #[serde(default = "default_folder_max_streams")]
     pub folder_max_streams: usize,
@@ -365,6 +375,14 @@ fn default_level_detect_bytes() -> usize {
     crate::log_level::DEFAULT_WINDOW
 }
 
+fn default_export_format() -> String {
+    "text".to_string()
+}
+
+fn default_export_csv_separator() -> String {
+    "comma".to_string()
+}
+
 fn default_out_of_order_tolerance_ms() -> u64 {
     crate::tail_engine::DEFAULT_OUT_OF_ORDER_TOLERANCE_MS as u64
 }
@@ -424,6 +442,10 @@ impl Default for FastTailConfig {
             markdown_max_mb: default_markdown_max_mb(),
             level_detect_bytes: default_level_detect_bytes(),
             out_of_order_tolerance_ms: default_out_of_order_tolerance_ms(),
+            export_format: default_export_format(),
+            export_csv_separator: default_export_csv_separator(),
+            export_csv_bom: true,
+            export_csv_protect: true,
             folder_max_streams: default_folder_max_streams(),
             folder_groups: Vec::new(),
             auto_bookmark_max: default_auto_bookmark_max(),
@@ -812,6 +834,10 @@ impl FastTailConfig {
                 "out_of_order_tolerance_ms",
                 self.out_of_order_tolerance_ms.to_string(),
             )
+            .set("export_format", self.export_format.clone())
+            .set("export_csv_separator", self.export_csv_separator.clone())
+            .set("export_csv_bom", self.export_csv_bom.to_string())
+            .set("export_csv_protect", self.export_csv_protect.to_string())
             .set("folder_max_streams", self.folder_max_streams.to_string())
             .set("auto_bookmark_max", self.auto_bookmark_max.to_string())
             .set(
@@ -1186,6 +1212,26 @@ impl FastTailConfig {
                 if let Ok(v) = s.trim().parse::<usize>() {
                     cfg.folder_max_streams =
                         crate::settings_model::clamp(v, &crate::settings_model::FOLDER_MAX_STREAMS);
+                }
+            }
+            if let Some(f) = general
+                .get("export_format")
+                .and_then(crate::export::Format::from_name)
+            {
+                cfg.export_format = f.name().to_string();
+            }
+            if let Some(sep) = general
+                .get("export_csv_separator")
+                .and_then(crate::export::separator_from_name)
+            {
+                cfg.export_csv_separator = crate::export::separator_name(sep).to_string();
+            }
+            for (key, slot) in [
+                ("export_csv_bom", &mut cfg.export_csv_bom),
+                ("export_csv_protect", &mut cfg.export_csv_protect),
+            ] {
+                if let Some(v) = general.get(key).and_then(|v| v.trim().parse().ok()) {
+                    *slot = v;
                 }
             }
             if let Some(s) = general.get("out_of_order_tolerance_ms") {

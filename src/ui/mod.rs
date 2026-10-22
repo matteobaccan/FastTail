@@ -6,6 +6,8 @@ pub mod app;
 pub mod calendar;
 pub mod compare_tab;
 pub mod dock;
+pub mod export_dialog;
+pub mod export_html;
 pub mod find_results;
 pub mod folder_dialog;
 pub mod global_filter_bar;

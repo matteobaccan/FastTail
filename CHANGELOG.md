@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Export as CSV or HTML.** The export items of the stream menu open an Export dialog:
+  visible lines, selected lines or search matches, as text (as before), CSV
+  (`line,time,level,text`, or the shown fields on a stream with a parser; separator, BOM
+  and formula protection) or a standalone HTML page in the colours of the view (at most
+  200,000 lines), with progress and Cancel; the choices are remembered.
+
 ## [0.21.9] - 2026-10-22
 
 ### Added
