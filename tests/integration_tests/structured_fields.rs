@@ -652,3 +652,30 @@ fn turning_the_parser_off_reads_levels_from_the_text_again() {
     assert_eq!(e.level_of(0), LogLevel::Error);
     assert_eq!(e.total_lines(), 1);
 }
+
+#[test]
+fn copy_as_shown_writes_the_cells_tab_separated() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("app.json");
+    write_lines(
+        &file,
+        &[
+            r#"{"level":"error","status":502,"msg":"payment failed"}"#,
+            "not json at all",
+        ],
+    );
+    let mut e = open(&file);
+    e.set_field_choice(ParserChoice::Json);
+    wait_for_jobs(&mut e);
+    e.select_row(0);
+    let raw = e.copy_selection_as_shown().unwrap();
+    assert!(raw.starts_with('{'), "text view: the line");
+    e.set_fields_view(true);
+    e.set_field_columns(vec!["level".into(), "status".into()]);
+    assert_eq!(
+        e.copy_selection_as_shown().unwrap(),
+        "error\t502\tpayment failed"
+    );
+    e.select_row(1);
+    assert_eq!(e.copy_selection_as_shown().unwrap(), "not json at all");
+}

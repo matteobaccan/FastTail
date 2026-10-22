@@ -5260,6 +5260,13 @@ impl TailEngine {
         if lines.is_empty() {
             return None;
         }
+        // In the column view a row is copied as its cells, tab-separated.
+        let columns = if self.columns_shown() {
+            self.field_columns()
+        } else {
+            Vec::new()
+        };
+        let mut spans = crate::fields::FieldSpans::new();
         // A group's hidden lines come after the rows of its first entry: rows are
         // remembered, not compared with the previous one.
         let mut rows_seen = BTreeSet::new();
@@ -5277,7 +5284,10 @@ impl TailEngine {
             }
             written += 1;
             if let Some(text) = self.get_line(first) {
-                out.push_str(&text);
+                match self.cells_as_shown(&text, &columns, &mut spans) {
+                    Some(cells) => out.push_str(&cells),
+                    None => out.push_str(&text),
+                }
             }
             if let Some(group) = row
                 .and_then(|r| self.collapsed_row(r))
@@ -5288,6 +5298,29 @@ impl TailEngine {
             }
         }
         Some(out)
+    }
+
+    /// `text` as the column view shows it: the `columns` cells then the message, joined by
+    /// tabs. `None` outside the column view, or for a line without the parser's shape
+    /// (drawn across the columns as it is).
+    fn cells_as_shown(
+        &self,
+        text: &str,
+        columns: &[String],
+        spans: &mut crate::fields::FieldSpans,
+    ) -> Option<String> {
+        let parser = self
+            .field_parser
+            .as_deref()
+            .filter(|_| self.columns_shown())?;
+        let row = crate::fields::row_fields(parser, text, spans);
+        if !row.shaped {
+            return None;
+        }
+        let mut cells: Vec<&str> = columns.iter().map(|k| row.get(k).unwrap_or("")).collect();
+        let message = row.message(columns);
+        cells.push(&message);
+        Some(cells.join("\t"))
     }
 
     pub fn is_line_visible(&self, idx: usize) -> bool {
