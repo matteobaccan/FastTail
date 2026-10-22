@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.20.22] - 2026-10-22
+
 ### Added
 
 - **Level and time from the fields.** On a stream with a field parser the level of a line
@@ -1776,6 +1778,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.20.22]: https://github.com/matteobaccan/FastTail/compare/v0.20.21...v0.20.22
 [0.20.21]: https://github.com/matteobaccan/FastTail/compare/v0.20.20...v0.20.21
 [0.20.20]: https://github.com/matteobaccan/FastTail/compare/v0.20.19...v0.20.20
 [0.20.19]: https://github.com/matteobaccan/FastTail/compare/v0.20.18...v0.20.19
