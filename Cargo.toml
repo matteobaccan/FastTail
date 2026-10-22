@@ -85,6 +85,13 @@ sysinfo = "0.39"
 similar = "3"
 
 # Windows Specific
+# The Linux tray: StatusNotifierItem over D-Bus in pure Rust (zbus), no GTK or
+# libappindicator at run time; blocking API on its own async-io thread, no tokio.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+# Asks the session bus whether a tray host is there (already built for ksni).
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 

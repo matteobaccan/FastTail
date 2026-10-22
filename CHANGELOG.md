@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Tray icon on Linux.** Settings → **Tray icon**, **Minimise to tray** and **Close to
+  tray** now work on Linux too, through a StatusNotifierItem (KDE Plasma, Xfce, Cinnamon,
+  MATE, Budgie; GNOME with the AppIndicator extension): the same menu, click to show or
+  hide, red alert dot and tooltip as on Windows. With no StatusNotifierWatcher on the
+  session bus the options stay greyed out, and the hint now says what is missing. New
+  dependencies, Linux only: `ksni` (the StatusNotifierItem protocol, blocking API without
+  tokio) and `zbus` (already pulled in by `ksni`, used for the availability check).
+
 ## [0.20.18] - 2026-10-22
 
 ### Added

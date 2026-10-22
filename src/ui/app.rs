@@ -4178,7 +4178,7 @@ impl FastTailApp {
                         {
                             let _ = self.config.save();
                         }
-                        // Notification-area icon (Windows only in this version).
+                        // Notification-area icon (Windows, and Linux with a StatusNotifierItem host).
                         let tray_ok = crate::tray::Tray::available();
                         ui.add_enabled_ui(tray_ok, |ui| {
                             let mut changed = ui
