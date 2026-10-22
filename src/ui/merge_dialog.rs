@@ -16,6 +16,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergePrompt {
     pub picked: Vec<PathBuf>,
+    /// Whether each stream carries timestamps, by path and reload generation: read once,
+    /// not at every repaint.
+    checked: Vec<(PathBuf, u64, bool)>,
 }
 
 /// What the dialog was closed with.
@@ -37,14 +40,39 @@ impl MergePrompt {
     pub fn starting_with(first: Option<PathBuf>) -> Self {
         Self {
             picked: first.into_iter().collect(),
+            checked: Vec::new(),
         }
     }
 
+    /// The dialog with `picked` ticked.
+    pub fn with_picked(picked: Vec<PathBuf>) -> Self {
+        Self {
+            picked,
+            checked: Vec::new(),
+        }
+    }
+
+    /// `mergeable(engine)`, read once per stream and reload.
+    fn can_merge(&mut self, engine: &TailEngine) -> bool {
+        let generation = engine.reload_generation;
+        if let Some(&(_, _, ok)) = self
+            .checked
+            .iter()
+            .find(|(p, g, _)| *p == engine.path && *g == generation)
+        {
+            return ok;
+        }
+        let ok = mergeable(engine);
+        self.checked.retain(|(p, _, _)| *p != engine.path);
+        self.checked.push((engine.path.clone(), generation, ok));
+        ok
+    }
+
     /// The streams ticked that can be merged, in the order of `engines`.
-    pub fn sources(&self, engines: &[TailEngine]) -> Vec<PathBuf> {
+    pub fn sources(&mut self, engines: &[TailEngine]) -> Vec<PathBuf> {
         engines
             .iter()
-            .filter(|e| self.picked.contains(&e.path) && mergeable(e))
+            .filter(|e| self.picked.contains(&e.path) && self.can_merge(e))
             .map(|e| e.path.clone())
             .take(crate::merged_stream::MAX_SOURCES)
             .collect()
@@ -82,7 +110,7 @@ impl MergePrompt {
                 .max_height(320.0)
                 .show(ui, |ui| {
                     for e in engines.iter().filter(|e| e.merged.is_none()) {
-                        let ok = mergeable(e);
+                        let ok = self.can_merge(e);
                         let mut on = ok && self.picked.contains(&e.path);
                         let name = crate::find_all::stream_name(e);
                         let resp = ui

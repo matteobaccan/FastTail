@@ -53,9 +53,7 @@ fn two_services_read_as_one_timeline_that_follows_them() {
     }
     // The dialog keeps the streams without timestamps out.
     assert!(!mergeable(&app.engines[2]));
-    let prompt = MergePrompt {
-        picked: vec![gw.clone(), pay.clone(), plain.clone()],
-    };
+    let mut prompt = MergePrompt::with_picked(vec![gw.clone(), pay.clone(), plain.clone()]);
     let sources = prompt.sources(&app.engines);
     assert_eq!(sources, vec![gw.clone(), pay.clone()]);
     let merged = app.open_merged_view(&sources).unwrap();
@@ -95,9 +93,13 @@ fn two_services_read_as_one_timeline_that_follows_them() {
     settle(&mut app, |a| a.engines[m].total_lines() == 2);
     assert!(lines_of(&app, m).iter().all(|l| l.contains("pay")));
 
-    // Not kept in the workspace: its spool goes with the process.
+    // Not kept in the workspace or in a session: its spool goes with the process.
     app.save_dock_layout();
     assert!(!app.config.open_files.contains(&merged));
+    assert!(fasttail::merged_stream::is_merged_path(&merged));
+    let session = app.capture_session();
+    assert!(session.streams.iter().all(|s| s.path != merged));
+    assert!(!session.dock_layout.unwrap_or_default().contains("merged"));
 
     // Every source closed: it stops following.
     app.engines.retain(|e| e.merged.is_some());

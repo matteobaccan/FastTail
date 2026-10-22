@@ -29,6 +29,10 @@ use std::time::{Duration, Instant};
 /// Most streams one merged view holds.
 pub const MAX_SOURCES: usize = 16;
 
+/// Longest a growing source without a next line holds the others (a line that grows
+/// without ever ending must not stop the view).
+const MAX_HOLD: Duration = Duration::from_secs(10);
+
 /// Lines read from the start of a stream to tell whether it carries timestamps.
 const PROBE_LINES: usize = 200;
 
@@ -41,6 +45,15 @@ pub fn has_timestamps(engine: &TailEngine) -> bool {
             crate::fields::line_timestamp(parser.as_deref(), &text, FormatHint::default()).is_some()
         })
     })
+}
+
+/// Whether `path` is the spool of a merged view (`<pid>-<counter>-merged`), which is not
+/// kept in a saved layout or session.
+pub fn is_merged_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    crate::spool::owner_pid(name).is_some() && name.splitn(3, '-').nth(2) == Some("merged")
 }
 
 /// One stream of a merged view and how far it has been read.
@@ -56,8 +69,10 @@ pub struct MergedSource {
     next: usize,
     inherited: i64,
     hint: FormatHint,
-    /// The next line's timestamp and format, read once while it waits its turn.
-    head: Option<(usize, i64, FormatHint)>,
+    /// The next line, read once while it waits its turn.
+    head: Option<Head>,
+    /// A line written before its newline arrived.
+    partial: Option<usize>,
     /// `TailEngine::reload_generation` the read position belongs to.
     generation: u64,
     /// Its size when last seen (`None`: not seen yet) and since when it has not changed.
@@ -75,6 +90,7 @@ impl MergedSource {
             inherited: NO_TIMESTAMP,
             hint: FormatHint::default(),
             head: None,
+            partial: None,
             generation: 0,
             seen_len: None,
             // Quiet from the start: a source that is not growing never holds the others.
@@ -87,7 +103,19 @@ impl MergedSource {
         self.inherited = NO_TIMESTAMP;
         self.hint = FormatHint::default();
         self.head = None;
+        self.partial = None;
     }
+}
+
+/// A source's next line waiting its turn: its index, timestamp (its own, or inherited),
+/// the format that matched, its text, and whether it had no newline yet.
+#[derive(Debug, Clone)]
+struct Head {
+    line: usize,
+    ts: i64,
+    hint: FormatHint,
+    text: String,
+    unterminated: bool,
 }
 
 /// Feeds a merged view's spool from its sources. Kept in the merged engine
@@ -103,6 +131,10 @@ pub struct MergedFeeder {
     pub map: Vec<(u8, usize)>,
     /// The source of the line written last: on equal timestamps it goes on.
     last: Option<usize>,
+    /// Since when a growing source without a next line has held the merge.
+    held_since: Option<Instant>,
+    /// A source was turned on or off: the next step writes the spool again.
+    restart_pending: bool,
     written: u64,
     max_bytes: u64,
     pub stopped: Option<Stopped>,
@@ -129,6 +161,8 @@ impl MergedFeeder {
             out: Some(out),
             map: Vec::new(),
             last: None,
+            held_since: None,
+            restart_pending: false,
             written: 0,
             max_bytes,
             stopped: None,
@@ -160,12 +194,14 @@ impl MergedFeeder {
         if let Some(s) = self.sources.get_mut(i) {
             if s.enabled != on {
                 s.enabled = on;
-                self.restart();
+                self.restart_pending = true;
             }
         }
     }
 
-    /// Empties the spool and reads every source again from its first line.
+    /// Empties the spool and reads every source again from its first line. A view that
+    /// stopped (full, every source closed) follows again; one that cannot write stays
+    /// stopped.
     fn restart(&mut self) -> bool {
         match self.spool.rewrite() {
             Ok(file) => self.out = Some(file),
@@ -180,6 +216,11 @@ impl MergedFeeder {
         self.map.clear();
         self.last = None;
         self.written = 0;
+        self.held_since = None;
+        self.restart_pending = false;
+        if self.stopped != Some(Stopped::WriteFailed) {
+            self.stopped = None;
+        }
         true
     }
 
@@ -187,44 +228,59 @@ impl MergedFeeder {
     /// `budget` is spent. `engines[i]` is the open stream of source `i` (`None`: closed,
     /// it adds nothing more). Returns whether the spool changed or work is left.
     pub fn step(&mut self, engines: &[Option<&TailEngine>], budget: Duration) -> bool {
+        // A source reloaded (rotated, truncated, re-decoded) since it was read, or one
+        // whose unterminated last line was written and has grown since, writes the
+        // spool again; so does a toggle.
+        let mut restart = self.restart_pending;
+        for (s, e) in self.sources.iter_mut().zip(engines) {
+            let Some(e) = e else {
+                continue;
+            };
+            let read = s.next > 0 || s.head.is_some();
+            if e.reload_generation != s.generation && read {
+                restart = true;
+            }
+            s.generation = e.reload_generation;
+            if s.seen_len.is_some_and(|len| len != e.file_size) {
+                // Growth seen after the first look: the source is being written to.
+                s.seen_at = Instant::now();
+                if s.partial.is_some() {
+                    restart = true;
+                }
+            }
+            s.seen_len = Some(e.file_size);
+        }
+        if restart {
+            // Nothing is written in this call: the merged engine sees the empty spool
+            // first, or a refill to the old size would hide the truncation from it.
+            self.restart();
+            return true;
+        }
         if self.stopped.is_some() {
             return false;
         }
-        let mut changed = false;
-        // A reloaded source writes everything again.
-        let reloaded = self
+        if self
             .sources
             .iter()
             .zip(engines)
-            .any(|(s, e)| e.is_some_and(|e| e.reload_generation != s.generation && s.next > 0));
-        for (s, e) in self.sources.iter_mut().zip(engines) {
-            if let Some(e) = e {
-                s.generation = e.reload_generation;
-                // Growth seen after the first look: the source is being written to.
-                if s.seen_len.is_some_and(|len| len != e.file_size) {
-                    s.seen_at = Instant::now();
-                }
-                s.seen_len = Some(e.file_size);
-            }
-        }
-        if reloaded {
-            if !self.restart() {
-                return false;
-            }
-            changed = true;
-        }
-        if engines.iter().flatten().any(|e| e.index_pending) {
+            .any(|(s, e)| s.enabled && e.is_some_and(|e| e.index_pending))
+        {
             return true;
         }
         if engines.iter().all(Option::is_none) {
             self.stopped = Some(Stopped::SourceClosed);
-            return changed;
+            return false;
         }
+        let parsers: Vec<Option<std::sync::Arc<crate::fields::FieldParser>>> = engines
+            .iter()
+            .map(|e| e.and_then(|e| e.field_parser().cloned()))
+            .collect();
         let started = Instant::now();
+        let mut changed = false;
         let mut written_now = 0usize;
         loop {
             // The next line of every enabled open source; a source without one that is
-            // still growing holds the merge.
+            // still growing holds the merge, for at most `MAX_HOLD`.
             let mut best: Option<(i64, usize)> = None;
             let mut held = false;
             for (i, (s, e)) in self.sources.iter_mut().zip(engines).enumerate() {
@@ -233,69 +289,86 @@ impl MergedFeeder {
                 };
                 if s.head.is_none() {
                     let idle = s.seen_at.elapsed() >= SETTLED;
-                    let end = if e.last_line_complete() || idle {
+                    let complete = e.last_line_complete();
+                    let end = if complete || idle {
                         e.total_lines()
                     } else {
                         e.total_lines().saturating_sub(1)
                     };
                     if s.next < end {
-                        let text = e.get_line(s.next).unwrap_or_default();
-                        let parser = e.field_parser().cloned();
-                        let (ts, hint) =
-                            match crate::fields::line_timestamp(parser.as_deref(), &text, s.hint) {
-                                Some((ts, hint)) => (ts, hint),
-                                None => (s.inherited, s.hint),
-                            };
-                        s.head = Some((s.next, ts, hint));
+                        let text = e.get_line(s.next).unwrap_or_default().into_owned();
+                        let (ts, hint) = match crate::fields::line_timestamp(
+                            parsers[i].as_deref(),
+                            &text,
+                            s.hint,
+                        ) {
+                            Some((ts, hint)) => (ts, hint),
+                            None => (s.inherited, s.hint),
+                        };
+                        let unterminated = !complete && s.next + 1 == e.total_lines();
+                        s.head = Some(Head {
+                            line: s.next,
+                            ts,
+                            hint,
+                            text,
+                            unterminated,
+                        });
                     } else if !idle {
                         held = true;
                     }
                 }
-                if let Some((_, ts, _)) = s.head {
+                if let Some(head) = &s.head {
                     let better = match best {
                         None => true,
-                        Some((b, j)) => ts < b || (ts == b && self.last == Some(i) && j != i),
+                        Some((b, j)) => {
+                            head.ts < b || (head.ts == b && self.last == Some(i) && j != i)
+                        }
                     };
                     if better {
-                        best = Some((ts, i));
+                        best = Some((head.ts, i));
                     }
                 }
             }
             if held {
-                break;
+                let since = *self.held_since.get_or_insert_with(Instant::now);
+                if since.elapsed() < MAX_HOLD {
+                    break;
+                }
+            } else {
+                self.held_since = None;
             }
             let Some((_, i)) = best else {
                 break;
             };
-            let Some(e) = engines[i] else {
-                break;
-            };
             let s = &mut self.sources[i];
-            let Some((line, ts, hint)) = s.head.take() else {
+            let Some(head) = s.head.take() else {
                 break;
             };
-            let text = e.get_line(line).unwrap_or_default();
-            let bytes = text.len() as u64 + 1;
+            let bytes = head.text.len() as u64 + 1;
             if self.written + bytes > self.max_bytes {
                 self.stopped = Some(Stopped::Full);
-                return changed;
+                break;
             }
             let Some(out) = self.out.as_mut() else {
-                return changed;
+                break;
             };
             if out
-                .write_all(text.as_bytes())
+                .write_all(head.text.as_bytes())
                 .and_then(|_| out.write_all(b"\n"))
                 .is_err()
             {
                 self.stopped = Some(Stopped::WriteFailed);
-                return changed;
+                break;
             }
             self.written += bytes;
-            self.map.push((i as u8, line));
-            s.next = line + 1;
-            s.inherited = ts;
-            s.hint = hint;
+            self.map.push((i as u8, head.line));
+            s.next = head.line + 1;
+            s.inherited = head.ts;
+            s.hint = head.hint;
+            if head.unterminated {
+                // Written before its newline: the source growing writes it again.
+                s.partial = Some(head.line);
+            }
             self.last = Some(i);
             changed = true;
             written_now += 1;
@@ -307,6 +380,9 @@ impl MergedFeeder {
             if let Some(out) = self.out.as_mut() {
                 let _ = out.flush();
             }
+        }
+        if self.stopped.is_some() {
+            return changed;
         }
         let left = self
             .sources
@@ -460,5 +536,74 @@ mod tests {
         let plain = write(dir.path(), "plain.log", &["no time here", "nor here"]);
         let e = TailEngine::open(&plain).unwrap();
         assert!(!has_timestamps(&e));
+    }
+
+    #[test]
+    fn an_unterminated_line_is_written_again_once_it_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let a_path = dir.path().join("a.log");
+        std::fs::write(&a_path, "2026-01-01T10:00:00Z a1\n2026-01-01T10:00:01Z hal").unwrap();
+        let b_path = write(dir.path(), "b.log", &["2026-01-01T10:00:05Z b1"]);
+        let mut a = TailEngine::open(&a_path).unwrap();
+        a.size_check_interval = Duration::ZERO;
+        let b = TailEngine::open(&b_path).unwrap();
+        let mut f = feeder(dir.path(), &[&a, &b]);
+        fill(&mut f, &[Some(&a), Some(&b)]);
+        assert!(spool_text(&f).contains("hal\n"), "quiet: written as it is");
+        use std::io::Write as _;
+        let mut fa = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&a_path)
+            .unwrap();
+        writeln!(fa, "f done").unwrap();
+        drop(fa);
+        a.poll_updates();
+        fill(&mut f, &[Some(&a), Some(&b)]);
+        let text = spool_text(&f);
+        assert!(text.contains("half done\n"), "{text}");
+        assert_eq!(text.lines().count(), 3);
+    }
+
+    #[test]
+    fn a_full_view_follows_again_once_a_source_is_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let a_path = write(dir.path(), "a.log", &["2026-01-01T10:00:00Z a1"]);
+        let b_path = write(
+            dir.path(),
+            "b.log",
+            &["2026-01-01T10:00:01Z bbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        );
+        let a = TailEngine::open(&a_path).unwrap();
+        let b = TailEngine::open(&b_path).unwrap();
+        let sources = vec![(a.path.clone(), "a".into()), (b.path.clone(), "b".into())];
+        let mut f = MergedFeeder::create(1, sources, &dir.path().join("spool"), 40).unwrap();
+        fill(&mut f, &[Some(&a), Some(&b)]);
+        assert_eq!(f.stopped, Some(Stopped::Full));
+        f.set_enabled(1, false);
+        fill(&mut f, &[Some(&a), Some(&b)]);
+        assert_eq!(f.stopped, None);
+        assert_eq!(spool_text(&f), "2026-01-01T10:00:00Z a1\n");
+    }
+
+    #[test]
+    fn a_first_line_waiting_its_turn_is_read_again_after_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let a_path = write(dir.path(), "a.log", &["2026-01-01T12:00:00Z old a"]);
+        let b_path = write(dir.path(), "b.log", &["2026-01-01T10:00:00Z b1"]);
+        let mut a = TailEngine::open(&a_path).unwrap();
+        a.size_check_interval = Duration::ZERO;
+        let b = TailEngine::open(&b_path).unwrap();
+        let mut f = feeder(dir.path(), &[&a, &b]);
+        // b is being written: a's first line waits.
+        f.sources[1].seen_len = Some(b.file_size);
+        f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
+        f.sources[1].seen_at = Instant::now();
+        f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
+        std::fs::write(&a_path, "2026-01-01T09:00:00Z new a\n").unwrap();
+        a.poll_updates();
+        fill(&mut f, &[Some(&a), Some(&b)]);
+        let text = spool_text(&f);
+        assert!(text.starts_with("2026-01-01T09:00:00Z new a\n"), "{text}");
+        assert!(!text.contains("old a"));
     }
 }

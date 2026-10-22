@@ -767,6 +767,7 @@ impl FastTailApp {
                 self.engines
                     .iter()
                     .find(|e| paths_equal(&e.path, p))
+                    .filter(|e| crate::workspace::is_persisted(e))
                     .map(crate::workspace::stream_entry)
             })
             .collect();
@@ -6235,7 +6236,9 @@ fn rename_tab(dock: &mut DockState<FastTailTab>, from: &Path, to: Option<PathBuf
 /// still named after its spool (`rename_derived_tabs` gives it its saved name first).
 fn is_stdin_tab(tab: &FastTailTab) -> bool {
     matches!(tab, FastTailTab::LogStream(p)
-        if crate::stdin_source::is_stdin_path(p) || crate::filter_tab::is_derived_path(p))
+        if crate::stdin_source::is_stdin_path(p)
+            || crate::filter_tab::is_derived_path(p)
+            || crate::merged_stream::is_merged_path(p))
 }
 
 /// Command line options applied to the standard-input stream when it opens.
