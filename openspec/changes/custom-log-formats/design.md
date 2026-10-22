@@ -60,6 +60,13 @@ passed to the filter, timestamp, level and collapse paths and their jobs, instea
 static function. Changing the format of a stream rebuilds the filter, the timestamp and
 level caches and collapse, as a parser change already does.
 
+*As built:* no separate `EntryRule` value: the rule comes from the stream's parser, which
+the filter spec, the timestamp and level paths and their jobs already carry
+(`fields::is_continuation`); the collapse detector takes it with `with_entry_rule`. A line
+that continues an entry by the pattern has no time or level of its own (its time is the
+entry's). Detection's sample still skips stack-trace lines; each format counts entries by
+its own rule.
+
 ### D5. Detection
 Order: (1) formats whose `files` globs match the file name, (2) every other user format,
 (3) JSON and logfmt as in `structured-fields`. For (1) and (2) the sample's entries (by

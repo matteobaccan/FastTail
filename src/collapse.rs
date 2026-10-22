@@ -249,6 +249,8 @@ pub struct Detector {
     spare: Vec<u8>,
     /// Lines fed since the detector was created, for the tests of the incremental path.
     lines_fed: u64,
+    /// The stream's log format, when its entry start pattern decides the entries.
+    format: Option<std::sync::Arc<crate::log_format::LogFormat>>,
 }
 
 impl Detector {
@@ -263,7 +265,20 @@ impl Detector {
             groups: Vec::new(),
             spare: Vec::new(),
             lines_fed: 0,
+            format: None,
         }
+    }
+
+    /// Entries start where the stream's log format says (its entry start pattern), when
+    /// `parser` is such a format; the stack-trace heuristic otherwise.
+    pub fn with_entry_rule(mut self, parser: Option<&crate::fields::FieldParser>) -> Self {
+        self.format = match parser {
+            Some(crate::fields::FieldParser::Format(f)) if f.entry_start.is_some() => {
+                Some(f.clone())
+            }
+            _ => None,
+        };
+        self
     }
 
     /// Lines fed so far, over every pass (resumed ones included).
@@ -275,7 +290,10 @@ impl Detector {
     pub fn feed(&mut self, line: usize, text: &str, pos: Option<usize>) {
         self.next_line = line + 1;
         self.lines_fed += 1;
-        let continuation = TailEngine::is_stacktrace_continuation(text);
+        let continuation = match &self.format {
+            Some(f) => !f.starts_entry(text),
+            None => TailEngine::is_stacktrace_continuation(text),
+        };
         if !continuation {
             self.header_visible = pos.is_some();
         }

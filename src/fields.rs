@@ -1350,6 +1350,22 @@ pub fn timestamp_in(
     })
 }
 
+/// Whether `line` continues the entry above it: with a log format that has an entry start
+/// pattern, exactly when the line does not match it; otherwise the stack-trace heuristic
+/// (indentation, `at `, `Caused by:`...).
+pub fn is_continuation(parser: Option<&FieldParser>, line: &str) -> bool {
+    match parser {
+        Some(FieldParser::Format(f)) if f.entry_start.is_some() => !f.starts_entry(line),
+        _ => crate::tail_engine::TailEngine::is_stacktrace_continuation(line),
+    }
+}
+
+/// A line that continues an entry by its format's entry start pattern: it has no level
+/// or time of its own (its time is the entry's).
+fn format_continuation(parser: &FieldParser, line: &str) -> bool {
+    matches!(parser, FieldParser::Format(f) if f.entry_start.as_ref().is_some_and(|s| !s.is_match(line)))
+}
+
 /// The level of `line`: from its fields when `parser` is set and a level field names a
 /// level, otherwise detected from the first `window` bytes of the text.
 pub fn line_level(
@@ -1358,6 +1374,9 @@ pub fn line_level(
     window: usize,
 ) -> crate::log_level::LogLevel {
     if let Some(parser) = parser {
+        if format_continuation(parser, line) {
+            return crate::log_level::LogLevel::Unknown;
+        }
         let found = with_spans(|spans| {
             scan(parser, line, spans);
             match parser {
@@ -1380,6 +1399,9 @@ pub fn line_timestamp(
     hint: crate::timestamp::FormatHint,
 ) -> Option<(i64, crate::timestamp::FormatHint)> {
     if let Some(parser) = parser {
+        if format_continuation(parser, line) {
+            return None;
+        }
         let found = with_spans(|spans| {
             scan(parser, line, spans);
             match parser {

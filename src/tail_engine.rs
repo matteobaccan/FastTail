@@ -5058,7 +5058,10 @@ impl TailEngine {
             }
             None => {
                 self.collapse.clear_groups();
-                Box::new(Detector::new(self.collapse.mode, self.timestamp_hint))
+                Box::new(
+                    Detector::new(self.collapse.mode, self.timestamp_hint)
+                        .with_entry_rule(self.field_parser.as_deref()),
+                )
             }
         };
         if self.source.len().saturating_sub(start_offset) > self.job_threshold_bytes {
@@ -5446,7 +5449,7 @@ impl TailEngine {
             return true;
         }
         // A stack trace continuation line is shown with its (nearest non-continuation) parent.
-        if Self::is_stacktrace_continuation(&line) {
+        if crate::fields::is_continuation(self.field_parser.as_deref(), &line) {
             return self.parent_visible_before(idx);
         }
         false
@@ -6201,7 +6204,7 @@ impl TailEngine {
         while curr > 0 {
             curr -= 1;
             if let Some(line) = self.get_line(curr) {
-                if !Self::is_stacktrace_continuation(&line) {
+                if !crate::fields::is_continuation(self.field_parser.as_deref(), &line) {
                     return self.filter.matches(&line);
                 }
             }
