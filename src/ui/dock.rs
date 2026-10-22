@@ -2666,6 +2666,14 @@ fn render_log_stream(
                 engine.filter_tab_request = true;
                 ui.close();
             }
+            if ui
+                .button(RichText::new(format!("✂ {}", t(lang, "split_open"))).monospace())
+                .on_hover_text(t(lang, "split_tip"))
+                .clicked()
+            {
+                engine.split_request = true;
+                ui.close();
+            }
             if engine.merged.is_none()
                 && ui
                     .button(RichText::new(format!("⋈ {}", t(lang, "merge_open"))).monospace())

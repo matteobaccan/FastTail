@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Split file.** *✂ Split file…* (stream menu, palette) cuts a file into pieces every N
+  lines, every N MB at a line end, or by hour, day or N minutes from the line timestamps,
+  all lines or the visible ones, next to the file or in a chosen folder, with a preview,
+  no silent overwrite, a free-space check, progress and Cancel. The terminal splits from
+  the palette with a typed `100000`, `10mb`, `1h`, `1d` or `30m`.
+
 ## [0.21.8] - 2026-10-22
 
 ### Added

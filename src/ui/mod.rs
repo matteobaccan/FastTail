@@ -18,6 +18,7 @@ pub mod overview_strip;
 pub mod palette;
 pub mod report_dialog;
 pub mod scratchpad;
+pub mod split_dialog;
 pub mod theme;
 pub mod time_range;
 pub mod timeline_strip;

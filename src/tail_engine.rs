@@ -1762,6 +1762,8 @@ pub struct TailEngine {
     /// The stream menu asked for a merged view starting with this stream (applied by the
     /// app, which opens its dialog).
     pub merged_request: bool,
+    /// "Split file..." in the stream menu (applied by the app, which opens its dialog).
+    pub split_request: bool,
     /// "Create format from these lines" on this row (applied by the app, which opens the
     /// Log formats dialog with the row, or the selection holding it).
     pub format_request: Option<usize>,
@@ -2419,6 +2421,7 @@ impl TailEngine {
             derived: None,
             merged: None,
             merged_request: false,
+            split_request: false,
             format_request: None,
             filter_tab_request: false,
             compare_request: None,
@@ -4906,7 +4909,7 @@ impl TailEngine {
     }
 
     /// The line at visible position `pos` (its index among the visible lines).
-    fn line_at(&self, pos: usize) -> Option<usize> {
+    pub fn line_at(&self, pos: usize) -> Option<usize> {
         self.rows_view().line_at(pos)
     }
 

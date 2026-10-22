@@ -284,6 +284,8 @@ pub enum PromptKind {
     SaveSession,
     /// The bytes of a line the stream's level is looked for in (empty: the setting).
     LevelBytes,
+    /// How to split the stream's file (`100000`, `10mb`, `1h`, `1d`, `30m`).
+    Split,
 }
 
 pub struct Prompt {
@@ -506,6 +508,10 @@ pub struct App {
     pub floats: Vec<Float>,
     pub palette: Palette,
     pub prompt: Option<Prompt>,
+    /// A split being written (the tab's stream path and the job), or waiting for the
+    /// stream's timestamps before it starts.
+    pub split: Option<(PathBuf, crate::split::SplitJob)>,
+    pub split_waiting: Option<(PathBuf, crate::split::SplitBy)>,
     pub time_range: Option<TimeRangeDialog>,
     pub picker: Option<EntryPicker>,
     /// The Open dialog (`o`).
@@ -645,6 +651,8 @@ impl App {
             floats: Vec::new(),
             palette,
             prompt: None,
+            split: None,
+            split_waiting: None,
             time_range: None,
             picker: None,
             browser: None,
@@ -926,7 +934,95 @@ impl App {
 
     /// Polls every engine (hidden streams keep tailing), applies what the engines ask the
     /// view to do, and says whether the screen needs a redraw.
+    /// Starts the split typed in the prompt, or waits for the timestamps it needs.
+    fn submit_split(&mut self, text: &str) {
+        let Some((by, replace)) = crate::split::parse_spec(text) else {
+            self.message = Some(txf(self.lang, "Cannot split by \"{0}\"", &[&text]));
+            return;
+        };
+        let tab = &mut self.tabs[self.active];
+        let path = tab.engine.path.clone();
+        if matches!(by, crate::split::SplitBy::Time(_)) && !tab.engine.timestamps_complete() {
+            tab.engine.ensure_timestamps();
+            self.split_waiting = Some((path, by));
+            self.message = Some(tx(self.lang, "Split: reading the timestamps...").into());
+            return;
+        }
+        self.start_split(path, by, replace);
+    }
+
+    fn start_split(&mut self, path: PathBuf, by: crate::split::SplitBy, replace: bool) {
+        let Some(tab) = self.tabs.iter().find(|t| t.engine.path == path) else {
+            return;
+        };
+        let file = tab
+            .engine
+            .current_file
+            .clone()
+            .unwrap_or_else(|| tab.engine.path.clone());
+        let plan = crate::split::SplitPlan::for_file(&file, by);
+        let preview = crate::split::preview(&tab.engine, &plan);
+        if preview.no_timestamps {
+            self.message = Some(tx(self.lang, "No timestamps: cannot split by time").into());
+            return;
+        }
+        if !preview.existing.is_empty() && !replace {
+            self.message = Some(txf(
+                self.lang,
+                "{0} files exist already: add ! to replace them",
+                &[&preview.existing.len()],
+            ));
+            return;
+        }
+        let job = crate::split::SplitJob::start(&tab.engine, plan);
+        self.split = Some((path, job));
+    }
+
+    /// Runs the split a slice per tick, and starts one that waited for the timestamps.
+    fn step_split(&mut self) {
+        if let Some((path, by)) = self.split_waiting.clone() {
+            let ready = self
+                .tabs
+                .iter()
+                .find(|t| t.engine.path == path)
+                .map(|t| t.engine.timestamps_complete());
+            match ready {
+                Some(true) => {
+                    self.split_waiting = None;
+                    self.start_split(path, by, false);
+                }
+                Some(false) => {}
+                None => self.split_waiting = None,
+            }
+        }
+        let Some((path, mut job)) = self.split.take() else {
+            return;
+        };
+        let Some(tab) = self.tabs.iter().find(|t| t.engine.path == path) else {
+            job.cancel();
+            return;
+        };
+        if job.step(&tab.engine, Duration::from_millis(20)) {
+            self.message = Some(match &job.error {
+                Some(e) => txf(self.lang, "Split failed: {0}", &[e]),
+                None => txf(
+                    self.lang,
+                    "{0} files written in {1}",
+                    &[&job.written.len(), &job.plan.dir.display()],
+                ),
+            });
+        } else {
+            self.message = Some(txf(
+                self.lang,
+                "Split: {0}%",
+                &[&format!("{:.0}", job.progress() * 100.0)],
+            ));
+            self.split = Some((path, job));
+        }
+    }
+
     pub fn tick(&mut self) -> bool {
+        self.step_split();
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1060,6 +1156,8 @@ impl App {
                     || t.engine.compressed.as_ref().is_some_and(|c| c.is_running())
             })
             || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
+            || self.split.is_some()
+            || self.split_waiting.is_some()
     }
 
     fn signature(&self) -> Signature {
@@ -2977,6 +3075,7 @@ impl App {
             // A note bookmarks the line; an empty one removes the note, not the bookmark.
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
+            PromptKind::Split => self.submit_split(&text),
             PromptKind::LevelBytes if text.is_empty() => tab.engine.set_level_override(None),
             PromptKind::LevelBytes => {
                 match text.parse().ok().and_then(crate::log_level::valid_window) {
@@ -3032,6 +3131,7 @@ impl App {
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
+            PromptKind::Split => "100000".to_string(),
             PromptKind::LevelBytes => e
                 .level_override()
                 .map(|b| b.to_string())
@@ -3618,6 +3718,7 @@ impl App {
             }
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
+            Action::Split => self.open_prompt(PromptKind::Split),
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::Palette => self.open_palette(),
             Action::Label(n) => self.toggle_label(n),
@@ -5349,6 +5450,10 @@ impl App {
             PromptKind::LevelBytes => tx(
                 self.lang,
                 "Level searched in the first N bytes (16 to 4096, empty: the setting)",
+            ),
+            PromptKind::Split => tx(
+                self.lang,
+                "Split every N lines, 10mb, 1h, 1d or 30m (pieces next to the file)",
             ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
@@ -11206,6 +11311,53 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         let saved = crate::tui::workspace::Settings::read(&ini).config;
         assert!(saved.filter_presets.is_empty());
+    }
+
+    #[test]
+    fn the_palette_splits_the_file_from_a_prompt() {
+        use crossterm::event::KeyCode;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let text: String = (0..30).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&a, text).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::Split);
+        assert_eq!(app.prompt.as_ref().map(|p| p.kind), Some(PromptKind::Split));
+        app.prompt.as_mut().unwrap().field = TextField::new("12");
+        press(&mut app, KeyCode::Enter);
+        for _ in 0..20 {
+            app.tick();
+            if app.split.is_none() {
+                break;
+            }
+        }
+        assert!(app.split.is_none());
+        assert!(dir.path().join("a.part-003.log").exists());
+        assert!(app
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("3 files written")));
+        // Again: the pieces exist, so it asks for `!`.
+        app.apply(Action::Split);
+        app.prompt.as_mut().unwrap().field = TextField::new("12");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.split.is_none());
+        assert!(app.message.as_deref().is_some_and(|m| m.contains("add !")));
+        app.apply(Action::Split);
+        app.prompt.as_mut().unwrap().field = TextField::new("bogus");
+        press(&mut app, KeyCode::Enter);
+        assert!(app
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Cannot split")));
     }
 
     #[test]

@@ -14,6 +14,10 @@ range use it).
 
 1. **One background job** reading the file sequentially through the block cache and
    writing one piece at a time with a buffered writer; memory is bounded by the buffers.
+   *As built:* the job runs a few milliseconds per frame (as the bookmark report does)
+   over the engine's lines, so it reads the visible lines and the timestamp cache as the
+   view has them; the terminal takes the split as a typed answer (`10mb`, `1h`) instead
+   of a form.
 2. **Cut at line ends:** by size, a piece ends at the last full line before the limit (a
    single line longer than the limit becomes its own piece).
 3. **By time:** buckets from the line timestamps; lines without a timestamp stay with the
