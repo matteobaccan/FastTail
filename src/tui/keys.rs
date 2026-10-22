@@ -77,6 +77,8 @@ pub enum Action {
     NextBookmark,
     /// The next / previous line whose time goes back (palette, the bar's chip).
     NextOutOfOrder,
+    /// Split file... (palette): asks how to cut.
+    Split,
     PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.

@@ -89,6 +89,8 @@ pub struct FastTailApp {
     pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
     /// The New merged view dialog while it is shown.
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
+    /// The Split file dialog, while it is shown.
+    pub split_dialog: Option<crate::ui::split_dialog::SplitDialog>,
     /// The Log formats dialog, while it is shown.
     pub log_formats: Option<crate::ui::log_formats::FormatsDialog>,
     /// The open-all folder groups: each opens the new files of its folder as tabs.
@@ -604,6 +606,7 @@ impl FastTailApp {
             folder_prompt: None,
             merge_prompt: None,
             log_formats: None,
+            split_dialog: None,
             folder_groups: Vec::new(),
             tool_runner: ToolRunner::default(),
             filters_focus: None,
@@ -1279,8 +1282,27 @@ impl FastTailApp {
         }
     }
 
+    /// Opens the Split file dialog on stream `idx`.
+    pub fn open_split_dialog(&mut self, idx: usize) {
+        let Some(engine) = self.engines.get(idx) else {
+            return;
+        };
+        let file = engine
+            .current_file
+            .clone()
+            .unwrap_or_else(|| engine.path.clone());
+        self.split_dialog = Some(crate::ui::split_dialog::SplitDialog::new(
+            engine.path.clone(),
+            &file,
+        ));
+    }
+
     /// Opens the Log formats dialog a row menu asked for, with the lines picked.
     fn apply_format_requests(&mut self) {
+        if let Some(idx) = self.engines.iter().position(|e| e.split_request) {
+            self.engines[idx].split_request = false;
+            self.open_split_dialog(idx);
+        }
         let Some(idx) = self.engines.iter().position(|e| e.format_request.is_some()) else {
             return;
         };
@@ -5696,6 +5718,19 @@ impl FastTailApp {
             }
         }
 
+        // 11a''. Split file dialog: closed when its stream goes.
+        if let Some(dialog) = self.split_dialog.as_mut() {
+            match self.engines.iter_mut().find(|e| e.path == dialog.source) {
+                Some(engine) => {
+                    let lang = self.config.language;
+                    if dialog.show(&ctx, engine, lang, self.config.theme).is_some() {
+                        self.split_dialog = None;
+                    }
+                }
+                None => self.split_dialog = None,
+            }
+        }
+
         // 11a'. Log formats dialog
         if let Some(dialog) = self.log_formats.as_mut() {
             use crate::ui::log_formats::FormatsAction;
@@ -6364,6 +6399,14 @@ impl FastTailApp {
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
             A::LogFormats => self.open_log_formats(None, None),
+            A::SplitFile => {
+                let focused = self.focused_stream_path();
+                if let Some(idx) =
+                    focused.and_then(|p| self.engines.iter().position(|e| e.path == p))
+                {
+                    self.open_split_dialog(idx);
+                }
+            }
             A::MergedView => {
                 let first = self.focused_stream_path();
                 self.merge_prompt =
