@@ -133,3 +133,35 @@ fn the_mode_and_the_expression_are_saved_and_frozen_into_filter_tabs() {
     assert_eq!(back.expr, frozen.expr);
     assert_eq!(back.label(), "refund AND NOT refused");
 }
+
+#[test]
+fn an_empty_expression_stays_empty_through_a_restart_and_a_filter_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    write_lines(&log, &LOG);
+    let mut app = FastTailApp::from_config(FastTailConfig {
+        spool_dir: Some(dir.path().join("spool")),
+        ..Default::default()
+    });
+    app.open_log_file(log.clone());
+    let e = &mut app.engines[0];
+    e.set_include_filter("ERROR");
+    e.set_filter_expr_mode(true);
+    e.set_filter_expr("");
+    assert!(
+        !e.is_filter_active(),
+        "the terms do not filter in expression mode"
+    );
+    let frozen = fasttail::filter_tab::FrozenFilter::of(e);
+    assert!(frozen.include.is_empty() && frozen.expr.is_none());
+    fasttail::workspace::save_changes(&mut app.engines[0], &mut app.config, false);
+    app.save_dock_layout();
+    let again = FastTailApp::from_config(FastTailConfig {
+        spool_dir: Some(dir.path().join("spool")),
+        ..FastTailConfig::from_ini(&app.config.to_ini())
+    });
+    let e = again.engines.iter().find(|e| e.path == log).unwrap();
+    assert!(e.filter_expr_mode());
+    assert_eq!(e.filter_expr(), "", "not rebuilt from the terms");
+    assert_eq!(visible(e).len(), LOG.len());
+}

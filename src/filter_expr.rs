@@ -116,6 +116,12 @@ fn tokenize(text: &str) -> Result<Vec<(usize, Tok)>, ExprError> {
                             j += 2;
                             continue;
                         }
+                        if close == b'/' && next == b'\\' {
+                            // A regex's own escaped backslash, kept for the regex.
+                            value.push_str("\\\\");
+                            j += 2;
+                            continue;
+                        }
                     }
                     if d == close {
                         closed = true;
@@ -146,7 +152,11 @@ fn tokenize(text: &str) -> Result<Vec<(usize, Tok)>, ExprError> {
             }
             _ => {
                 let mut j = i;
-                while j < b.len() && !b[j].is_ascii_whitespace() && b[j] != b'(' && b[j] != b')' {
+                // A quote ends a word too: `a"b c"` is `a` and the phrase `b c`.
+                while j < b.len()
+                    && !b[j].is_ascii_whitespace()
+                    && !matches!(b[j], b'(' | b')' | b'"')
+                {
                     j += 1;
                 }
                 let word = &text[i..j];
@@ -292,7 +302,12 @@ impl FilterExpr {
     /// Compiles `text`; `Ok(None)` for an empty expression (no condition).
     pub fn compile(text: &str, toggles: Toggles) -> Result<Option<Self>, ExprError> {
         if text.len() > MAX_EXPR_BYTES {
-            return Err(ExprError::at(MAX_EXPR_BYTES, "expr_err_too_long"));
+            // On a character boundary, so the position can slice the text.
+            let mut pos = MAX_EXPR_BYTES;
+            while !text.is_char_boundary(pos) {
+                pos -= 1;
+            }
+            return Err(ExprError::at(pos, "expr_err_too_long"));
         }
         let toks = tokenize(text)?;
         if toks.is_empty() {
@@ -351,19 +366,29 @@ impl FilterExpr {
 }
 
 /// An expression equal to the include `terms` (all of them, ANDed): words as they are,
-/// anything else quoted. Used the first time a stream switches to expression mode.
-pub fn from_terms(terms: &[String]) -> String {
+/// anything else quoted. With `fields` (the stream has a parser), a quoted term is the
+/// text inside its quotes and a field term stays bare, as the term mode reads them (a
+/// field term whose value holds a space or a parenthesis cannot be written bare and
+/// becomes a phrase). Used the first time a stream switches to expression mode.
+pub fn from_terms(terms: &[String], fields: bool) -> String {
+    let phrase = |t: &str| format!("\"{}\"", t.replace('\\', "\\\\").replace('"', "\\\""));
     terms
         .iter()
         .map(|t| t.trim())
         .filter(|t| !t.is_empty())
         .map(|t| {
-            let plain = !t.contains(|c: char| c.is_whitespace() || "()\"/".contains(c))
+            if fields {
+                if let Some(inner) = crate::fields::unquote(t) {
+                    return phrase(inner);
+                }
+            }
+            let plain = !t.contains(|c: char| c.is_whitespace() || "()\"".contains(c))
+                && !t.starts_with('/')
                 && !matches!(t, "AND" | "OR" | "NOT");
             if plain {
                 t.to_string()
             } else {
-                format!("\"{}\"", t.replace('\\', "\\\\").replace('"', "\\\""))
+                phrase(t)
             }
         })
         .collect::<Vec<_>>()
@@ -507,9 +532,26 @@ mod tests {
             "time out".into(),
             "OR".into(),
         ];
-        let expr = from_terms(&terms);
+        let expr = from_terms(&terms, false);
         assert_eq!(expr, r#"payment AND "time out" AND "OR""#);
         assert!(passes(&expr, "payment time out OR"));
         assert!(!passes(&expr, "payment time out"));
+        // With a parser a quoted term is its inner text, a field term stays one.
+        let terms = vec![
+            "\"circuit open\"".to_string(),
+            "status>=500".into(),
+            "a/b".into(),
+        ];
+        assert_eq!(
+            from_terms(&terms, true),
+            r#""circuit open" AND status>=500 AND a/b"#
+        );
+        // A quote ends a word; a regex may end in an escaped backslash.
+        assert!(passes(r#"a"b c""#, "a then b c"));
+        assert!(passes(r"/x\\/ OR none", r"path x\ end"));
+        // Too long with multi-byte characters: the position is a character boundary.
+        let long = "€".repeat(400);
+        let e = err(&long);
+        assert!(long.is_char_boundary(e.pos));
     }
 }

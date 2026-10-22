@@ -489,7 +489,7 @@ impl CliArgs {
                 let detail = e.detail.map(|d| format!(" ({d})")).unwrap_or_default();
                 return Err(CliError::Usage(format!(
                     "--filter-expr: {message} at character {}{detail}",
-                    expr[..e.pos.min(expr.len())].chars().count() + 1
+                    expr.char_indices().take_while(|(i, _)| *i < e.pos).count() + 1
                 )));
             }
         }
@@ -820,6 +820,9 @@ mod tests {
         assert!(
             usage_error(&["--print", "--regex", "--filter-expr", "ok ("]).contains("--filter-expr")
         );
+        // Too long with multi-byte characters: no panic, a position in characters.
+        let long = "€".repeat(400);
+        assert!(usage_error(&["--filter-expr", &long]).contains("character 342"));
     }
 
     fn usage_error(args: &[&str]) -> String {

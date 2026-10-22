@@ -57,7 +57,8 @@ impl FrozenFilter {
         let expr = (engine.filter_expr_mode() && engine.filter_is_active_expr())
             .then(|| engine.applied_expr().unwrap_or_default());
         Self {
-            include: if expr.is_some() {
+            // In expression mode the include terms do not filter the source.
+            include: if engine.filter_expr_mode() {
                 Vec::new()
             } else {
                 nonempty(engine.include_terms())

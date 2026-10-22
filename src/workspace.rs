@@ -257,8 +257,7 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
     if include.iter().chain(&exclude).any(|t| !t.is_empty()) {
         engine.set_filter_terms(include, exclude);
     }
-    engine.set_filter_expr(&entry.filter_expr);
-    engine.set_filter_expr_mode(entry.filter_expr_mode);
+    engine.restore_filter_expr(entry.filter_expr_mode, &entry.filter_expr);
     if !entry.search_query.is_empty() {
         engine.search_query = entry.search_query.clone();
         engine.update_search(&entry.search_query);

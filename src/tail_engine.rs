@@ -3113,8 +3113,20 @@ impl TailEngine {
             return;
         }
         if on && self.filter_expr.trim().is_empty() {
-            self.filter_expr = crate::filter_expr::from_terms(&self.include_terms);
+            let fields = self.field_parser.is_some();
+            self.filter_expr = crate::filter_expr::from_terms(&self.include_terms, fields);
         }
+        self.filter_expr_mode = on;
+        self.refresh_filters();
+    }
+
+    /// Restores a saved mode and expression as they were (an empty expression stays
+    /// empty, not built from the terms).
+    pub fn restore_filter_expr(&mut self, on: bool, text: &str) {
+        if on == self.filter_expr_mode && text == self.filter_expr {
+            return;
+        }
+        self.filter_expr = text.to_string();
         self.filter_expr_mode = on;
         self.refresh_filters();
     }
