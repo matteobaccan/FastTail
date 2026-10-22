@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-22
+
+The **structured data** milestone: the six changes of the 0.21.0 plan, shipped one by one
+in the nightly patches 0.20.17 to 0.20.28 and listed in their sections below.
+
+### Added
+
+- **Open a file at a line** (0.20.17): `fasttail app.log:1204`, `--line N`, `--print
+  --line`.
+- **Hide lines by hand** (0.20.18): `Ctrl + H`, `H` in the terminal, listed and restorable,
+  saved per stream.
+- **Tray icon on Linux** (0.20.19): StatusNotifierItem (KDE, Xfce, GNOME with
+  AppIndicator).
+- **Folder sources** (0.20.20): the Open folder dialog, several patterns and subfolders,
+  Open all groups that open new files by themselves, `--all`.
+- **Structured logs** (0.20.21 to 0.20.24): field filter terms (`status>=500`,
+  `level=error|fatal`), level and time read from the fields, search and rule colours in
+  the cells, Copy as shown as columns, wrapped message column, selection inside a cell.
+- **Tables** (0.20.25 to 0.20.28): CSV / TSV files read as tables (separator and header
+  detected, RFC 4180 quoting, records over several lines on one row), opened in the column
+  view; the column view in the terminal interface for every parser.
+
 ## [0.20.28] - 2026-10-22
 
 ### Changed
@@ -1840,6 +1862,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.21.0]: https://github.com/matteobaccan/FastTail/compare/v0.20.28...v0.21.0
 [0.20.28]: https://github.com/matteobaccan/FastTail/compare/v0.20.27...v0.20.28
 [0.20.27]: https://github.com/matteobaccan/FastTail/compare/v0.20.26...v0.20.27
 [0.20.26]: https://github.com/matteobaccan/FastTail/compare/v0.20.25...v0.20.26
