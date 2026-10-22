@@ -225,7 +225,10 @@ impl SplitDialog {
                     && p.pieces > 0
                     && !no_space
                     && (p.existing.is_empty() || self.replace);
-                let disabled_tip = if busy || p.waiting_for_timestamps {
+                // While the split runs the progress bar says why the button is off.
+                let disabled_tip = if busy {
+                    t(lang, "split_tip").to_string()
+                } else if p.waiting_for_timestamps {
                     t(lang, "split_waiting").to_string()
                 } else if p.no_timestamps {
                     t(lang, "split_no_timestamps").to_string()
