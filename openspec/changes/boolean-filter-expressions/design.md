@@ -48,7 +48,9 @@ when the stream has a field parser.
    `FieldSpans`, as in `structured-fields`). Operands are evaluated in written order;
    cheap text operands are not reordered (keeps the behaviour predictable when debugging).
    *Rejected:* a parser crate (`pest`, `nom`) — a new dependency for a grammar of five
-   rules.
+   rules. *As built:* the nodes are a small tree in a `Vec` (children by index, root last)
+   evaluated recursively, which gives the short-circuit directly; still no allocation per
+   line.
 5. **Limits and errors.** ≤ 1,024 characters, ≤ 32 operands, depth ≤ 16; beyond them a
    parse error. An error (syntax, limit, invalid regex) is shown under the field with a
    caret at the byte position and a short message; the engine keeps the last valid

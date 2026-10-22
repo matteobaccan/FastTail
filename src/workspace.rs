@@ -257,6 +257,8 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
     if include.iter().chain(&exclude).any(|t| !t.is_empty()) {
         engine.set_filter_terms(include, exclude);
     }
+    engine.set_filter_expr(&entry.filter_expr);
+    engine.set_filter_expr_mode(entry.filter_expr_mode);
     if !entry.search_query.is_empty() {
         engine.search_query = entry.search_query.clone();
         engine.update_search(&entry.search_query);
@@ -364,6 +366,8 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         exclude_filter: engine.exclude_filter().to_string(),
         include_extra: extra_terms(engine.include_terms()),
         exclude_extra: extra_terms(engine.exclude_terms()),
+        filter_expr_mode: engine.filter_expr_mode(),
+        filter_expr: engine.filter_expr().to_string(),
         search_query: engine.search_query.trim().to_string(),
         wrap: engine.wrap_lines,
         encoding: Some(engine.encoding.name().to_string()),

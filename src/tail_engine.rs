@@ -1423,6 +1423,14 @@ pub struct TailEngine {
     /// `MAX_FILTER_TERMS` each; empty rows are kept for the editor and ignored. The first
     /// term of each side is the stream bar's field (`include_filter` / `exclude_filter`).
     include_terms: Vec<String>,
+    /// Expression mode: the include side is `filter_expr` instead of the include terms,
+    /// which are kept for the way back (`filter_mode=expr`, `filter_expr=`).
+    filter_expr_mode: bool,
+    filter_expr: String,
+    /// Why `filter_expr` does not compile; the last text that did is what filters
+    /// meanwhile.
+    expr_error: Option<crate::filter_expr::ExprError>,
+    last_valid_expr: Option<String>,
     exclude_terms: Vec<String>,
     /// Preset last applied to this stream, in memory only: with the filter state edited
     /// since, the presets drop-down shows it as `name *` (see `filter_preset`).
@@ -2271,6 +2279,10 @@ impl TailEngine {
             size_unit: SizeUnit::Bytes,
             encoding: detected_encoding,
             include_terms: Vec::new(),
+            filter_expr_mode: false,
+            filter_expr: String::new(),
+            expr_error: None,
+            last_valid_expr: None,
             exclude_terms: Vec::new(),
             applied_preset: None,
             filter_case_sensitive: false,
@@ -2576,9 +2588,47 @@ impl TailEngine {
         }
     }
 
-    fn build_filter(&self) -> FilterSpec {
+    /// The expression the filter applies: the current text when it compiles (an empty one
+    /// filters nothing), else the last text that did; `expr_error` says why not.
+    fn compile_expr(&mut self) -> Option<Arc<crate::filter_expr::FilterExpr>> {
+        if !self.filter_expr_mode {
+            self.expr_error = None;
+            return None;
+        }
+        let toggles = crate::filter_expr::Toggles {
+            case_sensitive: self.filter_case_sensitive,
+            is_regex: self.filter_is_regex,
+            fields: self.field_parser.is_some(),
+        };
+        match crate::filter_expr::FilterExpr::compile(&self.filter_expr, toggles) {
+            Ok(expr) => {
+                self.expr_error = None;
+                self.last_valid_expr = Some(self.filter_expr.clone());
+                expr.map(Arc::new)
+            }
+            Err(e) => {
+                self.expr_error = Some(e);
+                self.last_valid_expr
+                    .as_deref()
+                    .and_then(|text| crate::filter_expr::FilterExpr::compile(text, toggles).ok())
+                    .flatten()
+                    .map(Arc::new)
+            }
+        }
+    }
+
+    fn build_filter(&mut self) -> FilterSpec {
+        let expr = self.compile_expr();
+        let in_expr_mode = self.filter_expr_mode;
+        // In expression mode the include terms are kept but do not apply.
+        let none: [String; 0] = [];
+        let include: &[String] = if in_expr_mode {
+            &none
+        } else {
+            &self.include_terms
+        };
         FilterSpec::build(
-            &self.include_terms,
+            include,
             &self.exclude_terms,
             self.filter_case_sensitive,
             self.filter_is_regex,
@@ -2587,6 +2637,7 @@ impl TailEngine {
         .with_level_window(self.level_window())
         .with_global(self.global_filter.clone())
         .with_parser(self.field_parser.clone())
+        .with_expr(expr)
     }
 
     /// Sets the global filter this stream combines with its own (`None`: off, or no
@@ -3027,6 +3078,56 @@ impl TailEngine {
     /// Every include term row, empty ones included.
     pub fn include_terms(&self) -> &[String] {
         &self.include_terms
+    }
+
+    /// Whether the include side is an expression (`filter_expr`).
+    pub fn filter_expr_mode(&self) -> bool {
+        self.filter_expr_mode
+    }
+
+    /// The expression as typed (kept while in term mode too).
+    pub fn filter_expr(&self) -> &str {
+        &self.filter_expr
+    }
+
+    /// The expression the filter applies now (the last valid one), `None` in term mode or
+    /// without one.
+    pub fn applied_expr(&self) -> Option<String> {
+        self.filter.expr.as_ref().map(|e| e.text.clone())
+    }
+
+    /// Whether an expression filters the include side now.
+    pub fn filter_is_active_expr(&self) -> bool {
+        self.filter.expr.is_some()
+    }
+
+    /// Why the expression as typed does not compile (the last valid one filters).
+    pub fn expr_error(&self) -> Option<&crate::filter_expr::ExprError> {
+        self.expr_error.as_ref()
+    }
+
+    /// Switches between include terms and an expression. The first switch to an empty
+    /// expression builds it from the include terms; both sides keep their text.
+    pub fn set_filter_expr_mode(&mut self, on: bool) {
+        if on == self.filter_expr_mode {
+            return;
+        }
+        if on && self.filter_expr.trim().is_empty() {
+            self.filter_expr = crate::filter_expr::from_terms(&self.include_terms);
+        }
+        self.filter_expr_mode = on;
+        self.refresh_filters();
+    }
+
+    /// Sets the expression (applied in expression mode).
+    pub fn set_filter_expr(&mut self, text: &str) {
+        if text == self.filter_expr {
+            return;
+        }
+        self.filter_expr = text.to_string();
+        if self.filter_expr_mode {
+            self.refresh_filters();
+        }
     }
 
     pub fn exclude_terms(&self) -> &[String] {
@@ -4508,7 +4609,8 @@ impl TailEngine {
 
     pub fn is_filter_active(&self) -> bool {
         !self.hidden.is_empty()
-            || self.include_terms.iter().any(|t| !t.is_empty())
+            || (!self.filter_expr_mode && self.include_terms.iter().any(|t| !t.is_empty()))
+            || self.filter.expr.is_some()
             || self.exclude_terms.iter().any(|t| !t.is_empty())
             || self.global_filter.is_some()
             || self.min_level != LogLevel::Unknown

@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Filter expressions (engine, sessions, command line).** The include side of a stream's
+  filter can be one expression: `AND`, `OR`, `NOT` (upper case), parentheses, implicit
+  `AND`, words, `"phrases"`, `/regexes/` and field terms, with the exclude terms and the
+  stack-trace rule as before; while the text does not compile the last valid expression
+  filters. Saved per stream (`filter_mode=expr`, `filter_expr=`), frozen into filter tabs,
+  and given on the command line with `--filter-expr` (window, terminal, print mode). The
+  `ƒx` toggle in the stream bar, the global filter and presets follow.
+
 ## [0.21.5] - 2026-10-22
 
 ### Added

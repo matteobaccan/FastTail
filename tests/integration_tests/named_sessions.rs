@@ -15,6 +15,8 @@ fn entry(path: PathBuf) -> StreamEntry {
         exclude_filter: "health".to_string(),
         include_extra: vec!["payment".to_string(), "timeout".to_string()],
         exclude_extra: vec!["retry=0".to_string()],
+        filter_expr_mode: true,
+        filter_expr: r#"(payment OR "re fund") AND NOT /a\/b/"#.to_string(),
         search_query: "timeout".to_string(),
         wrap: true,
         encoding: Some("ANSI".to_string()),
@@ -538,6 +540,7 @@ fn a_derived_stream_round_trips_with_its_frozen_filter_and_follows_a_moved_bundl
         hidden: vec![(3, 4)],
         time_from: Some(1_700_000_000_000),
         time_to: None,
+        expr: Some("ERROR OR \"time out\"".into()),
     };
     let mut derived = StreamEntry::new(identity(2, &log));
     derived.frozen = Some(frozen.clone());

@@ -2171,6 +2171,10 @@ impl FastTailApp {
         if let Some(f) = cli.window_filter() {
             engine.set_include_filter(f);
         }
+        if let Some(expr) = &cli.filter_expr {
+            engine.set_filter_expr(expr);
+            engine.set_filter_expr_mode(true);
+        }
         if let Some(x) = cli.window_exclude() {
             engine.set_exclude_filter(x);
         }
@@ -2244,6 +2248,10 @@ impl FastTailApp {
         let options = self.stdin_options.clone();
         if let Some(f) = &options.filter {
             engine.set_include_filter(f);
+        }
+        if let Some(expr) = &options.filter_expr {
+            engine.set_filter_expr(expr);
+            engine.set_filter_expr_mode(true);
         }
         if let Some(x) = &options.exclude {
             engine.set_exclude_filter(x);
@@ -6434,6 +6442,7 @@ fn is_stdin_tab(tab: &FastTailTab) -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StdinOptions {
     pub filter: Option<String>,
+    pub filter_expr: Option<String>,
     pub exclude: Option<String>,
     pub follow: Option<bool>,
     pub since: Option<String>,
@@ -6444,6 +6453,7 @@ impl StdinOptions {
     pub fn from_cli(cli: &crate::cli::CliArgs) -> Self {
         Self {
             filter: cli.window_filter().cloned(),
+            filter_expr: cli.filter_expr.clone(),
             exclude: cli.window_exclude().cloned(),
             follow: cli.follow,
             since: cli.since.clone(),

@@ -284,6 +284,10 @@ fn run_args(args: Vec<String>) -> i32 {
         if let Some(f) = cli.window_filter() {
             tab.engine.set_include_filter(f);
         }
+        if let Some(expr) = &cli.filter_expr {
+            tab.engine.set_filter_expr(expr);
+            tab.engine.set_filter_expr_mode(true);
+        }
         if let Some(f) = cli.window_exclude() {
             tab.engine.set_exclude_filter(f);
         }

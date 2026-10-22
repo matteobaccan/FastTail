@@ -730,7 +730,20 @@ struct Matcher {
 
 impl Matcher {
     fn from_cli(cli: &CliArgs) -> Self {
+        // `validate` checked that the expression compiles.
+        let expr = cli.filter_expr.as_deref().and_then(|text| {
+            let toggles = crate::filter_expr::Toggles {
+                case_sensitive: cli.case_sensitive,
+                is_regex: cli.regex,
+                fields: false,
+            };
+            crate::filter_expr::FilterExpr::compile(text, toggles)
+                .ok()
+                .flatten()
+                .map(std::sync::Arc::new)
+        });
         let filter = FilterSpec::build(&cli.filter, &cli.exclude, cli.case_sensitive, cli.regex)
+            .with_expr(expr)
             .with_levels(cli.level.unwrap_or(LogLevel::Unknown), false)
             .with_level_window(cli.level_bytes.unwrap_or(crate::log_level::DEFAULT_WINDOW));
         Self {
@@ -1437,6 +1450,36 @@ mod tests {
 2026-09-18 14:05:30 ERROR payment refused
 2026-09-18 14:06:00 INFO done
 ";
+
+    #[test]
+    fn an_expression_filters_with_its_traces_and_the_exclude_terms() {
+        let (out, n) = print_text(
+            &[
+                "--filter-expr",
+                "(timeout OR start) AND NOT INFO",
+                "--exclude",
+                "x",
+            ],
+            LOG.as_bytes(),
+            4096,
+        );
+        assert_eq!(
+            out,
+            "2026-09-18 14:02:10 ERROR payment timeout\n    at Gateway.call(Gateway.java:12)\n"
+        );
+        assert_eq!(n, 2);
+        let (out, _) = print_text(
+            &[
+                "--filter-expr",
+                "refused OR healthcheck",
+                "--exclude",
+                "WARN",
+            ],
+            LOG.as_bytes(),
+            7,
+        );
+        assert_eq!(out, "2026-09-18 14:05:30 ERROR payment refused\n");
+    }
 
     #[test]
     fn filters_follow_their_stack_traces_in_any_chunking() {

@@ -58,6 +58,10 @@ pub struct StreamEntry {
     /// the rest.
     pub include_extra: Vec<String>,
     pub exclude_extra: Vec<String>,
+    /// Expression mode (`filter_mode=expr`, written only when on) and the expression
+    /// (`filter_expr=`, kept in term mode too). Older builds read the include terms.
+    pub filter_expr_mode: bool,
+    pub filter_expr: String,
     pub search_query: String,
     pub wrap: bool,
     /// Encoding name as `FileEncoding::name()`; `None` keeps the detected one.
@@ -229,6 +233,12 @@ impl Session {
                 for (n, term) in extra.iter().filter(|t| !t.is_empty()).enumerate() {
                     sec.set(format!("{key}.{}", n + 2), ini_value(term));
                 }
+            }
+            if s.filter_expr_mode {
+                sec.set("filter_mode", "expr");
+            }
+            if !s.filter_expr.is_empty() {
+                sec.set("filter_expr", ini_value(&s.filter_expr));
             }
             sec.set("search", ini_value(&s.search_query));
             sec.set("wrap", s.wrap.to_string());
@@ -468,6 +478,10 @@ impl Session {
                 exclude_filter: sec.get("exclude").unwrap_or("").to_string(),
                 include_extra: extra("include"),
                 exclude_extra: extra("exclude"),
+                filter_expr_mode: sec
+                    .get("filter_mode")
+                    .is_some_and(|m| m.trim().eq_ignore_ascii_case("expr")),
+                filter_expr: sec.get("filter_expr").unwrap_or("").to_string(),
                 search_query: sec.get("search").unwrap_or("").to_string(),
                 wrap: sec
                     .get("wrap")

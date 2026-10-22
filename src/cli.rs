@@ -36,6 +36,8 @@ OPTIONS:
     --filter <TEXT>      Include filter applied to the files opened from the command line
                          (given twice, the last one counts)
     --exclude <TEXT>     Exclude filter applied to the files opened from the command line
+    --filter-expr <EXPR> Include side as an expression (AND, OR, NOT, parentheses,
+                         \"phrases\", /regexes/), instead of --filter; also in print mode
     --since <TIME>       Start of the time window of the files opened from the command line:
                          14:02, 2026-09-28 14:02, a timestamp copied from a line, or a
                          relative time: now, -15m, -3h, -1h30m, -2d, -1w (units s, m, h,
@@ -120,6 +122,7 @@ Press ? or F1 in the viewer for the keys.
 /// hand-offs that pass a command line on without parsing it (`crate::handoff`).
 pub const VALUE_OPTIONS: &[&str] = &[
     "--filter",
+    "--filter-expr",
     "--exclude",
     "--since",
     "--until",
@@ -202,6 +205,8 @@ pub struct CliArgs {
     pub filter: Vec<String>,
     /// Exclude terms, as `filter` (`window_exclude`).
     pub exclude: Vec<String>,
+    /// `--filter-expr`: the include side as an expression (instead of `--filter`).
+    pub filter_expr: Option<String>,
     /// Start and end of the time window, as typed (validated at parse time).
     pub since: Option<String>,
     pub until: Option<String>,
@@ -320,6 +325,7 @@ impl CliArgs {
                 "-V" | "--version" => out.show_version = true,
                 "-h" | "--help" => out.show_help = true,
                 "--filter" => out.filter.push(value("text")?),
+                "--filter-expr" => out.filter_expr = Some(value("expression")?),
                 "--exclude" => out.exclude.push(value("text")?),
                 "--print" => out.print = true,
                 "--regex" => out.regex = true,
@@ -466,6 +472,26 @@ impl CliArgs {
             return Err(CliError::Usage(
                 "--tui and --gui cannot be given together".to_string(),
             ));
+        }
+        if let Some(expr) = &self.filter_expr {
+            if !self.filter.is_empty() {
+                return Err(CliError::Usage(
+                    "--filter-expr and --filter cannot be given together".to_string(),
+                ));
+            }
+            let toggles = crate::filter_expr::Toggles {
+                case_sensitive: self.case_sensitive,
+                is_regex: self.regex,
+                fields: false,
+            };
+            if let Err(e) = crate::filter_expr::FilterExpr::compile(expr, toggles) {
+                let message = crate::i18n::t(crate::i18n::Language::En, e.key);
+                let detail = e.detail.map(|d| format!(" ({d})")).unwrap_or_default();
+                return Err(CliError::Usage(format!(
+                    "--filter-expr: {message} at character {}{detail}",
+                    expr[..e.pos.min(expr.len())].chars().count() + 1
+                )));
+            }
         }
         for (name, terms) in [("--filter", &self.filter), ("--exclude", &self.exclude)] {
             if self.print && terms.len() > MAX_FILTER_TERMS {
@@ -781,6 +807,19 @@ mod tests {
             CliArgs::parse(["--renderer", "vulkan"], &cwd()),
             Err(CliError::Usage(m)) if m.contains("vulkan")
         ));
+    }
+
+    #[test]
+    fn filter_expr_is_checked_and_excludes_filter() {
+        let a = CliArgs::parse(["--filter-expr", "a OR (b NOT c)", "x.log"], &cwd()).unwrap();
+        assert_eq!(a.filter_expr.as_deref(), Some("a OR (b NOT c)"));
+        assert!(VALUE_OPTIONS.contains(&"--filter-expr"));
+        assert!(usage_error(&["--filter-expr", "a", "--filter", "b"]).contains("--filter"));
+        let bad = usage_error(&["--filter-expr", "(a OR"]);
+        assert!(bad.contains("character 6"), "{bad}");
+        assert!(
+            usage_error(&["--print", "--regex", "--filter-expr", "ok ("]).contains("--filter-expr")
+        );
     }
 
     fn usage_error(args: &[&str]) -> String {
