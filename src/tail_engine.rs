@@ -1683,9 +1683,18 @@ pub struct TailEngine {
     /// Line a search across streams asked the view to show (see `request_jump`); the
     /// stream viewer centres it on its next frame, when it knows the row geometry.
     pub pending_jump: Option<usize>,
-    /// Lines hidden by hand (`hidden=` per stream): inclusive line ranges, sorted and
-    /// merged, at most `MAX_HIDDEN_RANGES`.
+    /// The lines out of the view by index: those hidden by hand (`user_hidden`) and, in
+    /// the column view of a CSV, the lines that continue a quoted record (`record_tails`,
+    /// drawn in their record's row). Inclusive line ranges, sorted and merged.
     hidden: Vec<(usize, usize)>,
+    /// Lines hidden by hand (`hidden=` per stream), at most `MAX_HIDDEN_RANGES`.
+    user_hidden: Vec<(usize, usize)>,
+    /// The lines after the first of each CSV record whose quoted cell runs over several
+    /// lines, found by `scan_records` up to `record_scan_next`; `record_open` is the first
+    /// line of a record still open there.
+    record_tails: Vec<(usize, usize)>,
+    record_scan_next: usize,
+    record_open: Option<usize>,
     /// The hidden ranges changed: the stream state is saved again (`hidden=`).
     pub hidden_dirty: bool,
     /// A reload cleared the hidden ranges: the interfaces say so once (`hidden_cleared`).
@@ -2328,6 +2337,10 @@ impl TailEngine {
             reload_generation: 0,
             pending_jump: None,
             hidden: Vec::new(),
+            user_hidden: Vec::new(),
+            record_tails: Vec::new(),
+            record_scan_next: 0,
+            record_open: None,
             hidden_dirty: false,
             hidden_cleared: false,
             pending_open_line: None,
@@ -3099,11 +3112,15 @@ impl TailEngine {
         self.context = None;
         self.reload_generation = self.reload_generation.wrapping_add(1);
         // Hidden lines are numbers of the old index: they no longer name the same lines.
-        if !self.hidden.is_empty() {
-            self.hidden.clear();
+        if !self.user_hidden.is_empty() {
+            self.user_hidden.clear();
             self.hidden_dirty = true;
             self.hidden_cleared = true;
         }
+        self.record_tails.clear();
+        self.record_scan_next = 0;
+        self.record_open = None;
+        self.hidden.clear();
         // The JSON rows' trees and folds named lines of the old index.
         self.expanded_json_lines.clear();
         self.json_open.clear();
@@ -3611,6 +3628,11 @@ impl TailEngine {
         if self.field_view != on {
             self.field_view = on;
             self.fields_dirty = true;
+            // The record tails leave the view in the column view only.
+            if !self.record_tails.is_empty() {
+                self.rebuild_hidden();
+                self.hidden_changed(false);
+            }
         }
     }
 
@@ -3692,9 +3714,10 @@ impl TailEngine {
         if let Some(row) = self.field_rows.get(key, idx) {
             return Some(row);
         }
+        let text = self.record_text(idx, text).into_owned();
         let row = Arc::new(crate::fields::row_fields(
             &parser,
-            text,
+            &text,
             &mut self.field_spans,
         ));
         for (field, value) in &row.fields {
@@ -3777,6 +3800,7 @@ impl TailEngine {
         // An automatic-bookmark scan displaced by another job, or waiting for the index.
         self.run_auto_scan_if_due();
         self.detect_fields();
+        self.scan_records();
         if !self.is_watching {
             return;
         }
@@ -5309,7 +5333,7 @@ impl TailEngine {
             }
             written += 1;
             if let Some(text) = self.get_line(first) {
-                match self.cells_as_shown(&text, &columns, &mut spans) {
+                match self.cells_as_shown(first, &text, &columns, &mut spans) {
                     Some(cells) => out.push_str(&cells),
                     None => out.push_str(&text),
                 }
@@ -5330,6 +5354,7 @@ impl TailEngine {
     /// (drawn across the columns as it is).
     fn cells_as_shown(
         &self,
+        line_idx: usize,
         text: &str,
         columns: &[String],
         spans: &mut crate::fields::FieldSpans,
@@ -5342,6 +5367,11 @@ impl TailEngine {
         if !row.shaped {
             return None;
         }
+        let row = if self.record_tails.is_empty() {
+            row
+        } else {
+            crate::fields::row_fields(parser, &self.record_text(line_idx, text), spans)
+        };
         let mut cells: Vec<&str> = columns.iter().map(|k| row.get(k).unwrap_or("")).collect();
         let message = row.message(columns);
         cells.push(&message);
@@ -8459,9 +8489,10 @@ impl TailEngine {
         }
         // Pruning in place needs the filtered lines to be the visible set already.
         let was_filtered = self.is_filter_active();
-        let mut all = std::mem::take(&mut self.hidden);
+        let mut all = std::mem::take(&mut self.user_hidden);
         all.extend(added);
-        self.hidden = merge_ranges(all);
+        self.user_hidden = merge_ranges(all);
+        self.rebuild_hidden();
         self.hidden_changed(was_filtered);
     }
 
@@ -8494,22 +8525,132 @@ impl TailEngine {
 
     /// Shows the hidden range at `index` of `hidden_ranges` again.
     pub fn show_hidden_range(&mut self, index: usize) {
-        if index < self.hidden.len() {
-            self.hidden.remove(index);
+        if index < self.user_hidden.len() {
+            self.user_hidden.remove(index);
+            self.rebuild_hidden();
             self.hidden_changed(false);
         }
     }
 
     pub fn show_all_hidden(&mut self) {
-        if !self.hidden.is_empty() {
-            self.hidden.clear();
+        if !self.user_hidden.is_empty() {
+            self.user_hidden.clear();
+            self.rebuild_hidden();
             self.hidden_changed(false);
         }
     }
 
-    /// The hidden ranges, inclusive, in line order.
+    /// The ranges hidden by hand, inclusive, in line order.
     pub fn hidden_ranges(&self) -> &[(usize, usize)] {
-        &self.hidden
+        &self.user_hidden
+    }
+
+    /// `hidden`: the ranges hidden by hand, with the record tails in the column view.
+    fn rebuild_hidden(&mut self) {
+        if self.record_tails.is_empty() || !self.columns_shown() {
+            self.hidden = self.user_hidden.clone();
+            return;
+        }
+        let mut all = self.user_hidden.clone();
+        all.extend_from_slice(&self.record_tails);
+        all.sort_unstable();
+        let mut out: Vec<(usize, usize)> = Vec::with_capacity(all.len());
+        for (a, b) in all {
+            match out.last_mut() {
+                Some((_, end)) if a <= end.saturating_add(1) => *end = (*end).max(b),
+                _ => out.push((a, b)),
+            }
+        }
+        self.hidden = out;
+    }
+
+    /// Lines read per call by `scan_records`.
+    const RECORD_SCAN_BUDGET: usize = 50_000;
+
+    /// Finds the CSV records whose quoted cell runs over several lines (a CSV parser
+    /// only), a bounded pass per call from where the last one stopped; the lines after a
+    /// record's first leave the column view, which draws them in that row.
+    fn scan_records(&mut self) {
+        let delimited = matches!(
+            self.field_parser.as_deref(),
+            Some(FieldParser::Delimited(_))
+        );
+        if !delimited {
+            if !self.record_tails.is_empty() || self.record_scan_next > 0 {
+                self.record_tails.clear();
+                self.record_scan_next = 0;
+                self.record_open = None;
+                self.rebuild_hidden();
+                self.hidden_changed(false);
+            }
+            return;
+        }
+        let total = self.total_lines();
+        if self.index_pending || self.record_scan_next >= total {
+            return;
+        }
+        let from = self.record_scan_next;
+        let to = (from + Self::RECORD_SCAN_BUDGET).min(total);
+        let mut open = self.record_open;
+        let mut fresh: Vec<(usize, usize)> = Vec::new();
+        self.scan_lines(from, to, |idx, text| {
+            match open {
+                Some(head) => {
+                    match fresh.last_mut() {
+                        Some((_, end)) if *end + 1 == idx => *end = idx,
+                        _ => fresh.push((idx, idx)),
+                    }
+                    if crate::fields::toggles_quote(text)
+                        || idx - head + 1 >= crate::fields::MAX_RECORD_LINES
+                    {
+                        open = None;
+                    }
+                }
+                None if crate::fields::toggles_quote(text) => open = Some(idx),
+                None => {}
+            }
+            true
+        });
+        self.record_scan_next = to;
+        self.record_open = open;
+        if fresh.is_empty() {
+            return;
+        }
+        for range in fresh {
+            match self.record_tails.last_mut() {
+                Some((_, end)) if *end + 1 == range.0 => *end = range.1,
+                _ => self.record_tails.push(range),
+            }
+        }
+        // The rows drawn before were the record's first lines alone.
+        self.field_rows.clear();
+        if self.columns_shown() {
+            let was_filtered = self.is_filter_active();
+            self.rebuild_hidden();
+            self.hidden_changed(was_filtered);
+        }
+    }
+
+    /// `text`, the line `idx`, with the lines that continue its quoted CSV record (the
+    /// record's whole text, with its line breaks), or `text` itself.
+    fn record_text<'a>(&self, idx: usize, text: &'a str) -> std::borrow::Cow<'a, str> {
+        let i = self.record_tails.partition_point(|&(a, _)| a <= idx);
+        let tail = self
+            .record_tails
+            .get(i)
+            .filter(|&&(a, _)| a == idx + 1)
+            .copied();
+        let Some((_, end)) = tail else {
+            return std::borrow::Cow::Borrowed(text);
+        };
+        let mut out = text.trim_end_matches(['\r', '\n']).to_string();
+        for l in idx + 1..=end {
+            out.push('\n');
+            if let Some(next) = self.get_line(l) {
+                out.push_str(next.trim_end_matches(['\r', '\n']));
+            }
+        }
+        std::borrow::Cow::Owned(out)
     }
 
     /// Restores saved ranges (`hidden=`). They are all kept, even past the current end:
@@ -8518,8 +8659,9 @@ impl TailEngine {
     pub fn set_hidden_ranges(&mut self, ranges: Vec<(usize, usize)>) {
         let ranges: Vec<_> = ranges.into_iter().filter(|&(a, b)| a <= b).collect();
         let ranges = merge_ranges(ranges);
-        if ranges != self.hidden {
-            self.hidden = ranges;
+        if ranges != self.user_hidden {
+            self.user_hidden = ranges;
+            self.rebuild_hidden();
             self.recompute_filtered_lines();
         }
     }
@@ -8527,7 +8669,7 @@ impl TailEngine {
     /// How many existing lines are hidden (a saved range may reach past the end).
     pub fn hidden_count(&self) -> usize {
         let total = self.total_lines();
-        self.hidden
+        self.user_hidden
             .iter()
             .filter(|&&(a, _)| a < total)
             .map(|&(a, b)| b.min(total - 1) - a + 1)

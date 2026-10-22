@@ -18,9 +18,11 @@ without loading the file.
 2. **Header** when the first row's cells are all non-numeric, distinct and not repeated
    in the next rows; the user can turn it off.
 3. **Quoted newlines:** a record whose quotes are not closed at the end of a line
-   continues on the next one. The engine joins such lines into one row through the same
-   mechanism as stack-trace grouping, so the line index stays per physical line and
-   nothing is held in memory. A record that does not close within 1,000 lines is cut
+   continues on the next one. In the column view the engine takes the lines after a record's
+   first out of the view with the line ranges that hide lines by hand (kept apart from
+   them, not saved), and the record's row parses the joined text, so the line index stays
+   per physical line and nothing is held in memory beyond the ranges. The text view keeps
+   every line. A record that does not close within 1,000 lines is cut
    there (a broken file must not swallow the rest).
 4. **Cells are parsed on demand** for the rows on screen and in the filter pass, without
    allocation per line in the hot path (cell spans into the line buffer).

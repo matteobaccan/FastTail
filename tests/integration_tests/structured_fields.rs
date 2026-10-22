@@ -761,3 +761,59 @@ fn a_forced_separator_and_header_are_saved_with_the_stream() {
         }
     );
 }
+
+#[test]
+fn a_quoted_newline_keeps_its_record_on_one_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("notes.csv");
+    write_lines(
+        &file,
+        &[
+            "id,note,total",
+            r#"1,"line one"#,
+            r#"line two",10"#,
+            "2,plain,20",
+        ],
+    );
+    let mut e = open(&file);
+    assert_eq!(kind(&e), "csv");
+    e.poll_updates();
+    // The text view keeps every line.
+    assert_eq!(visible(&e), vec![0, 1, 2, 3]);
+    e.set_fields_view(true);
+    assert_eq!(
+        visible(&e),
+        vec![0, 1, 3],
+        "line 2 continues the record of line 1"
+    );
+    let text = e.get_line(1).unwrap().into_owned();
+    let row = e.row_fields(1, &text).unwrap();
+    assert_eq!(row.get("note"), Some("line one⏎line two"));
+    assert_eq!(row.get("total"), Some("10"));
+    assert!(e.hidden_ranges().is_empty(), "no line hidden by hand");
+    e.select_row(1);
+    assert_eq!(
+        e.copy_selection_as_shown().unwrap(),
+        "1\tline one⏎line two\t10\t"
+    );
+    e.set_fields_view(false);
+    assert_eq!(visible(&e), vec![0, 1, 2, 3]);
+}
+
+#[test]
+fn an_unclosed_quote_takes_at_most_1000_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("broken.csv");
+    let mut lines = vec!["a,b".to_string(), r#"1,"never closed"#.to_string()];
+    lines.extend((0..1500).map(|i| format!("x{i},y")));
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    write_lines(&file, &refs);
+    let mut e = open(&file);
+    e.set_fields_view(true);
+    e.poll_updates();
+    let shown = visible(&e);
+    // Line 1 opens the record, lines 2..=1000 continue it, line 1001 is a row again.
+    assert!(shown.contains(&1));
+    assert!(!shown.contains(&1000));
+    assert!(shown.contains(&1001), "{:?}", &shown[..3]);
+}
