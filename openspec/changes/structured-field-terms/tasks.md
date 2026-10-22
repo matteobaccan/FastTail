@@ -16,13 +16,13 @@
 - [x] 3.1 Hit tints and rule spans in the cells (computed on each cell's text), whole-row styles on the row, 64-span budget unchanged
 - [x] 3.2 "Copy as shown" writes the shown cells tab-separated in the column view; copy and export keep writing raw lines
 - [x] 3.3 Tests: span mapping across cell boundaries; copy as shown TSV; export unchanged
-- [ ] 3.4 Character selection kept inside the cell it starts in (from `partial-line-selection` task 2.6)
-- [ ] 3.5 Wrap mode: the last column wraps, the other cells on the row's first line; scroll and jumps through the wrap layout
+- [x] 3.4 Character selection kept inside the cell it starts in (from `partial-line-selection` task 2.6)
+- [x] 3.5 Wrap mode: the last column wraps, the other cells on the row's first line; scroll and jumps through the wrap layout
 
 ## 4. Texts and documentation
 
-- [ ] 4.1 New i18n keys (`ƒ` tooltip, copy as shown in columns, help entries) in all 16 languages; exhaustive i18n test
-- [ ] 4.2 README "Structured logs" section with the field-term syntax, FAQ; CHANGELOG `[Unreleased]`
+- [x] 4.1 New i18n keys (`ƒ` tooltip, copy as shown in columns, help entries) in all 16 languages; exhaustive i18n test
+- [x] 4.2 README "Structured logs" section with the field-term syntax, FAQ; CHANGELOG `[Unreleased]`
 
 ## 5. Wrap-up
 

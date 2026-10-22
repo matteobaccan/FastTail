@@ -300,6 +300,15 @@ fn the_column_view_draws_cells_a_header_and_the_message() {
         "{texts:?}"
     );
 
+    // Wrap on: the cells and the message are still drawn, the message wrapped.
+    app.engines[0].set_field_columns(vec![]);
+    app.engines[0].set_wrap_lines(true, 0);
+    let texts = app_frame(&mut app);
+    for cell in ["error", "bob", "boom", "not json at all"] {
+        assert!(has(&texts, cell), "wrapped: {cell} missing in {texts:?}");
+    }
+    app.engines[0].set_wrap_lines(false, 0);
+
     // Without a parser the rows are text again.
     app.engines[0].set_field_choice(ParserChoice::Off);
     let texts = app_frame(&mut app);
@@ -348,7 +357,7 @@ fn the_column_view_is_kept_in_the_workspace() {
 }
 
 #[test]
-fn the_column_view_keeps_one_row_per_line_and_the_top_row_across_the_switch() {
+fn the_column_view_wraps_with_wrap_on_and_keeps_the_top_row() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.json");
     write_lines(&path, JSON_LOG);
@@ -359,20 +368,16 @@ fn the_column_view_keeps_one_row_per_line_and_the_top_row_across_the_switch() {
     assert!(engine.wraps_rows());
     engine.wrap_anchor.row = 3;
 
-    // Columns on: one row per line, scrolled to the wrap view's top row.
+    // Columns on: still wrapped (the message column wraps), on the same top row.
     engine.set_fields_view(true);
-    assert!(!engine.wraps_rows());
-    engine.sync_row_mode(20.0);
-    assert_eq!(engine.requested_scroll_y, Some(60.0));
-    assert!(engine.wrap_request.is_none());
-
-    // Columns off again: wrapped, anchored on the extended view's top row.
-    engine.requested_scroll_y = None;
-    engine.current_scroll_y = 40.0;
-    engine.set_fields_view(false);
-    engine.sync_row_mode(20.0);
     assert!(engine.wraps_rows());
-    assert_eq!(engine.wrap_anchor.row, 2);
+    engine.sync_row_mode(20.0);
+    assert_eq!(engine.wrap_anchor.row, 3);
+
+    // Wrap off in the column view: one row per line.
+    engine.set_wrap_lines(false, 0);
+    engine.sync_row_mode(20.0);
+    assert!(!engine.wraps_rows());
 }
 
 #[test]

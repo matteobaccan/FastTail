@@ -3529,9 +3529,26 @@ fn render_rows(
     external_tools: &[ExternalTool],
 ) -> RowInteractions {
     if engine.columns_shown() {
-        // The column view keeps one row per line: the wrap setting waits for the text view.
         let layout = ColumnLayout::of(ui, engine, font_size);
         render_field_header(ui, engine, theme, lang, &layout, font_size, row_height);
+        // Wrap on: the message column wraps, the other cells stay on the first line.
+        if engine.wraps_rows() {
+            return render_wrapped_rows(
+                ui,
+                engine,
+                theme,
+                lang,
+                font_size,
+                row_height,
+                show_line_numbers,
+                time_delta,
+                show_markers,
+                level_colors,
+                has_search,
+                external_tools,
+                Some(&layout),
+            );
+        }
         return render_extended_rows(
             ui,
             engine,
@@ -3562,6 +3579,7 @@ fn render_rows(
             level_colors,
             has_search,
             external_tools,
+            None,
         )
     } else {
         render_extended_rows(
@@ -3826,6 +3844,8 @@ fn render_extended_rows(
                 // The row's text and where it was drawn: its galley is laid out again
                 // (from egui's cache) only to outline a token or to pick one.
                 let mut label: Option<(WidgetText, egui::Pos2)> = None;
+                // In the column view: the cells as drawn, for a character selection.
+                let mut cell_galleys: Vec<CellGalley> = Vec::new();
                 // Kept only when it will be used: an outlined token, a converted
                 // timestamp (its tooltip), or a click this frame (a token pick).
                 let keep_label = engine.selection_token().is_some()
@@ -3934,7 +3954,7 @@ fn render_extended_rows(
                                     &query_lower,
                                 )
                             };
-                            draw_field_cells(
+                            cell_galleys = draw_field_cells(
                                 ui,
                                 layout,
                                 row_fields.as_deref(),
@@ -4090,12 +4110,24 @@ fn render_extended_rows(
                     || row_galley(label.clone()),
                     &mut token_pick,
                 );
+                let in_cells = !cell_galleys.is_empty();
                 if let Some(pick) = row_char_selection(
                     ui,
                     engine.char_selection.as_ref(),
                     &click,
                     actual_line_idx,
-                    || row_galley(label.clone()),
+                    || {
+                        if in_cells {
+                            cell_for_selection(
+                                ui,
+                                &cell_galleys,
+                                engine.char_selection.as_ref(),
+                                actual_line_idx,
+                            )
+                        } else {
+                            row_galley(label.clone())
+                        }
+                    },
                 ) {
                     // A press on the text selects its row too, as a click does.
                     if click.drag_started() && matches!(pick, CharPick::Set(_)) {
@@ -4108,7 +4140,15 @@ fn render_extended_rows(
                     .as_ref()
                     .filter(|sel| sel.line == actual_line_idx)
                 {
-                    if let Some((galley, at)) = row_galley(label.clone()) {
+                    let drawn = if in_cells {
+                        cell_galleys
+                            .iter()
+                            .find(|(g, _, _)| g.text() == sel.text)
+                            .map(|(g, pos, _)| (g.clone(), *pos))
+                    } else {
+                        row_galley(label.clone())
+                    };
+                    if let Some((galley, at)) = drawn {
                         paint_char_selection(
                             ui.painter(),
                             &galley,
@@ -4389,16 +4429,24 @@ fn draw_field_cells(
     style: &CellStyle,
     theme: &CyberTheme,
     spans: &dyn Fn(&str) -> Vec<HighlightSpan>,
-) {
+) -> Vec<CellGalley> {
     let format = |color: Color32| egui::TextFormat {
         font_id: style.font_id.clone(),
         color,
         background: style.bg.unwrap_or(Color32::TRANSPARENT),
         ..Default::default()
     };
-    let label = |ui: &mut Ui, text: &str, color: Color32| {
+    // The message (or the whole line) on one line after the cells, as a label would be.
+    let label = |ui: &mut Ui, text: &str, color: Color32| -> CellGalley {
         let job = span_layout_job(text, style.font_id, format(color), &spans(text), theme);
-        ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend));
+        let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(galley.size().x, style.row_height.max(galley.size().y)),
+            egui::Sense::hover(),
+        );
+        let pos = egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(pos, galley.clone(), color);
+        (galley, pos, rect.x_range())
     };
     let Some(fields) = fields.filter(|f| f.shaped) else {
         let color = if TailEngine::is_stacktrace_continuation(line) || style.bg.is_some() {
@@ -4406,18 +4454,74 @@ fn draw_field_cells(
         } else {
             style.text.gamma_multiply(0.6)
         };
-        label(ui, line, color);
-        return;
+        return vec![label(ui, line, color)];
     };
     // One allocation for all the cells, placed by `cell_rects` as the header places its
     // names: allocating each cell on its own added egui's item spacing after every one.
     let total: f32 = layout.widths.iter().sum();
     let (all, _) =
         ui.allocate_exact_size(egui::vec2(total, style.row_height), egui::Sense::hover());
-    let cells = cell_rects(all.left_top(), style.row_height, &layout.widths);
+    let painter = ui.painter().clone();
+    let mut cells = paint_field_cells(
+        ui,
+        &painter,
+        all.left_top(),
+        layout,
+        fields,
+        style,
+        theme,
+        spans,
+    );
+    cells.push(label(ui, &fields.message(&layout.keys), style.text));
+    cells
+}
+
+/// A cell's text as drawn: its galley, where, and the columns it may take (a character
+/// selection stays inside them).
+type CellGalley = (std::sync::Arc<egui::Galley>, egui::Pos2, egui::Rangef);
+
+/// The cell a character selection of row `line` works on: the one under the press
+/// (the drag stays in the cell it started in), else the one holding the selection.
+fn cell_for_selection(
+    ui: &Ui,
+    cells: &[CellGalley],
+    current: Option<&CharSelection>,
+    line: usize,
+) -> Option<(std::sync::Arc<egui::Galley>, egui::Pos2)> {
+    let at = ui.input(|i| i.pointer.press_origin().or(i.pointer.interact_pos()));
+    at.and_then(|p| cells.iter().find(|(_, _, x)| x.contains(p.x)))
+        .or_else(|| {
+            current
+                .filter(|sel| sel.line == line)
+                .and_then(|sel| cells.iter().find(|(g, _, _)| g.text() == sel.text))
+        })
+        .map(|(g, pos, _)| (g.clone(), *pos))
+}
+
+/// Paints the field cells of a row from `origin`, each clipped to its column (the message
+/// is the caller's).
+#[allow(clippy::too_many_arguments)]
+fn paint_field_cells(
+    ui: &Ui,
+    painter: &egui::Painter,
+    origin: egui::Pos2,
+    layout: &ColumnLayout,
+    fields: &crate::fields::RowFields,
+    style: &CellStyle,
+    theme: &CyberTheme,
+    spans: &dyn Fn(&str) -> Vec<HighlightSpan>,
+) -> Vec<CellGalley> {
+    let format = |color: Color32| egui::TextFormat {
+        font_id: style.font_id.clone(),
+        color,
+        background: style.bg.unwrap_or(Color32::TRANSPARENT),
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    let cells = cell_rects(origin, style.row_height, &layout.widths);
     for (key, rect) in layout.keys.iter().zip(cells) {
         if let Some(bg) = style.bg {
-            ui.painter().rect_filled(rect, 0.0, bg);
+            painter.rect_filled(rect, 0.0, bg);
         }
         let Some(value) = fields.get(key) else {
             continue;
@@ -4433,11 +4537,14 @@ fn draw_field_cells(
             .with_max_x(rect.max.x - layout.char_w)
             .intersect(ui.clip_rect());
         let job = span_layout_job(value, style.font_id, format(color), &spans(value), theme);
-        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
         let pos = egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0);
-        ui.painter().with_clip_rect(clip).galley(pos, galley, color);
+        painter
+            .with_clip_rect(clip)
+            .galley(pos, galley.clone(), color);
+        out.push((galley, pos, clip.x_range()));
     }
-    label(ui, &fields.message(&layout.keys), style.text);
+    out
 }
 
 /// What the column header asked for this frame.
@@ -5959,6 +6066,9 @@ struct WrappedRow {
     /// The group this row heads, and the width of its `×N` badge before the text.
     collapsed: Option<CollapsedRow>,
     badge_w: f32,
+    /// The column view's fields of the row: the cells drawn on its first line, `galley`
+    /// then holding the message (no token outline there).
+    cells: Option<std::sync::Arc<crate::fields::RowFields>>,
 }
 
 /// Text view in wrap mode: rows soft-wrap at the viewport width and have their own
@@ -5981,6 +6091,7 @@ fn render_wrapped_rows(
     level_colors: bool,
     has_search: bool,
     external_tools: &[ExternalTool],
+    columns: Option<&ColumnLayout>,
 ) -> RowInteractions {
     use std::collections::HashMap;
 
@@ -6044,6 +6155,63 @@ fn render_wrapped_rows(
                 return row_height;
             };
             let raw: &str = &row_text.line;
+            // The column view: a parsed row wraps its message after the field cells.
+            let cells = columns
+                .zip(eng.field_parser())
+                .and_then(|(layout, parser)| {
+                    let fields = crate::fields::with_spans(|spans| {
+                        crate::fields::row_fields(parser, raw, spans)
+                    });
+                    fields.shaped.then(|| {
+                        let message = fields.message(&layout.keys);
+                        (std::sync::Arc::new(fields), message)
+                    })
+                });
+            if let Some((fields, message)) = cells {
+                let cells_w: f32 = columns.map_or(0.0, |l| l.widths.iter().sum());
+                let (_, active, _) = eng.row_marks(row, line, has_search);
+                let highlight = if active {
+                    None
+                } else {
+                    row_highlight(eng, theme, level_colors, line, raw)
+                };
+                let dimmed = eng.is_context_row(line);
+                let format = egui::TextFormat {
+                    font_id: font_id.clone(),
+                    color: Color32::PLACEHOLDER,
+                    italics: highlight.map(|h| h.italic).unwrap_or(false),
+                    ..Default::default()
+                };
+                let query_lower = eng.search_query.to_lowercase();
+                let spans = cell_spans(
+                    eng.match_highlight_spans(&message).spans,
+                    &message,
+                    &query_lower,
+                );
+                let mut job =
+                    span_layout_job(layout_slice(&message), &font_id, format, &spans, theme);
+                job.wrap.max_width = (text_w - cells_w).max(20.0);
+                let galley = ctx.fonts_mut(|f| f.layout_job(job));
+                let height = galley.size().y.max(font_row_h) + pad;
+                laid.insert(
+                    row,
+                    WrappedRow {
+                        line,
+                        galley,
+                        json: None,
+                        height,
+                        is_json: false,
+                        expanded: false,
+                        highlight,
+                        dimmed,
+                        time_original: None,
+                        collapsed: eng.collapsed_row(row),
+                        badge_w: 0.0,
+                        cells: Some(fields),
+                    },
+                );
+                return height;
+            }
             let is_json = TailEngine::is_json_line(raw);
             let expanded = is_json && eng.expanded_json_lines.contains(&line);
             // Search hits keep their own colours; other rows take the span path only when
@@ -6120,6 +6288,7 @@ fn render_wrapped_rows(
                     time_original,
                     collapsed,
                     badge_w,
+                    cells: None,
                 },
             );
             height
@@ -6274,7 +6443,7 @@ fn render_wrapped_rows(
             }
             let (color, text_bg) = if is_active {
                 (Color32::BLACK, Some(SEARCH_ACTIVE_BG))
-            } else if matches_search {
+            } else if matches_search && r.cells.is_none() {
                 (Color32::BLACK, Some(SEARCH_MATCH_BG))
             } else if let Some(hl) = r.highlight {
                 (
@@ -6300,10 +6469,41 @@ fn render_wrapped_rows(
                     },
                 );
             }
-            let text_pos = egui::pos2(
+            let mut text_pos = egui::pos2(
                 text_x + r.badge_w + if r.is_json { json_w } else { 0.0 },
                 text_top,
             );
+            let mut cell_galleys: Vec<CellGalley> = Vec::new();
+            if let (Some(fields), Some(layout)) = (&r.cells, columns) {
+                let style = CellStyle {
+                    font_id: &font_id,
+                    row_height: font_row_h,
+                    text: color,
+                    bg: text_bg,
+                    level_colors: level_colors && text_bg.is_none() && r.highlight.is_none(),
+                };
+                let query_lower = eng.search_query.to_lowercase();
+                let spans_of = |text: &str| {
+                    cell_spans(eng.match_highlight_spans(text).spans, text, &query_lower)
+                };
+                cell_galleys = paint_field_cells(
+                    ui,
+                    &painter,
+                    egui::pos2(text_x, text_top),
+                    layout,
+                    fields,
+                    &style,
+                    theme,
+                    &spans_of,
+                );
+                text_pos.x = text_x + layout.widths.iter().sum::<f32>();
+                cell_galleys.push((
+                    r.galley.clone(),
+                    text_pos,
+                    egui::Rangef::new(text_pos.x, f32::INFINITY),
+                ));
+            }
+            let text_spans = r.cells.is_none();
             if let Some(bg) = text_bg {
                 painter.rect_filled(
                     egui::Rect::from_min_size(text_pos, r.galley.size()),
@@ -6312,7 +6512,7 @@ fn render_wrapped_rows(
                 );
             }
             painter.galley(text_pos, r.galley.clone(), color);
-            if let Some(token) = eng.selection_token() {
+            if let Some(token) = eng.selection_token().filter(|_| text_spans) {
                 outline_token(
                     &painter,
                     &r.galley,
@@ -6358,16 +6558,22 @@ fn render_wrapped_rows(
             if click.clicked() {
                 row_click = Some((line, ui.input(|i| i.modifiers)));
             }
+            // A row drawn as cells: no token picks (the cells' offsets are not the
+            // line's), and a character selection inside one cell.
             row_token_clicks(
                 ui,
                 eng,
                 &click,
-                || Some((r.galley.clone(), text_pos)),
+                || text_spans.then(|| (r.galley.clone(), text_pos)),
                 &mut token_pick,
             );
             if let Some(pick) =
                 row_char_selection(ui, eng.char_selection.as_ref(), &click, line, || {
-                    Some((r.galley.clone(), text_pos))
+                    if text_spans {
+                        Some((r.galley.clone(), text_pos))
+                    } else {
+                        cell_for_selection(ui, &cell_galleys, eng.char_selection.as_ref(), line)
+                    }
                 })
             {
                 if click.drag_started() && matches!(pick, CharPick::Set(_)) {
@@ -6376,14 +6582,24 @@ fn render_wrapped_rows(
                 char_pick = Some(pick);
             }
             if let Some(sel) = eng.char_selection.as_ref().filter(|sel| sel.line == line) {
-                paint_char_selection(
-                    &painter,
-                    &r.galley,
-                    text_pos,
-                    sel,
-                    ui.visuals().selection.bg_fill.gamma_multiply(0.55),
-                    theme.text_primary().into(),
-                );
+                let drawn = if text_spans {
+                    Some((r.galley.clone(), text_pos))
+                } else {
+                    cell_galleys
+                        .iter()
+                        .find(|(g, _, _)| g.text() == sel.text)
+                        .map(|(g, pos, _)| (g.clone(), *pos))
+                };
+                if let Some((galley, at)) = drawn {
+                    paint_char_selection(
+                        &painter,
+                        &galley,
+                        at,
+                        sel,
+                        ui.visuals().selection.bg_fill.gamma_multiply(0.55),
+                        theme.text_primary().into(),
+                    );
+                }
             }
             row_context_menu(
                 &click,
