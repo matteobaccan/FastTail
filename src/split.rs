@@ -346,7 +346,7 @@ impl SplitJob {
             .plan
             .dir
             .join(self.plan.piece_name(self.pieces, bucket));
-        let file = File::create(&path)?;
+        let file = crate::paths::create_export_file(&path)?;
         self.writer = Some(BufWriter::with_capacity(1 << 20, file));
         self.current = Some(path);
         self.piece_lines = 0;

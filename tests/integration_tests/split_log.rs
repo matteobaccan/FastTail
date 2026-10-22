@@ -56,6 +56,18 @@ fn by_lines_with_a_preview_and_no_silent_overwrite() {
 }
 
 #[test]
+fn a_piece_name_taken_by_a_folder_stops_the_split() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("app.log");
+    write_lines(&log, &["one", "two"]);
+    std::fs::create_dir(dir.path().join("app.part-001.log")).unwrap();
+    let e = open(&log);
+    let job = run(&e, SplitPlan::for_file(&log, SplitBy::Lines(1)));
+    assert!(job.error.is_some());
+    assert!(dir.path().join("app.part-001.log").is_dir());
+}
+
+#[test]
 fn by_size_cuts_at_line_ends_and_a_long_line_is_its_own_piece() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("big.txt");
