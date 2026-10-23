@@ -100,6 +100,8 @@ fn dock_context<'a>(
         find_all: session,
         scratchpad: leak(Default::default()),
         compare: leak(None),
+        query_history: &[],
+        query_ran: leak(None),
         filter_presets: leak(Vec::new()),
         preset_events: leak(Default::default()),
         palette_action: None,

@@ -62,6 +62,8 @@ pub enum FastTailTab {
     Compare,
     /// Statistics of a field of a stream (`ui::stats_tab`); never saved.
     Statistics(PathBuf),
+    /// Queries over a stream (`ui::query_tab`); never saved.
+    Query(PathBuf),
 }
 
 pub struct DockContext<'a> {
@@ -111,6 +113,9 @@ pub struct DockContext<'a> {
     pub find_all: &'a mut crate::find_all::FindAllSession,
     pub scratchpad: &'a mut crate::ui::scratchpad::Scratchpad,
     pub compare: &'a mut Option<crate::ui::compare_tab::CompareView>,
+    /// The Query tab's history, and the query just run (to remember).
+    pub query_history: &'a [String],
+    pub query_ran: &'a mut Option<String>,
     /// Named filter presets (global preferences) and what the stream bars asked about
     /// them this frame.
     pub filter_presets: &'a mut Vec<FilterPreset>,
@@ -364,6 +369,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .strong(),
                 )
             }
+            FastTailTab::Query(path) => WidgetText::from(
+                RichText::new(crate::ui::query_tab::title(
+                    find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
+                    *self.ctx.language,
+                ))
+                .monospace()
+                .strong(),
+            ),
             FastTailTab::Statistics(path) => WidgetText::from(
                 RichText::new(crate::ui::stats_tab::title(
                     find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
@@ -523,6 +536,20 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
                 crate::ui::stats_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
             }
+            FastTailTab::Query(path) => {
+                let engine =
+                    find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
+                let out = crate::ui::query_tab::render(
+                    ui,
+                    engine,
+                    self.ctx.query_history,
+                    self.ctx.theme,
+                    *self.ctx.language,
+                );
+                if let Some(q) = out.ran {
+                    *self.ctx.query_ran = Some(q);
+                }
+            }
             FastTailTab::Compare => {
                 crate::ui::compare_tab::render(
                     ui,
@@ -596,6 +623,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
             FastTailTab::Statistics(path) => {
                 if let Some(i) = find_engine_index(self.ctx.engines, path) {
                     self.ctx.engines[i].close_stats();
+                }
+            }
+            FastTailTab::Query(path) => {
+                if let Some(i) = find_engine_index(self.ctx.engines, path) {
+                    self.ctx.engines[i].stop_query();
                 }
             }
             _ => {
@@ -1492,6 +1524,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::AutoBookmarks => "scan_auto_bookmarks",
         crate::scan_job::ScanKind::Collapse => "scan_collapsing",
         crate::scan_job::ScanKind::FieldStats => "scan_statistics",
+        crate::scan_job::ScanKind::Query => "scan_query",
     }
 }
 
@@ -2895,6 +2928,14 @@ fn render_log_stream(
                 .clicked()
             {
                 engine.stats_request = Some(None);
+                ui.close();
+            }
+            if ui
+                .button(RichText::new(format!("🧮 {}", t(lang, "query_open"))).monospace())
+                .on_hover_text(t(lang, "query_open_tip"))
+                .clicked()
+            {
+                engine.query_request = true;
                 ui.close();
             }
             if ui

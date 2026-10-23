@@ -20,6 +20,7 @@ pub mod log_formats;
 pub mod merge_dialog;
 pub mod overview_strip;
 pub mod palette;
+pub mod query_tab;
 pub mod remote_dialog;
 pub mod report_dialog;
 pub mod scratchpad;

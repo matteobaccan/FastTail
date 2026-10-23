@@ -53,6 +53,21 @@ nothing per line of the file. Growing files: not followed (snapshot). Truncation
 rotation during a run cancels it with a notice. File access through the job's own
 handle with the engine's sharing flags (Windows writers not blocked).
 
+## As implemented
+
+- One module, `src/query.rs`: `split_stages` (a `|` inside quotes or `/…/` does not
+  split), `Query::parse` with errors as `(stage, byte, i18n key, detail)`, an `Executor`
+  fed line by line, `Table` with CSV and a stable sort.
+- The pipeline splits at the first `stats` or `sort`: the stages before it act on lines
+  (`where`, `parse`, `timeslice`, `head` stopping the scan), the rest on the table
+  (`fields`, `sort`, `head`); `where`, `parse` and `timeslice` after `stats` are errors.
+- `where` evaluates the stream's parser fields and the text (not `parse` captures), with
+  the stream's case and regex toggles.
+- The scan is a `JobSpec::Query` in its own engine slot; it times the lines only when the
+  query names `ts`, `_slice` or uses `timeslice` (or shows the default columns), and reads
+  levels only when it names `level`.
+- The history keeps the query on one line (an ini value cannot hold a line break).
+
 ## Risks / Trade-offs
 
 - [Scope creep toward a database] → the stage list is closed in this change; new stages

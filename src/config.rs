@@ -52,6 +52,15 @@ impl Interface {
     }
 }
 
+/// Queries the Query tab remembers.
+pub const MAX_QUERY_HISTORY: usize = 20;
+
+/// `text` on one line (an ini value cannot hold a line break), trimmed; the spaces inside
+/// stay as typed.
+fn one_line(text: &str) -> String {
+    text.replace(['\r', '\n'], " ").trim().to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FastTailConfig {
     pub theme: CyberTheme,
@@ -240,6 +249,10 @@ pub struct FastTailConfig {
     pub recent_files: Vec<PathBuf>,
     #[serde(default)]
     pub search_history: Vec<String>,
+    /// The last queries of the Query tab, most recent first (at most
+    /// `MAX_QUERY_HISTORY`), `[query] history.1`…; line breaks read as spaces.
+    #[serde(default)]
+    pub query_history: Vec<String>,
     /// Ids of the last commands run from the command palette, most recent first (at most
     /// `actions::MAX_RECENT`), `[general] palette_recent` comma separated.
     #[serde(default)]
@@ -539,6 +552,7 @@ impl Default for FastTailConfig {
             open_files: Vec::new(),
             recent_files: Vec::new(),
             search_history: Vec::new(),
+            query_history: Vec::new(),
             palette_recent: Vec::new(),
             bookmarks: Vec::new(),
             wrapped_files: Vec::new(),
@@ -765,6 +779,27 @@ impl FastTailConfig {
     }
 
     /// Records `path` at the front of the recent files (most recent first, at most 15).
+    /// Puts `query` first in the query history (once, line breaks as spaces).
+    pub fn push_query_history(&mut self, query: &str) {
+        let q = one_line(query);
+        if q.is_empty() {
+            return;
+        }
+        self.query_history.retain(|h| *h != q);
+        self.query_history.insert(0, q);
+        self.query_history.truncate(MAX_QUERY_HISTORY);
+    }
+
+    fn push_query_history_back(&mut self, query: &str) {
+        let q = one_line(query);
+        if !q.is_empty()
+            && !self.query_history.contains(&q)
+            && self.query_history.len() < MAX_QUERY_HISTORY
+        {
+            self.query_history.push(q);
+        }
+    }
+
     pub fn add_recent_file(&mut self, path: &Path) {
         self.recent_files
             .retain(|p| !crate::paths::paths_equal(p, path));
@@ -1069,6 +1104,16 @@ impl FastTailConfig {
             let mut sec = conf.with_section(Some("search_history"));
             for (i, q) in self.search_history.iter().enumerate() {
                 sec.set(format!("query_{}", i), q);
+            }
+        }
+
+        if !self.query_history.is_empty() {
+            let mut sec = conf.with_section(Some("query"));
+            for (i, q) in self.query_history.iter().enumerate() {
+                sec.set(
+                    format!("history.{}", i + 1),
+                    crate::filter_preset::ini_value(q),
+                );
             }
         }
 
@@ -1605,6 +1650,21 @@ impl FastTailConfig {
                     cfg.wrapped_files.push(PathBuf::from(path));
                 }
                 i += 1;
+            }
+        }
+
+        if let Some(sec) = conf.section(Some("query")) {
+            let mut entries: Vec<(usize, &str)> = sec
+                .iter()
+                .filter_map(|(k, v)| {
+                    let n = k.strip_prefix("history.")?.parse::<usize>().ok()?;
+                    Some((n, v))
+                })
+                .collect();
+            entries.sort_by_key(|e| e.0);
+            cfg.query_history.clear();
+            for (_, v) in entries {
+                cfg.push_query_history_back(v);
             }
         }
 
@@ -2334,6 +2394,25 @@ mod tests {
         let wild = FastTailConfig::from_ini(&wild);
         assert_eq!(wild.system_source_backlog_lines, 1_000_000);
         assert_eq!(wild.docker_command, "docker");
+    }
+
+    #[test]
+    fn test_query_history_round_trips_on_one_line() {
+        let mut cfg = FastTailConfig::default();
+        cfg.push_query_history("where a\n| stats count()");
+        cfg.push_query_history(" head 5 ");
+        cfg.push_query_history("where a | stats count()");
+        assert_eq!(cfg.query_history, ["where a | stats count()", "head 5"]);
+        for i in 0..30 {
+            cfg.push_query_history(&format!("head {i}"));
+        }
+        assert_eq!(cfg.query_history.len(), MAX_QUERY_HISTORY);
+        cfg.push_query_history(r#"where "  two  spaces" | parse /x(?P<n>\d+)/"#);
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.query_history, cfg.query_history);
+        assert!(FastTailConfig::from_ini(&Ini::new())
+            .query_history
+            .is_empty());
     }
 
     #[test]
