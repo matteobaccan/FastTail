@@ -399,8 +399,8 @@ Released on 2026-10-22 after the maintainer's preview check; all six changes arc
 
 ### 0.22.0 — time and formats
 
-All six changes shipped in the nightlies 0.21.1 to 0.21.10 (2026-10-22); the minor follows
-the maintainer's check of the preview, then the changes are archived.
+Released on 2026-10-23 after the maintainer's check of the preview (0.21.10); the six
+changes shipped in the nightlies 0.21.1 to 0.21.10 and are archived.
 
 | Change | Gaps | Effort |
 |---|---|---|
