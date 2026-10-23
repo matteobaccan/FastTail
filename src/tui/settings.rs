@@ -54,6 +54,9 @@ pub enum Key {
     SystemBacklog,
     DockerCommand,
     JournalctlCommand,
+    SshProgram,
+    RemoteInitialMb,
+    RemoteSpoolMaxMb,
     AutoBookmarkMax,
     Sound,
     FlashOnAlert,
@@ -305,6 +308,21 @@ impl SettingsForm {
                 Widget::Text(TextField::new(&c.journalctl_command)),
             ),
             Field::new(
+                Key::SshProgram,
+                en("SSH client"),
+                Widget::Text(TextField::new(&c.ssh_program)),
+            ),
+            Field::new(
+                Key::RemoteInitialMb,
+                en("Remote files: first fetch (MB, 0: only new lines)"),
+                number(c.remote_initial_mb, &model::REMOTE_INITIAL_MB),
+            ),
+            Field::new(
+                Key::RemoteSpoolMaxMb,
+                en("Remote files: spool (MB)"),
+                number(c.remote_spool_max_mb, &model::STDIN_SPOOL_MAX_MB),
+            ),
+            Field::new(
                 Key::LineNumbers,
                 en("Line numbers in new streams"),
                 check(c.show_line_numbers),
@@ -537,21 +555,25 @@ impl SettingsForm {
                 Key::CompressedMaxGb => c.compressed_max_gb = num() as u32,
                 Key::StdinSpoolMaxMb => c.stdin_spool_max_mb = num() as u32,
                 Key::SystemBacklog => c.system_source_backlog_lines = num() as u32,
-                Key::DockerCommand | Key::JournalctlCommand => {
+                Key::RemoteInitialMb => c.remote_initial_mb = num() as u32,
+                Key::RemoteSpoolMaxMb => c.remote_spool_max_mb = num() as u32,
+                Key::DockerCommand | Key::JournalctlCommand | Key::SshProgram => {
                     let text = match &f.widget {
                         Widget::Text(t) => t.text().trim().to_string(),
                         _ => String::new(),
                     };
-                    let (value, default) = if f.key == Key::DockerCommand {
-                        (
+                    let (value, default) = match f.key {
+                        Key::DockerCommand => (
                             &mut c.docker_command,
                             crate::system_source::DEFAULT_DOCKER_COMMAND,
-                        )
-                    } else {
-                        (
+                        ),
+                        Key::SshProgram => {
+                            (&mut c.ssh_program, crate::ssh_source::DEFAULT_SSH_PROGRAM)
+                        }
+                        _ => (
                             &mut c.journalctl_command,
                             crate::system_source::DEFAULT_JOURNALCTL_COMMAND,
-                        )
+                        ),
                     };
                     *value = if text.is_empty() {
                         default.to_string()

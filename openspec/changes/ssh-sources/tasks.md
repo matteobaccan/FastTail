@@ -15,17 +15,17 @@
 
 ## 3. UI, command line, sessions
 
-- [ ] 3.1 Open dialog **Remote…**: URL or host list + path, initial content (last N MB / whole file); one stream per host
-- [ ] 3.2 Stream bar: connection state, Reconnect / Disconnect, "remote file replaced" notice; title `host:name`, full URL in the tooltip and footer
+- [x] 3.1 Open dialog **Remote…**: URL or host list + path, initial content (last N MB / whole file); one stream per host
+- [ ] 3.2 Stream bar (state, Reconnect / Disconnect, replaced notice, title and URL tooltip done; the footer still shows the spool): connection state, Reconnect / Disconnect, "remote file replaced" notice; title `host:name`, full URL in the tooltip and footer
 - [x] 3.3 `src/cli.rs`: `ssh://` arguments open remote streams; `--filter`, `--exclude`, `--follow` apply
 - [ ] 3.4 Sessions and workspace: `path=<url>`, no `rel`, `remote_initial=`; bookmarks persisted only for whole-file streams; round-trip test; restored streams reconnect in the background
-- [ ] 3.5 Settings → Remote: `ssh_program`, `remote_spool_max_mb`, `remote_initial_mb`, detected `ssh -V`; keys in `fasttail.ini` with bounds tests
+- [ ] 3.5 Settings → Remote (the three fields are in Settings → Performance & refresh of both interfaces; the `ssh -V` check is left): `ssh_program`, `remote_spool_max_mb`, `remote_initial_mb`, detected `ssh -V`; keys in `fasttail.ini` with bounds tests
 
 ## 4. Texts and documentation
 
-- [ ] 4.1 New i18n keys (dialog, states, errors: password required, unknown host key, no `tail`, file missing, file replaced, queued) in all 16 languages; exhaustive i18n test updated
-- [ ] 4.2 README: "Remote files over SSH" section (requirements per platform, agent setup on Windows, what is never stored), command line, FAQ; comparison table row
-- [ ] 4.3 CHANGELOG `[Unreleased]`: bold opening sentence, before / after
+- [x] 4.1 New i18n keys (dialog, states, errors: password required, unknown host key, no `tail`, file missing, file replaced, queued) in all 16 languages; exhaustive i18n test updated
+- [x] 4.2 README: "Remote files over SSH" section (requirements per platform, agent setup on Windows, what is never stored), command line, FAQ; comparison table row
+- [x] 4.3 CHANGELOG `[Unreleased]`: bold opening sentence, before / after
 
 ## 5. Wrap-up
 

@@ -189,7 +189,7 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ (F) FASTTAIL v0.12.0 by Matteo Baccan · proj*  ░drag░  🖥 CPU: 7% ▬ │ RAM: 5.1 GB/32 GB ▬ │
 │                                                         🔍 100%  📌  🌐 │ —  🗖  ✕       │ ← title_panel (always)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
-│ [📁 Open File][🕒][📂*][📦][🗂][⚡ Color Filters (3)][▶ Play][⏸ Pause][⚙ Settings]  [ℹ About][❓ Help] │ ← toolbar_panel
+│ [📁 Open File][🕒][📂*][📦][🌐][🗂][⚡ Color Filters (3)][▶ Play][⏸ Pause][⚙ Settings]  [ℹ About][❓ Help] │ ← toolbar_panel
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ⚠ Software mode: rendering runs on the CPU ... A GPU is required ...                  │ ← software_banner (only on WARP/llvmpipe/VM)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
@@ -237,6 +237,7 @@ Fill is `panel_bg`, with a 1 px stroke of accent at 25 % and inner margin 10/6. 
 | `🕒` (30 px) | same | Menu: recent files (`📄 name (full path)`, at most 15 kept), separator, `🗑 Clear recent files history` (warn). Shows *No recent files* in italics when empty. The tooltip is the localized "Recent Files". |
 | `📂*` (30 px) | same | Opens the **Open folder** dialog on the folder of the most recent file, patterns `*.log` |
 | `📦` (30 px) | same | Opens the **Open system source** dialog (§4.5f) |
+| `🌐` (30 px) | same | Opens the **Remote file (SSH)** dialog (§4.5g) |
 | `🗂` (30 px) | same | **Sessions** menu (§4.12) |
 | `⚡ {Color Filters} (N)` | warn text and stroke; fill `#FEF9EB` on Light, `#14120C` on dark | Toggles the Filters / Color Filters window. N is the number of enabled rules with a non-empty pattern. |
 | `▶ Play` | green `#00C864` text and stroke; fill `#EBFCF2` / `#0A1812` | Every engine: `is_watching = true`, and follow on unless the stream is compressed |
@@ -581,6 +582,10 @@ Source: `src/ui/merge_dialog.rs` (`MergePrompt`), the feeder in `src/merged_stre
 ### 4.5f Open system source dialog — `📦 Open system source`
 
 `src/ui/system_dialog.rs`, opened by the `📦` toolbar button and the palette's *Open system source…*. A non-resizable window anchored at the centre: a dim description; radio buttons for the kind (*Docker container*, and on Linux *systemd journal* and *User journal*) and a `⟳` refresh button; a scroll area (at most 260 px, at least 460 px wide) filled by a background listing (`system_source::Listing`: `docker ps -a --format …`, `systemctl list-units --type=service --no-legend --plain [--user]`) that shows `⏳ Listing…`, the command's error in warn, *Nothing listed*, or one selectable monospace row per entry (`name  image · status`, `name  active running · description`; a click puts the name in the field, a double click opens it); a name field (hint: container name or id / unit, empty for the whole journal; `Enter` opens); the URI it opens in dim small text, or why the name is refused in warn; **Open** (disabled until the URI is valid) and **Cancel** (`Esc`). The listing runs again when the kind changes. Settings → Performance & refresh gains *System source backlog (lines)* (drag value, 0–1,000,000), *Docker command* and *journalctl command* (text fields saved when they lose the focus, an empty one going back to the default).
+
+### 4.5g Remote file (SSH) dialog — `🌐 Remote file (SSH)`
+
+`src/ui/remote_dialog.rs`, opened by the `🌐` toolbar button and the palette's *Open remote file (SSH)…*. A non-resizable window at the centre: a dim description; a two-column grid with *Hosts* (a two-row text box, hint `deploy@web1, web2, web3:2222`; hosts separated by commas or lines), *Path* (hint `/var/log/app.log`) and *First fetch* (radio buttons *Last N MB*, N being `remote_initial_mb`, and *Whole file*); below, the URL of each host in dim small monospace (`ssh_source::urls_for`), or the first refused host and why in warn; a dim note that authentication is the ssh client's; **Open** (disabled until every host and the path are valid) opens one stream per host, **Cancel** / `Esc`. Settings → Performance & refresh gains *SSH client* (text field saved when it loses the focus, empty going back to `ssh`), *Remote files: first fetch* and *Remote files: spool* (drag values in MB).
 
 ### 4.5e Export dialog — `💾 Export`
 

@@ -91,6 +91,8 @@ pub struct FastTailApp {
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
     /// The Open system source dialog (`📦`, the palette).
     pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
+    /// The Remote file (SSH) dialog (`🌐`, the palette).
+    pub remote_dialog: Option<crate::ui::remote_dialog::RemoteDialog>,
     /// The Export dialog, while it is shown.
     pub export_dialog: Option<crate::ui::export_dialog::ExportDialog>,
     /// The Split file dialog, while it is shown.
@@ -610,6 +612,7 @@ impl FastTailApp {
             folder_prompt: None,
             merge_prompt: None,
             system_dialog: None,
+            remote_dialog: None,
             log_formats: None,
             split_dialog: None,
             export_dialog: None,
@@ -3535,6 +3538,21 @@ impl FastTailApp {
                         self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
                     }
 
+                    // Remote file over SSH: one stream per host.
+                    let remote_btn =
+                        egui::Button::new(RichText::new("🌐").monospace().strong().color(text_pri))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.2, accent))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(30.0, 26.0));
+                    if ui
+                        .add(remote_btn)
+                        .on_hover_text(t(self.config.language, "remote_open_tip"))
+                        .clicked()
+                    {
+                        self.remote_dialog = Some(Default::default());
+                    }
+
                     // Sessions menu (🗂): save as, save, load, recent, save as default
                     let session_btn =
                         egui::Button::new(RichText::new("🗂").monospace().strong().color(text_pri))
@@ -5098,6 +5116,53 @@ impl FastTailApp {
                         if save_commands {
                             let _ = self.config.save();
                         }
+                        // Remote files over SSH: the client, the first fetch, the spool.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "ssh_program"))).monospace(),
+                            );
+                            let resp = ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut self.config.ssh_program)
+                                        .desired_width(200.0),
+                                )
+                                .on_hover_text(t(lang, "system_command_tip"));
+                            if resp.lost_focus() {
+                                if self.config.ssh_program.trim().is_empty() {
+                                    self.config.ssh_program =
+                                        crate::ssh_source::DEFAULT_SSH_PROGRAM.to_string();
+                                }
+                                let _ = self.config.save();
+                            }
+                        });
+                        for (key, tip, value, range) in [
+                            (
+                                "remote_initial_setting",
+                                "remote_initial_tip",
+                                &mut self.config.remote_initial_mb,
+                                crate::settings_model::REMOTE_INITIAL_MB,
+                            ),
+                            (
+                                "remote_spool_setting",
+                                "stdin_spool_max_tip",
+                                &mut self.config.remote_spool_max_mb,
+                                crate::settings_model::STDIN_SPOOL_MAX_MB,
+                            ),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(format!("{}:", t(lang, key))).monospace());
+                                if ui
+                                    .add(egui::DragValue::new(value).range(range).suffix(" MB"))
+                                    .on_hover_text(t(lang, tip))
+                                    .changed()
+                                {
+                                    save_commands = true;
+                                }
+                            });
+                        }
+                        if save_commands {
+                            let _ = self.config.save();
+                        }
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(format!("{}:", t(lang, "spool_dir"))).monospace(),
@@ -5812,6 +5877,22 @@ impl FastTailApp {
             }
         }
 
+        // 11a. Remote file (SSH) dialog
+        if let Some(dialog) = self.remote_dialog.as_mut() {
+            use crate::ui::remote_dialog::RemoteChoice;
+            let initial_mb = self.config.remote_initial_mb;
+            match dialog.show(&ctx, initial_mb, self.config.language, self.config.theme) {
+                Some(RemoteChoice::Open(urls)) => {
+                    self.remote_dialog = None;
+                    for url in urls {
+                        self.open_log_file(url);
+                    }
+                }
+                Some(RemoteChoice::Cancel) => self.remote_dialog = None,
+                None => {}
+            }
+        }
+
         // 11a. New merged view dialog
         if let Some(prompt) = self.merge_prompt.as_mut() {
             use crate::ui::merge_dialog::MergeChoice;
@@ -6518,6 +6599,7 @@ impl FastTailApp {
             }
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
+            A::OpenRemote => self.remote_dialog = Some(Default::default()),
             A::OpenSystemSource => {
                 self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
             }
