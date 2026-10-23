@@ -93,6 +93,13 @@ pub struct FastTailConfig {
     pub minimize_to_tray: bool,
     #[serde(default)]
     pub close_to_tray: bool,
+    /// Desktop notifications of the rules with "Notify" (on by default; each rule opts in).
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    /// `notify_when=always`: notify even while the stream is on screen in the focused
+    /// window (`background`, the default, only when it is not).
+    #[serde(default)]
+    pub notify_always: bool,
     /// Colour rows by their detected log level when no highlight rule matches them.
     #[serde(default = "default_true")]
     pub level_colors: bool,
@@ -483,6 +490,8 @@ impl Default for FastTailConfig {
             tray_icon: false,
             minimize_to_tray: false,
             close_to_tray: false,
+            notifications_enabled: true,
+            notify_always: false,
             level_colors: true,
             auto_highlight: false,
             auto_highlight_kinds: TokenKinds::ALL,
@@ -897,6 +906,18 @@ impl FastTailConfig {
             .set("tray_icon", self.tray_icon.to_string())
             .set("minimize_to_tray", self.minimize_to_tray.to_string())
             .set("close_to_tray", self.close_to_tray.to_string())
+            .set(
+                "notifications_enabled",
+                self.notifications_enabled.to_string(),
+            )
+            .set(
+                "notify_when",
+                if self.notify_always {
+                    "always"
+                } else {
+                    "background"
+                },
+            )
             .set("level_colors", self.level_colors.to_string())
             .set("auto_highlight", self.auto_highlight.to_string())
             .set(
@@ -1192,10 +1213,16 @@ impl FastTailConfig {
                 ("tray_icon", &mut cfg.tray_icon),
                 ("minimize_to_tray", &mut cfg.minimize_to_tray),
                 ("close_to_tray", &mut cfg.close_to_tray),
+                ("notifications_enabled", &mut cfg.notifications_enabled),
             ] {
                 if let Some(v) = general.get(key).and_then(|s| s.parse::<bool>().ok()) {
                     *field = v;
                 }
+            }
+            match general.get("notify_when") {
+                Some("always") => cfg.notify_always = true,
+                Some("background") => cfg.notify_always = false,
+                _ => {}
             }
             if let Some(v) = general
                 .get("level_colors")
@@ -1921,6 +1948,7 @@ pub fn write_rule_sections(conf: &mut Ini, rules: &[HighlightRule]) {
         sec.set("enabled", rule.enabled.to_string());
         sec.set("captures_only", rule.captures_only.to_string());
         sec.set("bookmark", rule.auto_bookmark.to_string());
+        sec.set("notify", rule.notify.to_string());
     }
 }
 
@@ -1966,6 +1994,10 @@ pub fn read_rule_sections(conf: &Ini) -> Vec<HighlightRule> {
                 .get("bookmark")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(false);
+            let notify = sec
+                .get("notify")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(false);
 
             rules.push(HighlightRule {
                 pattern,
@@ -1979,6 +2011,7 @@ pub fn read_rule_sections(conf: &Ini) -> Vec<HighlightRule> {
                 enabled,
                 captures_only,
                 auto_bookmark,
+                notify,
             });
         }
         idx += 1;
@@ -2301,6 +2334,25 @@ mod tests {
         let wild = FastTailConfig::from_ini(&wild);
         assert_eq!(wild.system_source_backlog_lines, 1_000_000);
         assert_eq!(wild.docker_command, "docker");
+    }
+
+    #[test]
+    fn test_notification_keys_round_trip_and_default() {
+        let cfg = FastTailConfig {
+            notifications_enabled: false,
+            notify_always: true,
+            ..Default::default()
+        };
+        let ini = cfg.to_ini();
+        assert_eq!(ini.get_from(Some("general"), "notify_when"), Some("always"));
+        let loaded = FastTailConfig::from_ini(&ini);
+        assert!(!loaded.notifications_enabled && loaded.notify_always);
+        let old = FastTailConfig::from_ini(&Ini::new());
+        assert!(old.notifications_enabled && !old.notify_always);
+        let mut wild = Ini::new();
+        wild.with_section(Some("general"))
+            .set("notify_when", "sometimes");
+        assert!(!FastTailConfig::from_ini(&wild).notify_always);
     }
 
     #[test]

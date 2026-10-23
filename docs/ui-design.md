@@ -544,7 +544,7 @@ The four "big" dialogs are plain `egui::Window`s. They are **non-modal**, resiza
   2. A separator.
   3. **Color Filters section** (`render_highlights_content`):
      - A `⚡ Color Filters (a/t active)` heading, a description and an order hint.
-     - One group per rule: enabled checkbox, `⬆` `⬇`, `#n:`, pattern field, `Regex`, `Captures only` (regex rules only), `Aa`, `B`, `I`, sound combo (None, Beep, Chime, Warning, Critical) with `▶` test, a **`Bookmark matching lines`** checkbox, `FG:` and `BG:` sRGB colour buttons, a live ` Preview ` chip, and `🗑`.
+     - One group per rule: enabled checkbox, `⬆` `⬇`, `#n:`, pattern field, `Regex`, `Captures only` (regex rules only), `Aa`, `B`, `I`, sound combo (None, Beep, Chime, Warning, Critical) with `▶` test, a **`Bookmark matching lines`** checkbox, a **`Notify`** checkbox (greyed out with the reason when no notification service runs), `FG:` and `BG:` sRGB colour buttons, a live ` Preview ` chip, and `🗑`.
      - An "Add rule" button, which creates a rule with white text on `#0064C8`.
      - **Rule sets** (`render_rule_set_controls`): `⬇ Export rules…` (disabled without rules; native save dialog, `highlights.fasttail-rules.ini`) and `⬆ Import rules…` (native open dialog). An import shows a group with `{file}: {n} rules` in accent, the first 5 patterns as chips in their own colours (`…` beyond), and `Append` · `Replace` · `Cancel`; `Replace` turns the row into a warn `Replace the {n} current rules?` with `Replace` · `Cancel`. The outcome (`{n} rules exported to {file}`, `{added} rules added, {skipped} skipped (already present)`, `Rules replaced: {n} imported`) or a refusal (*not a FastTail rule set*, *written by a newer FastTail*, *cannot read*) is shown under the buttons in 11 pt, accent or warn. The pending import and the message live in egui temp memory.
      - **Automatic bookmarks.** Every line an enabled rule with "Bookmark matching lines" matches carries an automatic bookmark (`☆`), lines appended later included, whatever the rule's colours. The tooltip says so. On a large file the matching runs as a background scan (`⏳ finding auto-bookmarks N%`). At most `auto_bookmark_max` are kept per stream, the first in file order; past that the stream bar shows `ⓘ auto-bookmarks capped at N`. `F2` / `SHIFT + F2` visit them with the manual ones, and `CTRL + F2` or "Remove bookmark" dismisses one. A dismissal lasts until the set of bookmarking rules changes (a pattern, its regex or case flag, the rule's enabled box or the option itself): colours, styles and sounds leave the automatic bookmarks alone.
@@ -792,7 +792,7 @@ Everything edits a **draft** (`TimeRangeDraft`: the two texts and the month of e
 
 ### 4.17 Things that do not exist
 
-There is no separate goto-line dialog (it is inline in the stream bar), no bookmarks list window and no note dialog (the note editor is inline in the stream bar). Bookmarks are the `★` / `✏` / `☆` markers, the note tooltips, the overview strip marks, `F2` navigation and "Clear bookmarks". There are no toast notifications. Transient information is shown as `ⓘ` labels in the stream bar or in the small centred notice windows above.
+There is no separate goto-line dialog (it is inline in the stream bar), no bookmarks list window and no note dialog (the note editor is inline in the stream bar). Bookmarks are the `★` / `✏` / `☆` markers, the note tooltips, the overview strip marks, `F2` navigation and "Clear bookmarks". There are no in-window toast notifications (a rule's **Notify** sends a desktop notification of the system, see Settings). Transient information is shown as `ⓘ` labels in the stream bar or in the small centred notice windows above.
 
 ---
 
@@ -1315,6 +1315,7 @@ A legacy `fasttail.toml` is migrated. The file is written only when its content 
 | `interface` | `gui` | `gui` or `tui`: the interface opened at start (`--tui` / `--gui` override it); Settings offers to switch now |
 | `always_on_top` | false | window level; 📌 |
 | `flash_on_alert` | false | taskbar attention for background errors |
+| `notifications_enabled`, `notify_when` | true, `background` | desktop notifications of the rules with Notify; `always` notifies with the stream on screen too |
 | `level_colors` | true | colour rows by level |
 | `tray_icon`, `minimize_to_tray`, `close_to_tray` | false, false, false | notification-area icon (Windows, Linux) and hiding the window in it on minimise / close |
 | `auto_highlight`, `auto_highlight_kinds` | false, `ip,uuid,url,duration,path` | automatic token highlighting and the kinds it paints |
@@ -1365,7 +1366,7 @@ Environment overrides for support: `FASTTAIL_POLL_INTERVAL_MS`, `FASTTAIL_SIZE_C
 | `[wrapped_files]` | `file_N` | ↩ Wrap per file (at most 50) |
 | `[folder_groups]` | `group_N` | Open all folder groups as pattern paths (`dir/**/*.log;*.txt`), written only while the group has a tab open; their files are in `[open_files]` too. Older builds ignore the section. Named sessions write `[folder_N]` with `path` and `rel` |
 | `[session]` / `[stream_N]` | `path`, `rel`, `entry`, `include[.n]`, `exclude[.n]`, `search`, `wrap`, `encoding`, `ansi`, `timeline`, `collapse`, `line_numbers`, `time_delta`, `context_lines`, `time_display`, `time_source_zone`, `level_bytes`, `hidden`, … | per-stream state of the default workspace. `context_lines` is written only above 0, `hidden=120-180,4096` (1-based ranges, at most 1,000) only when lines are hidden, `level_bytes` only when it differs from `level_detect_bytes`, `time_display` and `time_source_zone` only when not the default. `collapse=exact` or `collapse=numbers` is written only when the collapse is on; a missing or unknown value reads as off. `line_numbers=` and `time_delta=` are always written, so a saved stream never depends on the `[general]` defaults; a missing value (a file from an older version) takes the default. In a named session file the same sections also carry `bookmarks` and `bookmark_note.<line>` |
-| `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only`, `bookmark` | Color Filters; `bookmark=true` is "Bookmark matching lines" (default false) |
+| `[highlight_N]` | `pattern`, `is_regex`, `case_sensitive`, `fg`, `bg` (`r,g,b`), `bold`, `italic`, `sound_alert`, `enabled`, `captures_only`, `bookmark`, `notify` | Color Filters; `bookmark=true` is "Bookmark matching lines", `notify=true` is "Notify" (both default false) |
 | `[tool.N]` | `name`, `program`, `args`, `shortcut`, `rule`, `shell`, `match` | external tools, menus, shortcuts |
 | `[filter_preset.N]` | `name`, `include.n`, `exclude.n`, `case_sensitive`, `regex`, `min_level`, `show_unknown_levels`, `time_from`, `time_to` | Presets ▾ |
 | `[global_filter]` | `enabled`, `bar_open`, `case_sensitive`, `regex`, `include.n`, `exclude.n` | global filter bar |

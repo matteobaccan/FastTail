@@ -8624,6 +8624,18 @@ pub fn render_highlights_content(
                     {
                         rules_changed = true;
                     }
+                    let notify_off = crate::notifications::unavailable();
+                    if ui
+                        .add_enabled(
+                            notify_off.is_none(),
+                            egui::Checkbox::new(&mut rule.notify, t(lang, "rule_notify")),
+                        )
+                        .on_hover_text(t(lang, "rule_notify_tip"))
+                        .on_disabled_hover_text(t(lang, notify_off.unwrap_or_default()))
+                        .changed()
+                    {
+                        rules_changed = true;
+                    }
 
                     ui.label(RichText::new("FG:").monospace().size(11.0));
                     if ui.color_edit_button_srgb(&mut rule.fg_color).changed() {

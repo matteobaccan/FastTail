@@ -48,6 +48,16 @@ Center, click brings the app to the front. If creating the back end fails (no D-
 session, notification service missing), the Notify checkbox and the settings show the
 reason and nothing is retried per hit.
 
+Implemented without `notify-rust` (it would bring a second D-Bus stack and the WinRT
+bindings): on Linux the `zbus` crate already built for the tray calls
+`org.freedesktop.Notifications.Notify` and listens to `ActionInvoked` for the click; on
+Windows the toast is shown by `powershell.exe -EncodedCommand` through the WinRT
+`ToastNotificationManager` under the registered AppUserModelID; on macOS by
+`osascript -e 'display notification …'`. The back end starts the first time something is
+shown; whether a service exists is checked once (`notifications::unavailable`). The
+terminal interface uses the same `Center`, and counts a stream on screen as seen (it
+cannot tell whether the terminal has the focus).
+
 ### D5. Click action
 A click event carries a stream id and a line index; the app focuses the window
 (`ViewportCommand::Focus`), activates the stream's tab and scrolls to the line if the

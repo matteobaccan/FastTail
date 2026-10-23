@@ -128,6 +128,8 @@ pub struct FastTailApp {
     /// baseline and the menu and badge last handed to the tray.
     tray: Option<crate::tray::Tray>,
     tray_failed: bool,
+    /// Desktop notifications of the rules with "Notify".
+    notifications: crate::notifications::Center,
     hidden_in_tray: bool,
     quitting: bool,
     alert_baseline: u64,
@@ -544,6 +546,7 @@ impl FastTailApp {
     /// Builds the app around a given egui context (used by the filesystem watchers to wake
     /// the event loop). Tests go through `from_config` with a fresh default context.
     pub fn from_config_with_ctx(config: FastTailConfig, egui_ctx: egui::Context) -> Self {
+        let wake_notify = Self::make_wake(&egui_ctx);
         let mut system = System::new_with_specifics(
             RefreshKind::nothing()
                 .with_cpu(CpuRefreshKind::everything())
@@ -635,6 +638,7 @@ impl FastTailApp {
             markdown_caches: Default::default(),
             tray: None,
             tray_failed: false,
+            notifications: crate::notifications::Center::new(wake_notify),
             hidden_in_tray: false,
             quitting: false,
             alert_baseline: 0,
@@ -2360,6 +2364,42 @@ impl FastTailApp {
 
     /// Waker handed to every stream: repaint as soon as its filesystem watcher fires, so
     /// an idle software-rendered window drops the periodic present loop (see `render_ui`).
+    /// Shows the notifications the streams queued and acts on a clicked one: the window
+    /// comes forward on the stream, at the line when it is still there.
+    pub fn run_notifications(&mut self, ctx: &egui::Context) {
+        let lang = self.config.language;
+        let opts = crate::notifications::Options {
+            enabled: self.config.notifications_enabled,
+            always: self.config.notify_always,
+            focused: !self.hidden_in_tray && ctx.input(|i| i.viewport().focused.unwrap_or(true)),
+        };
+        let texts = crate::notifications::Texts {
+            more: t(lang, "notify_more"),
+            summary: t(lang, "notify_summary"),
+        };
+        self.notifications
+            .drain(self.engines.iter_mut(), &opts, &texts, Instant::now());
+        if self.notifications.has_held() {
+            // A summary is due once the rule is quiet, with or without new lines.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        while let Some(target) = self.notifications.clicked() {
+            self.show_from_tray(ctx);
+            let Some(engine) = self.engines.iter_mut().find(|e| e.path == target.stream) else {
+                continue;
+            };
+            if target.line < engine.line_offsets.len() {
+                engine.request_jump(target.line, lang);
+            }
+            if let Some(tab) = self
+                .dock_state
+                .find_tab(&FastTailTab::LogStream(engine.path.clone()))
+            {
+                let _ = self.dock_state.set_active_tab(tab);
+            }
+        }
+    }
+
     fn make_wake(ctx: &egui::Context) -> crate::tail_engine::WakeFn {
         let ctx = ctx.clone();
         std::sync::Arc::new(move || ctx.request_repaint()) as crate::tail_engine::WakeFn
@@ -2772,6 +2812,7 @@ impl FastTailApp {
             eng.poll_updates();
         }
         self.run_rule_bound_tools();
+        self.run_notifications(ctx);
         let alert = self.engines.iter().any(|e| e.unseen_severity >= 2);
         if self.config.flash_on_alert && alert && !self.attention_requested {
             self.attention_requested = true;
@@ -2994,6 +3035,7 @@ impl FastTailApp {
             eng.poll_updates();
         }
         self.run_rule_bound_tools();
+        self.run_notifications(&ctx);
         // The search across streams drains its jobs and notices closed or reloaded streams.
         // Under a time scope the streams it waits for are timed first.
         let to_time: Vec<PathBuf> = self
@@ -4813,6 +4855,36 @@ impl FastTailApp {
                         {
                             let _ = self.config.save();
                         }
+                        // Desktop notifications of the rules with "Notify".
+                        let notify_off = crate::notifications::unavailable();
+                        ui.add_enabled_ui(notify_off.is_none(), |ui| {
+                            let mut changed = ui
+                                .checkbox(
+                                    &mut self.config.notifications_enabled,
+                                    t(lang, "notifications_enabled"),
+                                )
+                                .on_hover_text(t(lang, "notifications_enabled_tip"))
+                                .on_disabled_hover_text(t(lang, notify_off.unwrap_or_default()))
+                                .changed();
+                            ui.add_enabled_ui(self.config.notifications_enabled, |ui| {
+                                ui.horizontal(|ui| {
+                                    changed |= ui
+                                        .checkbox(
+                                            &mut self.config.notify_always,
+                                            t(lang, "notify_always"),
+                                        )
+                                        .on_hover_text(t(lang, "notify_always_tip"))
+                                        .changed();
+                                    if ui.button(t(lang, "notify_test")).clicked() {
+                                        self.notifications
+                                            .test("FastTail", t(lang, "notify_test_body"));
+                                    }
+                                });
+                            });
+                            if changed {
+                                let _ = self.config.save();
+                            }
+                        });
                         // Notification-area icon (Windows, and Linux with a StatusNotifierItem host).
                         let tray_ok = crate::tray::Tray::available();
                         ui.add_enabled_ui(tray_ok, |ui| {

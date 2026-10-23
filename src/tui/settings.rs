@@ -63,6 +63,8 @@ pub enum Key {
     AutoBookmarkMax,
     Sound,
     FlashOnAlert,
+    Notifications,
+    NotifyAlways,
     /// Opens the external tools editor (`Enter`); the tools are not part of the form.
     Tools,
     /// The idle lock switch (`lock_enabled`), the idle minutes
@@ -371,6 +373,16 @@ impl SettingsForm {
                 check(c.flash_on_alert),
             ),
             Field::new(
+                Key::Notifications,
+                en("Desktop notifications"),
+                check(c.notifications_enabled),
+            ),
+            Field::new(
+                Key::NotifyAlways,
+                en("Also when the stream is on screen"),
+                check(c.notify_always),
+            ),
+            Field::new(
                 Key::Tools,
                 en("External tools"),
                 Widget::Button(txf(
@@ -608,6 +620,8 @@ impl SettingsForm {
                 Key::AutoBookmarkMax => c.auto_bookmark_max = num() as usize,
                 Key::Sound => c.sound_enabled = on,
                 Key::FlashOnAlert => c.flash_on_alert = on,
+                Key::Notifications => c.notifications_enabled = on,
+                Key::NotifyAlways => c.notify_always = on,
                 Key::Tools | Key::PinConfirm => {}
                 Key::LockEnabled => c.lock_enabled = on,
                 Key::IdleMinutes => c.screensaver_timeout_mins = num() as u32,

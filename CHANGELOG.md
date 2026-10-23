@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Desktop notifications from rules.** A highlight rule with **Notify** shows a desktop
+  notification (`FastTail · <stream>`, the line and the rule) when it matches a line added
+  to the stream, never for the lines already there when the file opens or reloads. At most
+  one per rule every 10 seconds (the next says `+N more`, a summary follows when the rule
+  is quiet) and 3 per 10 seconds overall. By default only while the stream is not in
+  view; Settings → **Desktop notifications** turns them off, **Also when the stream is on
+  screen** notifies always (`notifications_enabled`, `notify_when` in `[general]`, `notify`
+  in `[highlight_N]`), **Test notification** tries the service. On Linux a click brings
+  the window to the stream and the line. The terminal interface has the rule field and the
+  two settings too. No new dependency: D-Bus through the `zbus` already built for the tray
+  on Linux, a PowerShell toast on Windows, `osascript` on macOS.
+
+### Added
+
 - **OpenTelemetry logs.** `fasttail --listen otlp://127.0.0.1:4318` (or OTLP in the Listen
   dialog) is an OTLP/HTTP logs receiver: a service exporting with
   `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` shows its logs live, one line per

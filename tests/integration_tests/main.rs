@@ -245,3 +245,5 @@ mod search_scope;
 
 mod minimised_window;
 mod workspace;
+
+mod rule_notifications;

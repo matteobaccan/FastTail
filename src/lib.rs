@@ -38,6 +38,7 @@ pub mod log_format;
 pub mod log_level;
 pub mod merged_stream;
 pub mod net_listener;
+pub mod notifications;
 pub mod otlp;
 pub mod paths;
 pub mod print_mode;

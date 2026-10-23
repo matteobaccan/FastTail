@@ -150,6 +150,7 @@ fn test_include_filter_is_not_bypassed_by_highlight_rules() {
         enabled: true,
         captures_only: false,
         auto_bookmark: false,
+        notify: false,
     }]);
     engine.set_include_filter("payment");
 
