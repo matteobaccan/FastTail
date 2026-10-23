@@ -106,6 +106,7 @@ pub enum ActionId {
     BookmarkNext,
     OutOfOrderNext,
     OutOfOrderPrev,
+    SystemReconnect,
     BookmarkPrev,
     BookmarkNote,
     BookmarkRemove,
@@ -187,6 +188,8 @@ pub enum Need {
     TimeDeltaShown,
     /// A time anchor is set.
     TimeAnchor,
+    /// The stream is a system source whose command ended.
+    SourceEnded,
     /// A PIN is set (window lock).
     Pin,
     /// A named session is current.
@@ -220,6 +223,8 @@ pub struct StreamState {
     pub in_context: bool,
     pub time_delta: bool,
     pub has_anchor: bool,
+    /// A system source whose command ended.
+    pub source_ended: bool,
 }
 
 impl StreamState {
@@ -241,6 +246,7 @@ impl StreamState {
             in_context: engine.context_line().is_some(),
             time_delta: engine.show_time_delta,
             has_anchor: engine.time_anchor().is_some(),
+            source_ended: engine.system.as_ref().is_some_and(|s| !s.is_running()),
         }
     }
 }
@@ -269,6 +275,7 @@ impl Need {
             Need::InContext => stream.in_context,
             Need::TimeDeltaShown => stream.time_delta,
             Need::TimeAnchor => stream.has_anchor,
+            Need::SourceEnded => stream.source_ended,
         };
         if met {
             return None;
@@ -286,6 +293,7 @@ impl Need {
             Need::ContextToggle => "palette_no_selection",
             Need::InContext => "palette_not_in_context",
             Need::TimeDeltaShown => "palette_no_time_delta",
+            Need::SourceEnded => "palette_no_ended_source",
             _ => "palette_no_anchor",
         })
     }
@@ -413,6 +421,7 @@ pub const ACTIONS: &[Action] = &[
     action(A::MergedView, "window.merged_view", "act_merge", C::Window, S::Window, None, &[]),
     action(A::LogFormats, "window.log_formats", "act_log_formats", C::Window, S::Window, None, &[]),
     action(A::SplitFile, "window.split", "act_split", C::Window, S::Window, None, &[]),
+    action(A::SystemReconnect, "stream.reconnect", "system_reconnect", C::Stream, S::Stream, None, &[N::SourceEnded]),
     action(A::ClearRecentFiles, "window.recent_files.clear", "clear_recent", C::Window, S::Window, None, &[]),
     action(A::PlayAll, "window.play_all", "act_play_all", C::Window, S::Window, None, &[]),
     action(A::PauseAll, "window.pause_all", "act_pause_all", C::Window, S::Window, None, &[]),

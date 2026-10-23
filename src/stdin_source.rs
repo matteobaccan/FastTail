@@ -250,7 +250,18 @@ impl StdinStream {
         settings: &Settings,
         wake: Option<WakeFn>,
     ) -> std::io::Result<Self> {
-        let (spool, out) = SpoolFile::create(&settings.spool_dir, "stdin")?;
+        Self::start_named(input, settings, wake, "stdin")
+    }
+
+    /// `start` with the spool named after `label` (a system source copies its command's
+    /// output the same way).
+    pub fn start_named(
+        input: impl Read + Send + 'static,
+        settings: &Settings,
+        wake: Option<WakeFn>,
+        label: &str,
+    ) -> std::io::Result<Self> {
+        let (spool, out) = SpoolFile::create(&settings.spool_dir, label)?;
         let shared = Arc::new(Shared {
             written: AtomicU64::new(0),
             total: AtomicU64::new(0),
@@ -265,6 +276,7 @@ impl StdinStream {
             spool_dir: settings.spool_dir.clone(),
             limits: settings.limits,
             wake,
+            start_written: 0,
         };
         std::thread::Builder::new()
             .name("fasttail-stdin".to_string())
@@ -275,6 +287,43 @@ impl StdinStream {
             seen_generation: 0,
             finalized: false,
         })
+    }
+
+    /// Copies `input` after what the spool already holds, once the previous input ended
+    /// (a system source reconnecting).
+    pub fn resume(
+        &mut self,
+        input: impl Read + Send + 'static,
+        settings: &Settings,
+        wake: Option<WakeFn>,
+    ) -> std::io::Result<()> {
+        if self.is_reading() {
+            return Err(std::io::Error::other("the input is still being read"));
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.append(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(7); // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        }
+        let out = options.open(self.spool.path())?;
+        if let Ok(mut state) = self.shared.state.lock() {
+            *state = InputState::Reading;
+        }
+        self.finalized = false;
+        let copier = Copier {
+            shared: self.shared.clone(),
+            spool: self.spool.path().to_path_buf(),
+            spool_dir: settings.spool_dir.clone(),
+            limits: settings.limits,
+            wake,
+            start_written: self.written(),
+        };
+        std::thread::Builder::new()
+            .name("fasttail-stdin".to_string())
+            .spawn(move || copier.run(input, out))?;
+        Ok(())
     }
 
     pub fn state(&self) -> InputState {
@@ -336,6 +385,8 @@ struct Copier {
     spool_dir: PathBuf,
     limits: Limits,
     wake: Option<WakeFn>,
+    /// Bytes already in the spool when this copier started (a resumed input).
+    start_written: u64,
 }
 
 impl Copier {
@@ -362,8 +413,8 @@ impl Copier {
     fn pump(&self, input: &mut impl Read, mut out: File) -> Option<InputState> {
         let shared = &self.shared;
         let mut buf = vec![0u8; READ_BYTES];
-        let mut written: u64 = 0;
-        let mut next_check = self.limits.check_every;
+        let mut written: u64 = self.start_written;
+        let mut next_check = written + self.limits.check_every;
         loop {
             let n = match input.read(&mut buf) {
                 Ok(n) => n,
@@ -460,11 +511,25 @@ impl TailEngine {
         self.stdin.is_some()
     }
 
+    /// The copier of a piped stream: standard input or a system source.
+    pub fn piped(&self) -> Option<&StdinStream> {
+        self.stdin
+            .as_ref()
+            .or_else(|| self.system.as_ref().map(|s| &s.copier))
+    }
+
+    pub(crate) fn piped_mut(&mut self) -> Option<&mut StdinStream> {
+        match self.stdin.as_mut() {
+            Some(s) => Some(s),
+            None => self.system.as_mut().map(|s| &mut s.copier),
+        }
+    }
+
     /// Called from `poll_updates` before the file is checked: after a spool restart the
     /// index is rebuilt from byte 0, even when the spool has already grown back past the
     /// indexed size (an append check would take it for more of the old content).
     pub(crate) fn poll_stdin_restart(&mut self) {
-        let Some(s) = self.stdin.as_mut() else {
+        let Some(s) = self.piped_mut() else {
             return;
         };
         let generation = s.shared.generation.load(Ordering::Acquire);
@@ -479,7 +544,7 @@ impl TailEngine {
     /// stayed under the sample size.
     pub(crate) fn poll_stdin_end(&mut self) {
         let file_size = self.file_size;
-        let Some(s) = self.stdin.as_mut() else {
+        let Some(s) = self.piped_mut() else {
             return;
         };
         if !s.finalized && !s.is_reading() && s.written() == file_size {

@@ -43,6 +43,8 @@ pub enum BarChip {
     Hidden,
     /// The lines whose time goes back (`3 out of order`): goes to the next.
     OutOfOrder,
+    /// A system source whose command ended (`ended (exit 1) · Reconnect`): reconnects.
+    SourceEnded,
     /// The column view on or off (a stream with a field parser).
     Columns,
     /// The columns shown: opens their list.
@@ -282,6 +284,18 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             if ascii { text } else { format!("↶ {text}") },
             warn,
             BarChip::OutOfOrder,
+        ));
+    }
+    if let Some((code, _)) = e.system_end() {
+        let ended = match code {
+            Some(code) => txf(lang, "ended (exit {0})", &[&code]),
+            None => tx(lang, "ended").to_string(),
+        };
+        let text = format!("{ended} · {}", tx(lang, "Reconnect"));
+        second.push(chip(
+            if ascii { text } else { format!("⏹ {text}") },
+            warn,
+            BarChip::SourceEnded,
         ));
     }
     let hidden = e.hidden_count();

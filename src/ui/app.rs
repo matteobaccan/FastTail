@@ -1302,6 +1302,13 @@ impl FastTailApp {
 
     /// Opens the Log formats dialog a row menu asked for, with the lines picked.
     fn apply_format_requests(&mut self) {
+        let commands = self.config.system_commands();
+        let lang = self.config.language;
+        for engine in &mut self.engines {
+            if let Some(err) = engine.apply_reconnect_request(&commands) {
+                engine.view_notice = Some(t(lang, "system_reconnect_failed").replace("{0}", &err));
+            }
+        }
         if let Some(idx) = self.engines.iter().position(|e| e.export_request.is_some()) {
             let scope = self.engines[idx].export_request.take().expect("a request");
             self.export_dialog = Some(crate::ui::export_dialog::ExportDialog::new(
@@ -2158,7 +2165,8 @@ impl FastTailApp {
         for path in &cli.paths {
             let pattern_dir_exists =
                 crate::wildcard::FolderSpec::parse(path).is_some_and(|spec| spec.dir.is_dir());
-            if !path.exists() && !pattern_dir_exists {
+            if !path.exists() && !pattern_dir_exists && !crate::system_source::is_system_path(path)
+            {
                 eprintln!("fasttail: {} not found, skipped", path.display());
                 continue;
             }
@@ -2386,6 +2394,7 @@ impl FastTailApp {
                 .replace("{size}", &crate::ui::zip_picker::human_size(*needed)),
             OpenError::Refused(refusal) => crate::ui::zip_picker::refusal_text(lang, refusal),
             OpenError::NoSuchEntry => t(lang, "compressed_no_such_entry").to_string(),
+            OpenError::System { .. } => err.system_text(lang).unwrap_or_default(),
         };
         format!("{}: {reason}", path.display())
     }
@@ -6423,6 +6432,15 @@ impl FastTailApp {
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
             A::LogFormats => self.open_log_formats(None, None),
+            A::SystemReconnect => {
+                let focused = self.focused_stream_path();
+                if let Some(s) = focused
+                    .and_then(|p| self.engines.iter_mut().find(|e| e.path == p))
+                    .and_then(|e| e.system.as_mut())
+                {
+                    s.reconnect_requested = true;
+                }
+            }
             A::SplitFile => {
                 let focused = self.focused_stream_path();
                 if let Some(idx) =

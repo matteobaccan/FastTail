@@ -260,6 +260,9 @@ fn stream_title(engine: &TailEngine) -> String {
     if engine.is_stdin() {
         return crate::stdin_source::STDIN_TITLE.to_string();
     }
+    if let Some(uri) = engine.system_uri() {
+        return uri.title();
+    }
     match &engine.compressed {
         Some(c) => c.title().replace(" \u{203a} ", "/"),
         None => engine
@@ -1034,7 +1037,15 @@ impl App {
             // The engine counts what arrives while a stream is not on screen, and how
             // severe it is (2: a rule with a sound alert), as in the GUI's tab bar.
             let shown = self.visible_tabs();
+            let commands = self
+                .settings
+                .as_ref()
+                .map(|s| s.config.system_commands())
+                .unwrap_or_default();
             for (i, tab) in self.tabs.iter_mut().enumerate() {
+                if let Some(err) = tab.engine.apply_reconnect_request(&commands) {
+                    self.message = Some(txf(self.lang, "Reconnect failed: {0}", &[&err]));
+                }
                 tab.engine.displayed = shown.contains(&i);
                 tab.engine.poll_updates();
                 if tab.engine.displayed {
@@ -2927,7 +2938,12 @@ impl App {
             OpenOutcome::Missing => {
                 self.message = Some(txf(self.lang, "{0}: not found", &[&shown]))
             }
-            OpenOutcome::Failed { error, .. } => self.message = Some(format!("{shown}: {error:?}")),
+            OpenOutcome::Failed { error, .. } => {
+                let reason = error
+                    .system_text(self.lang)
+                    .unwrap_or_else(|| format!("{error:?}"));
+                self.message = Some(format!("{shown}: {reason}"))
+            }
             OpenOutcome::EmptyArchive(_) => {
                 self.message = Some(txf(self.lang, "{0}: the archive holds no file", &[&shown]))
             }
@@ -3396,6 +3412,7 @@ impl App {
             C::LevelBytes => self.open_prompt(PromptKind::LevelBytes),
             C::Hidden => self.hidden_menu = Some(0),
             C::OutOfOrder => self.apply(Action::NextOutOfOrder),
+            C::SourceEnded => self.apply(Action::Reconnect),
             C::Columns => self.apply(Action::ToggleColumns),
             C::Fields => self.columns_menu = Some(0),
             C::Presets => self.apply(Action::Presets),
@@ -3719,6 +3736,16 @@ impl App {
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::Split => self.open_prompt(PromptKind::Split),
+            Action::Reconnect => {
+                match self
+                    .tabs
+                    .get_mut(self.active)
+                    .and_then(|t| t.engine.system.as_mut())
+                {
+                    Some(s) if !s.is_running() => s.reconnect_requested = true,
+                    _ => self.message = Some(tx(self.lang, "No ended system source").into()),
+                }
+            }
             Action::GoTo => self.open_prompt(PromptKind::Goto),
             Action::Palette => self.open_palette(),
             Action::Label(n) => self.toggle_label(n),
@@ -8288,7 +8315,12 @@ pub fn open_path(
         OpenOutcome::Opened(engine) => Ok(*engine),
         OpenOutcome::OpenEntry(entry) => open_path(&entry, config),
         OpenOutcome::Missing => Err(txf(lang, "{0}: not found", &[&shown])),
-        OpenOutcome::Failed { error, .. } => Err(format!("{shown}: {error:?}")),
+        OpenOutcome::Failed { error, .. } => {
+            let reason = error
+                .system_text(lang)
+                .unwrap_or_else(|| format!("{error:?}"));
+            Err(format!("{shown}: {reason}"))
+        }
         OpenOutcome::EmptyArchive(_) => Err(txf(lang, "{0}: empty archive", &[&shown])),
         OpenOutcome::ChooseEntries { entries, .. } => {
             let names: Vec<&str> = entries

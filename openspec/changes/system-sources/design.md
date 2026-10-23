@@ -154,6 +154,18 @@ a later release because:
 Additive. Older builds reading a workspace with a `docker://` path report it as a missing
 file and skip it. Rollback: remove the source kinds; saved URIs become missing streams.
 
+## Decisions taken at implementation (2026-10-23)
+
+- Reconnect is the button only (and the palette entry); no automatic reconnect in this
+  change.
+- No `k8s://` in this change (a non-goal of the proposal).
+- The dialog lists stopped containers too (`docker ps -a`), since their logs are still
+  readable with `docker logs`.
+- A line without a timestamp at the start of a reconnect is taken for a continuation of
+  the line before it and dropped with it.
+- The command's last line is read back from the stream (the engine's last line) instead
+  of being kept by the copier.
+
 ## Open Questions
 
 - Automatic reconnect when a container restarts (poll `docker inspect` every 2 s while

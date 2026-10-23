@@ -30,6 +30,9 @@ pub const COMPRESSED_MAX_GB: RangeInclusive<u32> =
 /// `[general] stdin_spool_max_mb`: size the standard-input spool restarts from empty at.
 pub const STDIN_SPOOL_MAX_MB: RangeInclusive<u32> =
     crate::stdin_source::MIN_MAX_MB..=crate::stdin_source::MAX_MAX_MB;
+/// `[general] system_source_backlog_lines`: lines a system source reads at open.
+pub const SYSTEM_SOURCE_BACKLOG_LINES: RangeInclusive<u32> =
+    0..=crate::system_source::MAX_BACKLOG_LINES;
 /// `[general] screensaver_timeout_mins`: idle minutes before the screensaver (GUI) or the
 /// idle lock (terminal); 0 turns it off.
 pub const SCREENSAVER_TIMEOUT_MINS: RangeInclusive<u32> = 0..=120;

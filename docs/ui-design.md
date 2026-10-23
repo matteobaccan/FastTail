@@ -372,7 +372,7 @@ One `ui.horizontal` row, in this order. `|` stands for a separator.
     - a tar entry refused when it is extracted: *link or special file, not supported*, *sparse file, not supported* (the picker's refusal texts);
     - *the decoder window exceeds the 256 MiB limit* (an xz dictionary or zstd window over `MAX_DECODER_WINDOW`);
     - *decompression failed: {error}*.
-14. **Stdin status**: `⏹ input ended · N lines`, `⚠ cannot read…`, `ⓘ earlier input discarded…`.
+14. **Stdin status**: `⏹ input ended · N lines`, `⚠ cannot read…`, `ⓘ earlier input discarded…`. A **system source** (`docker://`, `journald://`, `src/system_source.rs`) shows the spool messages too and, once its command ended, `⏹ Source ended (exit code N)` in warn (tooltip: the last line the command wrote, often its error) and a **`⟳ Reconnect`** button (`render_system_status`), which runs the command again with `--since` the last timestamp and appends to the same view; the request is applied by the app (`apply_format_requests`), which holds the commands. The tab is titled `docker: api` / `journal: nginx.service`. The terminal shows `⏹ ended (exit N) · Reconnect` as a chip of the bar's second row; a click (or **Reconnect source** in the palette) reconnects.
 15. **Pattern stream**: `📂* glob ▸ file` (`secondary_accent`; the patterns joined by `;`, prefixed `**/` with subfolders), or `▸ waiting…` in warn, followed by `ⓘ switched to name`. Any stream whose file was deleted shows `⚠ file removed` in warn (tooltip: its lines stay, a new file of that name is tailed from the start).
 16. **`📦 size`** button, which cycles Bytes → MB → GB → Hex (`0x…`). The chosen unit applies to every stream.
 17. **`Throughput: x.x KB/s`** when greater than 0.

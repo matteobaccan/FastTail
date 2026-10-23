@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **System sources: journald and Docker.** `fasttail docker://api`, `journald://nginx.service`,
+  `journald://` (the system journal) and `journald://user/<unit>` (Linux) open as followed
+  streams: FastTail runs `docker logs --follow` or `journalctl --follow` with standard
+  output and error copied into a spool, titles the tab `docker: api` / `journal: …`, and
+  keeps the URI in the workspace, the recent files and sessions (bookmarks are not saved
+  for them). When the command ends the stream bar says so with the exit code and offers
+  **Reconnect**, which resumes after the last timestamp without repeating lines (also in
+  the command palette and as a chip in the terminal). New `fasttail.ini` keys:
+  `docker_command` (`podman` works), `journalctl_command`, `system_source_backlog_lines`
+  (default 10,000). First part of `system-sources`; the Open system source dialog follows.
+
 ## [0.22.0] - 2026-10-23
 
 The **time and formats** milestone: the six changes of the 0.22.0 plan, shipped one by one

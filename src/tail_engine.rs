@@ -1845,6 +1845,9 @@ pub struct TailEngine {
     /// Copier and spool of the standard-input stream (see `stdin_source`); `path` is
     /// then `<stdin>` and `current_file` the spool. Last for the same reason.
     pub stdin: Option<crate::stdin_source::StdinStream>,
+    /// Child process, copier and spool of a system source (see `system_source`); `path`
+    /// is then its URI and `current_file` the spool. Last for the same reason.
+    pub system: Option<crate::system_source::SystemStream>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2457,6 +2460,7 @@ impl TailEngine {
             encoding_pending: false,
             compressed: None,
             stdin: None,
+            system: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
@@ -4075,12 +4079,12 @@ impl TailEngine {
             .compressed
             .as_ref()
             .is_some_and(|c| c.has_unindexed(self.file_size));
-        // Standard input: the same, and a spool restarted at its limit rebuilds first.
-        if self.stdin.is_some() {
+        // Standard input and system sources: the same, and a spool restarted at its limit
+        // rebuilds first.
+        if self.piped().is_some() {
             self.poll_stdin_restart();
             needs_refresh |= self
-                .stdin
-                .as_ref()
+                .piped()
                 .is_some_and(|s| s.has_unindexed(self.file_size));
         }
 
@@ -4131,7 +4135,7 @@ impl TailEngine {
                 let found = std::fs::metadata(current);
                 // Removed, as opposed to unreadable for a moment (a locked file).
                 self.file_removed = matches!(&found, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
-                    && self.stdin.is_none();
+                    && self.piped().is_none();
                 if let Ok(metadata) = found {
                     let current_len = metadata.len();
                     if current_len != self.file_size
@@ -4152,8 +4156,11 @@ impl TailEngine {
         if self.compressed.is_some() {
             self.poll_compressed();
         }
-        if self.stdin.is_some() {
+        if self.piped().is_some() {
             self.poll_stdin_end();
+        }
+        if self.system.is_some() {
+            self.poll_system_exit();
         }
 
         // Update throughput measurement once every 500ms
