@@ -35,6 +35,12 @@ pub const SYSTEM_SOURCE_BACKLOG_LINES: RangeInclusive<u32> =
     0..=crate::system_source::MAX_BACKLOG_LINES;
 /// `[general] remote_initial_mb`: MB from the end a remote stream fetches first.
 pub const REMOTE_INITIAL_MB: RangeInclusive<u32> = 0..=crate::ssh_source::MAX_REMOTE_INITIAL_MB;
+/// `[general] listener_max_lines_per_sec` / `listener_max_mb_per_sec`: rate limit of a
+/// listener stream.
+pub const LISTENER_MAX_LINES_PER_SEC: RangeInclusive<u32> =
+    crate::net_listener::MIN_MAX_LINES_PER_SEC..=crate::net_listener::MAX_MAX_LINES_PER_SEC;
+pub const LISTENER_MAX_MB_PER_SEC: RangeInclusive<u32> =
+    1..=crate::net_listener::MAX_MAX_MB_PER_SEC;
 /// `[general] screensaver_timeout_mins`: idle minutes before the screensaver (GUI) or the
 /// idle lock (terminal); 0 turns it off.
 pub const SCREENSAVER_TIMEOUT_MINS: RangeInclusive<u32> = 0..=120;

@@ -53,6 +53,30 @@ pub enum OpenOutcome {
 /// Opens `path`. `wake` is called from the watcher threads when new data arrives, so a
 /// front end waiting on input can redraw.
 pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -> OpenOutcome {
+    if let Some(parsed) = crate::net_listener::ListenSpec::parse(path) {
+        let error = match parsed {
+            Err(key) => OpenError::System {
+                key,
+                detail: String::new(),
+            },
+            Ok(spec) => match crate::net_listener::open_engine(
+                spec,
+                config.listener_limits(),
+                &config.listener_spool_settings(),
+                wake,
+            ) {
+                Ok(engine) => return OpenOutcome::Opened(Box::new(engine)),
+                Err(e) => OpenError::System {
+                    key: "listen_bind_failed",
+                    detail: format!("{}: {}", e.addr, e.error),
+                },
+            },
+        };
+        return OpenOutcome::Failed {
+            error,
+            report: true,
+        };
+    }
     if let Some(parsed) = crate::ssh_source::SshSpec::parse(path) {
         let settings = config.ssh_settings();
         let error = match parsed {
@@ -231,7 +255,7 @@ pub fn restore_stream(engine: &mut TailEngine, config: &FastTailConfig, path: &P
 /// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
 /// its bookmarks wait until the index covers them (see `TailEngine::poll_compressed`).
 fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
-    if engine.system.is_some() || engine.ssh.is_some() {
+    if engine.system.is_some() || engine.ssh.is_some() || engine.listener.is_some() {
         return;
     }
     // A derived stream saves them by source line: they wait for its fill to reach them.
@@ -396,7 +420,11 @@ pub fn persisted_path(engine: &TailEngine) -> PathBuf {
 fn saved_bookmarks(engine: &TailEngine) -> (Vec<usize>, BTreeMap<usize, String>) {
     // A merged view's lines are numbered again at each rebuild, and a system source
     // starts from another backlog when it reopens: their bookmarks stay with the process.
-    if engine.merged.is_some() || engine.system.is_some() || engine.ssh.is_some() {
+    if engine.merged.is_some()
+        || engine.system.is_some()
+        || engine.ssh.is_some()
+        || engine.listener.is_some()
+    {
         return (Vec::new(), BTreeMap::new());
     }
     let Some(feeder) = &engine.derived else {

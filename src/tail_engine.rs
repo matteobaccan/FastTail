@@ -1851,6 +1851,9 @@ pub struct TailEngine {
     /// Client, copier and spool of a remote file over SSH (see `ssh_source`); `path` is
     /// then its URL and `current_file` the spool. Last for the same reason.
     pub ssh: Option<crate::ssh_source::SshStream>,
+    /// Sockets, copier and spool of a listener stream (see `net_listener`); `path` is
+    /// then its URL and `current_file` the spool. Last for the same reason.
+    pub listener: Option<crate::net_listener::ListenerStream>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2465,6 +2468,7 @@ impl TailEngine {
             stdin: None,
             system: None,
             ssh: None,
+            listener: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
