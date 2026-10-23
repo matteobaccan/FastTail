@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Open system source dialog.** The 📦 toolbar button (and *Open system source…* in the
+  command palette) lists the Docker containers, stopped ones too, or the systemd services
+  (system or user) in the background; a double click or Open opens one as a stream, and
+  the name can be typed. The terminal interface asks for the URI from its palette (with
+  no stream open too). The three system source keys are in Settings in both interfaces.
+  `system-sources` is code complete.
+
+### Added
+
 - **System sources: journald and Docker.** `fasttail docker://api`, `journald://nginx.service`,
   `journald://` (the system journal) and `journald://user/<unit>` (Linux) open as followed
   streams: FastTail runs `docker logs --follow` or `journalctl --follow` with standard

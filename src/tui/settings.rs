@@ -51,6 +51,9 @@ pub enum Key {
     SpoolDir,
     CompressedMaxGb,
     StdinSpoolMaxMb,
+    SystemBacklog,
+    DockerCommand,
+    JournalctlCommand,
     AutoBookmarkMax,
     Sound,
     FlashOnAlert,
@@ -284,6 +287,24 @@ impl SettingsForm {
                 number(c.stdin_spool_max_mb, &model::STDIN_SPOOL_MAX_MB),
             ),
             Field::new(
+                Key::SystemBacklog,
+                en("System source backlog (lines)"),
+                number(
+                    c.system_source_backlog_lines,
+                    &model::SYSTEM_SOURCE_BACKLOG_LINES,
+                ),
+            ),
+            Field::new(
+                Key::DockerCommand,
+                en("Docker command"),
+                Widget::Text(TextField::new(&c.docker_command)),
+            ),
+            Field::new(
+                Key::JournalctlCommand,
+                en("journalctl command"),
+                Widget::Text(TextField::new(&c.journalctl_command)),
+            ),
+            Field::new(
                 Key::LineNumbers,
                 en("Line numbers in new streams"),
                 check(c.show_line_numbers),
@@ -515,6 +536,29 @@ impl SettingsForm {
                 }
                 Key::CompressedMaxGb => c.compressed_max_gb = num() as u32,
                 Key::StdinSpoolMaxMb => c.stdin_spool_max_mb = num() as u32,
+                Key::SystemBacklog => c.system_source_backlog_lines = num() as u32,
+                Key::DockerCommand | Key::JournalctlCommand => {
+                    let text = match &f.widget {
+                        Widget::Text(t) => t.text().trim().to_string(),
+                        _ => String::new(),
+                    };
+                    let (value, default) = if f.key == Key::DockerCommand {
+                        (
+                            &mut c.docker_command,
+                            crate::system_source::DEFAULT_DOCKER_COMMAND,
+                        )
+                    } else {
+                        (
+                            &mut c.journalctl_command,
+                            crate::system_source::DEFAULT_JOURNALCTL_COMMAND,
+                        )
+                    };
+                    *value = if text.is_empty() {
+                        default.to_string()
+                    } else {
+                        text
+                    };
+                }
                 Key::AutoBookmarkMax => c.auto_bookmark_max = num() as usize,
                 Key::Sound => c.sound_enabled = on,
                 Key::FlashOnAlert => c.flash_on_alert = on,
