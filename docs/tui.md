@@ -131,10 +131,12 @@ terminals) selects text natively.
 - **Settings** (`,`): interface, theme, language (or the system's), view, automatic token
   highlighting, performance and refresh, new-stream defaults (with the bytes the level
   is looked for in), bookmarks, sound and the
-  bell on background alerts, external tools, PIN lock. Changes apply at once; `[ OK ]`
+  bell on background alerts, desktop notifications (and whether a stream on screen
+  notifies too), external tools, PIN lock. Changes apply at once; `[ OK ]`
   saves, `Esc` brings back the values Settings opened with.
-- **Highlight rules** (`r`): every field of the window's rules, order, colours, quick
-  labels. **Presets** (`p`), **global filter** (`F`), **external tools** (`!`, with their
+- **Highlight rules** (`r`): every field of the window's rules (the *Desktop notification*
+  box included: a stream not on screen notifies a matching appended line), order, colours,
+  quick labels. **Presets** (`p`), **global filter** (`F`), **external tools** (`!`, with their
   shortcuts and rule-bound runs, and their editor in Settings).
 - **Lock** (`Ctrl+L`, and after the idle minutes when the lock is on): a PIN dialog on a
   blank screen. The lock deters onlookers; it is not security.

@@ -657,6 +657,17 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex_hint",
         "fields_regex_invalid",
         "fields_format_missing",
+        "rule_notify",
+        "rule_notify_tip",
+        "notifications_enabled",
+        "notifications_enabled_tip",
+        "notify_always",
+        "notify_always_tip",
+        "notify_test",
+        "notify_test_body",
+        "notify_more",
+        "notify_summary",
+        "notify_no_service",
         "listen_otlp_tip",
         "listen_title",
         "listen_desc",
@@ -2045,6 +2056,7 @@ fn test_config_ini_persistence() {
         enabled: true,
         captures_only: false,
         auto_bookmark: false,
+        notify: false,
     }];
 
     let ini_obj = config.to_ini();
@@ -2207,6 +2219,7 @@ fn test_highlight_rule_sound_alert_ini_persistence() {
             enabled: true,
             captures_only: false,
             auto_bookmark: false,
+            notify: false,
         },
         HighlightRule {
             pattern: "WARN".to_string(),
@@ -2220,6 +2233,7 @@ fn test_highlight_rule_sound_alert_ini_persistence() {
             enabled: true,
             captures_only: false,
             auto_bookmark: false,
+            notify: false,
         },
         HighlightRule {
             pattern: "INFO".to_string(),
@@ -2233,6 +2247,7 @@ fn test_highlight_rule_sound_alert_ini_persistence() {
             enabled: true,
             captures_only: false,
             auto_bookmark: false,
+            notify: false,
         },
         HighlightRule {
             pattern: "DEBUG".to_string(),
@@ -2246,6 +2261,7 @@ fn test_highlight_rule_sound_alert_ini_persistence() {
             enabled: true,
             captures_only: false,
             auto_bookmark: false,
+            notify: false,
         },
     ];
 

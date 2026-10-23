@@ -393,6 +393,8 @@ pub enum RuleSeekStep {
 
 /// Cap on queued external-tool hits per stream (see `TailEngine::collect_tool_hits`).
 pub const MAX_PENDING_TOOL_HITS: usize = 256;
+/// Notification hits a stream keeps for the app at most.
+pub const MAX_PENDING_NOTIFY_HITS: usize = 64;
 
 /// Longest bookmark note, in characters (see `normalize_note`).
 pub const MAX_NOTE_CHARS: usize = 200;
@@ -450,6 +452,10 @@ pub struct HighlightRule {
     /// bookmark, whatever the rule's colours (see `TailEngine::is_auto_bookmark`).
     #[serde(default)]
     pub auto_bookmark: bool,
+    /// "Notify": a desktop notification when the rule matches an appended line (see
+    /// `notifications`).
+    #[serde(default)]
+    pub notify: bool,
 }
 
 impl HighlightRule {
@@ -466,6 +472,7 @@ impl HighlightRule {
             enabled: true,
             captures_only: false,
             auto_bookmark: false,
+            notify: false,
         }
     }
 
@@ -506,6 +513,7 @@ impl HighlightRule {
             enabled: true,
             captures_only: false,
             auto_bookmark: false,
+            notify: false,
         }
     }
 
@@ -528,6 +536,7 @@ impl HighlightRule {
             enabled: true,
             captures_only: false,
             auto_bookmark: false,
+            notify: false,
         }
     }
 }
@@ -1133,6 +1142,7 @@ pub struct CompiledHighlight {
     pub pattern: String,
     pub sound_alert: SoundAlertPreset,
     pub auto_bookmark: bool,
+    pub notify: bool,
 }
 
 impl CompiledHighlight {
@@ -1157,6 +1167,7 @@ impl CompiledHighlight {
             pattern: r.pattern.clone(),
             sound_alert: r.sound_alert,
             auto_bookmark: r.auto_bookmark,
+            notify: r.notify,
         }
     }
 
@@ -1808,6 +1819,10 @@ pub struct TailEngine {
     /// `MAX_PENDING_TOOL_HITS` per poll (the runner throttles anyway).
     pub tool_bound_rules: HashSet<String>,
     pub pending_tool_hits: Vec<(String, usize)>,
+    /// Appended lines matched by a rule with "Notify", for the app to notify (at most
+    /// `MAX_PENDING_NOTIFY_HITS`; beyond, only `notify_overflow` counts them).
+    pub pending_notify_hits: Vec<crate::notifications::Hit>,
+    pub notify_overflow: u64,
     _watcher: Option<RecommendedWatcher>,
     rx: Receiver<notify::Result<Event>>,
     pub last_read_time: Instant,
@@ -2458,6 +2473,8 @@ impl TailEngine {
             pending_sounds: Vec::new(),
             tool_bound_rules: HashSet::new(),
             pending_tool_hits: Vec::new(),
+            pending_notify_hits: Vec::new(),
+            notify_overflow: 0,
             _watcher: watcher,
             rx,
             last_read_time: Instant::now(),
@@ -4249,6 +4266,7 @@ impl TailEngine {
             self.update_tail_fingerprint();
             self.check_sound_alerts(prev_lines_count);
             self.collect_tool_hits(prev_lines_count);
+            self.collect_notify_hits(prev_lines_count);
             // The previously last line may have been partial: it is matched again.
             self.collect_auto_bookmarks(prev_lines_count.saturating_sub(1));
             self.note_unseen(prev_lines_count);
@@ -4423,6 +4441,43 @@ impl TailEngine {
             }
         }
         self.pending_tool_hits.extend(hits);
+    }
+
+    /// Queues the appended lines from `start_idx` that an enabled rule with "Notify"
+    /// matches (never the lines read at open, reload or restore: only appends call it).
+    pub fn collect_notify_hits(&mut self, start_idx: usize) {
+        if !self
+            .compiled_highlights
+            .iter()
+            .any(|c| c.enabled && c.notify)
+        {
+            return;
+        }
+        let total = self.line_offsets.len();
+        let room = MAX_PENDING_NOTIFY_HITS.saturating_sub(self.pending_notify_hits.len());
+        let mut hits = Vec::new();
+        let mut overflow = 0;
+        for idx in start_idx..total {
+            let Some(line) = self.get_line(idx) else {
+                continue;
+            };
+            for ch in &self.compiled_highlights {
+                if !ch.enabled || !ch.notify || !ch.is_match(&line) {
+                    continue;
+                }
+                if hits.len() >= room {
+                    overflow += 1;
+                } else {
+                    hits.push(crate::notifications::Hit {
+                        rule: ch.pattern.clone(),
+                        line: idx,
+                        text: crate::notifications::short_text(&line),
+                    });
+                }
+            }
+        }
+        self.pending_notify_hits.extend(hits);
+        self.notify_overflow += overflow;
     }
 
     /// Row an external tool or a stream-menu action applies to: the last clicked row of

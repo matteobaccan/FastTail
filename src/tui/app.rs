@@ -550,6 +550,8 @@ pub struct App {
     pub palette_dialog: Option<CommandPalette>,
     /// Spawns the external tools and keeps the limits of the rule-bound runs.
     tool_runner: crate::external_tools::ToolRunner,
+    /// Desktop notifications of the rules with "Notify" (a click focuses the stream).
+    notifications: crate::notifications::Center,
     /// The PIN lock screen while locked: the PIN being typed and the last notice.
     pub locked: Option<LockScreen>,
     /// Wrong PINs and their cooldown, shared rules with the GUI (memory only).
@@ -681,6 +683,7 @@ impl App {
             lock_attempts: Default::default(),
             idle: crate::lock::IdleClock::new(Instant::now()),
             tool_runner: Default::default(),
+            notifications: crate::notifications::Center::new(std::sync::Arc::new(|| {})),
             confirm_overwrite: None,
             interface_switch: None,
             start_gui: if cfg!(test) {
@@ -1142,6 +1145,7 @@ impl App {
         }
         if due {
             self.run_bound_tools();
+            self.run_notifications();
         }
         // The idle lock, armed by a PIN, `lock_enabled` and the idle minutes.
         let idle_locked = self.locked.is_none()
@@ -2230,6 +2234,45 @@ impl App {
             Ok(()) => txf(self.lang, "Started {0}", &[&tool.name]),
             Err(e) => txf(self.lang, "Cannot start {0}: {1}", &[&tool.name, &e]),
         });
+    }
+
+    /// Shows the notifications the streams queued (a stream counts as seen when it is on
+    /// screen: the terminal does not say whether it has the focus) and focuses the stream
+    /// of a clicked one, at its line.
+    fn run_notifications(&mut self) {
+        let Some(settings) = self.settings.as_ref() else {
+            return;
+        };
+        let opts = crate::notifications::Options {
+            enabled: settings.config.notifications_enabled,
+            always: settings.config.notify_always,
+            focused: true,
+        };
+        let lang = settings.config.language;
+        let texts = crate::notifications::Texts {
+            more: crate::i18n::t(lang, "notify_more"),
+            summary: crate::i18n::t(lang, "notify_summary"),
+        };
+        self.notifications.drain(
+            self.tabs.iter_mut().map(|t| &mut t.engine),
+            &opts,
+            &texts,
+            Instant::now(),
+        );
+        while let Some(target) = self.notifications.clicked() {
+            let Some(i) = self
+                .tabs
+                .iter()
+                .position(|t| t.engine.path == target.stream)
+            else {
+                continue;
+            };
+            self.focus_tab(i);
+            if target.line < self.tabs[i].engine.total_lines() {
+                self.tabs[i].engine.follow_tail = false;
+                self.tabs[i].set_cursor(target.line);
+            }
+        }
     }
 
     /// Runs the tools bound to the rules that matched appended lines, within the limits

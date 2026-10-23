@@ -206,7 +206,9 @@ the settings row.
 | Run on rule | your `FATAL` highlight rule |
 
 Combine it with the rule's sound alert and the "flash the window on background alerts"
-preference and a hidden tab can still reach you.
+preference and a hidden tab can still reach you. For a plain desktop alert no tool is
+needed any more: tick the rule's **Notify** box instead of binding `notify-send` to it
+(throttled, and on Linux a click leads to the line).
 
 ## 10. Restart the service that just died
 

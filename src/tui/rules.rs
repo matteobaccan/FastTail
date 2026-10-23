@@ -53,6 +53,7 @@ pub enum RuleKey {
     Background,
     Sound,
     AutoBookmark,
+    Notify,
     Tool,
     Enabled,
 }
@@ -169,6 +170,7 @@ impl RuleForm {
                 en("Bookmark matching lines"),
                 check(r.auto_bookmark),
             ),
+            field(RuleKey::Notify, en("Desktop notification"), check(r.notify)),
             field(
                 RuleKey::Tool,
                 en("Run tool"),
@@ -232,6 +234,7 @@ impl RuleForm {
             enabled: self.on(RuleKey::Enabled),
             captures_only: self.on(RuleKey::CapturesOnly),
             auto_bookmark: self.on(RuleKey::AutoBookmark),
+            notify: self.on(RuleKey::Notify),
         }
     }
 
