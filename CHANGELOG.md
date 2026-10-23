@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Regex search.** The `ab` / `.*` button beside a stream's search box switches the search
+  to a regular expression matched on each visible line (`code=E0[0-4]\d`,
+  `took \d{4,}ms`), with an `Aa` toggle for case. Hits are listed, counted, walked with
+  `F3` and tinted in the results pane and the column view as text hits are, on the UI
+  thread or in the background on large files. A regex that does not compile turns red and
+  the last valid search keeps its hits. Saved per stream (`search_mode=regex`,
+  `search_case=true`); in the terminal interface a `re:` prefix in `/` does the same.
+  First part of `cross-line-regex`; the multi-line mode follows.
+
 ## [0.23.1] - 2026-10-23
 
 ### Added

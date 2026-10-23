@@ -1058,6 +1058,85 @@ pub(crate) fn find_case_insensitive_cb(
     }
 }
 
+/// How the stream search reads its query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SearchMode {
+    /// Plain text, whatever the case (the default).
+    #[default]
+    Text,
+    /// A regular expression matched against each visible line (case per `Aa`).
+    Regex,
+}
+
+impl SearchMode {
+    /// The name saved in sessions (`search_mode=`); text is not written.
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            SearchMode::Text => "text",
+            SearchMode::Regex => "regex",
+        }
+    }
+
+    pub fn from_saved(name: &str) -> Self {
+        match name {
+            "regex" => SearchMode::Regex,
+            _ => SearchMode::Text,
+        }
+    }
+}
+
+/// The compiled search query: lower-cased text or a regex.
+#[derive(Debug, Clone)]
+pub enum SearchMatcher {
+    Text(String),
+    Regex(regex::Regex),
+}
+
+impl SearchMatcher {
+    /// The matcher of `query` in `mode`; an invalid regex is `Err` with its message.
+    pub fn build(query: &str, mode: SearchMode, case_sensitive: bool) -> Result<Self, String> {
+        match mode {
+            SearchMode::Text => Ok(SearchMatcher::Text(query.to_lowercase())),
+            SearchMode::Regex => regex::RegexBuilder::new(query)
+                .case_insensitive(!case_sensitive)
+                .size_limit(1 << 23)
+                .build()
+                .map(SearchMatcher::Regex)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    pub fn is_match(&self, line: &str) -> bool {
+        match self {
+            SearchMatcher::Text(lower) => contains_case_insensitive(line, lower),
+            SearchMatcher::Regex(re) => re.is_match(line),
+        }
+    }
+
+    /// Byte ranges of the hits in `text` (non-overlapping, empty matches left out), at
+    /// most `max`.
+    pub fn ranges(&self, text: &str, max: usize) -> Vec<(usize, usize)> {
+        match self {
+            SearchMatcher::Text(lower) => {
+                let mut out = Vec::new();
+                if !lower.is_empty() {
+                    find_case_insensitive_cb(text, lower, |s, e| {
+                        out.push((s, e));
+                        out.len() < max
+                    });
+                }
+                out
+            }
+            SearchMatcher::Regex(re) => re
+                .find_iter(text)
+                .filter(|m| !m.is_empty())
+                .take(max)
+                .map(|m| (m.start(), m.end()))
+                .collect(),
+        }
+    }
+}
+
 /// Efficient case-insensitive substring search.
 /// Byte ranges of every non-overlapping, case-insensitive occurrence of `needle_lower`
 /// (already lower-cased) in `haystack`.
@@ -1572,6 +1651,13 @@ pub struct TailEngine {
     /// the UI caches built over the visible rows.
     pub filter_generation: u64,
     pub search_query: String,
+    /// How the query is read (text or regex), the case toggle of the regex mode, the
+    /// compiled query of the active search, and why the query typed does not compile (the
+    /// last valid one keeps its hits).
+    pub search_mode: SearchMode,
+    pub search_case_sensitive: bool,
+    search_matcher: Option<SearchMatcher>,
+    pub search_error: Option<String>,
     /// Line hits of the active search in file order, at most `MAX_SEARCH_MATCHES`.
     pub search_matches: Vec<usize>,
     /// Every visible line matching the active search, counted past the cap too.
@@ -2395,6 +2481,10 @@ impl TailEngine {
             context_rebuild_threshold: BACKGROUND_REBUILD_MATCHES,
             filter_generation: 0,
             search_query: String::new(),
+            search_mode: SearchMode::Text,
+            search_case_sensitive: false,
+            search_matcher: None,
+            search_error: None,
             search_matches: Vec::new(),
             search_total: 0,
             search_last_counted: 0,
@@ -6679,7 +6769,7 @@ impl TailEngine {
         if query.is_empty() {
             return hits;
         }
-        let q_lower = query.to_lowercase();
+        let matcher = self.matcher_for(query);
 
         // Hits outside the search scope are not hits; a line scope bounds the walk too.
         let (lo, total) = self.scope_line_bounds();
@@ -6688,7 +6778,7 @@ impl TailEngine {
             return hits;
         }
         let scoped = !self.search_scope.is_all();
-        let check_match = |line: &str| -> bool { contains_case_insensitive(line, &q_lower) };
+        let check_match = |line: &str| -> bool { matcher.is_match(line) };
         let mut record = |idx: usize| {
             if idx >= total || (scoped && !self.in_search_scope(idx)) {
                 return;
@@ -7023,7 +7113,12 @@ impl TailEngine {
         let mut matches = Vec::new();
         let trimmed = query.trim();
         let total = self.source.len() as usize;
-        if trimmed.is_empty() || limit == 0 || start >= total {
+        // A regex is matched on the text lines only, not on the bytes of the HEX view.
+        if trimmed.is_empty()
+            || limit == 0
+            || start >= total
+            || self.search_mode != SearchMode::Text
+        {
             return (matches, 0);
         }
 
@@ -7315,7 +7410,7 @@ impl TailEngine {
     /// the bytes of the word, not on a position shifted by the sequences before it.
     fn search_hit_file_offset(&self, line: usize) -> Option<usize> {
         let (start, len, truncated) = self.line_span(line)?;
-        let query = self.last_searched_query.to_lowercase();
+        let matcher = self.matcher_for(&self.last_searched_query);
         let encoding = self.encoding;
         let strip = self.strips_ansi();
         self.source
@@ -7329,11 +7424,7 @@ impl TailEngine {
                         map: vec![(0, 0)],
                     }
                 };
-                let mut hit = None;
-                find_case_insensitive_cb(&stripped.text, &query, |s, _| {
-                    hit = Some(s);
-                    false
-                });
+                let hit = matcher.ranges(&stripped.text, 1).first().map(|r| r.0);
                 let raw = stripped.to_raw(hit?).min(text.len());
                 let prefix = text.get(..raw)?;
                 Some(start as usize + encoded_len(prefix, encoding))
@@ -7508,6 +7599,17 @@ impl TailEngine {
         }
         if trimmed == self.last_searched_query {
             return;
+        }
+        match SearchMatcher::build(trimmed, self.search_mode, self.search_case_sensitive) {
+            Ok(m) => {
+                self.search_matcher = Some(m);
+                self.search_error = None;
+            }
+            Err(e) => {
+                // The last valid query keeps its hits until this one is fixed.
+                self.search_error = Some(e);
+                return;
+            }
         }
         self.last_searched_query = trimmed.to_string();
         if self.search_waits() {
@@ -7775,6 +7877,36 @@ impl TailEngine {
         }
     }
 
+    /// Switches the search between text and regex (and the regex case toggle) and runs
+    /// the query again.
+    pub fn set_search_mode(&mut self, mode: SearchMode, case_sensitive: bool) {
+        if mode == self.search_mode && case_sensitive == self.search_case_sensitive {
+            return;
+        }
+        self.search_mode = mode;
+        self.search_case_sensitive = case_sensitive;
+        self.search_error = None;
+        self.last_searched_query.clear();
+        let query = self.search_query.clone();
+        self.update_search(&query);
+    }
+
+    /// The compiled active search (`None` without one).
+    pub fn search_matcher(&self) -> Option<&SearchMatcher> {
+        (!self.last_searched_query.is_empty())
+            .then_some(self.search_matcher.as_ref())
+            .flatten()
+    }
+
+    /// The matcher of `query`: the active one when `query` is the active query.
+    fn matcher_for(&self, query: &str) -> SearchMatcher {
+        match &self.search_matcher {
+            Some(m) if query == self.last_searched_query => m.clone(),
+            _ => SearchMatcher::build(query, self.search_mode, self.search_case_sensitive)
+                .unwrap_or_else(|_| SearchMatcher::Text(query.to_lowercase())),
+        }
+    }
+
     /// Drops a running search job, whose hits no longer apply. Returns whether it did.
     fn drop_search_job(&mut self) -> bool {
         if self
@@ -7817,7 +7949,7 @@ impl TailEngine {
         };
         self.start_job(
             JobSpec::Search {
-                query_lower: query.to_lowercase(),
+                matcher: self.matcher_for(&query),
                 filter,
                 limit,
                 count_past_limit: true,

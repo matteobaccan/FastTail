@@ -18,6 +18,8 @@ fn entry(path: PathBuf) -> StreamEntry {
         filter_expr_mode: true,
         filter_expr: r#"(payment OR "re fund") AND NOT /a\/b/"#.to_string(),
         search_query: "timeout".to_string(),
+        search_mode: fasttail::tail_engine::SearchMode::Regex,
+        search_case: true,
         wrap: true,
         encoding: Some("ANSI".to_string()),
         ansi: Some("strip".to_string()),

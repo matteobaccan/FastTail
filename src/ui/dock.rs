@@ -2244,13 +2244,79 @@ fn render_log_stream(
         let has_query = !search_query.trim().is_empty();
         let match_count = engine.active_match_count();
 
+        // The mode: text, or a regex with its case toggle.
+        let regex = engine.search_mode == crate::tail_engine::SearchMode::Regex;
+        let mode_text = if regex {
+            RichText::new(".*")
+                .monospace()
+                .strong()
+                .color(theme.accent_color())
+        } else {
+            RichText::new("ab").monospace().color(theme.text_dim())
+        };
+        if ui
+            .small_button(mode_text)
+            .on_hover_text(t(
+                lang,
+                if regex {
+                    "search_mode_regex_tip"
+                } else {
+                    "search_mode_text_tip"
+                },
+            ))
+            .clicked()
+        {
+            let mode = if regex {
+                crate::tail_engine::SearchMode::Text
+            } else {
+                crate::tail_engine::SearchMode::Regex
+            };
+            engine.set_search_mode(mode, engine.search_case_sensitive);
+        }
+        if regex {
+            let case = engine.search_case_sensitive;
+            let case_text = if case {
+                RichText::new("Aa")
+                    .monospace()
+                    .strong()
+                    .color(theme.accent_color())
+            } else {
+                RichText::new("Aa").monospace().color(theme.text_dim())
+            };
+            if ui
+                .small_button(case_text)
+                .on_hover_text(t(lang, "case_sensitive_tip"))
+                .clicked()
+            {
+                engine.set_search_mode(engine.search_mode, !case);
+            }
+        }
         let extra_controls_w = if has_query { 278.0 } else { 128.0 };
         let box_w = (ui.available_width() - extra_controls_w).clamp(160.0, 360.0);
-        let search_edit = egui::TextEdit::singleline(search_query)
-            .hint_text(t(lang, "search_placeholder"))
+        let mut search_edit = egui::TextEdit::singleline(search_query)
+            .hint_text(t(
+                lang,
+                if regex {
+                    "search_regex_placeholder"
+                } else {
+                    "search_placeholder"
+                },
+            ))
             .desired_width(box_w)
             .id(search_id);
-        let search_resp = ui.add(search_edit).on_hover_text(t(lang, "tip_search_box"));
+        if regex {
+            search_edit = search_edit.font(egui::TextStyle::Monospace);
+        }
+        if engine.search_error.is_some() {
+            search_edit = search_edit.text_color(theme.error_color().into());
+        }
+        let search_resp = ui.add(search_edit);
+        let search_resp = match &engine.search_error {
+            Some(e) => {
+                search_resp.on_hover_text(format!("{}\n{e}", t(lang, "search_regex_invalid")))
+            }
+            None => search_resp.on_hover_text(t(lang, "tip_search_box")),
+        };
         if search_resp.changed() {
             engine.search_edited_at = Some(Instant::now());
         }
@@ -4015,6 +4081,7 @@ fn render_search_pane(
                 engine.current_match_idx,
                 &engine.last_searched_query,
             )
+            .matcher(engine.search_matcher().cloned())
             .font_size(font_size)
             .level_colors(level_colors)
             .show(ui, engine, theme, lang);
@@ -4264,12 +4331,11 @@ fn render_extended_rows(
                                 // Level colours only where nothing else colours the row.
                                 level_colors: level_colors && bg.is_none() && highlight.is_none(),
                             };
-                            let query_lower = engine.search_query.to_lowercase();
                             let spans_of = |text: &str| {
-                                cell_spans(
+                                cell_spans_with(
                                     engine.match_highlight_spans(text).spans,
                                     text,
-                                    &query_lower,
+                                    engine.search_matcher(),
                                 )
                             };
                             cell_galleys = draw_field_cells(
@@ -4674,27 +4740,23 @@ fn field_header_id(engine: &TailEngine) -> egui::Id {
 /// query's occurrences (`query_lower`, case-insensitive) drawn over them as hits. At most
 /// `MAX_ROW_SPANS`, sorted and non-overlapping.
 pub(crate) fn cell_spans(
-    mut rule_spans: Vec<HighlightSpan>,
+    rule_spans: Vec<HighlightSpan>,
     text: &str,
     query_lower: &str,
 ) -> Vec<HighlightSpan> {
-    let mut hits: Vec<(usize, usize)> = Vec::new();
-    if !query_lower.is_empty() {
-        let lower = text.to_lowercase();
-        // Byte offsets carry over only while lower-casing keeps every length.
-        if lower.len() == text.len() {
-            let mut from = 0;
-            while let Some(at) = lower[from..].find(query_lower) {
-                let start = from + at;
-                let end = start + query_lower.len();
-                hits.push((start, end));
-                from = end;
-                if hits.len() >= crate::tail_engine::MAX_ROW_SPANS {
-                    break;
-                }
-            }
-        }
-    }
+    let matcher = crate::tail_engine::SearchMatcher::Text(query_lower.to_string());
+    cell_spans_with(rule_spans, text, Some(&matcher))
+}
+
+/// `cell_spans` with the stream's search as it reads its query (text or regex).
+pub(crate) fn cell_spans_with(
+    mut rule_spans: Vec<HighlightSpan>,
+    text: &str,
+    matcher: Option<&crate::tail_engine::SearchMatcher>,
+) -> Vec<HighlightSpan> {
+    let hits: Vec<(usize, usize)> = matcher.map_or_else(Vec::new, |m| {
+        m.ranges(text, crate::tail_engine::MAX_ROW_SPANS)
+    });
     if hits.is_empty() {
         return rule_spans;
     }
@@ -6530,11 +6592,10 @@ fn render_wrapped_rows(
                     italics: highlight.map(|h| h.italic).unwrap_or(false),
                     ..Default::default()
                 };
-                let query_lower = eng.search_query.to_lowercase();
-                let spans = cell_spans(
+                let spans = cell_spans_with(
                     eng.match_highlight_spans(&message).spans,
                     &message,
-                    &query_lower,
+                    eng.search_matcher(),
                 );
                 let mut job =
                     span_layout_job(layout_slice(&message), &font_id, format, &spans, theme);
@@ -6849,9 +6910,12 @@ fn render_wrapped_rows(
                     bg: text_bg,
                     level_colors: level_colors && text_bg.is_none() && r.highlight.is_none(),
                 };
-                let query_lower = eng.search_query.to_lowercase();
                 let spans_of = |text: &str| {
-                    cell_spans(eng.match_highlight_spans(text).spans, text, &query_lower)
+                    cell_spans_with(
+                        eng.match_highlight_spans(text).spans,
+                        text,
+                        eng.search_matcher(),
+                    )
                 };
                 cell_galleys = paint_field_cells(
                     ui,

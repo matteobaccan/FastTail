@@ -479,7 +479,7 @@ pub enum JobSpec {
     /// at most `limit`; past it the scan stops, or with `count_past_limit` goes on
     /// counting the hits it no longer lists (`ScanBatch::Counted`).
     Search {
-        query_lower: String,
+        matcher: crate::tail_engine::SearchMatcher,
         filter: VisibleSet,
         limit: usize,
         count_past_limit: bool,
@@ -985,14 +985,14 @@ fn run(
                 true
             }
             JobSpec::Search {
-                query_lower,
+                matcher,
                 limit,
                 count_past_limit,
                 ..
             } => {
                 let hit = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                     let visible = walk.as_mut().is_none_or(|w| w.visible(idx, s));
-                    visible && contains_case_insensitive(s, query_lower)
+                    visible && matcher.is_match(s)
                 });
                 if hit {
                     if tally.listed < *limit {
