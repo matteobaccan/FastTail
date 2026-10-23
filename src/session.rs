@@ -63,6 +63,9 @@ pub struct StreamEntry {
     pub filter_expr_mode: bool,
     pub filter_expr: String,
     pub search_query: String,
+    /// `search_mode=regex` (written only then) and `search_case=true` (regex only).
+    pub search_mode: crate::tail_engine::SearchMode,
+    pub search_case: bool,
     pub wrap: bool,
     /// Encoding name as `FileEncoding::name()`; `None` keeps the detected one.
     pub encoding: Option<String>,
@@ -241,6 +244,12 @@ impl Session {
                 sec.set("filter_expr", ini_value(&s.filter_expr));
             }
             sec.set("search", ini_value(&s.search_query));
+            if s.search_mode != crate::tail_engine::SearchMode::Text {
+                sec.set("search_mode", s.search_mode.saved_name());
+                if s.search_case {
+                    sec.set("search_case", "true");
+                }
+            }
             sec.set("wrap", s.wrap.to_string());
             sec.set("encoding", s.encoding.clone().unwrap_or_default());
             if let Some(ansi) = &s.ansi {
@@ -483,6 +492,10 @@ impl Session {
                     .is_some_and(|m| m.trim().eq_ignore_ascii_case("expr")),
                 filter_expr: sec.get("filter_expr").unwrap_or("").to_string(),
                 search_query: sec.get("search").unwrap_or("").to_string(),
+                search_mode: crate::tail_engine::SearchMode::from_saved(
+                    sec.get("search_mode").unwrap_or("").trim(),
+                ),
+                search_case: sec.get("search_case").is_some_and(|v| v.trim() == "true"),
                 wrap: sec
                     .get("wrap")
                     .and_then(|v| v.parse().ok())

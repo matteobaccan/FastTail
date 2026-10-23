@@ -1,16 +1,16 @@
 ## 1. Engine
 
-- [ ] 1.1 `SearchMode { Text, Regex, Multiline }` and the compiled pattern per stream; `Aa` for the regex modes; invalid pattern keeps the last valid hits
-- [ ] 1.2 Single-line regex search on the synchronous path and in `JobSpec::Search`
+- [ ] 1.1 (Text and Regex done: `SearchMatcher`, `Aa`, the last valid hits kept) `SearchMode { Text, Regex, Multiline }` and the compiled pattern per stream; `Aa` for the regex modes; invalid pattern keeps the last valid hits
+- [x] 1.2 Single-line regex search on the synchronous path and in `JobSpec::Search`
 - [ ] 1.3 Chunked multi-line scanner (1 MB chunks, 64-line / 64 KB overlap, deferred hits, dropped long matches counted); `search_spans` beside `search_matches`
 - [ ] 1.4 Append overlap and replacement of hits; truncation and rotation rerun
 - [ ] 1.5 Tests: hits across chunk boundaries neither lost nor doubled; `^`/`$` per line; a hit across a filter gap; 64-line bound; cap and counting past it; synchronous and job results identical; bench case
 
 ## 2. UI and persistence
 
-- [ ] 2.1 Mode selector and `Aa` in the search box, error tint and message
+- [ ] 2.1 (text / regex button, `Aa`, red text with the error as tooltip done) Mode selector and `Aa` in the search box, error tint and message
 - [ ] 2.2 Bracket marker and lighter tint on continuation rows (normal and wrap layouts), overview strip marks, `+N lines` in the results pane
-- [ ] 2.3 `search_mode` in `StreamEntry`; history entries with `re:` / `mre:`; round-trip and old-file tests
+- [ ] 2.3 (`search_mode` / `search_case` in `StreamEntry` with the round-trip test done; the terminal reads a `re:` prefix) `search_mode` in `StreamEntry`; history entries with `re:` / `mre:`; round-trip and old-file tests
 
 ## 3. Texts and documentation
 

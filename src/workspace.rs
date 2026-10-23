@@ -384,6 +384,8 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         engine.set_filter_terms(include, exclude);
     }
     engine.restore_filter_expr(entry.filter_expr_mode, &entry.filter_expr);
+    engine.search_mode = entry.search_mode;
+    engine.search_case_sensitive = entry.search_case;
     if !entry.search_query.is_empty() {
         engine.search_query = entry.search_query.clone();
         engine.update_search(&entry.search_query);
@@ -499,6 +501,8 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         filter_expr_mode: engine.filter_expr_mode(),
         filter_expr: engine.filter_expr().to_string(),
         search_query: engine.search_query.trim().to_string(),
+        search_mode: engine.search_mode,
+        search_case: engine.search_case_sensitive,
         wrap: engine.wrap_lines,
         encoding: Some(engine.encoding.name().to_string()),
         ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),

@@ -251,3 +251,5 @@ mod rule_notifications;
 mod debug_output;
 
 mod field_statistics;
+
+mod search_modes;

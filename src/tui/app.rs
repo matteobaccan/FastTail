@@ -3138,9 +3138,23 @@ impl App {
         let text = prompt.field.text().trim().to_string();
         match prompt.kind {
             PromptKind::Search => {
-                tab.engine.search_query = text.clone();
-                tab.engine.update_search(&text);
-                tab.pending_first_hit = !text.is_empty();
+                // `re:` makes the query a regex (`re:(?-i)` for case), as the window's
+                // `.*` toggle does.
+                let (mode, query) = match text.strip_prefix("re:") {
+                    Some(rest) => (crate::tail_engine::SearchMode::Regex, rest.to_string()),
+                    None => (crate::tail_engine::SearchMode::Text, text.clone()),
+                };
+                tab.engine.search_query = query.clone();
+                let case = tab.engine.search_case_sensitive;
+                if mode != tab.engine.search_mode {
+                    tab.engine.set_search_mode(mode, case);
+                } else {
+                    tab.engine.update_search(&query);
+                }
+                if let Some(e) = &tab.engine.search_error {
+                    self.message = Some(txf(self.lang, "Invalid regex: {0}", &[e]));
+                }
+                tab.pending_first_hit = !query.is_empty();
             }
             PromptKind::Include => {
                 tab.engine.set_include_filter(&text);
@@ -3225,6 +3239,10 @@ impl App {
         }
         let e = &self.tabs[self.active].engine;
         let text = match kind {
+            // A regex search opens with its `re:` prefix.
+            PromptKind::Search if e.search_mode == crate::tail_engine::SearchMode::Regex => {
+                format!("re:{}", e.search_query)
+            }
             PromptKind::Search => e.search_query.clone(),
             PromptKind::Include => e.include_filter().to_string(),
             PromptKind::Exclude => e.exclude_filter().to_string(),
@@ -5568,7 +5586,7 @@ impl App {
             return;
         };
         let title = match kind {
-            PromptKind::Search => tx(self.lang, "Search"),
+            PromptKind::Search => tx(self.lang, "Search (re: for a regex)"),
             PromptKind::Include => tx(self.lang, "Include filter"),
             PromptKind::Exclude => tx(self.lang, "Exclude filter"),
             PromptKind::Note(_) => tx(self.lang, "Bookmark note"),

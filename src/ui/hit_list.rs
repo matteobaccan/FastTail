@@ -130,7 +130,7 @@ pub struct HitList<'a> {
     id: egui::Id,
     hits: &'a [usize],
     current: Option<usize>,
-    query_lower: String,
+    matcher: Option<crate::tail_engine::SearchMatcher>,
     font_size: f32,
     level_colors: bool,
 }
@@ -142,10 +142,18 @@ impl<'a> HitList<'a> {
             id,
             hits,
             current,
-            query_lower: query.trim().to_lowercase(),
+            matcher: Some(crate::tail_engine::SearchMatcher::Text(
+                query.trim().to_lowercase(),
+            )),
             font_size: 13.0,
             level_colors: true,
         }
+    }
+
+    /// Tints what `matcher` finds instead of the query as text (a regex search).
+    pub fn matcher(mut self, matcher: Option<crate::tail_engine::SearchMatcher>) -> Self {
+        self.matcher = matcher;
+        self
     }
 
     pub fn font_size(mut self, font_size: f32) -> Self {
@@ -250,7 +258,7 @@ impl<'a> HitList<'a> {
         let mut clicked = None;
         let selected = state.selected;
         let current = self.current;
-        let query_lower = &self.query_lower;
+        let matcher = self.matcher.as_ref();
         let level_colors = self.level_colors;
         let hits = self.hits;
         let output = scroll.show_rows(ui, row_height, len, |ui, rows| {
@@ -311,7 +319,7 @@ impl<'a> HitList<'a> {
                     &LineStyle {
                         font_id: &font_id,
                         char_w,
-                        query_lower,
+                        matcher,
                         level_colors,
                         dim: false,
                     },
@@ -444,7 +452,7 @@ pub struct GroupedOutput {
 pub struct GroupedHitList<'a> {
     id: egui::Id,
     groups: &'a [HitGroup<'a>],
-    query_lower: String,
+    matcher: crate::tail_engine::SearchMatcher,
     font_size: f32,
     level_colors: bool,
     /// Label of the hits' "Show in context" menu entry; no menu without it.
@@ -458,7 +466,7 @@ impl<'a> GroupedHitList<'a> {
         Self {
             id,
             groups,
-            query_lower: query.trim().to_lowercase(),
+            matcher: crate::tail_engine::SearchMatcher::Text(query.trim().to_lowercase()),
             font_size: 13.0,
             level_colors: true,
             context_label: None,
@@ -593,7 +601,7 @@ impl<'a> GroupedHitList<'a> {
         let style = LineStyle {
             font_id: &font_id,
             char_w,
-            query_lower: &self.query_lower,
+            matcher: Some(&self.matcher),
             level_colors: self.level_colors,
             dim: false,
         };
@@ -753,7 +761,7 @@ fn take_nav_keys(ui: &mut Ui) -> Vec<NavKey> {
 struct LineStyle<'a> {
     font_id: &'a egui::FontId,
     char_w: f32,
-    query_lower: &'a str,
+    matcher: Option<&'a crate::tail_engine::SearchMatcher>,
     level_colors: bool,
     /// Faded (the rows of a stale group).
     dim: bool,
@@ -789,7 +797,7 @@ fn paint_line_text(
     if style.dim {
         fg = fg.gamma_multiply(0.45);
     }
-    let job = row_job(text, style.query_lower, style.font_id, fg.into());
+    let job = row_job(text, style.matcher, style.font_id, fg.into());
     let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
     painter.galley(pos, galley, fg.into());
 }
@@ -798,7 +806,7 @@ fn paint_line_text(
 /// yellow in black.
 fn row_job(
     text: &str,
-    query_lower: &str,
+    matcher: Option<&crate::tail_engine::SearchMatcher>,
     font_id: &egui::FontId,
     fg: Color32,
 ) -> egui::text::LayoutJob {
@@ -815,7 +823,8 @@ fn row_job(
     };
     let mut job = egui::text::LayoutJob::default();
     let mut pos = 0;
-    for (start, end) in query_ranges(text, query_lower) {
+    let ranges = matcher.map_or_else(Vec::new, |m| m.ranges(text, usize::MAX));
+    for (start, end) in ranges {
         if start > pos {
             job.append(&text[pos..start], 0.0, plain.clone());
         }
@@ -925,7 +934,7 @@ mod tests {
         assert_eq!(clip_chars("abc", 10), "abc");
         let job = row_job(
             "a timeout b",
-            "timeout",
+            Some(&crate::tail_engine::SearchMatcher::Text("timeout".into())),
             &egui::FontId::monospace(12.0),
             Color32::WHITE,
         );

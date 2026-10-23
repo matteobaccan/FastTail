@@ -334,7 +334,7 @@ impl FindAllSession {
                 &file,
                 range,
                 JobSpec::Search {
-                    query_lower: query_lower.clone(),
+                    matcher: crate::tail_engine::SearchMatcher::Text(query_lower.clone()),
                     filter: engine
                         .filter_spec()
                         .map_or(VisibleSet::All, VisibleSet::Filter),
