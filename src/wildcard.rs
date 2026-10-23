@@ -267,6 +267,10 @@ fn ends_with_fold(text: &str, suffix: &str) -> bool {
 /// True when `path` names a pattern stream rather than a file: its last component holds a
 /// wildcard or a `;` list, or the folder before it is `**`.
 pub fn is_pattern_path(path: &Path) -> bool {
+    // A remote pattern (`ssh://host/var/log/app-*.log`) is the SSH source's own.
+    if crate::system_source::is_system_path(path) {
+        return false;
+    }
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };

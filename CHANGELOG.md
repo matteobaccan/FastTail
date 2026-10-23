@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Remote pattern streams.** `ssh://web1/var/log/app-*.log` follows the newest match on
+  the server, lists the folder every 10 seconds and switches to a newer file with a notice,
+  as local pattern streams do; only `*` and `?` reach the remote shell unquoted.
+
+### Fixed
+
+- The terminal interface restores `docker://`, `journald://` and `ssh://` streams from the
+  workspace at start (they were skipped as missing files).
+
+### Added
+
 - **Remote file dialog.** The 🌐 toolbar button (and *Open remote file (SSH)…* in the
   command palette) takes one or more hosts (`deploy@web1, web2, web3:2222`), the path and
   the first fetch (last N MB or the whole file), and opens one stream per host. The

@@ -166,6 +166,11 @@ impl SshSpec {
         if path.len() < 2 || path.ends_with('/') || path.contains('\0') {
             return Err("ssh_bad_path");
         }
+        // Wildcards only in the file name (a remote pattern stream).
+        let dir = &path[..path.rfind('/').unwrap_or(0)];
+        if dir.contains(['*', '?']) {
+            return Err("ssh_bad_path");
+        }
         Ok(Self {
             user: user.map(String::from),
             host,
@@ -192,6 +197,18 @@ impl SshSpec {
             "{SCHEME}{user}{host}{port}{}{whole}",
             percent_encode(&self.path)
         )
+    }
+
+    /// The folder and the file name pattern of a remote pattern stream (a file name with
+    /// `*` or `?`).
+    pub fn glob_parts(&self) -> Option<(String, String)> {
+        let cut = self.path.rfind('/')?;
+        let name = &self.path[cut + 1..];
+        if !name.contains(['*', '?']) {
+            return None;
+        }
+        let dir = if cut == 0 { "/" } else { &self.path[..cut] };
+        Some((dir.to_string(), name.to_string()))
     }
 
     /// The tab title: `web1:app.log`.
@@ -236,15 +253,52 @@ pub struct SshSettings {
     pub program: String,
     /// Bytes from the end a first fetch starts at (0: only new lines).
     pub initial_bytes: u64,
+    /// How often a remote pattern stream lists its folder for a newer match.
+    pub rescan: Duration,
 }
+
+/// The listing interval of remote pattern streams (each one is a connection).
+pub const DEFAULT_RESCAN: Duration = Duration::from_secs(10);
 
 impl Default for SshSettings {
     fn default() -> Self {
         Self {
             program: DEFAULT_SSH_PROGRAM.to_string(),
             initial_bytes: u64::from(DEFAULT_REMOTE_INITIAL_MB) << 20,
+            rescan: DEFAULT_RESCAN,
         }
     }
+}
+
+/// A file name pattern for the remote shell: the literal runs single-quoted, `*` and `?`
+/// bare, so nothing else is interpreted.
+pub fn glob_word(pattern: &str) -> String {
+    let mut out = String::new();
+    let mut run = String::new();
+    for ch in pattern.chars() {
+        if ch == '*' || ch == '?' {
+            if !run.is_empty() {
+                out.push_str(&crate::external_tools::quote_sh_arg(&run));
+                run.clear();
+            }
+            out.push(ch);
+        } else {
+            run.push(ch);
+        }
+    }
+    if !run.is_empty() {
+        out.push_str(&crate::external_tools::quote_sh_arg(&run));
+    }
+    out
+}
+
+/// The script that prints the newest match of a pattern in `dir` (empty: none).
+fn newest_script(dir: &str, pattern: &str) -> String {
+    format!(
+        "cd -- {} 2>/dev/null && ls -td -- {} 2>/dev/null | head -n 1",
+        crate::external_tools::quote_sh_arg(dir),
+        glob_word(pattern)
+    )
 }
 
 /// Where the next connection asks the server to start.
@@ -264,7 +318,8 @@ pub enum Start {
 
 /// The remote script: the marker on standard error, then `tail` from the start chosen on
 /// the server (so the size and the start come from the same moment).
-pub fn remote_script(path: &str, start: &Start) -> String {
+pub fn remote_script(spec: &SshSpec, start: &Start) -> String {
+    let path = spec.path.as_str();
     // A tail fetch asks for one byte more than `bytes` (the client drops through the
     // first line break), so a fetch that starts on a line start keeps that line.
     let initial = |whole: bool, bytes: u64| {
@@ -289,19 +344,32 @@ pub fn remote_script(path: &str, start: &Start) -> String {
     };
     // `set -f`: the fields of `ls` are not globbed; a C locale and no block size keep the
     // size a plain number. `m` tells the client whether it resumed (R) or started (I).
+    // A pattern stream follows the newest match (`n`, reported after the marker fields).
+    let locate = match spec.glob_parts() {
+        None => format!("n=; f={}", crate::external_tools::quote_sh_arg(path)),
+        Some((dir, pattern)) => format!(
+            "d={}; n=$({}); [ -n \"$n\" ] || {{ printf 'FASTTAIL1 - - - -\\n' >&2; exit 2; }}; f=\"$d/$n\"",
+            crate::external_tools::quote_sh_arg(&dir),
+            newest_script(&dir, &pattern)
+        ),
+    };
     format!(
-        "set -f; f={}; [ -r \"$f\" ] || {{ printf 'FASTTAIL1 - - - -\\n' >&2; exit 2; }}; \
+        "{locate}; set -f; [ -r \"$f\" ] || {{ printf 'FASTTAIL1 - - - -\\n' >&2; exit 2; }}; \
          unset BLOCK_SIZE LS_BLOCK_SIZE; set -- $(LC_ALL=C ls -iLnd -- \"$f\" 2>/dev/null); i=$1; s=$6; \
          if [ -z \"$i\" ]; then printf 'FASTTAIL1 - - - -\\n' >&2; exit 2; fi; \
-         {choose}; printf 'FASTTAIL1 %s %s %s %s\\n' \"$i\" \"$s\" \"$b\" \"$m\" >&2; \
-         exec tail -c +\"$b\" -F -- \"$f\"",
-        crate::external_tools::quote_sh_arg(path)
+         {choose}; printf 'FASTTAIL1 %s %s %s %s %s\\n' \"$i\" \"$s\" \"$b\" \"$m\" \"$n\" >&2; \
+         exec tail -c +\"$b\" -F -- \"$f\""
     )
 }
 
 /// The client's arguments: batch mode (no prompt ever), timeouts and keep-alives, the
 /// user and port, then `--`, the host and the script.
 pub fn ssh_args(spec: &SshSpec, start: &Start) -> Vec<String> {
+    script_args(spec, remote_script(spec, start))
+}
+
+/// The client's arguments around any remote `script`.
+fn script_args(spec: &SshSpec, script: String) -> Vec<String> {
     let mut args: Vec<String> = [
         "-T",
         "-n",
@@ -330,11 +398,7 @@ pub fn ssh_args(spec: &SshSpec, start: &Start) -> Vec<String> {
     if let Some(port) = spec.port {
         args.extend(["-p".to_string(), port.to_string()]);
     }
-    args.extend([
-        "--".to_string(),
-        spec.host.clone(),
-        remote_script(&spec.path, start),
-    ]);
+    args.extend(["--".to_string(), spec.host.clone(), script]);
     args
 }
 
@@ -382,6 +446,9 @@ struct Shared {
     /// `tail` said the file was truncated or replaced while connected: the next
     /// connection starts again instead of resuming.
     changed: AtomicBool,
+    /// The file a pattern stream follows, and the one it switched to last.
+    current: Mutex<Option<String>>,
+    switched: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -577,12 +644,31 @@ impl SshReader {
                 return Err(self.classify(true));
             }
         };
-        let Some((inode, start_at, resumed)) = marker else {
+        let Some(Marker {
+            inode,
+            start: start_at,
+            resumed,
+            name,
+        }) = marker
+        else {
             self.shared.kill_child();
             return Err(Outcome::Stop(Disconnect::Missing));
         };
         // A stream that had a file and did not resume it starts again.
         let replaced = had_file && !resumed;
+        if !name.is_empty() {
+            let before = self
+                .shared
+                .current
+                .lock()
+                .ok()
+                .and_then(|mut c| c.replace(name.clone()));
+            if before.is_some_and(|b| b != name) {
+                if let Ok(mut s) = self.shared.switched.lock() {
+                    *s = Some(name);
+                }
+            }
+        }
         if let Ok(mut i) = self.shared.inode.lock() {
             *i = Some(inode);
         }
@@ -683,11 +769,20 @@ impl Shared {
     }
 }
 
+/// What the script reported before `tail`.
+struct Marker {
+    inode: String,
+    start: u64,
+    resumed: bool,
+    /// The match a pattern stream follows (empty for a plain file).
+    name: String,
+}
+
 /// Reads the client's standard error: the first marker goes to `tx` (`None` inside for a
 /// missing file), every other line to the kept messages.
 fn drain_stderr(
     err: std::process::ChildStderr,
-    tx: mpsc::Sender<Option<(String, u64, bool)>>,
+    tx: mpsc::Sender<Option<Marker>>,
     shared: Arc<Shared>,
 ) {
     let mut tx = Some(tx);
@@ -699,12 +794,18 @@ fn drain_stderr(
         let line = line.trim_end_matches('\r');
         if let Some(rest) = line.strip_prefix("FASTTAIL1 ") {
             if let Some(tx) = tx.take() {
-                let parts: Vec<&str> = rest.split_whitespace().collect();
+                // `inode size start mode name`; the name (of a pattern's match) may hold
+                // spaces, so it is the rest of the line.
+                let parts: Vec<&str> = rest.splitn(5, ' ').collect();
                 let marker = match parts.as_slice() {
-                    [inode, _size, start, mode] if *inode != "-" => start
-                        .parse::<u64>()
-                        .ok()
-                        .map(|s| (inode.to_string(), s.max(1), *mode == "R")),
+                    [inode, _size, start, mode, name @ ..] if *inode != "-" => {
+                        start.parse::<u64>().ok().map(|s| Marker {
+                            inode: inode.to_string(),
+                            start: s.max(1),
+                            resumed: *mode == "R",
+                            name: name.first().map(|n| n.to_string()).unwrap_or_default(),
+                        })
+                    }
                     _ => None,
                 };
                 let _ = tx.send(marker);
@@ -809,6 +910,55 @@ impl Read for SshReader {
     }
 }
 
+/// Lists the folder of a pattern stream every `settings.rescan` while it follows; a newer
+/// match ends the connection, and the next one starts on that file.
+fn rescan_loop(shared: &Shared, spec: &SshSpec, settings: &SshSettings, dir: &str, pattern: &str) {
+    let script = newest_script(dir, pattern);
+    loop {
+        let mut waited = Duration::ZERO;
+        while waited < settings.rescan {
+            if shared.closed.load(Ordering::Acquire) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            waited += Duration::from_millis(100);
+        }
+        let following = shared.state.lock().is_ok_and(|s| *s == SshState::Following);
+        if !following || shared.ended() {
+            continue;
+        }
+        let Some(_slot) = Slot::try_take() else {
+            continue;
+        };
+        let mut cmd = Command::new(&settings.program);
+        cmd.args(script_args(spec, script.clone()))
+            .stdin(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let Ok(out) = cmd.output() else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let newest = text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches('\r');
+        if newest.is_empty() || newest.chars().any(char::is_control) {
+            continue;
+        }
+        let current = shared.current.lock().ok().and_then(|c| c.clone());
+        if current.as_deref().is_some_and(|c| c != newest) {
+            shared.changed.store(true, Ordering::Release);
+            shared.kill_child();
+        }
+    }
+}
+
 /// A remote stream, owned by its engine (`TailEngine::ssh`).
 pub struct SshStream {
     pub spec: SshSpec,
@@ -844,6 +994,8 @@ impl SshStream {
             inode: Mutex::new(None),
             stderr: Mutex::new(String::new()),
             changed: AtomicBool::new(false),
+            current: Mutex::new(None),
+            switched: Mutex::new(None),
         });
         let reader = SshReader {
             spec: spec.clone(),
@@ -855,6 +1007,12 @@ impl SshStream {
             stderr_done: None,
         };
         let copier = StdinStream::start_named(reader, spool_settings, wake.clone(), "ssh")?;
+        if let Some((dir, pattern)) = spec.glob_parts() {
+            let (shared, spec, settings) = (shared.clone(), spec.clone(), settings.clone());
+            let _ = std::thread::Builder::new()
+                .name("fasttail-ssh-rescan".to_string())
+                .spawn(move || rescan_loop(&shared, &spec, &settings, &dir, &pattern));
+        }
         Ok(Self {
             spec,
             shared,
@@ -875,6 +1033,23 @@ impl SshStream {
             .unwrap_or(SshState::Disconnected(Disconnect::Failed(
                 "poisoned".into(),
             )))
+    }
+
+    /// The tab title: `web1:app.log`, or `web1:app-*.log ▸ app-2026-10-23.log` for a
+    /// pattern stream.
+    pub fn title(&self) -> String {
+        let current = self.shared.current.lock().ok().and_then(|c| c.clone());
+        match current {
+            Some(name) if self.spec.glob_parts().is_some() => {
+                format!("{} ▸ {name}", self.spec.title())
+            }
+            _ => self.spec.title(),
+        }
+    }
+
+    /// The match a pattern stream switched to last.
+    pub fn switched(&self) -> Option<String> {
+        self.shared.switched.lock().ok().and_then(|s| s.clone())
     }
 
     /// The client's last messages.
@@ -1027,6 +1202,36 @@ mod tests {
     }
 
     #[test]
+    fn pattern_streams_quote_only_the_literal_runs() {
+        let s = parse("ssh://h/var/log/app-*.lo?").unwrap().unwrap();
+        assert_eq!(
+            s.glob_parts(),
+            Some(("/var/log".to_string(), "app-*.lo?".to_string()))
+        );
+        assert_eq!(glob_word("it's-*.log"), r"'it'\''s-'*'.log'");
+        assert_eq!(glob_word("*"), "*");
+        let script = remote_script(
+            &s,
+            &Start::Initial {
+                whole: false,
+                bytes: 1,
+            },
+        );
+        assert!(
+            script.starts_with(r"d='/var/log'; n=$(cd -- '/var/log' 2>/dev/null && ls -td -- 'app-'*'.lo'? 2>/dev/null | head -n 1);"),
+            "{script}"
+        );
+        assert_eq!(parse("ssh://h/var/*/app.log"), Some(Err("ssh_bad_path")));
+        assert_eq!(
+            parse("ssh://h/var/log/app.log")
+                .unwrap()
+                .unwrap()
+                .glob_parts(),
+            None
+        );
+    }
+
+    #[test]
     fn one_url_per_host() {
         let urls = urls_for(
             "web1, deploy@web2:2222\n[::1]\n-x",
@@ -1085,7 +1290,7 @@ mod tests {
         assert_eq!(args[dash - 4..dash], ["-l", "deploy", "-p", "2222"]);
         let script = &args[dash + 2];
         assert!(
-            script.starts_with(r"set -f; f='/var/log/it'\''s.log';"),
+            script.starts_with(r"n=; f='/var/log/it'\''s.log'; set -f;"),
             "{script}"
         );
         assert!(script.contains("b=$((s-1024))"), "{script}");
@@ -1095,8 +1300,9 @@ mod tests {
             script.ends_with(r#"exec tail -c +"$b" -F -- "$f""#),
             "{script}"
         );
+        let x = parse("ssh://h/x").unwrap().unwrap();
         let resume = remote_script(
-            "/x",
+            &x,
             &Start::Resume {
                 inode: "42".into(),
                 offset: 900,
@@ -1109,7 +1315,7 @@ mod tests {
             "{resume}"
         );
         assert!(remote_script(
-            "/x",
+            &x,
             &Start::Initial {
                 whole: true,
                 bytes: 1
