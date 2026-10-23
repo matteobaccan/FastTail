@@ -1396,6 +1396,18 @@ impl FastTailApp {
         changed
     }
 
+    /// Opens the Patterns tab a stream asked for. Returns whether one opened.
+    pub fn apply_patterns_requests(&mut self) -> bool {
+        let Some(idx) = self.engines.iter().position(|e| e.patterns_request) else {
+            return false;
+        };
+        self.engines[idx].patterns_request = false;
+        self.engines[idx].open_patterns();
+        let path = self.engines[idx].path.clone();
+        crate::ui::patterns_tab::open_tab(&mut self.dock_state, &path);
+        true
+    }
+
     /// Opens the Query tab a stream asked for, and shows a line a query result points to.
     /// Returns whether anything changed.
     pub fn apply_query_requests(&mut self) -> bool {
@@ -4493,6 +4505,9 @@ impl FastTailApp {
         if self.apply_query_requests() {
             ctx.request_repaint();
         }
+        if self.apply_patterns_requests() {
+            ctx.request_repaint();
+        }
         if self.apply_merged_views() {
             ctx.request_repaint();
         }
@@ -5832,6 +5847,12 @@ impl FastTailApp {
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_context")).monospace(),
                                     );
+                                    ui.end_row();
+
+                                    ui.label(
+                                        RichText::new("CTRL + SHIFT + G").monospace().strong(),
+                                    );
+                                    ui.label(RichText::new(t(lang, "act_patterns")).monospace());
                                     ui.end_row();
 
                                     ui.label(

@@ -2009,6 +2009,16 @@ pub struct TailEngine {
     pub query_request: bool,
     /// A row of a query result was double-clicked: show this line (applied by the app).
     pub query_jump: Option<usize>,
+    /// The Patterns tab of the stream, while it is open (see `open_patterns`).
+    pub patterns: Option<crate::patterns::PatternState>,
+    /// The Patterns tab was asked for (stream menu, `CTRL + SHIFT + G`).
+    pub patterns_request: bool,
+    /// The pattern filter (see `set_pattern_filter`), part of `filter`.
+    pattern_filter: Option<Arc<crate::patterns::PatternFilter>>,
+    /// The pattern filter is being set: the view it gives is not a new one to learn.
+    applying_pattern_filter: bool,
+    /// The pattern filter was cleared because the patterns were learnt again.
+    pub pattern_filter_dropped: bool,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2638,6 +2648,11 @@ impl TailEngine {
             query: None,
             query_request: false,
             query_jump: None,
+            patterns: None,
+            patterns_request: false,
+            pattern_filter: None,
+            applying_pattern_filter: false,
+            pattern_filter_dropped: false,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
@@ -2844,6 +2859,7 @@ impl TailEngine {
         .with_global(self.global_filter.clone())
         .with_parser(self.field_parser.clone())
         .with_expr(expr)
+        .with_patterns(self.pattern_filter.clone())
     }
 
     /// Sets the global filter this stream combines with its own (`None`: off, or no
@@ -3529,6 +3545,7 @@ impl TailEngine {
         if unchanged_lines == 0 {
             // New content (reload, rotation, another encoding).
             self.restart_stats();
+            self.restart_patterns();
             self.cancel_query_on_reload();
         }
         let mut total_len = self.source.len();
@@ -3992,6 +4009,7 @@ impl TailEngine {
         if !same {
             // Another parser reads other fields: the statistics count again.
             self.restart_stats();
+            self.restart_patterns();
             // A table opens in the column view, unless the view was chosen already.
             if matches!(parser.as_deref(), Some(FieldParser::Delimited(_)))
                 && !self.field_view_chosen
@@ -4264,6 +4282,7 @@ impl TailEngine {
         self.poll_context_rebuild();
         self.drain_job();
         self.poll_stats();
+        self.poll_patterns();
         self.poll_query();
         self.land_open_line();
         // A live time window slides with the clock.
@@ -4942,6 +4961,7 @@ impl TailEngine {
             || self.min_level != LogLevel::Unknown
             || self.time_from.is_some()
             || self.time_to.is_some()
+            || self.filter.patterns.is_some()
     }
 
     pub fn recompute_filtered_lines(&mut self) {
@@ -4979,8 +4999,9 @@ impl TailEngine {
 
     fn recompute_filtered_lines_from(&mut self, start: usize) {
         if start == 0 {
-            // A new view: the statistics count it again.
+            // A new view: the statistics count it again, the patterns are learnt again.
             self.restart_stats();
+            self.restart_patterns();
         }
         self.filter_generation = self.filter_generation.wrapping_add(1);
         // The groups stand on the visible lines: from `start` they are formed again (and
@@ -5963,11 +5984,20 @@ impl TailEngine {
         if self.filter.excluded(&line) {
             return false;
         }
-        if self.filter.included(&line) && self.filter.level_passes(&line) {
+        let continuation = crate::fields::is_continuation(self.field_parser.as_deref(), &line);
+        if self.filter.included(&line)
+            && self.filter.level_passes(&line)
+            && !(continuation && self.filter.patterns.is_some())
+            && self
+                .filter
+                .patterns
+                .as_ref()
+                .is_none_or(|p| p.passes(&line))
+        {
             return true;
         }
         // A stack trace continuation line is shown with its (nearest non-continuation) parent.
-        if crate::fields::is_continuation(self.field_parser.as_deref(), &line) {
+        if continuation {
             return self.parent_visible_before(idx);
         }
         false
@@ -7882,6 +7912,288 @@ impl TailEngine {
         }
     }
 
+    // ----- Patterns (see `patterns`) -----
+
+    /// Opens the Patterns of the stream: its entries grouped by template, learnt and
+    /// counted in the background.
+    pub fn open_patterns(&mut self) {
+        if self.patterns.is_none() {
+            self.patterns = Some(crate::patterns::PatternState::new());
+        }
+        self.poll_patterns();
+    }
+
+    pub fn close_patterns(&mut self) {
+        self.patterns = None;
+    }
+
+    /// The pattern filter in place: the patterns shown, and those hidden.
+    pub fn pattern_filter(&self) -> Option<&crate::patterns::PatternFilter> {
+        self.pattern_filter.as_deref()
+    }
+
+    /// Shows only the entries of the `include` patterns (all when empty) that are in no
+    /// `exclude` one, classified on the tree the Patterns tab shows; both empty clear it.
+    pub fn set_pattern_filter(&mut self, mut include: Vec<u32>, mut exclude: Vec<u32>) {
+        include.sort_unstable();
+        include.dedup();
+        exclude.sort_unstable();
+        exclude.dedup();
+        // The ids the tab shows may be newer than the tree last published.
+        if let Some(p) = self.patterns.as_mut() {
+            p.publish();
+        }
+        let snapshot = self.patterns.as_ref().and_then(|p| p.snapshot.clone());
+        let next = match snapshot {
+            Some(drain) if !include.is_empty() || !exclude.is_empty() => {
+                Some(Arc::new(crate::patterns::PatternFilter {
+                    drain,
+                    include,
+                    exclude,
+                }))
+            }
+            _ => None,
+        };
+        if next.is_none() && self.pattern_filter.is_none() {
+            return;
+        }
+        self.pattern_filter = next;
+        self.pattern_filter_dropped = false;
+        self.applying_pattern_filter = true;
+        self.refresh_filters();
+        self.applying_pattern_filter = false;
+    }
+
+    /// The view changed from its first line: the patterns are learnt again, and a pattern
+    /// filter, whose ids belong to the old tree, is cleared (said by the chip).
+    fn restart_patterns(&mut self) {
+        if self.applying_pattern_filter {
+            return;
+        }
+        if self.pattern_filter.take().is_some() {
+            self.pattern_filter_dropped = true;
+            self.filter = self.build_filter();
+        }
+        if let Some(p) = self.patterns.as_mut() {
+            p.restart = true;
+        }
+    }
+
+    /// The visible lines a pattern scan covers.
+    fn patterns_visible(&self) -> VisibleSet {
+        if self.is_filter_active() {
+            VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+        } else {
+            VisibleSet::All
+        }
+    }
+
+    /// The scan range of the first `lines` lines.
+    fn patterns_range(&self, lines: usize) -> (PathBuf, ScanRange) {
+        let (file, mut range) = self.full_scan_range();
+        if lines < self.total_lines() {
+            range.end_offset = self
+                .line_offsets
+                .get(lines)
+                .copied()
+                .unwrap_or(range.end_offset);
+        }
+        (file, range)
+    }
+
+    /// Starts learning from scratch over the visible lines present now.
+    fn start_patterns(&mut self) {
+        if !self.stats_view_settled(false) {
+            return;
+        }
+        let visible = self.patterns_visible();
+        let lines = self.stats_complete_lines();
+        let (file, range) = self.patterns_range(lines);
+        let Some(p) = self.patterns.as_mut() else {
+            return;
+        };
+        p.restart = false;
+        p.failed = false;
+        p.counting = false;
+        p.drain = crate::patterns::Drain::new();
+        p.snapshot = None;
+        p.counts = crate::patterns::PatternCounts::new(crate::patterns::Axis::new(false, 0, 0));
+        p.covered = lines;
+        p.parent_visible = false;
+        p.progress = 0.0;
+        p.dirty = false;
+        p.generation = p.generation.wrapping_add(1);
+        p.job_generation = p.job_generation.wrapping_add(1);
+        p.job = Some(ScanJob::spawn(
+            p.job_generation,
+            &file,
+            range,
+            JobSpec::Patterns {
+                count: None,
+                visible,
+            },
+        ));
+    }
+
+    /// Learnt: counts every entry on the finished tree, over the same lines.
+    fn start_pattern_counts(&mut self, drain: crate::patterns::Drain) {
+        let axis = match self.stats_time_span() {
+            Some((first, last)) => crate::patterns::Axis::new(true, first, last),
+            None => crate::patterns::Axis::new(false, 0, self.total_lines() as i64),
+        };
+        let visible = self.patterns_visible();
+        let Some(lines) = self.patterns.as_ref().map(|p| p.covered) else {
+            return;
+        };
+        let (file, range) = self.patterns_range(lines);
+        let parent_visible = lines > 0 && self.is_line_visible(lines - 1);
+        let last_ts = lines
+            .checked_sub(1)
+            .and_then(|l| self.line_timestamp(l))
+            .unwrap_or(NO_TIMESTAMP);
+        let Some(p) = self.patterns.as_mut() else {
+            return;
+        };
+        let snapshot = Arc::new(drain.clone());
+        p.drain = drain;
+        p.snapshot = Some(snapshot.clone());
+        p.published = std::time::Instant::now();
+        p.counts = crate::patterns::PatternCounts::new(axis);
+        p.last_ts = last_ts;
+        p.parent_visible = parent_visible;
+        p.counting = true;
+        p.progress = 0.0;
+        p.generation = p.generation.wrapping_add(1);
+        p.job_generation = p.job_generation.wrapping_add(1);
+        p.job = Some(ScanJob::spawn(
+            p.job_generation,
+            &file,
+            range,
+            JobSpec::Patterns {
+                count: Some((snapshot, axis)),
+                visible,
+            },
+        ));
+    }
+
+    /// Takes what the pattern scans sent, and learns and counts the visible entries
+    /// appended since (a bounded number per poll).
+    fn poll_patterns(&mut self) {
+        const APPEND_BATCH: usize = 20_000;
+        const PUBLISH: std::time::Duration = std::time::Duration::from_millis(500);
+        let Some(p) = self.patterns.as_mut() else {
+            return;
+        };
+        if !p.restart && p.covered > self.line_offsets.len() {
+            // Truncated or replaced.
+            p.restart = true;
+        }
+        if p.restart {
+            self.start_patterns();
+            return;
+        }
+        if let Some(job) = p.job.as_ref() {
+            let mut finished = false;
+            let mut learnt = None;
+            while let Some(batch) = job.try_recv() {
+                match batch {
+                    ScanBatch::PatternTree(tree) => learnt = Some(*tree),
+                    ScanBatch::PatternCounts(part) => {
+                        p.counts.merge(*part);
+                        p.generation = p.generation.wrapping_add(1);
+                    }
+                    ScanBatch::Progress(f) => p.progress = f,
+                    ScanBatch::Done { .. } => finished = true,
+                    ScanBatch::Failed => {
+                        p.failed = true;
+                        finished = true;
+                    }
+                    _ => {}
+                }
+            }
+            if !finished {
+                return;
+            }
+            p.job = None;
+            p.progress = 1.0;
+            p.generation = p.generation.wrapping_add(1);
+            if let Some(tree) = learnt.filter(|_| !p.failed) {
+                self.start_pattern_counts(tree);
+                return;
+            }
+            p.counting = false;
+        }
+        // Entries appended after the scans started, once the filters placed them.
+        if !self.stats_view_settled(true) {
+            return;
+        }
+        let Some(p) = self.patterns.as_ref() else {
+            return;
+        };
+        if p.snapshot.is_none() {
+            return;
+        }
+        let from = p.covered;
+        let to = self.stats_complete_lines().min(from + APPEND_BATCH);
+        if from < to {
+            let parser = self.field_parser.clone();
+            // The pattern filter is left out: the patterns are learnt over what the other
+            // filters show.
+            let base = self
+                .filter
+                .patterns
+                .is_some()
+                .then(|| self.filter.clone().with_patterns(None));
+            let filtered = self.is_filter_active();
+            let timed = p.counts.axis.timed;
+            let mut parent_visible = p.parent_visible;
+            let mut last_ts = p.last_ts;
+            let mut entries: Vec<(String, usize, i64)> = Vec::new();
+            for idx in from..to {
+                let Some(line) = self.get_line(idx) else {
+                    continue;
+                };
+                if let Some(ts) = self.line_timestamp(idx) {
+                    last_ts = ts;
+                }
+                let continuation = crate::fields::is_continuation(parser.as_deref(), &line);
+                let visible = match &base {
+                    Some(spec) => {
+                        let (v, next) = spec.visible_in_sequence(&line, parent_visible);
+                        parent_visible = next;
+                        v && self.in_time_range(idx) && !self.is_hidden(idx)
+                    }
+                    None => !filtered || self.filtered_lines.binary_search(&idx).is_ok(),
+                };
+                if visible && !continuation {
+                    let ts = if timed { last_ts } else { NO_TIMESTAMP };
+                    entries.push((line.into_owned(), idx, ts));
+                }
+            }
+            let Some(p) = self.patterns.as_mut() else {
+                return;
+            };
+            let mut scratch = crate::patterns::Scratch::default();
+            for (line, idx, ts) in &entries {
+                let id = p.drain.learn(line, &mut scratch);
+                p.counts.add(id, *idx, *ts);
+            }
+            if !entries.is_empty() {
+                p.dirty = true;
+                p.generation = p.generation.wrapping_add(1);
+            }
+            p.covered = to;
+            p.last_ts = last_ts;
+            p.parent_visible = parent_visible;
+        }
+        let Some(p) = self.patterns.as_mut() else {
+            return;
+        };
+        if p.published.elapsed() >= PUBLISH {
+            p.publish();
+        }
+    }
+
     // ----- Queries (see `query`) -----
 
     /// Runs `text` over the lines the stream shows now, in the background. A query that
@@ -8345,7 +8657,10 @@ impl TailEngine {
         while let Some(batch) = job.try_recv() {
             match batch {
                 // Statistics and query jobs run in their own slots (`stats`, `query`).
-                ScanBatch::Stats(_) | ScanBatch::Query(_) => {}
+                ScanBatch::Stats(_)
+                | ScanBatch::Query(_)
+                | ScanBatch::PatternTree(_)
+                | ScanBatch::PatternCounts(_) => {}
                 ScanBatch::MultiHits(found) => {
                     // The visible set was exact (hidden lines and time window included):
                     // only the search scope applies, on the first line of each hit.
@@ -8397,7 +8712,7 @@ impl TailEngine {
                     }
                     job.hits += lines.len();
                     match job.kind {
-                        ScanKind::FieldStats | ScanKind::Query => {}
+                        ScanKind::FieldStats | ScanKind::Query | ScanKind::Patterns => {}
                         ScanKind::Filter => {
                             self.extend_filtered(lines);
                             self.filter_generation = self.filter_generation.wrapping_add(1);
@@ -8539,7 +8854,7 @@ impl TailEngine {
 
     fn finish_job(&mut self, kind: ScanKind, end_offset: u64) {
         match kind {
-            ScanKind::FieldStats | ScanKind::Query => {}
+            ScanKind::FieldStats | ScanKind::Query | ScanKind::Patterns => {}
             ScanKind::Index => {
                 self.index_pending = false;
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);

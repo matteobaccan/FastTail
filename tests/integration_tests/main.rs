@@ -40,6 +40,7 @@ mod merged_views;
 mod net_listener;
 mod open_at_line;
 mod out_of_order_lines;
+mod pattern_grouping;
 mod pattern_streams;
 mod relative_time_windows;
 mod review_regressions;

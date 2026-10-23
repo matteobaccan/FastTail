@@ -50,6 +50,8 @@ pub enum ScanKind {
     FieldStats,
     /// Runs a query over the visible lines (Query tab).
     Query,
+    /// Learns or counts the patterns of the visible entries (Patterns tab).
+    Patterns,
 }
 
 /// Most include terms, and most exclude terms, a stream can hold.
@@ -218,6 +220,9 @@ pub struct FilterSpec {
     /// Expression mode: the include side is this expression instead of the include terms
     /// (`filter_expr`); the exclude terms still apply.
     pub expr: Option<Arc<crate::filter_expr::FilterExpr>>,
+    /// The pattern filter (see `patterns`): an entry's first line must be in its patterns;
+    /// continuation lines then only follow their entry.
+    pub patterns: Option<Arc<crate::patterns::PatternFilter>>,
 }
 
 impl FilterSpec {
@@ -246,7 +251,18 @@ impl FilterSpec {
             parser: None,
             has_field_terms: false,
             expr: None,
+            patterns: None,
         }
+    }
+
+    /// Adds the pattern filter (none, or one naming no pattern: off).
+    pub fn with_patterns(mut self, patterns: Option<Arc<crate::patterns::PatternFilter>>) -> Self {
+        self.patterns = patterns.filter(|p| !p.is_empty());
+        self
+    }
+
+    fn patterns_pass(&self, line: &str) -> bool {
+        self.patterns.as_ref().is_none_or(|p| p.passes(line))
     }
 
     /// Expression mode: `expr` is the include side (none: every line passes it).
@@ -383,7 +399,10 @@ impl FilterSpec {
     }
 
     pub fn is_active(&self) -> bool {
-        self.has_terms() || self.min_level != LogLevel::Unknown || self.global.is_some()
+        self.has_terms()
+            || self.min_level != LogLevel::Unknown
+            || self.global.is_some()
+            || self.patterns.is_some()
     }
 
     /// Third stage after exclude and include: the line's level (its level field on a
@@ -444,6 +463,7 @@ impl FilterSpec {
             !self.excluded_in(line, fields)
                 && self.included_in(line, fields)
                 && self.level_passes_in(line, fields)
+                && self.patterns_pass(line)
         })
     }
 
@@ -453,14 +473,17 @@ impl FilterSpec {
     pub fn visible_in_sequence(&self, line: &str, parent_visible: bool) -> (bool, bool) {
         self.with_fields(|fields| {
             if crate::fields::is_continuation(self.parser.as_deref(), line) {
-                let v = !self.excluded_in(line, fields)
-                    && ((self.included_in(line, fields) && self.level_passes_in(line, fields))
-                        || parent_visible);
+                // Under a pattern filter only entries are classified: their lines follow.
+                let own = self.patterns.is_none()
+                    && self.included_in(line, fields)
+                    && self.level_passes_in(line, fields);
+                let v = !self.excluded_in(line, fields) && (own || parent_visible);
                 (v, parent_visible)
             } else {
                 let v = !self.excluded_in(line, fields)
                     && self.included_in(line, fields)
-                    && self.level_passes_in(line, fields);
+                    && self.level_passes_in(line, fields)
+                    && self.patterns_pass(line);
                 (v, v)
             }
         })
@@ -525,6 +548,13 @@ pub enum JobSpec {
     /// end (`ScanBatch::Query`).
     Query {
         query: Arc<crate::query::Query>,
+        visible: VisibleSet,
+    },
+    /// Learn the patterns of the visible entries (the tree is sent at the end,
+    /// `ScanBatch::PatternTree`), or count them on a learnt tree over `axis`
+    /// (`ScanBatch::PatternCounts`, sent as the scan goes); see `patterns`.
+    Patterns {
+        count: Option<(Arc<crate::patterns::Drain>, crate::patterns::Axis)>,
         visible: VisibleSet,
     },
 }
@@ -634,6 +664,10 @@ pub enum ScanBatch {
     Skipped(usize),
     /// Counts of a `FieldStats` job since its last batch, to merge.
     Stats(Box<crate::field_stats::FieldStats>),
+    /// The tree a learning `Patterns` job built.
+    PatternTree(Box<crate::patterns::Drain>),
+    /// Counts of a counting `Patterns` job since its last batch, to merge.
+    PatternCounts(Box<crate::patterns::PatternCounts>),
     /// Fraction of the byte range scanned so far.
     Progress(f32),
     /// The range was scanned completely (`lines` = line count covered).
@@ -684,6 +718,7 @@ impl ScanJob {
             JobSpec::AutoBookmarks { .. } => ScanKind::AutoBookmarks,
             JobSpec::Collapse { .. } => ScanKind::Collapse,
             JobSpec::FieldStats { .. } => ScanKind::FieldStats,
+            JobSpec::Patterns { .. } => ScanKind::Patterns,
             JobSpec::Query { .. } => ScanKind::Query,
         };
         let (tx, rx) = channel();
@@ -799,6 +834,28 @@ struct QueryRun<'q> {
     hint: FormatHint,
     timed: bool,
     leveled: bool,
+}
+
+/// Running state of a `Patterns` job: the tree being learnt, or the counts since the
+/// last batch, with the scratch buffers and the timestamp the next line inherits.
+struct PatternRun {
+    drain: crate::patterns::Drain,
+    counts: Option<crate::patterns::PatternCounts>,
+    scratch: crate::patterns::Scratch,
+    inherited: i64,
+    hint: FormatHint,
+    sent: std::time::Instant,
+}
+
+impl PatternRun {
+    fn take_batch(&mut self) -> Option<ScanBatch> {
+        let counts = self.counts.as_mut().filter(|c| c.entries > 0)?;
+        let fresh = crate::patterns::PatternCounts::new(counts.axis);
+        self.sent = std::time::Instant::now();
+        Some(ScanBatch::PatternCounts(Box::new(std::mem::replace(
+            counts, fresh,
+        ))))
+    }
 }
 
 /// How often a `FieldStats` job sends its counts.
@@ -928,6 +985,19 @@ fn run(
         }),
         _ => None,
     };
+    let mut pattern_run = match &spec {
+        JobSpec::Patterns { count, .. } => Some(PatternRun {
+            drain: crate::patterns::Drain::new(),
+            counts: count
+                .as_ref()
+                .map(|(_, axis)| crate::patterns::PatternCounts::new(*axis)),
+            scratch: crate::patterns::Scratch::default(),
+            inherited: NO_TIMESTAMP,
+            hint: FormatHint::default(),
+            sent: std::time::Instant::now(),
+        }),
+        _ => None,
+    };
     if matches!(spec, JobSpec::Index) && range.start_offset < range.end_offset {
         offsets.push(range.start_offset);
     }
@@ -940,6 +1010,7 @@ fn run(
     let mut walk = match &spec {
         JobSpec::Collapse { visible, .. }
         | JobSpec::FieldStats { visible, .. }
+        | JobSpec::Patterns { visible, .. }
         | JobSpec::Query { visible, .. }
         | JobSpec::Search {
             filter: visible, ..
@@ -952,187 +1023,222 @@ fn run(
     };
     let strip = range.ansi.strips();
     let mut strip_buf = String::new();
-    let mut eval =
-        |idx: usize,
-         bytes: &[u8],
-         hits: &mut Vec<usize>,
-         levels: &mut Vec<u8>,
-         timing: &mut Timing,
-         tally: &mut Tally,
-         collapse: &mut Option<Detector>,
-         stats_run: &mut Option<StatsRun>,
-         multi: &mut Option<(crate::multiline_search::Scanner<'_>, Vec<(usize, usize)>)>,
-         query_run: &mut Option<QueryRun<'_>>|
-         -> bool {
-            match &spec {
-                JobSpec::Index => true,
-                JobSpec::Query { .. } => {
-                    let Some(run) = query_run.as_mut() else {
+    let mut eval = |idx: usize,
+                    bytes: &[u8],
+                    hits: &mut Vec<usize>,
+                    levels: &mut Vec<u8>,
+                    timing: &mut Timing,
+                    tally: &mut Tally,
+                    collapse: &mut Option<Detector>,
+                    stats_run: &mut Option<StatsRun>,
+                    multi: &mut Option<(
+        crate::multiline_search::Scanner<'_>,
+        Vec<(usize, usize)>,
+    )>,
+                    query_run: &mut Option<QueryRun<'_>>,
+                    pattern_run: &mut Option<PatternRun>|
+     -> bool {
+        match &spec {
+            JobSpec::Index => true,
+            JobSpec::Patterns { count, .. } => {
+                let Some(run) = pattern_run.as_mut() else {
+                    return true;
+                };
+                let parser = range.parser.as_deref();
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    // Every line is timed, visible or not, as in the engine's cache.
+                    let timed = count.as_ref().is_some_and(|(_, axis)| axis.timed);
+                    if timed {
+                        if let Some((ms, f)) = crate::fields::line_timestamp(parser, s, run.hint) {
+                            run.hint = f;
+                            run.inherited = ms;
+                        }
+                    }
+                    if !walk.as_mut().is_none_or(|w| w.visible(idx, s))
+                        || crate::fields::is_continuation(parser, s)
+                    {
                         return true;
-                    };
-                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        if run.timed {
-                            if let Some((ms, f)) =
-                                crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
-                            {
-                                run.hint = f;
-                                run.inherited = ms;
-                            }
+                    }
+                    match (count, run.counts.as_mut()) {
+                        (Some((drain, _)), Some(counts)) => {
+                            let id = drain.classify(s, &mut run.scratch);
+                            counts.add(id, idx, run.inherited);
                         }
-                        if walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
-                            let level = if run.leveled {
-                                crate::fields::line_level(
-                                    range.parser.as_deref(),
-                                    s,
-                                    range.level_window,
-                                ) as u8
-                            } else {
-                                0
-                            };
-                            run.ex.push(&crate::query::LineIn {
-                                idx,
-                                text: s,
-                                level,
-                                ts: run.inherited,
-                            });
+                        _ => {
+                            run.drain.learn(s, &mut run.scratch);
                         }
-                        true
-                    });
-                    run.ex.wants_more()
-                }
-                JobSpec::FieldStats { source, slices, .. } => {
-                    let Some(run) = stats_run.as_mut() else {
-                        return true;
-                    };
-                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        // Every line is timed, visible or not: a line without a timestamp of
-                        // its own inherits the one above, as in the engine's cache.
-                        if slices.is_some() {
-                            if let Some((millis, format)) =
-                                crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
-                            {
-                                run.hint = format;
-                                run.inherited = millis;
-                            }
-                        }
-                        if !walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
-                            return true;
-                        }
-                        let parser = range.parser.as_deref();
-                        let ts = run.inherited;
-                        let StatsRun { stats, scratch, .. } = run;
-                        source.with_value(parser, s, scratch, |v| {
-                            let level = if v.is_some() {
-                                crate::fields::line_level(parser, s, range.level_window) as u8
-                            } else {
-                                0
-                            };
-                            stats.add_line(v, level, ts);
-                        });
-                        true
-                    });
+                    }
                     true
-                }
-                JobSpec::Collapse { .. } => {
-                    let pos = walk.as_mut().and_then(|w| w.pos(idx));
-                    if let Some(detector) = collapse.as_mut() {
-                        line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                            detector.feed(idx, s, pos);
-                            true
+                });
+                true
+            }
+            JobSpec::Query { .. } => {
+                let Some(run) = query_run.as_mut() else {
+                    return true;
+                };
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    if run.timed {
+                        if let Some((ms, f)) =
+                            crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
+                        {
+                            run.hint = f;
+                            run.inherited = ms;
+                        }
+                    }
+                    if walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                        let level = if run.leveled {
+                            crate::fields::line_level(
+                                range.parser.as_deref(),
+                                s,
+                                range.level_window,
+                            ) as u8
+                        } else {
+                            0
+                        };
+                        run.ex.push(&crate::query::LineIn {
+                            idx,
+                            text: s,
+                            level,
+                            ts: run.inherited,
                         });
                     }
                     true
-                }
-                JobSpec::Levels => {
+                });
+                run.ex.wants_more()
+            }
+            JobSpec::FieldStats { source, slices, .. } => {
+                let Some(run) = stats_run.as_mut() else {
+                    return true;
+                };
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    // Every line is timed, visible or not: a line without a timestamp of
+                    // its own inherits the one above, as in the engine's cache.
+                    if slices.is_some() {
+                        if let Some((millis, format)) =
+                            crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
+                        {
+                            run.hint = format;
+                            run.inherited = millis;
+                        }
+                    }
+                    if !walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                        return true;
+                    }
+                    let parser = range.parser.as_deref();
+                    let ts = run.inherited;
+                    let StatsRun { stats, scratch, .. } = run;
+                    source.with_value(parser, s, scratch, |v| {
+                        let level = if v.is_some() {
+                            crate::fields::line_level(parser, s, range.level_window) as u8
+                        } else {
+                            0
+                        };
+                        stats.add_line(v, level, ts);
+                    });
+                    true
+                });
+                true
+            }
+            JobSpec::Collapse { .. } => {
+                let pos = walk.as_mut().and_then(|w| w.pos(idx));
+                if let Some(detector) = collapse.as_mut() {
                     line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                        detector.feed(idx, s, pos);
+                        true
+                    });
+                }
+                true
+            }
+            JobSpec::Levels => {
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    levels.push(crate::fields::line_level(
+                        range.parser.as_deref(),
+                        s,
+                        range.level_window,
+                    ) as u8);
+                    true
+                });
+                true
+            }
+            JobSpec::Timestamps { levels_from, .. } => {
+                let with_level = levels_from.is_some_and(|from| idx >= from);
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    timing.push(s);
+                    if with_level {
                         levels.push(crate::fields::line_level(
                             range.parser.as_deref(),
                             s,
                             range.level_window,
                         ) as u8);
-                        true
-                    });
-                    true
-                }
-                JobSpec::Timestamps { levels_from, .. } => {
-                    let with_level = levels_from.is_some_and(|from| idx >= from);
-                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        timing.push(s);
-                        if with_level {
-                            levels.push(crate::fields::line_level(
-                                range.parser.as_deref(),
-                                s,
-                                range.level_window,
-                            ) as u8);
-                        }
-                        true
-                    });
-                    true
-                }
-                JobSpec::Filter(filter) => {
-                    let visible = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        let (v, next) = filter.visible_in_sequence(s, parent_visible);
-                        parent_visible = next;
-                        v
-                    });
-                    if visible {
-                        hits.push(idx);
                     }
                     true
+                });
+                true
+            }
+            JobSpec::Filter(filter) => {
+                let visible = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    let (v, next) = filter.visible_in_sequence(s, parent_visible);
+                    parent_visible = next;
+                    v
+                });
+                if visible {
+                    hits.push(idx);
                 }
-                JobSpec::Search { .. } if multi.is_some() => {
-                    let Some((scanner, found)) = multi.as_mut() else {
-                        return true;
-                    };
-                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        if walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
-                            scanner.push(idx, s, &mut |h| {
-                                found.push((h.first, h.last));
-                                true
-                            });
-                        }
-                        true
-                    });
-                    true
-                }
-                JobSpec::Search {
-                    matcher,
-                    limit,
-                    count_past_limit,
-                    ..
-                } => {
-                    let hit = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        let visible = walk.as_mut().is_none_or(|w| w.visible(idx, s));
-                        visible && matcher.is_match(s)
-                    });
-                    if hit {
-                        if tally.listed < *limit {
-                            hits.push(idx);
-                            tally.listed += 1;
-                            if tally.listed >= *limit && !*count_past_limit {
-                                return false;
-                            }
-                        } else {
-                            tally.counted += 1;
-                            tally.last_counted = idx;
-                        }
+                true
+            }
+            JobSpec::Search { .. } if multi.is_some() => {
+                let Some((scanner, found)) = multi.as_mut() else {
+                    return true;
+                };
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    if walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                        scanner.push(idx, s, &mut |h| {
+                            found.push((h.first, h.last));
+                            true
+                        });
                     }
                     true
-                }
-                JobSpec::AutoBookmarks { rules, limit } => {
-                    if line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        rules.iter().any(|r| r.is_match(s))
-                    }) {
+                });
+                true
+            }
+            JobSpec::Search {
+                matcher,
+                limit,
+                count_past_limit,
+                ..
+            } => {
+                let hit = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    let visible = walk.as_mut().is_none_or(|w| w.visible(idx, s));
+                    visible && matcher.is_match(s)
+                });
+                if hit {
+                    if tally.listed < *limit {
                         hits.push(idx);
                         tally.listed += 1;
-                        if tally.listed >= *limit {
+                        if tally.listed >= *limit && !*count_past_limit {
                             return false;
                         }
+                    } else {
+                        tally.counted += 1;
+                        tally.last_counted = idx;
                     }
-                    true
                 }
+                true
             }
-        };
+            JobSpec::AutoBookmarks { rules, limit } => {
+                if line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    rules.iter().any(|r| r.is_match(s))
+                }) {
+                    hits.push(idx);
+                    tally.listed += 1;
+                    if tally.listed >= *limit {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    };
 
     'outer: while pos < range.end_offset {
         if cancel.load(Ordering::Relaxed) {
@@ -1182,6 +1288,7 @@ fn run(
                     &mut stats_run,
                     &mut multi,
                     &mut query_run,
+                    &mut pattern_run,
                 ) {
                     limit_reached = true;
                     break 'outer;
@@ -1237,6 +1344,14 @@ fn run(
             if !found.is_empty() && !send(ScanBatch::MultiHits(std::mem::take(found))) {
                 return;
             }
+        } else if let Some(run) = pattern_run.as_mut() {
+            if run.sent.elapsed() >= STATS_PERIOD {
+                if let Some(batch) = run.take_batch() {
+                    if !send(batch) {
+                        return;
+                    }
+                }
+            }
         } else if let Some(run) = stats_run.as_mut() {
             if run.sent.elapsed() >= STATS_PERIOD {
                 if let Some(batch) = run.take_batch() {
@@ -1290,6 +1405,7 @@ fn run(
             &mut stats_run,
             &mut multi,
             &mut query_run,
+            &mut pattern_run,
         );
         line_idx += 1;
     }
@@ -1319,6 +1435,17 @@ fn run(
         }
         if scanner.skipped > 0 && !send(ScanBatch::Skipped(scanner.skipped)) {
             return;
+        }
+    } else if let Some(mut run) = pattern_run.take() {
+        let batch = if run.counts.is_some() {
+            run.take_batch()
+        } else {
+            Some(ScanBatch::PatternTree(Box::new(run.drain)))
+        };
+        if let Some(batch) = batch {
+            if !send(batch) {
+                return;
+            }
         }
     } else if let Some(mut run) = stats_run.take() {
         if let Some(batch) = run.take_batch() {
