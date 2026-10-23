@@ -383,12 +383,14 @@ struct Slot;
 
 impl Slot {
     fn try_take() -> Option<Slot> {
-        RUNNING
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_CHILDREN).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| Slot)
+        let mut n = RUNNING.load(Ordering::Acquire);
+        while n < MAX_CHILDREN {
+            match RUNNING.compare_exchange_weak(n, n + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(Slot),
+                Err(now) => n = now,
+            }
+        }
+        None
     }
 }
 
