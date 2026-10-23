@@ -62,6 +62,25 @@ drawing on the UI thread. Memory per open Statistics tab: the counter (≤ 100,0
 appended lines; truncation, rotation or rewrite reset and recompute. The job's file handle
 uses the engine's sharing flags, so Windows writers are not blocked.
 
+## As implemented
+
+- The scan is a `JobSpec::FieldStats` of the existing worker, run in a slot of its own
+  (`TailEngine::stats`), over `VisibleSet::Lines(filtered_lines)` when a filter is active
+  (so the time window and hidden lines apply) or every line; it waits while the filter or
+  index scan runs. Partial counts are merged every 250 ms.
+- The slices are fixed before the scan from the timestamps of the first and last 1,000
+  lines; lines before that span count in the table, not in the chart. A live log adds
+  slices at the end (up to 2,000, then the slices are chosen again over the whole span).
+- An unterminated last line is left out until it ends, so a value written in two parts is
+  counted once, complete. Appended lines wait while a filter refresh is pending, and
+  inherit the last timestamp as the scan's lines do.
+- The tab sorts the values again only when the counts change (cached per generation).
+- Per-value series are sparse `(slice, count)` runs, so memory follows the counts and not
+  values × slices; per-slice percentiles use one sparse histogram per slice.
+- A regex source adds a regex term only when the stream's filter is in regex mode (terms
+  share the toggle); in text mode it adds the value as text.
+- No entry in a cell's menu, and the source is not saved (open questions left as they are).
+
 ## Risks / Trade-offs
 
 - [High-cardinality fields (request ids) fill the cap] → the cap and the `≥` mark; the tab

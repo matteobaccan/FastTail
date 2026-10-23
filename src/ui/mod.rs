@@ -24,6 +24,7 @@ pub mod remote_dialog;
 pub mod report_dialog;
 pub mod scratchpad;
 pub mod split_dialog;
+pub mod stats_tab;
 pub mod system_dialog;
 pub mod theme;
 pub mod time_range;
