@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-24
+
+The **queries and statistics** milestone: field statistics (shipped in the nightly patch
+0.23.1, listed in its section below), regex and multi-line search, and the Query tab.
+
 ### Added
 
 - **Query tab.** *🧮 Query…* in the stream's 💾 menu opens a Query tab: a pipeline over the
@@ -2172,6 +2177,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.24.0]: https://github.com/matteobaccan/FastTail/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/matteobaccan/FastTail/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/matteobaccan/FastTail/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/matteobaccan/FastTail/compare/v0.22.0...v0.22.1
