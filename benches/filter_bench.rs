@@ -506,6 +506,27 @@ fn main() {
     }
     engine.set_search_mode(SearchMode::Text, false);
 
+    // Patterns: learning and counting over every line (two background passes).
+    report(
+        "patterns",
+        best(rounds, || {
+            engine.close_patterns();
+            engine.open_patterns();
+            let start = Instant::now();
+            while engine.patterns.as_ref().is_some_and(|p| p.running())
+                && start.elapsed().as_secs() < 600
+            {
+                engine.poll_updates();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            engine
+                .patterns
+                .as_ref()
+                .map_or(0, |p| p.counts.ids().count())
+        }),
+    );
+    engine.close_patterns();
+
     if generated {
         // Growing file with an active search and an include filter: the derived state
         // (visible rows, matches) must be refreshed incrementally too.

@@ -23,7 +23,9 @@ every job.
 1. **Drain, fixed depth.** Each entry's first line is normalised (collapse's Numbers masks
    plus IPv4 / IPv6), split on whitespace into at most 128 tokens (first 4,096 bytes), and
    routed through a tree: level 1 by token count, level 2 by the first token (or `<*>` when
-   it holds a digit), level 3 by the second token; a leaf holds up to 100 templates. The
+   it holds a digit); a leaf holds up to 100 templates. *Implemented:* Drain's depth 4
+   counts the root and the leaf, so there is one token level (as in Drain3); routing on
+   the second token too kept `user alice logged in` and `user bob logged in` apart. The
    entry joins the template of equal length with the highest share of equal tokens when
    that share is ≥ 0.5 (tokens that differ become `<*>`), otherwise it creates one. These
    are Drain's published defaults (depth 4, similarity 0.5, 100 children). *Rejected:*
@@ -34,9 +36,18 @@ every job.
    filter needs a stable answer. When learning completes (or every 500 ms while it runs)
    the engine publishes an `Arc<PatternSnapshot>`: the templates and the routing tables,
    immutable. `PatternSnapshot::classify(line)` walks it without inserting and returns the
-   template id; the same function computes the counts shown in the tab at the end of a
-   learning pass (a second, read-only pass is not needed: the learning pass records the
-   final id of each template and merges counts when a template generalises). The pattern
+   template id. *Implemented:* the counts come from a second, read-only pass that
+   classifies every entry on the finished tree (`JobSpec::Patterns { count }`): an entry's
+   template at learning time can differ from its template on the final tree (one made
+   later can fit it better), so only classifying both the counts and the filter on the
+   same tree makes them agree. The tree is `Drain`, the snapshot an `Arc<Drain>`; the
+   tab shows the live tree, and setting the filter publishes it first. Appended entries
+   are learnt into the live tree and counted with `classify` (on the pattern filter's
+   tree while one is set), so the counts follow what the filter shows. A view change
+   relearns only when what the patterns are learnt over changed (a key of the other
+   filters, the time window, the hidden lines, the parser and the context lines), so the
+   pattern filter, and a refresh of it deferred behind an index or timestamp scan, never
+   relearns. Closing the tab clears the pattern filter. The pattern
    filter holds the snapshot, so the filtered view shows exactly the entries counted for
    the clicked pattern. *Rejected:* filtering by a regex built from the template — lines
    matching the regex but clustered elsewhere would make counts and view disagree.

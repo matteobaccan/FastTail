@@ -99,6 +99,7 @@ pub enum ActionId {
     ShowContext,
     LeaveContext,
     HideLines,
+    Patterns,
     RuleNext,
     RulePrev,
     // Bookmarks
@@ -404,6 +405,7 @@ pub const ACTIONS: &[Action] = &[
     action(A::GlobalFilterBar, "search.global_filter.toggle", "act_global_filter", C::Search, S::Window, Some("CTRL + SHIFT + H"), &[]),
     action(A::ShowContext, "search.context.toggle", "context_show", C::Search, S::Stream, Some("CTRL + K"), &[N::ContextToggle]),
     action(A::HideLines, "stream.hide_lines", "hide_lines", C::Stream, S::Stream, Some("CTRL + H"), &[N::LineView, N::Row]),
+    action(A::Patterns, "stream.patterns", "act_patterns", C::Stream, S::Stream, Some("CTRL + SHIFT + G"), &[N::LineView]),
     action(A::LeaveContext, "search.context.back", "context_back", C::Search, S::Stream, None, &[N::InContext]),
     action(A::RuleNext, "search.rule.next", "act_rule_next", C::Search, S::Stream, Some("F4"), &[N::LineView, N::Row]),
     action(A::RulePrev, "search.rule.prev", "act_rule_prev", C::Search, S::Stream, Some("SHIFT + F4"), &[N::LineView, N::Row]),

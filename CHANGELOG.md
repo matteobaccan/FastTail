@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Patterns tab.** *⧉ Patterns…* in the stream's 💾 menu (or `CTRL + SHIFT + G`) groups
+  the entries the stream shows by template, the variable parts as `<*>`
+  (`payment <*> failed after <*> ms: gateway timeout`), learnt with Drain over each
+  entry's first line without its timestamp, numbers, hex values, ids and IP addresses
+  masked. Per pattern: count, share, a sparkline of its volume over the stream's time span
+  (over line numbers without timestamps), first and last seen; sortable, with a box that
+  narrows the templates. **Click** a pattern to show only its entries (stack traces
+  included), `CTRL + click` to add or remove one, the row menu to hide it, copy the
+  template, search its fixed words or go to its first line; the filter is a
+  `⧉ N patterns` chip in the stream bar with `✖`, and combines with every other filter.
+  Learning and counting run in the background (two passes, so a pattern filter shows
+  exactly the entries counted), appended entries are learnt as they arrive, another
+  filter or a reload learns again. At most 2,000 patterns per stream. First change of the
+  0.25.0 plan (`pattern-grouping`).
+
 ## [0.24.0] - 2026-10-24
 
 The **queries and statistics** milestone: field statistics (shipped in the nightly patch

@@ -390,7 +390,10 @@ pub fn without_find_results(dock: &DockState<FastTailTab>) -> DockState<FastTail
     retain_tabs(&mut saved, |tab| {
         *tab != FastTailTab::FindResults
             && *tab != FastTailTab::Compare
-            && !matches!(tab, FastTailTab::Statistics(_) | FastTailTab::Query(_))
+            && !matches!(
+                tab,
+                FastTailTab::Statistics(_) | FastTailTab::Query(_) | FastTailTab::Patterns(_)
+            )
     });
     saved
 }

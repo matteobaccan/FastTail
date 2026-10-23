@@ -44,6 +44,7 @@ pub mod net_listener;
 pub mod notifications;
 pub mod otlp;
 pub mod paths;
+pub mod patterns;
 pub mod print_mode;
 pub mod query;
 pub mod renderer;

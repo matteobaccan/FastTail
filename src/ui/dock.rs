@@ -64,6 +64,8 @@ pub enum FastTailTab {
     Statistics(PathBuf),
     /// Queries over a stream (`ui::query_tab`); never saved.
     Query(PathBuf),
+    /// The patterns of a stream (`ui::patterns_tab`); never saved.
+    Patterns(PathBuf),
 }
 
 pub struct DockContext<'a> {
@@ -377,6 +379,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 .monospace()
                 .strong(),
             ),
+            FastTailTab::Patterns(path) => WidgetText::from(
+                RichText::new(crate::ui::patterns_tab::title(
+                    find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
+                    *self.ctx.language,
+                ))
+                .monospace()
+                .strong(),
+            ),
             FastTailTab::Statistics(path) => WidgetText::from(
                 RichText::new(crate::ui::stats_tab::title(
                     find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
@@ -536,6 +546,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
                 crate::ui::stats_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
             }
+            FastTailTab::Patterns(path) => {
+                let engine =
+                    find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
+                crate::ui::patterns_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
+            }
             FastTailTab::Query(path) => {
                 let engine =
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
@@ -628,6 +643,12 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
             FastTailTab::Query(path) => {
                 if let Some(i) = find_engine_index(self.ctx.engines, path) {
                     self.ctx.engines[i].stop_query();
+                }
+            }
+            FastTailTab::Patterns(path) => {
+                // The pattern filter stays (its chip clears it); the learning stops.
+                if let Some(i) = find_engine_index(self.ctx.engines, path) {
+                    self.ctx.engines[i].close_patterns();
                 }
             }
             _ => {
@@ -1543,6 +1564,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Collapse => "scan_collapsing",
         crate::scan_job::ScanKind::FieldStats => "scan_statistics",
         crate::scan_job::ScanKind::Query => "scan_query",
+        crate::scan_job::ScanKind::Patterns => "scan_patterns",
     }
 }
 
@@ -2695,10 +2717,12 @@ fn render_log_stream(
             }
         }
 
-        // Go to line (Ctrl+G): inline box, Enter jumps, Esc closes
+        // Go to line (Ctrl+G): inline box, Enter jumps, Esc closes. Not with Shift, which
+        // egui would match too: CTRL + SHIFT + G opens the Patterns tab.
         let ctrl_g = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::G);
         let goto_id = egui::Id::new("goto_line_input").with(&engine.path);
-        if act(ActionId::GoToLine) || (is_focused && ui.input_mut(|i| i.consume_shortcut(&ctrl_g)))
+        if act(ActionId::GoToLine)
+            || (is_focused && ui.input_mut(|i| !i.modifiers.shift && i.consume_shortcut(&ctrl_g)))
         {
             engine.goto_open = true;
             engine.goto_input.clear();
@@ -2957,6 +2981,14 @@ fn render_log_stream(
                 ui.close();
             }
             if ui
+                .button(RichText::new(format!("⧉ {}", t(lang, "patterns_open"))).monospace())
+                .on_hover_text(t(lang, "patterns_open_tip"))
+                .clicked()
+            {
+                engine.patterns_request = true;
+                ui.close();
+            }
+            if ui
                 .button(RichText::new(format!("✂ {}", t(lang, "split_open"))).monospace())
                 .on_hover_text(t(lang, "split_tip"))
                 .clicked()
@@ -3098,6 +3130,17 @@ fn render_log_stream(
                     | crate::tail_engine::ViewMode::Markdown
                     | crate::tail_engine::ViewMode::Asm
             );
+            // CTRL + SHIFT + G opens the Patterns of the stream (text view only).
+            let ctrl_shift_g = egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::G,
+            );
+            if text_view
+                && (act(ActionId::Patterns)
+                    || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_shift_g))))
+            {
+                engine.patterns_request = true;
+            }
             if text_view
                 && (act(ActionId::Collapse)
                     || (keys_ok && ui.input_mut(|i| i.consume_shortcut(&ctrl_shift_d))))
@@ -3393,6 +3436,7 @@ fn render_log_stream(
 
         render_timeline_toggles(ui, engine, theme, lang, search_view);
         render_out_of_order_chip(ui, engine, theme, lang);
+        render_pattern_chip(ui, engine, theme, lang);
 
         ui.separator();
 
@@ -7767,6 +7811,44 @@ fn out_of_order_mark(engine: &TailEngine, idx: usize) -> Option<i64> {
         return None;
     }
     engine.out_of_order_jump(idx)
+}
+
+/// The stream bar's pattern filter chip: `⧉ N patterns`, the patterns in its tooltip
+/// (`+` shown, `−` hidden), a click opens the Patterns tab, `✖` clears the filter.
+fn render_pattern_chip(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let Some(f) = engine.pattern_filter() else {
+        return;
+    };
+    let mut tip = t(lang, "patterns_chip_tip").to_string();
+    for (sign, ids) in [("+", &f.include), ("−", &f.exclude)] {
+        for &id in ids.iter().take(20) {
+            if let Some(tpl) = f.drain.template(id) {
+                tip.push_str(&format!("\n{sign} {}", tpl.text()));
+            }
+        }
+    }
+    let text = format!(
+        "⧉ {}",
+        t(lang, "patterns_chip").replace("{0}", &f.len().to_string())
+    );
+    let chip = ui
+        .button(
+            RichText::new(text)
+                .monospace()
+                .size(11.0)
+                .color(theme.accent_color()),
+        )
+        .on_hover_text(tip);
+    if chip.clicked() {
+        engine.patterns_request = true;
+    }
+    if ui
+        .small_button("✖")
+        .on_hover_text(t(lang, "patterns_clear"))
+        .clicked()
+    {
+        engine.set_pattern_filter(Vec::new(), Vec::new());
+    }
 }
 
 /// The stream bar's out-of-order chip: `↶ N out of order` (click: next, right-click:
