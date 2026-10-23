@@ -671,6 +671,11 @@ pub fn set_enum_value(setting: EnumSetting, cfg: &mut FastTailConfig, index: usi
     }
 }
 
+/// Whether `action` exists on this platform (the debug-output capture is Windows only).
+pub fn on_this_platform(action: &Action) -> bool {
+    cfg!(windows) || action.id != ActionId::OpenDebugOutput
+}
+
 /// Every action the palette lists: the built-in ones, then one per boolean and per
 /// enumerated setting.
 pub fn all() -> Vec<Action> {
