@@ -24,11 +24,11 @@
 
 - [x] 4.1 New i18n keys (menu entry, dialog, kinds, status texts, Reconnect, Settings labels, refusal messages, help entry) in all 16 languages; add them to the exhaustive i18n test
 - [x] 4.2 README (feature list, "System sources" section with journald / Docker / Podman examples, comparison table, FAQ replacing the `docker logs | fasttail -` advice), CHANGELOG `[Unreleased]`
-- [ ] 4.3 Manual check on Linux (journald system and user units, Docker, Podman) and on Windows with Docker Desktop, recorded in the PR
+- [ ] 4.3 Manual check on Linux (journald system and user units, Docker, Podman) and on Windows with Docker Desktop, recorded in the PR (left to the maintainer: not run in the agent sessions)
 
 ## 5. Wrap-up
 
-- [ ] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
-- [ ] 5.2 Local preview exe for the maintainer before the 0.23.0 release
-- [ ] 5.3 After the release, archive the change so `stream-engine`, `command-line` and `cyber-ui-docking` gain the new requirements
+- [x] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
+- [x] 5.2 Local preview exe for the maintainer before the 0.23.0 release (0.22.1 release builds and the terminal exe, OK on 2026-10-23)
+- [x] 5.3 After the release, archive the change so `stream-engine`, `command-line` and `cyber-ui-docking` gain the new requirements
 - [x] 5.4 Check that the `ssh-sources` proposal (phase 2) covers the points listed in the design and reuses the piped source

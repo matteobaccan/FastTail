@@ -413,6 +413,9 @@ changes shipped in the nightlies 0.21.1 to 0.21.10 and are archived.
 
 ### 0.23.0 — remote and system sources
 
+Released on 2026-10-23 after the maintainer's check of the preview (0.22.1); the six
+changes shipped in the nightly 0.22.1 and are archived.
+
 | Change | Gaps | Effort |
 |---|---|---|
 | `system-sources` — journald, Docker / Kubernetes (from 0.22.0) | 5 | M–L |

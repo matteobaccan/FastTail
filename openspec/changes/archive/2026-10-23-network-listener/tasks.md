@@ -28,6 +28,6 @@
 
 ## 5. Wrap-up
 
-- [ ] 5.1 Manual check: `logger -n 127.0.0.1 -P 5514 -d` (UDP) and `--tcp`, a Docker container with `--log-driver syslog`, 50 000 lines/s burst dropped and counted
-- [ ] 5.2 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
-- [ ] 5.3 After the release, archive the change so `network-listener` becomes a spec
+- [ ] 5.1 Manual check: `logger -n 127.0.0.1 -P 5514 -d` (UDP) and `--tcp`, a Docker container with `--log-driver syslog`, 50 000 lines/s burst dropped and counted (left to the maintainer: not run in the agent sessions)
+- [x] 5.2 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
+- [x] 5.3 After the release, archive the change so `network-listener` becomes a spec
