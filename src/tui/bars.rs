@@ -296,6 +296,17 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
         } else {
             text
         };
+        let text = match s.switched() {
+            Some(name) => format!(
+                "{text} · {}",
+                txf(
+                    lang,
+                    "switched to {0}",
+                    &[&crate::tui::view::sanitize(&name)]
+                )
+            ),
+            None => text,
+        };
         second.push(chip(
             text,
             if warn_state { warn } else { dim },

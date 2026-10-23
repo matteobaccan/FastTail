@@ -139,6 +139,49 @@ mod unix {
     }
 
     #[test]
+    fn a_remote_pattern_follows_the_newest_match_and_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        std::fs::write(logs.join("app-1.log"), "first file\n").unwrap();
+        let ssh = fake_ssh(dir.path(), RUN_SCRIPT);
+        let settings = fasttail::ssh_source::SshSettings {
+            program: ssh.to_string_lossy().into_owned(),
+            initial_bytes: 1 << 20,
+            rescan: Duration::from_millis(200),
+        };
+        let spool =
+            fasttail::stdin_source::Settings::from_config(Some(&dir.path().join("spool")), 2048);
+        let url = format!("ssh://web1{}/app-*.log", logs.display());
+        let spec = fasttail::ssh_source::SshSpec::parse(Path::new(&url))
+            .unwrap()
+            .unwrap();
+        let mut engine = fasttail::ssh_source::open_engine(spec, &settings, &spool, None).unwrap();
+        poll_until(&mut engine, "the first match", |e| e.total_lines() >= 1);
+        assert_eq!(
+            fasttail::find_all::stream_name(&engine),
+            "web1:app-*.log ▸ app-1.log"
+        );
+        let newer = logs.join("app-2.log");
+        std::fs::write(&newer, "second file\n").unwrap();
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&newer)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        poll_until(&mut engine, "the switch", |e| {
+            e.get_line(0).as_deref() == Some("second file")
+        });
+        assert_eq!(lines(&engine), ["second file"]);
+        assert_eq!(
+            engine.ssh.as_ref().unwrap().switched().as_deref(),
+            Some("app-2.log")
+        );
+    }
+
+    #[test]
     fn a_refused_key_and_a_missing_file_stop_without_retrying() {
         let dir = tempfile::tempdir().unwrap();
         let denied = fake_ssh(

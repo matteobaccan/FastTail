@@ -657,6 +657,7 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex_hint",
         "fields_regex_invalid",
         "fields_format_missing",
+        "ssh_switched",
         "remote_title",
         "remote_desc",
         "remote_hosts",

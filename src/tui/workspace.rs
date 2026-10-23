@@ -235,7 +235,9 @@ pub fn open_plan(settings: &Settings, plan: &Plan) -> (Vec<TailEngine>, Vec<Stri
 }
 
 fn exists(path: &Path) -> bool {
-    crate::wildcard::is_pattern_path(path) || crate::compressed::source_exists(path)
+    crate::wildcard::is_pattern_path(path)
+        || crate::compressed::source_exists(path)
+        || crate::system_source::is_system_path(path)
 }
 
 /// "Skipped 2 missing files: a.log, b.log" for the status bar.

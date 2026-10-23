@@ -449,7 +449,7 @@ impl TailEngine {
     pub fn source_title(&self) -> Option<String> {
         self.system_uri()
             .map(SystemUri::title)
-            .or_else(|| self.ssh.as_ref().map(|s| s.spec.title()))
+            .or_else(|| self.ssh.as_ref().map(crate::ssh_source::SshStream::title))
     }
 
     /// Called from `poll_updates`: once the copier saw the end of the pipe, collects the

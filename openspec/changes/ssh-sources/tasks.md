@@ -10,7 +10,7 @@
 - [x] 2.3 `SshStream`: supervisor loop, `FASTTAIL1` marker parsing, drop to the first `\n` on a mid-file start, stderr ring of 4 KB, states `queued` / `connecting` / `following` / `reconnecting(n)` / `disconnected(reason)`
 - [x] 2.4 Reconnect with back-off 1, 2, 5, 10, 30 s; resume by inode and size; refetch and spool restart when the file was replaced; no retry on authentication, host key or missing file errors
 - [x] 2.5 Global limit of 32 concurrent `ssh` children with a queue
-- [ ] 2.6 Remote pattern streams: glob quoting per D4, 10 s rescans, switch like local pattern streams
+- [x] 2.6 Remote pattern streams: glob quoting per D4, 10 s rescans, switch like local pattern streams
 - [x] 2.7 Tests with a fake `ssh_program` (a test binary that echoes the marker and streams a fixture, can exit 255, can print "Permission denied"): initial tail fetch, whole-file fetch, resume without duplicates, replaced file, auth failure without retry, cap restart
 
 ## 3. UI, command line, sessions

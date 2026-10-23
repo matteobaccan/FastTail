@@ -1276,6 +1276,16 @@ fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
         format!("{}\n\n{}", s.spec.to_uri(), messages.trim_end())
     };
     label.on_hover_text(tip);
+    if let Some(name) = s.switched() {
+        ui.label(
+            RichText::new(format!(
+                "ⓘ {}",
+                t(lang, "ssh_switched").replace("{0}", &name)
+            ))
+            .monospace()
+            .color(theme.text_dim()),
+        );
+    }
     if s.is_stopped() {
         if ui
             .button(format!("⟳ {}", t(lang, "system_reconnect")))

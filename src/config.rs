@@ -818,6 +818,7 @@ impl FastTailConfig {
             // Never more than the spool holds, or the first fetch would restart it.
             initial_bytes: u64::from(self.remote_initial_mb.min(self.remote_spool_max_mb / 2))
                 << 20,
+            rescan: crate::ssh_source::DEFAULT_RESCAN,
         }
     }
 
