@@ -93,6 +93,8 @@ pub struct FastTailApp {
     pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
     /// The Remote file (SSH) dialog (`🌐`, the palette).
     pub remote_dialog: Option<crate::ui::remote_dialog::RemoteDialog>,
+    /// The Listen dialog (`📡`, the palette).
+    pub listen_dialog: Option<crate::ui::listen_dialog::ListenDialog>,
     /// The Export dialog, while it is shown.
     pub export_dialog: Option<crate::ui::export_dialog::ExportDialog>,
     /// The Split file dialog, while it is shown.
@@ -613,6 +615,7 @@ impl FastTailApp {
             merge_prompt: None,
             system_dialog: None,
             remote_dialog: None,
+            listen_dialog: None,
             log_formats: None,
             split_dialog: None,
             export_dialog: None,
@@ -3553,6 +3556,21 @@ impl FastTailApp {
                         self.remote_dialog = Some(Default::default());
                     }
 
+                    // Listen: lines received on a local port.
+                    let listen_btn =
+                        egui::Button::new(RichText::new("📡").monospace().strong().color(text_pri))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.2, accent))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(30.0, 26.0));
+                    if ui
+                        .add(listen_btn)
+                        .on_hover_text(t(self.config.language, "listen_open_tip"))
+                        .clicked()
+                    {
+                        self.listen_dialog = Some(Default::default());
+                    }
+
                     // Sessions menu (🗂): save as, save, load, recent, save as default
                     let session_btn =
                         egui::Button::new(RichText::new("🗂").monospace().strong().color(text_pri))
@@ -5137,6 +5155,18 @@ impl FastTailApp {
                         });
                         for (key, tip, value, range) in [
                             (
+                                "listener_spool_setting",
+                                "stdin_spool_max_tip",
+                                &mut self.config.listener_spool_max_mb,
+                                crate::settings_model::STDIN_SPOOL_MAX_MB,
+                            ),
+                            (
+                                "listener_mb_setting",
+                                "listener_rate_tip",
+                                &mut self.config.listener_max_mb_per_sec,
+                                crate::settings_model::LISTENER_MAX_MB_PER_SEC,
+                            ),
+                            (
                                 "remote_initial_setting",
                                 "remote_initial_tip",
                                 &mut self.config.remote_initial_mb,
@@ -5160,6 +5190,24 @@ impl FastTailApp {
                                 }
                             });
                         }
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "listener_lines_setting")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut self.config.listener_max_lines_per_sec,
+                                    )
+                                    .range(crate::settings_model::LISTENER_MAX_LINES_PER_SEC),
+                                )
+                                .on_hover_text(t(lang, "listener_rate_tip"))
+                                .changed()
+                            {
+                                save_commands = true;
+                            }
+                        });
                         if save_commands {
                             let _ = self.config.save();
                         }
@@ -5873,6 +5921,19 @@ impl FastTailApp {
                     self.open_log_file(path);
                 }
                 Some(SystemChoice::Cancel) => self.system_dialog = None,
+                None => {}
+            }
+        }
+
+        // 11a. Listen dialog
+        if let Some(dialog) = self.listen_dialog.as_mut() {
+            use crate::ui::listen_dialog::ListenChoice;
+            match dialog.show(&ctx, self.config.language, self.config.theme) {
+                Some(ListenChoice::Open(url)) => {
+                    self.listen_dialog = None;
+                    self.open_log_file(url);
+                }
+                Some(ListenChoice::Cancel) => self.listen_dialog = None,
                 None => {}
             }
         }
@@ -6600,6 +6661,7 @@ impl FastTailApp {
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
             A::OpenRemote => self.remote_dialog = Some(Default::default()),
+            A::OpenListener => self.listen_dialog = Some(Default::default()),
             A::OpenSystemSource => {
                 self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
             }

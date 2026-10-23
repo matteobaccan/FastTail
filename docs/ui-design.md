@@ -189,7 +189,7 @@ There is **no classic egui menu bar** and **no left or right side panel**. The w
 │ (F) FASTTAIL v0.12.0 by Matteo Baccan · proj*  ░drag░  🖥 CPU: 7% ▬ │ RAM: 5.1 GB/32 GB ▬ │
 │                                                         🔍 100%  📌  🌐 │ —  🗖  ✕       │ ← title_panel (always)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
-│ [📁 Open File][🕒][📂*][📦][🌐][🗂][⚡ Color Filters (3)][▶ Play][⏸ Pause][⚙ Settings]  [ℹ About][❓ Help] │ ← toolbar_panel
+│ [📁 Open File][🕒][📂*][📦][🌐][📡][🗂][⚡ Color Filters (3)][▶ Play][⏸ Pause][⚙ Settings]  [ℹ About][❓ Help] │ ← toolbar_panel
 ├──────────────────────────────────────────────────────────────────────────────────────┤
 │ ⚠ Software mode: rendering runs on the CPU ... A GPU is required ...                  │ ← software_banner (only on WARP/llvmpipe/VM)
 ├──────────────────────────────────────────────────────────────────────────────────────┤
@@ -238,6 +238,7 @@ Fill is `panel_bg`, with a 1 px stroke of accent at 25 % and inner margin 10/6. 
 | `📂*` (30 px) | same | Opens the **Open folder** dialog on the folder of the most recent file, patterns `*.log` |
 | `📦` (30 px) | same | Opens the **Open system source** dialog (§4.5f) |
 | `🌐` (30 px) | same | Opens the **Remote file (SSH)** dialog (§4.5g) |
+| `📡` (30 px) | same | Opens the **Listen** dialog (§4.5h) |
 | `🗂` (30 px) | same | **Sessions** menu (§4.12) |
 | `⚡ {Color Filters} (N)` | warn text and stroke; fill `#FEF9EB` on Light, `#14120C` on dark | Toggles the Filters / Color Filters window. N is the number of enabled rules with a non-empty pattern. |
 | `▶ Play` | green `#00C864` text and stroke; fill `#EBFCF2` / `#0A1812` | Every engine: `is_watching = true`, and follow on unless the stream is compressed |
@@ -586,6 +587,10 @@ Source: `src/ui/merge_dialog.rs` (`MergePrompt`), the feeder in `src/merged_stre
 ### 4.5g Remote file (SSH) dialog — `🌐 Remote file (SSH)`
 
 `src/ui/remote_dialog.rs`, opened by the `🌐` toolbar button and the palette's *Open remote file (SSH)…*. A non-resizable window at the centre: a dim description; a two-column grid with *Hosts* (a two-row text box, hint `deploy@web1, web2, web3:2222`; hosts separated by commas or lines), *Path* (hint `/var/log/app.log`) and *First fetch* (radio buttons *Last N MB*, N being `remote_initial_mb`, and *Whole file*); below, the URL of each host in dim small monospace (`ssh_source::urls_for`), or the first refused host and why in warn; a dim note that authentication is the ssh client's; **Open** (disabled until every host and the path are valid) opens one stream per host, **Cancel** / `Esc`. Settings → Performance & refresh gains *SSH client* (text field saved when it loses the focus, empty going back to `ssh`), *Remote files: first fetch* and *Remote files: spool* (drag values in MB).
+
+### 4.5h Listen dialog — `📡 Listen on a port`
+
+`src/ui/listen_dialog.rs`, opened by the `📡` toolbar button and the palette's *Listen on a port…*. A non-resizable window at the centre: a dim description; a grid with *Protocol* (radio buttons syslog, TCP, UDP; changing it sets the sender prefix to the protocol's default), *Address* (a *This machine only (127.0.0.1)* check box, ticked, and a text field enabled when it is not), *Port* (drag value 1–65535, 5514 by default) and the *Sender address before each line* check box; below, the URL in dim small monospace, the warning *other machines on the network can send lines to this stream* in warn for a non-loopback address, a dim note on ports below 1024 (Linux and macOS), or why the address is refused in warn; **Listen** (disabled until the URL is valid) and **Cancel** / `Esc`. Settings → Performance & refresh gains *Listeners: spool*, *Listeners: MB per second at most* and *Listeners: lines per second at most*.
 
 ### 4.5e Export dialog — `💾 Export`
 

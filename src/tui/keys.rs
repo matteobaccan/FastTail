@@ -85,6 +85,8 @@ pub enum Action {
     OpenSystem,
     /// Open remote file (palette): asks for an `ssh://` URL.
     OpenRemote,
+    /// Listen (palette): asks for a listener URL.
+    OpenListen,
     PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.

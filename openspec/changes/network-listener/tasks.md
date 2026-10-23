@@ -14,17 +14,17 @@
 
 ## 3. UI, command line, persistence
 
-- [ ] 3.1 Listen dialog: protocol, address (loopback preselected, warning for others), port, sender prefix
-- [ ] 3.2 Stream bar: listening state, connections, lines/s, dropped, bind error with Retry; one-time LAN warning after a restore
+- [x] 3.1 Listen dialog: protocol, address (loopback preselected, warning for others), port, sender prefix
+- [ ] 3.2 Stream bar (listening state, connections, lines/s, dropped, refused and the LAN warning done; a bind error is reported at open, without a Retry button): listening state, connections, lines/s, dropped, bind error with Retry; one-time LAN warning after a restore
 - [x] 3.3 `--listen <url>` (repeatable) in `src/cli.rs` and the usage text
 - [x] 3.4 Sessions, workspace and recent files store the identity; restore re-binds; round-trip test
-- [ ] 3.5 `listener_spool_max_mb`, `listener_max_lines_per_sec`, `listener_max_mb_per_sec` in `fasttail.ini` and Settings, with bounds tests
+- [x] 3.5 `listener_spool_max_mb`, `listener_max_lines_per_sec`, `listener_max_mb_per_sec` in `fasttail.ini` and Settings, with bounds tests
 
 ## 4. Texts and documentation
 
-- [ ] 4.1 New i18n keys in all 16 languages; exhaustive i18n test updated
-- [ ] 4.2 README section "Network listener" (examples for rsyslog, `logger -n`, Docker's syslog driver, Windows firewall note), command line, comparison table
-- [ ] 4.3 CHANGELOG `[Unreleased]`: bold opening sentence, before / after
+- [x] 4.1 New i18n keys in all 16 languages; exhaustive i18n test updated
+- [x] 4.2 README section "Network listener" (examples for rsyslog, `logger -n`, Docker's syslog driver, Windows firewall note), command line, comparison table
+- [x] 4.3 CHANGELOG `[Unreleased]`: bold opening sentence, before / after
 
 ## 5. Wrap-up
 

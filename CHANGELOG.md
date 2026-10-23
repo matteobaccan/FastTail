@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Listen dialog.** The 📡 toolbar button (and *Listen on a port…* in the command palette)
+  picks the protocol, the address (this machine only by default, a warning for any other),
+  the port and the sender prefix. The terminal interface asks for the URL from its
+  palette. The listener spool and rate limits are in Settings in both interfaces.
+  `network-listener` is code complete.
+
+### Added
+
 - **Network listener.** `fasttail --listen syslog://127.0.0.1:5514` (also `tcp://` and
   `udp://` URLs, as paths too) receives log lines on a local port as a stream. Before, the
   only way was a separate syslog server or `nc -lk 5140 | fasttail -` (no `nc` on Windows).
