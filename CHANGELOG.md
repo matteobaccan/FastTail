@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Multi-line regex search.** A third state of the search mode button (`.*⤶`) matches the
+  regex against the visible lines joined with `\n`, so a hit may cover several lines:
+  `^BEGIN tx\d+\n.*\ndeadlock`, a request line followed by another one
+  (`^GET .*\nGET `), an exception whose third frame is in a class. `^` and `$` match at
+  each line, `(?s)` lets `.` cross line ends; lines the filters hide are not part of the
+  text, so a hit spans the rows seen as consecutive. A hit is listed and walked by its
+  first line and marks every row it covers; matches over 64 lines or 64 KB are counted
+  (`⚠ N`) instead of listed. Works on the UI thread or in the background on any file size,
+  and a hit across the old end of a growing file is found once. Saved per stream
+  (`search_mode=multiline`); `mre:` in the terminal's `/`. `cross-line-regex` is code
+  complete.
+
+### Added
+
 - **Regex search.** The `ab` / `.*` button beside a stream's search box switches the search
   to a regular expression matched on each visible line (`code=E0[0-4]\d`,
   `took \d{4,}ms`), with an `Aa` toggle for case. Hits are listed, counted, walked with

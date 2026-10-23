@@ -607,6 +607,10 @@ pub enum ScanBatch {
     Groups(Vec<Group>),
     /// The collapse detection state at the end of the range, sent before `Done`.
     CollapseCursor(Box<Detector>),
+    /// Multi-line search hits (first and last line), in order.
+    MultiHits(Vec<(usize, usize)>),
+    /// Multi-line matches too long to report, counted at the end of the scan.
+    Skipped(usize),
     /// Counts of a `FieldStats` job since its last batch, to merge.
     Stats(Box<crate::field_stats::FieldStats>),
     /// Fraction of the byte range scanned so far.
@@ -860,6 +864,17 @@ fn run(
         JobSpec::Collapse { detector, .. } => Some(Detector::clone(detector)),
         _ => None,
     };
+    // A multi-line search: the scanner over the visible lines, and the hits found.
+    let mut multi = match &spec {
+        JobSpec::Search {
+            matcher: crate::tail_engine::SearchMatcher::Multiline(re),
+            ..
+        } => Some((
+            crate::multiline_search::Scanner::new(re),
+            Vec::<(usize, usize)>::new(),
+        )),
+        _ => None,
+    };
     let mut stats_run = match &spec {
         JobSpec::FieldStats { slices, .. } => Some(StatsRun {
             stats: crate::field_stats::FieldStats::new(*slices),
@@ -893,135 +908,152 @@ fn run(
     };
     let strip = range.ansi.strips();
     let mut strip_buf = String::new();
-    let mut eval = |idx: usize,
-                    bytes: &[u8],
-                    hits: &mut Vec<usize>,
-                    levels: &mut Vec<u8>,
-                    timing: &mut Timing,
-                    tally: &mut Tally,
-                    collapse: &mut Option<Detector>,
-                    stats_run: &mut Option<StatsRun>|
-     -> bool {
-        match &spec {
-            JobSpec::Index => true,
-            JobSpec::FieldStats { source, slices, .. } => {
-                let Some(run) = stats_run.as_mut() else {
-                    return true;
-                };
-                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    // Every line is timed, visible or not: a line without a timestamp of
-                    // its own inherits the one above, as in the engine's cache.
-                    if slices.is_some() {
-                        if let Some((millis, format)) =
-                            crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
-                        {
-                            run.hint = format;
-                            run.inherited = millis;
-                        }
-                    }
-                    if !walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+    let mut eval =
+        |idx: usize,
+         bytes: &[u8],
+         hits: &mut Vec<usize>,
+         levels: &mut Vec<u8>,
+         timing: &mut Timing,
+         tally: &mut Tally,
+         collapse: &mut Option<Detector>,
+         stats_run: &mut Option<StatsRun>,
+         multi: &mut Option<(crate::multiline_search::Scanner<'_>, Vec<(usize, usize)>)>|
+         -> bool {
+            match &spec {
+                JobSpec::Index => true,
+                JobSpec::FieldStats { source, slices, .. } => {
+                    let Some(run) = stats_run.as_mut() else {
                         return true;
-                    }
-                    let parser = range.parser.as_deref();
-                    let ts = run.inherited;
-                    let StatsRun { stats, scratch, .. } = run;
-                    source.with_value(parser, s, scratch, |v| {
-                        let level = if v.is_some() {
-                            crate::fields::line_level(parser, s, range.level_window) as u8
-                        } else {
-                            0
-                        };
-                        stats.add_line(v, level, ts);
-                    });
-                    true
-                });
-                true
-            }
-            JobSpec::Collapse { .. } => {
-                let pos = walk.as_mut().and_then(|w| w.pos(idx));
-                if let Some(detector) = collapse.as_mut() {
+                    };
                     line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                        detector.feed(idx, s, pos);
+                        // Every line is timed, visible or not: a line without a timestamp of
+                        // its own inherits the one above, as in the engine's cache.
+                        if slices.is_some() {
+                            if let Some((millis, format)) =
+                                crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
+                            {
+                                run.hint = format;
+                                run.inherited = millis;
+                            }
+                        }
+                        if !walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                            return true;
+                        }
+                        let parser = range.parser.as_deref();
+                        let ts = run.inherited;
+                        let StatsRun { stats, scratch, .. } = run;
+                        source.with_value(parser, s, scratch, |v| {
+                            let level = if v.is_some() {
+                                crate::fields::line_level(parser, s, range.level_window) as u8
+                            } else {
+                                0
+                            };
+                            stats.add_line(v, level, ts);
+                        });
                         true
                     });
-                }
-                true
-            }
-            JobSpec::Levels => {
-                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    levels.push(crate::fields::line_level(
-                        range.parser.as_deref(),
-                        s,
-                        range.level_window,
-                    ) as u8);
                     true
-                });
-                true
-            }
-            JobSpec::Timestamps { levels_from, .. } => {
-                let with_level = levels_from.is_some_and(|from| idx >= from);
-                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    timing.push(s);
-                    if with_level {
+                }
+                JobSpec::Collapse { .. } => {
+                    let pos = walk.as_mut().and_then(|w| w.pos(idx));
+                    if let Some(detector) = collapse.as_mut() {
+                        line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                            detector.feed(idx, s, pos);
+                            true
+                        });
+                    }
+                    true
+                }
+                JobSpec::Levels => {
+                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
                         levels.push(crate::fields::line_level(
                             range.parser.as_deref(),
                             s,
                             range.level_window,
                         ) as u8);
+                        true
+                    });
+                    true
+                }
+                JobSpec::Timestamps { levels_from, .. } => {
+                    let with_level = levels_from.is_some_and(|from| idx >= from);
+                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                        timing.push(s);
+                        if with_level {
+                            levels.push(crate::fields::line_level(
+                                range.parser.as_deref(),
+                                s,
+                                range.level_window,
+                            ) as u8);
+                        }
+                        true
+                    });
+                    true
+                }
+                JobSpec::Filter(filter) => {
+                    let visible = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                        let (v, next) = filter.visible_in_sequence(s, parent_visible);
+                        parent_visible = next;
+                        v
+                    });
+                    if visible {
+                        hits.push(idx);
                     }
                     true
-                });
-                true
-            }
-            JobSpec::Filter(filter) => {
-                let visible = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    let (v, next) = filter.visible_in_sequence(s, parent_visible);
-                    parent_visible = next;
-                    v
-                });
-                if visible {
-                    hits.push(idx);
                 }
-                true
-            }
-            JobSpec::Search {
-                matcher,
-                limit,
-                count_past_limit,
-                ..
-            } => {
-                let hit = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    let visible = walk.as_mut().is_none_or(|w| w.visible(idx, s));
-                    visible && matcher.is_match(s)
-                });
-                if hit {
-                    if tally.listed < *limit {
+                JobSpec::Search { .. } if multi.is_some() => {
+                    let Some((scanner, found)) = multi.as_mut() else {
+                        return true;
+                    };
+                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                        if walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                            scanner.push(idx, s, &mut |h| {
+                                found.push((h.first, h.last));
+                                true
+                            });
+                        }
+                        true
+                    });
+                    true
+                }
+                JobSpec::Search {
+                    matcher,
+                    limit,
+                    count_past_limit,
+                    ..
+                } => {
+                    let hit = line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                        let visible = walk.as_mut().is_none_or(|w| w.visible(idx, s));
+                        visible && matcher.is_match(s)
+                    });
+                    if hit {
+                        if tally.listed < *limit {
+                            hits.push(idx);
+                            tally.listed += 1;
+                            if tally.listed >= *limit && !*count_past_limit {
+                                return false;
+                            }
+                        } else {
+                            tally.counted += 1;
+                            tally.last_counted = idx;
+                        }
+                    }
+                    true
+                }
+                JobSpec::AutoBookmarks { rules, limit } => {
+                    if line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                        rules.iter().any(|r| r.is_match(s))
+                    }) {
                         hits.push(idx);
                         tally.listed += 1;
-                        if tally.listed >= *limit && !*count_past_limit {
+                        if tally.listed >= *limit {
                             return false;
                         }
-                    } else {
-                        tally.counted += 1;
-                        tally.last_counted = idx;
                     }
+                    true
                 }
-                true
             }
-            JobSpec::AutoBookmarks { rules, limit } => {
-                if line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
-                    rules.iter().any(|r| r.is_match(s))
-                }) {
-                    hits.push(idx);
-                    tally.listed += 1;
-                    if tally.listed >= *limit {
-                        return false;
-                    }
-                }
-                true
-            }
-        }
-    };
+        };
 
     'outer: while pos < range.end_offset {
         if cancel.load(Ordering::Relaxed) {
@@ -1069,6 +1101,7 @@ fn run(
                     &mut tally,
                     &mut collapse,
                     &mut stats_run,
+                    &mut multi,
                 ) {
                     limit_reached = true;
                     break 'outer;
@@ -1118,6 +1151,10 @@ fn run(
         } else if matches!(spec, JobSpec::AutoBookmarks { .. }) {
             // Few hits as a rule: every chunk's, so the marks appear as the scan goes.
             if !hits.is_empty() && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
+                return;
+            }
+        } else if let Some((_, found)) = multi.as_mut() {
+            if !found.is_empty() && !send(ScanBatch::MultiHits(std::mem::take(found))) {
                 return;
             }
         } else if let Some(run) = stats_run.as_mut() {
@@ -1171,6 +1208,7 @@ fn run(
             &mut tally,
             &mut collapse,
             &mut stats_run,
+            &mut multi,
         );
         line_idx += 1;
     }
@@ -1184,6 +1222,17 @@ fn run(
                 max_line_bytes,
             })
         {
+            return;
+        }
+    } else if let Some((mut scanner, mut found)) = multi.take() {
+        scanner.finish(&mut |h| {
+            found.push((h.first, h.last));
+            true
+        });
+        if !found.is_empty() && !send(ScanBatch::MultiHits(found)) {
+            return;
+        }
+        if scanner.skipped > 0 && !send(ScanBatch::Skipped(scanner.skipped)) {
             return;
         }
     } else if let Some(mut run) = stats_run.take() {

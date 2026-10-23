@@ -662,6 +662,9 @@ struct LineHits {
     lines: Vec<usize>,
     total: usize,
     last: Option<usize>,
+    /// Multi-line mode: the last line of each listed hit, and the hits too long to report.
+    ends: Vec<usize>,
+    skipped: usize,
 }
 
 /// How many of the `total` counted hits lie at or after line `start`, which a rescan
@@ -1066,6 +1069,9 @@ pub enum SearchMode {
     Text,
     /// A regular expression matched against each visible line (case per `Aa`).
     Regex,
+    /// A regular expression matched against the visible lines joined with `\n`, so a hit
+    /// may cover several lines (see `multiline_search`).
+    Multiline,
 }
 
 impl SearchMode {
@@ -1074,12 +1080,19 @@ impl SearchMode {
         match self {
             SearchMode::Text => "text",
             SearchMode::Regex => "regex",
+            SearchMode::Multiline => "multiline",
         }
+    }
+
+    /// Whether the query is a regex (either regex mode).
+    pub fn is_regex(self) -> bool {
+        self != SearchMode::Text
     }
 
     pub fn from_saved(name: &str) -> Self {
         match name {
             "regex" => SearchMode::Regex,
+            "multiline" => SearchMode::Multiline,
             _ => SearchMode::Text,
         }
     }
@@ -1090,6 +1103,9 @@ impl SearchMode {
 pub enum SearchMatcher {
     Text(String),
     Regex(regex::Regex),
+    /// A multi-line regex (`^` / `$` per line); matched over joined lines by
+    /// `multiline_search::Scanner`, and over one line for the tint of its text.
+    Multiline(regex::Regex),
 }
 
 impl SearchMatcher {
@@ -1103,13 +1119,16 @@ impl SearchMatcher {
                 .build()
                 .map(SearchMatcher::Regex)
                 .map_err(|e| e.to_string()),
+            SearchMode::Multiline => {
+                crate::multiline_search::build(query, case_sensitive).map(SearchMatcher::Multiline)
+            }
         }
     }
 
     pub fn is_match(&self, line: &str) -> bool {
         match self {
             SearchMatcher::Text(lower) => contains_case_insensitive(line, lower),
-            SearchMatcher::Regex(re) => re.is_match(line),
+            SearchMatcher::Regex(re) | SearchMatcher::Multiline(re) => re.is_match(line),
         }
     }
 
@@ -1127,7 +1146,7 @@ impl SearchMatcher {
                 }
                 out
             }
-            SearchMatcher::Regex(re) => re
+            SearchMatcher::Regex(re) | SearchMatcher::Multiline(re) => re
                 .find_iter(text)
                 .filter(|m| !m.is_empty())
                 .take(max)
@@ -1660,6 +1679,10 @@ pub struct TailEngine {
     pub search_error: Option<String>,
     /// Line hits of the active search in file order, at most `MAX_SEARCH_MATCHES`.
     pub search_matches: Vec<usize>,
+    /// Multi-line search: the last line of each listed hit (`search_matches` holds the
+    /// first), and the matches too long to report; empty in the other modes.
+    pub search_ends: Vec<usize>,
+    pub search_skipped: usize,
     /// Every visible line matching the active search, counted past the cap too.
     search_total: usize,
     /// Upper bound on the last line counted in `search_total`, and whether it is that line
@@ -2485,6 +2508,8 @@ impl TailEngine {
             search_case_sensitive: false,
             search_matcher: None,
             search_error: None,
+            search_ends: Vec::new(),
+            search_skipped: 0,
             search_matches: Vec::new(),
             search_total: 0,
             search_last_counted: 0,
@@ -5650,7 +5675,7 @@ impl TailEngine {
     /// a line its closed group hides, is a search hit, the current hit, bookmarked.
     pub fn row_marks(&self, row: usize, line: usize, has_search: bool) -> (bool, bool, bool) {
         let current = self.current_search_line();
-        let mut hit = has_search && self.search_matches.binary_search(&line).is_ok();
+        let mut hit = has_search && self.search_hit_covers(line);
         let mut active = current == Some(line);
         let mut bookmarked = self.is_bookmarked(line);
         if let Some((first, last)) = self.collapsed_row(row).and_then(|c| c.hidden) {
@@ -5662,6 +5687,16 @@ impl TailEngine {
         }
         bookmarked |= self.hidden_bookmark(row).is_some();
         (hit, active, bookmarked)
+    }
+
+    /// Whether `line` is a search hit, or a line a multi-line hit continues on.
+    pub fn search_hit_covers(&self, line: usize) -> bool {
+        let i = self.search_matches.partition_point(|&l| l <= line);
+        if i == 0 {
+            return false;
+        }
+        self.search_matches[i - 1] == line
+            || self.search_ends.get(i - 1).is_some_and(|&end| end >= line)
     }
 
     /// A bookmarked line the closed group of row `row` hides, and whether it is a manual
@@ -6770,6 +6805,9 @@ impl TailEngine {
             return hits;
         }
         let matcher = self.matcher_for(query);
+        if let SearchMatcher::Multiline(re) = &matcher {
+            return self.find_multiline_from(re, start, limit);
+        }
 
         // Hits outside the search scope are not hits; a line scope bounds the walk too.
         let (lo, total) = self.scope_line_bounds();
@@ -6852,6 +6890,106 @@ impl TailEngine {
             });
         }
         hits
+    }
+
+    /// Calls `f` with each visible line `>= start` (and `< end`) in order, context lines
+    /// included, reading only those lines when they are few; `f` returns false to stop.
+    fn for_each_visible_line(
+        &self,
+        start: usize,
+        end: usize,
+        mut f: impl FnMut(usize, &str) -> bool,
+    ) {
+        if self.has_context() {
+            let view = self.filtered_view();
+            let first = view.pos_of_line_or_next(start);
+            for idx in (first..view.len())
+                .filter_map(|p| view.line_at(p))
+                .take_while(|&idx| idx < end)
+            {
+                if let Some(line) = self.get_line(idx) {
+                    if !f(idx, &line) {
+                        return;
+                    }
+                }
+            }
+        } else if self.is_filter_active() {
+            let first = self.filtered_lines.partition_point(|&idx| idx < start);
+            let visible = &self.filtered_lines[first..];
+            if visible.len() * 4 < end.saturating_sub(start) {
+                for &idx in visible.iter().take_while(|&&idx| idx < end) {
+                    if let Some(line) = self.get_line(idx) {
+                        if !f(idx, &line) {
+                            return;
+                        }
+                    }
+                }
+            } else {
+                let mut p = 0;
+                self.scan_lines(start, end, |idx, line| {
+                    while p < visible.len() && visible[p] < idx {
+                        p += 1;
+                    }
+                    if p < visible.len() && visible[p] == idx {
+                        return f(idx, line);
+                    }
+                    true
+                });
+            }
+        } else {
+            self.scan_lines(start, end, f);
+        }
+    }
+
+    /// The multi-line search over the visible lines `>= start`: the first `limit` hits
+    /// are listed with their last line, the others only counted.
+    fn find_multiline_from(&self, re: &regex::Regex, start: usize, limit: usize) -> LineHits {
+        let mut hits = LineHits::default();
+        let (lo, total) = self.scope_line_bounds();
+        let start = start.max(lo);
+        if start >= total {
+            return hits;
+        }
+        let scoped = !self.search_scope.is_all();
+        let mut scanner = crate::multiline_search::Scanner::new(re);
+        let mut record = |h: crate::multiline_search::Hit| {
+            if scoped && !self.in_search_scope(h.first) {
+                return true;
+            }
+            if hits.lines.len() < limit {
+                hits.lines.push(h.first);
+                hits.ends.push(h.last);
+            }
+            hits.total += 1;
+            hits.last = Some(h.first);
+            true
+        };
+        self.for_each_visible_line(start, total, |idx, line| {
+            scanner.push(idx, line, &mut record)
+        });
+        scanner.finish(&mut record);
+        hits.skipped = scanner.skipped;
+        hits
+    }
+
+    /// Where a multi-line search refreshed from `start` must begin: early enough that a
+    /// hit crossing into the new lines is found (64 visible lines before), and after the
+    /// last hit kept, so none is found twice.
+    fn multiline_rescan_start(&self, start: usize) -> usize {
+        if start == 0 {
+            return 0;
+        }
+        let view = self.filtered_view();
+        let pos = view.pos_of_line_or_next(start);
+        let mut from = view
+            .line_at(pos.saturating_sub(crate::multiline_search::MAX_HIT_LINES))
+            .unwrap_or(0)
+            .min(start);
+        let keep = self.search_matches.partition_point(|&l| l < from);
+        if let Some(&end) = keep.checked_sub(1).and_then(|k| self.search_ends.get(k)) {
+            from = from.max(end + 1);
+        }
+        from
     }
 
     /// Every visible line matching the active search, the ones past `MAX_SEARCH_MATCHES`
@@ -6964,6 +7102,8 @@ impl TailEngine {
     /// Forgets the line hits of the search, listed and counted.
     fn clear_search_hits(&mut self) {
         self.search_matches = Vec::new();
+        self.search_ends = Vec::new();
+        self.search_skipped = 0;
         self.search_total = 0;
         self.search_last_counted = 0;
         self.search_last_counted_exact = false;
@@ -6993,6 +7133,12 @@ impl TailEngine {
         // With context lines a match found from `start` on also shows the `N` lines
         // before it: they are searched again too.
         let start = self.context_start(start);
+        // A multi-line hit may cross into the new lines: from before them.
+        let start = if self.search_mode == SearchMode::Multiline {
+            self.multiline_rescan_start(start)
+        } else {
+            start
+        };
         if self.search_waits() {
             // Search follows the filter: rerun it when the index / filter / timing job ends.
             self.pending_search = true;
@@ -7033,8 +7179,15 @@ impl TailEngine {
         let query = std::mem::take(&mut self.last_searched_query);
 
         self.search_matches.truncate(keep);
+        self.search_ends.truncate(keep);
         let remaining = MAX_SEARCH_MATCHES.saturating_sub(self.search_matches.len());
         let fresh = self.find_matches_from(&query, start, remaining);
+        self.search_ends.extend(&fresh.ends);
+        if start == 0 {
+            self.search_skipped = fresh.skipped;
+        } else {
+            self.search_skipped += fresh.skipped;
+        }
         self.search_total = self.search_total.saturating_sub(replaced) + fresh.total;
         match fresh.last {
             Some(last) => {
@@ -7628,6 +7781,8 @@ impl TailEngine {
         // over the whole file would add its hits to these.
         let dropped = self.drop_search_job();
         let hits = self.find_matches_from(trimmed, 0, MAX_SEARCH_MATCHES);
+        self.search_ends = hits.ends;
+        self.search_skipped = hits.skipped;
         self.search_matches = hits.lines;
         self.search_total = hits.total;
         self.search_last_counted = hits.last.unwrap_or(0);
@@ -7928,8 +8083,13 @@ impl TailEngine {
         self.clear_search_hits();
         self.current_match_idx = None;
         // With context lines the search covers the rows shown, context rows included.
+        let multiline = self.search_mode == SearchMode::Multiline;
         let filter = if self.has_context() {
             VisibleSet::Ranges(Arc::from(self.context_ranges.ranges()))
+        } else if multiline && self.is_filter_active() {
+            // The joined text skips exactly the lines the view hides (hidden lines and the
+            // time window too, which a filter spec does not know).
+            VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
         } else if self.filter.is_active() {
             VisibleSet::Filter(self.filter.clone())
         } else {
@@ -8019,6 +8179,34 @@ impl TailEngine {
             match batch {
                 // Statistics jobs run in their own slot (`stats`).
                 ScanBatch::Stats(_) => {}
+                ScanBatch::MultiHits(found) => {
+                    // The visible set was exact (hidden lines and time window included):
+                    // only the search scope applies, on the first line of each hit.
+                    let found: Vec<(usize, usize)> = if self.search_scope.is_all() {
+                        found
+                    } else {
+                        found
+                            .into_iter()
+                            .filter(|&(first, _)| self.in_search_scope(first))
+                            .collect()
+                    };
+                    job.hits += found.len();
+                    if let Some(&(last, _)) = found.last() {
+                        self.search_last_counted = last;
+                        self.search_last_counted_exact = true;
+                    }
+                    self.search_total += found.len();
+                    let room = MAX_SEARCH_MATCHES.saturating_sub(self.search_matches.len());
+                    for &(first, end) in found.iter().take(room) {
+                        self.search_matches.push(first);
+                        self.search_ends.push(end);
+                    }
+                    self.search_generation = self.search_generation.wrapping_add(1);
+                    if self.current_match_idx.is_none() && !self.search_matches.is_empty() {
+                        self.current_match_idx = Some(0);
+                    }
+                }
+                ScanBatch::Skipped(n) => self.search_skipped += n,
                 ScanBatch::Lines(lines) if job.kind == ScanKind::AutoBookmarks => {
                     // Matched on the raw lines, whatever the filters and time window.
                     self.add_auto_bookmarks(lines);
