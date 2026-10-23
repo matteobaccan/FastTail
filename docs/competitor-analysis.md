@@ -291,7 +291,7 @@ match the filter presets and `--print`.
 These points are folded into the `tui-interface` proposal (PR #132, design decision 7 and
 the Terminal Key Conventions requirement). It shipped in 0.20.0 (archived as the
 `terminal-interface` spec; guide in `docs/tui.md`); remappable keys stay with
-`remappable-shortcuts` (0.26.0).
+`remappable-shortcuts` (in the backlog).
 
 ## 8. Release plan: closing the gap
 
@@ -448,21 +448,17 @@ ends, which keeps `cross-line-regex` a small differentiator.
 | `pattern-grouping` — Drain patterns, CTRL + SHIFT + G (from 0.23.0) | 6 | M |
 | `spike-explanation` — what is different in a histogram spike (from 0.23.0) | Loki, Kibana | M |
 | `field-sparkline` — a numeric field plotted over the timeline histogram (from 0.24.0; after `field-statistics`) | lnav, gonzo | M |
-| `operation-timeline` — Gantt of operations by an id field (from 0.23.0) | lnav | M |
 
 ### 0.26.0 — extensibility
 
 | Change | Gaps | Effort |
 |---|---|---|
-| `plugin-api` — out-of-process source plugins, bundled formats (from 0.22.0) | 20 | L |
 | `windows-event-log` — Event Log source (from 0.22.0) | 12 | M |
-| `remappable-shortcuts` — key bindings on the 0.13.0 action registry (from 0.22.0) | 14 | M |
 
 ### 0.27.0 — integrations
 
 | Change | Gaps | Effort |
 |---|---|---|
-| `mcp-server` — read-only MCP server for AI assistants, off by default (from 0.22.0) | 17 | M |
 | `tui-find-all` — Search all streams in the terminal interface (from 0.24.0) | FastTail window, Chipmunk | M |
 
 ### Backlog (no release)
@@ -473,6 +469,10 @@ Changes kept for the future but not planned, by maintainer decision. They stay i
 | Change | Gaps | Effort | Since |
 |---|---|---|---|
 | `web-ui` — read-only local web view, off by default (from 0.27.0) | Seq, Loki | M | 2026-10-24 |
+| `operation-timeline` — Gantt of operations by an id field (from 0.25.0; the table is a `query-language` query) | lnav | M | 2026-10-24 |
+| `plugin-api` — out-of-process source plugins, bundled formats (from 0.26.0) | 20 | L | 2026-10-24 |
+| `remappable-shortcuts` — key bindings on the 0.13.0 action registry (from 0.26.0) | 14 | M | 2026-10-24 |
+| `mcp-server` — read-only MCP server for AI assistants, off by default (from 0.27.0) | 17 | M | 2026-10-24 |
 
 Open questions are listed in each change's design.
 
