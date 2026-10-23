@@ -57,6 +57,9 @@ pub enum Key {
     SshProgram,
     RemoteInitialMb,
     RemoteSpoolMaxMb,
+    ListenerSpoolMaxMb,
+    ListenerLinesPerSec,
+    ListenerMbPerSec,
     AutoBookmarkMax,
     Sound,
     FlashOnAlert,
@@ -323,6 +326,24 @@ impl SettingsForm {
                 number(c.remote_spool_max_mb, &model::STDIN_SPOOL_MAX_MB),
             ),
             Field::new(
+                Key::ListenerSpoolMaxMb,
+                en("Listeners: spool (MB)"),
+                number(c.listener_spool_max_mb, &model::STDIN_SPOOL_MAX_MB),
+            ),
+            Field::new(
+                Key::ListenerLinesPerSec,
+                en("Listeners: lines per second at most"),
+                number(
+                    c.listener_max_lines_per_sec,
+                    &model::LISTENER_MAX_LINES_PER_SEC,
+                ),
+            ),
+            Field::new(
+                Key::ListenerMbPerSec,
+                en("Listeners: MB per second at most"),
+                number(c.listener_max_mb_per_sec, &model::LISTENER_MAX_MB_PER_SEC),
+            ),
+            Field::new(
                 Key::LineNumbers,
                 en("Line numbers in new streams"),
                 check(c.show_line_numbers),
@@ -557,6 +578,9 @@ impl SettingsForm {
                 Key::SystemBacklog => c.system_source_backlog_lines = num() as u32,
                 Key::RemoteInitialMb => c.remote_initial_mb = num() as u32,
                 Key::RemoteSpoolMaxMb => c.remote_spool_max_mb = num() as u32,
+                Key::ListenerSpoolMaxMb => c.listener_spool_max_mb = num() as u32,
+                Key::ListenerLinesPerSec => c.listener_max_lines_per_sec = num() as u32,
+                Key::ListenerMbPerSec => c.listener_max_mb_per_sec = num() as u32,
                 Key::DockerCommand | Key::JournalctlCommand | Key::SshProgram => {
                     let text = match &f.widget {
                         Widget::Text(t) => t.text().trim().to_string(),

@@ -293,6 +293,8 @@ pub enum PromptKind {
     System,
     /// Open remote file (palette): an `ssh://` URL.
     Remote,
+    /// Listen (palette): a `tcp://`, `udp://` or `syslog://` URL.
+    Listen,
 }
 
 pub struct Prompt {
@@ -3080,7 +3082,10 @@ impl App {
     }
 
     fn submit_prompt(&mut self, prompt: Prompt) {
-        if matches!(prompt.kind, PromptKind::System | PromptKind::Remote) {
+        if matches!(
+            prompt.kind,
+            PromptKind::System | PromptKind::Remote | PromptKind::Listen
+        ) {
             let text = prompt.field.text().trim().to_string();
             self.open_file(Path::new(&text));
             return;
@@ -3105,7 +3110,7 @@ impl App {
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
             PromptKind::Split => self.submit_split(&text),
-            PromptKind::System | PromptKind::Remote => {}
+            PromptKind::System | PromptKind::Remote | PromptKind::Listen => {}
             PromptKind::LevelBytes if text.is_empty() => tab.engine.set_level_override(None),
             PromptKind::LevelBytes => {
                 match text.parse().ok().and_then(crate::log_level::valid_window) {
@@ -3155,11 +3160,14 @@ impl App {
 
     fn open_prompt(&mut self, kind: PromptKind) {
         // The prompts that work with no stream open.
-        if matches!(kind, PromptKind::System | PromptKind::Remote) {
-            let start = if kind == PromptKind::System {
-                "docker://"
-            } else {
-                "ssh://"
+        if matches!(
+            kind,
+            PromptKind::System | PromptKind::Remote | PromptKind::Listen
+        ) {
+            let start = match kind {
+                PromptKind::System => "docker://",
+                PromptKind::Remote => "ssh://",
+                _ => "syslog://127.0.0.1:5514",
             };
             self.prompt = Some(Prompt {
                 kind,
@@ -3175,7 +3183,9 @@ impl App {
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
             PromptKind::Split => "100000".to_string(),
-            PromptKind::System | PromptKind::Remote => unreachable!("opened above"),
+            PromptKind::System | PromptKind::Remote | PromptKind::Listen => {
+                unreachable!("opened above")
+            }
             PromptKind::LevelBytes => e
                 .level_override()
                 .map(|b| b.to_string())
@@ -3712,6 +3722,7 @@ impl App {
                 Action::OpenFile => self.open_browser(),
                 Action::OpenSystem => self.open_prompt(PromptKind::System),
                 Action::OpenRemote => self.open_prompt(PromptKind::Remote),
+                Action::OpenListen => self.open_prompt(PromptKind::Listen),
                 Action::OpenSession => self.open_sessions(),
                 Action::Settings => self.open_settings(),
                 Action::EditRules => self.open_rules(),
@@ -3768,6 +3779,7 @@ impl App {
             Action::Split => self.open_prompt(PromptKind::Split),
             Action::OpenSystem => self.open_prompt(PromptKind::System),
             Action::OpenRemote => self.open_prompt(PromptKind::Remote),
+            Action::OpenListen => self.open_prompt(PromptKind::Listen),
             Action::Reconnect => {
                 let engine = self.tabs.get_mut(self.active).map(|t| &mut t.engine);
                 match engine {
@@ -5527,6 +5539,10 @@ impl App {
             PromptKind::Remote => tx(
                 self.lang,
                 "Open ssh://[user@]host[:port]/path (#whole: the whole file)",
+            ),
+            PromptKind::Listen => tx(
+                self.lang,
+                "Listen on syslog://, tcp:// or udp://ADDRESS:PORT (127.0.0.1: this machine only)",
             ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
@@ -9819,14 +9835,14 @@ mod tests {
         assert!(screen[x.y as usize].contains("[x]"), "{screen:#?}");
         // The title row moves it; released outside, it stays open where it was left.
         app.on_mouse(click(start.x + 5, start.y));
-        app.on_mouse(drag(start.x + 35, start.y + 10));
+        app.on_mouse(drag(start.x + 35, start.y + 5));
         app.on_mouse(release(199, 79));
         assert!(app.settings_form.is_some(), "a drag never closes it");
         render(&mut app, 200, 80);
         let moved = app.hits.dialog.unwrap().outer;
         assert_eq!(
             (moved.x, moved.y, moved.width, moved.height),
-            (start.x + 30, start.y + 10, start.width, start.height)
+            (start.x + 30, start.y + 5, start.width, start.height)
         );
         // It keeps the keyboard.
         let focus = app.settings_form.as_ref().unwrap().focus;
