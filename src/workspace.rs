@@ -62,6 +62,15 @@ pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -
             Ok(uri) => {
                 let commands = config.system_commands();
                 let program = uri.command_line(&commands, None).0;
+                if !crate::system_source::valid_program(&program) {
+                    return OpenOutcome::Failed {
+                        error: OpenError::System {
+                            key: "system_bad_program",
+                            detail: program,
+                        },
+                        report: true,
+                    };
+                }
                 match crate::system_source::open_engine(
                     uri,
                     &commands,

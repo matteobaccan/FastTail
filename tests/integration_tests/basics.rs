@@ -657,6 +657,7 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex_hint",
         "fields_regex_invalid",
         "fields_format_missing",
+        "system_bad_program",
         "system_bad_unit",
         "system_bad_container",
         "system_journald_linux_only",

@@ -4488,6 +4488,20 @@ impl TailEngine {
         })
     }
 
+    /// The bytes of line `idx` as the file holds them, line break excluded; `None` for a
+    /// line cut at `MAX_LINE_BYTES`.
+    pub(crate) fn raw_line(&self, idx: usize) -> Option<Vec<u8>> {
+        let (start, len, cut) = self.line_span(idx)?;
+        if cut {
+            return None;
+        }
+        let mut bytes = self.source.read_with(start, len, <[u8]>::to_vec)?;
+        while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+            bytes.pop();
+        }
+        Some(bytes)
+    }
+
     /// The line holding byte `offset` of the file (the last line past the end).
     pub fn line_of_offset(&self, offset: u64) -> usize {
         self.line_offsets
@@ -8666,6 +8680,8 @@ impl TailEngine {
             .collect();
         let path = if self.is_stdin() {
             crate::stdin_source::STDIN_TITLE.to_string()
+        } else if let Some(uri) = self.system_uri() {
+            uri.title()
         } else {
             match &self.compressed {
                 Some(c) => c.title(),

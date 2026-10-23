@@ -702,6 +702,7 @@ impl FastTailApp {
             for path in app.config.open_files.clone() {
                 if crate::compressed::source_exists(&path)
                     || crate::wildcard::is_pattern_path(&path)
+                    || crate::system_source::is_system_path(&path)
                 {
                     app.open_log_file(path);
                 }
@@ -2610,7 +2611,10 @@ impl FastTailApp {
             return None;
         }
         let is_pattern = crate::wildcard::is_pattern_path(&path);
-        if !is_pattern && !crate::compressed::source_exists(&path) {
+        if !is_pattern
+            && !crate::compressed::source_exists(&path)
+            && !crate::system_source::is_system_path(&path)
+        {
             return None;
         }
 

@@ -224,9 +224,21 @@ fn line_instant(line: &[u8]) -> Option<i64> {
     Some(stamp.millis - i64::from(stamp.zone_minutes.unwrap_or(0)) * 60_000)
 }
 
+/// True for a program a source may run: a bare name looked up on `PATH`, or an absolute
+/// path. A relative path is refused, so a `fasttail.ini` in the current folder cannot
+/// point at a program next to it.
+pub fn valid_program(program: &str) -> bool {
+    !program.is_empty() && (Path::new(program).is_absolute() || !program.contains(['/', '\\']))
+}
+
 /// Starts `program args` with standard output and error on one pipe; returns the child
 /// and the reading end.
 fn spawn(program: &str, args: &[String]) -> std::io::Result<(Child, std::io::PipeReader)> {
+    if !valid_program(program) {
+        return Err(std::io::Error::other(
+            "the program must be a name on PATH or an absolute path",
+        ));
+    }
     let (reader, writer) = std::io::pipe()?;
     let mut cmd = Command::new(program);
     cmd.args(args)
@@ -252,6 +264,8 @@ struct SkipSeen<R> {
     instant: i64,
     seen: Vec<Vec<u8>>,
     passing: bool,
+    /// The line before was dropped: a line without a timestamp after it goes with it.
+    dropped_last: bool,
     pending: Vec<u8>,
     out: Vec<u8>,
     out_pos: usize,
@@ -264,6 +278,7 @@ impl<R: Read> SkipSeen<R> {
             instant,
             seen,
             passing: false,
+            dropped_last: false,
             pending: Vec::new(),
             out: Vec::new(),
             out_pos: 0,
@@ -277,8 +292,9 @@ impl<R: Read> SkipSeen<R> {
             Some(t) if t < self.instant => true,
             Some(t) if t == self.instant => self.seen.iter().any(|s| s == line),
             Some(_) => false,
-            // A continuation line goes with the line before it, which was dropped.
-            None => true,
+            // A continuation line goes with the line before it when that one was
+            // dropped; a leading one (the command's own error) is shown.
+            None => self.dropped_last,
         }
     }
 
@@ -291,6 +307,7 @@ impl<R: Read> SkipSeen<R> {
                 None => return,
             };
             if self.already_seen(&self.pending[..end]) {
+                self.dropped_last = true;
                 self.pending.drain(..(end + 1).min(self.pending.len()));
             } else {
                 self.passing = true;
@@ -432,7 +449,13 @@ impl TailEngine {
         let Some(s) = self.system.as_mut() else {
             return;
         };
-        if s.exit.is_some() || s.copier.state() == InputState::Reading {
+        // Ended once the copy is over and the engine indexed all of it, so the last line
+        // shown and the instant a reconnect starts from are the real last ones.
+        if s.exit.is_some()
+            || s.copier.state() == InputState::Reading
+            || (s.copier.state() == InputState::Ended && !s.copier.is_finalized())
+            || self.index_pending
+        {
             return;
         }
         let Some(child) = s.child.as_mut() else {
@@ -478,20 +501,22 @@ impl TailEngine {
 
     /// The last instant the stream holds and the lines stamped with it, newest first.
     fn last_instant(&self) -> Option<(i64, Vec<Vec<u8>>)> {
-        let total = self.total_lines();
+        // A last line without its line break (the command killed while writing) is
+        // ended by the reconnect and left out: its full text comes again.
+        let total = self.total_lines() - usize::from(!self.last_line_complete());
         let mut found: Option<i64> = None;
         let mut seen = Vec::new();
         for idx in (total.saturating_sub(RECONNECT_LOOKBACK)..total).rev() {
-            let Some(text) = self.get_line(idx) else {
+            // The bytes as the command wrote them, compared with what it writes again.
+            let Some(raw) = self.raw_line(idx) else {
                 continue;
             };
-            let text = text.trim_end_matches(['\r', '\n']);
-            match (line_instant(text.as_bytes()), found) {
+            match (line_instant(&raw), found) {
                 (Some(t), None) => {
                     found = Some(t);
-                    seen.push(text.as_bytes().to_vec());
+                    seen.push(raw);
                 }
-                (Some(t), Some(f)) if t == f => seen.push(text.as_bytes().to_vec()),
+                (Some(t), Some(f)) if t == f => seen.push(raw),
                 (Some(_), Some(_)) => break,
                 (None, _) => {}
             }
@@ -503,6 +528,7 @@ impl TailEngine {
     /// to the same spool.
     pub fn reconnect_system(&mut self, commands: &Commands) -> std::io::Result<()> {
         let last = self.last_instant();
+        let partial = !self.last_line_complete();
         let Some(s) = self.system.as_mut() else {
             return Err(std::io::Error::other("not a system source"));
         };
@@ -520,12 +546,17 @@ impl TailEngine {
         };
         let (program, args) = s.uri.command_line(&commands, since);
         let (child, reader) = spawn(&program, &args)?;
+        // A cut last line is ended first, so the new lines do not join it.
+        let head: &'static [u8] = if partial { b"\n" } else { b"" };
         let resumed = match last {
-            Some((t, seen)) => {
-                s.copier
-                    .resume(SkipSeen::new(reader, t, seen), &s.settings, s.wake.clone())
-            }
-            None => s.copier.resume(reader, &s.settings, s.wake.clone()),
+            Some((t, seen)) => s.copier.resume(
+                head.chain(SkipSeen::new(reader, t, seen)),
+                &s.settings,
+                s.wake.clone(),
+            ),
+            None => s
+                .copier
+                .resume(head.chain(reader), &s.settings, s.wake.clone()),
         };
         if let Err(e) = resumed {
             kill(child);
@@ -695,6 +726,35 @@ mod tests {
             unit: None,
         };
         assert_eq!(system.command_line(&commands, None).1.len(), 4);
+    }
+
+    #[test]
+    fn programs_are_names_or_absolute_paths() {
+        assert!(valid_program("docker"));
+        assert!(valid_program("podman"));
+        assert!(!valid_program("./evil"));
+        assert!(!valid_program("bin/docker"));
+        assert!(!valid_program(""));
+        if cfg!(windows) {
+            assert!(valid_program(r"C:\\Program Files\\Docker\\docker.exe"));
+            assert!(!valid_program(r"tools\\docker.exe"));
+        } else {
+            assert!(valid_program("/usr/bin/docker"));
+        }
+    }
+
+    #[test]
+    fn a_leading_error_line_is_shown_on_reconnect() {
+        let t = line_instant(b"2026-10-23T06:00:01.000Z").unwrap();
+        let mut out = String::new();
+        SkipSeen::new(
+            &b"Error response from daemon: No such container: api\n"[..],
+            t,
+            Vec::new(),
+        )
+        .read_to_string(&mut out)
+        .unwrap();
+        assert_eq!(out, "Error response from daemon: No such container: api\n");
     }
 
     #[test]

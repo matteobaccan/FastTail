@@ -337,6 +337,12 @@ impl Input {
             }
             InputSpec::Path(path) => path,
         };
+        if crate::system_source::is_system_path(&path) {
+            return Err(format!(
+                "{}: system sources are not read by --print; pipe the command instead (docker logs ... | fasttail --print -)",
+                path.display()
+            ));
+        }
         let pattern = crate::wildcard::FolderSpec::parse(&path);
         let file_path = match &pattern {
             Some(spec) => spec

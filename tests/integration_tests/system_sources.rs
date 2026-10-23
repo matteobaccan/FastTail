@@ -134,3 +134,33 @@ fn system_sources_are_saved_without_bookmarks_and_kept_in_sessions() {
     let loaded = FastTailConfig::from_ini(&config.to_ini());
     assert_eq!(loaded.open_files, [PathBuf::from("docker://api")]);
 }
+
+#[cfg(unix)]
+#[test]
+fn the_window_opens_a_system_source_from_a_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = fasttail::ui::app::FastTailApp::from_config(FastTailConfig {
+        docker_command: fake_docker(dir.path()).to_string_lossy().into_owned(),
+        spool_dir: Some(dir.path().join("spool")),
+        ..Default::default()
+    });
+    app.open_log_file(PathBuf::from("docker://api"));
+    assert_eq!(app.engines.len(), 1);
+    assert_eq!(app.engines[0].path, PathBuf::from("docker://api"));
+    assert!(app.engines[0].system.is_some());
+}
+
+#[test]
+fn a_program_given_as_a_relative_path_is_refused() {
+    let config = FastTailConfig {
+        docker_command: "./docker".into(),
+        ..Default::default()
+    };
+    match open_target(Path::new("docker://api"), &config, None) {
+        OpenOutcome::Failed { error, .. } => assert_eq!(
+            error.system_text(fasttail::i18n::Language::En).as_deref(),
+            Some("./docker: the program must be a name on PATH or an absolute path")
+        ),
+        _ => panic!("expected a refusal"),
+    }
+}

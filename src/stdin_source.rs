@@ -357,6 +357,11 @@ impl StdinStream {
         self.spool.path()
     }
 
+    /// The input ended and the engine indexed its last bytes.
+    pub(crate) fn is_finalized(&self) -> bool {
+        self.finalized
+    }
+
     /// True while the spool holds bytes the engine has not indexed yet.
     pub fn has_unindexed(&self, indexed: u64) -> bool {
         self.written() != indexed || self.pending_restart()
