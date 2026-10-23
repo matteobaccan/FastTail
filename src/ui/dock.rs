@@ -2244,34 +2244,37 @@ fn render_log_stream(
         let has_query = !search_query.trim().is_empty();
         let match_count = engine.active_match_count();
 
-        // The mode: text, or a regex with its case toggle.
-        let regex = engine.search_mode == crate::tail_engine::SearchMode::Regex;
+        // The mode: text, a regex, or a multi-line regex, with the case toggle of the
+        // regex modes.
+        use crate::tail_engine::SearchMode;
+        let mode = engine.search_mode;
+        let regex = mode.is_regex();
+        let (mode_label, mode_tip) = match mode {
+            SearchMode::Text => ("ab", "search_mode_text_tip"),
+            SearchMode::Regex => (".*", "search_mode_regex_tip"),
+            SearchMode::Multiline => (".*⤶", "search_mode_multiline_tip"),
+        };
         let mode_text = if regex {
-            RichText::new(".*")
+            RichText::new(mode_label)
                 .monospace()
                 .strong()
                 .color(theme.accent_color())
         } else {
-            RichText::new("ab").monospace().color(theme.text_dim())
+            RichText::new(mode_label)
+                .monospace()
+                .color(theme.text_dim())
         };
         if ui
             .small_button(mode_text)
-            .on_hover_text(t(
-                lang,
-                if regex {
-                    "search_mode_regex_tip"
-                } else {
-                    "search_mode_text_tip"
-                },
-            ))
+            .on_hover_text(t(lang, mode_tip))
             .clicked()
         {
-            let mode = if regex {
-                crate::tail_engine::SearchMode::Text
-            } else {
-                crate::tail_engine::SearchMode::Regex
+            let next = match mode {
+                SearchMode::Text => SearchMode::Regex,
+                SearchMode::Regex => SearchMode::Multiline,
+                SearchMode::Multiline => SearchMode::Text,
             };
-            engine.set_search_mode(mode, engine.search_case_sensitive);
+            engine.set_search_mode(next, engine.search_case_sensitive);
         }
         if regex {
             let case = engine.search_case_sensitive;
@@ -2311,6 +2314,17 @@ fn render_log_stream(
             search_edit = search_edit.text_color(theme.error_color().into());
         }
         let search_resp = ui.add(search_edit);
+        if engine.search_skipped > 0 {
+            ui.label(
+                RichText::new(format!("⚠ {}", engine.search_skipped))
+                    .monospace()
+                    .color(theme.warn_color()),
+            )
+            .on_hover_text(
+                t(lang, "search_skipped_tip")
+                    .replace("{0}", &crate::multiline_search::MAX_HIT_LINES.to_string()),
+            );
+        }
         let search_resp = match &engine.search_error {
             Some(e) => {
                 search_resp.on_hover_text(format!("{}\n{e}", t(lang, "search_regex_invalid")))

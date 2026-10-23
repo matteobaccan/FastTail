@@ -657,6 +657,8 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex_hint",
         "fields_regex_invalid",
         "fields_format_missing",
+        "search_mode_multiline_tip",
+        "search_skipped_tip",
         "search_mode_text_tip",
         "search_mode_regex_tip",
         "search_regex_placeholder",

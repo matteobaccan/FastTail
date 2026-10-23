@@ -51,6 +51,17 @@ search as today.
 today; a regex entry is prefixed with its mode (`re:` / `mre:`) so older builds show it as
 text instead of failing.
 
+## As implemented
+
+- `search_ends: Vec<usize>` (the last line of each hit) instead of a `u8` line count: with
+  filters a hit's lines are not consecutive in the file, and the row check is one binary
+  search either way.
+- The job sends `MultiHits(first, last)` batches over `VisibleSet::Lines(filtered_lines)`
+  (hidden lines and the time window included) and `Skipped(n)` at the end.
+- On append the rescan starts 64 visible lines before the old end, after the last hit kept.
+- Rows a hit continues on are marked like its first row (no separate bracket or tint yet);
+  the history stores the text of the query, the mode stays per stream.
+
 ## Risks / Trade-offs
 
 - [`.*` with `(?s)` matches to the end of the chunk] → the 64-line bound drops it and the

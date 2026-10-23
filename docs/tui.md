@@ -76,7 +76,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `←` `→`, `Ctrl+←` `Ctrl+→`, `0` | sideways by 1, by 10, back to column 0 (`Col N` in the bottom border while scrolled) |
 | `Shift+↑` `Shift+↓` | extend the selection |
 | `Space` | follow on / off |
-| `/`, `n` `N` (`F3` `Shift+F3`), `Esc` | search (`re:` before the query makes it a regular expression, `re:(?-i)…` case-sensitive), next / previous hit, clear |
+| `/`, `n` `N` (`F3` `Shift+F3`), `Esc` | search (`re:` before the query makes it a regular expression, `mre:` a multi-line one over the visible lines joined with `\n`, `(?-i)` case-sensitive), next / previous hit, clear |
 | `i`, `x`, `l`, `c`, `a`, `#` | include, exclude, minimum level, collapse, ANSI mode, line numbers |
 | `H` | hide the selected lines (or the cursor row); `[🙈 N hidden]` in the filter row lists them: `Enter` shows a range again, `a` all |
 | palette | *Split file…*: asks `100000` (lines), `10mb`, `1h`, `1d` or `30m`; the pieces go next to the file (`app.part-001.log`, `app.2026-10-05T14.log`), the progress and the outcome in the message line; existing pieces are kept unless the answer ends with `!` |

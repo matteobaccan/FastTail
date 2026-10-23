@@ -3140,9 +3140,13 @@ impl App {
             PromptKind::Search => {
                 // `re:` makes the query a regex (`re:(?-i)` for case), as the window's
                 // `.*` toggle does.
-                let (mode, query) = match text.strip_prefix("re:") {
-                    Some(rest) => (crate::tail_engine::SearchMode::Regex, rest.to_string()),
-                    None => (crate::tail_engine::SearchMode::Text, text.clone()),
+                use crate::tail_engine::SearchMode;
+                let (mode, query) = if let Some(rest) = text.strip_prefix("mre:") {
+                    (SearchMode::Multiline, rest.to_string())
+                } else if let Some(rest) = text.strip_prefix("re:") {
+                    (SearchMode::Regex, rest.to_string())
+                } else {
+                    (SearchMode::Text, text.clone())
                 };
                 tab.engine.search_query = query.clone();
                 let case = tab.engine.search_case_sensitive;
@@ -3242,6 +3246,9 @@ impl App {
             // A regex search opens with its `re:` prefix.
             PromptKind::Search if e.search_mode == crate::tail_engine::SearchMode::Regex => {
                 format!("re:{}", e.search_query)
+            }
+            PromptKind::Search if e.search_mode == crate::tail_engine::SearchMode::Multiline => {
+                format!("mre:{}", e.search_query)
             }
             PromptKind::Search => e.search_query.clone(),
             PromptKind::Include => e.include_filter().to_string(),
@@ -5586,7 +5593,7 @@ impl App {
             return;
         };
         let title = match kind {
-            PromptKind::Search => tx(self.lang, "Search (re: for a regex)"),
+            PromptKind::Search => tx(self.lang, "Search (re: regex, mre: multi-line regex)"),
             PromptKind::Include => tx(self.lang, "Include filter"),
             PromptKind::Exclude => tx(self.lang, "Exclude filter"),
             PromptKind::Note(_) => tx(self.lang, "Bookmark note"),
