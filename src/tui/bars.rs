@@ -313,6 +313,16 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             BarChip::SourceEnded,
         ));
     }
+    if let Some(d) = e.debug_output.as_ref() {
+        second.push(text(
+            txf(
+                lang,
+                "{0} debug messages · {1} dropped",
+                &[&d.received(), &d.dropped()],
+            ),
+            if d.dropped() > 0 { warn } else { dim },
+        ));
+    }
     if let Some(l) = e.listener.as_ref() {
         let at = l
             .bound

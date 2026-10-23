@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Windows debug output.** `fasttail dbwin://local` (or the 🪲 toolbar button, *Capture
+  debug output…* in the command palette) follows the `OutputDebugString` messages of the
+  programs in the session as a stream, like DebugView: one line per message,
+  `<time> [<pid> <process>] <message>`, the lines after a line break indented by two
+  spaces. `dbwin://global` adds the services (FastTail run as administrator); a process
+  filter (`?include=app.exe,1234&exclude=svc*.exe`) keeps or leaves out processes, and
+  FastTail's own messages are left out. Only one debug monitor can own the buffer: with
+  DebugView running the stream says so. Windows only; no new dependency.
+
+### Added
+
 - **Desktop notifications from rules.** A highlight rule with **Notify** shows a desktop
   notification (`FastTail · <stream>`, the line and the rule) when it matches a line added
   to the stream, never for the lines already there when the file opens or reloads. At most

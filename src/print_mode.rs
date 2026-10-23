@@ -337,6 +337,12 @@ impl Input {
             }
             InputSpec::Path(path) => path,
         };
+        if crate::debug_output::is_dbwin_path(&path) {
+            return Err(format!(
+                "{}: --print reads files only; open the debug output in the window or the terminal interface",
+                path.display()
+            ));
+        }
         if crate::system_source::is_system_path(&path) {
             let hint = if crate::ssh_source::is_ssh_path(&path) {
                 "ssh host tail -F /path"

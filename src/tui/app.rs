@@ -295,6 +295,7 @@ pub enum PromptKind {
     Remote,
     /// Listen (palette): a `tcp://`, `udp://` or `syslog://` URL.
     Listen,
+    DebugOutput,
 }
 
 pub struct Prompt {
@@ -3127,7 +3128,7 @@ impl App {
     fn submit_prompt(&mut self, prompt: Prompt) {
         if matches!(
             prompt.kind,
-            PromptKind::System | PromptKind::Remote | PromptKind::Listen
+            PromptKind::System | PromptKind::Remote | PromptKind::Listen | PromptKind::DebugOutput
         ) {
             let text = prompt.field.text().trim().to_string();
             self.open_file(Path::new(&text));
@@ -3153,7 +3154,10 @@ impl App {
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
             PromptKind::Split => self.submit_split(&text),
-            PromptKind::System | PromptKind::Remote | PromptKind::Listen => {}
+            PromptKind::System
+            | PromptKind::Remote
+            | PromptKind::Listen
+            | PromptKind::DebugOutput => {}
             PromptKind::LevelBytes if text.is_empty() => tab.engine.set_level_override(None),
             PromptKind::LevelBytes => {
                 match text.parse().ok().and_then(crate::log_level::valid_window) {
@@ -3205,11 +3209,12 @@ impl App {
         // The prompts that work with no stream open.
         if matches!(
             kind,
-            PromptKind::System | PromptKind::Remote | PromptKind::Listen
+            PromptKind::System | PromptKind::Remote | PromptKind::Listen | PromptKind::DebugOutput
         ) {
             let start = match kind {
                 PromptKind::System => "docker://",
                 PromptKind::Remote => "ssh://",
+                PromptKind::DebugOutput => "dbwin://local",
                 _ => "syslog://127.0.0.1:5514",
             };
             self.prompt = Some(Prompt {
@@ -3226,7 +3231,10 @@ impl App {
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
             PromptKind::Split => "100000".to_string(),
-            PromptKind::System | PromptKind::Remote | PromptKind::Listen => {
+            PromptKind::System
+            | PromptKind::Remote
+            | PromptKind::Listen
+            | PromptKind::DebugOutput => {
                 unreachable!("opened above")
             }
             PromptKind::LevelBytes => e
@@ -3766,6 +3774,7 @@ impl App {
                 Action::OpenSystem => self.open_prompt(PromptKind::System),
                 Action::OpenRemote => self.open_prompt(PromptKind::Remote),
                 Action::OpenListen => self.open_prompt(PromptKind::Listen),
+                Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
                 Action::OpenSession => self.open_sessions(),
                 Action::Settings => self.open_settings(),
                 Action::EditRules => self.open_rules(),
@@ -3823,6 +3832,7 @@ impl App {
             Action::OpenSystem => self.open_prompt(PromptKind::System),
             Action::OpenRemote => self.open_prompt(PromptKind::Remote),
             Action::OpenListen => self.open_prompt(PromptKind::Listen),
+            Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
             Action::Reconnect => {
                 let engine = self.tabs.get_mut(self.active).map(|t| &mut t.engine);
                 match engine {
@@ -5586,6 +5596,10 @@ impl App {
             PromptKind::Listen => tx(
                 self.lang,
                 "Listen on syslog://, tcp:// or udp://ADDRESS:PORT (127.0.0.1: this machine only)",
+            ),
+            PromptKind::DebugOutput => tx(
+                self.lang,
+                "Capture debug output: dbwin://local or dbwin://global (?include=app.exe&exclude=...)",
             ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);

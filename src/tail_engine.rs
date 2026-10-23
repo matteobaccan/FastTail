@@ -1869,6 +1869,8 @@ pub struct TailEngine {
     /// Sockets, copier and spool of a listener stream (see `net_listener`); `path` is
     /// then its URL and `current_file` the spool. Last for the same reason.
     pub listener: Option<crate::net_listener::ListenerStream>,
+    /// The capture of a Windows debug-output stream (see `debug_output`).
+    pub debug_output: Option<crate::debug_output::DebugStream>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2486,6 +2488,7 @@ impl TailEngine {
             system: None,
             ssh: None,
             listener: None,
+            debug_output: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,

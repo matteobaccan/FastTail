@@ -199,6 +199,7 @@ pub fn entries(cfg: &FastTailConfig, state: &ActionState) -> Vec<PaletteEntry> {
     let lang = cfg.language;
     actions::all()
         .into_iter()
+        .filter(actions::on_this_platform)
         .map(|action| {
             let checked = match action.id {
                 ActionId::Toggle(s) => Some((actions::bool_setting(s).get)(cfg)),
@@ -743,7 +744,14 @@ mod tests {
     fn recent_commands_come_first() {
         let mut cfg = english();
         let all = ranked(&cfg, "");
-        assert_eq!(all.len(), actions::all().len(), "every command is listed");
+        assert_eq!(
+            all.len(),
+            actions::all()
+                .iter()
+                .filter(|a| actions::on_this_platform(a))
+                .count(),
+            "every command is listed"
+        );
         actions::push_recent(&mut cfg.palette_recent, "search.next");
         actions::push_recent(&mut cfg.palette_recent, "view.time_delta.toggle");
         let list = ranked(&cfg, "");

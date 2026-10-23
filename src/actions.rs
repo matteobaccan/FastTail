@@ -110,6 +110,7 @@ pub enum ActionId {
     OpenSystemSource,
     OpenRemote,
     OpenListener,
+    OpenDebugOutput,
     BookmarkPrev,
     BookmarkNote,
     BookmarkRemove,
@@ -425,6 +426,7 @@ pub const ACTIONS: &[Action] = &[
     action(A::OpenSystemSource, "window.open_system_source", "act_open_system", C::Window, S::Window, None, &[]),
     action(A::OpenRemote, "window.open_remote", "act_open_remote", C::Window, S::Window, None, &[]),
     action(A::OpenListener, "window.open_listener", "act_open_listener", C::Window, S::Window, None, &[]),
+    action(A::OpenDebugOutput, "window.open_debug_output", "act_open_debug_output", C::Window, S::Window, None, &[]),
     action(A::MergedView, "window.merged_view", "act_merge", C::Window, S::Window, None, &[]),
     action(A::LogFormats, "window.log_formats", "act_log_formats", C::Window, S::Window, None, &[]),
     action(A::SplitFile, "window.split", "act_split", C::Window, S::Window, None, &[]),
@@ -667,6 +669,11 @@ pub fn set_enum_value(setting: EnumSetting, cfg: &mut FastTailConfig, index: usi
             }
         }
     }
+}
+
+/// Whether `action` exists on this platform (the debug-output capture is Windows only).
+pub fn on_this_platform(action: &Action) -> bool {
+    cfg!(windows) || action.id != ActionId::OpenDebugOutput
 }
 
 /// Every action the palette lists: the built-in ones, then one per boolean and per

@@ -95,6 +95,8 @@ pub struct FastTailApp {
     pub remote_dialog: Option<crate::ui::remote_dialog::RemoteDialog>,
     /// The Listen dialog (`📡`, the palette).
     pub listen_dialog: Option<crate::ui::listen_dialog::ListenDialog>,
+    /// The Debug output dialog (Windows).
+    pub debug_dialog: Option<crate::ui::debug_dialog::DebugDialog>,
     /// The Export dialog, while it is shown.
     pub export_dialog: Option<crate::ui::export_dialog::ExportDialog>,
     /// The Split file dialog, while it is shown.
@@ -619,6 +621,7 @@ impl FastTailApp {
             system_dialog: None,
             remote_dialog: None,
             listen_dialog: None,
+            debug_dialog: None,
             log_formats: None,
             split_dialog: None,
             export_dialog: None,
@@ -3613,6 +3616,24 @@ impl FastTailApp {
                         self.listen_dialog = Some(Default::default());
                     }
 
+                    // Debug output (Windows): OutputDebugString messages as a stream.
+                    if cfg!(windows) {
+                        let debug_btn = egui::Button::new(
+                            RichText::new("🪲").monospace().strong().color(text_pri),
+                        )
+                        .fill(self.config.theme.button_bg())
+                        .stroke(Stroke::new(1.2, accent))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(30.0, 26.0));
+                        if ui
+                            .add(debug_btn)
+                            .on_hover_text(t(self.config.language, "dbwin_open_tip"))
+                            .clicked()
+                        {
+                            self.debug_dialog = Some(Default::default());
+                        }
+                    }
+
                     // Sessions menu (🗂): save as, save, load, recent, save as default
                     let session_btn =
                         egui::Button::new(RichText::new("🗂").monospace().strong().color(text_pri))
@@ -6009,6 +6030,17 @@ impl FastTailApp {
                 None => {}
             }
         }
+        if let Some(dialog) = self.debug_dialog.as_mut() {
+            use crate::ui::debug_dialog::DebugChoice;
+            match dialog.show(&ctx, self.config.language, self.config.theme) {
+                Some(DebugChoice::Open(uri)) => {
+                    self.debug_dialog = None;
+                    self.open_log_file(uri);
+                }
+                Some(DebugChoice::Cancel) => self.debug_dialog = None,
+                None => {}
+            }
+        }
 
         // 11a. Remote file (SSH) dialog
         if let Some(dialog) = self.remote_dialog.as_mut() {
@@ -6734,6 +6766,7 @@ impl FastTailApp {
             A::OpenPattern => self.open_pattern_prompt(),
             A::OpenRemote => self.remote_dialog = Some(Default::default()),
             A::OpenListener => self.listen_dialog = Some(Default::default()),
+            A::OpenDebugOutput => self.debug_dialog = Some(Default::default()),
             A::OpenSystemSource => {
                 self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
             }

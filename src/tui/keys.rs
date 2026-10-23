@@ -87,6 +87,7 @@ pub enum Action {
     OpenRemote,
     /// Listen (palette): asks for a listener URL.
     OpenListen,
+    OpenDebugOutput,
     PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.

@@ -1286,6 +1286,27 @@ fn render_listener_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, 
         .request_repaint_after(std::time::Duration::from_secs(1));
 }
 
+/// Stream bar part of a debug-output capture: messages received and dropped, the
+/// filter in the tooltip.
+fn render_debug_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
+    let Some(d) = engine.debug_output.as_ref() else {
+        return;
+    };
+    ui.separator();
+    let text = t(lang, "dbwin_status")
+        .replace("{0}", &d.received().to_string())
+        .replace("{1}", &d.dropped().to_string());
+    let color = if d.dropped() > 0 {
+        theme.warn_color()
+    } else {
+        theme.text_dim()
+    };
+    ui.label(RichText::new(format!("🪲 {text}")).monospace().color(color))
+        .on_hover_text(d.spec.to_uri());
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs(1));
+}
+
 /// Stream bar part of a remote file: its connection state (the client's messages in the
 /// tooltip), and Disconnect or Reconnect.
 fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
@@ -1392,7 +1413,10 @@ fn render_stdin_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lan
         InputState::Reading => {}
         // A system source says it ended with its exit code (`render_system_status`).
         InputState::Ended
-            if engine.system.is_some() || engine.ssh.is_some() || engine.listener.is_some() => {}
+            if engine.system.is_some()
+                || engine.ssh.is_some()
+                || engine.listener.is_some()
+                || engine.debug_output.is_some() => {}
         InputState::Ended => {
             ui.separator();
             ui.label(
@@ -2119,6 +2143,7 @@ fn render_log_stream(
         render_system_status(ui, engine, theme, lang);
         render_ssh_status(ui, engine, theme, lang);
         render_listener_status(ui, engine, theme, lang);
+        render_debug_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
         if let Some(glob) = engine.folder.as_ref().map(|f| {

@@ -67,6 +67,7 @@ pub fn is_system_path(path: &Path) -> bool {
     path.to_str().is_some_and(|s| {
         s.starts_with(JOURNALD) || s.starts_with(DOCKER) || s.starts_with("ssh://")
     }) || crate::net_listener::is_listen_path(path)
+        || crate::debug_output::is_dbwin_path(path)
 }
 
 /// A unit name journalctl accepts and cannot take for an option.
@@ -451,6 +452,7 @@ impl TailEngine {
             .map(SystemUri::title)
             .or_else(|| self.ssh.as_ref().map(crate::ssh_source::SshStream::title))
             .or_else(|| self.listener.as_ref().map(|l| l.spec.title()))
+            .or_else(|| self.debug_output.as_ref().map(|d| d.spec.title()))
     }
 
     /// Called from `poll_updates`: once the copier saw the end of the pipe, collects the

@@ -57,6 +57,23 @@ by default: GPU drivers and runtimes may trace into it.
 stream entry. On restore the capture restarts empty; if another monitor owns the buffer,
 the stream shows D2's message and a Retry button.
 
+### D6. As implemented
+- No `windows-sys`: `CreateEventW`, `CreateFileMappingW`, `MapViewOfFile`, `SetEvent`,
+  `WaitForSingleObject`, `OpenProcess`, `QueryFullProcessImageNameW`,
+  `MultiByteToWideChar` and the handle calls are declared in `src/debug_output.rs`
+  (kernel32 is always linked); the module compiles everywhere, the URI is recognised on
+  every platform and opening it elsewhere says "Windows only".
+- The process filter lives in the URI (`dbwin://local?include=…&exclude=…`), so the
+  workspace and sessions keep it with no new key (D5's `dbwin_include` / `dbwin_exclude`
+  are not needed).
+- The "writer thread" of D1 is the standard-input copier: its input formats the queued
+  messages, so there are two threads per capture, the reader and the copier.
+- The global capture is not greyed out in advance: creating the `Global\` objects fails
+  with access denied without administrator rights, and the stream says so.
+- No Retry button: the stream does not open while another monitor owns the buffer, and
+  opening it again retries. No pause (open question): closing the tab releases the
+  buffer at once.
+
 ## Risks / Trade-offs
 
 - [A debugger attached to a process receives its messages instead] → documented; nothing

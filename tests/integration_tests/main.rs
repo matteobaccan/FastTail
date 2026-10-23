@@ -247,3 +247,5 @@ mod minimised_window;
 mod workspace;
 
 mod rule_notifications;
+
+mod debug_output;
