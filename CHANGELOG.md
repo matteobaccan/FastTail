@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Field statistics.** *Statistics of `status`* in a column header menu (or *Statistics…*
+  in the stream's 💾 menu) opens a Statistics tab: the most frequent values of a field
+  over the lines the stream shows, with count, share, a bar and the count per level; a
+  numeric summary (min, max, mean, p50 / p90 / p95 / p99 within 1 %) when the values are
+  numbers (`250ms`, `12 %` too); and a line chart per time slice (automatic, or 1 s to
+  1 day) of the top five values or of p50 / p95. The source can also be a regex with a
+  capture group (`took (\d+)ms`), so plain logs work too. A click on a value adds the
+  include term (`status=500`), `CTRL` + click an exclude term; **Copy as CSV** copies the
+  table. Counted in the background on files of any size, again when the filters change,
+  and appended lines are added as they come; at most 100,000 distinct values are listed.
+
 ## [0.23.0] - 2026-10-23
 
 The **remote and system sources** milestone: the six changes of the 0.23.0 plan, shipped in

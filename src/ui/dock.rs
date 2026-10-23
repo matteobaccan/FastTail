@@ -60,6 +60,8 @@ pub enum FastTailTab {
     Scratchpad,
     /// Two lines or two lists of lines compared (`ui::compare_tab`); never saved.
     Compare,
+    /// Statistics of a field of a stream (`ui::stats_tab`); never saved.
+    Statistics(PathBuf),
 }
 
 pub struct DockContext<'a> {
@@ -362,6 +364,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     .strong(),
                 )
             }
+            FastTailTab::Statistics(path) => WidgetText::from(
+                RichText::new(crate::ui::stats_tab::title(
+                    find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
+                    *self.ctx.language,
+                ))
+                .monospace()
+                .strong(),
+            ),
             FastTailTab::Compare => WidgetText::from(
                 RichText::new(format!("⇄ {}", t(*self.ctx.language, "compare_title")))
                     .monospace()
@@ -508,6 +518,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     *self.ctx.level_colors,
                 );
             }
+            FastTailTab::Statistics(path) => {
+                let engine =
+                    find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
+                crate::ui::stats_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
+            }
             FastTailTab::Compare => {
                 crate::ui::compare_tab::render(
                     ui,
@@ -578,6 +593,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 self.ctx.find_all.close();
             }
             FastTailTab::Compare => *self.ctx.compare = None,
+            FastTailTab::Statistics(path) => {
+                if let Some(i) = find_engine_index(self.ctx.engines, path) {
+                    self.ctx.engines[i].close_stats();
+                }
+            }
             _ => {
                 *self.ctx.tab_closed = true;
             }
@@ -1471,6 +1491,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Timestamps => "scan_timestamps",
         crate::scan_job::ScanKind::AutoBookmarks => "scan_auto_bookmarks",
         crate::scan_job::ScanKind::Collapse => "scan_collapsing",
+        crate::scan_job::ScanKind::FieldStats => "scan_statistics",
     }
 }
 
@@ -2786,6 +2807,14 @@ fn render_log_stream(
                 .clicked()
             {
                 engine.filter_tab_request = true;
+                ui.close();
+            }
+            if ui
+                .button(RichText::new(format!("📊 {}", t(lang, "stats_open"))).monospace())
+                .on_hover_text(t(lang, "stats_open_tip"))
+                .clicked()
+            {
+                engine.stats_request = Some(None);
                 ui.close();
             }
             if ui
@@ -4841,6 +4870,8 @@ enum HeaderAction {
     Columns(Vec<String>),
     Width(String, u16),
     Reset,
+    /// Statistics of this field.
+    Stats(String),
 }
 
 /// Header row of the column view: the field names over their columns (following the
@@ -4975,6 +5006,7 @@ fn render_field_header(
         Some(HeaderAction::Columns(keys)) => engine.set_field_columns(keys),
         Some(HeaderAction::Width(key, cells)) => engine.set_field_width(&key, cells),
         Some(HeaderAction::Reset) => engine.reset_field_columns(),
+        Some(HeaderAction::Stats(key)) => engine.stats_request = Some(Some(key)),
         None => return,
     }
     ui.ctx().request_repaint();
@@ -5023,6 +5055,16 @@ fn header_menu(
             let mut next = keys.clone();
             next.swap(i, i + 1);
             action = Some(HeaderAction::Columns(next));
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "📊 {}",
+                t(lang, "stats_of_field").replace("{0}", &keys[i])
+            ))
+            .clicked()
+        {
+            action = Some(HeaderAction::Stats(keys[i].clone()));
             ui.close();
         }
         ui.separator();

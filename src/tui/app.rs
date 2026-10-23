@@ -7429,6 +7429,7 @@ fn panel_name(tab: &DockTab, lang: Language) -> String {
         DockTab::FindResults => tx(lang, "Find results").into(),
         DockTab::Scratchpad => tx(lang, "Scratchpad").into(),
         DockTab::Compare => tx(lang, "Compare").into(),
+        DockTab::Statistics(_) => tx(lang, "Statistics").into(),
     }
 }
 
@@ -7687,6 +7688,7 @@ fn progress_text(e: &TailEngine, lang: Language) -> String {
             ScanKind::Timestamps => "timestamps",
             ScanKind::AutoBookmarks => "bookmarks",
             ScanKind::Collapse => "collapsing",
+            ScanKind::FieldStats => "statistics",
         };
         s.push_str(&format!(" - {name} {:.0}%", p * 100.0));
         if kind == ScanKind::Search {

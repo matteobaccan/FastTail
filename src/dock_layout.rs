@@ -60,6 +60,7 @@ pub enum Tab {
     FindResults,
     Scratchpad,
     Compare,
+    Statistics(PathBuf),
 }
 
 impl Tab {

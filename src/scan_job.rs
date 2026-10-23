@@ -46,6 +46,8 @@ pub enum ScanKind {
     AutoBookmarks,
     /// Detects the runs of repeated entries among the visible lines (collapse mode).
     Collapse,
+    /// Counts the values of a field or capture over the visible lines (Statistics tab).
+    FieldStats,
 }
 
 /// Most include terms, and most exclude terms, a stream can hold.
@@ -498,6 +500,14 @@ pub enum JobSpec {
         detector: Box<Detector>,
         visible: VisibleSet,
     },
+    /// Count the values of `source` over the visible lines (see `field_stats`), with their
+    /// level and, given `slices`, their time slice. Partial counts are sent as they grow
+    /// (`ScanBatch::Stats`, to be merged), at most every `STATS_PERIOD`.
+    FieldStats {
+        source: crate::field_stats::StatsSource,
+        visible: VisibleSet,
+        slices: Option<crate::field_stats::Slices>,
+    },
 }
 
 /// The lines a search or collapse job covers.
@@ -597,6 +607,8 @@ pub enum ScanBatch {
     Groups(Vec<Group>),
     /// The collapse detection state at the end of the range, sent before `Done`.
     CollapseCursor(Box<Detector>),
+    /// Counts of a `FieldStats` job since its last batch, to merge.
+    Stats(Box<crate::field_stats::FieldStats>),
     /// Fraction of the byte range scanned so far.
     Progress(f32),
     /// The range was scanned completely (`lines` = line count covered).
@@ -646,6 +658,7 @@ impl ScanJob {
             JobSpec::Timestamps { .. } => ScanKind::Timestamps,
             JobSpec::AutoBookmarks { .. } => ScanKind::AutoBookmarks,
             JobSpec::Collapse { .. } => ScanKind::Collapse,
+            JobSpec::FieldStats { .. } => ScanKind::FieldStats,
         };
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -742,6 +755,33 @@ impl Timing {
     }
 }
 
+/// Running state of a `FieldStats` job: the counts since the last batch, the scratch
+/// field buffer, and the timestamp the next line inherits.
+struct StatsRun {
+    stats: crate::field_stats::FieldStats,
+    spans: FieldSpans,
+    inherited: i64,
+    hint: FormatHint,
+    sent: std::time::Instant,
+}
+
+/// How often a `FieldStats` job sends its counts.
+const STATS_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
+
+impl StatsRun {
+    fn take_batch(&mut self) -> Option<ScanBatch> {
+        if self.stats.lines == 0 {
+            return None;
+        }
+        let fresh = crate::field_stats::FieldStats::new(self.stats.slices);
+        self.sent = std::time::Instant::now();
+        Some(ScanBatch::Stats(Box::new(std::mem::replace(
+            &mut self.stats,
+            fresh,
+        ))))
+    }
+}
+
 /// Running state of a `Search` job: hits listed so far, and the hits past the limit
 /// counted since the last `Counted` batch with the last of them.
 #[derive(Default)]
@@ -820,6 +860,16 @@ fn run(
         JobSpec::Collapse { detector, .. } => Some(Detector::clone(detector)),
         _ => None,
     };
+    let mut stats_run = match &spec {
+        JobSpec::FieldStats { slices, .. } => Some(StatsRun {
+            stats: crate::field_stats::FieldStats::new(*slices),
+            spans: FieldSpans::new(),
+            inherited: NO_TIMESTAMP,
+            hint: FormatHint::default(),
+            sent: std::time::Instant::now(),
+        }),
+        _ => None,
+    };
     if matches!(spec, JobSpec::Index) && range.start_offset < range.end_offset {
         offsets.push(range.start_offset);
     }
@@ -831,6 +881,7 @@ fn run(
     // The visible lines a search or collapse job covers, walked in file order.
     let mut walk = match &spec {
         JobSpec::Collapse { visible, .. }
+        | JobSpec::FieldStats { visible, .. }
         | JobSpec::Search {
             filter: visible, ..
         } => Some(VisibleWalk::new(
@@ -848,10 +899,44 @@ fn run(
                     levels: &mut Vec<u8>,
                     timing: &mut Timing,
                     tally: &mut Tally,
-                    collapse: &mut Option<Detector>|
+                    collapse: &mut Option<Detector>,
+                    stats_run: &mut Option<StatsRun>|
      -> bool {
         match &spec {
             JobSpec::Index => true,
+            JobSpec::FieldStats { source, slices, .. } => {
+                let Some(run) = stats_run.as_mut() else {
+                    return true;
+                };
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    // Every line is timed, visible or not: a line without a timestamp of
+                    // its own inherits the one above, as in the engine's cache.
+                    if slices.is_some() {
+                        if let Some((millis, format)) =
+                            crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
+                        {
+                            run.hint = format;
+                            run.inherited = millis;
+                        }
+                    }
+                    if !walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                        return true;
+                    }
+                    let parser = range.parser.as_deref();
+                    let ts = run.inherited;
+                    let StatsRun { stats, spans, .. } = run;
+                    source.with_value(parser, s, spans, |v| {
+                        let level = if v.is_some() {
+                            crate::fields::line_level(parser, s, range.level_window) as u8
+                        } else {
+                            0
+                        };
+                        stats.add_line(v, level, ts);
+                    });
+                    true
+                });
+                true
+            }
             JobSpec::Collapse { .. } => {
                 let pos = walk.as_mut().and_then(|w| w.pos(idx));
                 if let Some(detector) = collapse.as_mut() {
@@ -983,6 +1068,7 @@ fn run(
                     &mut timing,
                     &mut tally,
                     &mut collapse,
+                    &mut stats_run,
                 ) {
                     limit_reached = true;
                     break 'outer;
@@ -1034,6 +1120,14 @@ fn run(
             if !hits.is_empty() && !send(ScanBatch::Lines(std::mem::take(&mut hits))) {
                 return;
             }
+        } else if let Some(run) = stats_run.as_mut() {
+            if run.sent.elapsed() >= STATS_PERIOD {
+                if let Some(batch) = run.take_batch() {
+                    if !send(batch) {
+                        return;
+                    }
+                }
+            }
         } else if let Some(detector) = collapse.as_mut() {
             if !detector.groups.is_empty()
                 && !send(ScanBatch::Groups(std::mem::take(&mut detector.groups)))
@@ -1076,6 +1170,7 @@ fn run(
             &mut timing,
             &mut tally,
             &mut collapse,
+            &mut stats_run,
         );
         line_idx += 1;
     }
@@ -1090,6 +1185,12 @@ fn run(
             })
         {
             return;
+        }
+    } else if let Some(mut run) = stats_run.take() {
+        if let Some(batch) = run.take_batch() {
+            if !send(batch) {
+                return;
+            }
         }
     } else if let Some(mut detector) = collapse.take() {
         let groups = std::mem::take(&mut detector.groups);

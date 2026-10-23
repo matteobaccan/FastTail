@@ -1782,6 +1782,8 @@ pub struct TailEngine {
     pub format_request: Option<usize>,
     /// The stream menu asked for its filter as a new tab (applied by the app).
     pub filter_tab_request: bool,
+    /// The Statistics tab was asked for: of this field, or of the stream (`None`).
+    pub stats_request: Option<Option<String>>,
     /// The row menu asked for a compare (applied by the app).
     pub compare_request: Option<crate::compare::CompareRequest>,
     /// "Show in context" on a derived stream: the source line to show in the source.
@@ -1871,6 +1873,8 @@ pub struct TailEngine {
     pub listener: Option<crate::net_listener::ListenerStream>,
     /// The capture of a Windows debug-output stream (see `debug_output`).
     pub debug_output: Option<crate::debug_output::DebugStream>,
+    /// The Statistics tab of the stream, while it is open (see `open_stats`).
+    pub stats: Option<crate::field_stats::StatsState>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2453,6 +2457,7 @@ impl TailEngine {
             export_request: None,
             format_request: None,
             filter_tab_request: false,
+            stats_request: None,
             compare_request: None,
             source_context_request: None,
             markdown_text_cache: None,
@@ -2489,6 +2494,7 @@ impl TailEngine {
             ssh: None,
             listener: None,
             debug_output: None,
+            stats: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
@@ -3229,6 +3235,26 @@ impl TailEngine {
         self.refresh_filters();
     }
 
+    /// Adds `term` as an include (or exclude) term, in the first empty row or a new one.
+    /// Returns false when the side holds `MAX_FILTER_TERMS` terms already; a term already
+    /// there is not added twice.
+    pub fn add_filter_term(&mut self, term: &str, include: bool) -> bool {
+        let (mut inc, mut exc) = (self.include_terms.clone(), self.exclude_terms.clone());
+        let side = if include { &mut inc } else { &mut exc };
+        if side.iter().any(|t| t == term) {
+            return true;
+        }
+        if let Some(slot) = side.iter_mut().find(|t| t.is_empty()) {
+            *slot = term.to_string();
+        } else if side.len() < MAX_FILTER_TERMS {
+            side.push(term.to_string());
+        } else {
+            return false;
+        }
+        self.set_filter_terms(inc, exc);
+        true
+    }
+
     /// Replaces both term lists (capped at `MAX_FILTER_TERMS` each) in one recomputation.
     /// Rows added or removed empty change nothing visible: they skip the recomputation,
     /// which on a large file is a background scan.
@@ -3816,6 +3842,10 @@ impl TailEngine {
             _ => false,
         };
         if !same {
+            // Another parser reads other fields: the statistics count again.
+            if let Some(s) = self.stats.as_mut() {
+                s.restart = true;
+            }
             // A table opens in the column view, unless the view was chosen already.
             if matches!(parser.as_deref(), Some(FieldParser::Delimited(_)))
                 && !self.field_view_chosen
@@ -4087,6 +4117,7 @@ impl TailEngine {
     pub fn poll_updates(&mut self) {
         self.poll_context_rebuild();
         self.drain_job();
+        self.poll_stats();
         self.land_open_line();
         // A live time window slides with the clock.
         if self.time_window_live() && self.live_checked_at.elapsed() >= LIVE_WINDOW_PERIOD {
@@ -4773,6 +4804,12 @@ impl TailEngine {
     /// Recomputes filter visibility and search matches for lines `>= unchanged_lines`,
     /// keeping the already-computed state for the lines before it.
     fn refresh_derived_state_from(&mut self, unchanged_lines: usize) {
+        if unchanged_lines == 0 {
+            // A new view (filters, reload): the statistics count it again.
+            if let Some(s) = self.stats.as_mut() {
+                s.restart = true;
+            }
+        }
         self.recompute_filtered_lines_from(unchanged_lines);
         self.refresh_search_from(unchanged_lines);
         self.update_collapse();
@@ -7508,6 +7545,203 @@ impl TailEngine {
         }
     }
 
+    // ----- Statistics of a field (see `field_stats`) -----
+
+    /// Opens (or changes) the Statistics of the stream: the values of `source` over the
+    /// lines it shows, counted in the background.
+    pub fn open_stats(
+        &mut self,
+        source: crate::field_stats::StatsSource,
+        slice_choice: crate::field_stats::SliceChoice,
+    ) {
+        self.stats = Some(crate::field_stats::StatsState {
+            source,
+            slice_choice,
+            result: crate::field_stats::FieldStats::default(),
+            job: None,
+            progress: 0.0,
+            covered: 0,
+            restart: true,
+            failed: false,
+            generation: 0,
+            job_generation: 0,
+            top_n: self.stats.as_ref().map_or(20, |s| s.top_n),
+        });
+        self.poll_stats();
+    }
+
+    pub fn close_stats(&mut self) {
+        self.stats = None;
+    }
+
+    /// First and last timestamps of the stream, read from its first and last lines (out
+    /// of order lines past them are left out of the slices).
+    fn stats_time_span(&self) -> Option<(i64, i64)> {
+        const LOOK: usize = 1000;
+        let total = self.total_lines();
+        let parser = self.field_parser.as_deref();
+        let read = |idx: usize| {
+            let line = self.get_line(idx)?;
+            crate::fields::line_timestamp(parser, &line, crate::timestamp::FormatHint::default())
+                .map(|(ms, _)| ms)
+        };
+        let first = (0..total.min(LOOK)).find_map(read)?;
+        let last = (total.saturating_sub(LOOK)..total).rev().find_map(read)?;
+        Some((first, last.max(first)))
+    }
+
+    /// Starts counting from scratch: a scan over the visible lines present now.
+    fn start_stats(&mut self) {
+        use crate::field_stats::{SliceChoice, Slices};
+        let filtering = self
+            .job
+            .as_ref()
+            .is_some_and(|j| matches!(j.kind, ScanKind::Filter | ScanKind::Index))
+            || self.index_pending;
+        let span = match self.stats.as_ref().map(|s| s.slice_choice) {
+            Some(SliceChoice::Off) | None => None,
+            Some(_) => self.stats_time_span(),
+        };
+        let visible = if self.is_filter_active() {
+            VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+        } else {
+            VisibleSet::All
+        };
+        let total = self.total_lines();
+        let (file, range) = self.full_scan_range();
+        let Some(s) = self.stats.as_mut() else {
+            return;
+        };
+        if filtering {
+            // The visible set is still being built: wait for it.
+            return;
+        }
+        let slices = match (s.slice_choice, span) {
+            (SliceChoice::Auto, Some((a, b))) => Slices::auto(a, b),
+            (SliceChoice::Width(w), Some((a, b))) => {
+                Slices::with_width(a, b, w).or_else(|| Slices::auto(a, b))
+            }
+            _ => None,
+        };
+        s.restart = false;
+        s.failed = false;
+        s.result = crate::field_stats::FieldStats::new(slices);
+        s.covered = total;
+        s.progress = 0.0;
+        s.generation = s.generation.wrapping_add(1);
+        s.job_generation = s.job_generation.wrapping_add(1);
+        s.job = Some(ScanJob::spawn(
+            s.job_generation,
+            &file,
+            range,
+            JobSpec::FieldStats {
+                source: s.source.clone(),
+                visible,
+                slices,
+            },
+        ));
+    }
+
+    /// Merges what the statistics scan sent, and counts the visible lines appended since
+    /// (a bounded number per poll).
+    fn poll_stats(&mut self) {
+        const APPEND_BATCH: usize = 20_000;
+        let Some(s) = self.stats.as_mut() else {
+            return;
+        };
+        if !s.restart && s.covered > self.line_offsets.len() {
+            // Truncated or replaced.
+            s.restart = true;
+        }
+        if s.restart {
+            self.start_stats();
+            return;
+        }
+        if let Some(job) = s.job.as_ref() {
+            let mut finished = false;
+            while let Some(batch) = job.try_recv() {
+                match batch {
+                    ScanBatch::Stats(part) => {
+                        s.result.merge(*part);
+                        s.generation = s.generation.wrapping_add(1);
+                    }
+                    ScanBatch::Progress(p) => s.progress = p,
+                    ScanBatch::Done { .. } => finished = true,
+                    ScanBatch::Failed => {
+                        s.failed = true;
+                        finished = true;
+                    }
+                    _ => {}
+                }
+            }
+            if finished {
+                s.job = None;
+                s.progress = 1.0;
+            } else {
+                return;
+            }
+        }
+        // Lines appended after the scan started, once the filters placed them.
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|j| matches!(j.kind, ScanKind::Filter | ScanKind::Index))
+        {
+            return;
+        }
+        let Some(s) = self.stats.as_ref() else {
+            return;
+        };
+        let from = s.covered;
+        let total = self.total_lines();
+        if from >= total {
+            return;
+        }
+        let to = total.min(from + APPEND_BATCH);
+        let filtered = self.is_filter_active();
+        let parser = self.field_parser.clone();
+        let window = self.level_window();
+        let mut spans = crate::fields::FieldSpans::new();
+        let mut counted = Vec::new();
+        for idx in from..to {
+            if filtered && self.filtered_lines.binary_search(&idx).is_err() {
+                continue;
+            }
+            counted.push(idx);
+        }
+        let mut part =
+            crate::field_stats::FieldStats::new(self.stats.as_ref().and_then(|s| s.result.slices));
+        let Some(source) = self.stats.as_ref().map(|s| s.source.clone()) else {
+            return;
+        };
+        for idx in counted {
+            let Some(line) = self.get_line(idx) else {
+                continue;
+            };
+            let ts = self.line_timestamp(idx).unwrap_or_else(|| {
+                crate::fields::line_timestamp(
+                    parser.as_deref(),
+                    &line,
+                    crate::timestamp::FormatHint::default(),
+                )
+                .map_or(NO_TIMESTAMP, |(ms, _)| ms)
+            });
+            source.with_value(parser.as_deref(), &line, &mut spans, |v| {
+                let level = if v.is_some() {
+                    crate::fields::line_level(parser.as_deref(), &line, window) as u8
+                } else {
+                    0
+                };
+                part.add_line(v, level, ts);
+            });
+        }
+        if let Some(s) = self.stats.as_mut() {
+            s.result.merge(part);
+            s.covered = to;
+            s.generation = s.generation.wrapping_add(1);
+        }
+    }
+
     /// Drops a running search job, whose hits no longer apply. Returns whether it did.
     fn drop_search_job(&mut self) -> bool {
         if self
@@ -7618,6 +7852,8 @@ impl TailEngine {
         let mut finished: Option<Result<usize, ()>> = None;
         while let Some(batch) = job.try_recv() {
             match batch {
+                // Statistics jobs run in their own slot (`stats`).
+                ScanBatch::Stats(_) => {}
                 ScanBatch::Lines(lines) if job.kind == ScanKind::AutoBookmarks => {
                     // Matched on the raw lines, whatever the filters and time window.
                     self.add_auto_bookmarks(lines);
@@ -7641,6 +7877,7 @@ impl TailEngine {
                     }
                     job.hits += lines.len();
                     match job.kind {
+                        ScanKind::FieldStats => {}
                         ScanKind::Filter => {
                             self.extend_filtered(lines);
                             self.filter_generation = self.filter_generation.wrapping_add(1);
@@ -7782,6 +8019,7 @@ impl TailEngine {
 
     fn finish_job(&mut self, kind: ScanKind, end_offset: u64) {
         match kind {
+            ScanKind::FieldStats => {}
             ScanKind::Index => {
                 self.index_pending = false;
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);

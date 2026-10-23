@@ -388,7 +388,9 @@ pub fn apply_find_jump(
 pub fn without_find_results(dock: &DockState<FastTailTab>) -> DockState<FastTailTab> {
     let mut saved = dock.clone();
     retain_tabs(&mut saved, |tab| {
-        *tab != FastTailTab::FindResults && *tab != FastTailTab::Compare
+        *tab != FastTailTab::FindResults
+            && *tab != FastTailTab::Compare
+            && !matches!(tab, FastTailTab::Statistics(_))
     });
     saved
 }

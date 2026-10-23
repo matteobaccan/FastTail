@@ -1396,6 +1396,33 @@ impl FastTailApp {
         changed
     }
 
+    /// Opens the Statistics tab a stream asked for: of a field, or of the stream (its
+    /// first field, or the regex picker without a parser). Returns whether one opened.
+    pub fn apply_stats_requests(&mut self) -> bool {
+        let Some(idx) = self.engines.iter().position(|e| e.stats_request.is_some()) else {
+            return false;
+        };
+        let engine = &mut self.engines[idx];
+        let wanted = engine.stats_request.take().flatten();
+        let key = wanted.or_else(|| {
+            if engine.stats.is_some() {
+                None
+            } else {
+                engine.field_catalogue().keys().first().cloned()
+            }
+        });
+        if let Some(key) = key {
+            let slices = engine
+                .stats
+                .as_ref()
+                .map_or(crate::field_stats::SliceChoice::Auto, |s| s.slice_choice);
+            engine.open_stats(crate::field_stats::StatsSource::Field(key), slices);
+        }
+        let path = engine.path.clone();
+        crate::ui::stats_tab::open_tab(&mut self.dock_state, &path);
+        true
+    }
+
     /// Feeds the derived streams from their sources (a few milliseconds each per frame)
     /// and applies their requests: a filter to open as a tab, a line to show in the
     /// source. Returns whether anything changed.
@@ -4430,6 +4457,9 @@ impl FastTailApp {
             ctx.request_repaint();
         }
         if self.apply_filter_tab_requests() {
+            ctx.request_repaint();
+        }
+        if self.apply_stats_requests() {
             ctx.request_repaint();
         }
         if self.apply_merged_views() {
