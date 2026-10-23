@@ -29,6 +29,6 @@
 
 ## 5. Wrap-up
 
-- [ ] 5.1 Manual check against a Linux server (GNU), an Alpine container (BusyBox) and a macOS host, from Windows 11 and Linux; a dropped Wi-Fi reconnects without duplicate lines
-- [ ] 5.2 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
-- [ ] 5.3 After the release, archive the change so `ssh-sources` becomes a spec
+- [ ] 5.1 Manual check against a Linux server (GNU), an Alpine container (BusyBox) and a macOS host, from Windows 11 and Linux; a dropped Wi-Fi reconnects without duplicate lines (left to the maintainer: not run in the agent sessions)
+- [x] 5.2 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
+- [x] 5.3 After the release, archive the change so `ssh-sources` becomes a spec

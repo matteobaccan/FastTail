@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-23
+
+The **remote and system sources** milestone: the six changes of the 0.23.0 plan, shipped in
+the nightly patch 0.22.1 and listed in its section below.
+
+### Added
+
+- **System sources**: `journald://<unit>` and `docker://<container>` (Podman too) followed
+  as streams, with backlog, Reconnect and the 📦 Open system source dialog.
+- **Remote files over SSH**: `ssh://[user@]host[:port]/path` and remote patterns through
+  the system `ssh` client, reconnecting with back-off, the 🌐 dialog for several hosts.
+- **Network listener**: TCP, UDP and syslog (RFC 5424 / 3164) lines on a local port, rate
+  limited and bound to loopback by default, the 📡 Listen dialog.
+- **OpenTelemetry logs**: an OTLP/HTTP receiver (`otlp://127.0.0.1:4318`), protobuf or
+  JSON, no collector needed.
+- **Desktop notifications from rules**: a rule with Notify, throttled, only when the
+  stream is not in view unless asked.
+- **Windows debug output**: `dbwin://local` / `dbwin://global` capture of
+  `OutputDebugString`, with a process filter.
+
 ## [0.22.1] - 2026-10-23
 
 ### Added
@@ -2097,6 +2117,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.23.0]: https://github.com/matteobaccan/FastTail/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/matteobaccan/FastTail/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/matteobaccan/FastTail/compare/v0.21.10...v0.22.0
 [0.21.10]: https://github.com/matteobaccan/FastTail/compare/v0.21.9...v0.21.10

@@ -14,5 +14,5 @@
 
 ## 3. Wrap-up
 
-- [ ] 3.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
-- [ ] 3.2 After the release, archive the change so `otlp-receiver` becomes a spec
+- [x] 3.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
+- [x] 3.2 After the release, archive the change so `otlp-receiver` becomes a spec
