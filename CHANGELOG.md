@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-10-23
+
 ### Added
 
 - **Field statistics.** *Statistics of `status`* in a column header menu (or *Statistics…*
@@ -2130,6 +2132,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.23.1]: https://github.com/matteobaccan/FastTail/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/matteobaccan/FastTail/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/matteobaccan/FastTail/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/matteobaccan/FastTail/compare/v0.21.10...v0.22.0
