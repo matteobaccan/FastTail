@@ -47,6 +47,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::OutOfOrderNext => (Action::NextOutOfOrder, ""),
         ActionId::SplitFile => (Action::Split, ""),
         ActionId::SystemReconnect => (Action::Reconnect, ""),
+        ActionId::OpenSystemSource => (Action::OpenSystem, ""),
         ActionId::OutOfOrderPrev => (Action::PrevOutOfOrder, ""),
         ActionId::BookmarkNote => (Action::EditNote, "m"),
         ActionId::PresetSave | ActionId::PresetManage => (Action::Presets, "p"),

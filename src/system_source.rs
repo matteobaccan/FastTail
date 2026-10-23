@@ -569,9 +569,178 @@ impl TailEngine {
     }
 }
 
+/// What the Open system source dialog lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListKind {
+    /// Containers, running and stopped (`docker ps -a`).
+    Docker,
+    /// systemd services, the user's with `user` (`systemctl list-units`).
+    Units { user: bool },
+}
+
+/// One entry of a listing: the name a URI takes, and what to show next to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub name: String,
+    pub detail: String,
+}
+
+/// The program and arguments that list `kind`.
+pub fn list_command(kind: ListKind, commands: &Commands) -> (String, Vec<String>) {
+    match kind {
+        ListKind::Docker => (
+            commands.docker.clone(),
+            [
+                "ps",
+                "-a",
+                "--format",
+                "{{.Names}}\t{{.Image}}\t{{.Status}}",
+            ]
+            .map(String::from)
+            .to_vec(),
+        ),
+        ListKind::Units { user } => {
+            let mut args = ["list-units", "--type=service", "--no-legend", "--plain"]
+                .map(String::from)
+                .to_vec();
+            if user {
+                args.push("--user".to_string());
+            }
+            ("systemctl".to_string(), args)
+        }
+    }
+}
+
+/// The entries of a listing command's output; names a URI would refuse are left out.
+pub fn parse_listing(kind: ListKind, output: &str) -> Vec<Listed> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (name, detail) = match kind {
+                ListKind::Docker => {
+                    let mut parts = line.split('\t');
+                    let name = parts.next()?.trim();
+                    (name, parts.collect::<Vec<_>>().join(" · "))
+                }
+                // `nginx.service loaded active running A high performance web server`
+                ListKind::Units { .. } => {
+                    let mut parts = line.split_whitespace();
+                    let name = parts.next()?;
+                    let rest: Vec<&str> = parts.collect();
+                    let state = rest.iter().skip(1).take(2).copied().collect::<Vec<_>>();
+                    let description = rest.iter().skip(3).copied().collect::<Vec<_>>();
+                    (
+                        name,
+                        format!("{} · {}", state.join(" "), description.join(" ")),
+                    )
+                }
+            };
+            let valid = match kind {
+                ListKind::Docker => valid_container(name),
+                ListKind::Units { .. } => valid_unit(name),
+            };
+            valid.then(|| Listed {
+                name: name.to_string(),
+                detail,
+            })
+        })
+        .collect()
+}
+
+/// A listing running on a background thread.
+pub struct Listing {
+    rx: std::sync::mpsc::Receiver<Result<Vec<Listed>, String>>,
+}
+
+impl Listing {
+    /// Starts listing `kind`; `wake` is called when the result is in.
+    pub fn start(kind: ListKind, commands: &Commands, wake: Option<WakeFn>) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (program, args) = list_command(kind, commands);
+        let _ = std::thread::Builder::new()
+            .name("fasttail-list".to_string())
+            .spawn(move || {
+                let _ = tx.send(run_listing(kind, &program, &args));
+                if let Some(wake) = wake {
+                    wake();
+                }
+            });
+        Self { rx }
+    }
+
+    /// The result once it is in.
+    pub fn poll(&self) -> Option<Result<Vec<Listed>, String>> {
+        self.rx.try_recv().ok()
+    }
+}
+
+fn run_listing(kind: ListKind, program: &str, args: &[String]) -> Result<Vec<Listed>, String> {
+    if !valid_program(program) {
+        return Err(format!(
+            "{program}: the program must be a name on PATH or an absolute path"
+        ));
+    }
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().map_err(|e| format!("{program}: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let first = err
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_default();
+        return Err(format!("{program}: {}", first.trim()));
+    }
+    Ok(parse_listing(kind, &String::from_utf8_lossy(&out.stdout)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listings_are_parsed() {
+        let docker = "api\tnginx:1.27\tUp 2 hours\n-bad\tx\ty\nworker_1\tapp:latest\tExited (0) 3 days ago\n";
+        assert_eq!(
+            parse_listing(ListKind::Docker, docker),
+            [
+                Listed {
+                    name: "api".into(),
+                    detail: "nginx:1.27 · Up 2 hours".into()
+                },
+                Listed {
+                    name: "worker_1".into(),
+                    detail: "app:latest · Exited (0) 3 days ago".into()
+                }
+            ]
+        );
+        let units = "nginx.service loaded active running A high performance web server\n\
+                     ssh.service loaded active running OpenBSD Secure Shell server\n";
+        let listed = parse_listing(ListKind::Units { user: false }, units);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "nginx.service");
+        assert_eq!(
+            listed[0].detail,
+            "active running · A high performance web server"
+        );
+        assert_eq!(
+            list_command(ListKind::Units { user: true }, &Commands::default())
+                .1
+                .last()
+                .map(String::as_str),
+            Some("--user")
+        );
+        assert_eq!(
+            list_command(ListKind::Docker, &Commands::default()).0,
+            "docker"
+        );
+    }
 
     fn parse(s: &str) -> Option<Result<SystemUri, UriError>> {
         SystemUri::parse(Path::new(s))

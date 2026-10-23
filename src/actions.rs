@@ -107,6 +107,7 @@ pub enum ActionId {
     OutOfOrderNext,
     OutOfOrderPrev,
     SystemReconnect,
+    OpenSystemSource,
     BookmarkPrev,
     BookmarkNote,
     BookmarkRemove,
@@ -418,6 +419,7 @@ pub const ACTIONS: &[Action] = &[
     // Window
     action(A::OpenFile, "window.open_file", "open_file", C::Window, S::Window, None, &[]),
     action(A::OpenPattern, "window.open_pattern", "act_open_pattern", C::Window, S::Window, None, &[]),
+    action(A::OpenSystemSource, "window.open_system_source", "act_open_system", C::Window, S::Window, None, &[]),
     action(A::MergedView, "window.merged_view", "act_merge", C::Window, S::Window, None, &[]),
     action(A::LogFormats, "window.log_formats", "act_log_formats", C::Window, S::Window, None, &[]),
     action(A::SplitFile, "window.split", "act_split", C::Window, S::Window, None, &[]),

@@ -89,6 +89,8 @@ pub struct FastTailApp {
     pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
     /// The New merged view dialog while it is shown.
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
+    /// The Open system source dialog (`📦`, the palette).
+    pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
     /// The Export dialog, while it is shown.
     pub export_dialog: Option<crate::ui::export_dialog::ExportDialog>,
     /// The Split file dialog, while it is shown.
@@ -607,6 +609,7 @@ impl FastTailApp {
             quick_labels: Vec::new(),
             folder_prompt: None,
             merge_prompt: None,
+            system_dialog: None,
             log_formats: None,
             split_dialog: None,
             export_dialog: None,
@@ -3514,6 +3517,21 @@ impl FastTailApp {
                         self.open_pattern_prompt();
                     }
 
+                    // Open system source: a container or a systemd unit as a stream.
+                    let system_btn =
+                        egui::Button::new(RichText::new("📦").monospace().strong().color(text_pri))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.2, accent))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(30.0, 26.0));
+                    if ui
+                        .add(system_btn)
+                        .on_hover_text(t(self.config.language, "system_open_tip"))
+                        .clicked()
+                    {
+                        self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
+                    }
+
                     // Sessions menu (🗂): save as, save, load, recent, save as default
                     let session_btn =
                         egui::Button::new(RichText::new("🗂").monospace().strong().color(text_pri))
@@ -5029,6 +5047,54 @@ impl FastTailApp {
                                 let _ = self.config.save();
                             }
                         });
+                        // System sources: the backlog read at open and the programs run.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{}:", t(lang, "system_backlog")))
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut self.config.system_source_backlog_lines,
+                                    )
+                                    .range(crate::settings_model::SYSTEM_SOURCE_BACKLOG_LINES),
+                                )
+                                .on_hover_text(t(lang, "system_backlog_tip"))
+                                .changed()
+                            {
+                                let _ = self.config.save();
+                            }
+                        });
+                        let mut save_commands = false;
+                        for (key, value, default) in [
+                            (
+                                "system_docker_command",
+                                &mut self.config.docker_command,
+                                crate::system_source::DEFAULT_DOCKER_COMMAND,
+                            ),
+                            (
+                                "system_journalctl_command",
+                                &mut self.config.journalctl_command,
+                                crate::system_source::DEFAULT_JOURNALCTL_COMMAND,
+                            ),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(format!("{}:", t(lang, key))).monospace());
+                                let resp = ui
+                                    .add(egui::TextEdit::singleline(value).desired_width(200.0))
+                                    .on_hover_text(t(lang, "system_command_tip"));
+                                if resp.lost_focus() {
+                                    if value.trim().is_empty() {
+                                        *value = default.to_string();
+                                    }
+                                    save_commands = true;
+                                }
+                            });
+                        }
+                        if save_commands {
+                            let _ = self.config.save();
+                        }
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(format!("{}:", t(lang, "spool_dir"))).monospace(),
@@ -5726,6 +5792,20 @@ impl FastTailApp {
             if self.config.help_open != is_open {
                 self.config.help_open = is_open;
                 let _ = self.config.save();
+            }
+        }
+
+        // 11a. Open system source dialog
+        if let Some(dialog) = self.system_dialog.as_mut() {
+            use crate::ui::system_dialog::SystemChoice;
+            let commands = self.config.system_commands();
+            match dialog.show(&ctx, &commands, self.config.language, self.config.theme) {
+                Some(SystemChoice::Open(path)) => {
+                    self.system_dialog = None;
+                    self.open_log_file(path);
+                }
+                Some(SystemChoice::Cancel) => self.system_dialog = None,
+                None => {}
             }
         }
 
@@ -6435,6 +6515,9 @@ impl FastTailApp {
             }
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
+            A::OpenSystemSource => {
+                self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
+            }
             A::LogFormats => self.open_log_formats(None, None),
             A::SystemReconnect => {
                 let focused = self.focused_stream_path();

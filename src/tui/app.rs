@@ -289,6 +289,8 @@ pub enum PromptKind {
     LevelBytes,
     /// How to split the stream's file (`100000`, `10mb`, `1h`, `1d`, `30m`).
     Split,
+    /// Open system source (palette): a `docker://` or `journald://` URI.
+    System,
 }
 
 pub struct Prompt {
@@ -3072,6 +3074,11 @@ impl App {
     }
 
     fn submit_prompt(&mut self, prompt: Prompt) {
+        if prompt.kind == PromptKind::System {
+            let text = prompt.field.text().trim().to_string();
+            self.open_file(Path::new(&text));
+            return;
+        }
         let tab = &mut self.tabs[self.active];
         let text = prompt.field.text().trim().to_string();
         match prompt.kind {
@@ -3092,6 +3099,7 @@ impl App {
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
             PromptKind::Split => self.submit_split(&text),
+            PromptKind::System => {}
             PromptKind::LevelBytes if text.is_empty() => tab.engine.set_level_override(None),
             PromptKind::LevelBytes => {
                 match text.parse().ok().and_then(crate::log_level::valid_window) {
@@ -3140,6 +3148,14 @@ impl App {
     }
 
     fn open_prompt(&mut self, kind: PromptKind) {
+        // The only prompt that works with no stream open.
+        if kind == PromptKind::System {
+            self.prompt = Some(Prompt {
+                kind,
+                field: TextField::new("docker://"),
+            });
+            return;
+        }
         let e = &self.tabs[self.active].engine;
         let text = match kind {
             PromptKind::Search => e.search_query.clone(),
@@ -3148,6 +3164,7 @@ impl App {
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
             PromptKind::Split => "100000".to_string(),
+            PromptKind::System => unreachable!("opened above"),
             PromptKind::LevelBytes => e
                 .level_override()
                 .map(|b| b.to_string())
@@ -3682,6 +3699,7 @@ impl App {
                     self.help_top = 0;
                 }
                 Action::OpenFile => self.open_browser(),
+                Action::OpenSystem => self.open_prompt(PromptKind::System),
                 Action::OpenSession => self.open_sessions(),
                 Action::Settings => self.open_settings(),
                 Action::EditRules => self.open_rules(),
@@ -3736,6 +3754,7 @@ impl App {
             Action::StartSearch => self.open_prompt(PromptKind::Search),
             Action::EditInclude => self.open_prompt(PromptKind::Include),
             Action::Split => self.open_prompt(PromptKind::Split),
+            Action::OpenSystem => self.open_prompt(PromptKind::System),
             Action::Reconnect => {
                 match self
                     .tabs
@@ -5481,6 +5500,10 @@ impl App {
             PromptKind::Split => tx(
                 self.lang,
                 "Split every N lines, 10mb, 1h, 1d or 30m (pieces next to the file)",
+            ),
+            PromptKind::System => tx(
+                self.lang,
+                "Open docker://<container>, journald://<unit> or journald://user/<unit>",
             ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
@@ -9590,6 +9613,36 @@ mod tests {
         let mut app = App::new(engines.into_iter().map(Tab::new).collect(), palette);
         app.settings = Some(settings);
         app
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_system_source_opens_from_the_palette_prompt_with_no_stream_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("fake-docker");
+        std::fs::write(&fake, "#!/bin/sh\necho '2026-10-23T06:00:00.000Z hello'\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            docker_command: fake.to_string_lossy().into_owned(),
+            spool_dir: Some(dir.path().join("spool")),
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        assert!(app.tabs.is_empty());
+        app.apply(Action::OpenSystem);
+        assert_eq!(
+            app.prompt.as_ref().map(|p| p.kind),
+            Some(PromptKind::System)
+        );
+        let mut prompt = app.prompt.take().unwrap();
+        prompt.field = TextField::new("docker://api");
+        app.submit_prompt(prompt);
+        assert_eq!(app.tabs.len(), 1, "{:?}", app.message);
+        assert_eq!(stream_title(&app.tabs[0].engine), "docker: api");
     }
 
     #[test]

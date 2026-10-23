@@ -15,15 +15,15 @@
 ## 3. UI, command line and persistence
 
 - [x] 3.1 `cli.rs`: `journald://` and `docker://` recognised before path resolution; tests
-- [ ] 3.2 "Open system source…" dialog: kind selector (journald on Linux only, Docker when the command is found), background listing (`docker ps`, `systemctl list-units`, with `--user`), errors shown, free text field
+- [x] 3.2 "Open system source…" dialog: kind selector (journald on Linux only, Docker when the command is found), background listing (`docker ps`, `systemctl list-units`, with `--user`), errors shown, free text field
 - [x] 3.3 Stream bar: source status (running, ended with exit code and last line), Reconnect button; tab titles `docker: <name>` / `journal: <unit>`
 - [x] 3.4 Workspace, recent files and sessions store the URI unchanged; `source_exists` true for URIs; bookmarks and notes not saved for system sources; reopen at start runs the command again; round-trip tests
-- [ ] 3.5 Settings and `fasttail.ini` (the three keys load, save and round-trip; the Settings fields follow with the dialog): `system_source_backlog_lines` (0–1,000,000, default 10,000), `docker_command` (default `docker`), `journalctl_command` (default `journalctl`); round-trip test
+- [x] 3.5 Settings and `fasttail.ini` (the three keys load, save and round-trip; the Settings fields follow with the dialog): `system_source_backlog_lines` (0–1,000,000, default 10,000), `docker_command` (default `docker`), `journalctl_command` (default `journalctl`); round-trip test
 
 ## 4. Texts and documentation
 
-- [ ] 4.1 New i18n keys (menu entry, dialog, kinds, status texts, Reconnect, Settings labels, refusal messages, help entry) in all 16 languages; add them to the exhaustive i18n test
-- [ ] 4.2 README (feature list, "System sources" section with journald / Docker / Podman examples, comparison table, FAQ replacing the `docker logs | fasttail -` advice), CHANGELOG `[Unreleased]`
+- [x] 4.1 New i18n keys (menu entry, dialog, kinds, status texts, Reconnect, Settings labels, refusal messages, help entry) in all 16 languages; add them to the exhaustive i18n test
+- [x] 4.2 README (feature list, "System sources" section with journald / Docker / Podman examples, comparison table, FAQ replacing the `docker logs | fasttail -` advice), CHANGELOG `[Unreleased]`
 - [ ] 4.3 Manual check on Linux (journald system and user units, Docker, Podman) and on Windows with Docker Desktop, recorded in the PR
 
 ## 5. Wrap-up
@@ -31,4 +31,4 @@
 - [ ] 5.1 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green; PR with Linux and Windows CI green
 - [ ] 5.2 Local preview exe for the maintainer before the 0.23.0 release
 - [ ] 5.3 After the release, archive the change so `stream-engine`, `command-line` and `cyber-ui-docking` gain the new requirements
-- [ ] 5.4 Check that the `ssh-sources` proposal (phase 2) covers the points listed in the design and reuses the piped source
+- [x] 5.4 Check that the `ssh-sources` proposal (phase 2) covers the points listed in the design and reuses the piped source

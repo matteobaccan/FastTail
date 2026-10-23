@@ -81,6 +81,8 @@ pub enum Action {
     Split,
     /// Reconnect an ended system source (palette, the bar's chip).
     Reconnect,
+    /// Open system source (palette): asks for a URI.
+    OpenSystem,
     PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.
