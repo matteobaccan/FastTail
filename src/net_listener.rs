@@ -432,6 +432,9 @@ struct HttpConn<'a> {
 /// Why a request cannot be served: the status to answer before closing.
 type Refusal = &'static str;
 
+/// The request line and the headers (names lower-cased).
+type RequestHead = (String, Vec<(String, String)>);
+
 impl HttpConn<'_> {
     fn available(&self) -> usize {
         self.buf.len() - self.pos
@@ -633,7 +636,7 @@ fn serve_http(
     };
     loop {
         // Request line and headers, within MAX_HEAD.
-        let head = (|| -> Result<Option<(String, Vec<(String, String)>)>, Refusal> {
+        let head = (|| -> Result<Option<RequestHead>, Refusal> {
             let Some(request) = c.line(MAX_HEAD)? else {
                 return Ok(None);
             };
@@ -716,9 +719,10 @@ fn serve_http(
                 "Allow: POST\r\n",
                 close,
             )
-        } else if !json && !content_type.starts_with("application/x-protobuf") {
-            c.respond("415 Unsupported Media Type", "text/plain", b"", "", close)
-        } else if encoding.iter().any(|e| e != "gzip" && e != "identity") || encoding.len() > 1 {
+        } else if (!json && !content_type.starts_with("application/x-protobuf"))
+            || encoding.iter().any(|e| e != "gzip" && e != "identity")
+            || encoding.len() > 1
+        {
             c.respond("415 Unsupported Media Type", "text/plain", b"", "", close)
         } else if shared.limited.load(Ordering::Relaxed) {
             c.respond(
