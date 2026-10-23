@@ -216,6 +216,32 @@ pub enum RestartReason {
     CapReached(u64),
     /// The spool volume kept less than the margin.
     LowDisk { volume: String },
+    /// The source said its content was replaced (a remote file rotated while the
+    /// connection was down): the copy starts again.
+    Replaced,
+}
+
+/// The error an input returns to have the spool restarted from empty before its next
+/// bytes (`RestartReason::Replaced`).
+#[derive(Debug)]
+pub struct RestartRequest;
+
+impl std::fmt::Display for RestartRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the source was replaced")
+    }
+}
+
+impl std::error::Error for RestartRequest {}
+
+/// A `RestartRequest` as an I/O error, for an input's `read`.
+pub fn restart_request() -> std::io::Error {
+    std::io::Error::other(RestartRequest)
+}
+
+fn is_restart_request(e: &std::io::Error) -> bool {
+    e.get_ref()
+        .is_some_and(|inner| inner.is::<RestartRequest>())
 }
 
 struct Shared {
@@ -414,6 +440,18 @@ impl Copier {
         }
     }
 
+    /// Starts the spool over from empty: the engine sees the size drop (and the new
+    /// generation) and rebuilds from byte 0.
+    fn restart_spool(&self, out: &mut File, reason: RestartReason) -> std::io::Result<()> {
+        *out = restart(&self.spool)?;
+        if let Ok(mut r) = self.shared.restart.lock() {
+            *r = Some(reason);
+        }
+        self.shared.written.store(0, Ordering::Release);
+        self.shared.generation.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
     /// Copies until the end of the input; `None` when the stream was closed first.
     fn pump(&self, input: &mut impl Read, mut out: File) -> Option<InputState> {
         let shared = &self.shared;
@@ -434,6 +472,18 @@ impl Copier {
                 }
                 // Windows reports the writer's end closing as a broken pipe.
                 Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => 0,
+                Err(e) if is_restart_request(&e) => {
+                    if shared.closed.load(Ordering::Acquire) {
+                        return None;
+                    }
+                    if let Err(e) = self.restart_spool(&mut out, RestartReason::Replaced) {
+                        return Some(InputState::Failed(e.to_string()));
+                    }
+                    written = 0;
+                    next_check = self.limits.check_every;
+                    self.wake();
+                    continue;
+                }
                 Err(e) => return Some(InputState::Failed(e.to_string())),
             };
             if shared.closed.load(Ordering::Acquire) {
@@ -458,19 +508,11 @@ impl Copier {
                 None => None,
             };
             if let Some(reason) = reason {
-                // Start over from empty: the engine sees the size drop (and the new
-                // generation) and rebuilds from byte 0.
-                out = match restart(&self.spool) {
-                    Ok(file) => file,
-                    Err(e) => return Some(InputState::Failed(e.to_string())),
-                };
+                if let Err(e) = self.restart_spool(&mut out, reason) {
+                    return Some(InputState::Failed(e.to_string()));
+                }
                 written = 0;
                 next_check = self.limits.check_every;
-                if let Ok(mut r) = shared.restart.lock() {
-                    *r = Some(reason);
-                }
-                shared.written.store(0, Ordering::Release);
-                shared.generation.fetch_add(1, Ordering::AcqRel);
             }
             if let Err(e) = out.write_all(&buf[..n]).and_then(|_| out.flush()) {
                 return Some(InputState::Failed(e.to_string()));
@@ -521,13 +563,17 @@ impl TailEngine {
         self.stdin
             .as_ref()
             .or_else(|| self.system.as_ref().map(|s| &s.copier))
+            .or_else(|| self.ssh.as_ref().map(|s| &s.copier))
     }
 
     pub(crate) fn piped_mut(&mut self) -> Option<&mut StdinStream> {
-        match self.stdin.as_mut() {
-            Some(s) => Some(s),
-            None => self.system.as_mut().map(|s| &mut s.copier),
+        if let Some(s) = self.stdin.as_mut() {
+            return Some(s);
         }
+        if let Some(s) = self.system.as_mut() {
+            return Some(&mut s.copier);
+        }
+        self.ssh.as_mut().map(|s| &mut s.copier)
     }
 
     /// Called from `poll_updates` before the file is checked: after a spool restart the

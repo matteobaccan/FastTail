@@ -247,7 +247,8 @@ impl StreamState {
             in_context: engine.context_line().is_some(),
             time_delta: engine.show_time_delta,
             has_anchor: engine.time_anchor().is_some(),
-            source_ended: engine.system.as_ref().is_some_and(|s| !s.is_running()),
+            source_ended: engine.system.as_ref().is_some_and(|s| !s.is_running())
+                || engine.ssh.as_ref().is_some_and(|s| s.is_stopped()),
         }
     }
 }

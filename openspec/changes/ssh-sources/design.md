@@ -122,6 +122,23 @@ are deleted on close, at exit, and by the startup sweep after a crash; the contr
 directory is swept with them. Windows file sharing is unchanged (the spool is written by
 FastTail only).
 
+## Decisions taken at implementation (2026-10-23)
+
+- The copier of `stdin_source` is shared as it is (`system-sources` generalised it); the
+  SSH side is the copier's input (`SshReader`), one endless `Read` that connects, follows
+  and connects again, so the supervisor needs no thread of its own. A replaced file is
+  an error value the copier takes for "restart the spool" (`RestartRequest`).
+- The start is chosen on the server, from the same `ls` the marker prints
+  (`FASTTAIL1 <inode> <size> <start>`): resuming needs one connection, and a rotation
+  during the drop is seen as a start that is not the expected one.
+- ControlMaster is not used: a persisted master can keep the client's output pipe open
+  after the client exits. Glob rescans (part 2) will open their own short connection.
+- The initial-content choice is the URL fragment `#whole` rather than a session key, so
+  the command line, recent files and sessions carry it the same way.
+- Bookmarks of remote streams are not saved in this part (whole-file streams included).
+- Truncations noticed by `tail -F` while connected are appended as they come; the next
+  reconnection sees the smaller size and starts again.
+
 ## Risks / Trade-offs
 
 - [Users with password-only servers cannot use it] → the error says so and links the

@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Remote files over SSH.** `fasttail ssh://deploy@web1/var/log/app.log` follows a file
+  on a server through the system OpenSSH client (keys, agent, `~/.ssh/config`,
+  `known_hosts`; FastTail never handles a password or accepts a host key) running `tail -F`
+  remotely into a local spool. Before, the only way was `ssh web1 tail -F … | fasttail -`,
+  an anonymous `stdin` tab lost at the next start. The last 64 MB are fetched first
+  (`#whole` for the whole file), the stream bar shows the connection state with Disconnect
+  and Reconnect, a dropped connection is retried with back-off and resumes after the last
+  byte without repeating lines, a file rotated meanwhile starts the stream again, a refused
+  key or host key stops without retrying, at most 32 clients run at once. Kept in the
+  workspace and sessions. New `fasttail.ini` keys: `ssh_program`, `remote_spool_max_mb`,
+  `remote_initial_mb`. First part of `ssh-sources`; the Remote dialog, globs and several
+  hosts follow.
+
+### Added
+
 - **Open system source dialog.** The 📦 toolbar button (and *Open system source…* in the
   command palette) lists the Docker containers, stopped ones too, or the systemd services
   (system or user) in the background; a double click or Open opens one as a stream, and

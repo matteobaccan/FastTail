@@ -260,8 +260,8 @@ fn stream_title(engine: &TailEngine) -> String {
     if engine.is_stdin() {
         return crate::stdin_source::STDIN_TITLE.to_string();
     }
-    if let Some(uri) = engine.system_uri() {
-        return uri.title();
+    if let Some(title) = engine.source_title() {
+        return title;
     }
     match &engine.compressed {
         Some(c) => c.title().replace(" \u{203a} ", "/"),
@@ -1045,7 +1045,11 @@ impl App {
                 .map(|s| s.config.system_commands())
                 .unwrap_or_default();
             for (i, tab) in self.tabs.iter_mut().enumerate() {
-                if let Some(err) = tab.engine.apply_reconnect_request(&commands) {
+                if let Some(err) = tab
+                    .engine
+                    .apply_reconnect_request(&commands)
+                    .or_else(|| tab.engine.apply_ssh_request())
+                {
                     self.message = Some(txf(self.lang, "Reconnect failed: {0}", &[&err]));
                 }
                 tab.engine.displayed = shown.contains(&i);
@@ -3756,12 +3760,18 @@ impl App {
             Action::Split => self.open_prompt(PromptKind::Split),
             Action::OpenSystem => self.open_prompt(PromptKind::System),
             Action::Reconnect => {
-                match self
-                    .tabs
-                    .get_mut(self.active)
-                    .and_then(|t| t.engine.system.as_mut())
-                {
-                    Some(s) if !s.is_running() => s.reconnect_requested = true,
+                let engine = self.tabs.get_mut(self.active).map(|t| &mut t.engine);
+                match engine {
+                    Some(e) if e.system.as_ref().is_some_and(|s| !s.is_running()) => {
+                        if let Some(s) = e.system.as_mut() {
+                            s.reconnect_requested = true;
+                        }
+                    }
+                    Some(e) if e.ssh.as_ref().is_some_and(|s| s.is_stopped()) => {
+                        if let Some(s) = e.ssh.as_mut() {
+                            s.reconnect_requested = true;
+                        }
+                    }
                     _ => self.message = Some(tx(self.lang, "No ended system source").into()),
                 }
             }

@@ -269,10 +269,9 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                             None if engine.is_stdin() => {
                                 crate::stdin_source::STDIN_TITLE.to_string()
                             }
-                            None if engine.system.is_some() => engine
-                                .system_uri()
-                                .map(crate::system_source::SystemUri::title)
-                                .unwrap_or_default(),
+                            None if engine.source_title().is_some() => {
+                                engine.source_title().unwrap_or_default()
+                            }
                             None => file_name.to_string(),
                         },
                     };
@@ -1246,6 +1245,58 @@ fn render_compressed_status(
     }
 }
 
+/// Stream bar part of a remote file: its connection state (the client's messages in the
+/// tooltip), and Disconnect or Reconnect.
+fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let Some(s) = engine.ssh.as_mut() else {
+        return;
+    };
+    ui.separator();
+    let state = s.state();
+    let (text, warn) = crate::ssh_source::state_text(&state, lang);
+    let icon = match state {
+        crate::ssh_source::SshState::Following => "●",
+        crate::ssh_source::SshState::Disconnected(_) => "⏹",
+        _ => "⏳",
+    };
+    let color = if warn {
+        theme.warn_color()
+    } else {
+        theme.text_dim()
+    };
+    let label = ui.label(
+        RichText::new(format!("{icon} {text}"))
+            .monospace()
+            .color(color),
+    );
+    let messages = s.messages();
+    let tip = if messages.trim().is_empty() {
+        s.spec.to_uri()
+    } else {
+        format!("{}\n\n{}", s.spec.to_uri(), messages.trim_end())
+    };
+    label.on_hover_text(tip);
+    if s.is_stopped() {
+        if ui
+            .button(format!("⟳ {}", t(lang, "system_reconnect")))
+            .on_hover_text(t(lang, "ssh_reconnect_tip"))
+            .clicked()
+        {
+            s.reconnect_requested = true;
+        }
+    } else if ui
+        .button(t(lang, "ssh_disconnect"))
+        .on_hover_text(t(lang, "ssh_disconnect_tip"))
+        .clicked()
+    {
+        s.disconnect_requested = true;
+    }
+    if !matches!(state, crate::ssh_source::SshState::Following) {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500));
+    }
+}
+
 /// Stream bar part of a system source once its command ended: the exit code and the
 /// last line it wrote, and Reconnect.
 fn render_system_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
@@ -1289,7 +1340,7 @@ fn render_stdin_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lan
     match s.state() {
         InputState::Reading => {}
         // A system source says it ended with its exit code (`render_system_status`).
-        InputState::Ended if engine.system.is_some() => {}
+        InputState::Ended if engine.system.is_some() || engine.ssh.is_some() => {}
         InputState::Ended => {
             ui.separator();
             ui.label(
@@ -1319,6 +1370,7 @@ fn render_stdin_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lan
         let text = match reason {
             RestartReason::CapReached(cap) => t(lang, "stdin_restarted_cap")
                 .replace("{size}", &crate::ui::zip_picker::human_size(cap)),
+            RestartReason::Replaced => t(lang, "ssh_replaced").to_string(),
             RestartReason::LowDisk { volume } => {
                 t(lang, "stdin_restarted_disk").replace("{volume}", &volume)
             }
@@ -2013,6 +2065,7 @@ fn render_log_stream(
         render_compressed_status(ui, engine, theme, lang);
         render_stdin_status(ui, engine, theme, lang);
         render_system_status(ui, engine, theme, lang);
+        render_ssh_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
         if let Some(glob) = engine.folder.as_ref().map(|f| {
@@ -8275,8 +8328,8 @@ pub fn render_filters_content(
 
     let focus_path = focus.as_deref().cloned().flatten();
     for engine in engines.iter_mut() {
-        let file_name = match engine.system_uri() {
-            Some(uri) => uri.title(),
+        let file_name = match engine.source_title() {
+            Some(title) => title,
             None => if engine.is_stdin() {
                 Some(crate::stdin_source::STDIN_TITLE)
             } else {
