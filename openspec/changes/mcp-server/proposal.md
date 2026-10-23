@@ -43,7 +43,7 @@ Target release: **0.27.0** (re-planned by the maintainer on 2026-10-06, from 0.2
 ### Non-goals
 
 - An AI chat or a built-in model inside FastTail, or FastTail calling any AI service.
-- Listening on a non-loopback address, TLS, multi-user access (see `web-ui` for a
+- Listening on a non-loopback address, TLS, multi-user access (see `web-ui`, in the backlog, for a
   browser view).
 - MCP prompts and sampling; tools that run external tools or change highlight rules.
 - Structured field queries (`structured-fields`, `query-language` can add tools later).
@@ -65,7 +65,7 @@ None.
   `tools/call`, `resources/list`, `resources/read`; tool implementations over a read-only
   `StreamSnapshot` (path, visible-line index, filters, bookmarks) published by the UI
   thread each frame it changes; write tools as commands queued to the UI thread.
-- `src/http_local.rs` (new, shared with `web-ui`): a minimal loopback HTTP/1.1 server on
+- `src/http_local.rs` (new; shared with `web-ui` if it leaves the backlog): a minimal loopback HTTP/1.1 server on
   `std::net` threads, token check, request size limits.
 - `src/cli.rs`, `src/main.rs`: `--mcp` bridge mode (no window); discovery of the running
   instance through a runtime file (`mcp.port`, token) in the config directory.
