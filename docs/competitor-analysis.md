@@ -430,7 +430,8 @@ changes shipped in the nightly 0.22.1 and are archived.
 
 ### 0.24.0 — queries and statistics
 
-Started on 2026-10-23. In the evening scan lnav 0.15.0-beta1 already shows per-column
+Released on 2026-10-24; the three changes are archived (the maintainer checks 0.24.0 to
+0.26.0 together after 0.26.0). Started on 2026-10-23. In the evening scan lnav 0.15.0-beta1 already shows per-column
 statistics (min / max, p50 / p90 / p99, an approximate distinct count) and SQL over fields,
 and LogViewPlus 3.2 has SQL window functions; no tool documents regex matches across line
 ends, which keeps `cross-line-regex` a small differentiator.
