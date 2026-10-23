@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Remote file dialog.** The 🌐 toolbar button (and *Open remote file (SSH)…* in the
+  command palette) takes one or more hosts (`deploy@web1, web2, web3:2222`), the path and
+  the first fetch (last N MB or the whole file), and opens one stream per host. The
+  terminal interface asks for the URL from its palette. `ssh_program`,
+  `remote_initial_mb` and `remote_spool_max_mb` are in Settings in both interfaces.
+
+### Added
+
 - **Remote files over SSH.** `fasttail ssh://deploy@web1/var/log/app.log` follows a file
   on a server through the system OpenSSH client (keys, agent, `~/.ssh/config`,
   `known_hosts`; FastTail never handles a password or accepts a host key) running `tail -F`

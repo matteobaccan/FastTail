@@ -201,6 +201,35 @@ impl SshSpec {
     }
 }
 
+/// The URLs of `path` on each host of `hosts` (separated by commas or line breaks, each
+/// `[user@]host[:port]`): one per host, or the host and why it is refused (an i18n key).
+pub fn urls_for(
+    hosts: &str,
+    path: &str,
+    whole: bool,
+) -> Vec<Result<String, (String, &'static str)>> {
+    let path = path.trim();
+    hosts
+        .split([',', '\n', '\r'])
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(|host| {
+            let mut spec =
+                SshSpec::parse_rest(&format!("{host}/x")).map_err(|e| (host.to_string(), e))?;
+            if !path.starts_with('/')
+                || path.len() < 2
+                || path.ends_with('/')
+                || path.contains('\0')
+            {
+                return Err((host.to_string(), "ssh_bad_path"));
+            }
+            spec.path = path.to_string();
+            spec.whole = whole;
+            Ok(spec.to_uri())
+        })
+        .collect()
+}
+
 /// The client program and how much a first fetch reads (`fasttail.ini`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshSettings {
@@ -995,6 +1024,29 @@ mod tests {
         assert_eq!(v6.to_uri(), "ssh://[::1]:22/tmp/my%20log.txt#whole");
         assert_eq!(parse("/var/log/x"), None);
         assert!(is_ssh_path(Path::new("ssh://h/x")));
+    }
+
+    #[test]
+    fn one_url_per_host() {
+        let urls = urls_for(
+            "web1, deploy@web2:2222\n[::1]\n-x",
+            "/var/log/my app.log",
+            true,
+        );
+        assert_eq!(
+            urls,
+            [
+                Ok("ssh://web1/var/log/my%20app.log#whole".to_string()),
+                Ok("ssh://deploy@web2:2222/var/log/my%20app.log#whole".to_string()),
+                Ok("ssh://[::1]/var/log/my%20app.log#whole".to_string()),
+                Err(("-x".to_string(), "ssh_bad_host")),
+            ]
+        );
+        assert_eq!(
+            urls_for("web1", "relative.log", false),
+            [Err(("web1".to_string(), "ssh_bad_path"))]
+        );
+        assert!(urls_for(" , ", "/x", false).is_empty());
     }
 
     #[test]

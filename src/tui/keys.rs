@@ -83,6 +83,8 @@ pub enum Action {
     Reconnect,
     /// Open system source (palette): asks for a URI.
     OpenSystem,
+    /// Open remote file (palette): asks for an `ssh://` URL.
+    OpenRemote,
     PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.
