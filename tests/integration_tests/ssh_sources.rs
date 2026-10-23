@@ -118,6 +118,27 @@ mod unix {
     }
 
     #[test]
+    fn a_tail_fetch_that_starts_on_a_line_start_keeps_that_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("lines.log");
+        // 3 MB of 1 KB lines: the last 1 MB starts exactly on a line start.
+        let line = format!("{}\n", "x".repeat(1023));
+        std::fs::write(&log, line.repeat(3 * 1024)).unwrap();
+        let ssh = fake_ssh(dir.path(), RUN_SCRIPT);
+        let mut engine = open(
+            &format!("ssh://h{}", log.display()),
+            &config(dir.path(), &ssh, 1),
+        );
+        poll_until(&mut engine, "the last megabyte", |e| {
+            e.total_lines() >= 1024
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        engine.poll_updates();
+        assert_eq!(engine.total_lines(), 1024);
+        assert_eq!(engine.get_line(0).unwrap().len(), 1023);
+    }
+
+    #[test]
     fn a_refused_key_and_a_missing_file_stop_without_retrying() {
         let dir = tempfile::tempdir().unwrap();
         let denied = fake_ssh(

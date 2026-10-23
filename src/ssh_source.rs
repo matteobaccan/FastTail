@@ -229,17 +229,20 @@ pub enum Start {
         inode: String,
         offset: u64,
         bytes: u64,
+        whole: bool,
     },
 }
 
 /// The remote script: the marker on standard error, then `tail` from the start chosen on
 /// the server (so the size and the start come from the same moment).
 pub fn remote_script(path: &str, start: &Start) -> String {
+    // A tail fetch asks for one byte more than `bytes` (the client drops through the
+    // first line break), so a fetch that starts on a line start keeps that line.
     let initial = |whole: bool, bytes: u64| {
         if whole {
-            "b=1".to_string()
+            "b=1; m=I".to_string()
         } else {
-            format!("if [ \"$s\" -gt {bytes} ]; then b=$((s-{bytes}+1)); else b=1; fi")
+            format!("if [ \"$s\" -gt {bytes} ]; then b=$((s-{bytes})); else b=1; fi; m=I")
         }
     };
     let choose = match start {
@@ -248,16 +251,20 @@ pub fn remote_script(path: &str, start: &Start) -> String {
             inode,
             offset,
             bytes,
+            whole,
         } => format!(
-            "if [ \"$i\" = {} ] && [ \"$s\" -ge {offset} ]; then b=$(({offset}+1)); else {}; fi",
+            "if [ \"$i\" = {} ] && [ \"$s\" -ge {offset} ]; then b=$(({offset}+1)); m=R; else {}; fi",
             crate::external_tools::quote_sh_arg(inode),
-            initial(false, *bytes)
+            initial(*whole, *bytes)
         ),
     };
+    // `set -f`: the fields of `ls` are not globbed; a C locale and no block size keep the
+    // size a plain number. `m` tells the client whether it resumed (R) or started (I).
     format!(
-        "f={}; set -- $(ls -iLnd -- \"$f\" 2>/dev/null); i=$1; s=$6; \
-         if [ -z \"$i\" ]; then printf 'FASTTAIL1 - - -\\n' >&2; exit 2; fi; \
-         {choose}; printf 'FASTTAIL1 %s %s %s\\n' \"$i\" \"$s\" \"$b\" >&2; \
+        "set -f; f={}; [ -r \"$f\" ] || {{ printf 'FASTTAIL1 - - - -\\n' >&2; exit 2; }}; \
+         unset BLOCK_SIZE LS_BLOCK_SIZE; set -- $(LC_ALL=C ls -iLnd -- \"$f\" 2>/dev/null); i=$1; s=$6; \
+         if [ -z \"$i\" ]; then printf 'FASTTAIL1 - - - -\\n' >&2; exit 2; fi; \
+         {choose}; printf 'FASTTAIL1 %s %s %s %s\\n' \"$i\" \"$s\" \"$b\" \"$m\" >&2; \
          exec tail -c +\"$b\" -F -- \"$f\"",
         crate::external_tools::quote_sh_arg(path)
     )
@@ -277,6 +284,14 @@ pub fn ssh_args(spec: &SshSpec, start: &Start) -> Vec<String> {
         "ServerAliveInterval=15",
         "-o",
         "ServerAliveCountMax=3",
+        // A persisted master of the user's config could keep the pipes open, and a
+        // RemoteCommand would replace the script.
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
+        "-o",
+        "RemoteCommand=none",
     ]
     .map(String::from)
     .to_vec();
@@ -335,6 +350,9 @@ struct Shared {
     inode: Mutex<Option<String>>,
     /// The client's last messages.
     stderr: Mutex<String>,
+    /// `tail` said the file was truncated or replaced while connected: the next
+    /// connection starts again instead of resuming.
+    changed: AtomicBool,
 }
 
 impl Shared {
@@ -405,6 +423,15 @@ struct SshReader {
     conn: Option<Connection>,
     /// Failed attempts since the last byte received.
     attempt: u32,
+    /// Closed when the stderr thread of the last client finished.
+    stderr_done: Option<mpsc::Receiver<()>>,
+}
+
+impl Drop for SshReader {
+    fn drop(&mut self) {
+        // The copy stopped (closed, or a spool error): the client goes with it.
+        self.shared.kill_child();
+    }
 }
 
 impl SshReader {
@@ -431,6 +458,7 @@ impl SshReader {
 
     /// Waits for a free slot (`Queued` meanwhile); `None` when the stream ended.
     fn slot(&self) -> Option<Slot> {
+        let mut queued = false;
         loop {
             if self.shared.ended() {
                 return None;
@@ -438,7 +466,10 @@ impl SshReader {
             if let Some(slot) = Slot::try_take() {
                 return Some(slot);
             }
-            self.set_state(SshState::Queued);
+            if !queued {
+                self.set_state(SshState::Queued);
+                queued = true;
+            }
             std::thread::sleep(Duration::from_millis(200));
         }
     }
@@ -454,13 +485,18 @@ impl SshReader {
         } else {
             SshState::Reconnecting(self.attempt)
         });
-        let inode = self.shared.inode.lock().ok().and_then(|i| i.clone());
+        let mut inode = self.shared.inode.lock().ok().and_then(|i| i.clone());
+        let had_file = inode.is_some();
+        if self.shared.changed.swap(false, Ordering::AcqRel) {
+            inode = None;
+        }
         let offset = self.shared.offset.load(Ordering::Acquire);
         let start = match inode {
             Some(inode) => Start::Resume {
                 inode,
                 offset,
                 bytes: self.settings.initial_bytes,
+                whole: self.spec.whole,
             },
             None => Start::Initial {
                 whole: self.spec.whole,
@@ -486,10 +522,15 @@ impl SshReader {
         let out = child.stdout.take().expect("piped");
         let err = child.stderr.take().expect("piped");
         let (tx, rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        self.stderr_done = Some(done_rx);
         let shared = self.shared.clone();
         let _ = std::thread::Builder::new()
             .name("fasttail-ssh-err".to_string())
-            .spawn(move || drain_stderr(err, tx, shared));
+            .spawn(move || {
+                drain_stderr(err, tx, shared);
+                drop(done_tx);
+            });
         if let Ok(mut c) = self.shared.child.lock() {
             *c = Some(child);
         }
@@ -502,22 +543,24 @@ impl SshReader {
             Err(_) => {
                 // No marker: the client failed (or hangs); its exit says why.
                 self.shared.kill_child_if_hung();
-                return Err(self.classify());
+                return Err(self.classify(true));
             }
         };
-        let Some((inode, start_at)) = marker else {
+        let Some((inode, start_at, resumed)) = marker else {
             self.shared.kill_child();
             return Err(Outcome::Stop(Disconnect::Missing));
         };
-        let resumed = matches!(&start, Start::Resume { offset, .. } if start_at == offset + 1);
-        let replaced = matches!(start, Start::Resume { .. }) && !resumed;
+        // A stream that had a file and did not resume it starts again.
+        let replaced = had_file && !resumed;
         if let Ok(mut i) = self.shared.inode.lock() {
             *i = Some(inode);
         }
         self.shared
             .offset
             .store(start_at.saturating_sub(1), Ordering::Release);
-        let first_fetch_mid_file = !resumed && start_at > 1 && self.settings.initial_bytes > 0;
+        // A first fetch after byte 1 starts one byte early: dropped through the first
+        // line break, it leaves whole lines (just that byte when it is a line break).
+        let first_fetch_mid_file = !resumed && start_at > 1;
         self.conn = Some(Connection {
             out,
             skip_line: first_fetch_mid_file,
@@ -528,16 +571,26 @@ impl SshReader {
     }
 
     /// Why the client ended: waits for it and reads its messages.
-    fn classify(&mut self) -> Outcome {
+    /// `before_marker`: the client ended before the script ran, so its messages are the
+    /// client's own (a refused key, a host key); after it, they are `tail`'s.
+    fn classify(&mut self, before_marker: bool) -> Outcome {
         let status = self
             .shared
             .child
             .lock()
             .ok()
             .and_then(|mut c| c.take())
-            .and_then(|mut c| c.wait().ok());
-        // The stderr thread may still be appending the last lines.
-        std::thread::sleep(Duration::from_millis(50));
+            .and_then(|mut c| {
+                if matches!(c.try_wait(), Ok(None)) && !before_marker {
+                    // Output ended but the client still runs (a read error): end it.
+                    let _ = c.kill();
+                }
+                c.wait().ok()
+            });
+        // The stderr thread stores the last lines before it ends.
+        if let Some(done) = self.stderr_done.take() {
+            let _ = done.recv_timeout(Duration::from_secs(2));
+        }
         let text = self
             .shared
             .stderr
@@ -551,8 +604,9 @@ impl SshReader {
             .unwrap_or_default()
             .trim()
             .to_string();
-        if text.contains("Host key verification failed")
-            || text.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
+        if before_marker
+            && (text.contains("Host key verification failed")
+                || text.contains("REMOTE HOST IDENTIFICATION HAS CHANGED"))
         {
             let shown: Vec<&str> = text
                 .lines()
@@ -564,7 +618,7 @@ impl SshReader {
                 shown.into_iter().rev().collect::<Vec<_>>().join("\n"),
             ));
         }
-        if text.contains("Permission denied") {
+        if before_marker && text.contains("Permission denied (") {
             return Outcome::Stop(Disconnect::Password);
         }
         match status.and_then(|s| s.code()) {
@@ -602,7 +656,7 @@ impl Shared {
 /// missing file), every other line to the kept messages.
 fn drain_stderr(
     err: std::process::ChildStderr,
-    tx: mpsc::Sender<Option<(String, u64)>>,
+    tx: mpsc::Sender<Option<(String, u64, bool)>>,
     shared: Arc<Shared>,
 ) {
     let mut tx = Some(tx);
@@ -616,15 +670,25 @@ fn drain_stderr(
             if let Some(tx) = tx.take() {
                 let parts: Vec<&str> = rest.split_whitespace().collect();
                 let marker = match parts.as_slice() {
-                    [inode, _size, start] if *inode != "-" => start
+                    [inode, _size, start, mode] if *inode != "-" => start
                         .parse::<u64>()
                         .ok()
-                        .map(|s| (inode.to_string(), s.max(1))),
+                        .map(|s| (inode.to_string(), s.max(1), *mode == "R")),
                     _ => None,
                 };
                 let _ = tx.send(marker);
             }
             continue;
+        }
+        // GNU and BusyBox `tail -F` on a truncation or a new file of that name: the
+        // position no longer matches, so the next connection starts again.
+        if tx.is_none()
+            && (line.contains("file truncated")
+                || line.contains("has been replaced")
+                || line.contains("following new file")
+                || line.contains("has appeared"))
+        {
+            shared.changed.store(true, Ordering::Release);
         }
         if let Ok(mut kept) = shared.stderr.lock() {
             kept.push_str(line);
@@ -680,8 +744,9 @@ impl Read for SshReader {
                 if self.shared.ended() {
                     continue;
                 }
-                match self.classify() {
-                    Outcome::Retry => {}
+                match self.classify(false) {
+                    // No byte since: back off like a failed connection.
+                    Outcome::Retry => self.attempt += 1,
                     Outcome::Stop(reason) => {
                         self.set_state(SshState::Disconnected(reason));
                         return Ok(0);
@@ -747,6 +812,7 @@ impl SshStream {
             offset: AtomicU64::new(0),
             inode: Mutex::new(None),
             stderr: Mutex::new(String::new()),
+            changed: AtomicBool::new(false),
         });
         let reader = SshReader {
             spec: spec.clone(),
@@ -755,6 +821,7 @@ impl SshStream {
             wake: wake.clone(),
             conn: None,
             attempt: 0,
+            stderr_done: None,
         };
         let copier = StdinStream::start_named(reader, spool_settings, wake.clone(), "ssh")?;
         Ok(Self {
@@ -809,6 +876,7 @@ impl SshStream {
             wake: self.wake.clone(),
             conn: None,
             attempt: 0,
+            stderr_done: None,
         };
         self.copier
             .resume(reader, &self.spool_settings, self.wake.clone())
@@ -962,8 +1030,13 @@ mod tests {
         assert_eq!(args[dash + 1], "web1");
         assert_eq!(args[dash - 4..dash], ["-l", "deploy", "-p", "2222"]);
         let script = &args[dash + 2];
-        assert!(script.starts_with(r"f='/var/log/it'\''s.log';"), "{script}");
-        assert!(script.contains("b=$((s-1024+1))"), "{script}");
+        assert!(
+            script.starts_with(r"set -f; f='/var/log/it'\''s.log';"),
+            "{script}"
+        );
+        assert!(script.contains("b=$((s-1024))"), "{script}");
+        assert!(script.contains(r#"[ -r "$f" ] ||"#), "{script}");
+        assert!(args.contains(&"ControlMaster=no".to_string()));
         assert!(
             script.ends_with(r#"exec tail -c +"$b" -F -- "$f""#),
             "{script}"
@@ -974,9 +1047,13 @@ mod tests {
                 inode: "42".into(),
                 offset: 900,
                 bytes: 10,
+                whole: true,
             },
         );
-        assert!(resume.contains(r#"if [ "$i" = '42' ] && [ "$s" -ge 900 ]; then b=$((900+1));"#));
+        assert!(
+            resume.contains(r#"if [ "$i" = '42' ] && [ "$s" -ge 900 ]; then b=$((900+1)); m=R; else b=1; m=I; fi"#),
+            "{resume}"
+        );
         assert!(remote_script(
             "/x",
             &Start::Initial {
@@ -984,6 +1061,6 @@ mod tests {
                 bytes: 1
             }
         )
-        .contains("b=1;"));
+        .contains("b=1; m=I"));
     }
 }

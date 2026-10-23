@@ -815,7 +815,9 @@ impl FastTailConfig {
     pub fn ssh_settings(&self) -> crate::ssh_source::SshSettings {
         crate::ssh_source::SshSettings {
             program: self.ssh_program.clone(),
-            initial_bytes: u64::from(self.remote_initial_mb) << 20,
+            // Never more than the spool holds, or the first fetch would restart it.
+            initial_bytes: u64::from(self.remote_initial_mb.min(self.remote_spool_max_mb / 2))
+                << 20,
         }
     }
 

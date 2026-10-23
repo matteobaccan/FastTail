@@ -289,6 +289,8 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
     if let Some(s) = e.ssh.as_ref() {
         let state = s.state();
         let (text, warn_state) = crate::ssh_source::state_text(&state, lang);
+        // The reason may be the client's or the server's text.
+        let text = crate::tui::view::sanitize(&text);
         let text = if s.is_stopped() {
             format!("{text} · {}", tx(lang, "Reconnect"))
         } else {

@@ -131,13 +131,20 @@ FastTail only).
 - The start is chosen on the server, from the same `ls` the marker prints
   (`FASTTAIL1 <inode> <size> <start>`): resuming needs one connection, and a rotation
   during the drop is seen as a start that is not the expected one.
-- ControlMaster is not used: a persisted master can keep the client's output pipe open
-  after the client exits. Glob rescans (part 2) will open their own short connection.
+- ControlMaster is not used, and `-o ControlMaster=no -o ControlPath=none -o
+  RemoteCommand=none` override the user's config: a persisted master can keep the
+  client's pipes open after it exits. Glob rescans (part 2) open their own connection.
+- The marker carries the branch the script took (`R` resumed, `I` started), and a first
+  fetch asks for one byte more than the tail so that dropping through the first line
+  break keeps a line that starts exactly there.
+- A refused key and a host key are recognised only before the marker; after it, the
+  messages are `tail`'s. An unreadable file is refused by the script like a missing one.
 - The initial-content choice is the URL fragment `#whole` rather than a session key, so
   the command line, recent files and sessions carry it the same way.
 - Bookmarks of remote streams are not saved in this part (whole-file streams included).
-- Truncations noticed by `tail -F` while connected are appended as they come; the next
-  reconnection sees the smaller size and starts again.
+- A truncation or a new file noticed by `tail -F` while connected (its "file truncated",
+  "has been replaced", "following new file" messages, GNU and BusyBox) is appended as it
+  comes, and the next connection starts again instead of resuming.
 
 ## Risks / Trade-offs
 

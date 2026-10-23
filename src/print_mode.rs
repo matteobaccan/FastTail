@@ -338,8 +338,13 @@ impl Input {
             InputSpec::Path(path) => path,
         };
         if crate::system_source::is_system_path(&path) {
+            let hint = if crate::ssh_source::is_ssh_path(&path) {
+                "ssh host tail -F /path"
+            } else {
+                "docker logs ..."
+            };
             return Err(format!(
-                "{}: system sources are not read by --print; pipe the command instead (docker logs ... | fasttail --print -)",
+                "{}: --print reads files only; pipe the command instead ({hint} | fasttail --print -)",
                 path.display()
             ));
         }
