@@ -479,6 +479,10 @@ pub struct PatternState {
     pub failed: bool,
     /// The tree, extended by the appended entries.
     pub(crate) drain: Drain,
+    /// The tree the learning scan sent, until its `Done` arrives.
+    pub(crate) learnt: Option<Drain>,
+    /// Bumped whenever the tree changes (its templates as shown).
+    pub tree_generation: u64,
     /// The tree as last published: what the counts and the pattern filter use.
     pub snapshot: Option<Arc<Drain>>,
     pub counts: PatternCounts,
@@ -505,6 +509,8 @@ impl PatternState {
             restart: true,
             failed: false,
             drain: Drain::new(),
+            learnt: None,
+            tree_generation: 0,
             snapshot: None,
             counts: PatternCounts::new(Axis::new(false, 0, 0)),
             covered: 0,

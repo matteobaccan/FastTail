@@ -175,3 +175,27 @@ fn appended_entries_are_learnt_and_truncation_relearns() {
     }
     assert_eq!(engine.patterns.as_ref().unwrap().counts.ids().count(), 1);
 }
+
+#[test]
+fn the_pattern_filter_survives_its_own_refresh_and_goes_with_the_tab() {
+    let lines = app_log();
+    let (_dir, mut engine) = open(&lines, 0);
+    // A time window: the filters wait on the timestamps, the pattern filter must not be
+    // taken for a change of the view.
+    engine.set_time_range(Some(0), None);
+    super::wait_for_jobs(&mut engine);
+    engine.open_patterns();
+    wait_patterns(&mut engine);
+    let pay = pattern_of(&engine, "payment");
+    engine.set_pattern_filter(vec![pay], Vec::new());
+    super::wait_for_jobs(&mut engine);
+    wait_patterns(&mut engine);
+    assert!(engine.pattern_filter().is_some());
+    assert!(!engine.pattern_filter_dropped);
+    assert_eq!(engine.visible_line_count(), 180);
+    // Closing the tab clears the filter with it.
+    engine.close_patterns();
+    super::wait_for_jobs(&mut engine);
+    assert!(engine.pattern_filter().is_none());
+    assert_eq!(engine.visible_line_count(), lines.len());
+}

@@ -41,7 +41,13 @@ every job.
    template at learning time can differ from its template on the final tree (one made
    later can fit it better), so only classifying both the counts and the filter on the
    same tree makes them agree. The tree is `Drain`, the snapshot an `Arc<Drain>`; the
-   tab shows the live tree, and setting the filter publishes it first. The pattern
+   tab shows the live tree, and setting the filter publishes it first. Appended entries
+   are learnt into the live tree and counted with `classify` (on the pattern filter's
+   tree while one is set), so the counts follow what the filter shows. A view change
+   relearns only when what the patterns are learnt over changed (a key of the other
+   filters, the time window, the hidden lines, the parser and the context lines), so the
+   pattern filter, and a refresh of it deferred behind an index or timestamp scan, never
+   relearns. Closing the tab clears the pattern filter. The pattern
    filter holds the snapshot, so the filtered view shows exactly the entries counted for
    the clicked pattern. *Rejected:* filtering by a regex built from the template — lines
    matching the regex but clustered elsewhere would make counts and view disagree.

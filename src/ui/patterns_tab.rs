@@ -57,12 +57,15 @@ enum SortBy {
     Last,
 }
 
+/// The template texts of a tree as shown, and in lower case for the narrowing box.
+type Texts = Arc<(Vec<String>, Vec<String>)>;
+
 /// What the tab keeps between frames: the sort, and the template texts of a tree.
 #[derive(Clone)]
 struct TabState {
     sort: SortBy,
     descending: bool,
-    texts: Option<(u64, Arc<Vec<String>>)>,
+    texts: Option<(u64, Texts)>,
 }
 
 impl Default for TabState {
@@ -101,21 +104,23 @@ pub fn render(ui: &mut Ui, engine: Option<&mut TailEngine>, theme: &CyberTheme, 
         return;
     };
     let running = p.running();
-    let generation = p.generation;
-    // The template texts of the tree shown, made once per change.
-    let texts = match (&state.texts, p.snapshot.as_ref().map(|_| p.tree())) {
-        (Some((g, texts)), _) if *g == generation => texts.clone(),
+    let tree_generation = p.tree_generation;
+    // The template texts of the tree shown, made once per change of the tree.
+    let cached = match (&state.texts, p.snapshot.as_ref().map(|_| p.tree())) {
+        (Some((g, texts)), _) if *g == tree_generation => texts.clone(),
         (_, Some(drain)) => {
-            let texts: Arc<Vec<String>> = Arc::new(
-                (0..drain.len() as u32)
-                    .map(|i| drain.template(i).map(|t| t.text()).unwrap_or_default())
-                    .collect(),
-            );
-            state.texts = Some((generation, texts.clone()));
+            let shown: Vec<String> = (0..drain.len() as u32)
+                .map(|i| drain.template(i).map(|t| t.text()).unwrap_or_default())
+                .collect();
+            let lower = shown.iter().map(|t| t.to_lowercase()).collect();
+            let texts: Texts = Arc::new((shown, lower));
+            state.texts = Some((tree_generation, texts.clone()));
             texts
         }
-        _ => Arc::new(Vec::new()),
+        _ => Arc::new((Vec::new(), Vec::new())),
     };
+    let texts = &cached.0;
+    let lower = &cached.1;
     // Header: progress, counts, the narrowing box, the filter in place.
     ui.horizontal_wrapped(|ui| {
         if running {
@@ -173,10 +178,7 @@ pub fn render(ui: &mut Ui, engine: Option<&mut TailEngine>, theme: &CyberTheme, 
         .counts
         .ids()
         .filter(|&i| {
-            needle.is_empty()
-                || texts
-                    .get(i as usize)
-                    .is_some_and(|t| t.to_lowercase().contains(&needle))
+            needle.is_empty() || lower.get(i as usize).is_some_and(|t| t.contains(&needle))
         })
         .collect();
     let stat = |i: u32| &p.counts.per[i as usize];
