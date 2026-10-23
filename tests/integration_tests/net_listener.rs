@@ -332,3 +332,51 @@ fn otlp_refuses_what_it_does_not_take() {
     let head = "POST /v1/logs HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 99999999\r\n\r\n";
     assert_eq!(http(&mut big, head, b"").0, 413);
 }
+
+#[test]
+fn otlp_hostile_framing_is_refused_without_harm() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let mut engine = open(
+        &format!("otlp://127.0.0.1:{port}"),
+        Limits::default(),
+        dir.path(),
+    );
+    let body = OTLP_JSON.as_bytes();
+    let chunked = "POST /v1/logs HTTP/1.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n";
+    // A chunk size that would overflow.
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let status = http(&mut s, chunked, b"1\r\nx\r\nffffffffffffffff\r\n").0;
+    assert!(status == 400 || status == 413, "{status}");
+    // A Content-Length that is not a number, and two that disagree.
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let head =
+        "POST /v1/logs HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: abc\r\n\r\n";
+    assert_eq!(http(&mut s, head, b"").0, 400);
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let head = "POST /v1/logs HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\n";
+    assert_eq!(http(&mut s, head, b"{}").0, 400);
+    // A missing CRLF after a chunk.
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    assert_eq!(http(&mut s, chunked, b"2\r\n{}XX0\r\n\r\n").0, 400);
+    // A valid chunked body with a trailer, then a second request in step, after an
+    // Expect: 100-continue the server answers.
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let mut chunks = format!("{:x}\r\n", body.len()).into_bytes();
+    chunks.extend_from_slice(body);
+    chunks.extend_from_slice(b"\r\n0\r\nX-Trailer: 1\r\n\r\n");
+    assert_eq!(http(&mut s, chunked, &chunks).0, 200);
+    let expect = format!(
+        "POST /v1/logs HTTP/1.1\r\nContent-Type: application/json\r\nExpect: 100-continue\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    s.write_all(expect.as_bytes()).unwrap();
+    let mut cont = [0u8; 25];
+    std::io::Read::read_exact(&mut s, &mut cont).unwrap();
+    assert_eq!(&cont, b"HTTP/1.1 100 Continue\r\n\r\n");
+    assert_eq!(http(&mut s, "", body).0, 200);
+    poll_until(&mut engine, "the two good requests", |e| {
+        e.total_lines() >= 2
+    });
+    assert_eq!(lines(&engine).len(), 2);
+}

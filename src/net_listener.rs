@@ -417,15 +417,38 @@ fn send_line(line: Line, tx: &SyncSender<Line>, shared: &Shared) -> bool {
     }
 }
 
-/// An HTTP connection's reader: bytes kept between requests, reads with the listener's
-/// poll and idle checks.
+/// An HTTP connection's reader: the bytes received and a cursor into them (compacted once
+/// the cursor passes half of the buffer, so each byte is moved a bounded number of times),
+/// reads with the listener's poll and idle checks.
 struct HttpConn<'a> {
     stream: TcpStream,
     buf: Vec<u8>,
+    pos: usize,
+    /// Where the search for the next CRLF stopped.
+    scanned: usize,
     shared: &'a Shared,
 }
 
+/// Why a request cannot be served: the status to answer before closing.
+type Refusal = &'static str;
+
 impl HttpConn<'_> {
+    fn available(&self) -> usize {
+        self.buf.len() - self.pos
+    }
+
+    fn consume(&mut self, n: usize) -> Vec<u8> {
+        let out = self.buf[self.pos..self.pos + n].to_vec();
+        self.pos += n;
+        self.scanned = self.pos;
+        if self.pos > self.buf.len() / 2 {
+            self.buf.drain(..self.pos);
+            self.pos = 0;
+            self.scanned = 0;
+        }
+        out
+    }
+
     /// Reads more bytes; false when the connection ended, idled out or the listener closed.
     fn fill(&mut self) -> bool {
         let mut chunk = [0u8; 64 * 1024];
@@ -452,38 +475,141 @@ impl HttpConn<'_> {
         }
     }
 
-    /// The bytes up to and including `"\r\n"`, read as needed (at most `cap`).
-    fn line(&mut self, cap: usize) -> Option<Vec<u8>> {
+    /// The next line without its CRLF (at most `cap` bytes); `Err` when too long, `Ok(None)`
+    /// when the connection ended.
+    fn line(&mut self, cap: usize) -> Result<Option<Vec<u8>>, Refusal> {
         loop {
-            if let Some(i) = self.buf.windows(2).position(|w| w == b"\r\n") {
-                return Some(self.buf.drain(..i + 2).collect());
+            let from = self.scanned.max(self.pos).saturating_sub(1).max(self.pos);
+            if let Some(i) = self.buf[from..].windows(2).position(|w| w == b"\r\n") {
+                let end = from + i;
+                let line = self.consume(end - self.pos + 2);
+                return Ok(Some(line[..line.len() - 2].to_vec()));
             }
-            if self.buf.len() > cap || !self.fill() {
-                return None;
+            self.scanned = self.buf.len();
+            if self.available() > cap {
+                return Err("431 Request Header Fields Too Large");
+            }
+            if !self.fill() {
+                return Ok(None);
             }
         }
     }
 
-    /// Exactly `n` bytes.
+    /// Exactly `n` bytes, `None` when the connection ended first.
     fn exact(&mut self, n: usize) -> Option<Vec<u8>> {
-        while self.buf.len() < n {
+        while self.available() < n {
             if !self.fill() {
                 return None;
             }
         }
-        Some(self.buf.drain(..n).collect())
+        Some(self.consume(n))
     }
 
-    fn respond(&mut self, status: &str, content_type: &str, body: &[u8], extra: &str, close: bool) {
+    /// Writes a response; false when the client does not take it (the connection closes).
+    fn respond(
+        &mut self,
+        status: &str,
+        content_type: &str,
+        body: &[u8],
+        extra: &str,
+        close: bool,
+    ) -> bool {
         use std::io::Write;
         let head = format!(
             "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra}{}\r\n",
             body.len(),
             if close { "Connection: close\r\n" } else { "" }
         );
-        let _ = self.stream.write_all(head.as_bytes());
-        let _ = self.stream.write_all(body);
+        self.stream.write_all(head.as_bytes()).is_ok() && self.stream.write_all(body).is_ok()
     }
+}
+
+/// The comma-separated tokens of a header, lower-cased.
+fn tokens(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// A body read in full, or the reason it was refused.
+fn read_body(
+    c: &mut HttpConn<'_>,
+    headers: &[(String, String)],
+) -> Result<Option<Vec<u8>>, Refusal> {
+    fn all<'h>(headers: &'h [(String, String)], name: &'h str) -> impl Iterator<Item = &'h str> {
+        headers
+            .iter()
+            .filter(move |(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+    let codings: Vec<String> = all(headers, "transfer-encoding").flat_map(tokens).collect();
+    if !codings.is_empty() {
+        // Only `chunked`, last (RFC 9112): anything else cannot be framed safely.
+        if codings.iter().any(|t| t != "chunked") || codings.len() != 1 {
+            return Err("400 Bad Request");
+        }
+        let mut body = Vec::new();
+        loop {
+            let Some(size) = c.line(64)? else {
+                return Ok(None);
+            };
+            let size = String::from_utf8_lossy(&size);
+            let size = size.split(';').next().unwrap_or_default().trim();
+            if size.is_empty() || size.len() > 8 {
+                return Err("400 Bad Request");
+            }
+            let n = usize::from_str_radix(size, 16).map_err(|_| "400 Bad Request")?;
+            if n > MAX_BODY - body.len() {
+                return Err("413 Payload Too Large");
+            }
+            if n == 0 {
+                // Trailers, up to the empty line.
+                let mut budget = MAX_HEAD;
+                loop {
+                    let Some(t) = c.line(budget)? else {
+                        return Ok(None);
+                    };
+                    if t.is_empty() {
+                        return Ok(Some(body));
+                    }
+                    budget = budget.saturating_sub(t.len() + 2);
+                    if budget == 0 {
+                        return Err("431 Request Header Fields Too Large");
+                    }
+                }
+            }
+            let Some(data) = c.exact(n + 2) else {
+                return Ok(None);
+            };
+            if &data[n..] != b"\r\n" {
+                return Err("400 Bad Request");
+            }
+            body.extend_from_slice(&data[..n]);
+        }
+    }
+    let lengths: Vec<&str> = all(headers, "content-length")
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .collect();
+    let n = match lengths.as_slice() {
+        [] => 0,
+        [first, rest @ ..] => {
+            if first.is_empty()
+                || first.len() > 12
+                || !first.bytes().all(|b| b.is_ascii_digit())
+                || rest.iter().any(|r| r != first)
+            {
+                return Err("400 Bad Request");
+            }
+            first.parse::<usize>().map_err(|_| "400 Bad Request")?
+        }
+    };
+    if n > MAX_BODY {
+        return Err("413 Payload Too Large");
+    }
+    Ok(c.exact(n))
 }
 
 /// An OTLP/HTTP connection: `POST /v1/logs` requests (Content-Length or chunked bodies,
@@ -496,95 +622,78 @@ fn serve_http(
     shared: &Shared,
     wake: &Option<WakeFn>,
 ) {
+    // A client that does not read its responses cannot hold the thread.
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
     let mut c = HttpConn {
         stream,
         buf: Vec::new(),
+        pos: 0,
+        scanned: 0,
         shared,
     };
     loop {
-        // Request line and headers.
-        let Some(request) = c.line(MAX_HEAD) else {
-            return;
+        // Request line and headers, within MAX_HEAD.
+        let head = (|| -> Result<Option<(String, Vec<(String, String)>)>, Refusal> {
+            let Some(request) = c.line(MAX_HEAD)? else {
+                return Ok(None);
+            };
+            let mut budget = MAX_HEAD.saturating_sub(request.len() + 2);
+            let mut headers = Vec::new();
+            loop {
+                let Some(line) = c.line(budget)? else {
+                    return Ok(None);
+                };
+                if line.is_empty() {
+                    break;
+                }
+                budget = budget.saturating_sub(line.len() + 2);
+                if budget == 0 {
+                    return Err("431 Request Header Fields Too Large");
+                }
+                let line = String::from_utf8_lossy(&line).into_owned();
+                if let Some((k, v)) = line.split_once(':') {
+                    headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+                }
+            }
+            Ok(Some((
+                String::from_utf8_lossy(&request).into_owned(),
+                headers,
+            )))
+        })();
+        let (request, headers) = match head {
+            Ok(Some(h)) => h,
+            Ok(None) => return,
+            Err(status) => {
+                c.respond(status, "text/plain", b"", "", true);
+                return;
+            }
         };
-        let request = String::from_utf8_lossy(&request).trim_end().to_string();
         let mut parts = request.split(' ');
         let (method, path, version) = (
             parts.next().unwrap_or_default().to_string(),
             parts.next().unwrap_or_default().to_string(),
             parts.next().unwrap_or_default().to_string(),
         );
-        let mut headers: Vec<(String, String)> = Vec::new();
-        let mut head_len = request.len();
-        loop {
-            let Some(line) = c.line(MAX_HEAD) else {
-                return;
-            };
-            head_len += line.len();
-            if head_len > MAX_HEAD {
-                c.respond(
-                    "431 Request Header Fields Too Large",
-                    "text/plain",
-                    b"",
-                    "",
-                    true,
-                );
-                return;
-            }
-            let line = String::from_utf8_lossy(&line).trim_end().to_string();
-            if line.is_empty() {
-                break;
-            }
-            if let Some((k, v)) = line.split_once(':') {
-                headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
-            }
-        }
         let header = |name: &str| {
             headers
                 .iter()
                 .find(|(k, _)| k == name)
                 .map(|(_, v)| v.as_str())
         };
-        let close = version == "HTTP/1.0"
-            || header("connection").is_some_and(|v| v.eq_ignore_ascii_case("close"));
-        // The body: refused unread when too large (the connection closes).
-        let chunked =
-            header("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
-        let length = header("content-length").and_then(|v| v.parse::<usize>().ok());
-        let body = if chunked {
-            let mut body = Vec::new();
-            loop {
-                let Some(size) = c.line(64) else {
-                    return;
-                };
-                let size = String::from_utf8_lossy(&size);
-                let size = size.trim().split(';').next().unwrap_or_default();
-                let Ok(n) = usize::from_str_radix(size, 16) else {
-                    c.respond("400 Bad Request", "text/plain", b"", "", true);
-                    return;
-                };
-                if body.len() + n > MAX_BODY {
-                    c.respond("413 Payload Too Large", "text/plain", b"", "", true);
-                    return;
-                }
-                let Some(data) = c.exact(n + 2) else {
-                    return;
-                };
-                if n == 0 {
-                    break;
-                }
-                body.extend_from_slice(&data[..n]);
-            }
-            body
-        } else {
-            let n = length.unwrap_or(0);
-            if n > MAX_BODY {
-                c.respond("413 Payload Too Large", "text/plain", b"", "", true);
+        let close = version != "HTTP/1.1"
+            || header("connection").is_some_and(|v| tokens(v).iter().any(|t| t == "close"));
+        if header("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue")) {
+            use std::io::Write;
+            let _ = c.stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
+        }
+        // The body is read in full before any answer, so keep-alive stays in step.
+        let body = match read_body(&mut c, &headers) {
+            Ok(Some(b)) => b,
+            Ok(None) => return,
+            Err(status) => {
+                c.respond(status, "text/plain", b"", "", true);
                 return;
             }
-            let Some(body) = c.exact(n) else {
-                return;
-            };
-            body
         };
         let content_type = header("content-type")
             .unwrap_or_default()
@@ -595,8 +704,10 @@ fn serve_http(
         } else {
             "application/x-protobuf"
         };
-        if path.split('?').next() != Some("/v1/logs") {
-            c.respond("404 Not Found", "text/plain", b"", "", close);
+        let encoding = header("content-encoding").map(tokens).unwrap_or_default();
+        let gzip = encoding.iter().any(|e| e == "gzip");
+        let answered = if path.split('?').next() != Some("/v1/logs") {
+            c.respond("404 Not Found", "text/plain", b"", "", close)
         } else if method != "POST" {
             c.respond(
                 "405 Method Not Allowed",
@@ -604,9 +715,11 @@ fn serve_http(
                 b"",
                 "Allow: POST\r\n",
                 close,
-            );
+            )
         } else if !json && !content_type.starts_with("application/x-protobuf") {
-            c.respond("415 Unsupported Media Type", "text/plain", b"", "", close);
+            c.respond("415 Unsupported Media Type", "text/plain", b"", "", close)
+        } else if encoding.iter().any(|e| e != "gzip" && e != "identity") || encoding.len() > 1 {
+            c.respond("415 Unsupported Media Type", "text/plain", b"", "", close)
         } else if shared.limited.load(Ordering::Relaxed) {
             c.respond(
                 "429 Too Many Requests",
@@ -614,9 +727,8 @@ fn serve_http(
                 b"",
                 "Retry-After: 1\r\n",
                 close,
-            );
+            )
         } else {
-            let gzip = header("content-encoding").is_some_and(|v| v.eq_ignore_ascii_case("gzip"));
             let body = if gzip {
                 let mut out = Vec::new();
                 let read = flate2::read::GzDecoder::new(&body[..])
@@ -639,29 +751,32 @@ fn serve_http(
             } else {
                 crate::otlp::decode_protobuf(&body)
             };
-            let Some(records) = records else {
-                c.respond("400 Bad Request", "text/plain", b"", "", close);
-                if close {
-                    return;
+            match records {
+                Err(crate::otlp::DecodeError::TooMany) => {
+                    c.respond("413 Payload Too Large", "text/plain", b"", "", close)
                 }
-                continue;
-            };
-            let now = || crate::syslog::receive_time().0;
-            for record in &records {
-                for line in lines_of(spec, from, record.line(&now).as_bytes()) {
-                    if !send_line(line, tx, shared) {
-                        return;
+                Err(crate::otlp::DecodeError::Malformed) => {
+                    c.respond("400 Bad Request", "text/plain", b"", "", close)
+                }
+                Ok(records) => {
+                    let now = || crate::syslog::receive_time().0;
+                    for record in &records {
+                        for line in lines_of(spec, from, record.line(&now).as_bytes()) {
+                            if !send_line(line, tx, shared) {
+                                return;
+                            }
+                        }
                     }
+                    if let Some(w) = wake {
+                        w();
+                    }
+                    // An empty ExportLogsServiceResponse.
+                    let empty: &[u8] = if json { b"{}" } else { b"" };
+                    c.respond("200 OK", reply_type, empty, "", close)
                 }
             }
-            if let Some(w) = wake {
-                w();
-            }
-            // An empty ExportLogsServiceResponse.
-            let empty: &[u8] = if json { b"{}" } else { b"" };
-            c.respond("200 OK", reply_type, empty, "", close);
-        }
-        if close {
+        };
+        if close || !answered {
             return;
         }
     }

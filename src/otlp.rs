@@ -16,6 +16,38 @@ use serde_json::Value;
 const MAX_ATTRIBUTES: usize = 32;
 /// Nesting of values read at most (a hostile body cannot recurse without end).
 const MAX_DEPTH: usize = 16;
+/// Records one request may hold (a small body cannot become millions of records).
+pub const MAX_RECORDS: usize = 100_000;
+/// Characters kept of a service or scope name, which every record of its group repeats.
+const MAX_NAME: usize = 256;
+
+/// Why a request body gives no records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeError {
+    Malformed,
+    /// More than `MAX_RECORDS`.
+    TooMany,
+}
+
+fn short(name: String) -> String {
+    if name.chars().count() <= MAX_NAME {
+        return name;
+    }
+    name.chars().take(MAX_NAME).collect()
+}
+
+/// `text` with control characters (C0, C1) and bidirectional overrides replaced, so a
+/// sender cannot move the cursor, colour the view or reorder what it shows.
+fn clean(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\t' | '\r' | '\n' => ' ',
+            c if c.is_control() => '\u{fffd}',
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => '\u{fffd}',
+            c => c,
+        })
+        .collect()
+}
 
 /// A value of the OTLP data model.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,8 +177,8 @@ impl Record {
         if self.span_id.iter().any(|&b| b != 0) {
             line.push_str(&format!(" span={}", hex(&self.span_id)));
         }
-        // One record, one line.
-        line.replace(['\r', '\n'], " ")
+        // One record, one line, nothing the view would interpret.
+        clean(&line)
     }
 }
 
@@ -306,18 +338,21 @@ fn pb_record(b: &[u8], service: &str, scope: &str) -> Result<Record, ()> {
     Ok(r)
 }
 
-/// The records of a protobuf `ExportLogsServiceRequest`; `None` when malformed.
-pub fn decode_protobuf(body: &[u8]) -> Option<Vec<Record>> {
+/// The records of a protobuf `ExportLogsServiceRequest`.
+pub fn decode_protobuf(body: &[u8]) -> Result<Vec<Record>, DecodeError> {
+    use DecodeError::Malformed;
     let mut out = Vec::new();
     for f in fields(body) {
-        let (1, Field::Bytes(resource_logs)) = f.ok()? else {
+        let (1, Field::Bytes(resource_logs)) = f.map_err(|_| Malformed)? else {
             continue;
         };
         let mut service = String::new();
         let mut scopes = Vec::new();
         for f in fields(resource_logs) {
-            match f.ok()? {
-                (1, Field::Bytes(res)) => service = pb_service(res).ok()?,
+            match f.map_err(|_| Malformed)? {
+                (1, Field::Bytes(res)) => {
+                    service = short(pb_service(res).map_err(|_| Malformed)?);
+                }
                 (2, Field::Bytes(sl)) => scopes.push(sl),
                 _ => {}
             }
@@ -326,24 +361,29 @@ pub fn decode_protobuf(body: &[u8]) -> Option<Vec<Record>> {
             let mut scope = String::new();
             let mut records = Vec::new();
             for f in fields(sl) {
-                match f.ok()? {
+                match f.map_err(|_| Malformed)? {
                     (1, Field::Bytes(sc)) => {
                         for f in fields(sc) {
-                            if let (1, Field::Bytes(name)) = f.ok()? {
-                                scope = utf8(name);
+                            if let (1, Field::Bytes(name)) = f.map_err(|_| Malformed)? {
+                                scope = short(utf8(name));
                             }
                         }
                     }
-                    (2, Field::Bytes(rec)) => records.push(rec),
+                    (2, Field::Bytes(rec)) => {
+                        if out.len() + records.len() >= MAX_RECORDS {
+                            return Err(DecodeError::TooMany);
+                        }
+                        records.push(rec);
+                    }
                     _ => {}
                 }
             }
             for rec in records {
-                out.push(pb_record(rec, &service, &scope).ok()?);
+                out.push(pb_record(rec, &service, &scope).map_err(|_| Malformed)?);
             }
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 // ---- JSON ----
@@ -423,9 +463,9 @@ fn js_id(v: Option<&Value>) -> Vec<u8> {
         .collect()
 }
 
-/// The records of a JSON `ExportLogsServiceRequest`; `None` when it is not JSON.
-pub fn decode_json(body: &[u8]) -> Option<Vec<Record>> {
-    let root: Value = serde_json::from_slice(body).ok()?;
+/// The records of a JSON `ExportLogsServiceRequest`.
+pub fn decode_json(body: &[u8]) -> Result<Vec<Record>, DecodeError> {
+    let root: Value = serde_json::from_slice(body).map_err(|_| DecodeError::Malformed)?;
     let mut out = Vec::new();
     for rl in root
         .get("resourceLogs")
@@ -440,7 +480,7 @@ pub fn decode_json(body: &[u8]) -> Option<Vec<Record>> {
             .unwrap_or_default()
             .into_iter()
             .find(|(k, _)| k == "service.name")
-            .map(|(_, v)| v.text())
+            .map(|(_, v)| short(v.text()))
             .unwrap_or_default();
         for sl in rl
             .get("scopeLogs")
@@ -448,17 +488,18 @@ pub fn decode_json(body: &[u8]) -> Option<Vec<Record>> {
             .into_iter()
             .flatten()
         {
-            let scope = sl
-                .get("scope")
-                .and_then(|s| s.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            for r in sl
-                .get("logRecords")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
+            let scope = short(
+                sl.get("scope")
+                    .and_then(|s| s.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+            let records = sl.get("logRecords").and_then(Value::as_array);
+            if out.len() + records.map_or(0, Vec::len) > MAX_RECORDS {
+                return Err(DecodeError::TooMany);
+            }
+            for r in records.into_iter().flatten() {
                 out.push(Record {
                     time_unix_nano: r.get("timeUnixNano").map_or(0, js_u64),
                     observed_unix_nano: r.get("observedTimeUnixNano").map_or(0, js_u64),
@@ -477,12 +518,12 @@ pub fn decode_json(body: &[u8]) -> Option<Vec<Record>> {
                     trace_id: js_id(r.get("traceId")),
                     span_id: js_id(r.get("spanId")),
                     service: service.clone(),
-                    scope: scope.to_string(),
+                    scope: scope.clone(),
                 });
             }
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -592,10 +633,22 @@ pub(crate) mod tests {
             "2025-10-23T08:15:30.123Z ERROR checkout [shop.payments] payment failed {order.id=42} \
              trace=abababababababababababababababab span=0101010101010101"
         );
-        assert!(
-            decode_protobuf(&[0x0a, 0xff]).is_none(),
+        assert_eq!(
+            decode_protobuf(&[0x0a, 0xff]),
+            Err(DecodeError::Malformed),
             "a length past the end"
         );
+        // A small body of many empty records is refused.
+        let mut scope_logs = Vec::new();
+        for _ in 0..MAX_RECORDS + 1 {
+            scope_logs.extend_from_slice(&[0x12, 0x00]);
+        }
+        let mut w = W(Vec::new());
+        w.bytes(2, &scope_logs);
+        let rl = w.0;
+        let mut w = W(Vec::new());
+        w.bytes(1, &rl);
+        assert_eq!(decode_protobuf(&w.0), Err(DecodeError::TooMany));
     }
 
     #[test]
@@ -613,7 +666,11 @@ pub(crate) mod tests {
             records[1].line(&now),
             "2025-10-23T08:15:31.000Z DEBUG api [http] two lines trace=0102"
         );
-        assert!(decode_json(b"not json").is_none());
+        assert_eq!(decode_json(b"not json"), Err(DecodeError::Malformed));
+        // Control characters and bidi overrides never reach the view.
+        let sneaky = br#"{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"a\u001b[31mred\u202ex\tb"}}]}]}]}"#;
+        let line = decode_json(sneaky).unwrap()[0].line(&now);
+        assert!(line.ends_with("a\u{fffd}[31mred\u{fffd}x b"), "{line}");
     }
 
     #[test]
