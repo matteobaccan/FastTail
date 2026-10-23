@@ -121,6 +121,11 @@ fn source_row(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: La
         }
     });
     let current = engine.stats.as_ref().map(|s| s.source.clone());
+    // The regex field shows once Regex… was picked, or with no field to pick.
+    let mode_id = id.with("mode");
+    let mut regex_mode: bool = keys.is_empty()
+        || matches!(current, Some(StatsSource::Capture(_)))
+        || ui.data(|d| d.get_temp(mode_id)).unwrap_or(false);
     let slice_choice = engine
         .stats
         .as_ref()
@@ -141,6 +146,7 @@ fn source_row(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: La
                         .selectable_label(on, RichText::new(k).monospace())
                         .clicked()
                     {
+                        regex_mode = false;
                         open = Some((StatsSource::Field(k.clone()), slice_choice));
                     }
                 }
@@ -151,6 +157,7 @@ fn source_row(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: La
                     )
                     .clicked()
                 {
+                    regex_mode = true;
                     if let Ok(re) = regex::Regex::new(&regex_text) {
                         if !regex_text.is_empty() {
                             open = Some((StatsSource::Capture(re), slice_choice));
@@ -158,7 +165,7 @@ fn source_row(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: La
                     }
                 }
             });
-        if keys.is_empty() || matches!(current, Some(StatsSource::Capture(_)) | None) {
+        if regex_mode {
             let valid = regex::Regex::new(&regex_text);
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut regex_text)
@@ -235,6 +242,7 @@ fn source_row(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: La
             }
         }
     });
+    ui.data_mut(|d| d.insert_temp(mode_id, regex_mode));
     if let Some((source, slices)) = open {
         engine.open_stats(source, slices);
     }
@@ -301,10 +309,12 @@ fn summary(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language)
 }
 
 /// Counts per time slice of the top values (or p50 / p95 of a numeric source).
-fn chart(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
-    let Some(s) = engine.stats.as_ref() else {
+fn chart(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let Some(s) = engine.stats.as_mut() else {
         return;
     };
+    let top = s.top();
+    let s = &*s;
     let r = &s.result;
     let Some(slices) = r.slices else {
         if s.slice_choice != SliceChoice::Off && s.done() {
@@ -323,9 +333,8 @@ fn chart(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
             series.push((name.to_string(), colors[i], values));
         }
     } else {
-        let top = r.top(CHART_SERIES);
         let mut rest: Vec<f64> = r.slice_totals().iter().map(|&n| n as f64).collect();
-        for (i, (value, v)) in top.iter().enumerate() {
+        for (i, (value, v)) in top.iter().take(CHART_SERIES).enumerate() {
             let values: Vec<f64> = v.series(slices.count).iter().map(|&n| n as f64).collect();
             for (a, b) in rest.iter_mut().zip(&values) {
                 *a -= b;
@@ -432,12 +441,13 @@ fn chart(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
 /// The most frequent values: count, share, a bar and the counts per level; a click
 /// filters on a value, `CTRL` + click leaves it out.
 fn table(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
-    let Some(s) = engine.stats.as_ref() else {
+    let Some(s) = engine.stats.as_mut() else {
         return;
     };
+    let top = s.top();
+    let s = &*s;
     let r = &s.result;
     let total = r.with_value.max(1) as f64;
-    let top = r.top(s.top_n);
     let max = top.first().map_or(1, |(_, v)| v.count.max(1)) as f32;
     // Only the levels some value has.
     let levels: Vec<usize> = (0..LogLevel::COUNT)
@@ -463,7 +473,7 @@ fn table(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Languag
                 ui.label(RichText::new(names[l]).strong().color(level_color(l)));
             }
             ui.end_row();
-            for (value, v) in &top {
+            for (value, v) in top.iter() {
                 let shown = if value.is_empty() { "\"\"" } else { value };
                 let resp = ui
                     .add(

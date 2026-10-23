@@ -50,13 +50,13 @@ pub enum StatsSource {
 }
 
 impl StatsSource {
-    /// Calls `f` with the value of `line` (`None` when it has none), without copying it.
-    /// `spans` is a scratch buffer reused per line.
+    /// Calls `f` with the value of `line` (`None` when it has none), without copying it
+    /// and without allocating: `scratch` is reused from line to line.
     pub fn with_value<R>(
         &self,
         parser: Option<&FieldParser>,
         line: &str,
-        spans: &mut FieldSpans,
+        scratch: &mut Scratch,
         f: impl FnOnce(Option<&str>) -> R,
     ) -> R {
         match self {
@@ -64,17 +64,25 @@ impl StatsSource {
                 let Some(parser) = parser else {
                     return f(None);
                 };
-                crate::fields::scan(parser, line, spans);
-                match spans.get(line, key) {
+                crate::fields::scan(parser, line, &mut scratch.spans);
+                match scratch.spans.get(line, key) {
                     Some(field) => f(Some(&field.value())),
                     None => f(None),
                 }
             }
             StatsSource::Capture(re) => {
-                let m = re
-                    .captures(line)
-                    .and_then(|caps| caps.get(1).or_else(|| caps.get(0)));
-                f(m.map(|m| m.as_str()))
+                let locs = scratch.locs.get_or_insert_with(|| re.capture_locations());
+                if re.captures_read(locs, line).is_none() {
+                    return f(None);
+                }
+                // The first group; the whole match only for a regex without groups (an
+                // optional group that did not take part gives no value).
+                let at = if re.captures_len() == 1 {
+                    locs.get(0)
+                } else {
+                    locs.get(1)
+                };
+                f(at.map(|(a, b)| &line[a..b]))
             }
         }
     }
@@ -86,6 +94,14 @@ impl StatsSource {
             StatsSource::Capture(re) => re.as_str().to_string(),
         }
     }
+}
+
+/// Buffers `StatsSource::with_value` reuses: the fields of a line and the capture slots
+/// of a regex source (made for the first line it reads).
+#[derive(Debug, Default)]
+pub struct Scratch {
+    pub spans: FieldSpans,
+    locs: Option<regex::CaptureLocations>,
 }
 
 /// The time slices of a breakdown.
@@ -147,23 +163,45 @@ pub struct ValueStats {
 }
 
 impl ValueStats {
-    fn add(&mut self, level: u8, slice: Option<usize>) {
+    fn add(&mut self, level: u8, slice: Option<usize>, slices: usize) {
         self.count += 1;
         self.levels[(level as usize).min(LEVELS - 1)] += 1;
         if let Some(i) = slice {
             match self.series.last_mut() {
                 Some((s, n)) if *s == i as u32 && *n < u32::MAX => *n += 1,
-                _ => self.series.push((i as u32, 1)),
+                _ => {
+                    self.series.push((i as u32, 1));
+                    self.bound_series(slices);
+                }
             }
         }
     }
 
-    fn merge(&mut self, other: ValueStats) {
+    fn merge(&mut self, other: ValueStats, slices: usize) {
         self.count += other.count;
         for (a, b) in self.levels.iter_mut().zip(other.levels) {
             *a += b;
         }
         self.series.extend(other.series);
+        self.bound_series(slices);
+    }
+
+    /// Joins the runs of the same slice once there are more runs than slices (lines
+    /// going back and forth across a slice edge, or batches merged), so the series never
+    /// takes more than about two entries per slice.
+    fn bound_series(&mut self, slices: usize) {
+        if self.series.len() <= 2 * slices.max(8) {
+            return;
+        }
+        self.series.sort_unstable_by_key(|r| r.0);
+        let mut out: Vec<(u32, u32)> = Vec::with_capacity(slices.min(self.series.len()));
+        for &(s, n) in &self.series {
+            match out.last_mut() {
+                Some((ls, ln)) if *ls == s => *ln = ln.saturating_add(n),
+                _ => out.push((s, n)),
+            }
+        }
+        self.series = out;
     }
 
     /// The count in each of `count` slices.
@@ -312,6 +350,9 @@ fn kept(value: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{}…", &value[..end]))
 }
 
+/// The most frequent values with their counts, most frequent first.
+pub type TopList = std::sync::Arc<[(Box<str>, ValueStats)]>;
+
 /// How the time slices of a breakdown are chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SliceChoice {
@@ -344,9 +385,48 @@ pub struct StatsState {
     pub(crate) job_generation: u64,
     /// Values listed in the tab (5..=1000).
     pub top_n: usize,
+    /// The timestamp an appended line without its own inherits.
+    pub(crate) last_ts: i64,
+    /// The most frequent values as last listed: for `generation` and `top_n`.
+    top_cache: Option<(u64, usize, TopList)>,
 }
 
 impl StatsState {
+    pub(crate) fn new(source: StatsSource, slice_choice: SliceChoice, top_n: usize) -> Self {
+        Self {
+            source,
+            slice_choice,
+            result: FieldStats::default(),
+            job: None,
+            progress: 0.0,
+            covered: 0,
+            restart: true,
+            failed: false,
+            generation: 0,
+            job_generation: 0,
+            top_n,
+            last_ts: NO_TIMESTAMP,
+            top_cache: None,
+        }
+    }
+
+    /// The `top_n` most frequent values, sorted again only when the counts changed.
+    pub fn top(&mut self) -> TopList {
+        match &self.top_cache {
+            Some((g, n, list)) if *g == self.generation && *n == self.top_n => list.clone(),
+            _ => {
+                let list: TopList = self
+                    .result
+                    .top(self.top_n)
+                    .into_iter()
+                    .map(|(k, v)| (Box::from(k), v.clone()))
+                    .collect();
+                self.top_cache = Some((self.generation, self.top_n, list.clone()));
+                list
+            }
+        }
+    }
+
     /// Whether the counts cover the view (no scan running, nothing waiting).
     pub fn done(&self) -> bool {
         self.job.is_none() && !self.restart
@@ -417,21 +497,29 @@ impl FieldStats {
             }
         }
         let value = kept(value);
+        let n_slices = self.slice_totals.len();
         if let Some(stats) = self.values.get_mut(value.as_ref()) {
-            stats.add(level, slice);
+            stats.add(level, slice, n_slices);
         } else if self.values.len() < MAX_VALUES {
             let mut stats = ValueStats::default();
-            stats.add(level, slice);
+            stats.add(level, slice, n_slices);
             self.values
                 .insert(value.into_owned().into_boxed_str(), stats);
         } else {
             self.capped = true;
-            self.other.add(level, slice);
+            self.other.add(level, slice, n_slices);
         }
     }
 
     /// Adds the counts of `other`, gathered over other lines with the same slices.
     pub fn merge(&mut self, other: FieldStats) {
+        // Slices added at the end since the other counts began (`extend_slices`).
+        if let (Some(mine), Some(theirs)) = (self.slices, other.slices) {
+            if theirs.count > mine.count {
+                self.grow_slices(theirs.count);
+            }
+        }
+        let n_slices = self.slice_totals.len();
         self.lines += other.lines;
         self.with_value += other.with_value;
         self.numeric_values += other.numeric_values;
@@ -449,18 +537,46 @@ impl FieldStats {
         }
         for (value, stats) in other.values {
             if let Some(mine) = self.values.get_mut(&value) {
-                mine.merge(stats);
+                mine.merge(stats, n_slices);
             } else if self.values.len() < MAX_VALUES {
                 self.values.insert(value, stats);
             } else {
                 self.capped = true;
-                self.other.merge(stats);
+                self.other.merge(stats, n_slices);
             }
         }
         if other.capped {
             self.capped = true;
         }
-        self.other.merge(other.other);
+        self.other.merge(other.other, n_slices);
+    }
+
+    fn grow_slices(&mut self, count: usize) {
+        if let Some(sl) = self.slices.as_mut() {
+            sl.count = count;
+        }
+        self.slice_totals.resize(count, 0);
+        if !self.slice_hists.is_empty() {
+            self.slice_hists.resize_with(count, NumHist::default);
+        }
+    }
+
+    /// Adds slices at the end so `ts` falls in one (a live log moving past the last
+    /// slice). Returns false when that would take more than `MAX_SLICES`: the slices must
+    /// be chosen again.
+    pub fn extend_slices(&mut self, ts: i64) -> bool {
+        let Some(sl) = self.slices else {
+            return true;
+        };
+        if ts == NO_TIMESTAMP || ts < sl.start || sl.index(ts).is_some() {
+            return true;
+        }
+        let count = ((ts - sl.start) / sl.width + 1) as usize;
+        if count > MAX_SLICES {
+            return false;
+        }
+        self.grow_slices(count);
+        true
     }
 
     /// Distinct values counted (a lower bound when `capped`).
@@ -476,10 +592,20 @@ impl FieldStats {
 
     /// The `n` most frequent values, most frequent first (ties in value order).
     pub fn top(&self, n: usize) -> Vec<(&str, &ValueStats)> {
+        let order = |a: &(&str, &ValueStats), b: &(&str, &ValueStats)| {
+            b.1.count.cmp(&a.1.count).then_with(|| a.0.cmp(b.0))
+        };
         let mut all: Vec<(&str, &ValueStats)> =
             self.values.iter().map(|(k, v)| (k.as_ref(), v)).collect();
-        all.sort_unstable_by(|a, b| b.1.count.cmp(&a.1.count).then_with(|| a.0.cmp(b.0)));
-        all.truncate(n);
+        if n == 0 {
+            return Vec::new();
+        }
+        // Only the first `n` are sorted.
+        if all.len() > n {
+            all.select_nth_unstable_by(n - 1, order);
+            all.truncate(n);
+        }
+        all.sort_unstable_by(order);
         all
     }
 
@@ -525,7 +651,7 @@ impl FieldStats {
             let shown: std::collections::HashSet<&str> = top.iter().map(|(v, _)| *v).collect();
             for (v, s) in &self.values {
                 if !shown.contains(v.as_ref()) {
-                    rest.merge(s.clone());
+                    rest.merge(s.clone(), self.slice_totals.len());
                 }
             }
         }
@@ -751,7 +877,7 @@ mod tests {
             .build()
             .unwrap()
             .unwrap();
-        let mut spans = FieldSpans::new();
+        let mut spans = Scratch::default();
         let field = StatsSource::Field("status".into());
         assert_eq!(
             field.with_value(
@@ -798,5 +924,37 @@ mod tests {
         assert_eq!(rows[1], "\"a,b\",2,50.00%,0,0,0,0,0,2,0");
         assert_eq!(rows[2], "(other values),2,50.00%,0,0,0,0,0,2,0");
         assert!(s.to_csv(5, &names).contains("'=1+1,1,"));
+    }
+
+    #[test]
+    fn optional_groups_slices_that_grow_and_bounded_series() {
+        let mut scratch = Scratch::default();
+        let opt = StatsSource::Capture(Regex::new(r"took (\d+)?ms").unwrap());
+        assert!(!opt.with_value(None, "took ms", &mut scratch, |v| v.is_some()));
+        assert_eq!(
+            opt.with_value(None, "took 7ms", &mut scratch, |v| v.map(str::to_string)),
+            Some("7".to_string())
+        );
+
+        let sl = Slices::with_width(0, 59_999, 60_000).unwrap();
+        let mut a = FieldStats::new(Some(sl));
+        a.add_line(Some("x"), 3, 1_000);
+        let mut b = FieldStats::new(Some(sl));
+        assert!(b.extend_slices(130_000));
+        b.add_line(Some("x"), 3, 130_000);
+        a.merge(b);
+        assert_eq!(a.slices.unwrap().count, 3);
+        assert_eq!(a.slice_totals(), &[1, 0, 1]);
+        assert_eq!(a.values["x"].series(3), vec![1, 0, 1]);
+        assert!(!a.extend_slices(60_000 * MAX_SLICES as i64 + 1));
+
+        // Back and forth across a slice edge: the runs are joined.
+        let mut c = FieldStats::new(Some(sl));
+        assert!(c.extend_slices(61_000));
+        for i in 0..10_000 {
+            c.add_line(Some("y"), 3, if i % 2 == 0 { 59_000 } else { 61_000 });
+        }
+        assert!(c.values["y"].series.len() <= 2 * 8 + 1);
+        assert_eq!(c.values["y"].series(2), vec![5_000, 5_000]);
     }
 }

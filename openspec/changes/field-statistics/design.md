@@ -69,7 +69,12 @@ uses the engine's sharing flags, so Windows writers are not blocked.
   (so the time window and hidden lines apply) or every line; it waits while the filter or
   index scan runs. Partial counts are merged every 250 ms.
 - The slices are fixed before the scan from the timestamps of the first and last 1,000
-  lines; lines out of that span count in the table, not in the chart.
+  lines; lines before that span count in the table, not in the chart. A live log adds
+  slices at the end (up to 2,000, then the slices are chosen again over the whole span).
+- An unterminated last line is left out until it ends, so a value written in two parts is
+  counted once, complete. Appended lines wait while a filter refresh is pending, and
+  inherit the last timestamp as the scan's lines do.
+- The tab sorts the values again only when the counts change (cached per generation).
 - Per-value series are sparse `(slice, count)` runs, so memory follows the counts and not
   values × slices; per-slice percentiles use one sparse histogram per slice.
 - A regex source adds a regex term only when the stream's filter is in regex mode (terms

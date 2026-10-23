@@ -759,7 +759,7 @@ impl Timing {
 /// field buffer, and the timestamp the next line inherits.
 struct StatsRun {
     stats: crate::field_stats::FieldStats,
-    spans: FieldSpans,
+    scratch: crate::field_stats::Scratch,
     inherited: i64,
     hint: FormatHint,
     sent: std::time::Instant,
@@ -863,7 +863,7 @@ fn run(
     let mut stats_run = match &spec {
         JobSpec::FieldStats { slices, .. } => Some(StatsRun {
             stats: crate::field_stats::FieldStats::new(*slices),
-            spans: FieldSpans::new(),
+            scratch: crate::field_stats::Scratch::default(),
             inherited: NO_TIMESTAMP,
             hint: FormatHint::default(),
             sent: std::time::Instant::now(),
@@ -924,8 +924,8 @@ fn run(
                     }
                     let parser = range.parser.as_deref();
                     let ts = run.inherited;
-                    let StatsRun { stats, spans, .. } = run;
-                    source.with_value(parser, s, spans, |v| {
+                    let StatsRun { stats, scratch, .. } = run;
+                    source.with_value(parser, s, scratch, |v| {
                         let level = if v.is_some() {
                             crate::fields::line_level(parser, s, range.level_window) as u8
                         } else {

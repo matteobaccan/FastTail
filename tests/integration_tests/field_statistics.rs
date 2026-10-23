@@ -254,3 +254,54 @@ fn filter_terms_are_added_until_a_side_is_full() {
     assert!(engine.add_filter_term("x7", false));
     assert!(!engine.add_filter_term("x8", false), "eight terms at most");
 }
+
+#[test]
+fn an_unterminated_last_line_is_counted_once_complete_and_live_logs_add_slices() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("live.log");
+    std::fs::write(
+        &path,
+        "ts=2026-10-23T10:00:00Z status=200\nts=2026-10-23T10:00:01Z status=50",
+    )
+    .unwrap();
+    let mut engine = open(&path);
+    engine.set_field_choice(ParserChoice::Logfmt);
+    engine.open_stats(
+        StatsSource::Field("status".into()),
+        SliceChoice::Width(60_000),
+    );
+    wait_stats_lines(&mut engine, 1);
+    assert_eq!(count(&engine, "200"), 1);
+    assert_eq!(count(&engine, "50"), 0, "the unterminated line waits");
+
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(f, "0").unwrap();
+    writeln!(f, "ts=2026-10-23T10:05:00Z status=404").unwrap();
+    drop(f);
+    wait_stats_lines(&mut engine, 3);
+    assert_eq!(count(&engine, "500"), 1);
+    assert_eq!(count(&engine, "50"), 0);
+    let s = &engine.stats.as_ref().unwrap().result;
+    // Five minutes later than the last slice: slices were added for it.
+    assert_eq!(s.slices.unwrap().count, 6);
+    assert_eq!(s.slice_totals().iter().sum::<u64>(), 3);
+}
+
+fn wait_stats_lines(engine: &mut TailEngine, lines: u64) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        engine.poll_updates();
+        let s = engine.stats.as_ref().unwrap();
+        if s.done() && s.result.lines >= lines {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "statistics did not reach {lines} lines"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
