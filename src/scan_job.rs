@@ -48,6 +48,8 @@ pub enum ScanKind {
     Collapse,
     /// Counts the values of a field or capture over the visible lines (Statistics tab).
     FieldStats,
+    /// Runs a query over the visible lines (Query tab).
+    Query,
 }
 
 /// Most include terms, and most exclude terms, a stream can hold.
@@ -143,6 +145,17 @@ pub struct LineFields<'a> {
     parser: Option<&'a FieldParser>,
     spans: &'a mut FieldSpans,
     scanned: bool,
+}
+
+impl<'a> LineFields<'a> {
+    /// The fields of a line read with `parser`, scanned into `spans` on first use.
+    pub(crate) fn new(parser: Option<&'a FieldParser>, spans: &'a mut FieldSpans) -> Self {
+        Self {
+            parser,
+            spans,
+            scanned: false,
+        }
+    }
 }
 
 impl LineFields<'_> {
@@ -508,6 +521,12 @@ pub enum JobSpec {
         visible: VisibleSet,
         slices: Option<crate::field_stats::Slices>,
     },
+    /// Run `query` over the visible lines (see `query`); the result is sent once, at the
+    /// end (`ScanBatch::Query`).
+    Query {
+        query: Arc<crate::query::Query>,
+        visible: VisibleSet,
+    },
 }
 
 /// The lines a search or collapse job covers.
@@ -607,6 +626,8 @@ pub enum ScanBatch {
     Groups(Vec<Group>),
     /// The collapse detection state at the end of the range, sent before `Done`.
     CollapseCursor(Box<Detector>),
+    /// The result of a `Query` job.
+    Query(Box<Result<crate::query::Table, crate::query::QueryError>>),
     /// Multi-line search hits (first and last line), in order.
     MultiHits(Vec<(usize, usize)>),
     /// Multi-line matches too long to report, counted at the end of the scan.
@@ -663,6 +684,7 @@ impl ScanJob {
             JobSpec::AutoBookmarks { .. } => ScanKind::AutoBookmarks,
             JobSpec::Collapse { .. } => ScanKind::Collapse,
             JobSpec::FieldStats { .. } => ScanKind::FieldStats,
+            JobSpec::Query { .. } => ScanKind::Query,
         };
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -767,6 +789,16 @@ struct StatsRun {
     inherited: i64,
     hint: FormatHint,
     sent: std::time::Instant,
+}
+
+/// Running state of a `Query` job: the executor, the timestamp the next line inherits,
+/// and whether the query reads times and levels at all.
+struct QueryRun<'q> {
+    ex: crate::query::Executor<'q>,
+    inherited: i64,
+    hint: FormatHint,
+    timed: bool,
+    leveled: bool,
 }
 
 /// How often a `FieldStats` job sends its counts.
@@ -875,6 +907,17 @@ fn run(
         )),
         _ => None,
     };
+    // A query: its executor, and the timestamp the next line inherits.
+    let mut query_run = match &spec {
+        JobSpec::Query { query, .. } => Some(QueryRun {
+            ex: crate::query::Executor::new(query, range.parser.clone()),
+            inherited: NO_TIMESTAMP,
+            hint: FormatHint::default(),
+            timed: query.needs_time(),
+            leveled: query.needs_level(),
+        }),
+        _ => None,
+    };
     let mut stats_run = match &spec {
         JobSpec::FieldStats { slices, .. } => Some(StatsRun {
             stats: crate::field_stats::FieldStats::new(*slices),
@@ -897,6 +940,7 @@ fn run(
     let mut walk = match &spec {
         JobSpec::Collapse { visible, .. }
         | JobSpec::FieldStats { visible, .. }
+        | JobSpec::Query { visible, .. }
         | JobSpec::Search {
             filter: visible, ..
         } => Some(VisibleWalk::new(
@@ -917,10 +961,45 @@ fn run(
          tally: &mut Tally,
          collapse: &mut Option<Detector>,
          stats_run: &mut Option<StatsRun>,
-         multi: &mut Option<(crate::multiline_search::Scanner<'_>, Vec<(usize, usize)>)>|
+         multi: &mut Option<(crate::multiline_search::Scanner<'_>, Vec<(usize, usize)>)>,
+         query_run: &mut Option<QueryRun<'_>>|
          -> bool {
             match &spec {
                 JobSpec::Index => true,
+                JobSpec::Query { .. } => {
+                    let Some(run) = query_run.as_mut() else {
+                        return true;
+                    };
+                    line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                        if run.timed {
+                            if let Some((ms, f)) =
+                                crate::fields::line_timestamp(range.parser.as_deref(), s, run.hint)
+                            {
+                                run.hint = f;
+                                run.inherited = ms;
+                            }
+                        }
+                        if walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                            let level = if run.leveled {
+                                crate::fields::line_level(
+                                    range.parser.as_deref(),
+                                    s,
+                                    range.level_window,
+                                ) as u8
+                            } else {
+                                0
+                            };
+                            run.ex.push(&crate::query::LineIn {
+                                idx,
+                                text: s,
+                                level,
+                                ts: run.inherited,
+                            });
+                        }
+                        true
+                    });
+                    run.ex.wants_more()
+                }
                 JobSpec::FieldStats { source, slices, .. } => {
                     let Some(run) = stats_run.as_mut() else {
                         return true;
@@ -1102,6 +1181,7 @@ fn run(
                     &mut collapse,
                     &mut stats_run,
                     &mut multi,
+                    &mut query_run,
                 ) {
                     limit_reached = true;
                     break 'outer;
@@ -1209,6 +1289,7 @@ fn run(
             &mut collapse,
             &mut stats_run,
             &mut multi,
+            &mut query_run,
         );
         line_idx += 1;
     }
@@ -1222,6 +1303,10 @@ fn run(
                 max_line_bytes,
             })
         {
+            return;
+        }
+    } else if let Some(run) = query_run.take() {
+        if !send(ScanBatch::Query(Box::new(run.ex.finish()))) {
             return;
         }
     } else if let Some((mut scanner, mut found)) = multi.take() {

@@ -10,6 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Query tab.** *🧮 Query…* in the stream's 💾 menu opens a Query tab: a pipeline over the
+  lines the stream shows, stages joined by `|` and read left to right:
+  `where <filter expression>`, `parse /(?P<name>…)/`, `timeslice 5m`, `fields a, b`,
+  `stats count(), sum(x), avg(x), min(x), max(x), dc(x), p50(x)…p99(x), first(x), last(x)
+  [as name] [by k1, k2]`, `sort [-]col`, `head N`; for example
+  `where status>=500 | stats count() as n, p95(ms) by path | sort -n | head 10`. It runs in
+  the background with progress and Stop, and shows a table: click a header to sort, Copy
+  as CSV, double-click a row result to show its line. Errors name the stage and the
+  character. The last 20 queries are kept (`[query] history.N`). At most 100,000 rows or
+  groups. `query-language` is code complete: the three 0.24.0 changes are in.
+
+### Added
+
 - **Multi-line regex search.** A third state of the search mode button (`.*⤶`) matches the
   regex against the visible lines joined with `\n`, so a hit may cover several lines:
   `^BEGIN tx\d+\n.*\ndeadlock`, a request line followed by another one

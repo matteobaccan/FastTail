@@ -45,6 +45,7 @@ pub mod notifications;
 pub mod otlp;
 pub mod paths;
 pub mod print_mode;
+pub mod query;
 pub mod renderer;
 pub mod scan_job;
 #[cfg(feature = "gui")]

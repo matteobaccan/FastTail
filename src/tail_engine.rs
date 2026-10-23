@@ -1061,6 +1061,25 @@ pub(crate) fn find_case_insensitive_cb(
     }
 }
 
+/// The query of a stream's Query tab: its text, the parsed query waiting for the view to
+/// settle, the running scan, and the result (`None` while it runs).
+pub struct QueryState {
+    pub text: String,
+    pending: Option<Arc<crate::query::Query>>,
+    job: Option<ScanJob>,
+    pub progress: f32,
+    pub result: Option<Result<crate::query::Table, crate::query::QueryError>>,
+    /// Bumped when the result changes.
+    pub generation: u64,
+}
+
+impl QueryState {
+    /// Whether the query is still running (or waits to start).
+    pub fn running(&self) -> bool {
+        self.job.is_some() || self.pending.is_some()
+    }
+}
+
 /// How the stream search reads its query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SearchMode {
@@ -1984,6 +2003,12 @@ pub struct TailEngine {
     pub debug_output: Option<crate::debug_output::DebugStream>,
     /// The Statistics tab of the stream, while it is open (see `open_stats`).
     pub stats: Option<crate::field_stats::StatsState>,
+    /// The Query tab of the stream: its last query, run or result (see `run_query`).
+    pub query: Option<QueryState>,
+    /// The Query tab was asked for (stream menu, palette).
+    pub query_request: bool,
+    /// A row of a query result was double-clicked: show this line (applied by the app).
+    pub query_jump: Option<usize>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2610,6 +2635,9 @@ impl TailEngine {
             listener: None,
             debug_output: None,
             stats: None,
+            query: None,
+            query_request: false,
+            query_jump: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
@@ -3501,6 +3529,7 @@ impl TailEngine {
         if unchanged_lines == 0 {
             // New content (reload, rotation, another encoding).
             self.restart_stats();
+            self.cancel_query_on_reload();
         }
         let mut total_len = self.source.len();
         // Auto mode looks for colour codes in the head of the file, then in each append
@@ -4235,6 +4264,7 @@ impl TailEngine {
         self.poll_context_rebuild();
         self.drain_job();
         self.poll_stats();
+        self.poll_query();
         self.land_open_line();
         // A live time window slides with the clock.
         if self.time_window_live() && self.live_checked_at.elapsed() >= LIVE_WINDOW_PERIOD {
@@ -7832,6 +7862,123 @@ impl TailEngine {
         }
     }
 
+    // ----- Queries (see `query`) -----
+
+    /// Runs `text` over the lines the stream shows now, in the background. A query that
+    /// does not parse fails at once (the error is the result).
+    pub fn run_query(&mut self, text: &str) {
+        let parsed = crate::query::Query::parse(
+            text,
+            self.field_parser.is_some(),
+            self.filter_case_sensitive,
+            self.filter_is_regex,
+        );
+        let generation = self
+            .query
+            .as_ref()
+            .map_or(0, |q| q.generation.wrapping_add(1));
+        let mut state = QueryState {
+            text: text.to_string(),
+            job: None,
+            pending: None,
+            progress: 0.0,
+            result: None,
+            generation,
+        };
+        match parsed {
+            Err(e) => state.result = Some(Err(e)),
+            Ok(q) => state.pending = Some(Arc::new(q)),
+        }
+        self.query = Some(state);
+        self.poll_query();
+    }
+
+    /// Stops a running query (the result stays empty).
+    pub fn stop_query(&mut self) {
+        if let Some(q) = self.query.as_mut() {
+            q.job = None;
+            q.pending = None;
+        }
+    }
+
+    /// Starts a query waiting for the view, and takes the result of a finished one.
+    fn poll_query(&mut self) {
+        let Some(q) = self.query.as_ref() else {
+            return;
+        };
+        if q.job.is_none() {
+            // A query waits for the view to settle; the visible set is copied only then.
+            if q.pending.is_none() || !self.stats_view_settled(false) {
+                return;
+            }
+            let visible = if self.is_filter_active() {
+                VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+            } else {
+                VisibleSet::All
+            };
+            let (file, range) = self.full_scan_range();
+            let Some(q) = self.query.as_mut() else {
+                return;
+            };
+            if let Some(query) = q.pending.take() {
+                q.progress = 0.0;
+                q.job = Some(ScanJob::spawn(
+                    q.generation,
+                    &file,
+                    range,
+                    JobSpec::Query { query, visible },
+                ));
+            }
+            return;
+        }
+        let Some(q) = self.query.as_mut() else {
+            return;
+        };
+        let Some(job) = q.job.as_ref() else {
+            return;
+        };
+        let mut done = false;
+        while let Some(batch) = job.try_recv() {
+            match batch {
+                ScanBatch::Progress(p) => q.progress = p,
+                ScanBatch::Query(result) => {
+                    q.result = Some(*result);
+                    done = true;
+                }
+                ScanBatch::Failed => {
+                    q.result = Some(Err(crate::query::QueryError {
+                        stage: 0,
+                        pos: 0,
+                        key: "query_err_read",
+                        detail: String::new(),
+                    }));
+                    done = true;
+                }
+                _ => {}
+            }
+        }
+        if done {
+            q.job = None;
+            q.progress = 1.0;
+            q.generation = q.generation.wrapping_add(1);
+        }
+    }
+
+    /// A reload while a query reads the file: it stops, and says why.
+    fn cancel_query_on_reload(&mut self) {
+        if let Some(q) = self.query.as_mut() {
+            if q.job.take().is_some() || q.pending.take().is_some() {
+                q.result = Some(Err(crate::query::QueryError {
+                    stage: 0,
+                    pos: 0,
+                    key: "query_err_reloaded",
+                    detail: String::new(),
+                }));
+                q.generation = q.generation.wrapping_add(1);
+            }
+        }
+    }
+
     /// First and last timestamps of the stream, read from its first and last lines (out
     /// of order lines before them are left out of the slices; later ones add slices).
     fn stats_time_span(&self) -> Option<(i64, i64)> {
@@ -8177,8 +8324,8 @@ impl TailEngine {
         let mut finished: Option<Result<usize, ()>> = None;
         while let Some(batch) = job.try_recv() {
             match batch {
-                // Statistics jobs run in their own slot (`stats`).
-                ScanBatch::Stats(_) => {}
+                // Statistics and query jobs run in their own slots (`stats`, `query`).
+                ScanBatch::Stats(_) | ScanBatch::Query(_) => {}
                 ScanBatch::MultiHits(found) => {
                     // The visible set was exact (hidden lines and time window included):
                     // only the search scope applies, on the first line of each hit.
@@ -8230,7 +8377,7 @@ impl TailEngine {
                     }
                     job.hits += lines.len();
                     match job.kind {
-                        ScanKind::FieldStats => {}
+                        ScanKind::FieldStats | ScanKind::Query => {}
                         ScanKind::Filter => {
                             self.extend_filtered(lines);
                             self.filter_generation = self.filter_generation.wrapping_add(1);
@@ -8372,7 +8519,7 @@ impl TailEngine {
 
     fn finish_job(&mut self, kind: ScanKind, end_offset: u64) {
         match kind {
-            ScanKind::FieldStats => {}
+            ScanKind::FieldStats | ScanKind::Query => {}
             ScanKind::Index => {
                 self.index_pending = false;
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);

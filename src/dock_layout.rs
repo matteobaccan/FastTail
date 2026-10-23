@@ -61,6 +61,7 @@ pub enum Tab {
     Scratchpad,
     Compare,
     Statistics(PathBuf),
+    Query(PathBuf),
 }
 
 impl Tab {

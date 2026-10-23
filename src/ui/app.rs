@@ -1396,6 +1396,31 @@ impl FastTailApp {
         changed
     }
 
+    /// Opens the Query tab a stream asked for, and shows a line a query result points to.
+    /// Returns whether anything changed.
+    pub fn apply_query_requests(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(idx) = self.engines.iter().position(|e| e.query_request) {
+            self.engines[idx].query_request = false;
+            let path = self.engines[idx].path.clone();
+            crate::ui::query_tab::open_tab(&mut self.dock_state, &path);
+            changed = true;
+        }
+        let lang = self.config.language;
+        for i in 0..self.engines.len() {
+            let Some(line) = self.engines[i].query_jump.take() else {
+                continue;
+            };
+            self.engines[i].request_jump(line, lang);
+            let path = self.engines[i].path.clone();
+            if let Some(tab) = self.dock_state.find_tab(&FastTailTab::LogStream(path)) {
+                let _ = self.dock_state.set_active_tab(tab);
+            }
+            changed = true;
+        }
+        changed
+    }
+
     /// Opens the Statistics tab a stream asked for: of a field, or of the stream (its
     /// first field, or the regex picker without a parser). Returns whether one opened.
     pub fn apply_stats_requests(&mut self) -> bool {
@@ -3974,6 +3999,7 @@ impl FastTailApp {
         let prev_lang = self.config.language;
         let mut tab_closed = false;
         let mut labels_changed = false;
+        let mut query_ran: Option<String> = None;
         // Keyboard shortcut: Alt + 1..9 to switch focus to tab #1..9
         let mut switch_to_tab = None;
         ctx.input(|i| {
@@ -4337,6 +4363,8 @@ impl FastTailApp {
             find_all: &mut self.find_all,
             scratchpad: &mut self.scratchpad,
             compare: &mut self.compare,
+            query_history: &self.config.query_history,
+            query_ran: &mut query_ran,
             filter_presets: &mut self.config.filter_presets,
             preset_events: &mut preset_events,
             palette_action: self.palette_action.as_ref().map(|p| (p.path.clone(), p.id)),
@@ -4462,6 +4490,9 @@ impl FastTailApp {
         if self.apply_stats_requests() {
             ctx.request_repaint();
         }
+        if self.apply_query_requests() {
+            ctx.request_repaint();
+        }
         if self.apply_merged_views() {
             ctx.request_repaint();
         }
@@ -4583,6 +4614,10 @@ impl FastTailApp {
                 .retain(|path, _| engines.iter().any(|e| &e.path == path));
         }
 
+        if let Some(q) = query_ran {
+            self.config.push_query_history(&q);
+            let _ = self.config.save();
+        }
         if labels_changed {
             for eng in &mut self.engines {
                 eng.set_quick_labels(&self.quick_labels);
