@@ -4,11 +4,14 @@
 
 use fasttail::config::FastTailConfig;
 use fasttail::system_source::{Commands, SystemUri};
+#[cfg(unix)]
 use fasttail::tail_engine::TailEngine;
 use fasttail::workspace::{open_target, OpenOutcome};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 fn poll_until(engine: &mut TailEngine, what: &str, cond: impl Fn(&TailEngine) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -21,6 +24,7 @@ fn poll_until(engine: &mut TailEngine, what: &str, cond: impl Fn(&TailEngine) ->
     }
 }
 
+#[cfg(unix)]
 fn lines(engine: &TailEngine) -> Vec<String> {
     (0..engine.total_lines())
         .filter_map(|i| engine.get_line(i).map(|l| l.into_owned()))
