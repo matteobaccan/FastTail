@@ -187,3 +187,148 @@ fn a_listener_opens_again_on_its_port_right_after_closing() {
         drop(engine);
     }
 }
+
+/// Sends an HTTP request on `s` and returns the status code and the body.
+fn http(s: &mut TcpStream, head: &str, body: &[u8]) -> (u16, Vec<u8>) {
+    use std::io::Read;
+    s.write_all(head.as_bytes()).unwrap();
+    s.write_all(body).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut got = Vec::new();
+    let mut byte = [0u8; 1];
+    while !got.ends_with(b"\r\n\r\n") {
+        s.read_exact(&mut byte).unwrap();
+        got.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&got).to_string();
+    let status: u16 = head[9..12].parse().unwrap();
+    let len: usize = head
+        .lines()
+        .find_map(|l| l.strip_prefix("Content-Length: "))
+        .map_or(0, |v| v.trim().parse().unwrap());
+    let mut body = vec![0u8; len];
+    s.read_exact(&mut body).unwrap();
+    (status, body)
+}
+
+fn post(path: &str, kind: &str, extra: &str, body: &[u8]) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: {kind}\r\n{extra}Content-Length: {}\r\n\r\n",
+        body.len()
+    )
+}
+
+const OTLP_JSON: &str = r#"{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeLogs":[{"scope":{"name":"pay"},"logRecords":[{"timeUnixNano":"1761207330123000000","severityNumber":17,"body":{"stringValue":"payment failed"},"traceId":"0102030405060708090a0b0c0d0e0f10"}]}]}]}"#;
+
+#[test]
+fn otlp_http_json_and_gzipped_protobuf_on_one_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let mut engine = open(
+        &format!("otlp://127.0.0.1:{port}"),
+        Limits::default(),
+        dir.path(),
+    );
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let body = OTLP_JSON.as_bytes();
+    let (status, reply) = http(
+        &mut s,
+        &post("/v1/logs", "application/json", "", body),
+        body,
+    );
+    assert_eq!((status, reply.as_slice()), (200, &b"{}"[..]));
+    // A protobuf ExportLogsServiceRequest with one record, gzipped, on the same connection.
+    let record: &[u8] = &[0x2a, 0x05, 0x0a, 0x03, b'p', b'b', b'!', 0x10, 0x09];
+    let mut scope_logs = vec![0x12, record.len() as u8];
+    scope_logs.extend_from_slice(record);
+    let mut resource_logs = vec![0x12, scope_logs.len() as u8];
+    resource_logs.extend_from_slice(&scope_logs);
+    let mut request = vec![0x0a, resource_logs.len() as u8];
+    request.extend_from_slice(&resource_logs);
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&request).unwrap();
+    let gz = gz.finish().unwrap();
+    let (status, reply) = http(
+        &mut s,
+        &post(
+            "/v1/logs",
+            "application/x-protobuf",
+            "Content-Encoding: gzip\r\n",
+            &gz,
+        ),
+        &gz,
+    );
+    assert_eq!((status, reply.len()), (200, 0));
+    poll_until(&mut engine, "both records", |e| e.total_lines() >= 2);
+    let all = lines(&engine);
+    assert_eq!(
+        all[0],
+        "2025-10-23T08:15:30.123Z ERROR checkout [pay] payment failed trace=0102030405060708090a0b0c0d0e0f10"
+    );
+    assert!(all[1].ends_with(" INFO - pb!"), "{}", all[1]);
+}
+
+#[test]
+fn otlp_refuses_what_it_does_not_take() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let limits = Limits {
+        lines_per_sec: 100,
+        bytes_per_sec: 1 << 20,
+    };
+    let _engine = open(&format!("otlp://127.0.0.1:{port}"), limits, dir.path());
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    assert_eq!(
+        http(
+            &mut s,
+            &post("/v1/traces", "application/json", "", b"{}"),
+            b"{}"
+        )
+        .0,
+        404
+    );
+    assert_eq!(
+        http(&mut s, &post("/v1/logs", "text/plain", "", b"x"), b"x").0,
+        415
+    );
+    assert_eq!(
+        http(&mut s, "GET /v1/logs HTTP/1.1\r\nHost: x\r\n\r\n", b"").0,
+        405
+    );
+    // 500 records in one request: over the limit, so the next request is told to wait.
+    let records: Vec<String> = (0..500)
+        .map(|i| format!(r#"{{"body":{{"stringValue":"r{i}"}}}}"#))
+        .collect();
+    let many = format!(
+        r#"{{"resourceLogs":[{{"scopeLogs":[{{"logRecords":[{}]}}]}}]}}"#,
+        records.join(",")
+    );
+    assert_eq!(
+        http(
+            &mut s,
+            &post("/v1/logs", "application/json", "", many.as_bytes()),
+            many.as_bytes()
+        )
+        .0,
+        200
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let body = OTLP_JSON.as_bytes();
+        let status = http(
+            &mut s,
+            &post("/v1/logs", "application/json", "", body),
+            body,
+        )
+        .0;
+        if status == 429 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never rate-limited");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Too large: refused before the body is read, and the connection closes.
+    let mut big = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let head = "POST /v1/logs HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 99999999\r\n\r\n";
+    assert_eq!(http(&mut big, head, b"").0, 413);
+}

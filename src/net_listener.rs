@@ -43,6 +43,8 @@ pub enum Proto {
     Udp,
     /// UDP and TCP on the same port, messages rendered as syslog.
     Syslog,
+    /// OTLP/HTTP logs (`POST /v1/logs`, protobuf or JSON), see `otlp`.
+    Otlp,
 }
 
 impl Proto {
@@ -51,6 +53,7 @@ impl Proto {
             Proto::Tcp => "tcp",
             Proto::Udp => "udp",
             Proto::Syslog => "syslog",
+            Proto::Otlp => "otlp",
         }
     }
 }
@@ -69,7 +72,10 @@ pub struct ListenSpec {
 /// True when `path` is written as a listener URL (valid or not).
 pub fn is_listen_path(path: &Path) -> bool {
     path.to_str().is_some_and(|s| {
-        s.starts_with("tcp://") || s.starts_with("udp://") || s.starts_with("syslog://")
+        s.starts_with("tcp://")
+            || s.starts_with("udp://")
+            || s.starts_with("syslog://")
+            || s.starts_with("otlp://")
     })
 }
 
@@ -78,7 +84,7 @@ impl ListenSpec {
     /// reason (an i18n key) when it cannot be used.
     pub fn parse(path: &Path) -> Option<Result<Self, &'static str>> {
         let text = path.to_str()?;
-        let (proto, rest) = [Proto::Tcp, Proto::Udp, Proto::Syslog]
+        let (proto, rest) = [Proto::Tcp, Proto::Udp, Proto::Syslog, Proto::Otlp]
             .into_iter()
             .find_map(|p| {
                 text.strip_prefix(&format!("{}://", p.scheme()))
@@ -145,7 +151,8 @@ impl ListenSpec {
 
     /// Whether lines carry the sender's address.
     pub fn prefixed(&self) -> bool {
-        self.prefix.unwrap_or(self.proto != Proto::Tcp)
+        self.prefix
+            .unwrap_or(matches!(self.proto, Proto::Udp | Proto::Syslog))
     }
 
     /// True when other machines can reach it (not a loopback address).
@@ -203,6 +210,8 @@ struct Shared {
     dropped: AtomicU64,
     /// UDP lines dropped by a reader, not yet noted in the stream.
     dropped_unnoted: AtomicU64,
+    /// The rate limit dropped lines in the current second (OTLP answers 429 then).
+    limited: AtomicBool,
     received: AtomicU64,
 }
 
@@ -383,6 +392,281 @@ impl Framer {
     }
 }
 
+/// Largest OTLP request body, compressed or not.
+pub const MAX_BODY: usize = 16 << 20;
+/// Largest request head (request line and headers).
+const MAX_HEAD: usize = 16 * 1024;
+
+/// Hands `line` to the copier, waiting while the channel is full; false once the
+/// listener closed.
+fn send_line(line: Line, tx: &SyncSender<Line>, shared: &Shared) -> bool {
+    shared.received.fetch_add(1, Ordering::Relaxed);
+    let mut line = line;
+    loop {
+        match tx.try_send(line) {
+            Ok(()) => return true,
+            Err(TrySendError::Full(back)) => {
+                if shared.closed.load(Ordering::Acquire) {
+                    return false;
+                }
+                line = back;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(TrySendError::Disconnected(_)) => return false,
+        }
+    }
+}
+
+/// An HTTP connection's reader: bytes kept between requests, reads with the listener's
+/// poll and idle checks.
+struct HttpConn<'a> {
+    stream: TcpStream,
+    buf: Vec<u8>,
+    shared: &'a Shared,
+}
+
+impl HttpConn<'_> {
+    /// Reads more bytes; false when the connection ended, idled out or the listener closed.
+    fn fill(&mut self) -> bool {
+        let mut chunk = [0u8; 64 * 1024];
+        let start = Instant::now();
+        loop {
+            if self.shared.closed.load(Ordering::Acquire) || start.elapsed() > IDLE {
+                return false;
+            }
+            match self.stream.read(&mut chunk) {
+                Ok(0) => return false,
+                Ok(n) => {
+                    self.buf.extend_from_slice(&chunk[..n]);
+                    return true;
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return false,
+            }
+        }
+    }
+
+    /// The bytes up to and including `"\r\n"`, read as needed (at most `cap`).
+    fn line(&mut self, cap: usize) -> Option<Vec<u8>> {
+        loop {
+            if let Some(i) = self.buf.windows(2).position(|w| w == b"\r\n") {
+                return Some(self.buf.drain(..i + 2).collect());
+            }
+            if self.buf.len() > cap || !self.fill() {
+                return None;
+            }
+        }
+    }
+
+    /// Exactly `n` bytes.
+    fn exact(&mut self, n: usize) -> Option<Vec<u8>> {
+        while self.buf.len() < n {
+            if !self.fill() {
+                return None;
+            }
+        }
+        Some(self.buf.drain(..n).collect())
+    }
+
+    fn respond(&mut self, status: &str, content_type: &str, body: &[u8], extra: &str, close: bool) {
+        use std::io::Write;
+        let head = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra}{}\r\n",
+            body.len(),
+            if close { "Connection: close\r\n" } else { "" }
+        );
+        let _ = self.stream.write_all(head.as_bytes());
+        let _ = self.stream.write_all(body);
+    }
+}
+
+/// An OTLP/HTTP connection: `POST /v1/logs` requests (Content-Length or chunked bodies,
+/// gzip, keep-alive) whose records become lines.
+fn serve_http(
+    stream: TcpStream,
+    from: SocketAddr,
+    spec: &ListenSpec,
+    tx: &SyncSender<Line>,
+    shared: &Shared,
+    wake: &Option<WakeFn>,
+) {
+    let mut c = HttpConn {
+        stream,
+        buf: Vec::new(),
+        shared,
+    };
+    loop {
+        // Request line and headers.
+        let Some(request) = c.line(MAX_HEAD) else {
+            return;
+        };
+        let request = String::from_utf8_lossy(&request).trim_end().to_string();
+        let mut parts = request.split(' ');
+        let (method, path, version) = (
+            parts.next().unwrap_or_default().to_string(),
+            parts.next().unwrap_or_default().to_string(),
+            parts.next().unwrap_or_default().to_string(),
+        );
+        let mut headers: Vec<(String, String)> = Vec::new();
+        let mut head_len = request.len();
+        loop {
+            let Some(line) = c.line(MAX_HEAD) else {
+                return;
+            };
+            head_len += line.len();
+            if head_len > MAX_HEAD {
+                c.respond(
+                    "431 Request Header Fields Too Large",
+                    "text/plain",
+                    b"",
+                    "",
+                    true,
+                );
+                return;
+            }
+            let line = String::from_utf8_lossy(&line).trim_end().to_string();
+            if line.is_empty() {
+                break;
+            }
+            if let Some((k, v)) = line.split_once(':') {
+                headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+            }
+        }
+        let header = |name: &str| {
+            headers
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.as_str())
+        };
+        let close = version == "HTTP/1.0"
+            || header("connection").is_some_and(|v| v.eq_ignore_ascii_case("close"));
+        // The body: refused unread when too large (the connection closes).
+        let chunked =
+            header("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
+        let length = header("content-length").and_then(|v| v.parse::<usize>().ok());
+        let body = if chunked {
+            let mut body = Vec::new();
+            loop {
+                let Some(size) = c.line(64) else {
+                    return;
+                };
+                let size = String::from_utf8_lossy(&size);
+                let size = size.trim().split(';').next().unwrap_or_default();
+                let Ok(n) = usize::from_str_radix(size, 16) else {
+                    c.respond("400 Bad Request", "text/plain", b"", "", true);
+                    return;
+                };
+                if body.len() + n > MAX_BODY {
+                    c.respond("413 Payload Too Large", "text/plain", b"", "", true);
+                    return;
+                }
+                let Some(data) = c.exact(n + 2) else {
+                    return;
+                };
+                if n == 0 {
+                    break;
+                }
+                body.extend_from_slice(&data[..n]);
+            }
+            body
+        } else {
+            let n = length.unwrap_or(0);
+            if n > MAX_BODY {
+                c.respond("413 Payload Too Large", "text/plain", b"", "", true);
+                return;
+            }
+            let Some(body) = c.exact(n) else {
+                return;
+            };
+            body
+        };
+        let content_type = header("content-type")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let json = content_type.starts_with("application/json");
+        let reply_type = if json {
+            "application/json"
+        } else {
+            "application/x-protobuf"
+        };
+        if path.split('?').next() != Some("/v1/logs") {
+            c.respond("404 Not Found", "text/plain", b"", "", close);
+        } else if method != "POST" {
+            c.respond(
+                "405 Method Not Allowed",
+                "text/plain",
+                b"",
+                "Allow: POST\r\n",
+                close,
+            );
+        } else if !json && !content_type.starts_with("application/x-protobuf") {
+            c.respond("415 Unsupported Media Type", "text/plain", b"", "", close);
+        } else if shared.limited.load(Ordering::Relaxed) {
+            c.respond(
+                "429 Too Many Requests",
+                reply_type,
+                b"",
+                "Retry-After: 1\r\n",
+                close,
+            );
+        } else {
+            let gzip = header("content-encoding").is_some_and(|v| v.eq_ignore_ascii_case("gzip"));
+            let body = if gzip {
+                let mut out = Vec::new();
+                let read = flate2::read::GzDecoder::new(&body[..])
+                    .take(MAX_BODY as u64 + 1)
+                    .read_to_end(&mut out);
+                if read.is_err() {
+                    c.respond("400 Bad Request", "text/plain", b"", "", true);
+                    return;
+                }
+                if out.len() > MAX_BODY {
+                    c.respond("413 Payload Too Large", "text/plain", b"", "", true);
+                    return;
+                }
+                out
+            } else {
+                body
+            };
+            let records = if json {
+                crate::otlp::decode_json(&body)
+            } else {
+                crate::otlp::decode_protobuf(&body)
+            };
+            let Some(records) = records else {
+                c.respond("400 Bad Request", "text/plain", b"", "", close);
+                if close {
+                    return;
+                }
+                continue;
+            };
+            let now = || crate::syslog::receive_time().0;
+            for record in &records {
+                for line in lines_of(spec, from, record.line(&now).as_bytes()) {
+                    if !send_line(line, tx, shared) {
+                        return;
+                    }
+                }
+            }
+            if let Some(w) = wake {
+                w();
+            }
+            // An empty ExportLogsServiceResponse.
+            let empty: &[u8] = if json { b"{}" } else { b"" };
+            c.respond("200 OK", reply_type, empty, "", close);
+        }
+        if close {
+            return;
+        }
+    }
+}
+
 /// Gives a connection slot back when its reader ends, however it ends.
 struct ConnectionSlot(Arc<Shared>);
 
@@ -404,6 +688,10 @@ fn serve_tcp(
     wake: &Option<WakeFn>,
 ) {
     let _ = stream.set_read_timeout(Some(POLL));
+    if spec.proto == Proto::Otlp {
+        serve_http(stream, from, spec, tx, shared, wake);
+        return;
+    }
     let mut framer = Framer::new(spec.proto == Proto::Syslog);
     let mut last_data = Instant::now();
     let mut buf = vec![0u8; 64 * 1024];
@@ -574,6 +862,7 @@ impl ListenerInput {
         self.window = Instant::now();
         self.lines = 0;
         self.bytes = 0;
+        self.shared.limited.store(false, Ordering::Relaxed);
         let dropped = std::mem::take(&mut self.dropped_in_window)
             + self.shared.dropped_unnoted.swap(0, Ordering::Relaxed);
         (dropped > 0).then(|| {
@@ -590,6 +879,7 @@ impl ListenerInput {
         {
             self.dropped_in_window += 1;
             self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+            self.shared.limited.store(true, Ordering::Relaxed);
             return;
         }
         self.lines += 1;
@@ -670,7 +960,7 @@ impl ListenerStream {
         let mut tcp = Vec::new();
         let mut udp = Vec::new();
         for (addr, required) in spec.addresses() {
-            if matches!(spec.proto, Proto::Tcp | Proto::Syslog) {
+            if matches!(spec.proto, Proto::Tcp | Proto::Syslog | Proto::Otlp) {
                 match TcpListener::bind(addr) {
                     Ok(l) => tcp.push(l),
                     Err(error) if required => return Err(BindError { addr, error }),
