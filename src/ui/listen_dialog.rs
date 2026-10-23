@@ -174,9 +174,14 @@ impl ListenDialog {
                 }
             }
             let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            let start_tip = match &spec {
+                Ok(_) => "",
+                Err(key) => t(lang, key),
+            };
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(spec.is_ok(), egui::Button::new(t(lang, "listen_start")))
+                    .on_disabled_hover_text(start_tip)
                     .clicked()
                 {
                     if let Ok(s) = &spec {
