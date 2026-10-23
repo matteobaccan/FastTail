@@ -240,13 +240,13 @@ column says where each gap stands after 0.23.0.
 | 11 | **Rule sets** import / export (share highlight rules) | LogFusion, LogViewPlus | Medium | S | closed, 0.13.0 |
 | 12 | **Windows Event Log** source | SnakeTail, LogFusion, LogViewPlus | Medium | M | 0.26.0 |
 | 13 | **TCP / UDP / syslog listener** | LogViewPlus, Chipmunk | Medium | M | closed, 0.23.0 (with an OTLP/HTTP receiver) |
-| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | 0.26.0 |
+| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | backlog (2026-10-24) |
 | 15 | **Top-N and statistics** of a field over the view | angle-grinder, goaccess, lnav (per-column stats in 0.15), LogViewPlus | Medium | M | 0.24.0 |
 | 16 | **Markdown report** of bookmarks and notes (incident write-up) | logana, lnav | Medium | S | closed, 0.13.0 |
-| 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | 0.27.0 |
+| 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | backlog (2026-10-24) |
 | 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | closed, 0.22.0 |
 | 19 | Partial-line selection | requested (SnakeTail #60, Tailviewer #231) | Low–Med | M | closed, 0.14.0 |
-| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString closed (0.23.0), cross-line regex 0.24.0, plugin API 0.26.0 |
+| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString closed (0.23.0), cross-line regex 0.24.0, plugin API in the backlog (2026-10-24) |
 | 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | closed, 0.20.0 (`fasttail-tui`, Linux terminal-only archive) |
 
 ### Candidates from the 2026-10-05 scan
@@ -256,7 +256,7 @@ now an OpenSpec change (section 8): `open-at-line`, `hide-lines`, `tabular-files
 `field-sparkline`, `split-log`, `out-of-order-lines`, `tui-find-all`. Spread over 0.21.0 to
 0.27.0 by the re-plan of 2026-10-06 (section 8). Shipped: `open-at-line`, `hide-lines`,
 `tabular-files` (0.21.0), `split-log`, `out-of-order-lines` (0.22.0); left: `field-sparkline`
-(0.25.0) and `tui-find-all` (0.27.0).
+(0.25.0) and `tui-find-all` (0.26.0, merged with 0.27.0 on 2026-10-24).
 
 | Candidate | Who has it | Value | Effort |
 |---|---|---|---|
@@ -449,17 +449,15 @@ ends, which keeps `cross-line-regex` a small differentiator.
 | `spike-explanation` — what is different in a histogram spike (from 0.23.0) | Loki, Kibana | M |
 | `field-sparkline` — a numeric field plotted over the timeline histogram (from 0.24.0; after `field-statistics`) | lnav, gonzo | M |
 
-### 0.26.0 — extensibility
+### 0.26.0 — Event Log and terminal search
+
+0.26.0 and 0.27.0 merged by the maintainer on 2026-10-24, after the other changes of both
+releases moved to the backlog.
 
 | Change | Gaps | Effort |
 |---|---|---|
 | `windows-event-log` — Event Log source (from 0.22.0) | 12 | M |
-
-### 0.27.0 — integrations
-
-| Change | Gaps | Effort |
-|---|---|---|
-| `tui-find-all` — Search all streams in the terminal interface (from 0.24.0) | FastTail window, Chipmunk | M |
+| `tui-find-all` — Search all streams in the terminal interface (from 0.27.0) | FastTail window, Chipmunk | M |
 
 ### Backlog (no release)
 

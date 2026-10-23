@@ -134,7 +134,8 @@ Update this section in each release PR.
   `structured-field-terms`, `folder-source`, `linux-tray-icon`, `open-at-line`,
   `hide-lines`), **0.22.0** time and formats, **0.23.0** remote and system sources,
   **0.24.0** queries and statistics, **0.25.0** patterns and analysis, **0.26.0**
-  extensibility, **0.27.0** integrations; see `docs/competitor-analysis.md` section 8.
+  Event Log and terminal search (0.26.0 and 0.27.0 merged on 2026-10-24); see
+  `docs/competitor-analysis.md` section 8.
   In the backlog (maintainer decision, 2026-10-24), not planned until asked: `web-ui`,
   `plugin-api`, `remappable-shortcuts`, `mcp-server`, `operation-timeline`.
 
