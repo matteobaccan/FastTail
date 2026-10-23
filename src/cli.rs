@@ -633,7 +633,12 @@ mod tests {
     #[test]
     fn system_source_uris_are_kept_as_written() {
         let a = CliArgs::parse(
-            ["docker://api", "journald://nginx.service", "x.log"],
+            [
+                "docker://api",
+                "journald://nginx.service",
+                "dbwin://local",
+                "x.log",
+            ],
             &cwd(),
         )
         .unwrap();
@@ -642,10 +647,11 @@ mod tests {
             [
                 PathBuf::from("docker://api"),
                 PathBuf::from("journald://nginx.service"),
+                PathBuf::from("dbwin://local"),
                 cwd().join("x.log")
             ]
         );
-        assert_eq!(a.path_lines, [None, None, None]);
+        assert_eq!(a.path_lines, [None, None, None, None]);
     }
 
     fn cwd() -> PathBuf {

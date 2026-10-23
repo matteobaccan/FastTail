@@ -199,6 +199,8 @@ pub fn entries(cfg: &FastTailConfig, state: &ActionState) -> Vec<PaletteEntry> {
     let lang = cfg.language;
     actions::all()
         .into_iter()
+        // OutputDebugString exists on Windows only.
+        .filter(|a| cfg!(windows) || a.id != ActionId::OpenDebugOutput)
         .map(|action| {
             let checked = match action.id {
                 ActionId::Toggle(s) => Some((actions::bool_setting(s).get)(cfg)),

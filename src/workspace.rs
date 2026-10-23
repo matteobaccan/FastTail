@@ -53,6 +53,32 @@ pub enum OpenOutcome {
 /// Opens `path`. `wake` is called from the watcher threads when new data arrives, so a
 /// front end waiting on input can redraw.
 pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -> OpenOutcome {
+    if let Some(parsed) = crate::debug_output::DbwinSpec::parse(path) {
+        let error = match parsed {
+            Err(key) => OpenError::System {
+                key,
+                detail: String::new(),
+            },
+            Ok(spec) => match crate::debug_output::open_engine(
+                spec,
+                &crate::stdin_source::Settings::from_config(
+                    config.spool_dir.as_deref(),
+                    config.stdin_spool_max_mb,
+                ),
+                wake,
+            ) {
+                Ok(engine) => return OpenOutcome::Opened(Box::new(engine)),
+                Err(e) => OpenError::System {
+                    key: e.key,
+                    detail: e.detail,
+                },
+            },
+        };
+        return OpenOutcome::Failed {
+            error,
+            report: true,
+        };
+    }
     if let Some(parsed) = crate::net_listener::ListenSpec::parse(path) {
         let error = match parsed {
             Err(key) => OpenError::System {
@@ -255,7 +281,11 @@ pub fn restore_stream(engine: &mut TailEngine, config: &FastTailConfig, path: &P
 /// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
 /// its bookmarks wait until the index covers them (see `TailEngine::poll_compressed`).
 fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
-    if engine.system.is_some() || engine.ssh.is_some() || engine.listener.is_some() {
+    if engine.system.is_some()
+        || engine.ssh.is_some()
+        || engine.listener.is_some()
+        || engine.debug_output.is_some()
+    {
         return;
     }
     // A derived stream saves them by source line: they wait for its fill to reach them.
@@ -424,6 +454,7 @@ fn saved_bookmarks(engine: &TailEngine) -> (Vec<usize>, BTreeMap<usize, String>)
         || engine.system.is_some()
         || engine.ssh.is_some()
         || engine.listener.is_some()
+        || engine.debug_output.is_some()
     {
         return (Vec::new(), BTreeMap::new());
     }

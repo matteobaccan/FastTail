@@ -186,7 +186,12 @@ pub fn render(msg: &str, now: &dyn Fn() -> (String, i64)) -> Option<String> {
 
 /// The receive time as `YYYY-MM-DDTHH:MM:SS.mmm+HH:MM` (local clock) and its year.
 pub fn receive_time() -> (String, i64) {
-    let utc = std::time::SystemTime::now()
+    local_time(std::time::SystemTime::now())
+}
+
+/// `at` as `YYYY-MM-DDTHH:MM:SS.mmm+HH:MM` (local clock) and its year.
+pub fn local_time(at: std::time::SystemTime) -> (String, i64) {
+    let utc = at
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
