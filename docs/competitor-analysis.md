@@ -5,12 +5,12 @@ FastTail does not, and what that suggests for the next releases. It is refreshed
 every release (the post-release scan); each refresh replaces the tables and adds a line to
 the history at the end.
 
-**Last scan:** 2026-10-23, against FastTail **0.21.10** (the 0.22.0 changes, before the
-minor). Release dates and star counts come from the GitHub release and repository pages on
-that day (stars rounded as GitHub shows them); every other claim links its source. The sites
-of LogViewPlus, LogFusion and Seq could not be reached that day, so their rows rest on search
-results. What changed since the previous scan (2026-10-05, 0.20.0) is summarised in
-[section 9](#9-scan-history).
+**Last scan:** 2026-10-23 (evening), against FastTail **0.23.0**. Release dates and star
+counts come from the GitHub release and repository pages on that day (stars rounded as
+GitHub shows them), Seq's from Docker Hub; every other claim links its source. The sites of
+LogViewPlus, LogFusion, Seq, lnav's documentation and Grafana could not be reached that day,
+so their rows rest on the earlier scan and search results. What changed since the previous
+scan (the morning of the same day, 0.21.10) is summarised in [section 9](#9-scan-history).
 
 ## Contents
 
@@ -28,7 +28,7 @@ results. What changed since the previous scan (2026-10-05, 0.20.0) is summarised
 
 | Product | Kind | Licence / price | Platforms | Last release | Activity |
 |---|---|---|---|---|---|
-| **FastTail** | GUI (GPU) and TUI (`fasttail-tui`) | MIT | Windows, Linux, macOS | 0.21.0, 2026-10-22; nightlies to 0.21.10 | active |
+| **FastTail** | GUI (GPU) and TUI (`fasttail-tui`) | MIT | Windows, Linux, macOS | 0.23.0, 2026-10-23 (0.22.0 and 0.23.0 the same day) | active |
 | BareTail / BareTailPro | GUI | freeware / $35 | Windows | 3.50a (2006-11-02) / 2.50a (2006) | abandoned |
 | Tailviewer | GUI | MIT | Windows (.NET 4.7.1) | 1.0.0-rc1, 2022-09-12 | dormant (last commit 2022-09) |
 | LogExpert (LogExperts fork) | GUI | MIT | Windows (.NET 10) | 1.50.0, 2026-10-03 | very active (1.2k ★) |
@@ -43,7 +43,7 @@ results. What changed since the previous scan (2026-10-05, 0.20.0) is summarised
 | gonzo | TUI dashboard | MIT (Go) | all | 0.4.3, 2026-07-15 | active (2.8k ★) |
 | nerdlog | TUI, multi-host SSH | BSD-2 | Linux, macOS | 1.13.0, 2026-10-03 | active (1.6k ★; no release since) |
 | toolong | TUI | MIT (Python) | all | 1.4.0, 2024-03 | dormant (4k ★) |
-| Seq | server + web UI | proprietary, free single user | Windows, Docker | 2026.1 (no 2026.2 found; site not reachable on 2026-10-23) | active |
+| Seq | server + web UI | proprietary, free single user | Windows, Docker | 2026.1 patch build 2026.1.17473, 2026-10-23 on [Docker Hub](https://hub.docker.com/r/datalust/seq/tags) (no 2026.2; notes not reachable) | active |
 | Grafana Loki / Drilldown | server + web UI | AGPL-3.0 | server | 3.7.9, 2026-10-20 | active |
 
 Also watched: Chipmunk (Rust/Electron, DLT / PCAP, 4.3.0 2026-09-18 and 4.4.0 2026-09-29), LogFX, LogoRRR, LogMX,
@@ -211,7 +211,11 @@ and formats): the **merged timeline** of several streams by timestamp, user **lo
 (named groups, timestamp format, entry start pattern; a dialog with a live preview),
 **boolean filter expressions** (AND / OR / NOT, parentheses, field operands, `--filter-expr`),
 **out-of-order lines** marked, counted and walked, **split a file** by lines, size or time,
-and **export as CSV or HTML**.
+and **export as CSV or HTML**. Added in 0.23.0 (remote and system sources, shipped as the
+nightly 0.22.1): **journald and Docker / Podman** streams with reconnect, **remote files
+and patterns over SSH** through the system client, a **TCP / UDP / syslog listener**, an
+**OTLP/HTTP logs receiver**, **desktop notifications** from highlight rules, and the
+**Windows debug output** (`OutputDebugString`) as a stream.
 
 ## 6. Gaps, ranked
 
@@ -219,16 +223,15 @@ Value for FastTail's users against effort in this code base (S < 1 week, M 1–3
 L > 3 weeks).
 
 The numbers are stable: other sections and the OpenSpec changes refer to them. The status
-column says where each gap stands after 0.22.0 (its six changes are in the 0.21.x
-nightlies; the minor waits for the maintainer's preview check).
+column says where each gap stands after 0.23.0.
 
-| # | Gap | Who has it | Value | Effort | Status after 0.22.0 |
+| # | Gap | Who has it | Value | Effort | Status after 0.23.0 |
 |---|---|---|---|---|---|
 | 1 | **Structured logs**: parse JSON / logfmt / regex with named groups into fields, a column view, hide / show fields | LogExpert, LogViewPlus, lnav, hl, Seq, Loki | High | L | closed: `structured-fields` (0.14.0), JSON tree (0.16.2), field terms and CSV / TSV (0.21.0), user formats (0.22.0) |
 | 2 | **Merged timeline** of several files by timestamp | lnav, Tailviewer, hl, LogViewPlus, Chipmunk | High | L | closed, 0.22.0 |
 | 3 | **Context lines** (±N) around filter matches, `grep -C` style | LogFusion, lnav 0.15 | High | S–M | closed, 0.13.0 |
 | 4 | **Field-scoped and boolean filters** (`status>=500`, OR / NOT) | klogg, hl, Seq, Loki, LogViewPlus | High | M | closed: field terms (0.21.0), boolean expressions (0.22.0) |
-| 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | 0.23.0 |
+| 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | closed, 0.23.0 (journald, Docker / Podman, SSH files; Kubernetes through `kubectl logs -f` on standard input) |
 | 6 | **Pattern grouping** of similar lines anywhere in the file (Drain) | gonzo, Loki, Kibana; requested in LogExpert (#654) | Medium | M | 0.25.0 |
 | 7 | **Headless mode**: `fasttail --print` filters / highlights to stdout | hl, tailspin, lnav, Chipmunk CLI | Medium | S | closed, 0.13.0 |
 | 8 | **Time zones**: show timestamps in UTC / local / a chosen zone; epoch as dates | hl, LogViewPlus | Medium | S–M | closed, 0.13.0 |
@@ -236,14 +239,14 @@ nightlies; the minor waits for the maintainer's preview check).
 | 10 | **Selection helpers**: highlight every occurrence of the selected text; jump to the next line of a given rule | LogViewPlus, SnakeTail, LogExpert | Medium | S | closed, 0.13.0 |
 | 11 | **Rule sets** import / export (share highlight rules) | LogFusion, LogViewPlus | Medium | S | closed, 0.13.0 |
 | 12 | **Windows Event Log** source | SnakeTail, LogFusion, LogViewPlus | Medium | M | 0.26.0 |
-| 13 | **TCP / UDP / syslog listener** | LogViewPlus, Chipmunk | Medium | M | 0.23.0 |
+| 13 | **TCP / UDP / syslog listener** | LogViewPlus, Chipmunk | Medium | M | closed, 0.23.0 (with an OTLP/HTTP receiver) |
 | 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | 0.26.0 |
 | 15 | **Top-N and statistics** of a field over the view | angle-grinder, goaccess, lnav (per-column stats in 0.15), LogViewPlus | Medium | M | 0.24.0 |
 | 16 | **Markdown report** of bookmarks and notes (incident write-up) | logana, lnav | Medium | S | closed, 0.13.0 |
 | 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | 0.27.0 |
 | 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | closed, 0.22.0 |
 | 19 | Partial-line selection | requested (SnakeTail #60, Tailviewer #231) | Low–Med | M | closed, 0.14.0 |
-| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString 0.23.0, cross-line regex 0.24.0, plugin API 0.26.0 |
+| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString closed (0.23.0), cross-line regex 0.24.0, plugin API 0.26.0 |
 | 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | closed, 0.20.0 (`fasttail-tui`, Linux terminal-only archive) |
 
 ### Candidates from the 2026-10-05 scan
@@ -427,6 +430,11 @@ changes shipped in the nightly 0.22.1 and are archived.
 
 ### 0.24.0 — queries and statistics
 
+Started on 2026-10-23. In the evening scan lnav 0.15.0-beta1 already shows per-column
+statistics (min / max, p50 / p90 / p99, an approximate distinct count) and SQL over fields,
+and LogViewPlus 3.2 has SQL window functions; no tool documents regex matches across line
+ends, which keeps `cross-line-regex` a small differentiator.
+
 | Change | Gaps | Effort |
 |---|---|---|
 | `query-language` — SQL-like queries over fields (from 0.22.0; after the boolean filters of 0.22.0) | LogViewPlus, lnav | L |
@@ -469,3 +477,4 @@ Open questions are listed in each change's design.
 | 2026-09-28 | 0.12.0 | this document; 36 changes over 0.13.0–0.15.0 (section 8) |
 | 2026-10-05 | 0.20.0 | after the terminal interface. New releases: LogExpert 1.50.0 (open at a line, hide lines, overview marker bar), lnav 0.15.0-beta1 (filter context, named searches, CSV / metrics with timeline sparklines, column statistics, `file split`), nerdlog 1.12–1.13 (out-of-order and malformed records shown), Chipmunk 4.3–4.4; no release from BareTail, Tailviewer, klogg, glogg, SnakeTail, toolong, hl, tailspin, gonzo, LogViewPlus, LogFusion or Seq since the previous scan. Gaps 3, 7–11, 16, 19 and the terminal interface (new row 21) marked closed; seven candidates for 0.24.0 or later listed in section 6; section 8 unchanged |
 | 2026-10-23 | 0.21.10 | before the 0.22.0 minor. A quiet fortnight: no release from LogExpert, lnav (0.15.0 still in beta), klogg, Tailviewer, SnakeTail, tailspin, gonzo, nerdlog, toolong, Chipmunk, LogViewPlus or LogFusion; hl 0.36.4–0.36.5 and Loki 3.7.9 are fixes; logana 0.7.8 adds a merge by timestamp. No new request with traction and no new tool worth a row. Gaps 1, 2, 4 and 18 marked closed by 0.21.0 / 0.22.0; five of the seven 2026-10-05 candidates shipped; section 8 unchanged after 0.22.0 |
+| 2026-10-23 (evening) | 0.23.0 | after the 0.23.0 minor, hours after the morning scan: no new release from LogExpert, lnav, klogg, hl, tailspin, gonzo, nerdlog, toolong, Chipmunk, Loki, logana, Tailviewer or SnakeTail, star counts unchanged; Seq 2026.1.17473 is a patch build. LogViewPlus, LogFusion, Seq, lnav docs and Grafana not reachable. Gaps 5 and 13 and the OutputDebugString part of 20 marked closed by 0.23.0; section 8 unchanged (0.24.0 started) |
