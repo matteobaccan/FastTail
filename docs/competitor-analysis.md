@@ -159,7 +159,7 @@ live tail with a volume histogram, alerts, and in 2026 MCP servers for AI assist
 - **Structured logs**: the requests with the most votes in lnav (mixed JSON formats, forcing
   a format), klogg (#510) and LogExpert (#197) ask for fields and columns.
 - **Merging files by time** is standard in every tool that is growing (lnav, hl, LogViewPlus,
-  Chipmunk, LogoRRR); FastTail's `merged-timeline-view` is planned for 0.22.0.
+  Chipmunk, LogoRRR); FastTail has it since 0.21.1 (`merged-timeline-view`, 0.22.0).
 - **Context lines** became standard in 2026: lnav 0.15 (`:filter-context`) followed
   LogFusion and FastTail 0.13.0.
 - **Tabular and metric data**: lnav 0.15 reads CSV / TSV as a format and draws numeric
@@ -193,20 +193,31 @@ terminal-only archive for servers without graphical libraries. FastTail is now t
 tool in section 1 that offers the same viewer as a native GUI and as a TUI on Windows,
 Linux and macOS.
 
+Added in 0.21.0 (structured data): open a file at a line (`app.log:1204`, `--line N`),
+hiding lines by hand, folder sources with several patterns and subfolders, the Linux tray
+icon, field filter terms (`status>=500`, `level=error|fatal`) with the column view in both
+interfaces, and CSV / TSV files as tables. Added in the 0.21.x nightlies for 0.22.0 (time
+and formats): the **merged timeline** of several streams by timestamp, user **log formats**
+(named groups, timestamp format, entry start pattern; a dialog with a live preview),
+**boolean filter expressions** (AND / OR / NOT, parentheses, field operands, `--filter-expr`),
+**out-of-order lines** marked, counted and walked, **split a file** by lines, size or time,
+and **export as CSV or HTML**.
+
 ## 6. Gaps, ranked
 
 Value for FastTail's users against effort in this code base (S < 1 week, M 1–3 weeks,
 L > 3 weeks).
 
 The numbers are stable: other sections and the OpenSpec changes refer to them. The status
-column says where each gap stands after 0.20.0.
+column says where each gap stands after 0.22.0 (its six changes are in the 0.21.x
+nightlies; the minor waits for the maintainer's preview check).
 
-| # | Gap | Who has it | Value | Effort | Status after 0.20.0 |
+| # | Gap | Who has it | Value | Effort | Status after 0.22.0 |
 |---|---|---|---|---|---|
-| 1 | **Structured logs**: parse JSON / logfmt / regex with named groups into fields, a column view, hide / show fields | LogExpert, LogViewPlus, lnav, hl, Seq, Loki | High | L | partly closed: `structured-fields` (0.14.0), JSON tree (0.16.2); field terms and CSV / TSV in 0.21.0, user formats in 0.22.0 |
-| 2 | **Merged timeline** of several files by timestamp | lnav, Tailviewer, hl, LogViewPlus, Chipmunk | High | L | 0.22.0 |
+| 1 | **Structured logs**: parse JSON / logfmt / regex with named groups into fields, a column view, hide / show fields | LogExpert, LogViewPlus, lnav, hl, Seq, Loki | High | L | closed: `structured-fields` (0.14.0), JSON tree (0.16.2), field terms and CSV / TSV (0.21.0), user formats (0.22.0) |
+| 2 | **Merged timeline** of several files by timestamp | lnav, Tailviewer, hl, LogViewPlus, Chipmunk | High | L | closed, 0.22.0 |
 | 3 | **Context lines** (±N) around filter matches, `grep -C` style | LogFusion, lnav 0.15 | High | S–M | closed, 0.13.0 |
-| 4 | **Field-scoped and boolean filters** (`status>=500`, OR / NOT) | klogg, hl, Seq, Loki, LogViewPlus | High | M | 0.21.0 (field terms), 0.22.0 (boolean) |
+| 4 | **Field-scoped and boolean filters** (`status>=500`, OR / NOT) | klogg, hl, Seq, Loki, LogViewPlus | High | M | closed: field terms (0.21.0), boolean expressions (0.22.0) |
 | 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | 0.23.0 |
 | 6 | **Pattern grouping** of similar lines anywhere in the file (Drain) | gonzo, Loki, Kibana; requested in LogExpert (#654) | Medium | M | 0.25.0 |
 | 7 | **Headless mode**: `fasttail --print` filters / highlights to stdout | hl, tailspin, lnav, Chipmunk CLI | Medium | S | closed, 0.13.0 |
@@ -220,17 +231,19 @@ column says where each gap stands after 0.20.0.
 | 15 | **Top-N and statistics** of a field over the view | angle-grinder, goaccess, lnav (per-column stats in 0.15), LogViewPlus | Medium | M | 0.24.0 |
 | 16 | **Markdown report** of bookmarks and notes (incident write-up) | logana, lnav | Medium | S | closed, 0.13.0 |
 | 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | 0.27.0 |
-| 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | 0.22.0 |
+| 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | closed, 0.22.0 |
 | 19 | Partial-line selection | requested (SnakeTail #60, Tailviewer #231) | Low–Med | M | closed, 0.14.0 |
-| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray 0.21.0, OutputDebugString 0.23.0, cross-line regex 0.24.0, plugin API 0.26.0 |
+| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString 0.23.0, cross-line regex 0.24.0, plugin API 0.26.0 |
 | 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | closed, 0.20.0 (`fasttail-tui`, Linux terminal-only archive) |
 
-### New candidates for 0.24.0
+### Candidates from the 2026-10-05 scan
 
 Found in the 2026-10-05 scan and assigned to 0.24.0 by the maintainer the same evening, each
 now an OpenSpec change (section 8): `open-at-line`, `hide-lines`, `tabular-files`,
 `field-sparkline`, `split-log`, `out-of-order-lines`, `tui-find-all`. Spread over 0.21.0 to
-0.27.0 by the re-plan of 2026-10-06 (section 8).
+0.27.0 by the re-plan of 2026-10-06 (section 8). Shipped: `open-at-line`, `hide-lines`,
+`tabular-files` (0.21.0), `split-log`, `out-of-order-lines` (0.22.0); left: `field-sparkline`
+(0.25.0) and `tui-find-all` (0.27.0).
 
 | Candidate | Who has it | Value | Effort |
 |---|---|---|---|
@@ -362,6 +375,9 @@ the dependencies.
 
 ### 0.21.0 — structured data
 
+Released on 2026-10-22 after the maintainer's preview check; all six changes archived but
+`linux-tray-icon`, which waits for the hand check on KDE and GNOME.
+
 | Change | Gaps | Effort |
 |---|---|---|
 | `tabular-files` — CSV / TSV as columns, header and separator detection, quoted multi-line cells, and the column view in the terminal for every parser (moved from 0.24.0) | lnav, LogExpert | L |
@@ -372,6 +388,9 @@ the dependencies.
 | `hide-lines` — hide selected lines by hand, listed, restorable, saved per stream (from 0.24.0) | LogExpert | S |
 
 ### 0.22.0 — time and formats
+
+All six changes shipped in the nightlies 0.21.1 to 0.21.10 (2026-10-22); the minor follows
+the maintainer's check of the preview, then the changes are archived.
 
 | Change | Gaps | Effort |
 |---|---|---|
