@@ -4,12 +4,12 @@
 - [x] 1.2 Single-line regex search on the synchronous path and in `JobSpec::Search`
 - [x] 1.3 Chunked multi-line scanner (1 MB chunks, 64-line / 64 KB overlap, deferred hits, dropped long matches counted); `search_ends` (last line of each hit) beside `search_matches`
 - [x] 1.4 Append overlap and replacement of hits; truncation and rotation rerun
-- [x] 1.5 Tests (no bench case yet): hits across chunk boundaries neither lost nor doubled; `^`/`$` per line; a hit across a filter gap; 64-line bound; cap and counting past it; synchronous and job results identical; bench case
+- [x] 1.5 Tests: hits across chunk boundaries neither lost nor doubled; `^`/`$` per line; a hit across a filter gap; 64-line bound; cap and counting past it; synchronous and job results identical; bench case
 
 ## 2. UI and persistence
 
 - [x] 2.1 Mode selector and `Aa` in the search box, error tint and message
-- [ ] 2.2 (every covered row marked as a hit, `⚠ N` for long matches; no bracket, lighter tint, overview marks or `+N lines` yet) Bracket marker and lighter tint on continuation rows (normal and wrap layouts), overview strip marks, `+N lines` in the results pane
+- [x] 2.2 Bracket marker and lighter tint on continuation rows (normal and wrap layouts), overview strip marks, `+N lines` in the results pane
 - [x] 2.3 (`search_mode` / `search_case`; the history keeps the text, the terminal reads `re:` / `mre:` prefixes) `search_mode` in `StreamEntry`; history entries with `re:` / `mre:`; round-trip and old-file tests
 
 ## 3. Texts and documentation

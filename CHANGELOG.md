@@ -29,7 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`^GET .*\nGET `), an exception whose third frame is in a class. `^` and `$` match at
   each line, `(?s)` lets `.` cross line ends; lines the filters hide are not part of the
   text, so a hit spans the rows seen as consecutive. A hit is listed and walked by its
-  first line and marks every row it covers; matches over 64 lines or 64 KB are counted
+  first line and marks every row it covers (the rows after the first with `┃` and a lighter
+  tint, every row in the overview strip, `+N lines` in the results pane); matches over 64
+  lines or 64 KB are counted
   (`⚠ N`) instead of listed. Works on the UI thread or in the background on any file size,
   and a hit across the old end of a growing file is found once. Saved per stream
   (`search_mode=multiline`); `mre:` in the terminal's `/`. `cross-line-regex` is code

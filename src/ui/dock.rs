@@ -642,9 +642,12 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
 const SEARCH_ACTIVE_BG: Color32 = Color32::from_rgb(0, 255, 230);
 /// Background of the text of the other search hits.
 const SEARCH_MATCH_BG: Color32 = Color32::from_rgb(255, 230, 0);
+/// Background of the text of the rows a multi-line hit continues on.
+const SEARCH_CONT_BG: Color32 = Color32::from_rgb(255, 242, 150);
 
 /// The marker column shown while a search is active: `▶` on the current hit, `●` on the
 /// other hits, and a blank of the same width elsewhere so rows never shift.
+#[allow(clippy::too_many_arguments)]
 fn search_marker_label(
     ui: &mut Ui,
     theme: &CyberTheme,
@@ -653,8 +656,9 @@ fn search_marker_label(
     is_active: bool,
     bookmark: BookmarkMark,
     context: bool,
+    continues: bool,
 ) -> egui::Rect {
-    let (glyph, color) = marker_glyph(theme, matches, is_active, bookmark, context);
+    let (glyph, color) = marker_glyph(theme, matches, is_active, bookmark, context, continues);
     ui.label(
         RichText::new(format!("{glyph} "))
             .monospace()
@@ -742,19 +746,23 @@ fn note_tooltip(
 }
 
 /// Row tint for search hits, the selection and bookmarks; search tints win over the
-/// selection tint, which wins over the bookmark tint.
+/// selection tint, which wins over the bookmark tint. A row a multi-line hit `continues`
+/// on gets a lighter tint than the hit's first row.
 fn row_tint(
     theme: &CyberTheme,
     matches: bool,
     is_active: bool,
     selected: bool,
     bookmarked: bool,
+    continues: bool,
 ) -> Option<Color32> {
     if !matches && !is_active && !selected && !bookmarked {
         return None;
     }
     let (base, alpha) = if is_active {
         (theme.accent_color(), 70)
+    } else if matches && continues {
+        (theme.warn_color(), 18)
     } else if matches {
         (theme.warn_color(), 40)
     } else if selected {
@@ -768,16 +776,25 @@ fn row_tint(
 }
 
 /// Marker glyph and colour of a row: ◆ the line shown in context, ▶ current hit, ● other
-/// hits, ★ bookmark (✏ with a note, ☆ automatic), blank otherwise.
+/// hits, ┃ the rows a multi-line hit `continues` on, ★ bookmark (✏ with a note, ☆
+/// automatic), blank otherwise.
 fn marker_glyph(
     theme: &CyberTheme,
     matches: bool,
     is_active: bool,
     bookmark: BookmarkMark,
     context: bool,
+    continues: bool,
 ) -> (&'static str, Color32) {
     if context {
         ("◆", theme.warn_color().into())
+    } else if matches && continues {
+        let c = if is_active {
+            theme.accent_color()
+        } else {
+            theme.warn_color()
+        };
+        ("┃", c.into())
     } else if is_active {
         ("▶", theme.accent_color().into())
     } else if matches {
@@ -803,8 +820,9 @@ fn paint_search_row_background(
     is_active: bool,
     selected: bool,
     bookmarked: bool,
+    continues: bool,
 ) {
-    let Some(fill) = row_tint(theme, matches, is_active, selected, bookmarked) else {
+    let Some(fill) = row_tint(theme, matches, is_active, selected, bookmarked, continues) else {
         return;
     };
     let full = egui::Rect::from_min_max(
@@ -4137,6 +4155,7 @@ fn render_search_pane(
                 &engine.last_searched_query,
             )
             .matcher(engine.search_matcher().cloned())
+            .stream_hits(true)
             .font_size(font_size)
             .level_colors(level_colors)
             .show(ui, engine, theme, lang);
@@ -4221,6 +4240,8 @@ fn render_extended_rows(
                 // A collapsed row is marked for the lines it hides too.
                 let (matches_search, is_active_search, is_bookmarked) =
                     engine.row_marks(row_idx, actual_line_idx, has_search);
+                // A row a multi-line hit continues on: bracket marker, lighter tints.
+                let continues = matches_search && engine.search_hit_continues(actual_line_idx);
                 let collapsed = engine.collapsed_row(row_idx);
                 let mut badge_rect: Option<egui::Rect> = None;
                 // User rules first; the level palette only colours rows no rule matched.
@@ -4284,6 +4305,7 @@ fn render_extended_rows(
                                 is_active_search,
                                 bookmark,
                                 engine.context_line() == Some(actual_line_idx),
+                                continues,
                             );
                         }
 
@@ -4467,7 +4489,12 @@ fn render_extended_rows(
                                 .background_color(SEARCH_ACTIVE_BG)
                                 .strong();
                         } else if matches_search {
-                            text = text.color(Color32::BLACK).background_color(SEARCH_MATCH_BG);
+                            let bg = if continues {
+                                SEARCH_CONT_BG
+                            } else {
+                                SEARCH_MATCH_BG
+                            };
+                            text = text.color(Color32::BLACK).background_color(bg);
                         } else if let Some(hl) = highlight {
                             text = text.color(hl.fg).background_color(hl.bg);
                             if hl.bold {
@@ -4500,6 +4527,7 @@ fn render_extended_rows(
                     is_active_search,
                     is_selected,
                     is_bookmarked,
+                    continues,
                 );
 
                 // Row selection: click, Shift+click (range), Ctrl+click (toggle)
@@ -6856,11 +6884,17 @@ fn render_wrapped_rows(
             );
             // A collapsed row is marked for the lines it hides too.
             let (matches_search, is_active, is_bookmarked) = eng.row_marks(row, line, has_search);
+            let continues = matches_search && eng.search_hit_continues(line);
             let is_selected = eng.is_selected(line);
             let bookmark = BookmarkMark::of_row(eng, row, line);
-            if let Some(fill) =
-                row_tint(theme, matches_search, is_active, is_selected, is_bookmarked)
-            {
+            if let Some(fill) = row_tint(
+                theme,
+                matches_search,
+                is_active,
+                is_selected,
+                is_bookmarked,
+                continues,
+            ) {
                 painter.rect_filled(row_rect, 0.0, fill);
             }
             let text_top = y + pad / 2.0;
@@ -6871,6 +6905,7 @@ fn render_wrapped_rows(
                     is_active,
                     bookmark,
                     eng.context_line() == Some(line),
+                    continues,
                 );
                 painter.text(
                     egui::pos2(origin.x + left_pad, text_top),
@@ -6927,7 +6962,12 @@ fn render_wrapped_rows(
             let (color, text_bg) = if is_active {
                 (Color32::BLACK, Some(SEARCH_ACTIVE_BG))
             } else if matches_search && r.cells.is_none() {
-                (Color32::BLACK, Some(SEARCH_MATCH_BG))
+                let bg = if continues {
+                    SEARCH_CONT_BG
+                } else {
+                    SEARCH_MATCH_BG
+                };
+                (Color32::BLACK, Some(bg))
             } else if let Some(hl) = r.highlight {
                 (
                     hl.fg.into(),
@@ -7286,6 +7326,7 @@ fn render_hex_stream(
                         false,
                         BookmarkMark::None,
                         false,
+                        false,
                     );
                 }
                 ui.label(
@@ -7357,6 +7398,7 @@ fn render_hex_stream(
                             matches_search,
                             is_active_search,
                             BookmarkMark::None,
+                            false,
                             false,
                         );
                     }
@@ -7434,6 +7476,7 @@ fn render_hex_stream(
                 theme,
                 matches_search,
                 is_active_search,
+                false,
                 false,
                 false,
             );
@@ -7590,7 +7633,7 @@ fn render_asm_stream(
             && active
                 .is_some_and(|(off, len)| (off as u64) < end && (off + len) as u64 > row.offset);
         let selected = selection.is_some_and(|(a, b)| row.offset >= a && row.offset <= b);
-        if let Some(fill) = row_tint(theme, hit, current, selected, false) {
+        if let Some(fill) = row_tint(theme, hit, current, selected, false, false) {
             painter.rect_filled(row_rect, 0.0, fill);
         }
         let mut x = rect.left() + 4.0;

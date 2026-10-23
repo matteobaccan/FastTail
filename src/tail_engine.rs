@@ -5729,6 +5729,26 @@ impl TailEngine {
             || self.search_ends.get(i - 1).is_some_and(|&end| end >= line)
     }
 
+    /// Whether `line` is a row a multi-line hit continues on, not the first line of a hit.
+    pub fn search_hit_continues(&self, line: usize) -> bool {
+        self.search_matches.binary_search(&line).is_err() && self.search_hit_covers(line)
+    }
+
+    /// The visible lines hit `idx` covers after its first one (0 for a one-line hit).
+    pub fn search_hit_extra_lines(&self, idx: usize) -> usize {
+        let (Some(&first), Some(&end)) = (self.search_matches.get(idx), self.search_ends.get(idx))
+        else {
+            return 0;
+        };
+        if end <= first {
+            return 0;
+        }
+        match (self.pos_of_line(first), self.pos_of_line(end)) {
+            (Some(a), Some(b)) => b.saturating_sub(a),
+            _ => end - first,
+        }
+    }
+
     /// A bookmarked line the closed group of row `row` hides, and whether it is a manual
     /// bookmark (preferred) rather than an automatic one: the group row carries its mark.
     /// Called for every drawn group row, so the answer is cached per row until the

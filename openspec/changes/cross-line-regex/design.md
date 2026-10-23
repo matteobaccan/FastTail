@@ -59,7 +59,9 @@ text instead of failing.
 - The job sends `MultiHits(first, last)` batches over `VisibleSet::Lines(filtered_lines)`
   (hidden lines and the time window included) and `Skipped(n)` at the end.
 - On append the rescan starts 64 visible lines before the old end, after the last hit kept.
-- Rows a hit continues on are marked like its first row (no separate bracket or tint yet);
+- Rows a hit continues on show `┃` in the marker column and a lighter row and text tint
+  (`search_hit_continues`); the overview strip marks every row of a hit, the results pane
+  shows `+N lines` (`search_hit_extra_lines`, counted in visible lines);
   the history stores the text of the query, the mode stays per stream.
 
 ## Risks / Trade-offs

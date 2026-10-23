@@ -20,7 +20,7 @@
 
 use fasttail::log_level::LogLevel;
 use fasttail::scan_job::ScanKind;
-use fasttail::tail_engine::{HighlightRule, QuickLabel, TailEngine};
+use fasttail::tail_engine::{HighlightRule, QuickLabel, SearchMode, TailEngine};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -483,6 +483,29 @@ fn main() {
             engine.search_matches.len()
         }),
     );
+    // Regex and multi-line regex search (the latter joins the visible lines with \n).
+    for (name, mode, pattern) in [
+        ("search regex", SearchMode::Regex, r"timeout after \d+ms"),
+        (
+            "search multiline",
+            SearchMode::Multiline,
+            r"\[ERROR\][^\n]*\n[^\n]*\[WARN\]",
+        ),
+    ] {
+        engine.set_search_mode(mode, false);
+        report(
+            name,
+            best(rounds, || {
+                engine.update_search("");
+                engine.update_search(pattern);
+                settle(&mut engine);
+                engine.search_matches.len()
+            }),
+        );
+        engine.update_search("");
+    }
+    engine.set_search_mode(SearchMode::Text, false);
+
     if generated {
         // Growing file with an active search and an include filter: the derived state
         // (visible rows, matches) must be refreshed incrementally too.

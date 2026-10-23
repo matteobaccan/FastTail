@@ -133,6 +133,8 @@ pub struct HitList<'a> {
     matcher: Option<crate::tail_engine::SearchMatcher>,
     font_size: f32,
     level_colors: bool,
+    /// The hits are the stream's own (`search_matches`): a multi-line hit shows `+N lines`.
+    stream_hits: bool,
 }
 
 impl<'a> HitList<'a> {
@@ -147,7 +149,15 @@ impl<'a> HitList<'a> {
             )),
             font_size: 13.0,
             level_colors: true,
+            stream_hits: false,
         }
+    }
+
+    /// The hits are `engine.search_matches`: each row tells how many further lines a
+    /// multi-line hit covers.
+    pub fn stream_hits(mut self, stream_hits: bool) -> Self {
+        self.stream_hits = stream_hits;
+        self
     }
 
     /// Tints what `matcher` finds instead of the query as text (a regex search).
@@ -309,13 +319,31 @@ impl<'a> HitList<'a> {
                     },
                 );
                 let text_x = rect.left() + 2.0 + marker_w + num_w;
+                // A multi-line hit: `+N lines` at the right end, the text clipped before it.
+                let mut text_right = rect.right();
+                let extra = if self.stream_hits {
+                    engine.search_hit_extra_lines(hit)
+                } else {
+                    0
+                };
+                if extra > 0 {
+                    let label = t(lang, "search_hit_lines").replace("{0}", &extra.to_string());
+                    let r = painter.text(
+                        egui::pos2(rect.right() - 4.0, text_top),
+                        egui::Align2::RIGHT_TOP,
+                        label,
+                        font_id.clone(),
+                        theme.warn_color().into(),
+                    );
+                    text_right = (r.left() - char_w).max(text_x);
+                }
                 paint_line_text(
                     ui,
                     &painter,
                     engine,
                     line,
                     egui::pos2(text_x, text_top),
-                    rect.right(),
+                    text_right,
                     &LineStyle {
                         font_id: &font_id,
                         char_w,
