@@ -37,13 +37,13 @@ Medium, effort M).
 - New `fasttail.ini` section `[mcp]`: `enabled` (default `false`), `http` (default
   `false`), `port`, `token`, `allow_write` (default `false`), `open_roots`.
 
-Target release: **0.27.0** (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **none, backlog** (moved out of 0.27.0 by the maintainer on 2026-10-24: kept for the future, not planned). Before that: 0.27.0 (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low–Medium**. Effort: **M**.
 
 ### Non-goals
 
 - An AI chat or a built-in model inside FastTail, or FastTail calling any AI service.
-- Listening on a non-loopback address, TLS, multi-user access (see `web-ui`, in the backlog, for a
+- Listening on a non-loopback address, TLS, multi-user access (see `web-ui`, also in the backlog, for a
   browser view).
 - MCP prompts and sampling; tools that run external tools or change highlight rules.
 - Structured field queries (`structured-fields`, `query-language` can add tools later).
