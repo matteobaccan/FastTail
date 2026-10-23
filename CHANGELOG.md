@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-23
+
 ### Added
 
 - **Windows debug output.** `fasttail dbwin://local` (or the 🪲 toolbar button, *Capture
@@ -18,8 +20,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   filter (`?include=app.exe,1234&exclude=svc*.exe`) keeps or leaves out processes, and
   FastTail's own messages are left out. Only one debug monitor can own the buffer: with
   DebugView running the stream says so. Windows only; no new dependency.
-
-### Added
 
 - **Desktop notifications from rules.** A highlight rule with **Notify** shows a desktop
   notification (`FastTail · <stream>`, the line and the rule) when it matches a line added
@@ -33,8 +33,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   two settings too. No new dependency: D-Bus through the `zbus` already built for the tray
   on Linux, a PowerShell toast on Windows, `osascript` on macOS.
 
-### Added
-
 - **OpenTelemetry logs.** `fasttail --listen otlp://127.0.0.1:4318` (or OTLP in the Listen
   dialog) is an OTLP/HTTP logs receiver: a service exporting with
   `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` shows its logs live, one line per
@@ -42,15 +40,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gzip, keep-alive, with the listener's bounds; no collector needed. No new dependency:
   the protobuf messages are read by a small decoder.
 
-### Added
-
 - **Listen dialog.** The 📡 toolbar button (and *Listen on a port…* in the command palette)
   picks the protocol, the address (this machine only by default, a warning for any other),
   the port and the sender prefix. The terminal interface asks for the URL from its
   palette. The listener spool and rate limits are in Settings in both interfaces.
   `network-listener` is code complete.
-
-### Added
 
 - **Network listener.** `fasttail --listen syslog://127.0.0.1:5514` (also `tcp://` and
   `udp://` URLs, as paths too) receives log lines on a local port as a stream. Before, the
@@ -62,26 +56,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `listener_spool_max_mb`, `listener_max_lines_per_sec`, `listener_max_mb_per_sec`. First
   part of `network-listener`; the Listen dialog and the Settings fields follow.
 
-### Added
-
 - **Remote pattern streams.** `ssh://web1/var/log/app-*.log` follows the newest match on
   the server, lists the folder every 10 seconds and switches to a newer file with a notice,
   as local pattern streams do; only `*` and `?` reach the remote shell unquoted.
-
-### Fixed
-
-- The terminal interface restores `docker://`, `journald://` and `ssh://` streams from the
-  workspace at start (they were skipped as missing files).
-
-### Added
 
 - **Remote file dialog.** The 🌐 toolbar button (and *Open remote file (SSH)…* in the
   command palette) takes one or more hosts (`deploy@web1, web2, web3:2222`), the path and
   the first fetch (last N MB or the whole file), and opens one stream per host. The
   terminal interface asks for the URL from its palette. `ssh_program`,
   `remote_initial_mb` and `remote_spool_max_mb` are in Settings in both interfaces.
-
-### Added
 
 - **Remote files over SSH.** `fasttail ssh://deploy@web1/var/log/app.log` follows a file
   on a server through the system OpenSSH client (keys, agent, `~/.ssh/config`,
@@ -96,16 +79,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `remote_initial_mb`. First part of `ssh-sources`; the Remote dialog, globs and several
   hosts follow.
 
-### Added
-
 - **Open system source dialog.** The 📦 toolbar button (and *Open system source…* in the
   command palette) lists the Docker containers, stopped ones too, or the systemd services
   (system or user) in the background; a double click or Open opens one as a stream, and
   the name can be typed. The terminal interface asks for the URI from its palette (with
   no stream open too). The three system source keys are in Settings in both interfaces.
   `system-sources` is code complete.
-
-### Added
 
 - **System sources: journald and Docker.** `fasttail docker://api`, `journald://nginx.service`,
   `journald://` (the system journal) and `journald://user/<unit>` (Linux) open as followed
@@ -117,6 +96,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the command palette and as a chip in the terminal). New `fasttail.ini` keys:
   `docker_command` (`podman` works), `journalctl_command`, `system_source_backlog_lines`
   (default 10,000). First part of `system-sources`; the Open system source dialog follows.
+
+### Fixed
+
+- The terminal interface restores `docker://`, `journald://` and `ssh://` streams from the
+  workspace at start (they were skipped as missing files).
 
 ## [0.22.0] - 2026-10-23
 
@@ -2113,6 +2097,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.22.1]: https://github.com/matteobaccan/FastTail/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/matteobaccan/FastTail/compare/v0.21.10...v0.22.0
 [0.21.10]: https://github.com/matteobaccan/FastTail/compare/v0.21.9...v0.21.10
 [0.21.9]: https://github.com/matteobaccan/FastTail/compare/v0.21.8...v0.21.9
