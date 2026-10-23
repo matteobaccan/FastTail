@@ -40,6 +40,25 @@ No new thread: HTTP runs on the listener's connection threads (≤ 64). Memory p
 ≤ 16 MB body + its decoded records, freed after rendering; the content lives in the
 spool. The UI thread only reads counters.
 
+## Decisions taken at implementation (2026-10-23)
+
+- No `prost`: a decoder of the protobuf wire format (varint, fixed64, fixed32,
+  length-delimited) over the fields used (`src/otlp.rs`), about 150 lines, so no new
+  crate. Unknown fields are skipped, nesting of values is capped at 16.
+- The test fixtures are written with a small protobuf writer in the tests and by hand
+  in the integration test, not captured from an SDK exporter; the hand check with an
+  SDK stays in the release check.
+- `429` is answered while the listener's rate limit is dropping lines in the current
+  second; the request that went over the limit is still answered `200`.
+- `405` for a method other than POST on `/v1/logs`.
+- Hardened after review: chunk sizes checked before any arithmetic, CRLF after each chunk
+  and trailers read, `Transfer-Encoding` other than a lone `chunked` and a bad or
+  conflicting `Content-Length` refused with 400 and the connection closed, a 10 s write
+  timeout, `Expect: 100-continue` answered, unsupported `Content-Encoding` answered 415,
+  at most 100,000 records per request (413), service and scope names cut at 256
+  characters, control characters and bidi overrides replaced in the line, and a read
+  cursor so each received byte is moved a bounded number of times.
+
 ## Risks / Trade-offs
 
 - [Hand-written protobuf structs drift from the spec] → fixtures produced by the official

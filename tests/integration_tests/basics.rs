@@ -657,6 +657,7 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex_hint",
         "fields_regex_invalid",
         "fields_format_missing",
+        "listen_otlp_tip",
         "listen_title",
         "listen_desc",
         "listen_protocol",

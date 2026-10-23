@@ -43,6 +43,8 @@ pub enum Proto {
     Udp,
     /// UDP and TCP on the same port, messages rendered as syslog.
     Syslog,
+    /// OTLP/HTTP logs (`POST /v1/logs`, protobuf or JSON), see `otlp`.
+    Otlp,
 }
 
 impl Proto {
@@ -51,6 +53,7 @@ impl Proto {
             Proto::Tcp => "tcp",
             Proto::Udp => "udp",
             Proto::Syslog => "syslog",
+            Proto::Otlp => "otlp",
         }
     }
 }
@@ -69,7 +72,10 @@ pub struct ListenSpec {
 /// True when `path` is written as a listener URL (valid or not).
 pub fn is_listen_path(path: &Path) -> bool {
     path.to_str().is_some_and(|s| {
-        s.starts_with("tcp://") || s.starts_with("udp://") || s.starts_with("syslog://")
+        s.starts_with("tcp://")
+            || s.starts_with("udp://")
+            || s.starts_with("syslog://")
+            || s.starts_with("otlp://")
     })
 }
 
@@ -78,7 +84,7 @@ impl ListenSpec {
     /// reason (an i18n key) when it cannot be used.
     pub fn parse(path: &Path) -> Option<Result<Self, &'static str>> {
         let text = path.to_str()?;
-        let (proto, rest) = [Proto::Tcp, Proto::Udp, Proto::Syslog]
+        let (proto, rest) = [Proto::Tcp, Proto::Udp, Proto::Syslog, Proto::Otlp]
             .into_iter()
             .find_map(|p| {
                 text.strip_prefix(&format!("{}://", p.scheme()))
@@ -145,7 +151,8 @@ impl ListenSpec {
 
     /// Whether lines carry the sender's address.
     pub fn prefixed(&self) -> bool {
-        self.prefix.unwrap_or(self.proto != Proto::Tcp)
+        self.prefix
+            .unwrap_or(matches!(self.proto, Proto::Udp | Proto::Syslog))
     }
 
     /// True when other machines can reach it (not a loopback address).
@@ -203,6 +210,8 @@ struct Shared {
     dropped: AtomicU64,
     /// UDP lines dropped by a reader, not yet noted in the stream.
     dropped_unnoted: AtomicU64,
+    /// The rate limit dropped lines in the current second (OTLP answers 429 then).
+    limited: AtomicBool,
     received: AtomicU64,
 }
 
@@ -383,6 +392,400 @@ impl Framer {
     }
 }
 
+/// Largest OTLP request body, compressed or not.
+pub const MAX_BODY: usize = 16 << 20;
+/// Largest request head (request line and headers).
+const MAX_HEAD: usize = 16 * 1024;
+
+/// Hands `line` to the copier, waiting while the channel is full; false once the
+/// listener closed.
+fn send_line(line: Line, tx: &SyncSender<Line>, shared: &Shared) -> bool {
+    shared.received.fetch_add(1, Ordering::Relaxed);
+    let mut line = line;
+    loop {
+        match tx.try_send(line) {
+            Ok(()) => return true,
+            Err(TrySendError::Full(back)) => {
+                if shared.closed.load(Ordering::Acquire) {
+                    return false;
+                }
+                line = back;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(TrySendError::Disconnected(_)) => return false,
+        }
+    }
+}
+
+/// An HTTP connection's reader: the bytes received and a cursor into them (compacted once
+/// the cursor passes half of the buffer, so each byte is moved a bounded number of times),
+/// reads with the listener's poll and idle checks.
+struct HttpConn<'a> {
+    stream: TcpStream,
+    buf: Vec<u8>,
+    pos: usize,
+    /// Where the search for the next CRLF stopped.
+    scanned: usize,
+    shared: &'a Shared,
+}
+
+/// Why a request cannot be served: the status to answer before closing.
+type Refusal = &'static str;
+
+/// The request line and the headers (names lower-cased).
+type RequestHead = (String, Vec<(String, String)>);
+
+impl HttpConn<'_> {
+    fn available(&self) -> usize {
+        self.buf.len() - self.pos
+    }
+
+    fn consume(&mut self, n: usize) -> Vec<u8> {
+        let out = self.buf[self.pos..self.pos + n].to_vec();
+        self.pos += n;
+        self.scanned = self.pos;
+        if self.pos > self.buf.len() / 2 {
+            self.buf.drain(..self.pos);
+            self.pos = 0;
+            self.scanned = 0;
+        }
+        out
+    }
+
+    /// Reads more bytes; false when the connection ended, idled out or the listener closed.
+    fn fill(&mut self) -> bool {
+        let mut chunk = [0u8; 64 * 1024];
+        let start = Instant::now();
+        loop {
+            if self.shared.closed.load(Ordering::Acquire) || start.elapsed() > IDLE {
+                return false;
+            }
+            match self.stream.read(&mut chunk) {
+                Ok(0) => return false,
+                Ok(n) => {
+                    self.buf.extend_from_slice(&chunk[..n]);
+                    return true;
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return false,
+            }
+        }
+    }
+
+    /// The next line without its CRLF (at most `cap` bytes); `Err` when too long, `Ok(None)`
+    /// when the connection ended.
+    fn line(&mut self, cap: usize) -> Result<Option<Vec<u8>>, Refusal> {
+        loop {
+            let from = self.scanned.max(self.pos).saturating_sub(1).max(self.pos);
+            if let Some(i) = self.buf[from..].windows(2).position(|w| w == b"\r\n") {
+                let end = from + i;
+                let line = self.consume(end - self.pos + 2);
+                return Ok(Some(line[..line.len() - 2].to_vec()));
+            }
+            self.scanned = self.buf.len();
+            if self.available() > cap {
+                return Err("431 Request Header Fields Too Large");
+            }
+            if !self.fill() {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// Exactly `n` bytes, `None` when the connection ended first.
+    fn exact(&mut self, n: usize) -> Option<Vec<u8>> {
+        while self.available() < n {
+            if !self.fill() {
+                return None;
+            }
+        }
+        Some(self.consume(n))
+    }
+
+    /// Writes a response; false when the client does not take it (the connection closes).
+    fn respond(
+        &mut self,
+        status: &str,
+        content_type: &str,
+        body: &[u8],
+        extra: &str,
+        close: bool,
+    ) -> bool {
+        use std::io::Write;
+        let head = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra}{}\r\n",
+            body.len(),
+            if close { "Connection: close\r\n" } else { "" }
+        );
+        self.stream.write_all(head.as_bytes()).is_ok() && self.stream.write_all(body).is_ok()
+    }
+}
+
+/// The comma-separated tokens of a header, lower-cased.
+fn tokens(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// A body read in full, or the reason it was refused.
+fn read_body(
+    c: &mut HttpConn<'_>,
+    headers: &[(String, String)],
+) -> Result<Option<Vec<u8>>, Refusal> {
+    fn all<'h>(headers: &'h [(String, String)], name: &'h str) -> impl Iterator<Item = &'h str> {
+        headers
+            .iter()
+            .filter(move |(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+    let codings: Vec<String> = all(headers, "transfer-encoding").flat_map(tokens).collect();
+    if !codings.is_empty() {
+        // Only `chunked`, last (RFC 9112): anything else cannot be framed safely.
+        if codings.iter().any(|t| t != "chunked") || codings.len() != 1 {
+            return Err("400 Bad Request");
+        }
+        let mut body = Vec::new();
+        loop {
+            let Some(size) = c.line(64)? else {
+                return Ok(None);
+            };
+            let size = String::from_utf8_lossy(&size);
+            let size = size.split(';').next().unwrap_or_default().trim();
+            if size.is_empty() || size.len() > 8 {
+                return Err("400 Bad Request");
+            }
+            let n = usize::from_str_radix(size, 16).map_err(|_| "400 Bad Request")?;
+            if n > MAX_BODY - body.len() {
+                return Err("413 Payload Too Large");
+            }
+            if n == 0 {
+                // Trailers, up to the empty line.
+                let mut budget = MAX_HEAD;
+                loop {
+                    let Some(t) = c.line(budget)? else {
+                        return Ok(None);
+                    };
+                    if t.is_empty() {
+                        return Ok(Some(body));
+                    }
+                    budget = budget.saturating_sub(t.len() + 2);
+                    if budget == 0 {
+                        return Err("431 Request Header Fields Too Large");
+                    }
+                }
+            }
+            let Some(data) = c.exact(n + 2) else {
+                return Ok(None);
+            };
+            if &data[n..] != b"\r\n" {
+                return Err("400 Bad Request");
+            }
+            body.extend_from_slice(&data[..n]);
+        }
+    }
+    let lengths: Vec<&str> = all(headers, "content-length")
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .collect();
+    let n = match lengths.as_slice() {
+        [] => 0,
+        [first, rest @ ..] => {
+            if first.is_empty()
+                || first.len() > 12
+                || !first.bytes().all(|b| b.is_ascii_digit())
+                || rest.iter().any(|r| r != first)
+            {
+                return Err("400 Bad Request");
+            }
+            first.parse::<usize>().map_err(|_| "400 Bad Request")?
+        }
+    };
+    if n > MAX_BODY {
+        return Err("413 Payload Too Large");
+    }
+    Ok(c.exact(n))
+}
+
+/// An OTLP/HTTP connection: `POST /v1/logs` requests (Content-Length or chunked bodies,
+/// gzip, keep-alive) whose records become lines.
+fn serve_http(
+    stream: TcpStream,
+    from: SocketAddr,
+    spec: &ListenSpec,
+    tx: &SyncSender<Line>,
+    shared: &Shared,
+    wake: &Option<WakeFn>,
+) {
+    // A client that does not read its responses cannot hold the thread.
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    let mut c = HttpConn {
+        stream,
+        buf: Vec::new(),
+        pos: 0,
+        scanned: 0,
+        shared,
+    };
+    loop {
+        // Request line and headers, within MAX_HEAD.
+        let head = (|| -> Result<Option<RequestHead>, Refusal> {
+            let Some(request) = c.line(MAX_HEAD)? else {
+                return Ok(None);
+            };
+            let mut budget = MAX_HEAD.saturating_sub(request.len() + 2);
+            let mut headers = Vec::new();
+            loop {
+                let Some(line) = c.line(budget)? else {
+                    return Ok(None);
+                };
+                if line.is_empty() {
+                    break;
+                }
+                budget = budget.saturating_sub(line.len() + 2);
+                if budget == 0 {
+                    return Err("431 Request Header Fields Too Large");
+                }
+                let line = String::from_utf8_lossy(&line).into_owned();
+                if let Some((k, v)) = line.split_once(':') {
+                    headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+                }
+            }
+            Ok(Some((
+                String::from_utf8_lossy(&request).into_owned(),
+                headers,
+            )))
+        })();
+        let (request, headers) = match head {
+            Ok(Some(h)) => h,
+            Ok(None) => return,
+            Err(status) => {
+                c.respond(status, "text/plain", b"", "", true);
+                return;
+            }
+        };
+        let mut parts = request.split(' ');
+        let (method, path, version) = (
+            parts.next().unwrap_or_default().to_string(),
+            parts.next().unwrap_or_default().to_string(),
+            parts.next().unwrap_or_default().to_string(),
+        );
+        let header = |name: &str| {
+            headers
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.as_str())
+        };
+        let close = version != "HTTP/1.1"
+            || header("connection").is_some_and(|v| tokens(v).iter().any(|t| t == "close"));
+        if header("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue")) {
+            use std::io::Write;
+            let _ = c.stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
+        }
+        // The body is read in full before any answer, so keep-alive stays in step.
+        let body = match read_body(&mut c, &headers) {
+            Ok(Some(b)) => b,
+            Ok(None) => return,
+            Err(status) => {
+                c.respond(status, "text/plain", b"", "", true);
+                return;
+            }
+        };
+        let content_type = header("content-type")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let json = content_type.starts_with("application/json");
+        let reply_type = if json {
+            "application/json"
+        } else {
+            "application/x-protobuf"
+        };
+        let encoding = header("content-encoding").map(tokens).unwrap_or_default();
+        let gzip = encoding.iter().any(|e| e == "gzip");
+        let answered = if path.split('?').next() != Some("/v1/logs") {
+            c.respond("404 Not Found", "text/plain", b"", "", close)
+        } else if method != "POST" {
+            c.respond(
+                "405 Method Not Allowed",
+                "text/plain",
+                b"",
+                "Allow: POST\r\n",
+                close,
+            )
+        } else if (!json && !content_type.starts_with("application/x-protobuf"))
+            || encoding.iter().any(|e| e != "gzip" && e != "identity")
+            || encoding.len() > 1
+        {
+            c.respond("415 Unsupported Media Type", "text/plain", b"", "", close)
+        } else if shared.limited.load(Ordering::Relaxed) {
+            c.respond(
+                "429 Too Many Requests",
+                reply_type,
+                b"",
+                "Retry-After: 1\r\n",
+                close,
+            )
+        } else {
+            let body = if gzip {
+                let mut out = Vec::new();
+                let read = flate2::read::GzDecoder::new(&body[..])
+                    .take(MAX_BODY as u64 + 1)
+                    .read_to_end(&mut out);
+                if read.is_err() {
+                    c.respond("400 Bad Request", "text/plain", b"", "", true);
+                    return;
+                }
+                if out.len() > MAX_BODY {
+                    c.respond("413 Payload Too Large", "text/plain", b"", "", true);
+                    return;
+                }
+                out
+            } else {
+                body
+            };
+            let records = if json {
+                crate::otlp::decode_json(&body)
+            } else {
+                crate::otlp::decode_protobuf(&body)
+            };
+            match records {
+                Err(crate::otlp::DecodeError::TooMany) => {
+                    c.respond("413 Payload Too Large", "text/plain", b"", "", close)
+                }
+                Err(crate::otlp::DecodeError::Malformed) => {
+                    c.respond("400 Bad Request", "text/plain", b"", "", close)
+                }
+                Ok(records) => {
+                    let now = || crate::syslog::receive_time().0;
+                    for record in &records {
+                        for line in lines_of(spec, from, record.line(&now).as_bytes()) {
+                            if !send_line(line, tx, shared) {
+                                return;
+                            }
+                        }
+                    }
+                    if let Some(w) = wake {
+                        w();
+                    }
+                    // An empty ExportLogsServiceResponse.
+                    let empty: &[u8] = if json { b"{}" } else { b"" };
+                    c.respond("200 OK", reply_type, empty, "", close)
+                }
+            }
+        };
+        if close || !answered {
+            return;
+        }
+    }
+}
+
 /// Gives a connection slot back when its reader ends, however it ends.
 struct ConnectionSlot(Arc<Shared>);
 
@@ -404,6 +807,10 @@ fn serve_tcp(
     wake: &Option<WakeFn>,
 ) {
     let _ = stream.set_read_timeout(Some(POLL));
+    if spec.proto == Proto::Otlp {
+        serve_http(stream, from, spec, tx, shared, wake);
+        return;
+    }
     let mut framer = Framer::new(spec.proto == Proto::Syslog);
     let mut last_data = Instant::now();
     let mut buf = vec![0u8; 64 * 1024];
@@ -574,6 +981,7 @@ impl ListenerInput {
         self.window = Instant::now();
         self.lines = 0;
         self.bytes = 0;
+        self.shared.limited.store(false, Ordering::Relaxed);
         let dropped = std::mem::take(&mut self.dropped_in_window)
             + self.shared.dropped_unnoted.swap(0, Ordering::Relaxed);
         (dropped > 0).then(|| {
@@ -590,6 +998,7 @@ impl ListenerInput {
         {
             self.dropped_in_window += 1;
             self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+            self.shared.limited.store(true, Ordering::Relaxed);
             return;
         }
         self.lines += 1;
@@ -670,7 +1079,7 @@ impl ListenerStream {
         let mut tcp = Vec::new();
         let mut udp = Vec::new();
         for (addr, required) in spec.addresses() {
-            if matches!(spec.proto, Proto::Tcp | Proto::Syslog) {
+            if matches!(spec.proto, Proto::Tcp | Proto::Syslog | Proto::Otlp) {
                 match TcpListener::bind(addr) {
                     Ok(l) => tcp.push(l),
                     Err(error) if required => return Err(BindError { addr, error }),

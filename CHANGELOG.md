@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **OpenTelemetry logs.** `fasttail --listen otlp://127.0.0.1:4318` (or OTLP in the Listen
+  dialog) is an OTLP/HTTP logs receiver: a service exporting with
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` shows its logs live, one line per
+  record (`<time> <LEVEL> <service> [<scope>] <body> {attrs} trace=<id>`), protobuf or JSON,
+  gzip, keep-alive, with the listener's bounds; no collector needed. No new dependency:
+  the protobuf messages are read by a small decoder.
+
+### Added
+
 - **Listen dialog.** The 📡 toolbar button (and *Listen on a port…* in the command palette)
   picks the protocol, the address (this machine only by default, a warning for any other),
   the port and the sender prefix. The terminal interface asks for the URL from its

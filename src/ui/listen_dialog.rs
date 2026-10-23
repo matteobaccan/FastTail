@@ -49,6 +49,7 @@ impl ListenDialog {
             Proto::Tcp => "tcp",
             Proto::Udp => "udp",
             Proto::Syslog => "syslog",
+            Proto::Otlp => "otlp",
         };
         let host = if self.loopback {
             "127.0.0.1".to_string()
@@ -60,7 +61,7 @@ impl ListenDialog {
                 a.to_string()
             }
         };
-        let default_prefix = self.proto != Proto::Tcp;
+        let default_prefix = matches!(self.proto, Proto::Udp | Proto::Syslog);
         let query = if self.prefix == default_prefix {
             String::new()
         } else if self.prefix {
@@ -110,8 +111,16 @@ impl ListenDialog {
                             .on_hover_text(t(lang, "listen_syslog_tip"));
                         ui.radio_value(&mut self.proto, Proto::Tcp, "TCP");
                         ui.radio_value(&mut self.proto, Proto::Udp, "UDP");
+                        ui.radio_value(&mut self.proto, Proto::Otlp, "OTLP")
+                            .on_hover_text(t(lang, "listen_otlp_tip"));
                         if self.proto != before {
-                            self.prefix = self.proto != Proto::Tcp;
+                            self.prefix = matches!(self.proto, Proto::Udp | Proto::Syslog);
+                            // The usual ports of each kind.
+                            if self.proto == Proto::Otlp && self.port == 5514 {
+                                self.port = 4318;
+                            } else if before == Proto::Otlp && self.port == 4318 {
+                                self.port = 5514;
+                            }
                         }
                     });
                     ui.end_row();
@@ -205,5 +214,9 @@ mod tests {
         assert!(s.is_exposed());
         d.address = "not an address".into();
         assert!(d.spec().is_err());
+        d.loopback = true;
+        d.proto = Proto::Otlp;
+        d.port = 4318;
+        assert_eq!(d.spec().unwrap().to_uri(), "otlp://127.0.0.1:4318");
     }
 }
