@@ -135,6 +135,7 @@ Update this section in each release PR.
   `hide-lines`), **0.22.0** time and formats, **0.23.0** remote and system sources,
   **0.24.0** queries and statistics, **0.25.0** patterns and analysis, **0.26.0**
   extensibility, **0.27.0** integrations; see `docs/competitor-analysis.md` section 8.
+  `web-ui` is in the backlog (maintainer decision, 2026-10-24): not planned until asked.
 
 ### Handover notes (2026-10-05, 0.20.1)
 

@@ -463,8 +463,16 @@ ends, which keeps `cross-line-regex` a small differentiator.
 | Change | Gaps | Effort |
 |---|---|---|
 | `mcp-server` — read-only MCP server for AI assistants, off by default (from 0.22.0) | 17 | M |
-| `web-ui` — read-only local web view, off by default (from 0.22.0) | Seq, Loki | M |
 | `tui-find-all` — Search all streams in the terminal interface (from 0.24.0) | FastTail window, Chipmunk | M |
+
+### Backlog (no release)
+
+Changes kept for the future but not planned, by maintainer decision. They stay in
+`openspec/changes/` and come back into a release only when the maintainer asks.
+
+| Change | Gaps | Effort | Since |
+|---|---|---|---|
+| `web-ui` — read-only local web view, off by default (from 0.27.0) | Seq, Loki | M | 2026-10-24 |
 
 Open questions are listed in each change's design.
 
