@@ -125,6 +125,10 @@ fn multiline_hits_cross_lines_alike_on_the_ui_thread_and_in_a_job() {
         // The rows a hit continues on are marked too, the others not.
         assert!(engine.search_hit_covers(1) && engine.search_hit_covers(2));
         assert!(!engine.search_hit_covers(3));
+        // Continuation rows are told apart from a hit's first row; the list says `+2`.
+        assert!(!engine.search_hit_continues(0));
+        assert!(engine.search_hit_continues(1) && engine.search_hit_continues(2));
+        assert_eq!(engine.search_hit_extra_lines(0), 2);
         // Hidden lines are not part of the text: without the noise lines the pattern
         // with one line between no longer matches, the one without does.
         engine.set_exclude_filter("noise");
@@ -136,6 +140,8 @@ fn multiline_hits_cross_lines_alike_on_the_ui_thread_and_in_a_job() {
         let gap = search(&mut engine, r"^BEGIN tx\d+\ndeadlock");
         assert_eq!(gap.len(), 100, "threshold {threshold}");
         assert_eq!(engine.search_ends[0], 2, "the hit spans the hidden line");
+        // Counted in visible lines: the hidden line between is not one of them.
+        assert_eq!(engine.search_hit_extra_lines(0), 1);
     }
 }
 

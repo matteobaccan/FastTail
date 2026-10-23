@@ -67,6 +67,9 @@ pub struct MarkInputs<'a> {
     pub filtered: Option<&'a [usize]>,
     /// Search hits (line indices, visible lines only).
     pub hits: &'a [usize],
+    /// The last line of each hit, beside `hits` (empty for one-line hits): every row of a
+    /// multi-line hit is marked.
+    pub hit_ends: &'a [usize],
     pub bookmarks: &'a BTreeSet<usize>,
     /// Automatic bookmarks and the dismissed ones among them (see
     /// `TailEngine::auto_bookmarks`).
@@ -142,9 +145,17 @@ pub fn compute_marks(height: usize, input: &MarkInputs) -> Marks {
         return marks;
     }
     let px = |row: usize| pixel_of_row(row, rows, height);
-    for &line in input.hits {
+    for (i, &line) in input.hits.iter().enumerate() {
         if let Some(row) = input.row_of(line) {
-            marks.pixels[px(row)] |= MARK_HIT;
+            let last = input
+                .hit_ends
+                .get(i)
+                .filter(|&&end| end > line)
+                .and_then(|&end| input.row_of(end))
+                .map_or(row, |r| r.max(row));
+            for p in px(row)..=px(last) {
+                marks.pixels[p] |= MARK_HIT;
+            }
         }
     }
     for &line in input.bookmarks {
@@ -297,6 +308,7 @@ impl StripCache {
                 .rows_filtered()
                 .then_some(engine.filtered_lines.as_slice()),
             hits: &engine.search_matches,
+            hit_ends: &engine.search_ends,
             bookmarks: &engine.bookmarks,
             auto_bookmarks: engine.auto_bookmarks(),
             dismissed_auto: engine.dismissed_auto_bookmarks(),
@@ -514,6 +526,30 @@ mod tests {
     }
 
     #[test]
+    fn every_row_of_a_multi_line_hit_is_marked() {
+        let none = BTreeSet::new();
+        let input = MarkInputs {
+            rows: 100,
+            filtered: None,
+            hits: &[10, 50],
+            hit_ends: &[13, 50],
+            bookmarks: &none,
+            auto_bookmarks: &none,
+            dismissed_auto: &none,
+            levels: &[],
+            error_blocks: &[],
+            collapse: None,
+            context: None,
+        };
+        // One pixel per row.
+        let marks = compute_marks(100, &input);
+        let hit: Vec<usize> = (0..100)
+            .filter(|&p| marks.pixels[p] & MARK_HIT != 0)
+            .collect();
+        assert_eq!(hit, vec![10, 11, 12, 13, 50]);
+    }
+
+    #[test]
     fn unfiltered_marks_are_exact() {
         let rows = 100_000;
         let (levels, blocks) = levels_with_errors(rows, &[50_000, 99_999]);
@@ -522,6 +558,7 @@ mod tests {
             rows,
             filtered: None,
             hits: &[25_000],
+            hit_ends: &[],
             bookmarks: &bookmarks,
             auto_bookmarks: &BTreeSet::new(),
             dismissed_auto: &BTreeSet::new(),
@@ -565,6 +602,7 @@ mod tests {
             rows: 100,
             filtered: None,
             hits: &[],
+            hit_ends: &[],
             bookmarks: &bookmarks,
             auto_bookmarks: &auto,
             dismissed_auto: &dismissed,
@@ -586,6 +624,7 @@ mod tests {
             rows: 2000,
             filtered: None,
             hits: &[],
+            hit_ends: &[],
             bookmarks: &BTreeSet::new(),
             auto_bookmarks: &BTreeSet::new(),
             dismissed_auto: &BTreeSet::new(),
@@ -608,6 +647,7 @@ mod tests {
             rows: filtered.len(),
             filtered: Some(&filtered),
             hits: &[100],
+            hit_ends: &[],
             bookmarks: &bookmarks,
             auto_bookmarks: &BTreeSet::new(),
             dismissed_auto: &BTreeSet::new(),
@@ -650,6 +690,7 @@ mod tests {
             rows,
             filtered: None,
             hits: &[30],
+            hit_ends: &[],
             bookmarks: &bookmarks,
             // An automatic bookmark the group hides is drawn at the group's row.
             auto_bookmarks: &[20].into_iter().collect(),
@@ -684,6 +725,7 @@ mod tests {
             rows: 6,
             filtered: Some(&matches),
             hits: &[9],
+            hit_ends: &[],
             bookmarks: &bookmarks,
             auto_bookmarks: &BTreeSet::new(),
             dismissed_auto: &BTreeSet::new(),
@@ -712,6 +754,7 @@ mod tests {
             rows,
             filtered: Some(&filtered),
             hits: &[],
+            hit_ends: &[],
             bookmarks: &BTreeSet::new(),
             auto_bookmarks: &BTreeSet::new(),
             dismissed_auto: &BTreeSet::new(),
