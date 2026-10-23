@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-23
+
+The **time and formats** milestone: the six changes of the 0.22.0 plan, shipped one by one
+in the nightly patches 0.21.1 to 0.21.10 and listed in their sections below.
+
+### Added
+
+- **Merged timeline** (0.21.1, 0.21.2): several streams in one view ordered by timestamp,
+  each line marked with its source, saved in the workspace and sessions.
+- **Log formats** (0.21.3 to 0.21.5): named format files (named-group patterns, timestamp
+  format, level, entry start pattern), detection and per-stream choice, the Log formats
+  dialog with a live preview, import and export.
+- **Filter expressions** (0.21.6, 0.21.7): AND / OR / NOT with parentheses and field
+  operands, the ƒx toggle in the stream and global filter, presets, `--filter-expr`.
+- **Out-of-order lines** (0.21.8): lines whose timestamp goes back marked, counted and
+  walked.
+- **Split a file** (0.21.9): by lines, size or time, with a preview, a free-space check,
+  progress and Cancel.
+- **Export as CSV or HTML** (0.21.10): the Export dialog (visible, selected or matching
+  lines; text, CSV with separator, BOM and formula protection, or HTML in the view's colours).
+
 ### Changed
 
 - The Split button of the Split file dialog has a tooltip, and when it is off the tooltip
@@ -1982,6 +2003,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.22.0]: https://github.com/matteobaccan/FastTail/compare/v0.21.10...v0.22.0
 [0.21.10]: https://github.com/matteobaccan/FastTail/compare/v0.21.9...v0.21.10
 [0.21.9]: https://github.com/matteobaccan/FastTail/compare/v0.21.8...v0.21.9
 [0.21.8]: https://github.com/matteobaccan/FastTail/compare/v0.21.7...v0.21.8
