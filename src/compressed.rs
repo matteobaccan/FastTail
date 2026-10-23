@@ -2473,6 +2473,24 @@ pub enum OpenError {
     Refused(EntryRefusal),
     /// The archive holds no such entry.
     NoSuchEntry,
+    /// A system source URI that cannot be used, or whose command cannot run: an i18n key
+    /// and the text for its `{0}`.
+    System {
+        key: &'static str,
+        detail: String,
+    },
+}
+
+impl OpenError {
+    /// The reason in `lang`, for the errors that need no front-end helper.
+    pub fn system_text(&self, lang: crate::i18n::Language) -> Option<String> {
+        match self {
+            OpenError::System { key, detail } => {
+                Some(crate::i18n::t(lang, key).replace("{0}", detail))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl From<std::io::Error> for OpenError {

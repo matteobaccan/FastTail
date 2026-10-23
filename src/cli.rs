@@ -555,6 +555,10 @@ pub fn apply_time_window(
 /// does not, so a drive letter (`C:\logs\a.log`) and a file really named `trace:12` stay
 /// paths. A line 0 or too large for a number is not a target.
 fn split_line_target(arg: &str, cwd: &Path) -> (PathBuf, Option<usize>) {
+    // A system source (`docker://api`, `journald://nginx.service`) is kept as written.
+    if crate::system_source::is_system_path(Path::new(arg)) {
+        return (PathBuf::from(arg), None);
+    }
     let whole = resolve(arg, cwd);
     if whole.exists() {
         return (whole, None);
@@ -596,6 +600,24 @@ fn resolve(arg: &str, cwd: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_source_uris_are_kept_as_written() {
+        let a = CliArgs::parse(
+            ["docker://api", "journald://nginx.service", "x.log"],
+            &cwd(),
+        )
+        .unwrap();
+        assert_eq!(
+            a.paths,
+            [
+                PathBuf::from("docker://api"),
+                PathBuf::from("journald://nginx.service"),
+                cwd().join("x.log")
+            ]
+        );
+        assert_eq!(a.path_lines, [None, None, None]);
+    }
 
     fn cwd() -> PathBuf {
         if cfg!(windows) {

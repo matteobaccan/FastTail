@@ -79,6 +79,8 @@ pub enum Action {
     NextOutOfOrder,
     /// Split file... (palette): asks how to cut.
     Split,
+    /// Reconnect an ended system source (palette, the bar's chip).
+    Reconnect,
     PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.

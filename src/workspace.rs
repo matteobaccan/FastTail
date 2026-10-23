@@ -53,6 +53,43 @@ pub enum OpenOutcome {
 /// Opens `path`. `wake` is called from the watcher threads when new data arrives, so a
 /// front end waiting on input can redraw.
 pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -> OpenOutcome {
+    if let Some(parsed) = crate::system_source::SystemUri::parse(path) {
+        let error = match parsed {
+            Err(key) => OpenError::System {
+                key,
+                detail: String::new(),
+            },
+            Ok(uri) => {
+                let commands = config.system_commands();
+                let program = uri.command_line(&commands, None).0;
+                if !crate::system_source::valid_program(&program) {
+                    return OpenOutcome::Failed {
+                        error: OpenError::System {
+                            key: "system_bad_program",
+                            detail: program,
+                        },
+                        report: true,
+                    };
+                }
+                match crate::system_source::open_engine(
+                    uri,
+                    &commands,
+                    &config.stdin_settings(),
+                    wake,
+                ) {
+                    Ok(engine) => return OpenOutcome::Opened(Box::new(engine)),
+                    Err(e) => OpenError::System {
+                        key: "system_start_failed",
+                        detail: format!("{program}: {e}"),
+                    },
+                }
+            }
+        };
+        return OpenOutcome::Failed {
+            error,
+            report: true,
+        };
+    }
     if crate::wildcard::is_pattern_path(path) {
         // A pattern resolves to its newest match at every open.
         let opened = match wake {
@@ -163,6 +200,9 @@ pub fn restore_stream(engine: &mut TailEngine, config: &FastTailConfig, path: &P
 /// Applies the saved bookmarks of `path`. A compressed stream starts on an empty spool:
 /// its bookmarks wait until the index covers them (see `TailEngine::poll_compressed`).
 fn restore_bookmarks(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path) {
+    if engine.system.is_some() {
+        return;
+    }
     // A derived stream saves them by source line: they wait for its fill to reach them.
     if let Some(feeder) = engine.derived.as_mut() {
         if let Some((_, lines, notes)) = cfg.saved_bookmarks(path) {
@@ -323,9 +363,9 @@ pub fn persisted_path(engine: &TailEngine) -> PathBuf {
 /// stored by source line, so they find their lines again when it is rebuilt; the ones
 /// still waiting for the fill are kept.
 fn saved_bookmarks(engine: &TailEngine) -> (Vec<usize>, BTreeMap<usize, String>) {
-    // A merged view's lines are numbered again at each rebuild: its bookmarks stay with
-    // the process.
-    if engine.merged.is_some() {
+    // A merged view's lines are numbered again at each rebuild, and a system source
+    // starts from another backlog when it reopens: their bookmarks stay with the process.
+    if engine.merged.is_some() || engine.system.is_some() {
         return (Vec::new(), BTreeMap::new());
     }
     let Some(feeder) = &engine.derived else {

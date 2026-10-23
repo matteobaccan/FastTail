@@ -48,6 +48,7 @@ pub mod settings_model;
 pub mod split;
 pub mod spool;
 pub mod stdin_source;
+pub mod system_source;
 pub mod tail_engine;
 pub mod theme;
 pub mod time_histogram;

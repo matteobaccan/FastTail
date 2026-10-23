@@ -193,6 +193,16 @@ pub struct FastTailConfig {
     /// default 2048).
     #[serde(default = "default_stdin_spool_max_mb")]
     pub stdin_spool_max_mb: u32,
+    /// Lines of backlog a system source (`journald://`, `docker://`) reads at open
+    /// (0..=1,000,000, default 10,000).
+    #[serde(default = "default_system_source_backlog_lines")]
+    pub system_source_backlog_lines: u32,
+    /// The program run for `docker://` sources (`docker`, or `podman`).
+    #[serde(default = "default_docker_command")]
+    pub docker_command: String,
+    /// The program run for `journald://` sources.
+    #[serde(default = "default_journalctl_command")]
+    pub journalctl_command: String,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -399,6 +409,18 @@ fn default_stdin_spool_max_mb() -> u32 {
     crate::stdin_source::DEFAULT_MAX_MB
 }
 
+fn default_system_source_backlog_lines() -> u32 {
+    crate::system_source::DEFAULT_BACKLOG_LINES
+}
+
+fn default_docker_command() -> String {
+    crate::system_source::DEFAULT_DOCKER_COMMAND.to_string()
+}
+
+fn default_journalctl_command() -> String {
+    crate::system_source::DEFAULT_JOURNALCTL_COMMAND.to_string()
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -452,6 +474,9 @@ impl Default for FastTailConfig {
             spool_dir: None,
             compressed_max_gb: default_compressed_max_gb(),
             stdin_spool_max_mb: default_stdin_spool_max_mb(),
+            system_source_backlog_lines: default_system_source_backlog_lines(),
+            docker_command: default_docker_command(),
+            journalctl_command: default_journalctl_command(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -751,6 +776,15 @@ impl FastTailConfig {
         )
     }
 
+    /// The programs and backlog of the system sources.
+    pub fn system_commands(&self) -> crate::system_source::Commands {
+        crate::system_source::Commands {
+            docker: self.docker_command.clone(),
+            journalctl: self.journalctl_command.clone(),
+            backlog: self.system_source_backlog_lines,
+        }
+    }
+
     pub fn to_ini(&self) -> Ini {
         let mut conf = Ini::new();
 
@@ -849,6 +883,12 @@ impl FastTailConfig {
             )
             .set("compressed_max_gb", self.compressed_max_gb.to_string())
             .set("stdin_spool_max_mb", self.stdin_spool_max_mb.to_string())
+            .set(
+                "system_source_backlog_lines",
+                self.system_source_backlog_lines.to_string(),
+            )
+            .set("docker_command", self.docker_command.clone())
+            .set("journalctl_command", self.journalctl_command.clone())
             .set("size_unit", unit_str)
             .set("palette_recent", self.palette_recent.join(","))
             .set("baretail_import", self.baretail_import.to_string())
@@ -1277,6 +1317,22 @@ impl FastTailConfig {
                         crate::settings_model::clamp(v, &crate::settings_model::STDIN_SPOOL_MAX_MB);
                 }
             }
+            if let Some(s) = general.get("system_source_backlog_lines") {
+                if let Ok(v) = s.parse::<u32>() {
+                    cfg.system_source_backlog_lines = crate::settings_model::clamp(
+                        v,
+                        &crate::settings_model::SYSTEM_SOURCE_BACKLOG_LINES,
+                    );
+                }
+            }
+            for (key, value) in [
+                ("docker_command", &mut cfg.docker_command),
+                ("journalctl_command", &mut cfg.journalctl_command),
+            ] {
+                if let Some(s) = general.get(key).map(str::trim).filter(|s| !s.is_empty()) {
+                    *value = s.to_string();
+                }
+            }
             if let Some(s) = general.get("size_unit") {
                 cfg.size_unit = match s.to_lowercase().as_str() {
                     "mb" => SizeUnit::MB,
@@ -1318,6 +1374,7 @@ impl FastTailConfig {
                 let kept = |p: &PathBuf| {
                     let source = crate::filter_tab::parse_identity(p).map_or(p.clone(), |(_, s)| s);
                     source.exists()
+                        || crate::system_source::is_system_path(&source)
                         || crate::wildcard::is_pattern_path(&source)
                         || crate::compressed::source_exists(&source)
                 };
@@ -2077,6 +2134,37 @@ mod tests {
         ini.with_section(Some("general"))
             .set("time_delta_gap_ms", "soon");
         assert_eq!(FastTailConfig::from_ini(&ini).time_delta_gap_ms, 1000);
+    }
+
+    #[test]
+    fn test_system_source_keys_round_trip_default_and_clamp() {
+        let cfg = FastTailConfig {
+            system_source_backlog_lines: 500,
+            docker_command: "podman".into(),
+            journalctl_command: "/usr/bin/journalctl".into(),
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.system_source_backlog_lines, 500);
+        assert_eq!(loaded.docker_command, "podman");
+        assert_eq!(loaded.journalctl_command, "/usr/bin/journalctl");
+
+        let mut old_style = Ini::new();
+        old_style.with_section(Some("general")).set("theme", "Tron");
+        let old = FastTailConfig::from_ini(&old_style);
+        assert_eq!(old.system_source_backlog_lines, 10_000);
+        assert_eq!(
+            (old.docker_command.as_str(), old.journalctl_command.as_str()),
+            ("docker", "journalctl")
+        );
+
+        let mut wild = Ini::new();
+        wild.with_section(Some("general"))
+            .set("system_source_backlog_lines", "99999999")
+            .set("docker_command", "  ");
+        let wild = FastTailConfig::from_ini(&wild);
+        assert_eq!(wild.system_source_backlog_lines, 1_000_000);
+        assert_eq!(wild.docker_command, "docker");
     }
 
     #[test]

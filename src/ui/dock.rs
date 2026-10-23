@@ -269,6 +269,10 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                             None if engine.is_stdin() => {
                                 crate::stdin_source::STDIN_TITLE.to_string()
                             }
+                            None if engine.system.is_some() => engine
+                                .system_uri()
+                                .map(crate::system_source::SystemUri::title)
+                                .unwrap_or_default(),
                             None => file_name.to_string(),
                         },
                     };
@@ -1242,17 +1246,50 @@ fn render_compressed_status(
     }
 }
 
+/// Stream bar part of a system source once its command ended: the exit code and the
+/// last line it wrote, and Reconnect.
+fn render_system_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    let Some((code, last)) = engine.system_end() else {
+        return;
+    };
+    ui.separator();
+    let ended = match code {
+        Some(code) => t(lang, "system_ended").replace("{0}", &code.to_string()),
+        None => t(lang, "system_ended_plain").to_string(),
+    };
+    let label = ui.label(
+        RichText::new(format!("⏹ {ended}"))
+            .monospace()
+            .color(theme.warn_color()),
+    );
+    if !last.is_empty() {
+        label.on_hover_text(last);
+    }
+    if ui
+        .button(format!("⟳ {}", t(lang, "system_reconnect")))
+        .on_hover_text(t(lang, "system_reconnect_tip"))
+        .clicked()
+    {
+        if let Some(s) = engine.system.as_mut() {
+            s.reconnect_requested = true;
+        }
+        ui.ctx().request_repaint();
+    }
+}
+
 /// Stream bar part of the standard-input stream: nothing while input flows, then that
 /// it ended (with the line count) or failed, and that earlier input was discarded when
 /// the spool restarted at its limit.
 fn render_stdin_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
     use crate::stdin_source::{InputState, RestartReason};
-    let Some(s) = engine.stdin.as_ref() else {
+    let Some(s) = engine.piped() else {
         return;
     };
     let tip = t(lang, "stdin_footer").replace("{path}", &s.spool_path().display().to_string());
     match s.state() {
         InputState::Reading => {}
+        // A system source says it ended with its exit code (`render_system_status`).
+        InputState::Ended if engine.system.is_some() => {}
         InputState::Ended => {
             ui.separator();
             ui.label(
@@ -1975,6 +2012,7 @@ fn render_log_stream(
         }
         render_compressed_status(ui, engine, theme, lang);
         render_stdin_status(ui, engine, theme, lang);
+        render_system_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
         if let Some(glob) = engine.folder.as_ref().map(|f| {
@@ -8237,13 +8275,16 @@ pub fn render_filters_content(
 
     let focus_path = focus.as_deref().cloned().flatten();
     for engine in engines.iter_mut() {
-        let file_name = if engine.is_stdin() {
-            Some(crate::stdin_source::STDIN_TITLE)
-        } else {
-            engine.path.file_name().and_then(|n| n.to_str())
-        }
-        .unwrap_or("Log")
-        .to_string();
+        let file_name = match engine.system_uri() {
+            Some(uri) => uri.title(),
+            None => if engine.is_stdin() {
+                Some(crate::stdin_source::STDIN_TITLE)
+            } else {
+                engine.path.file_name().and_then(|n| n.to_str())
+            }
+            .unwrap_or("Log")
+            .to_string(),
+        };
         let is_focus = focus_path
             .as_deref()
             .is_some_and(|p| paths_equal_fast(p, &engine.path));

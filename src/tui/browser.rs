@@ -190,6 +190,9 @@ impl FileBrowser {
     /// The typed text as a path: absolute as it is, else in the listed folder.
     fn typed_path(&self, text: &str) -> PathBuf {
         let p = PathBuf::from(text);
+        if crate::system_source::is_system_path(&p) {
+            return p;
+        }
         match &self.dir {
             Some(d) if !p.is_absolute() && !has_drive(text) => d.join(p),
             _ => p,

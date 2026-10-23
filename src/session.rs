@@ -683,6 +683,10 @@ pub fn relative_under(path: &Path, base: &Path) -> Option<String> {
 
 /// A file that exists, or a pattern whose directory exists.
 fn source_exists(p: &Path) -> bool {
+    // A system source is run again; whether it still exists is for its command to say.
+    if crate::system_source::is_system_path(p) {
+        return true;
+    }
     match FolderSpec::parse(p) {
         Some(spec) => spec.dir.is_dir(),
         None => p.is_file(),
