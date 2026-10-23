@@ -48,6 +48,8 @@ OPTIONS:
     --follow             Enable follow mode on the files opened from the command line
     --all                Open every file a pattern PATH matches as its own stream (in the
                          window, a folder group that also opens the files created later)
+    --listen <URL>       Receive lines on a local port: tcp://127.0.0.1:5140,
+                         udp://127.0.0.1:5140 or syslog://127.0.0.1:5514 (repeatable)
     --no-follow          Disable follow mode on those files
     --renderer <NAME>    Rendering backend of the window: auto (default), glow, wgpu,
                          software
@@ -372,6 +374,16 @@ impl CliArgs {
                         })?;
                     out.level_bytes = Some(n);
                 }
+                "--listen" => {
+                    let v = value("URL")?;
+                    if !crate::net_listener::is_listen_path(Path::new(&v)) {
+                        return Err(CliError::Usage(format!(
+                            "invalid listener '{v}' (expected tcp://, udp:// or syslog://ADDRESS:PORT)"
+                        )));
+                    }
+                    out.paths.push(PathBuf::from(v));
+                    out.path_lines.push(None);
+                }
                 "--line" => {
                     let v = value("number")?;
                     let n = v
@@ -600,6 +612,23 @@ fn resolve(arg: &str, cwd: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listen_urls_are_streams() {
+        let a = CliArgs::parse(
+            ["--listen", "syslog://127.0.0.1:5514", "udp://[::1]:9"],
+            &cwd(),
+        )
+        .unwrap();
+        assert_eq!(
+            a.paths,
+            [
+                PathBuf::from("syslog://127.0.0.1:5514"),
+                PathBuf::from("udp://[::1]:9")
+            ]
+        );
+        assert!(CliArgs::parse(["--listen", "app.log"], &cwd()).is_err());
+    }
 
     #[test]
     fn system_source_uris_are_kept_as_written() {

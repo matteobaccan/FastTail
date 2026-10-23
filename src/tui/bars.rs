@@ -313,6 +313,26 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             BarChip::SourceEnded,
         ));
     }
+    if let Some(l) = e.listener.as_ref() {
+        let at = l
+            .bound
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut status = txf(
+            lang,
+            "listening on {0} · {1} connections · {2} dropped",
+            &[&at, &l.connections(), &l.dropped()],
+        );
+        status.push_str(" · ");
+        status.push_str(&txf(lang, "{0} lines/s", &[&l.lines_per_sec()]));
+        if l.refused() > 0 {
+            status.push_str(" · ");
+            status.push_str(&txf(lang, "{0} refused", &[&l.refused()]));
+        }
+        second.push(text(status, if l.dropped() > 0 { warn } else { dim }));
+    }
     if let Some((code, _)) = e.system_end() {
         let ended = match code {
             Some(code) => txf(lang, "ended (exit {0})", &[&code]),

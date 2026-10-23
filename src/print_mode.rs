@@ -340,6 +340,8 @@ impl Input {
         if crate::system_source::is_system_path(&path) {
             let hint = if crate::ssh_source::is_ssh_path(&path) {
                 "ssh host tail -F /path"
+            } else if crate::net_listener::is_listen_path(&path) {
+                "nc -lk PORT"
             } else {
                 "docker logs ..."
             };

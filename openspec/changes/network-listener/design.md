@@ -87,6 +87,22 @@ the 512 MB free-space margin, with the stdin restart-from-empty rule. The UI thr
 reads counters. Closing the stream closes the sockets (connections see a reset) and
 deletes the spool.
 
+## Decisions taken at implementation (2026-10-23)
+
+- The single writer is the standard-input copier: its input (`ListenerInput`) reads the
+  bounded channel and applies the rate limit there, so no writer thread of its own.
+- Readers of TCP connections wait (short sleeps) while the channel is full, which slows
+  the sender; UDP readers drop and count.
+- A port that cannot be bound is reported when the stream opens (no stream, no Retry
+  button in this part); a restored workspace reports it the same way.
+- Bookmarks of listener streams are not saved.
+- Closing joins the acceptor and UDP threads (at most one 200 ms poll), so the port is
+  free for a listener opened again right after (a session reloaded).
+- A TCP connection silent for 10 minutes is closed, so idle connections cannot hold every
+  slot; the slot is given back by a guard however the reader ends.
+- The stream bar also shows lines per second and, once any, the refused connections.
+- Facility is not shown (open question 2), and senders share one stream (question 1).
+
 ## Risks / Trade-offs
 
 - [A LAN-bound listener lets anyone write lines into the view] → loopback by default,

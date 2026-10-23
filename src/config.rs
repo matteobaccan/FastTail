@@ -214,6 +214,14 @@ pub struct FastTailConfig {
     /// lines).
     #[serde(default = "default_remote_initial_mb")]
     pub remote_initial_mb: u32,
+    /// Size in MB at which a listener stream's spool restarts from empty (64..=65536).
+    #[serde(default = "default_listener_spool_max_mb")]
+    pub listener_spool_max_mb: u32,
+    /// Rate limit of a listener stream: lines and MB per second.
+    #[serde(default = "default_listener_max_lines_per_sec")]
+    pub listener_max_lines_per_sec: u32,
+    #[serde(default = "default_listener_max_mb_per_sec")]
+    pub listener_max_mb_per_sec: u32,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -444,6 +452,18 @@ fn default_remote_initial_mb() -> u32 {
     crate::ssh_source::DEFAULT_REMOTE_INITIAL_MB
 }
 
+fn default_listener_spool_max_mb() -> u32 {
+    crate::net_listener::DEFAULT_SPOOL_MAX_MB
+}
+
+fn default_listener_max_lines_per_sec() -> u32 {
+    crate::net_listener::DEFAULT_MAX_LINES_PER_SEC
+}
+
+fn default_listener_max_mb_per_sec() -> u32 {
+    crate::net_listener::DEFAULT_MAX_MB_PER_SEC
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -503,6 +523,9 @@ impl Default for FastTailConfig {
             ssh_program: default_ssh_program(),
             remote_spool_max_mb: default_remote_spool_max_mb(),
             remote_initial_mb: default_remote_initial_mb(),
+            listener_spool_max_mb: default_listener_spool_max_mb(),
+            listener_max_lines_per_sec: default_listener_max_lines_per_sec(),
+            listener_max_mb_per_sec: default_listener_max_mb_per_sec(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -822,6 +845,22 @@ impl FastTailConfig {
         }
     }
 
+    /// The rate limit of listener streams.
+    pub fn listener_limits(&self) -> crate::net_listener::Limits {
+        crate::net_listener::Limits {
+            lines_per_sec: self.listener_max_lines_per_sec,
+            bytes_per_sec: u64::from(self.listener_max_mb_per_sec) << 20,
+        }
+    }
+
+    /// Where listener streams are spooled and how far a spool may grow.
+    pub fn listener_spool_settings(&self) -> crate::stdin_source::Settings {
+        crate::stdin_source::Settings::from_config(
+            self.spool_dir.as_deref(),
+            self.listener_spool_max_mb,
+        )
+    }
+
     /// Where remote streams are spooled and how far a spool may grow.
     pub fn remote_spool_settings(&self) -> crate::stdin_source::Settings {
         crate::stdin_source::Settings::from_config(
@@ -937,6 +976,18 @@ impl FastTailConfig {
             .set("ssh_program", self.ssh_program.clone())
             .set("remote_spool_max_mb", self.remote_spool_max_mb.to_string())
             .set("remote_initial_mb", self.remote_initial_mb.to_string())
+            .set(
+                "listener_spool_max_mb",
+                self.listener_spool_max_mb.to_string(),
+            )
+            .set(
+                "listener_max_lines_per_sec",
+                self.listener_max_lines_per_sec.to_string(),
+            )
+            .set(
+                "listener_max_mb_per_sec",
+                self.listener_max_mb_per_sec.to_string(),
+            )
             .set("size_unit", unit_str)
             .set("palette_recent", self.palette_recent.join(","))
             .set("baretail_import", self.baretail_import.to_string())
@@ -1379,6 +1430,28 @@ impl FastTailConfig {
             {
                 cfg.remote_spool_max_mb =
                     crate::settings_model::clamp(v, &crate::settings_model::STDIN_SPOOL_MAX_MB);
+            }
+            use crate::settings_model as model;
+            for (key, value, range) in [
+                (
+                    "listener_spool_max_mb",
+                    &mut cfg.listener_spool_max_mb,
+                    model::STDIN_SPOOL_MAX_MB,
+                ),
+                (
+                    "listener_max_lines_per_sec",
+                    &mut cfg.listener_max_lines_per_sec,
+                    model::LISTENER_MAX_LINES_PER_SEC,
+                ),
+                (
+                    "listener_max_mb_per_sec",
+                    &mut cfg.listener_max_mb_per_sec,
+                    model::LISTENER_MAX_MB_PER_SEC,
+                ),
+            ] {
+                if let Some(v) = general.get(key).and_then(|s| s.parse::<u32>().ok()) {
+                    *value = model::clamp(v, &range);
+                }
             }
             if let Some(v) = general
                 .get("remote_initial_mb")
@@ -2228,6 +2301,47 @@ mod tests {
         let wild = FastTailConfig::from_ini(&wild);
         assert_eq!(wild.system_source_backlog_lines, 1_000_000);
         assert_eq!(wild.docker_command, "docker");
+    }
+
+    #[test]
+    fn test_listener_keys_round_trip_default_and_clamp() {
+        let cfg = FastTailConfig {
+            listener_spool_max_mb: 256,
+            listener_max_lines_per_sec: 500,
+            listener_max_mb_per_sec: 2,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(
+            (
+                loaded.listener_spool_max_mb,
+                loaded.listener_max_lines_per_sec,
+                loaded.listener_max_mb_per_sec
+            ),
+            (256, 500, 2)
+        );
+        assert_eq!(loaded.listener_limits().bytes_per_sec, 2 << 20);
+        let old = FastTailConfig::from_ini(&Ini::new());
+        assert_eq!(
+            (
+                old.listener_spool_max_mb,
+                old.listener_max_lines_per_sec,
+                old.listener_max_mb_per_sec
+            ),
+            (2048, 20_000, 16)
+        );
+        let mut wild = Ini::new();
+        wild.with_section(Some("general"))
+            .set("listener_max_lines_per_sec", "1")
+            .set("listener_max_mb_per_sec", "99999");
+        let wild = FastTailConfig::from_ini(&wild);
+        assert_eq!(
+            (
+                wild.listener_max_lines_per_sec,
+                wild.listener_max_mb_per_sec
+            ),
+            (100, 1024)
+        );
     }
 
     #[test]

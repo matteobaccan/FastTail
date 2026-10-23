@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Network listener.** `fasttail --listen syslog://127.0.0.1:5514` (also `tcp://` and
+  `udp://` URLs, as paths too) receives log lines on a local port as a stream. Before, the
+  only way was a separate syslog server or `nc -lk 5140 | fasttail -` (no `nc` on Windows).
+  Syslog (RFC 5424 and 3164) is rendered as `<time> <LEVEL> <host> <app>[<pid>]: <msg>`,
+  octet counting over TCP is detected, UDP and syslog lines carry the sender, loopback is
+  the default, at most 64 TCP connections, 64 KB per message, a rate limit with dropped
+  lines counted and noted. Kept in the workspace and sessions. New `fasttail.ini` keys:
+  `listener_spool_max_mb`, `listener_max_lines_per_sec`, `listener_max_mb_per_sec`. First
+  part of `network-listener`; the Listen dialog and the Settings fields follow.
+
+### Added
+
 - **Remote pattern streams.** `ssh://web1/var/log/app-*.log` follows the newest match on
   the server, lists the folder every 10 seconds and switches to a newer file with a notice,
   as local pattern streams do; only `*` and `?` reach the remote shell unquoted.

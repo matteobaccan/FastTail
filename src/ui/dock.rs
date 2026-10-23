@@ -1245,6 +1245,47 @@ fn render_compressed_status(
     }
 }
 
+/// Stream bar part of a listener: where it listens, the connections and the lines
+/// dropped, and a warning when other machines can reach it.
+fn render_listener_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
+    let Some(l) = engine.listener.as_ref() else {
+        return;
+    };
+    ui.separator();
+    let at = l
+        .bound
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut text = t(lang, "listen_status")
+        .replace("{0}", &at)
+        .replace("{1}", &l.connections().to_string())
+        .replace("{2}", &l.dropped().to_string());
+    text.push_str(" · ");
+    text.push_str(&t(lang, "listen_rate").replace("{0}", &l.lines_per_sec().to_string()));
+    if l.refused() > 0 {
+        text.push_str(" · ");
+        text.push_str(&t(lang, "listen_refused").replace("{0}", &l.refused().to_string()));
+    }
+    let color = if l.dropped() > 0 {
+        theme.warn_color()
+    } else {
+        theme.text_dim()
+    };
+    ui.label(RichText::new(format!("📡 {text}")).monospace().color(color))
+        .on_hover_text(l.spec.to_uri());
+    if l.spec.is_exposed() {
+        ui.label(
+            RichText::new(format!("⚠ {}", t(lang, "listen_exposed")))
+                .monospace()
+                .color(theme.warn_color()),
+        );
+    }
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs(1));
+}
+
 /// Stream bar part of a remote file: its connection state (the client's messages in the
 /// tooltip), and Disconnect or Reconnect.
 fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
@@ -1350,7 +1391,8 @@ fn render_stdin_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lan
     match s.state() {
         InputState::Reading => {}
         // A system source says it ended with its exit code (`render_system_status`).
-        InputState::Ended if engine.system.is_some() || engine.ssh.is_some() => {}
+        InputState::Ended
+            if engine.system.is_some() || engine.ssh.is_some() || engine.listener.is_some() => {}
         InputState::Ended => {
             ui.separator();
             ui.label(
@@ -2076,6 +2118,7 @@ fn render_log_stream(
         render_stdin_status(ui, engine, theme, lang);
         render_system_status(ui, engine, theme, lang);
         render_ssh_status(ui, engine, theme, lang);
+        render_listener_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
         if let Some(glob) = engine.folder.as_ref().map(|f| {
