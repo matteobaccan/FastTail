@@ -657,6 +657,7 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex_hint",
         "fields_regex_invalid",
         "fields_format_missing",
+        "query_err_sort_rows",
         "query_title",
         "query_hint",
         "query_run",

@@ -171,6 +171,17 @@ fn result(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Langua
         return;
     };
     let generation = q.generation;
+    // Error positions are bytes of the query; shown as characters.
+    let char_at = |pos: usize| {
+        q.text
+            .get(..pos.min(q.text.len()))
+            .map_or(pos, |s| s.chars().count())
+    };
+    let error_char = q
+        .result
+        .as_ref()
+        .and_then(|r| r.as_ref().err())
+        .map(|e| char_at(e.pos));
     let Some(res) = q.result.as_mut() else {
         return;
     };
@@ -179,7 +190,7 @@ fn result(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Langua
             let msg = t(lang, e.key);
             let text = t(lang, "query_error")
                 .replace("{0}", &e.stage.to_string())
-                .replace("{1}", &(e.pos + 1).to_string())
+                .replace("{1}", &(error_char.unwrap_or(e.pos) + 1).to_string())
                 .replace("{2}", msg);
             let text = if e.detail.is_empty() {
                 text
@@ -252,7 +263,7 @@ fn result(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Langua
                     }
                 }
             });
-            let jump_lines = table.lines.clone();
+            let jump_lines = table.lines.as_deref();
             let mut jump = None;
             egui::ScrollArea::vertical()
                 .id_salt(id.with("v"))
@@ -282,7 +293,7 @@ fn result(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Langua
                         if jump_lines.is_some() {
                             let resp = resp.on_hover_text(t(lang, "query_jump_tip"));
                             if resp.double_clicked() {
-                                jump = jump_lines.as_ref().and_then(|l| l.get(r).copied());
+                                jump = jump_lines.and_then(|l| l.get(r).copied());
                             }
                         }
                     }

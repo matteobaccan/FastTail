@@ -7903,17 +7903,23 @@ impl TailEngine {
 
     /// Starts a query waiting for the view, and takes the result of a finished one.
     fn poll_query(&mut self) {
-        let settled = self.stats_view_settled(false);
-        let visible = if self.is_filter_active() {
-            VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
-        } else {
-            VisibleSet::All
-        };
-        let (file, range) = self.full_scan_range();
-        let Some(q) = self.query.as_mut() else {
+        let Some(q) = self.query.as_ref() else {
             return;
         };
-        if q.job.is_none() && settled {
+        if q.job.is_none() {
+            // A query waits for the view to settle; the visible set is copied only then.
+            if q.pending.is_none() || !self.stats_view_settled(false) {
+                return;
+            }
+            let visible = if self.is_filter_active() {
+                VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+            } else {
+                VisibleSet::All
+            };
+            let (file, range) = self.full_scan_range();
+            let Some(q) = self.query.as_mut() else {
+                return;
+            };
             if let Some(query) = q.pending.take() {
                 q.progress = 0.0;
                 q.job = Some(ScanJob::spawn(
@@ -7925,6 +7931,9 @@ impl TailEngine {
             }
             return;
         }
+        let Some(q) = self.query.as_mut() else {
+            return;
+        };
         let Some(job) = q.job.as_ref() else {
             return;
         };

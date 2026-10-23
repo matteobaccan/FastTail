@@ -67,6 +67,14 @@ handle with the engine's sharing flags (Windows writers not blocked).
   query names `ts`, `_slice` or uses `timeslice` (or shows the default columns), and reads
   levels only when it names `level`.
 - The history keeps the query on one line (an ini value cannot hold a line break).
+- A `/` opens a regex only where a token starts (`path=/api/x` is text). `sort` blocks
+  like `stats`: line stages after either are refused when the query is parsed, and a
+  second `stats` too. A `sort` of rows may name a field the columns lack (read, then
+  dropped); `sort … | head N` keeps the true first N past the 100,000-row cap, a `sort`
+  without `head` over more rows is an error instead of a partial answer.
+- `stats` without `by` over no line still gives one row (`count()` 0). The group key and
+  the values go through reused buffers; `dc` keeps at most 1,000,000 values over the
+  whole query. Error positions are bytes, shown as characters.
 
 ## Risks / Trade-offs
 

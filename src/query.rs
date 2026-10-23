@@ -37,8 +37,9 @@ pub const MAX_STAGES: usize = 16;
 /// Most rows of a result, and most groups of a `stats`.
 pub const MAX_ROWS: usize = 100_000;
 pub const MAX_GROUPS: usize = 100_000;
-/// Distinct values `dc` counts exactly.
+/// Distinct values one `dc` counts exactly, and all of them together.
 const MAX_DISTINCT: usize = 100_000;
+const MAX_DISTINCT_TOTAL: usize = 1_000_000;
 
 /// Why a query does not run: the stage (1-based, 0 for the whole query), the byte where
 /// it goes wrong, an i18n key and a detail in the query's own words.
@@ -142,17 +143,23 @@ fn split_stages(text: &str) -> Vec<(usize, &str)> {
     let b = text.as_bytes();
     let (mut out, mut start, mut i) = (Vec::new(), 0usize, 0usize);
     let (mut quote, mut slash) = (false, false);
+    // A `/` opens a regex only where a token starts, as in `filter_expr` (so the slashes
+    // of `path=/api/x` are text).
+    let mut token_start = true;
     while i < b.len() {
-        match b[i] {
+        let c = b[i];
+        match c {
             b'\\' if quote || slash => i += 1,
             b'"' if !slash => quote = !quote,
-            b'/' if !quote => slash = !slash,
+            b'/' if slash => slash = false,
+            b'/' if !quote && token_start => slash = true,
             b'|' if !quote && !slash => {
                 out.push((start, &text[start..i]));
                 start = i + 1;
             }
             _ => {}
         }
+        token_start = !quote && !slash && (c.is_ascii_whitespace() || matches!(c, b'(' | b'|'));
         i += 1;
     }
     out.push((start, &text[start..]));
@@ -274,7 +281,9 @@ impl Query {
             ));
         }
         let mut stages = Vec::new();
-        let mut aggregated = false;
+        // Past a `stats` or `sort` the stages act on the table: no more line stages.
+        let mut blocked = false;
+        let mut stats_seen = false;
         for (i, (at, raw)) in parts.iter().enumerate() {
             let n = i + 1;
             let lead = raw.len() - raw.trim_start().len();
@@ -288,11 +297,15 @@ impl Query {
                 return Err(QueryError::new(n, at, "query_err_empty_stage", ""));
             }
             let (word, rest) = part.split_once(char::is_whitespace).unwrap_or((part, ""));
-            let rest_at = at + word.len() + (rest.len() - rest.trim_start().len()) + 1;
+            let sep = part[word.len()..].chars().next().map_or(0, char::len_utf8);
+            let rest_at = at + word.len() + sep + (rest.len() - rest.trim_start().len());
             let rest = rest.trim();
             let line_stage = matches!(word, "where" | "parse" | "timeslice");
-            if line_stage && aggregated {
+            if line_stage && blocked {
                 return Err(QueryError::new(n, at, "query_err_after_stats", word));
+            }
+            if word == "stats" && stats_seen {
+                return Err(QueryError::new(n, at, "query_err_two_stats", word));
             }
             let stage = match word {
                 "where" => match FilterExpr::compile(rest, toggles) {
@@ -333,10 +346,12 @@ impl Query {
                 ),
                 "fields" => Stage::Fields(names(rest, n, rest_at)?),
                 "stats" => {
-                    aggregated = true;
+                    blocked = true;
+                    stats_seen = true;
                     parse_stats(rest, n, rest_at)?
                 }
                 "sort" => {
+                    blocked = true;
                     let mut cols = Vec::new();
                     for c in rest.split(',') {
                         let c = c.trim();
@@ -499,8 +514,9 @@ impl AggState {
         }
     }
 
-    /// Adds a value; returns false when a number was wanted and `v` is none.
-    fn add(&mut self, v: Option<&str>) -> bool {
+    /// Adds a value; returns false when a number was wanted and `v` is none. `dc_left`:
+    /// the distinct values every `dc` of the query may still keep.
+    fn add(&mut self, v: Option<&str>, dc_left: &mut usize) -> bool {
         let num = || v.and_then(parse_number);
         match self {
             AggState::Count(n) => {
@@ -525,9 +541,11 @@ impl AggState {
             },
             AggState::Dc(set, capped) => {
                 if let Some(v) = v {
-                    if set.len() < MAX_DISTINCT {
+                    if set.contains(v) {
+                    } else if set.len() < MAX_DISTINCT && *dc_left > 0 {
                         set.insert(v.into());
-                    } else if !set.contains(v) {
+                        *dc_left -= 1;
+                    } else {
                         *capped = true;
                     }
                 }
@@ -543,7 +561,13 @@ impl AggState {
             }
             AggState::Last(l) => {
                 if let Some(v) = v {
-                    *l = Some(v.to_string());
+                    match l {
+                        Some(s) => {
+                            s.clear();
+                            s.push_str(v);
+                        }
+                        None => *l = Some(v.to_string()),
+                    }
                 }
             }
         }
@@ -592,8 +616,9 @@ struct LineCtx<'a> {
     parser: Option<&'a FieldParser>,
     spans: &'a mut FieldSpans,
     scanned: bool,
-    /// `parse` captures: name and byte range in the line.
-    captures: &'a mut Vec<(String, (usize, usize))>,
+    /// `parse` captures: the name (in `names`) and byte range in the line.
+    captures: &'a [(usize, (usize, usize))],
+    names: &'a [String],
     slice: Option<i64>,
 }
 
@@ -619,7 +644,12 @@ impl LineCtx<'_> {
             }
             _ => {}
         }
-        if let Some((_, (a, b))) = self.captures.iter().rev().find(|(n, _)| n == name) {
+        if let Some((_, (a, b))) = self
+            .captures
+            .iter()
+            .rev()
+            .find(|(n, _)| self.names[*n] == name)
+        {
             return Some(Cow::Borrowed(&self.line.text[*a..*b]));
         }
         let parser = self.parser?;
@@ -631,7 +661,47 @@ impl LineCtx<'_> {
             .get(self.line.text, name)
             .map(|f| Cow::Owned(f.value().into_owned()))
     }
+
+    /// The value of `name` into `out` (cleared first, its capacity reused); whether the
+    /// line has it.
+    fn get_into(&mut self, name: &str, out: &mut String) -> bool {
+        out.clear();
+        if name == "line" {
+            use std::fmt::Write;
+            let _ = write!(out, "{}", self.line.idx + 1);
+            return true;
+        }
+        // Parser fields are copied from the spans without a temporary when not decoded.
+        if !matches!(name, "text" | "level" | "ts" | "_slice")
+            && !self.captures.iter().any(|(n, _)| self.names[*n] == name)
+        {
+            let Some(parser) = self.parser else {
+                return false;
+            };
+            if !self.scanned {
+                crate::fields::scan(parser, self.line.text, self.spans);
+                self.scanned = true;
+            }
+            return match self.spans.get(self.line.text, name) {
+                Some(f) => {
+                    out.push_str(&f.value());
+                    true
+                }
+                None => false,
+            };
+        }
+        match self.get(name) {
+            Some(v) => {
+                out.push_str(&v);
+                true
+            }
+            None => false,
+        }
+    }
 }
+
+/// The capture slots of a `parse` stage and its `(group, name)` pairs.
+type ParseSlots = (regex::CaptureLocations, Vec<(usize, usize)>);
 
 /// Runs a query over lines pushed in order.
 pub struct Executor<'q> {
@@ -640,14 +710,26 @@ pub struct Executor<'q> {
     /// The first `stats` or `sort`: the stages before it act on lines.
     split: usize,
     spans: FieldSpans,
-    captures: Vec<(String, (usize, usize))>,
+    /// `parse` captures of the current line, the names they refer to, and per `parse`
+    /// stage its capture slots and `(group, name)` pairs.
+    captures: Vec<(usize, (usize, usize))>,
+    names: Vec<String>,
+    parse_slots: Vec<Option<ParseSlots>>,
     /// Lines that passed every line stage so far, per `head` before the split.
     heads: Vec<usize>,
     rows: Vec<Vec<String>>,
     lines: Vec<usize>,
     columns: Vec<String>,
+    /// Columns added only for a `sort` that names them, dropped at the end.
+    extra_columns: usize,
+    /// A `sort … | head N` over rows keeps only the first N as it goes.
+    top_k: Option<usize>,
     groups: HashMap<Vec<String>, Vec<AggState>>,
     group_order: Vec<Vec<String>>,
+    /// Reused per line: the group key and the aggregate values.
+    key_buf: Vec<String>,
+    val_buf: Vec<(bool, String)>,
+    dc_left: usize,
     truncated: bool,
     lines_read: u64,
     skipped_values: u64,
@@ -663,7 +745,7 @@ impl<'q> Executor<'q> {
             .position(|s| matches!(s, Stage::Stats { .. } | Stage::Sort(_)))
             .unwrap_or(query.stages.len());
         // The columns of row results: the last `fields` before the split, or the line.
-        let columns = query.stages[..split]
+        let mut columns = query.stages[..split]
             .iter()
             .rev()
             .find_map(|s| match s {
@@ -671,18 +753,63 @@ impl<'q> Executor<'q> {
                 _ => None,
             })
             .unwrap_or_else(|| vec!["line".into(), "ts".into(), "level".into(), "text".into()]);
+        // A `sort` of rows may name a field the columns lack: read it, drop it later.
+        let mut extra_columns = 0;
+        let mut top_k = None;
+        if let Some(Stage::Sort(cols)) = query.stages.get(split) {
+            for (name, _) in cols {
+                if !columns.contains(name) {
+                    columns.push(name.clone());
+                    extra_columns += 1;
+                }
+            }
+            top_k = match query.stages.get(split + 1) {
+                Some(Stage::Head(n)) => Some(*n),
+                _ => None,
+            };
+        }
+        let mut names: Vec<String> = Vec::new();
+        let parse_slots = query
+            .stages
+            .iter()
+            .map(|s| match s {
+                Stage::Parse(re) => {
+                    let pairs = re
+                        .capture_names()
+                        .enumerate()
+                        .filter_map(|(g, n)| {
+                            let n = n?;
+                            let id = names.iter().position(|x| x == n).unwrap_or_else(|| {
+                                names.push(n.to_string());
+                                names.len() - 1
+                            });
+                            Some((g, id))
+                        })
+                        .collect();
+                    Some((re.capture_locations(), pairs))
+                }
+                _ => None,
+            })
+            .collect();
         Self {
             query,
             parser,
             split,
             spans: FieldSpans::new(),
             captures: Vec::new(),
+            names,
+            parse_slots,
             heads: vec![0; query.stages.len()],
             rows: Vec::new(),
             lines: Vec::new(),
             columns,
+            extra_columns,
+            top_k,
             groups: HashMap::new(),
             group_order: Vec::new(),
+            key_buf: Vec::new(),
+            val_buf: Vec::new(),
+            dc_left: MAX_DISTINCT_TOTAL,
             truncated: false,
             lines_read: 0,
             skipped_values: 0,
@@ -695,6 +822,11 @@ impl<'q> Executor<'q> {
     /// error).
     pub fn wants_more(&self) -> bool {
         !self.done
+    }
+
+    fn fail(&mut self, stage: usize, key: &'static str, detail: String) {
+        self.error = Some(QueryError::new(stage, 0, key, detail));
+        self.done = true;
     }
 
     /// One line, in file order.
@@ -717,10 +849,12 @@ impl<'q> Executor<'q> {
                     }
                 }
                 Stage::Parse(re) => {
-                    if let Some(caps) = re.captures(line.text) {
-                        for name in re.capture_names().flatten() {
-                            if let Some(m) = caps.name(name) {
-                                self.captures.push((name.to_string(), (m.start(), m.end())));
+                    if let Some((locs, pairs)) = self.parse_slots[i].as_mut() {
+                        if re.captures_read(locs, line.text).is_some() {
+                            for &(g, id) in pairs.iter() {
+                                if let Some(range) = locs.get(g) {
+                                    self.captures.push((id, range));
+                                }
                             }
                         }
                     }
@@ -745,66 +879,103 @@ impl<'q> Executor<'q> {
             parser: self.parser.as_deref(),
             spans: &mut self.spans,
             scanned: false,
-            captures: &mut self.captures,
+            captures: &self.captures,
+            names: &self.names,
             slice,
         };
         match self.query.stages.get(self.split) {
             Some(Stage::Stats { aggs, by }) => {
-                let key: Vec<String> = by
-                    .iter()
-                    .map(|k| ctx.get(k).map(|v| v.into_owned()).unwrap_or_default())
-                    .collect();
-                if !self.groups.contains_key(&key) {
+                // The key and the values into reused buffers: no allocation per line
+                // unless the group is new.
+                self.key_buf.resize_with(by.len(), String::new);
+                for (k, out) in by.iter().zip(self.key_buf.iter_mut()) {
+                    ctx.get_into(k, out);
+                }
+                self.val_buf.resize_with(aggs.len(), Default::default);
+                for (a, out) in aggs.iter().zip(self.val_buf.iter_mut()) {
+                    out.0 = match &a.arg {
+                        Some(arg) => ctx.get_into(arg, &mut out.1),
+                        None => {
+                            out.1.clear();
+                            true
+                        }
+                    };
+                }
+                if !self.groups.contains_key(&self.key_buf) {
                     if self.groups.len() >= MAX_GROUPS {
-                        self.error = Some(QueryError::new(
+                        self.fail(
                             self.split + 1,
-                            0,
                             "query_err_too_many_groups",
                             MAX_GROUPS.to_string(),
-                        ));
-                        self.done = true;
+                        );
                         return;
                     }
-                    self.group_order.push(key.clone());
+                    self.group_order.push(self.key_buf.clone());
                     self.groups.insert(
-                        key.clone(),
+                        self.key_buf.clone(),
                         aggs.iter().map(|a| AggState::new(a.func)).collect(),
                     );
                 }
                 let mut skipped = 0;
-                // The values first: `ctx` borrows the spans the group map does not.
-                let values: Vec<Option<String>> = aggs
-                    .iter()
-                    .map(|a| match &a.arg {
-                        Some(arg) => ctx.get(arg).map(|v| v.into_owned()),
-                        None => Some(String::new()),
-                    })
-                    .collect();
-                if let Some(states) = self.groups.get_mut(&key) {
-                    for (st, v) in states.iter_mut().zip(&values) {
-                        if !st.add(v.as_deref()) {
+                if let Some(states) = self.groups.get_mut(&self.key_buf) {
+                    for (st, (present, v)) in states.iter_mut().zip(&self.val_buf) {
+                        let v = present.then_some(v.as_str());
+                        if !st.add(v, &mut self.dc_left) {
                             skipped += 1;
                         }
                     }
                 }
                 self.skipped_values += skipped;
             }
-            _ => {
-                // Row results (sorted later when a `sort` follows).
-                if self.rows.len() >= MAX_ROWS {
-                    self.truncated = true;
-                    self.done = true;
-                    return;
+            split => {
+                let mut row: Vec<String> = Vec::with_capacity(self.columns.len());
+                for c in &self.columns {
+                    let mut v = String::new();
+                    ctx.get_into(c, &mut v);
+                    row.push(v);
                 }
-                let row = self
-                    .columns
-                    .iter()
-                    .map(|c| ctx.get(c).map(|v| v.into_owned()).unwrap_or_default())
-                    .collect();
                 self.rows.push(row);
                 self.lines.push(line.idx);
+                if let Some(Stage::Sort(cols)) = split {
+                    match self.top_k {
+                        // `sort … | head N`: the first N kept as the lines come.
+                        Some(k) if self.rows.len() >= (2 * k).max(1024) => {
+                            self.keep_top(cols, k);
+                        }
+                        None if self.rows.len() > MAX_ROWS => {
+                            self.fail(self.split + 1, "query_err_sort_rows", MAX_ROWS.to_string());
+                        }
+                        _ => {}
+                    }
+                } else if self.rows.len() >= MAX_ROWS {
+                    self.truncated = true;
+                    self.done = true;
+                }
             }
         }
+    }
+
+    /// Sorts the rows by `cols` (stable: equal rows keep their line order) and keeps `k`.
+    fn keep_top(&mut self, cols: &[(String, bool)], k: usize) {
+        let mut t = Table {
+            columns: std::mem::take(&mut self.columns),
+            rows: std::mem::take(&mut self.rows),
+            lines: Some(std::mem::take(&mut self.lines)),
+            ..Table::default()
+        };
+        for (name, desc) in cols.iter().rev() {
+            if let Some(col) = t.columns.iter().position(|c| c == name) {
+                stable_sort(&mut t, col, *desc);
+            }
+        }
+        if t.rows.len() > k {
+            t.rows.truncate(k);
+            self.truncated = true;
+        }
+        self.columns = t.columns;
+        self.rows = t.rows;
+        self.lines = t.lines.unwrap_or_default();
+        self.lines.truncate(k);
     }
 
     /// The result, once every line was pushed (or `wants_more` turned false).
@@ -816,7 +987,7 @@ impl<'q> Executor<'q> {
             Some(Stage::Stats { aggs, by }) => {
                 let mut columns = by.clone();
                 columns.extend(aggs.iter().map(|a| a.name.clone()));
-                let rows = self
+                let mut rows: Vec<Vec<String>> = self
                     .group_order
                     .iter()
                     .map(|key| {
@@ -826,6 +997,14 @@ impl<'q> Executor<'q> {
                         row
                     })
                     .collect();
+                // Without `by`, one row even when no line matched (`count()` is 0).
+                if by.is_empty() && rows.is_empty() {
+                    rows.push(
+                        aggs.iter()
+                            .map(|a| AggState::new(a.func).value(a.func))
+                            .collect(),
+                    );
+                }
                 Table {
                     columns,
                     rows,
@@ -848,6 +1027,7 @@ impl<'q> Executor<'q> {
             Some(Stage::Stats { .. }) => self.split + 1,
             _ => self.split,
         };
+        let mut extra = self.extra_columns;
         for (i, stage) in self.query.stages.iter().enumerate().skip(start) {
             match stage {
                 Stage::Sort(cols) => {
@@ -885,14 +1065,24 @@ impl<'q> Executor<'q> {
                     for r in &mut table.rows {
                         *r = idx.iter().map(|&k| std::mem::take(&mut r[k])).collect();
                     }
+                    // The projection decided the columns.
+                    extra = 0;
                 }
-                // Only `sort` can sit at the split itself (line stages come before).
+                // The parser refuses these orders; kept for an `Executor` built by hand.
                 Stage::Stats { .. } => {
                     return Err(QueryError::new(i + 1, 0, "query_err_two_stats", ""));
                 }
                 Stage::Where(_) | Stage::Parse(_) | Stage::Timeslice(_) => {
                     return Err(QueryError::new(i + 1, 0, "query_err_after_stats", ""));
                 }
+            }
+        }
+        // The columns read only for a sort.
+        if extra > 0 {
+            let keep = table.columns.len() - extra;
+            table.columns.truncate(keep);
+            for r in &mut table.rows {
+                r.truncate(keep);
             }
         }
         Ok(table)
@@ -1094,5 +1284,64 @@ mod tests {
         assert_eq!(parse_duration("90s"), Some(90_000));
         assert_eq!(parse_duration("1d"), Some(86_400_000));
         assert_eq!(parse_duration("0m"), None);
+    }
+
+    #[test]
+    fn review_cases() {
+        // Slashes inside a word are text, a `|` after them still splits.
+        let paths: Vec<String> = (0..10)
+            .map(|i| {
+                format!(
+                    "path=/api/x/{} status={}",
+                    i % 2,
+                    if i < 4 { 500 } else { 200 }
+                )
+            })
+            .collect();
+        let t = table(
+            "where path=/api/x/1 | stats count() by status | sort status",
+            &paths,
+        );
+        assert_eq!(t.rows, vec![vec!["200", "3"], vec!["500", "2"]]);
+        // A sort may name a field the columns lack; it is read, then dropped.
+        let t = table("where status=500 | sort -ms | head 2", &access());
+        assert_eq!(t.columns, ["line", "ts", "level", "text"]);
+        assert_eq!(t.rows.len(), 2);
+        assert!(t.rows[0][3].contains("ms=99"), "{:?}", t.rows[0]);
+        // `stats` without `by` over no line: one row.
+        let t = table("where status=999 | stats count(), sum(ms)", &access());
+        assert_eq!(t.rows, vec![vec!["0", ""]]);
+        // Orders refused before any line is read.
+        let e = |text: &str| Query::parse(text, true, false, false).unwrap_err().key;
+        assert_eq!(e("sort ms | where a"), "query_err_after_stats");
+        assert_eq!(e("stats count() | stats count()"), "query_err_two_stats");
+        // A multi-byte separator keeps the positions on the text.
+        let err = Query::parse("where\u{3000}(a", true, false, false).unwrap_err();
+        assert!("where\u{3000}(a".is_char_boundary(err.pos));
+    }
+
+    #[test]
+    fn sort_head_keeps_the_true_top_past_the_row_cap() {
+        let lines: Vec<String> = (0..MAX_ROWS + 5000).map(|i| format!("n={i}")).collect();
+        let t = table("fields n | sort -n | head 3", &lines);
+        let last = MAX_ROWS + 4999;
+        assert_eq!(
+            t.rows,
+            vec![
+                vec![last.to_string()],
+                vec![(last - 1).to_string()],
+                vec![(last - 2).to_string()]
+            ]
+        );
+        assert!(t.truncated);
+        // Without `head` a sort over too many rows says so instead of a partial answer.
+        let ins = lines.iter().enumerate().map(|(i, t)| LineIn {
+            idx: i,
+            text: t,
+            level: 0,
+            ts: 0,
+        });
+        let err = run(&q("sort -n"), Some(logfmt()), ins).unwrap_err();
+        assert_eq!(err.key, "query_err_sort_rows");
     }
 }
