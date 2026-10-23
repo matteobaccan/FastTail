@@ -223,9 +223,14 @@ impl SystemDialog {
                 Err(_) => ui.label(""),
             };
             let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            let open_tip = match &uri {
+                Ok(_) => "",
+                Err(key) => t(lang, key),
+            };
             ui.horizontal(|ui| {
                 let open = ui
                     .add_enabled(uri.is_ok(), egui::Button::new(t(lang, "system_open")))
+                    .on_disabled_hover_text(open_tip)
                     .clicked();
                 if (open || open_now || enter) && uri.is_ok() {
                     if let Ok(u) = &uri {

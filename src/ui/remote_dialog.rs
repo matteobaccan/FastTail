@@ -128,10 +128,16 @@ impl RemoteDialog {
                     .color(theme.text_dim()),
             );
             let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            let open_tip = match &urls {
+                Ok(_) => t(lang, "remote_need_host").to_string(),
+                Err((host, key)) if host.is_empty() => t(lang, key).to_string(),
+                Err((host, key)) => format!("{host}: {}", t(lang, key)),
+            };
             ui.horizontal(|ui| {
                 let ready = urls.as_ref().is_ok_and(|l| !l.is_empty());
                 if ui
                     .add_enabled(ready, egui::Button::new(t(lang, "system_open")))
+                    .on_disabled_hover_text(open_tip)
                     .clicked()
                 {
                     if let Ok(list) = &urls {
