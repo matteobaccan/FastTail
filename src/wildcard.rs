@@ -11,6 +11,7 @@
 //! `MAX_DEPTH` and at most `MAX_ENTRIES` entries per walk, never through a symbolic link
 //! or junction to a folder.
 
+use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -28,8 +29,10 @@ const RECURSIVE_MARK: &str = "**";
 /// none) and `?` exactly one. On Windows the comparison ignores ASCII case, like the file
 /// system does.
 pub fn wildcard_match(pattern: &str, name: &str) -> bool {
-    let p: Vec<char> = pattern.chars().map(fold).collect();
-    let n: Vec<char> = name.chars().map(fold).collect();
+    // Collect pattern and name chars into stack buffers to avoid heap allocations
+    // for standard file names (<= 64 chars).
+    let p: SmallVec<[char; 64]> = pattern.chars().map(fold).collect();
+    let n: SmallVec<[char; 64]> = name.chars().map(fold).collect();
     let (mut pi, mut ni) = (0usize, 0usize);
     // Position of the last `*` seen and the name index it was matched against, for
     // backtracking when a later literal fails.
@@ -259,8 +262,8 @@ pub fn newest_of(files: &[FolderMatch]) -> Option<&FolderMatch> {
 }
 
 fn ends_with_fold(text: &str, suffix: &str) -> bool {
-    let t: Vec<char> = text.chars().map(fold).collect();
-    let s: Vec<char> = suffix.chars().map(fold).collect();
+    let t: SmallVec<[char; 64]> = text.chars().map(fold).collect();
+    let s: SmallVec<[char; 64]> = suffix.chars().map(fold).collect();
     t.ends_with(&s)
 }
 
@@ -336,6 +339,18 @@ mod tests {
         );
         assert_eq!(FolderSpec::parse(&spec.path()), Some(spec));
         assert!(FolderSpec::parse(Path::new("logs/app.log")).is_none());
+    }
+
+    #[test]
+    fn matches_long_strings_exceeding_smallvec_capacity() {
+        let long_prefix = "a".repeat(100);
+        let pattern = format!("{}*.log", long_prefix);
+        let name = format!("{}2026-09-18.log", long_prefix);
+        assert!(wildcard_match(&pattern, &name));
+
+        let spec = FolderSpec::new(PathBuf::from("."), &format!("*;*.{}", "extension".repeat(10)), false);
+        let long_file_name = format!("file.{}", "extension".repeat(10));
+        assert!(spec.names_extension_of(&long_file_name));
     }
 
     #[test]
