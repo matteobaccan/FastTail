@@ -1309,7 +1309,10 @@ impl FastTailApp {
         let commands = self.config.system_commands();
         let lang = self.config.language;
         for engine in &mut self.engines {
-            if let Some(err) = engine.apply_reconnect_request(&commands) {
+            if let Some(err) = engine
+                .apply_reconnect_request(&commands)
+                .or_else(|| engine.apply_ssh_request())
+            {
                 engine.view_notice = Some(t(lang, "system_reconnect_failed").replace("{0}", &err));
             }
         }
@@ -6521,11 +6524,14 @@ impl FastTailApp {
             A::LogFormats => self.open_log_formats(None, None),
             A::SystemReconnect => {
                 let focused = self.focused_stream_path();
-                if let Some(s) = focused
-                    .and_then(|p| self.engines.iter_mut().find(|e| e.path == p))
-                    .and_then(|e| e.system.as_mut())
+                if let Some(e) = focused.and_then(|p| self.engines.iter_mut().find(|e| e.path == p))
                 {
-                    s.reconnect_requested = true;
+                    if let Some(s) = e.system.as_mut() {
+                        s.reconnect_requested = true;
+                    }
+                    if let Some(s) = e.ssh.as_mut() {
+                        s.reconnect_requested = true;
+                    }
                 }
             }
             A::SplitFile => {

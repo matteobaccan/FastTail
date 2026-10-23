@@ -33,6 +33,8 @@ pub const STDIN_SPOOL_MAX_MB: RangeInclusive<u32> =
 /// `[general] system_source_backlog_lines`: lines a system source reads at open.
 pub const SYSTEM_SOURCE_BACKLOG_LINES: RangeInclusive<u32> =
     0..=crate::system_source::MAX_BACKLOG_LINES;
+/// `[general] remote_initial_mb`: MB from the end a remote stream fetches first.
+pub const REMOTE_INITIAL_MB: RangeInclusive<u32> = 0..=crate::ssh_source::MAX_REMOTE_INITIAL_MB;
 /// `[general] screensaver_timeout_mins`: idle minutes before the screensaver (GUI) or the
 /// idle lock (terminal); 0 turns it off.
 pub const SCREENSAVER_TIMEOUT_MINS: RangeInclusive<u32> = 0..=120;

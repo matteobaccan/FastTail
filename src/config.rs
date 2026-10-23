@@ -203,6 +203,17 @@ pub struct FastTailConfig {
     /// The program run for `journald://` sources.
     #[serde(default = "default_journalctl_command")]
     pub journalctl_command: String,
+    /// The OpenSSH client run for `ssh://` streams.
+    #[serde(default = "default_ssh_program")]
+    pub ssh_program: String,
+    /// Size in MB at which a remote stream's spool restarts from empty (64..=65536,
+    /// default 2048).
+    #[serde(default = "default_remote_spool_max_mb")]
+    pub remote_spool_max_mb: u32,
+    /// MB from the end a remote stream fetches first (0..=4096, default 64; 0 = only new
+    /// lines).
+    #[serde(default = "default_remote_initial_mb")]
+    pub remote_initial_mb: u32,
     #[serde(default)]
     pub size_unit: SizeUnit,
     #[serde(default)]
@@ -421,6 +432,18 @@ fn default_journalctl_command() -> String {
     crate::system_source::DEFAULT_JOURNALCTL_COMMAND.to_string()
 }
 
+fn default_ssh_program() -> String {
+    crate::ssh_source::DEFAULT_SSH_PROGRAM.to_string()
+}
+
+fn default_remote_spool_max_mb() -> u32 {
+    crate::ssh_source::DEFAULT_REMOTE_SPOOL_MAX_MB
+}
+
+fn default_remote_initial_mb() -> u32 {
+    crate::ssh_source::DEFAULT_REMOTE_INITIAL_MB
+}
+
 impl Default for FastTailConfig {
     fn default() -> Self {
         Self {
@@ -477,6 +500,9 @@ impl Default for FastTailConfig {
             system_source_backlog_lines: default_system_source_backlog_lines(),
             docker_command: default_docker_command(),
             journalctl_command: default_journalctl_command(),
+            ssh_program: default_ssh_program(),
+            remote_spool_max_mb: default_remote_spool_max_mb(),
+            remote_initial_mb: default_remote_initial_mb(),
             size_unit: SizeUnit::Bytes,
             open_files: Vec::new(),
             recent_files: Vec::new(),
@@ -785,6 +811,24 @@ impl FastTailConfig {
         }
     }
 
+    /// The SSH client and the first fetch of remote streams.
+    pub fn ssh_settings(&self) -> crate::ssh_source::SshSettings {
+        crate::ssh_source::SshSettings {
+            program: self.ssh_program.clone(),
+            // Never more than the spool holds, or the first fetch would restart it.
+            initial_bytes: u64::from(self.remote_initial_mb.min(self.remote_spool_max_mb / 2))
+                << 20,
+        }
+    }
+
+    /// Where remote streams are spooled and how far a spool may grow.
+    pub fn remote_spool_settings(&self) -> crate::stdin_source::Settings {
+        crate::stdin_source::Settings::from_config(
+            self.spool_dir.as_deref(),
+            self.remote_spool_max_mb,
+        )
+    }
+
     pub fn to_ini(&self) -> Ini {
         let mut conf = Ini::new();
 
@@ -889,6 +933,9 @@ impl FastTailConfig {
             )
             .set("docker_command", self.docker_command.clone())
             .set("journalctl_command", self.journalctl_command.clone())
+            .set("ssh_program", self.ssh_program.clone())
+            .set("remote_spool_max_mb", self.remote_spool_max_mb.to_string())
+            .set("remote_initial_mb", self.remote_initial_mb.to_string())
             .set("size_unit", unit_str)
             .set("palette_recent", self.palette_recent.join(","))
             .set("baretail_import", self.baretail_import.to_string())
@@ -1325,9 +1372,24 @@ impl FastTailConfig {
                     );
                 }
             }
+            if let Some(v) = general
+                .get("remote_spool_max_mb")
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                cfg.remote_spool_max_mb =
+                    crate::settings_model::clamp(v, &crate::settings_model::STDIN_SPOOL_MAX_MB);
+            }
+            if let Some(v) = general
+                .get("remote_initial_mb")
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                cfg.remote_initial_mb =
+                    crate::settings_model::clamp(v, &crate::settings_model::REMOTE_INITIAL_MB);
+            }
             for (key, value) in [
                 ("docker_command", &mut cfg.docker_command),
                 ("journalctl_command", &mut cfg.journalctl_command),
+                ("ssh_program", &mut cfg.ssh_program),
             ] {
                 if let Some(s) = general.get(key).map(str::trim).filter(|s| !s.is_empty()) {
                     *value = s.to_string();
@@ -2165,6 +2227,41 @@ mod tests {
         let wild = FastTailConfig::from_ini(&wild);
         assert_eq!(wild.system_source_backlog_lines, 1_000_000);
         assert_eq!(wild.docker_command, "docker");
+    }
+
+    #[test]
+    fn test_remote_keys_round_trip_default_and_clamp() {
+        let cfg = FastTailConfig {
+            ssh_program: "/usr/bin/ssh".into(),
+            remote_spool_max_mb: 512,
+            remote_initial_mb: 0,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.ssh_program, "/usr/bin/ssh");
+        assert_eq!(
+            (loaded.remote_spool_max_mb, loaded.remote_initial_mb),
+            (512, 0)
+        );
+        assert_eq!(loaded.ssh_settings().initial_bytes, 0);
+        let old = FastTailConfig::from_ini(&Ini::new());
+        assert_eq!(
+            (
+                old.ssh_program.as_str(),
+                old.remote_spool_max_mb,
+                old.remote_initial_mb
+            ),
+            ("ssh", 2048, 64)
+        );
+        let mut wild = Ini::new();
+        wild.with_section(Some("general"))
+            .set("remote_spool_max_mb", "1")
+            .set("remote_initial_mb", "99999");
+        let wild = FastTailConfig::from_ini(&wild);
+        assert_eq!(
+            (wild.remote_spool_max_mb, wild.remote_initial_mb),
+            (64, 4096)
+        );
     }
 
     #[test]

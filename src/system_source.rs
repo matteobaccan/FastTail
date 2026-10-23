@@ -61,10 +61,12 @@ impl Default for Commands {
     }
 }
 
-/// True when `path` is written as a system source URI (valid or not).
+/// True when `path` is written as a source URI that is no file (valid or not): a system
+/// source, or a remote file (`ssh://`).
 pub fn is_system_path(path: &Path) -> bool {
-    path.to_str()
-        .is_some_and(|s| s.starts_with(JOURNALD) || s.starts_with(DOCKER))
+    path.to_str().is_some_and(|s| {
+        s.starts_with(JOURNALD) || s.starts_with(DOCKER) || s.starts_with("ssh://")
+    })
 }
 
 /// A unit name journalctl accepts and cannot take for an option.
@@ -441,6 +443,13 @@ impl TailEngine {
     /// The URI of a system source stream.
     pub fn system_uri(&self) -> Option<&SystemUri> {
         self.system.as_ref().map(|s| &s.uri)
+    }
+
+    /// The title of a stream whose path is a URI: `docker: api`, `web1:app.log`.
+    pub fn source_title(&self) -> Option<String> {
+        self.system_uri()
+            .map(SystemUri::title)
+            .or_else(|| self.ssh.as_ref().map(|s| s.spec.title()))
     }
 
     /// Called from `poll_updates`: once the copier saw the end of the pipe, collects the

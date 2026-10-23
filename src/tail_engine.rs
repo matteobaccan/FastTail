@@ -1848,6 +1848,9 @@ pub struct TailEngine {
     /// Child process, copier and spool of a system source (see `system_source`); `path`
     /// is then its URI and `current_file` the spool. Last for the same reason.
     pub system: Option<crate::system_source::SystemStream>,
+    /// Client, copier and spool of a remote file over SSH (see `ssh_source`); `path` is
+    /// then its URL and `current_file` the spool. Last for the same reason.
+    pub ssh: Option<crate::ssh_source::SshStream>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2461,6 +2464,7 @@ impl TailEngine {
             compressed: None,
             stdin: None,
             system: None,
+            ssh: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
@@ -8680,8 +8684,8 @@ impl TailEngine {
             .collect();
         let path = if self.is_stdin() {
             crate::stdin_source::STDIN_TITLE.to_string()
-        } else if let Some(uri) = self.system_uri() {
-            uri.title()
+        } else if let Some(title) = self.source_title() {
+            title
         } else {
             match &self.compressed {
                 Some(c) => c.title(),

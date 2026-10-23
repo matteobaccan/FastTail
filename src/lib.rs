@@ -47,6 +47,7 @@ pub mod session;
 pub mod settings_model;
 pub mod split;
 pub mod spool;
+pub mod ssh_source;
 pub mod stdin_source;
 pub mod system_source;
 pub mod tail_engine;

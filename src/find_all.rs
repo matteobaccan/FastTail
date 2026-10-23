@@ -464,8 +464,8 @@ pub fn stream_name(engine: &TailEngine) -> String {
     if engine.is_stdin() {
         return crate::stdin_source::STDIN_TITLE.to_string();
     }
-    if let Some(uri) = engine.system_uri() {
-        return uri.title();
+    if let Some(title) = engine.source_title() {
+        return title;
     }
     let file_name = engine
         .path

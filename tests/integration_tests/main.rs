@@ -44,6 +44,7 @@ mod relative_time_windows;
 mod review_regressions;
 mod scratchpad;
 mod split_log;
+mod ssh_sources;
 mod structured_fields;
 mod system_sources;
 
