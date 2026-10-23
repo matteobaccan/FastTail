@@ -29,6 +29,9 @@ fn split_pri(msg: &str) -> Option<(u8, &str)> {
     if close == 0 || close > 3 {
         return None;
     }
+    if !rest[..close].bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
     let pri: u16 = rest[..close].parse().ok()?;
     if pri > 191 {
         return None;
@@ -90,10 +93,10 @@ fn app_part(app: Option<&str>, pid: Option<&str>) -> String {
     }
 }
 
-/// `msg` rendered as a log line; `now` formats the receive time as ISO 8601 with offset
-/// (used when the message has no usable timestamp) and `year` is the receive year (RFC
-/// 3164 has none). `None` when `msg` is not syslog.
-pub fn render(msg: &str, year: i64, now: &dyn Fn() -> String) -> Option<String> {
+/// `msg` rendered as a log line; `now` gives the receive time as ISO 8601 with offset
+/// and its year, read only for a message without a usable timestamp or an RFC 3164 one
+/// (which has no year). `None` when `msg` is not syslog.
+pub fn render(msg: &str, now: &dyn Fn() -> (String, i64)) -> Option<String> {
     let msg = msg.trim_end_matches(['\r', '\n']);
     let (severity, rest) = split_pri(msg)?;
     let level = level_word(severity);
@@ -107,7 +110,7 @@ pub fn render(msg: &str, year: i64, now: &dyn Fn() -> String) -> Option<String> 
         let (sd, rest) = structured_data(rest)?;
         let text = rest.strip_prefix(' ').unwrap_or(rest);
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let ts = nil(ts).map_or_else(now, str::to_string);
+        let ts = nil(ts).map_or_else(|| now().0, str::to_string);
         let mut line = format!(
             "{ts} {level} {} {} {text}",
             nil(host).unwrap_or("-"),
@@ -122,10 +125,21 @@ pub fn render(msg: &str, year: i64, now: &dyn Fn() -> String) -> Option<String> 
     // RFC 3164: `Mmm dd hh:mm:ss HOST TAG[pid]: MSG`.
     let b = rest.as_bytes();
     let month = MONTHS.iter().position(|m| rest.starts_with(m))?;
-    if b.len() < 16 || b[3] != b' ' || b[6] != b' ' || b[9] != b':' || b[12] != b':' {
+    // Bytes 0..15 must be ASCII before they are sliced (a hostile message is not).
+    if b.len() < 16
+        || !b[..15].is_ascii()
+        || b[3] != b' '
+        || b[6] != b' '
+        || b[9] != b':'
+        || b[12] != b':'
+    {
         return None;
     }
-    let day: u32 = rest[4..6].trim().parse().ok()?;
+    let day: u32 = rest[4..6]
+        .trim()
+        .parse()
+        .ok()
+        .filter(|d| (1..=31).contains(d))?;
     let clock = &rest[7..15];
     if !clock.bytes().enumerate().all(|(i, c)| {
         if i == 2 || i == 5 {
@@ -155,8 +169,12 @@ pub fn render(msg: &str, year: i64, now: &dyn Fn() -> String) -> Option<String> 
         }
         _ => (None, None, rest),
     };
-    let offset = now();
-    let zone = offset.get(19..).filter(|z| !z.is_empty()).unwrap_or("");
+    let (received, mut year) = now();
+    // A December message received in January is from the year before.
+    if month == 11 && received.get(5..7) == Some("01") {
+        year -= 1;
+    }
+    let zone = received.get(19..).filter(|z| !z.is_empty()).unwrap_or("");
     let ts = format!(
         "{year:04}-{:02}-{day:02}T{clock}{}",
         month + 1,
@@ -194,12 +212,12 @@ pub fn receive_time() -> (String, i64) {
 mod tests {
     use super::*;
 
-    fn now() -> String {
-        "2026-10-23T10:00:00.000+02:00".to_string()
+    fn now() -> (String, i64) {
+        ("2026-10-23T10:00:00.000+02:00".to_string(), 2026)
     }
 
     fn r(msg: &str) -> Option<String> {
-        render(msg, 2026, &now)
+        render(msg, &now)
     }
 
     #[test]
@@ -245,6 +263,14 @@ mod tests {
         assert_eq!(r("plain line"), None);
         assert_eq!(r("<999>1 - - - - - - x"), None);
         assert_eq!(level_word(7), "DEBUG");
+        // Hostile ones: a multi-byte character at the cut, a signed priority, day 0.
+        assert_eq!(r("<13>Oct 11 22:14:1é host x"), None);
+        assert_eq!(r("<+1>1 - - - - - - x"), None);
+        assert_eq!(r("<13>Oct  0 22:14:15 host x"), None);
+        let january = || ("2027-01-01T00:00:01.000+01:00".to_string(), 2027);
+        assert!(render("<13>Dec 31 23:59:59 h a: x", &january)
+            .unwrap()
+            .starts_with("2026-12-31T23:59:59"));
     }
 
     #[test]

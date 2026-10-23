@@ -96,6 +96,11 @@ deletes the spool.
 - A port that cannot be bound is reported when the stream opens (no stream, no Retry
   button in this part); a restored workspace reports it the same way.
 - Bookmarks of listener streams are not saved.
+- Closing joins the acceptor and UDP threads (at most one 200 ms poll), so the port is
+  free for a listener opened again right after (a session reloaded).
+- A TCP connection silent for 10 minutes is closed, so idle connections cannot hold every
+  slot; the slot is given back by a guard however the reader ends.
+- The stream bar also shows lines per second and, once any, the refused connections.
 - Facility is not shown (open question 2), and senders share one stream (question 1).
 
 ## Risks / Trade-offs

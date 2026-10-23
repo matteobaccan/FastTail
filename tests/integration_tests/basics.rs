@@ -657,6 +657,8 @@ fn test_i18n_exhaustive_coverage() {
         "fields_regex_hint",
         "fields_regex_invalid",
         "fields_format_missing",
+        "listen_rate",
+        "listen_refused",
         "listen_bad_url",
         "listen_bad_port",
         "listen_bad_address",

@@ -176,3 +176,14 @@ fn a_port_in_use_and_a_bad_url_are_reported() {
         _ => panic!("expected a refusal"),
     }
 }
+
+#[test]
+fn a_listener_opens_again_on_its_port_right_after_closing() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let url = format!("syslog://127.0.0.1:{port}");
+    for _ in 0..3 {
+        let engine = open(&url, Limits::default(), dir.path());
+        drop(engine);
+    }
+}

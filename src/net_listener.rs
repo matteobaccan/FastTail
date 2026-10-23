@@ -108,6 +108,11 @@ impl ListenSpec {
         if port == 0 {
             return Err("listen_bad_port");
         }
+        let host = if host.eq_ignore_ascii_case("localhost") {
+            "localhost"
+        } else {
+            host
+        };
         if host != "localhost" && host.parse::<IpAddr>().is_err() {
             return Err("listen_bad_address");
         }
@@ -196,6 +201,8 @@ struct Shared {
     connections: AtomicUsize,
     refused: AtomicU64,
     dropped: AtomicU64,
+    /// UDP lines dropped by a reader, not yet noted in the stream.
+    dropped_unnoted: AtomicU64,
     received: AtomicU64,
 }
 
@@ -215,43 +222,51 @@ fn capped(mut text: String) -> String {
     text
 }
 
-/// The spool lines of one message from `from`: syslog rendered, the sender in front,
-/// embedded line breaks giving several lines.
+/// The spool lines of one message from `from`: each of its lines rendered as syslog when
+/// it is one, the sender in front.
 fn lines_of(spec: &ListenSpec, from: SocketAddr, raw: &[u8]) -> Vec<Line> {
     let text = String::from_utf8_lossy(raw);
     let text = text.trim_end_matches(['\r', '\n']);
     if text.is_empty() {
         return Vec::new();
     }
-    let text = if spec.proto == Proto::Syslog {
-        let (now, year) = crate::syslog::receive_time();
-        crate::syslog::render(text, year, &|| now.clone()).unwrap_or_else(|| text.to_string())
-    } else {
-        text.to_string()
-    };
     let prefix = if spec.prefixed() {
         format!("[{}] ", from.ip())
     } else {
         String::new()
     };
-    capped(text)
+    capped(text.to_string())
         .split('\n')
         .map(|l| {
-            let mut line = format!("{prefix}{}", l.trim_end_matches('\r')).into_bytes();
+            let l = l.trim_end_matches('\r');
+            let shown = if spec.proto == Proto::Syslog {
+                // The receive time is read only for a message that needs it.
+                crate::syslog::render(l, &crate::syslog::receive_time)
+                    .unwrap_or_else(|| l.to_string())
+            } else {
+                l.to_string()
+            };
+            let mut line = format!("{prefix}{shown}").into_bytes();
             line.push(b'\n');
             line
         })
         .collect()
 }
 
+/// Digits that can hold a message length (`MAX_MESSAGE + 1`).
+const LENGTH_DIGITS: usize = 5;
+
 /// Cuts a TCP byte stream into messages: newline framing, or octet counting (`123 <msg>`,
-/// RFC 6587) when `syslog` and the connection starts with a length.
+/// RFC 6587) when `syslog` and the connection starts with a length. The buffer never holds
+/// more than one message over the cap, and every byte is scanned once.
 struct Framer {
     syslog: bool,
     octet: Option<bool>,
     buf: Vec<u8>,
     /// Discarding the rest of a line that went over the cap.
     skipping: bool,
+    /// Bytes of `buf` already searched for a line break.
+    scanned: usize,
 }
 
 impl Framer {
@@ -261,87 +276,124 @@ impl Framer {
             octet: None,
             buf: Vec::new(),
             skipping: false,
+            scanned: 0,
         }
+    }
+
+    /// The length prefix at the start of `b`: its digits, and the length when a space
+    /// follows them.
+    fn length_prefix(b: &[u8]) -> (usize, Option<usize>) {
+        let digits = b
+            .iter()
+            .take(LENGTH_DIGITS + 1)
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        let len = (digits > 0 && digits <= LENGTH_DIGITS && b.get(digits) == Some(&b' '))
+            .then(|| {
+                std::str::from_utf8(&b[..digits])
+                    .ok()?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .flatten()
+            .filter(|l| *l <= MAX_MESSAGE + 1);
+        (digits, len)
     }
 
     /// The complete messages in `data` (the rest is kept for the next call).
     fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
         self.buf.extend_from_slice(data);
         if self.octet.is_none() {
-            let digits = self.buf.iter().take_while(|b| b.is_ascii_digit()).count();
-            if digits == self.buf.len() && digits < 6 {
+            let (digits, len) = Self::length_prefix(&self.buf);
+            if digits == self.buf.len() && digits <= LENGTH_DIGITS {
                 return Vec::new(); // too early to tell
             }
-            let len = std::str::from_utf8(&self.buf[..digits])
-                .ok()
-                .and_then(|d| d.parse::<usize>().ok());
-            self.octet = Some(
-                self.syslog
-                    && digits > 0
-                    && self.buf.get(digits) == Some(&b' ')
-                    && len.is_some_and(|l| l <= MAX_MESSAGE + 1),
-            );
+            self.octet = Some(self.syslog && len.is_some());
         }
         let mut out = Vec::new();
+        let mut start = 0;
         if self.octet == Some(true) {
             loop {
-                let digits = self.buf.iter().take_while(|b| b.is_ascii_digit()).count();
-                if digits == 0 || self.buf.get(digits) != Some(&b' ') {
-                    if digits == self.buf.len() {
-                        break; // the length is still arriving
-                    }
-                    // Lost framing: fall back to newlines for the rest.
+                // Some senders end each frame with a line break: skipped.
+                while self
+                    .buf
+                    .get(start)
+                    .is_some_and(|b| matches!(b, b'\r' | b'\n'))
+                {
+                    start += 1;
+                }
+                let rest = &self.buf[start..];
+                let (digits, len) = Self::length_prefix(rest);
+                if digits == rest.len() && digits <= LENGTH_DIGITS {
+                    break; // the length is still arriving
+                }
+                let Some(len) = len else {
+                    // Lost framing: line breaks for the rest of the connection.
                     self.octet = Some(false);
-                    out.extend(self.newline_messages());
+                    self.scanned = 0;
+                    break;
+                };
+                if rest.len() < digits + 1 + len {
                     break;
                 }
-                let len: usize = std::str::from_utf8(&self.buf[..digits])
-                    .ok()
-                    .and_then(|d| d.parse().ok())
-                    .unwrap_or(usize::MAX);
-                if len > MAX_MESSAGE + 1 {
-                    self.octet = Some(false);
-                    out.extend(self.newline_messages());
-                    break;
-                }
-                if self.buf.len() < digits + 1 + len {
-                    break;
-                }
-                out.push(self.buf[digits + 1..digits + 1 + len].to_vec());
-                self.buf.drain(..digits + 1 + len);
+                out.push(rest[digits + 1..digits + 1 + len].to_vec());
+                start += digits + 1 + len;
             }
+        }
+        if self.octet == Some(false) {
+            let mut from = start.max(self.scanned);
+            while let Some(rel) = self.buf[from..].iter().position(|&b| b == b'\n') {
+                let nl = from + rel;
+                if self.skipping {
+                    self.skipping = false;
+                } else {
+                    out.push(self.buf[start..=nl].to_vec());
+                }
+                start = nl + 1;
+                from = start;
+            }
+            if self.buf.len() - start > MAX_MESSAGE {
+                // Over the cap: keep its head, drop the rest up to the next line break.
+                if !self.skipping {
+                    out.push(self.buf[start..].to_vec());
+                }
+                start = self.buf.len();
+                self.skipping = true;
+            }
+        }
+        self.buf.drain(..start);
+        self.scanned = if self.octet == Some(false) {
+            self.buf.len()
         } else {
-            out.extend(self.newline_messages());
-        }
+            0
+        };
         out
     }
 
-    fn newline_messages(&mut self) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        while let Some(nl) = self.buf.iter().position(|&b| b == b'\n') {
-            let line: Vec<u8> = self.buf.drain(..=nl).collect();
-            if std::mem::take(&mut self.skipping) {
-                continue;
-            }
-            out.push(line);
-        }
-        if self.buf.len() > MAX_MESSAGE {
-            // Over the cap: keep its head, drop the rest up to the next line break.
-            if !self.skipping {
-                out.push(std::mem::take(&mut self.buf));
-            }
-            self.buf.clear();
-            self.skipping = true;
-        }
-        out
-    }
-
-    /// What is left when the connection closes, as a last message.
+    /// What is left when the connection closes, as a last message (without the length
+    /// of a cut frame).
     fn finish(&mut self) -> Option<Vec<u8>> {
-        let rest = std::mem::take(&mut self.buf);
+        let mut rest = std::mem::take(&mut self.buf);
+        if self.octet == Some(true) {
+            if let (digits, Some(_)) = Self::length_prefix(&rest) {
+                rest.drain(..=digits);
+            }
+        }
         (!rest.is_empty() && !self.skipping).then_some(rest)
     }
 }
+
+/// Gives a connection slot back when its reader ends, however it ends.
+struct ConnectionSlot(Arc<Shared>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.connections.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A connection silent this long is closed, so idle ones cannot hold every slot.
+const IDLE: Duration = Duration::from_secs(600);
 
 fn serve_tcp(
     mut stream: TcpStream,
@@ -353,6 +405,7 @@ fn serve_tcp(
 ) {
     let _ = stream.set_read_timeout(Some(POLL));
     let mut framer = Framer::new(spec.proto == Proto::Syslog);
+    let mut last_data = Instant::now();
     let mut buf = vec![0u8; 64 * 1024];
     let send = |msg: &[u8]| -> bool {
         for line in lines_of(spec, from, msg) {
@@ -383,6 +436,7 @@ fn serve_tcp(
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
+                last_data = Instant::now();
                 for msg in framer.push(&buf[..n]) {
                     if !send(&msg) {
                         return;
@@ -395,7 +449,12 @@ fn serve_tcp(
                     std::io::ErrorKind::WouldBlock
                         | std::io::ErrorKind::TimedOut
                         | std::io::ErrorKind::Interrupted
-                ) => {}
+                ) =>
+            {
+                if last_data.elapsed() > IDLE {
+                    break;
+                }
+            }
             Err(_) => break,
         }
     }
@@ -418,28 +477,28 @@ fn accept_loop(
         }
         match listener.accept() {
             Ok((stream, from)) => {
-                if shared.connections.load(Ordering::Acquire) >= MAX_CONNECTIONS {
+                // Taken first, so two acceptors (`localhost`) never pass the cap.
+                if shared.connections.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+                    shared.connections.fetch_sub(1, Ordering::AcqRel);
                     shared.refused.fetch_add(1, Ordering::Relaxed);
                     drop(stream);
                     continue;
                 }
                 let _ = stream.set_nonblocking(false);
-                shared.connections.fetch_add(1, Ordering::AcqRel);
+                let slot = ConnectionSlot(shared.clone());
                 let (spec, tx, shared, wake) =
                     (spec.clone(), tx.clone(), shared.clone(), wake.clone());
-                let spawned = std::thread::Builder::new()
+                // A thread that cannot start gives the slot back as the closure drops.
+                let _ = std::thread::Builder::new()
                     .name("fasttail-listen-tcp".to_string())
                     .stack_size(256 * 1024)
                     .spawn(move || {
+                        let _slot = slot;
                         serve_tcp(stream, from, &spec, &tx, &shared, &wake);
-                        shared.connections.fetch_sub(1, Ordering::AcqRel);
                         if let Some(w) = &wake {
                             w();
                         }
                     });
-                if spawned.is_err() {
-                    // Not counted as a connection when no thread serves it.
-                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(POLL),
             Err(_) => std::thread::sleep(POLL),
@@ -461,7 +520,16 @@ fn udp_loop(
             return;
         }
         // A timeout (or a reset reported by Windows) just polls again.
-        if let Ok((n, from)) = socket.recv_from(&mut buf) {
+        let received = socket.recv_from(&mut buf);
+        if let Err(e) = &received {
+            if !matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        if let Ok((n, from)) = received {
             {
                 for line in lines_of(&spec, from, &buf[..n]) {
                     shared.received.fetch_add(1, Ordering::Relaxed);
@@ -470,6 +538,7 @@ fn udp_loop(
                         // UDP has no back-pressure: what does not fit is dropped.
                         Err(TrySendError::Full(_)) => {
                             shared.dropped.fetch_add(1, Ordering::Relaxed);
+                            shared.dropped_unnoted.fetch_add(1, Ordering::Relaxed);
                         }
                         Err(TrySendError::Disconnected(_)) => return,
                     }
@@ -505,10 +574,27 @@ impl ListenerInput {
         self.window = Instant::now();
         self.lines = 0;
         self.bytes = 0;
-        let dropped = std::mem::take(&mut self.dropped_in_window);
+        let dropped = std::mem::take(&mut self.dropped_in_window)
+            + self.shared.dropped_unnoted.swap(0, Ordering::Relaxed);
         (dropped > 0).then(|| {
             format!("-- fasttail: {dropped} messages dropped (rate limit) --\n").into_bytes()
         })
+    }
+}
+
+impl ListenerInput {
+    /// `line` into the pending bytes, or dropped and counted when over the limit.
+    fn take(&mut self, line: Line) {
+        if self.lines >= self.limits.lines_per_sec
+            || self.bytes + line.len() as u64 > self.limits.bytes_per_sec
+        {
+            self.dropped_in_window += 1;
+            self.shared.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        self.lines += 1;
+        self.bytes += line.len() as u64;
+        self.pending.extend_from_slice(&line);
     }
 }
 
@@ -528,17 +614,16 @@ impl Read for ListenerInput {
             }
             match self.rx.recv_timeout(POLL) {
                 Ok(line) => {
-                    if self.lines >= self.limits.lines_per_sec
-                        || self.bytes + line.len() as u64 > self.limits.bytes_per_sec
-                    {
-                        self.dropped_in_window += 1;
-                        self.shared.dropped.fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
-                    self.lines += 1;
-                    self.bytes += line.len() as u64;
-                    self.pending = line;
+                    self.pending.clear();
                     self.pos = 0;
+                    self.take(line);
+                    // More lines already waiting go in the same write.
+                    while self.pending.len() < buf.len() {
+                        match self.rx.try_recv() {
+                            Ok(line) => self.take(line),
+                            Err(_) => break,
+                        }
+                    }
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     if self.shared.closed.load(Ordering::Acquire) {
@@ -555,6 +640,10 @@ impl Read for ListenerInput {
 pub struct ListenerStream {
     pub spec: ListenSpec,
     shared: Arc<Shared>,
+    /// The acceptor and UDP threads, joined on close so the port is free at once.
+    threads: Vec<std::thread::JoinHandle<()>>,
+    /// The last lines-per-second reading: when, the count then, the rate.
+    rate: std::sync::Mutex<(Instant, u64, u64)>,
     /// What each socket is bound to, for the stream bar.
     pub bound: Vec<SocketAddr>,
     /// The output copier; declared last so the sockets close before the spool goes.
@@ -601,6 +690,7 @@ impl ListenerStream {
             .filter_map(|l| l.local_addr().ok())
             .chain(udp.iter().filter_map(|s| s.local_addr().ok()))
             .collect();
+        bound.sort();
         bound.dedup();
         let input = ListenerInput {
             rx,
@@ -622,21 +712,30 @@ impl ListenerStream {
                     error,
                 }
             })?;
+        let mut threads = Vec::new();
         for l in tcp {
             let (spec, tx, shared, wake) = (spec.clone(), tx.clone(), shared.clone(), wake.clone());
-            let _ = std::thread::Builder::new()
-                .name("fasttail-listen-accept".to_string())
-                .spawn(move || accept_loop(l, spec, tx, shared, wake));
+            threads.extend(
+                std::thread::Builder::new()
+                    .name("fasttail-listen-accept".to_string())
+                    .spawn(move || accept_loop(l, spec, tx, shared, wake))
+                    .ok(),
+            );
         }
         for s in udp {
             let (spec, tx, shared, wake) = (spec.clone(), tx.clone(), shared.clone(), wake.clone());
-            let _ = std::thread::Builder::new()
-                .name("fasttail-listen-udp".to_string())
-                .spawn(move || udp_loop(s, spec, tx, shared, wake));
+            threads.extend(
+                std::thread::Builder::new()
+                    .name("fasttail-listen-udp".to_string())
+                    .spawn(move || udp_loop(s, spec, tx, shared, wake))
+                    .ok(),
+            );
         }
         Ok(Self {
             spec,
             shared,
+            threads,
+            rate: std::sync::Mutex::new((Instant::now(), 0, 0)),
             bound,
             copier,
         })
@@ -646,11 +745,12 @@ impl ListenerStream {
         self.shared.connections.load(Ordering::Acquire)
     }
 
-    /// Lines dropped (rate limit, a full channel for UDP) and connections refused.
+    /// Lines dropped (rate limit, a full channel for UDP).
     pub fn dropped(&self) -> u64 {
         self.shared.dropped.load(Ordering::Relaxed)
     }
 
+    /// TCP connections refused at the cap.
     pub fn refused(&self) -> u64 {
         self.shared.refused.load(Ordering::Relaxed)
     }
@@ -659,12 +759,30 @@ impl ListenerStream {
     pub fn received(&self) -> u64 {
         self.shared.received.load(Ordering::Relaxed)
     }
+
+    /// Lines received per second, measured over the last second or more.
+    pub fn lines_per_sec(&self) -> u64 {
+        let Ok(mut r) = self.rate.lock() else {
+            return 0;
+        };
+        let elapsed = r.0.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            let now = self.received();
+            r.2 = ((now - r.1) as f64 / elapsed.as_secs_f64()).round() as u64;
+            *r = (Instant::now(), now, r.2);
+        }
+        r.2
+    }
 }
 
 impl Drop for ListenerStream {
     fn drop(&mut self) {
-        // The threads see it within one poll and close their sockets.
+        // The threads see it within one poll and close their sockets; waiting for them
+        // frees the port for a listener opened again right after (a session reloaded).
         self.shared.closed.store(true, Ordering::Release);
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
     }
 }
 
@@ -680,10 +798,13 @@ pub fn open_engine(
         Some(wake) => TailEngine::open_with_wake(stream.copier.spool_path(), wake),
         None => TailEngine::open(stream.copier.spool_path()),
     };
-    let mut engine = opened.map_err(|error| BindError {
-        addr: stream.bound[0],
-        error,
-    })?;
+    let mut engine =
+        opened.map_err(|error| BindError {
+            addr: stream.bound.first().copied().unwrap_or_else(|| {
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), stream.spec.port)
+            }),
+            error,
+        })?;
     engine.path = PathBuf::from(stream.spec.to_uri());
     engine.follow_tail = true;
     engine.listener = Some(stream);
@@ -733,8 +854,25 @@ mod tests {
         assert_eq!(f.finish(), None);
 
         let mut s = Framer::new(true);
-        let msgs = s.push(b"11 <13>1 - a b11 <13>1 - c d");
-        assert_eq!(msgs, [b"<13>1 - a b".to_vec(), b"<13>1 - c d".to_vec()]);
+        let msgs = s.push(b"11 <13>1 - a b11 <13>1 - c d\n11 <13>1 - e f");
+        assert_eq!(
+            msgs,
+            [
+                b"<13>1 - a b".to_vec(),
+                b"<13>1 - c d".to_vec(),
+                b"<13>1 - e f".to_vec()
+            ]
+        );
+        // A cut frame at the close loses its length.
+        assert!(s.push(b"20 <13>1 - g").is_empty());
+        assert_eq!(s.finish(), Some(b"<13>1 - g".to_vec()));
+        // Endless digits never grow the buffer: framing is lost, then the line cap.
+        let mut d = Framer::new(true);
+        d.push(b"1 x");
+        for _ in 0..100 {
+            d.push(&[b'9'; 4096]);
+        }
+        assert!(d.buf.len() <= MAX_MESSAGE + 4096);
         // A syslog connection that starts with text uses newlines.
         let mut n = Framer::new(true);
         assert_eq!(n.push(b"<13>hello\n"), [b"<13>hello\n".to_vec()]);

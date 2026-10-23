@@ -1258,10 +1258,16 @@ fn render_listener_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, 
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
-    let text = t(lang, "listen_status")
+    let mut text = t(lang, "listen_status")
         .replace("{0}", &at)
         .replace("{1}", &l.connections().to_string())
         .replace("{2}", &l.dropped().to_string());
+    text.push_str(" · ");
+    text.push_str(&t(lang, "listen_rate").replace("{0}", &l.lines_per_sec().to_string()));
+    if l.refused() > 0 {
+        text.push_str(" · ");
+        text.push_str(&t(lang, "listen_refused").replace("{0}", &l.refused().to_string()));
+    }
     let color = if l.dropped() > 0 {
         theme.warn_color()
     } else {
