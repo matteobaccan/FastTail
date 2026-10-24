@@ -52,6 +52,8 @@ pub enum ScanKind {
     Query,
     /// Learns or counts the patterns of the visible entries (Patterns tab).
     Patterns,
+    /// Compares a span of the timeline with a baseline (Explain tab).
+    Explain,
 }
 
 /// Most include terms, and most exclude terms, a stream can hold.
@@ -557,6 +559,12 @@ pub enum JobSpec {
         count: Option<(Arc<crate::patterns::Drain>, crate::patterns::Axis)>,
         visible: VisibleSet,
     },
+    /// Compare the entries of a span with a baseline (see `spike`): the counts so far are
+    /// sent every 500 ms and at the end (`ScanBatch::Explain`).
+    Explain {
+        sides: crate::spike::Sides,
+        visible: VisibleSet,
+    },
 }
 
 /// The lines a search or collapse job covers.
@@ -668,6 +676,8 @@ pub enum ScanBatch {
     PatternTree(Box<crate::patterns::Drain>),
     /// Counts of a counting `Patterns` job since its last batch, to merge.
     PatternCounts(Box<crate::patterns::PatternCounts>),
+    /// The counts of an `Explain` job so far (each batch replaces the one before).
+    Explain(Box<crate::spike::Explanation>),
     /// Fraction of the byte range scanned so far.
     Progress(f32),
     /// The range was scanned completely (`lines` = line count covered).
@@ -719,6 +729,7 @@ impl ScanJob {
             JobSpec::Collapse { .. } => ScanKind::Collapse,
             JobSpec::FieldStats { .. } => ScanKind::FieldStats,
             JobSpec::Patterns { .. } => ScanKind::Patterns,
+            JobSpec::Explain { .. } => ScanKind::Explain,
             JobSpec::Query { .. } => ScanKind::Query,
         };
         let (tx, rx) = channel();
@@ -857,6 +868,20 @@ impl PatternRun {
         ))))
     }
 }
+
+/// Running state of an `Explain` job: the counts, the reused buffers, the timestamp the
+/// next line inherits.
+struct ExplainRun {
+    e: crate::spike::Explanation,
+    scratch: crate::patterns::Scratch,
+    spans: crate::fields::FieldSpans,
+    inherited: i64,
+    hint: FormatHint,
+    sent: std::time::Instant,
+}
+
+/// How often an `Explain` job sends its counts so far.
+const EXPLAIN_PERIOD: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// How often a `FieldStats` job sends its counts.
 const STATS_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
@@ -998,6 +1023,17 @@ fn run(
         }),
         _ => None,
     };
+    let mut explain_run = match &spec {
+        JobSpec::Explain { sides, .. } => Some(ExplainRun {
+            e: crate::spike::Explanation::new(*sides),
+            scratch: crate::patterns::Scratch::default(),
+            spans: crate::fields::FieldSpans::new(),
+            inherited: NO_TIMESTAMP,
+            hint: FormatHint::default(),
+            sent: std::time::Instant::now(),
+        }),
+        _ => None,
+    };
     if matches!(spec, JobSpec::Index) && range.start_offset < range.end_offset {
         offsets.push(range.start_offset);
     }
@@ -1011,6 +1047,7 @@ fn run(
         JobSpec::Collapse { visible, .. }
         | JobSpec::FieldStats { visible, .. }
         | JobSpec::Patterns { visible, .. }
+        | JobSpec::Explain { visible, .. }
         | JobSpec::Query { visible, .. }
         | JobSpec::Search {
             filter: visible, ..
@@ -1036,10 +1073,37 @@ fn run(
         Vec<(usize, usize)>,
     )>,
                     query_run: &mut Option<QueryRun<'_>>,
-                    pattern_run: &mut Option<PatternRun>|
+                    pattern_run: &mut Option<PatternRun>,
+                    explain_run: &mut Option<ExplainRun>|
      -> bool {
         match &spec {
             JobSpec::Index => true,
+            JobSpec::Explain { .. } => {
+                let Some(run) = explain_run.as_mut() else {
+                    return true;
+                };
+                let parser = range.parser.as_deref();
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    // Every line is timed, visible or not, as the histogram is.
+                    if let Some((ms, f)) = crate::fields::line_timestamp(parser, s, run.hint) {
+                        run.hint = f;
+                        run.inherited = ms;
+                    }
+                    if !walk.as_mut().is_none_or(|w| w.visible(idx, s))
+                        || crate::fields::is_continuation(parser, s)
+                    {
+                        return true;
+                    }
+                    let level = crate::fields::line_level(parser, s, range.level_window) as u8;
+                    let ts = run.inherited;
+                    let ExplainRun {
+                        e, scratch, spans, ..
+                    } = run;
+                    e.add(s, idx, ts, level, parser, scratch, spans);
+                    true
+                });
+                true
+            }
             JobSpec::Patterns { count, .. } => {
                 let Some(run) = pattern_run.as_mut() else {
                     return true;
@@ -1289,6 +1353,7 @@ fn run(
                     &mut multi,
                     &mut query_run,
                     &mut pattern_run,
+                    &mut explain_run,
                 ) {
                     limit_reached = true;
                     break 'outer;
@@ -1343,6 +1408,13 @@ fn run(
         } else if let Some((_, found)) = multi.as_mut() {
             if !found.is_empty() && !send(ScanBatch::MultiHits(std::mem::take(found))) {
                 return;
+            }
+        } else if let Some(run) = explain_run.as_mut() {
+            if run.sent.elapsed() >= EXPLAIN_PERIOD {
+                run.sent = std::time::Instant::now();
+                if !send(ScanBatch::Explain(Box::new(run.e.clone()))) {
+                    return;
+                }
             }
         } else if let Some(run) = pattern_run.as_mut() {
             if run.sent.elapsed() >= STATS_PERIOD {
@@ -1406,6 +1478,7 @@ fn run(
             &mut multi,
             &mut query_run,
             &mut pattern_run,
+            &mut explain_run,
         );
         line_idx += 1;
     }
@@ -1434,6 +1507,10 @@ fn run(
             return;
         }
         if scanner.skipped > 0 && !send(ScanBatch::Skipped(scanner.skipped)) {
+            return;
+        }
+    } else if let Some(run) = explain_run.take() {
+        if !send(ScanBatch::Explain(Box::new(run.e))) {
             return;
         }
     } else if let Some(mut run) = pattern_run.take() {

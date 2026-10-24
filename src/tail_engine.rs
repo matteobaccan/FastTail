@@ -2020,6 +2020,11 @@ pub struct TailEngine {
     pattern_scope: Option<u64>,
     /// The pattern filter was cleared because the patterns were learnt again.
     pub pattern_filter_dropped: bool,
+    /// The Explain tab of the stream (see `explain_span`).
+    pub explain: Option<crate::spike::ExplainState>,
+    /// A span to explain, asked by the histogram or the time range popup (applied by the
+    /// app, which opens the tab).
+    pub explain_request: Option<(i64, i64)>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2654,6 +2659,8 @@ impl TailEngine {
             pattern_filter: None,
             pattern_scope: None,
             pattern_filter_dropped: false,
+            explain: None,
+            explain_request: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
@@ -3548,6 +3555,10 @@ impl TailEngine {
             self.restart_stats();
             self.restart_patterns(true);
             self.cancel_query_on_reload();
+            if let Some(e) = self.explain.as_mut() {
+                // A snapshot of the old content.
+                e.stale = e.result.is_some() || e.job.is_some();
+            }
         }
         let mut total_len = self.source.len();
         // Auto mode looks for colour codes in the head of the file, then in each append
@@ -4284,6 +4295,7 @@ impl TailEngine {
         self.drain_job();
         self.poll_stats();
         self.poll_patterns();
+        self.poll_explain();
         self.poll_query();
         self.land_open_line();
         // A live time window slides with the clock.
@@ -8229,6 +8241,142 @@ impl TailEngine {
         self.patterns = Some(p);
     }
 
+    // ----- Explain a span of the timeline (see `spike`) -----
+
+    /// Explains `span` (milliseconds of the cache clock, both ends included) against
+    /// `baseline`: opens or replaces the stream's comparison, counted in the background.
+    pub fn explain_span(
+        &mut self,
+        span: (i64, i64),
+        baseline: crate::spike::Baseline,
+        only_filtered: bool,
+    ) {
+        let (a, b) = (span.0.min(span.1), span.0.max(span.1));
+        let estimate = self.histogram_count_outside(a, b, baseline);
+        let sides = crate::spike::Sides {
+            span: (a, b),
+            baseline,
+            sample: crate::spike::sample_for(estimate),
+        };
+        let generation = self.explain.as_ref().map_or(0, |e| e.job_generation);
+        let mut state = crate::spike::ExplainState::new(sides, only_filtered);
+        state.job_generation = generation;
+        self.explain = Some(state);
+        self.start_explain();
+    }
+
+    /// Runs the comparison again (Recompute, or another baseline or scope).
+    pub fn recompute_explain(&mut self, baseline: crate::spike::Baseline, only_filtered: bool) {
+        if let Some(span) = self.explain.as_ref().map(|e| e.sides.span) {
+            self.explain_span(span, baseline, only_filtered);
+        }
+    }
+
+    pub fn close_explain(&mut self) {
+        self.explain = None;
+    }
+
+    /// The span typed in the time range popup, a missing side reaching the first or last
+    /// timestamp; false when a side cannot be read.
+    pub fn explain_texts(&mut self, from: &str, to: &str) -> bool {
+        let (f, f_ok, t, t_ok) = self.parse_time_texts(from, to);
+        if !f_ok || !t_ok {
+            return false;
+        }
+        let span = self.time_histogram().span();
+        let a = f.or(span.map(|s| s.0));
+        let b = t.or(span.map(|s| s.1 - 1));
+        match (a, b) {
+            (Some(a), Some(b)) => {
+                self.explain_request = Some((a, b));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// About how many timed lines fall in the baseline of `[a, b]`, from the histogram
+    /// (every line when the histogram is not built).
+    fn histogram_count_outside(&self, a: i64, b: i64, baseline: crate::spike::Baseline) -> u64 {
+        let h = self.time_histogram();
+        if h.is_empty() {
+            return self.total_lines() as u64;
+        }
+        let len = b - a + 1;
+        let (lo, hi) = match baseline {
+            crate::spike::Baseline::Rest => (i64::MIN, i64::MAX),
+            crate::spike::Baseline::Preceding => (a - len, a - 1),
+        };
+        let first = h.first_bucket() * h.bucket_ms();
+        (0..h.len())
+            .filter(|&i| {
+                let start = first + i as i64 * h.bucket_ms();
+                let end = start + h.bucket_ms() - 1;
+                end >= lo && start <= hi && !(start >= a && end <= b)
+            })
+            .filter_map(|i| h.bucket(i))
+            .map(|c| c.iter().map(|&n| n as u64).sum::<u64>())
+            .sum()
+    }
+
+    fn start_explain(&mut self) {
+        let only = self.explain.as_ref().is_some_and(|e| e.only_filtered);
+        let visible = if only && self.is_filter_active() {
+            VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+        } else {
+            VisibleSet::All
+        };
+        let (file, range) = self.full_scan_range();
+        let Some(e) = self.explain.as_mut() else {
+            return;
+        };
+        e.job_generation = e.job_generation.wrapping_add(1);
+        e.progress = 0.0;
+        e.result = None;
+        e.failed = false;
+        e.stale = false;
+        e.generation = e.generation.wrapping_add(1);
+        e.job = Some(ScanJob::spawn(
+            e.job_generation,
+            &file,
+            range,
+            JobSpec::Explain {
+                sides: e.sides,
+                visible,
+            },
+        ));
+    }
+
+    fn poll_explain(&mut self) {
+        let Some(e) = self.explain.as_mut() else {
+            return;
+        };
+        let Some(job) = e.job.as_ref() else {
+            return;
+        };
+        let mut finished = false;
+        while let Some(batch) = job.try_recv() {
+            match batch {
+                ScanBatch::Explain(result) => {
+                    e.result = Some(*result);
+                    e.generation = e.generation.wrapping_add(1);
+                }
+                ScanBatch::Progress(p) => e.progress = p,
+                ScanBatch::Done { .. } => finished = true,
+                ScanBatch::Failed => {
+                    e.failed = true;
+                    finished = true;
+                }
+                _ => {}
+            }
+        }
+        if finished {
+            e.job = None;
+            e.progress = 1.0;
+            e.generation = e.generation.wrapping_add(1);
+        }
+    }
+
     // ----- Queries (see `query`) -----
 
     /// Runs `text` over the lines the stream shows now, in the background. A query that
@@ -8695,7 +8843,8 @@ impl TailEngine {
                 ScanBatch::Stats(_)
                 | ScanBatch::Query(_)
                 | ScanBatch::PatternTree(_)
-                | ScanBatch::PatternCounts(_) => {}
+                | ScanBatch::PatternCounts(_)
+                | ScanBatch::Explain(_) => {}
                 ScanBatch::MultiHits(found) => {
                     // The visible set was exact (hidden lines and time window included):
                     // only the search scope applies, on the first line of each hit.
@@ -8747,7 +8896,10 @@ impl TailEngine {
                     }
                     job.hits += lines.len();
                     match job.kind {
-                        ScanKind::FieldStats | ScanKind::Query | ScanKind::Patterns => {}
+                        ScanKind::FieldStats
+                        | ScanKind::Query
+                        | ScanKind::Patterns
+                        | ScanKind::Explain => {}
                         ScanKind::Filter => {
                             self.extend_filtered(lines);
                             self.filter_generation = self.filter_generation.wrapping_add(1);
@@ -8889,7 +9041,7 @@ impl TailEngine {
 
     fn finish_job(&mut self, kind: ScanKind, end_offset: u64) {
         match kind {
-            ScanKind::FieldStats | ScanKind::Query | ScanKind::Patterns => {}
+            ScanKind::FieldStats | ScanKind::Query | ScanKind::Patterns | ScanKind::Explain => {}
             ScanKind::Index => {
                 self.index_pending = false;
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);

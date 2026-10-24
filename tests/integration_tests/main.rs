@@ -45,6 +45,7 @@ mod pattern_streams;
 mod relative_time_windows;
 mod review_regressions;
 mod scratchpad;
+mod spike_explanation;
 mod split_log;
 mod ssh_sources;
 mod structured_fields;

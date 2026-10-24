@@ -92,6 +92,8 @@ pub struct TimelineCache {
     /// Tallest column, the scale of the bars.
     pub peak: u64,
     drag_from: Option<usize>,
+    /// The column a right-click opened the menu on.
+    menu_col: Option<usize>,
 }
 
 impl TimelineCache {
@@ -201,6 +203,11 @@ fn span_text(clock: &dyn Fn(i64) -> i64, columns: &[Column], a: usize, b: usize)
 }
 
 /// Interaction id of a stream's strip.
+/// Where the strip's menu leaves a span to explain, for the caller to take.
+pub fn explain_id(engine: &TailEngine) -> egui::Id {
+    egui::Id::new("timeline_explain").with(&engine.path)
+}
+
 pub fn strip_id(engine: &TailEngine) -> egui::Id {
     egui::Id::new("timeline_strip").with(&engine.path)
 }
@@ -436,6 +443,32 @@ pub fn show(
         }
         response.clone().on_hover_text_at_pointer(tip);
     }
+
+    // Right-click: explain the column under the pointer, or the time window.
+    if response.secondary_clicked() {
+        cache.menu_col = pointer_col;
+    }
+    let menu_col = cache.menu_col;
+    response.context_menu(|ui| {
+        let mut ask = None;
+        if let Some(column) = menu_col.and_then(|c| columns.get(c)) {
+            if ui.button(t(lang, "explain_bar")).clicked() {
+                ask = Some((column.start_ms, column.end_ms - 1));
+            }
+        }
+        if engine.is_time_filtered() && ui.button(t(lang, "explain_window")).clicked() {
+            let span = histogram.span();
+            let from = engine.time_from.or(span.map(|s| s.0));
+            let to = engine.time_to.or(span.map(|s| s.1 - 1));
+            if let (Some(a), Some(b)) = (from, to) {
+                ask = Some((a, b));
+            }
+        }
+        if let Some(span) = ask {
+            ui.data_mut(|d| d.insert_temp(explain_id(engine), span));
+            ui.close();
+        }
+    });
 
     ui.data_mut(|d| d.insert_temp(id, cache));
     selected

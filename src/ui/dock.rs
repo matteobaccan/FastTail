@@ -66,6 +66,8 @@ pub enum FastTailTab {
     Query(PathBuf),
     /// The patterns of a stream (`ui::patterns_tab`); never saved.
     Patterns(PathBuf),
+    /// A span of a stream's timeline explained (`ui::explain_tab`); never saved.
+    Explain(PathBuf),
 }
 
 pub struct DockContext<'a> {
@@ -379,6 +381,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 .monospace()
                 .strong(),
             ),
+            FastTailTab::Explain(path) => WidgetText::from(
+                RichText::new(crate::ui::explain_tab::title(
+                    find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
+                    *self.ctx.language,
+                ))
+                .monospace()
+                .strong(),
+            ),
             FastTailTab::Patterns(path) => WidgetText::from(
                 RichText::new(crate::ui::patterns_tab::title(
                     find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
@@ -551,6 +561,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
                 crate::ui::patterns_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
             }
+            FastTailTab::Explain(path) => {
+                let engine =
+                    find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
+                crate::ui::explain_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
+            }
             FastTailTab::Query(path) => {
                 let engine =
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
@@ -649,6 +664,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 // The pattern filter stays (its chip clears it); the learning stops.
                 if let Some(i) = find_engine_index(self.ctx.engines, path) {
                     self.ctx.engines[i].close_patterns();
+                }
+            }
+            FastTailTab::Explain(path) => {
+                if let Some(i) = find_engine_index(self.ctx.engines, path) {
+                    self.ctx.engines[i].close_explain();
                 }
             }
             _ => {
@@ -917,6 +937,11 @@ fn render_timeline(
         let (from_ok, to_ok) = engine.apply_time_range_text(&from, &to);
         engine.time_range_error = !from_ok || !to_ok;
         ui.ctx().request_repaint();
+    }
+    // "Explain this bar" / "Explain the time window" from the strip's menu.
+    let ask = crate::ui::timeline_strip::explain_id(engine);
+    if let Some(span) = ui.data_mut(|d| d.remove_temp::<(i64, i64)>(ask)) {
+        engine.explain_request = Some(span);
     }
 }
 
@@ -1565,6 +1590,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::FieldStats => "scan_statistics",
         crate::scan_job::ScanKind::Query => "scan_query",
         crate::scan_job::ScanKind::Patterns => "scan_patterns",
+        crate::scan_job::ScanKind::Explain => "scan_explain",
     }
 }
 

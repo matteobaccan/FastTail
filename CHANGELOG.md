@@ -17,6 +17,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Explain a spike.** Right-click a bar of the timeline histogram and pick *Explain this
+  bar* (or *Explain the time window*, or **Explain** in the time range popup): an Explain
+  tab compares the span with the rest of the log or the span of equal length before it.
+  Volume (entries per minute and ratio), levels on both sides, the message templates
+  over-represented in the span (Drain templates, ranked by `count · ln(share ratio)`,
+  **new** when absent from the baseline, so steady messages never come up) and, on
+  structured logs, the `field=value` pairs that stand out (a field with more than 1,000
+  values in the span is skipped). Click a message to see its first line in the span or
+  search it, click a field value to filter on it, *Set as time window*. One background
+  pass, filling in as it goes; *Only filtered lines* restricts both sides; a baseline over
+  1,000,000 entries is sampled with counts scaled; a rotated file marks the tab stale.
+  Second change of the 0.25.0 plan (`spike-explanation`).
 - **Patterns tab.** *⧉ Patterns…* in the stream's 💾 menu (or `CTRL + SHIFT + G`) groups
   the entries the stream shows by template, the variable parts as `<*>`
   (`payment <*> failed after <*> ms: gateway timeout`), learnt with Drain over each

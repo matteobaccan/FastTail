@@ -1396,6 +1396,29 @@ impl FastTailApp {
         changed
     }
 
+    /// Opens the Explain tab for the span a stream asked for. Returns whether one opened.
+    pub fn apply_explain_requests(&mut self) -> bool {
+        let Some(idx) = self
+            .engines
+            .iter()
+            .position(|e| e.explain_request.is_some())
+        else {
+            return false;
+        };
+        let engine = &mut self.engines[idx];
+        let span = engine.explain_request.take().unwrap_or_default();
+        let (baseline, only) = engine
+            .explain
+            .as_ref()
+            .map_or((crate::spike::Baseline::Rest, false), |e| {
+                (e.sides.baseline, e.only_filtered)
+            });
+        engine.explain_span(span, baseline, only);
+        let path = engine.path.clone();
+        crate::ui::explain_tab::open_tab(&mut self.dock_state, &path);
+        true
+    }
+
     /// Opens the Patterns tab a stream asked for. Returns whether one opened.
     pub fn apply_patterns_requests(&mut self) -> bool {
         let Some(idx) = self.engines.iter().position(|e| e.patterns_request) else {
@@ -4506,6 +4529,9 @@ impl FastTailApp {
             ctx.request_repaint();
         }
         if self.apply_patterns_requests() {
+            ctx.request_repaint();
+        }
+        if self.apply_explain_requests() {
             ctx.request_repaint();
         }
         if self.apply_merged_views() {
