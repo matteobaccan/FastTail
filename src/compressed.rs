@@ -1260,7 +1260,7 @@ fn list_7z(path: &Path, max_entries: usize) -> std::io::Result<SevenZListing> {
 fn entry_parts(entry: &str) -> impl Iterator<Item = &str> {
     entry
         .split(['/', '\\'])
-        .filter(|p| !p.is_empty() && *p != ".")
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
 }
 
 /// The name a zip entry is known by in FastTail (its stream identity and the value
@@ -3660,6 +3660,20 @@ mod tests {
         assert_eq!(entry_path(&bundle, "dir\\file.log"), engine.path);
         settle(&mut engine);
         assert_eq!(engine.get_line(0).as_deref(), Some("from windows"));
+    }
+
+    #[test]
+    fn test_entry_parts_filters_parent_directory_traversal() {
+        assert_eq!(normalize_entry("a/../b/./c"), "a/b/c");
+        let archive = Path::new("/logs/app.zip");
+        assert_eq!(
+            entry_path(archive, "a/../b.log"),
+            archive.join("a").join("b.log")
+        );
+        assert_eq!(
+            archive_of(&archive.join("a").join("b.log"), "a/../b.log"),
+            archive
+        );
     }
 
     #[test]
