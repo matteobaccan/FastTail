@@ -100,53 +100,87 @@ pub fn level_word(word: &str) -> Option<LogLevel> {
     token_level(word.trim().as_bytes())
 }
 
+/// 256-entry lookup table for word characters.
+/// Word characters: a level token must not be glued to letters, digits, `_` or non-ASCII
+/// bytes (`ERRORS`, `INFO2`, `error_count` are not levels).
+static IS_WORD_BYTE: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < 256 {
+        let b = i as u8;
+        table[i] = b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+        i += 1;
+    }
+    table
+};
+
+#[inline(always)]
+fn is_word_byte(b: u8) -> bool {
+    IS_WORD_BYTE[b as usize]
+}
+
 /// Level of a token (a whole word already isolated), or `None` if it is not a level word.
 fn token_level(word: &[u8]) -> Option<LogLevel> {
-    // Branch on length first to eliminate array scans and limit string comparisons.
-    // Length dispatch turns level matching into an O(1) lookup per scanned word.
+    // Length dispatch turns level matching into an O(1) integer comparison per scanned word.
+    // ASCII letters are case-folded by bitwise OR with 0x20 without multi-byte loops.
     match word.len() {
         4 => {
-            if word.eq_ignore_ascii_case(b"WARN") {
+            let w = u32::from_ne_bytes(word.try_into().ok()?) | 0x2020_2020;
+            if w == u32::from_ne_bytes(*b"warn") {
                 Some(LogLevel::Warn)
-            } else if word.eq_ignore_ascii_case(b"INFO") {
+            } else if w == u32::from_ne_bytes(*b"info") {
                 Some(LogLevel::Info)
             } else {
                 None
             }
         }
         5 => {
-            if word.eq_ignore_ascii_case(b"ERROR") {
+            let w4 = u32::from_ne_bytes(word[..4].try_into().ok()?) | 0x2020_2020;
+            let w1 = word[4] | 0x20;
+            if w4 == u32::from_ne_bytes(*b"erro") && w1 == b'r' {
                 Some(LogLevel::Error)
-            } else if word.eq_ignore_ascii_case(b"DEBUG") {
+            } else if w4 == u32::from_ne_bytes(*b"debu") && w1 == b'g' {
                 Some(LogLevel::Debug)
-            } else if word.eq_ignore_ascii_case(b"TRACE") {
+            } else if w4 == u32::from_ne_bytes(*b"trac") && w1 == b'e' {
                 Some(LogLevel::Trace)
-            } else if word.eq_ignore_ascii_case(b"FATAL") {
+            } else if w4 == u32::from_ne_bytes(*b"fata") && w1 == b'l' {
                 Some(LogLevel::Fatal)
             } else {
                 None
             }
         }
         6 => {
-            if word.eq_ignore_ascii_case(b"NOTICE") {
+            let w4 = u32::from_ne_bytes(word[..4].try_into().ok()?) | 0x2020_2020;
+            let w2 = u16::from_ne_bytes(word[4..6].try_into().ok()?) | 0x2020;
+            if w4 == u32::from_ne_bytes(*b"noti") && w2 == u16::from_ne_bytes(*b"ce") {
                 Some(LogLevel::Info)
-            } else if word.eq_ignore_ascii_case(b"SEVERE") {
+            } else if w4 == u32::from_ne_bytes(*b"seve") && w2 == u16::from_ne_bytes(*b"re") {
                 Some(LogLevel::Error)
             } else {
                 None
             }
         }
         7 => {
-            if word.eq_ignore_ascii_case(b"WARNING") {
+            let w4 = u32::from_ne_bytes(word[..4].try_into().ok()?) | 0x2020_2020;
+            let w2 = u16::from_ne_bytes(word[4..6].try_into().ok()?) | 0x2020;
+            let w1 = word[6] | 0x20;
+            if w4 == u32::from_ne_bytes(*b"warn")
+                && w2 == u16::from_ne_bytes(*b"in")
+                && w1 == b'g'
+            {
                 Some(LogLevel::Warn)
-            } else if word.eq_ignore_ascii_case(b"VERBOSE") {
+            } else if w4 == u32::from_ne_bytes(*b"verb")
+                && w2 == u16::from_ne_bytes(*b"os")
+                && w1 == b'e'
+            {
                 Some(LogLevel::Trace)
             } else {
                 None
             }
         }
         8 => {
-            if word.eq_ignore_ascii_case(b"CRITICAL") {
+            let w = u64::from_ne_bytes(word.try_into().ok()?) | 0x2020_2020_2020_2020;
+            if w == u64::from_ne_bytes(*b"critical") {
                 Some(LogLevel::Fatal)
             } else {
                 None
@@ -154,12 +188,6 @@ fn token_level(word: &[u8]) -> Option<LogLevel> {
         }
         _ => None,
     }
-}
-
-/// Word characters: a level token must not be glued to letters, digits, `_` or non-ASCII
-/// bytes (`ERRORS`, `INFO2`, `error_count` are not levels).
-fn is_word_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80
 }
 
 /// Syslog priority `<n>` at the very start of the line: the severity is `n & 7`.
@@ -207,9 +235,11 @@ pub fn detect_level_in(line: &str, window: usize) -> LogLevel {
     let window = &bytes[..bytes.len().min(window)];
     let mut i = 0;
     while i < window.len() {
-        if !is_word_byte(window[i]) {
+        while i < window.len() && !is_word_byte(window[i]) {
             i += 1;
-            continue;
+        }
+        if i >= window.len() {
+            break;
         }
         let start = i;
         while i < window.len() && is_word_byte(window[i]) {
