@@ -50,6 +50,39 @@ pub enum OpenOutcome {
     },
 }
 
+/// Opens an Event Log channel or `.evtx` file.
+fn open_event_log(
+    parsed: Result<crate::eventlog::EventLogSpec, &'static str>,
+    config: &FastTailConfig,
+    wake: Option<WakeFn>,
+) -> OpenOutcome {
+    let error = match parsed {
+        Err(key) => OpenError::System {
+            key,
+            detail: String::new(),
+        },
+        Ok(spec) => match crate::eventlog::open_engine(
+            spec,
+            config.event_log_initial_events,
+            &crate::stdin_source::Settings::from_config(
+                config.spool_dir.as_deref(),
+                config.stdin_spool_max_mb,
+            ),
+            wake,
+        ) {
+            Ok(engine) => return OpenOutcome::Opened(Box::new(engine)),
+            Err(e) => OpenError::System {
+                key: e.key,
+                detail: e.detail,
+            },
+        },
+    };
+    OpenOutcome::Failed {
+        error,
+        report: true,
+    }
+}
+
 /// Opens `path`. `wake` is called from the watcher threads when new data arrives, so a
 /// front end waiting on input can redraw.
 pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -> OpenOutcome {
@@ -78,6 +111,18 @@ pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -
             error,
             report: true,
         };
+    }
+    if let Some(parsed) = crate::eventlog::EventLogSpec::parse(path) {
+        return open_event_log(parsed, config, wake);
+    }
+    // An exported Event Log file: its events as text on Windows (elsewhere it opens as
+    // bytes).
+    if cfg!(windows) && crate::eventlog::is_evtx_file(path) {
+        let spec = crate::eventlog::EventLogSpec {
+            source: crate::eventlog::Source::File(path.to_path_buf()),
+            filter: Default::default(),
+        };
+        return open_event_log(Ok(spec), config, wake);
     }
     if let Some(parsed) = crate::net_listener::ListenSpec::parse(path) {
         let error = match parsed {

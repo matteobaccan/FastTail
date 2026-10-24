@@ -97,6 +97,8 @@ pub struct FastTailApp {
     pub listen_dialog: Option<crate::ui::listen_dialog::ListenDialog>,
     /// The Debug output dialog (Windows).
     pub debug_dialog: Option<crate::ui::debug_dialog::DebugDialog>,
+    /// The Event Log dialog (Windows), while open.
+    pub eventlog_dialog: Option<crate::ui::eventlog_dialog::EventLogDialog>,
     /// The Export dialog, while it is shown.
     pub export_dialog: Option<crate::ui::export_dialog::ExportDialog>,
     /// The Split file dialog, while it is shown.
@@ -622,6 +624,7 @@ impl FastTailApp {
             remote_dialog: None,
             listen_dialog: None,
             debug_dialog: None,
+            eventlog_dialog: None,
             log_formats: None,
             split_dialog: None,
             export_dialog: None,
@@ -3719,6 +3722,22 @@ impl FastTailApp {
                         {
                             self.debug_dialog = Some(Default::default());
                         }
+                        // Event Log channels as streams.
+                        let eventlog_btn = egui::Button::new(
+                            RichText::new("🗒").monospace().strong().color(text_pri),
+                        )
+                        .fill(self.config.theme.button_bg())
+                        .stroke(Stroke::new(1.2, accent))
+                        .corner_radius(CornerRadius::same(6))
+                        .min_size(egui::vec2(30.0, 26.0));
+                        if ui
+                            .add(eventlog_btn)
+                            .on_hover_text(t(self.config.language, "eventlog_open_tip"))
+                            .clicked()
+                        {
+                            self.eventlog_dialog =
+                                Some(crate::ui::eventlog_dialog::EventLogDialog::with_channels());
+                        }
                     }
 
                     // Sessions menu (🗂): save as, save, load, recent, save as default
@@ -5285,6 +5304,30 @@ impl FastTailApp {
                                 let _ = self.config.save();
                             }
                         });
+                        // Windows Event Log: the events of history read before following.
+                        if cfg!(windows) {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}:",
+                                        t(lang, "eventlog_initial_events")
+                                    ))
+                                    .monospace(),
+                                );
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(
+                                            &mut self.config.event_log_initial_events,
+                                        )
+                                        .range(crate::settings_model::EVENT_LOG_INITIAL_EVENTS),
+                                    )
+                                    .on_hover_text(t(lang, "eventlog_initial_events_tip"))
+                                    .changed()
+                                {
+                                    let _ = self.config.save();
+                                }
+                            });
+                        }
                         // System sources: the backlog read at open and the programs run.
                         ui.horizontal(|ui| {
                             ui.label(
@@ -6154,6 +6197,18 @@ impl FastTailApp {
             }
         }
 
+        if let Some(dialog) = self.eventlog_dialog.as_mut() {
+            use crate::ui::eventlog_dialog::EventLogChoice;
+            match dialog.show(&ctx, self.config.language, self.config.theme) {
+                Some(EventLogChoice::Open(uri)) => {
+                    self.eventlog_dialog = None;
+                    self.open_log_file(uri);
+                }
+                Some(EventLogChoice::Cancel) => self.eventlog_dialog = None,
+                None => {}
+            }
+        }
+
         // 11a. Remote file (SSH) dialog
         if let Some(dialog) = self.remote_dialog.as_mut() {
             use crate::ui::remote_dialog::RemoteChoice;
@@ -6879,6 +6934,10 @@ impl FastTailApp {
             A::OpenRemote => self.remote_dialog = Some(Default::default()),
             A::OpenListener => self.listen_dialog = Some(Default::default()),
             A::OpenDebugOutput => self.debug_dialog = Some(Default::default()),
+            A::OpenEventLog => {
+                self.eventlog_dialog =
+                    Some(crate::ui::eventlog_dialog::EventLogDialog::with_channels())
+            }
             A::OpenSystemSource => {
                 self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
             }

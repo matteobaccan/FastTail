@@ -2001,6 +2001,8 @@ pub struct TailEngine {
     pub listener: Option<crate::net_listener::ListenerStream>,
     /// The capture of a Windows debug-output stream (see `debug_output`).
     pub debug_output: Option<crate::debug_output::DebugStream>,
+    /// The worker of a Windows Event Log stream (see `eventlog`).
+    pub event_log: Option<crate::eventlog::EventLogStream>,
     /// The Statistics tab of the stream, while it is open (see `open_stats`).
     pub stats: Option<crate::field_stats::StatsState>,
     /// The Query tab of the stream: its last query, run or result (see `run_query`).
@@ -2654,6 +2656,7 @@ impl TailEngine {
             ssh: None,
             listener: None,
             debug_output: None,
+            event_log: None,
             stats: None,
             query: None,
             query_request: false,

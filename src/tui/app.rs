@@ -296,6 +296,8 @@ pub enum PromptKind {
     /// Listen (palette): a `tcp://`, `udp://` or `syslog://` URL.
     Listen,
     DebugOutput,
+    /// Open Event Log (palette, Windows): an `eventlog://` URI.
+    EventLog,
 }
 
 pub struct Prompt {
@@ -3128,7 +3130,11 @@ impl App {
     fn submit_prompt(&mut self, prompt: Prompt) {
         if matches!(
             prompt.kind,
-            PromptKind::System | PromptKind::Remote | PromptKind::Listen | PromptKind::DebugOutput
+            PromptKind::System
+                | PromptKind::Remote
+                | PromptKind::Listen
+                | PromptKind::DebugOutput
+                | PromptKind::EventLog
         ) {
             let text = prompt.field.text().trim().to_string();
             self.open_file(Path::new(&text));
@@ -3175,7 +3181,8 @@ impl App {
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
-            | PromptKind::DebugOutput => {}
+            | PromptKind::DebugOutput
+            | PromptKind::EventLog => {}
             PromptKind::LevelBytes if text.is_empty() => tab.engine.set_level_override(None),
             PromptKind::LevelBytes => {
                 match text.parse().ok().and_then(crate::log_level::valid_window) {
@@ -3227,12 +3234,17 @@ impl App {
         // The prompts that work with no stream open.
         if matches!(
             kind,
-            PromptKind::System | PromptKind::Remote | PromptKind::Listen | PromptKind::DebugOutput
+            PromptKind::System
+                | PromptKind::Remote
+                | PromptKind::Listen
+                | PromptKind::DebugOutput
+                | PromptKind::EventLog
         ) {
             let start = match kind {
                 PromptKind::System => "docker://",
                 PromptKind::Remote => "ssh://",
                 PromptKind::DebugOutput => "dbwin://local",
+                PromptKind::EventLog => "eventlog://Application",
                 _ => "syslog://127.0.0.1:5514",
             };
             self.prompt = Some(Prompt {
@@ -3259,7 +3271,8 @@ impl App {
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
-            | PromptKind::DebugOutput => {
+            | PromptKind::DebugOutput
+            | PromptKind::EventLog => {
                 unreachable!("opened above")
             }
             PromptKind::LevelBytes => e
@@ -3800,6 +3813,7 @@ impl App {
                 Action::OpenRemote => self.open_prompt(PromptKind::Remote),
                 Action::OpenListen => self.open_prompt(PromptKind::Listen),
                 Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
+                Action::OpenEventLog => self.open_prompt(PromptKind::EventLog),
                 Action::OpenSession => self.open_sessions(),
                 Action::Settings => self.open_settings(),
                 Action::EditRules => self.open_rules(),
@@ -3858,6 +3872,7 @@ impl App {
             Action::OpenRemote => self.open_prompt(PromptKind::Remote),
             Action::OpenListen => self.open_prompt(PromptKind::Listen),
             Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
+            Action::OpenEventLog => self.open_prompt(PromptKind::EventLog),
             Action::Reconnect => {
                 let engine = self.tabs.get_mut(self.active).map(|t| &mut t.engine);
                 match engine {
@@ -5625,6 +5640,10 @@ impl App {
             PromptKind::DebugOutput => tx(
                 self.lang,
                 "Capture debug output: dbwin://local or dbwin://global (?include=app.exe&exclude=...)",
+            ),
+            PromptKind::EventLog => tx(
+                self.lang,
+                "Follow an Event Log channel: eventlog://Application (?levels=1,2&ids=7031,7034-7040)",
             ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);

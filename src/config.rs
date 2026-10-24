@@ -213,6 +213,10 @@ pub struct FastTailConfig {
     /// (0..=1,000,000, default 10,000).
     #[serde(default = "default_system_source_backlog_lines")]
     pub system_source_backlog_lines: u32,
+    /// Events of history a Windows Event Log stream (`eventlog://`) reads before it
+    /// follows the channel (0..=1,000,000, default 10,000).
+    #[serde(default = "default_event_log_initial_events")]
+    pub event_log_initial_events: u32,
     /// The program run for `docker://` sources (`docker`, or `podman`).
     #[serde(default = "default_docker_command")]
     pub docker_command: String,
@@ -452,6 +456,10 @@ fn default_system_source_backlog_lines() -> u32 {
     crate::system_source::DEFAULT_BACKLOG_LINES
 }
 
+fn default_event_log_initial_events() -> u32 {
+    10_000
+}
+
 fn default_docker_command() -> String {
     crate::system_source::DEFAULT_DOCKER_COMMAND.to_string()
 }
@@ -540,6 +548,7 @@ impl Default for FastTailConfig {
             compressed_max_gb: default_compressed_max_gb(),
             stdin_spool_max_mb: default_stdin_spool_max_mb(),
             system_source_backlog_lines: default_system_source_backlog_lines(),
+            event_log_initial_events: default_event_log_initial_events(),
             docker_command: default_docker_command(),
             journalctl_command: default_journalctl_command(),
             ssh_program: default_ssh_program(),
@@ -1027,6 +1036,10 @@ impl FastTailConfig {
                 "system_source_backlog_lines",
                 self.system_source_backlog_lines.to_string(),
             )
+            .set(
+                "event_log_initial_events",
+                self.event_log_initial_events.to_string(),
+            )
             .set("docker_command", self.docker_command.clone())
             .set("journalctl_command", self.journalctl_command.clone())
             .set("ssh_program", self.ssh_program.clone())
@@ -1487,6 +1500,15 @@ impl FastTailConfig {
                     cfg.stdin_spool_max_mb =
                         crate::settings_model::clamp(v, &crate::settings_model::STDIN_SPOOL_MAX_MB);
                 }
+            }
+            if let Some(v) = general
+                .get("event_log_initial_events")
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                cfg.event_log_initial_events = crate::settings_model::clamp(
+                    v,
+                    &crate::settings_model::EVENT_LOG_INITIAL_EVENTS,
+                );
             }
             if let Some(s) = general.get("system_source_backlog_lines") {
                 if let Ok(v) = s.parse::<u32>() {
@@ -2363,6 +2385,26 @@ mod tests {
         ini.with_section(Some("general"))
             .set("time_delta_gap_ms", "soon");
         assert_eq!(FastTailConfig::from_ini(&ini).time_delta_gap_ms, 1000);
+    }
+
+    #[test]
+    fn test_event_log_initial_events_round_trips_defaults_and_clamps() {
+        assert_eq!(FastTailConfig::default().event_log_initial_events, 10_000);
+        let cfg = FastTailConfig {
+            event_log_initial_events: 250,
+            ..Default::default()
+        };
+        assert_eq!(
+            FastTailConfig::from_ini(&cfg.to_ini()).event_log_initial_events,
+            250
+        );
+        let mut ini = cfg.to_ini();
+        ini.with_section(Some("general"))
+            .set("event_log_initial_events", "5000000");
+        assert_eq!(
+            FastTailConfig::from_ini(&ini).event_log_initial_events,
+            1_000_000
+        );
     }
 
     #[test]

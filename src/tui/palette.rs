@@ -52,6 +52,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::OpenListener => (Action::OpenListen, ""),
         // OutputDebugString exists on Windows only.
         ActionId::OpenDebugOutput if cfg!(windows) => (Action::OpenDebugOutput, ""),
+        ActionId::OpenEventLog if cfg!(windows) => (Action::OpenEventLog, ""),
         ActionId::OutOfOrderPrev => (Action::PrevOutOfOrder, ""),
         ActionId::BookmarkNote => (Action::EditNote, "m"),
         ActionId::PresetSave | ActionId::PresetManage => (Action::Presets, "p"),

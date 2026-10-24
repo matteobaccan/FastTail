@@ -19,6 +19,7 @@ pub mod crash_handler;
 pub mod debug_output;
 pub mod disasm;
 pub mod dock_layout;
+pub mod eventlog;
 pub mod export;
 pub mod external_tools;
 pub mod field_stats;
