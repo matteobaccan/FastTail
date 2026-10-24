@@ -444,6 +444,10 @@ ends, which keeps `cross-line-regex` a small differentiator.
 
 ### 0.25.0 — patterns and analysis
 
+Released on 2026-10-24; `pattern-grouping` and `spike-explanation` are archived,
+`field-sparkline` stays open for its terminal row (the maintainer checks 0.24.0 to 0.26.0
+together after 0.26.0).
+
 | Change | Gaps | Effort |
 |---|---|---|
 | `pattern-grouping` — Drain patterns, CTRL + SHIFT + G (from 0.23.0) | 6 | M |

@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-24
+
+The **patterns and analysis** milestone: the Patterns tab, Explain a spike, and numeric
+fields plotted over the timeline.
+
 ### Changed
 
 - Field terms without case (`level=error|fatal`) compare an ASCII value byte by byte,
@@ -2224,6 +2229,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.25.0]: https://github.com/matteobaccan/FastTail/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/matteobaccan/FastTail/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/matteobaccan/FastTail/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/matteobaccan/FastTail/compare/v0.22.1...v0.23.0
