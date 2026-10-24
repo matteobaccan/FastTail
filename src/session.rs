@@ -75,6 +75,9 @@ pub struct StreamEntry {
     /// The timeline histogram is shown above the stream (`timeline=true`, written only
     /// when set).
     pub timeline: bool,
+    /// Numeric fields plotted over the timeline (`plot=latency_ms:avg,size:max`, written
+    /// only when set; see `plot::PlotSpec`).
+    pub plot: Option<String>,
     /// Collapse of repeated lines as `CollapseMode::name()` (`exact`, `numbers`), written
     /// as `collapse=` only when not off; `None` is off, and old files read as off.
     pub collapse: Option<String>,
@@ -257,6 +260,9 @@ impl Session {
             }
             if s.timeline {
                 sec.set("timeline", "true");
+            }
+            if let Some(plot) = s.plot.as_ref().filter(|p| !p.is_empty()) {
+                sec.set("plot", plot);
             }
             if let Some(collapse) = &s.collapse {
                 sec.set("collapse", collapse);
@@ -513,6 +519,12 @@ impl Session {
                     .get("timeline")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(false),
+                plot: sec
+                    .get("plot")
+                    .map(|v| {
+                        crate::plot::PlotSpec::list_text(&crate::plot::PlotSpec::parse_list(v))
+                    })
+                    .filter(|v| !v.is_empty()),
                 collapse: sec
                     .get("collapse")
                     .and_then(crate::collapse::CollapseMode::from_name)

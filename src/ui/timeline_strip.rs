@@ -203,6 +203,16 @@ fn span_text(clock: &dyn Fn(i64) -> i64, columns: &[Column], a: usize, b: usize)
 }
 
 /// Interaction id of a stream's strip.
+/// The colour of the `i`-th plotted field.
+pub fn plot_color(i: usize) -> egui::Color32 {
+    const COLORS: [egui::Color32; 3] = [
+        egui::Color32::from_rgb(90, 200, 255),
+        egui::Color32::from_rgb(255, 170, 60),
+        egui::Color32::from_rgb(200, 140, 255),
+    ];
+    COLORS[i % COLORS.len()]
+}
+
 /// Where the strip's menu leaves a span to explain, for the caller to take.
 pub fn explain_id(engine: &TailEngine) -> egui::Id {
     egui::Id::new("timeline_explain").with(&engine.path)
@@ -326,6 +336,59 @@ pub fn show(
         );
     }
 
+    // Plotted fields: a line each over the bars, on its own scale (min and max written at
+    // the right edge).
+    if let Some(plot) = engine.plot.as_ref().filter(|_| k > 0) {
+        for (i, series) in plot.series.iter().enumerate() {
+            let values: Vec<Option<f64>> = columns
+                .iter()
+                .map(|c| series.value_between(c.start_ms, c.end_ms))
+                .collect();
+            let (lo, hi) = values
+                .iter()
+                .flatten()
+                .fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            if lo > hi {
+                continue;
+            }
+            let color = plot_color(i);
+            let span = (hi - lo).max(f64::EPSILON);
+            let y_of =
+                |v: f64| bars.bottom() - 2.0 - (bars.height() - 4.0) * ((v - lo) / span) as f32;
+            let mut run: Vec<egui::Pos2> = Vec::new();
+            for (c, v) in values.iter().enumerate() {
+                let x = rect.left() + (c as f32 + 0.5) * col_w;
+                match v {
+                    Some(v) => run.push(egui::pos2(x, y_of(*v))),
+                    None if !run.is_empty() => {
+                        painter.add(egui::Shape::line(
+                            std::mem::take(&mut run),
+                            Stroke::new(1.5, color),
+                        ));
+                    }
+                    None => {}
+                }
+            }
+            if run.len() == 1 {
+                painter.circle_filled(run[0], 2.0, color);
+            } else if !run.is_empty() {
+                painter.add(egui::Shape::line(run, Stroke::new(1.5, color)));
+            }
+            let unit = series.unit();
+            painter.text(
+                egui::pos2(rect.right() - 4.0, bars.top() + 1.0 + i as f32 * 11.0),
+                egui::Align2::RIGHT_TOP,
+                format!(
+                    "{} – {}",
+                    crate::plot::format_value(lo, unit),
+                    crate::plot::format_value(hi, unit)
+                ),
+                small.clone(),
+                color,
+            );
+        }
+    }
+
     // Search lane: one mark per column holding a hit.
     for (c, _) in cache.lane.iter().enumerate().filter(|(_, &hit)| hit) {
         let x0 = rect.left() + c as f32 * col_w;
@@ -432,6 +495,18 @@ pub fn show(
             tip.push_str(
                 &t(lang, "timeline_untimed").replace("{n}", &histogram.untimed().to_string()),
             );
+        }
+        if let Some(plot) = engine.plot.as_ref() {
+            for series in &plot.series {
+                if let Some(v) = series.value_between(column.start_ms, column.end_ms) {
+                    tip.push_str(&format!(
+                        "\n{} {}: {}",
+                        series.spec.key,
+                        series.spec.stat.name(),
+                        crate::plot::format_value(v, series.unit())
+                    ));
+                }
+            }
         }
         if lane_on && !engine.last_searched_query.is_empty() {
             tip.push_str("\n\n");

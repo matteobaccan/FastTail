@@ -17,6 +17,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Fields plotted over time.** *📈 Plot over time* in a column header's menu draws that
+  numeric field as a line over the timeline histogram, on its own scale (min – max at the
+  right edge): per bar the average, maximum, minimum or 95th percentile (picked in the
+  legend under the strip, where `✖` removes it), the values in the bar's tooltip. Up to
+  three fields, in their own colours; times (`ns` … `h`) read in milliseconds and sizes
+  (`B` … `GB`) in bytes, a field mixing them plotted as written. The lines the filters
+  show are counted in the background, appended lines as they arrive. Saved per stream
+  (`plot=took:p95,size:max`; older builds ignore it). Third change of the 0.25.0 plan
+  (`field-sparkline`); the terminal row is left for later (the terminal has no histogram
+  row yet). Appended entries of the Patterns tab are timed from the line when the
+  timestamp cache does not hold them.
 - **Explain a spike.** Right-click a bar of the timeline histogram and pick *Explain this
   bar* (or *Explain the time window*, or **Explain** in the time range popup): an Explain
   tab compares the span with the rest of the log or the span of equal length before it.

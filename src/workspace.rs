@@ -313,6 +313,14 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         return;
     };
     engine.timeline_open = entry.timeline;
+    engine.set_plots(
+        entry
+            .plot
+            .as_deref()
+            .map(crate::plot::PlotSpec::parse_list)
+            .unwrap_or_default(),
+    );
+    engine.timeline_dirty = false;
     engine.show_line_numbers = entry.line_numbers.unwrap_or(cfg.show_line_numbers);
     engine.show_time_delta = entry.time_delta.unwrap_or(cfg.show_time_delta);
     if let Some(zone) = entry
@@ -507,6 +515,8 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         encoding: Some(engine.encoding.name().to_string()),
         ansi: (engine.ansi_mode != AnsiMode::Auto).then(|| engine.ansi_mode.name().to_string()),
         timeline: engine.timeline_open,
+        plot: (!engine.plots().is_empty())
+            .then(|| crate::plot::PlotSpec::list_text(engine.plots())),
         collapse: engine
             .collapse_mode()
             .is_on()

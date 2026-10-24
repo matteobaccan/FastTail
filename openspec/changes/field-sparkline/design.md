@@ -18,6 +18,11 @@ any size.
    per bucket (a few hundred bytes × at most a few thousand buckets).
 2. **Filled by the timing pass** that already reads every line for the histogram, when a
    field is plotted; adding a field re-runs the pass in the background with progress.
+   *Implemented:* a `Plot` scan job of its own over the visible lines (the timing pass
+   reads every line, not the visible ones, and does not scan fields), with buckets that
+   double like the histogram's (`plot::Series`, at most 2,048, each a count, sum, min,
+   max and the 1 % log histogram of `field_stats` for p95); appended lines are added on
+   poll; a filter, parser or content change counts again.
 3. **Own scale** per field (min to max of the shown buckets), with the values written at
    the strip's edge; lines with no value or a non-numeric value are skipped and counted.
 4. **Units:** a number followed by `ns` `µs` `ms` `s` `m` `h` or `B` `KB` `MB` `GB` is
