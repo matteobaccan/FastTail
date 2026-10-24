@@ -646,6 +646,7 @@ mod tests {
         f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
         f.sources[1].seen_at = Instant::now();
         f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(10));
         std::fs::write(&a_path, "2026-01-01T09:00:00Z new a\n").unwrap();
         a.poll_updates();
         fill(&mut f, &[Some(&a), Some(&b)]);
