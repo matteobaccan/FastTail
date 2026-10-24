@@ -2025,6 +2025,10 @@ pub struct TailEngine {
     /// A span to explain, asked by the histogram or the time range popup (applied by the
     /// app, which opens the tab).
     pub explain_request: Option<(i64, i64)>,
+    /// Numeric fields plotted over the timeline (see `set_plots`), saved as `plot=`.
+    plots: Vec<crate::plot::PlotSpec>,
+    /// Their series, while any is plotted.
+    pub plot: Option<crate::plot::PlotState>,
 }
 
 /// Directory scan cadence of a pattern stream.
@@ -2661,6 +2665,8 @@ impl TailEngine {
             pattern_filter_dropped: false,
             explain: None,
             explain_request: None,
+            plots: Vec::new(),
+            plot: None,
             ansi_mode: AnsiMode::Auto,
             ansi_dirty: false,
             timeline_open: false,
@@ -3554,6 +3560,7 @@ impl TailEngine {
             // New content (reload, rotation, another encoding).
             self.restart_stats();
             self.restart_patterns(true);
+            self.restart_plots();
             self.cancel_query_on_reload();
             if let Some(e) = self.explain.as_mut() {
                 // A snapshot of the old content.
@@ -4022,6 +4029,7 @@ impl TailEngine {
             // Another parser reads other fields: the statistics count again.
             self.restart_stats();
             self.restart_patterns(true);
+            self.restart_plots();
             // A table opens in the column view, unless the view was chosen already.
             if matches!(parser.as_deref(), Some(FieldParser::Delimited(_)))
                 && !self.field_view_chosen
@@ -4296,6 +4304,7 @@ impl TailEngine {
         self.poll_stats();
         self.poll_patterns();
         self.poll_explain();
+        self.poll_plots();
         self.poll_query();
         self.land_open_line();
         // A live time window slides with the clock.
@@ -5015,6 +5024,7 @@ impl TailEngine {
             // A new view: the statistics count it again, the patterns are learnt again.
             self.restart_stats();
             self.restart_patterns(false);
+            self.restart_plots();
         }
         self.filter_generation = self.filter_generation.wrapping_add(1);
         // The groups stand on the visible lines: from `start` they are formed again (and
@@ -8198,7 +8208,16 @@ impl TailEngine {
                 let Some(line) = self.get_line(idx) else {
                     continue;
                 };
-                if let Some(ts) = self.line_timestamp(idx) {
+                // Its own timestamp (the cache may not hold it), else the one above.
+                let own = self.line_timestamp(idx).or_else(|| {
+                    crate::fields::line_timestamp(
+                        parser.as_deref(),
+                        &line,
+                        crate::timestamp::FormatHint::default(),
+                    )
+                    .map(|(ms, _)| ms)
+                });
+                if let Some(ts) = own {
                     p.last_ts = ts;
                 }
                 let continuation = crate::fields::is_continuation(parser.as_deref(), &line);
@@ -8375,6 +8394,203 @@ impl TailEngine {
             e.progress = 1.0;
             e.generation = e.generation.wrapping_add(1);
         }
+    }
+
+    // ----- Numeric fields plotted over the timeline (see `plot`) -----
+
+    /// The plotted fields.
+    pub fn plots(&self) -> &[crate::plot::PlotSpec] {
+        &self.plots
+    }
+
+    /// Plots `specs` (at most `MAX_PLOTS`), counted again in the background.
+    pub fn set_plots(&mut self, mut specs: Vec<crate::plot::PlotSpec>) {
+        specs.truncate(crate::plot::MAX_PLOTS);
+        if specs == self.plots {
+            return;
+        }
+        self.plots = specs;
+        self.timeline_dirty = true;
+        if self.plots.is_empty() {
+            self.plot = None;
+        } else {
+            self.plot.get_or_insert_with(Default::default).restart = true;
+            self.poll_plots();
+        }
+    }
+
+    /// Plots field `key` (average per bucket) beside the others; false when it is plotted
+    /// already or three are.
+    pub fn add_plot(&mut self, key: &str) -> bool {
+        if self.plots.iter().any(|p| p.key == key) || self.plots.len() >= crate::plot::MAX_PLOTS {
+            return false;
+        }
+        let mut specs = self.plots.clone();
+        specs.push(crate::plot::PlotSpec {
+            key: key.to_string(),
+            stat: crate::plot::PlotStat::Avg,
+        });
+        self.set_plots(specs);
+        true
+    }
+
+    pub fn remove_plot(&mut self, key: &str) {
+        let specs = self
+            .plots
+            .iter()
+            .filter(|p| p.key != key)
+            .cloned()
+            .collect();
+        self.set_plots(specs);
+    }
+
+    /// What field `key` draws per bucket.
+    pub fn set_plot_stat(&mut self, key: &str, stat: crate::plot::PlotStat) {
+        let specs = self
+            .plots
+            .iter()
+            .map(|p| crate::plot::PlotSpec {
+                key: p.key.clone(),
+                stat: if p.key == key { stat } else { p.stat },
+            })
+            .collect();
+        self.set_plots(specs);
+    }
+
+    fn restart_plots(&mut self) {
+        if let Some(p) = self.plot.as_mut() {
+            p.restart = true;
+        }
+    }
+
+    fn start_plots(&mut self) {
+        if !self.stats_view_settled(false) {
+            return;
+        }
+        let visible = if self.is_filter_active() {
+            VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+        } else {
+            VisibleSet::All
+        };
+        let lines = self.stats_complete_lines();
+        let (file, range) = self.patterns_range(lines);
+        let specs = self.plots.clone();
+        let Some(p) = self.plot.as_mut() else {
+            return;
+        };
+        p.restart = false;
+        p.series = specs
+            .iter()
+            .cloned()
+            .map(crate::plot::Series::new)
+            .collect();
+        p.covered = lines;
+        p.last_ts = NO_TIMESTAMP;
+        p.progress = 0.0;
+        p.generation = p.generation.wrapping_add(1);
+        p.job_generation = p.job_generation.wrapping_add(1);
+        p.job = Some(ScanJob::spawn(
+            p.job_generation,
+            &file,
+            range,
+            JobSpec::Plot { specs, visible },
+        ));
+    }
+
+    /// Takes the series a plot scan sent, and adds the visible lines appended since (a
+    /// bounded number per poll).
+    fn poll_plots(&mut self) {
+        const APPEND_BATCH: usize = 5_000;
+        let Some(p) = self.plot.as_mut() else {
+            return;
+        };
+        if !p.restart && p.covered > self.line_offsets.len() {
+            p.restart = true;
+        }
+        if p.restart {
+            self.start_plots();
+            return;
+        }
+        if let Some(job) = p.job.as_ref() {
+            let mut finished = false;
+            while let Some(batch) = job.try_recv() {
+                match batch {
+                    ScanBatch::Plot(series) => p.series = series,
+                    ScanBatch::Progress(f) => p.progress = f,
+                    ScanBatch::Done { .. } | ScanBatch::Failed => finished = true,
+                    _ => {}
+                }
+            }
+            if !finished {
+                return;
+            }
+            p.job = None;
+            p.progress = 1.0;
+            p.generation = p.generation.wrapping_add(1);
+            // The appended lines inherit the time of the last line scanned.
+            let covered = p.covered;
+            let last = covered.checked_sub(1).and_then(|l| {
+                self.line_timestamp(l).or_else(|| {
+                    let line = self.get_line(l)?;
+                    crate::fields::line_timestamp(
+                        self.field_parser.as_deref(),
+                        &line,
+                        crate::timestamp::FormatHint::default(),
+                    )
+                    .map(|(ms, _)| ms)
+                })
+            });
+            if let Some(p) = self.plot.as_mut() {
+                p.last_ts = last.unwrap_or(NO_TIMESTAMP);
+            }
+        }
+        if !self.stats_view_settled(true) {
+            return;
+        }
+        let Some(mut p) = self.plot.take() else {
+            return;
+        };
+        let from = p.covered;
+        let to = self.stats_complete_lines().min(from + APPEND_BATCH);
+        if from < to {
+            let parser = self.field_parser.clone();
+            let filtered = self.is_filter_active();
+            crate::fields::with_spans(|spans| {
+                for idx in from..to {
+                    let Some(line) = self.get_line(idx) else {
+                        continue;
+                    };
+                    // Timed as the scan does: its own timestamp (the cache may not hold
+                    // it, the histogram being closed), else the one above.
+                    let own = self.line_timestamp(idx).or_else(|| {
+                        crate::fields::line_timestamp(
+                            parser.as_deref(),
+                            &line,
+                            crate::timestamp::FormatHint::default(),
+                        )
+                        .map(|(ms, _)| ms)
+                    });
+                    if let Some(ts) = own {
+                        p.last_ts = ts;
+                    }
+                    if filtered && self.filtered_lines.binary_search(&idx).is_err() {
+                        continue;
+                    }
+                    let Some(parser) = parser.as_deref() else {
+                        continue;
+                    };
+                    crate::fields::scan(parser, &line, spans);
+                    for series in &mut p.series {
+                        if let Some(f) = spans.get(&line, &series.spec.key) {
+                            series.add(p.last_ts, &f.value());
+                        }
+                    }
+                }
+            });
+            p.covered = to;
+            p.generation = p.generation.wrapping_add(1);
+        }
+        self.plot = Some(p);
     }
 
     // ----- Queries (see `query`) -----
@@ -8844,7 +9060,8 @@ impl TailEngine {
                 | ScanBatch::Query(_)
                 | ScanBatch::PatternTree(_)
                 | ScanBatch::PatternCounts(_)
-                | ScanBatch::Explain(_) => {}
+                | ScanBatch::Explain(_)
+                | ScanBatch::Plot(_) => {}
                 ScanBatch::MultiHits(found) => {
                     // The visible set was exact (hidden lines and time window included):
                     // only the search scope applies, on the first line of each hit.
@@ -8899,7 +9116,8 @@ impl TailEngine {
                         ScanKind::FieldStats
                         | ScanKind::Query
                         | ScanKind::Patterns
-                        | ScanKind::Explain => {}
+                        | ScanKind::Explain
+                        | ScanKind::Plot => {}
                         ScanKind::Filter => {
                             self.extend_filtered(lines);
                             self.filter_generation = self.filter_generation.wrapping_add(1);
@@ -9041,7 +9259,11 @@ impl TailEngine {
 
     fn finish_job(&mut self, kind: ScanKind, end_offset: u64) {
         match kind {
-            ScanKind::FieldStats | ScanKind::Query | ScanKind::Patterns | ScanKind::Explain => {}
+            ScanKind::FieldStats
+            | ScanKind::Query
+            | ScanKind::Patterns
+            | ScanKind::Explain
+            | ScanKind::Plot => {}
             ScanKind::Index => {
                 self.index_pending = false;
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);

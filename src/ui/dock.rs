@@ -938,6 +938,7 @@ fn render_timeline(
         engine.time_range_error = !from_ok || !to_ok;
         ui.ctx().request_repaint();
     }
+    render_plot_legend(ui, engine, theme, lang);
     // "Explain this bar" / "Explain the time window" from the strip's menu.
     let ask = crate::ui::timeline_strip::explain_id(engine);
     if let Some(span) = ui.data_mut(|d| d.remove_temp::<(i64, i64)>(ask)) {
@@ -1591,6 +1592,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Query => "scan_query",
         crate::scan_job::ScanKind::Patterns => "scan_patterns",
         crate::scan_job::ScanKind::Explain => "scan_explain",
+        crate::scan_job::ScanKind::Plot => "scan_plot",
     }
 }
 
@@ -5087,6 +5089,8 @@ enum HeaderAction {
     Reset,
     /// Statistics of this field.
     Stats(String),
+    /// Plot this field over the timeline.
+    Plot(String),
 }
 
 /// Header row of the column view: the field names over their columns (following the
@@ -5222,6 +5226,13 @@ fn render_field_header(
         Some(HeaderAction::Width(key, cells)) => engine.set_field_width(&key, cells),
         Some(HeaderAction::Reset) => engine.reset_field_columns(),
         Some(HeaderAction::Stats(key)) => engine.stats_request = Some(Some(key)),
+        Some(HeaderAction::Plot(key)) => {
+            if engine.add_plot(&key) && !engine.timeline_open {
+                // Plotted over the histogram: it opens with it.
+                engine.timeline_open = true;
+                engine.request_timeline();
+            }
+        }
         None => return,
     }
     ui.ctx().request_repaint();
@@ -5280,6 +5291,20 @@ fn header_menu(
             .clicked()
         {
             action = Some(HeaderAction::Stats(keys[i].clone()));
+            ui.close();
+        }
+        let plotted = engine.plots().iter().any(|p| p.key == keys[i]);
+        let room = engine.plots().len() < crate::plot::MAX_PLOTS;
+        if ui
+            .add_enabled(
+                !plotted && room,
+                egui::Button::new(format!("📈 {}", t(lang, "plot_over_time"))),
+            )
+            .on_hover_text(t(lang, "plot_over_time_tip"))
+            .on_disabled_hover_text(t(lang, "plot_full"))
+            .clicked()
+        {
+            action = Some(HeaderAction::Plot(keys[i].clone()));
             ui.close();
         }
         ui.separator();
@@ -7837,6 +7862,86 @@ fn out_of_order_mark(engine: &TailEngine, idx: usize) -> Option<i64> {
         return None;
     }
     engine.out_of_order_jump(idx)
+}
+
+/// The legend of the fields plotted over the histogram: `━ key` in its colour, the scale,
+/// what each bucket shows (a menu: avg / max / min / p95) and `✖` to remove it.
+fn render_plot_legend(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    if engine.plots().is_empty() {
+        return;
+    }
+    let mut remove: Option<String> = None;
+    let mut stat: Option<(String, crate::plot::PlotStat)> = None;
+    let specs = engine.plots().to_vec();
+    ui.horizontal_wrapped(|ui| {
+        for (i, spec) in specs.iter().enumerate() {
+            let series = engine
+                .plot
+                .as_ref()
+                .and_then(|p| p.series.iter().find(|s| s.spec.key == spec.key));
+            let color = crate::ui::timeline_strip::plot_color(i);
+            ui.label(
+                RichText::new(format!("━ {}", spec.key))
+                    .monospace()
+                    .size(11.0)
+                    .color(color),
+            );
+            egui::ComboBox::from_id_salt(("plot_stat", engine.path.clone(), &spec.key))
+                .selected_text(RichText::new(spec.stat.name()).monospace().size(11.0))
+                .width(52.0)
+                .show_ui(ui, |ui| {
+                    for s in crate::plot::PlotStat::ALL {
+                        if ui.selectable_label(s == spec.stat, s.name()).clicked() {
+                            stat = Some((spec.key.clone(), s));
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(t(lang, "plot_stat_tip"));
+            if let Some(series) = series {
+                let mut notes = Vec::new();
+                if series.mixed() {
+                    notes.push(t(lang, "plot_mixed").to_string());
+                }
+                if series.skipped > 0 {
+                    notes.push(t(lang, "plot_skipped").replace("{0}", &series.skipped.to_string()));
+                }
+                if series.is_empty() && !engine.plot.as_ref().is_some_and(|p| p.running()) {
+                    notes.push(t(lang, "plot_no_values").to_string());
+                }
+                if !notes.is_empty() {
+                    ui.label(
+                        RichText::new(format!("ⓘ {}", notes.join(" · ")))
+                            .size(10.5)
+                            .color(theme.text_dim()),
+                    );
+                }
+            }
+            if ui
+                .small_button("✖")
+                .on_hover_text(t(lang, "plot_remove"))
+                .clicked()
+            {
+                remove = Some(spec.key.clone());
+            }
+            ui.add_space(8.0);
+        }
+        if let Some(p) = engine.plot.as_ref().filter(|p| p.running()) {
+            ui.label(
+                RichText::new(format!("⏳ {:.0}%", p.progress * 100.0))
+                    .size(10.5)
+                    .color(theme.text_dim()),
+            );
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    });
+    if let Some(key) = remove {
+        engine.remove_plot(&key);
+    }
+    if let Some((key, s)) = stat {
+        engine.set_plot_stat(&key, s);
+    }
 }
 
 /// The stream bar's pattern filter chip: `⧉ N patterns`, the patterns in its tooltip

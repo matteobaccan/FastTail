@@ -28,6 +28,7 @@ mod compare_lines;
 mod disassembly_view;
 mod export_formats;
 mod external_tools;
+mod field_sparkline;
 mod filter_expressions;
 mod filter_tabs;
 mod folder_sources;

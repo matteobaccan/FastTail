@@ -7720,6 +7720,7 @@ fn progress_text(e: &TailEngine, lang: Language) -> String {
             ScanKind::Query => "query",
             ScanKind::Patterns => "patterns",
             ScanKind::Explain => "explain",
+            ScanKind::Plot => "plot",
         };
         s.push_str(&format!(" - {name} {:.0}%", p * 100.0));
         if kind == ScanKind::Search {

@@ -24,6 +24,7 @@ fn entry(path: PathBuf) -> StreamEntry {
         encoding: Some("ANSI".to_string()),
         ansi: Some("strip".to_string()),
         timeline: true,
+        plot: Some("latency_ms:p95,size:max".to_string()),
         collapse: Some("numbers".to_string()),
         context_lines: 4,
         disasm_arch: Some("x86-32".into()),

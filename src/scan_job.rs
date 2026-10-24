@@ -54,6 +54,8 @@ pub enum ScanKind {
     Patterns,
     /// Compares a span of the timeline with a baseline (Explain tab).
     Explain,
+    /// Aggregates numeric fields per time bucket (plotted over the histogram).
+    Plot,
 }
 
 /// Most include terms, and most exclude terms, a stream can hold.
@@ -565,6 +567,12 @@ pub enum JobSpec {
         sides: crate::spike::Sides,
         visible: VisibleSet,
     },
+    /// Aggregate the values of `specs` per time bucket over the visible lines (see `plot`);
+    /// the series are sent at the end (`ScanBatch::Plot`).
+    Plot {
+        specs: Vec<crate::plot::PlotSpec>,
+        visible: VisibleSet,
+    },
 }
 
 /// The lines a search or collapse job covers.
@@ -678,6 +686,8 @@ pub enum ScanBatch {
     PatternCounts(Box<crate::patterns::PatternCounts>),
     /// The counts of an `Explain` job so far (each batch replaces the one before).
     Explain(Box<crate::spike::Explanation>),
+    /// The series of a `Plot` job.
+    Plot(Vec<crate::plot::Series>),
     /// Fraction of the byte range scanned so far.
     Progress(f32),
     /// The range was scanned completely (`lines` = line count covered).
@@ -730,6 +740,7 @@ impl ScanJob {
             JobSpec::FieldStats { .. } => ScanKind::FieldStats,
             JobSpec::Patterns { .. } => ScanKind::Patterns,
             JobSpec::Explain { .. } => ScanKind::Explain,
+            JobSpec::Plot { .. } => ScanKind::Plot,
             JobSpec::Query { .. } => ScanKind::Query,
         };
         let (tx, rx) = channel();
@@ -878,6 +889,15 @@ struct ExplainRun {
     inherited: i64,
     hint: FormatHint,
     sent: std::time::Instant,
+}
+
+/// Running state of a `Plot` job: the series, the field buffer, the timestamp the next
+/// line inherits.
+struct PlotRun {
+    series: Vec<crate::plot::Series>,
+    spans: crate::fields::FieldSpans,
+    inherited: i64,
+    hint: FormatHint,
 }
 
 /// How often an `Explain` job sends its counts so far.
@@ -1034,6 +1054,19 @@ fn run(
         }),
         _ => None,
     };
+    let mut plot_run = match &spec {
+        JobSpec::Plot { specs, .. } => Some(PlotRun {
+            series: specs
+                .iter()
+                .cloned()
+                .map(crate::plot::Series::new)
+                .collect(),
+            spans: crate::fields::FieldSpans::new(),
+            inherited: NO_TIMESTAMP,
+            hint: FormatHint::default(),
+        }),
+        _ => None,
+    };
     if matches!(spec, JobSpec::Index) && range.start_offset < range.end_offset {
         offsets.push(range.start_offset);
     }
@@ -1048,6 +1081,7 @@ fn run(
         | JobSpec::FieldStats { visible, .. }
         | JobSpec::Patterns { visible, .. }
         | JobSpec::Explain { visible, .. }
+        | JobSpec::Plot { visible, .. }
         | JobSpec::Query { visible, .. }
         | JobSpec::Search {
             filter: visible, ..
@@ -1074,10 +1108,36 @@ fn run(
     )>,
                     query_run: &mut Option<QueryRun<'_>>,
                     pattern_run: &mut Option<PatternRun>,
-                    explain_run: &mut Option<ExplainRun>|
+                    explain_run: &mut Option<ExplainRun>,
+                    plot_run: &mut Option<PlotRun>|
      -> bool {
         match &spec {
             JobSpec::Index => true,
+            JobSpec::Plot { .. } => {
+                let Some(run) = plot_run.as_mut() else {
+                    return true;
+                };
+                let parser = range.parser.as_deref();
+                line_passes(bytes, range.encoding, strip, &mut strip_buf, |s| {
+                    if let Some((ms, f)) = crate::fields::line_timestamp(parser, s, run.hint) {
+                        run.hint = f;
+                        run.inherited = ms;
+                    }
+                    if !walk.as_mut().is_none_or(|w| w.visible(idx, s)) {
+                        return true;
+                    }
+                    if let Some(parser) = parser {
+                        crate::fields::scan(parser, s, &mut run.spans);
+                        for series in &mut run.series {
+                            if let Some(f) = run.spans.get(s, &series.spec.key) {
+                                series.add(run.inherited, &f.value());
+                            }
+                        }
+                    }
+                    true
+                });
+                true
+            }
             JobSpec::Explain { .. } => {
                 let Some(run) = explain_run.as_mut() else {
                     return true;
@@ -1354,6 +1414,7 @@ fn run(
                     &mut query_run,
                     &mut pattern_run,
                     &mut explain_run,
+                    &mut plot_run,
                 ) {
                     limit_reached = true;
                     break 'outer;
@@ -1479,6 +1540,7 @@ fn run(
             &mut query_run,
             &mut pattern_run,
             &mut explain_run,
+            &mut plot_run,
         );
         line_idx += 1;
     }
@@ -1507,6 +1569,10 @@ fn run(
             return;
         }
         if scanner.skipped > 0 && !send(ScanBatch::Skipped(scanner.skipped)) {
+            return;
+        }
+    } else if let Some(run) = plot_run.take() {
+        if !send(ScanBatch::Plot(run.series)) {
             return;
         }
     } else if let Some(run) = explain_run.take() {
