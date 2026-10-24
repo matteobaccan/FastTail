@@ -27,11 +27,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::find_all::FindState;
 use crate::i18n::Language;
 use crate::i18n_tui::{en, tx, txf};
 use crate::tui::clipboard::{Clipboard, Copied};
 use crate::tui::colors::{Chrome, Palette};
 use crate::tui::dock::{self, Place, Zone};
+use crate::tui::find::{FindWindow, Row as FindRow};
 use crate::tui::form::{FieldKey, TextField};
 use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
@@ -596,6 +598,10 @@ pub struct App {
     pub quit: bool,
     /// The JSON tree of a row (`J`).
     pub json_dialog: Option<JsonDialog>,
+    /// Search all streams (`Ctrl+Shift+F`, `Alt+/`): the Find results window.
+    pub find_window: Option<FindWindow>,
+    /// Rows of its list as last drawn (the page of PgUp / PgDn).
+    find_rows: usize,
     /// Windows that just closed, drawn as an outline shrinking to their centre for
     /// `CLOSE_EFFECT` (the place each had, and when it closed).
     pub closing: Vec<(Rect, Instant)>,
@@ -709,6 +715,8 @@ impl App {
             quit: false,
             bell: false,
             json_dialog: None,
+            find_window: None,
+            find_rows: 10,
             closing: Vec::new(),
             show_about: false,
             bell_rung: false,
@@ -1070,6 +1078,7 @@ impl App {
             }
             self.check_alerts(&shown);
         }
+        let found = self.poll_find();
         // Without a configuration (tests, the benchmark) there are no meters.
         let telemetry_on = self
             .settings
@@ -1171,7 +1180,7 @@ impl App {
         self.last_signature = sig;
         let animating = !self.closing.is_empty();
         self.closing.retain(|(_, at)| at.elapsed() < CLOSE_EFFECT);
-        changed || listed || global_applied || idle_locked || telemetry || animating
+        changed || listed || found || global_applied || idle_locked || telemetry || animating
     }
 
     /// Background work in flight: the loop then polls a little faster.
@@ -1186,6 +1195,10 @@ impl App {
             || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
             || self.split.is_some()
             || self.split_waiting.is_some()
+            || self
+                .find_window
+                .as_ref()
+                .is_some_and(|w| w.session.is_active())
     }
 
     fn signature(&self) -> Signature {
@@ -1287,6 +1300,9 @@ impl App {
         }
         if self.json_dialog.is_some() {
             return self.on_json_key(key);
+        }
+        if self.find_window.as_ref().is_some_and(|w| w.shown) {
+            return self.on_find_key(key);
         }
         if self.show_about {
             use crossterm::event::{KeyCode, KeyEventKind};
@@ -1831,6 +1847,180 @@ impl App {
             Err(crate::json_tree::NoTree::NotJson) => {
                 self.message = Some(tx(self.lang, "No JSON on this row").into())
             }
+        }
+    }
+
+    /// `Ctrl+Shift+F` / `Alt+/`: the Find results window, its query box holding the
+    /// focused stream's search; the results of the last search when it was hidden.
+    fn open_find(&mut self) {
+        if let Some(w) = self.find_window.as_mut() {
+            w.shown = true;
+            w.editing = w.row_count() == 0;
+            return;
+        }
+        let query = self
+            .tabs
+            .get(self.active)
+            .map(|t| t.engine.search_query.trim().to_string())
+            .unwrap_or_default();
+        self.find_window = Some(FindWindow::new(&query));
+    }
+
+    /// Closes the Find results window, cancelling its jobs.
+    fn close_find(&mut self) {
+        if let Some(mut w) = self.find_window.take() {
+            w.session.close();
+        }
+    }
+
+    /// Drains the Find results jobs; true when the window has something new to draw.
+    fn poll_find(&mut self) -> bool {
+        let Some(w) = self.find_window.as_mut() else {
+            return false;
+        };
+        let before = (
+            w.session.total_hits(),
+            w.session.running_count(),
+            w.session.queued_count(),
+            w.session
+                .groups
+                .iter()
+                .map(|g| (g.progress * 100.0) as usize)
+                .sum::<usize>(),
+        );
+        let engines: Vec<&TailEngine> = self.tabs.iter().map(|t| &t.engine).collect();
+        w.session.poll(&engines);
+        let after = (
+            w.session.total_hits(),
+            w.session.running_count(),
+            w.session.queued_count(),
+            w.session
+                .groups
+                .iter()
+                .map(|g| (g.progress * 100.0) as usize)
+                .sum::<usize>(),
+        );
+        w.shown && before != after
+    }
+
+    /// Runs the query box's text on every open stream.
+    fn run_find(&mut self) {
+        let Some(w) = self.find_window.as_mut() else {
+            return;
+        };
+        w.session.input = w.field.text().to_string();
+        let engines: Vec<&TailEngine> = self.tabs.iter().map(|t| &t.engine).collect();
+        w.session.start(&engines);
+        w.selected = 0;
+        w.top = 0;
+        if !w.session.groups.is_empty() {
+            w.editing = false;
+        }
+    }
+
+    fn on_find_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let page = self.find_rows.max(1);
+        let Some(w) = self.find_window.as_mut() else {
+            return false;
+        };
+        // The key that opened the window also takes it back to the query box.
+        if keys::map_key(key) == Some(Action::FindAll) {
+            w.editing = true;
+            return true;
+        }
+        if w.editing {
+            match w.field.on_key(key) {
+                FieldKey::Submit => self.run_find(),
+                FieldKey::Cancel => self.close_find(),
+                FieldKey::Edited => {}
+                FieldKey::Other => {
+                    if matches!(key.code, KeyCode::Tab | KeyCode::Down) && w.row_count() > 0 {
+                        w.editing = false;
+                    }
+                }
+            }
+            return true;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.close_find(),
+            KeyCode::Char('k') if ctrl => self.activate_find(true),
+            KeyCode::Up | KeyCode::Char('k') => w.move_by(-1, page),
+            KeyCode::Down | KeyCode::Char('j') => w.move_by(1, page),
+            KeyCode::PageUp => w.move_by(-(page as isize), page),
+            KeyCode::PageDown => w.move_by(page as isize, page),
+            KeyCode::Home => w.move_by(isize::MIN / 2, page),
+            KeyCode::End => w.move_by(isize::MAX / 2, page),
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('/') => w.editing = true,
+            KeyCode::Char('r') => {
+                let engines: Vec<&TailEngine> = self.tabs.iter().map(|t| &t.engine).collect();
+                w.session.refresh(&engines);
+                w.selected = 0;
+                w.top = 0;
+            }
+            KeyCode::Char('s') => w.session.stop(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
+                let open = |w: &FindWindow, g: usize| !w.session.groups[g].collapsed;
+                let toggle = match (w.row(w.selected), key.code) {
+                    (Some(FindRow::Header(g)), KeyCode::Left) => open(w, g),
+                    (Some(FindRow::Header(g)), KeyCode::Right) => !open(w, g),
+                    (Some(FindRow::Hit(..)), KeyCode::Left) | (Some(_), KeyCode::Char(' ')) => true,
+                    _ => false,
+                };
+                if toggle {
+                    w.toggle_group();
+                    w.reveal(page);
+                }
+            }
+            KeyCode::Enter => self.activate_find(false),
+            _ => {}
+        }
+        true
+    }
+
+    /// `Enter` on the selected row: a header opens or closes its group, a result focuses
+    /// its stream on the line (`in_context`: "Show in context", filters suspended) and
+    /// hides the window; a stale result does not jump.
+    fn activate_find(&mut self, in_context: bool) {
+        let Some(w) = self.find_window.as_mut() else {
+            return;
+        };
+        let (g, h) = match w.row(w.selected) {
+            Some(FindRow::Hit(g, h)) => (g, h),
+            Some(FindRow::Header(_)) => {
+                w.toggle_group();
+                return;
+            }
+            None => return,
+        };
+        let committed = if in_context {
+            w.session.commit_in_context(g, h)
+        } else {
+            w.session.commit(g, h)
+        };
+        if !committed {
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "This stream was reloaded since the search: press r to search again",
+                )
+                .into(),
+            );
+            return;
+        }
+        let Some((path, line)) = w.session.jump.take() else {
+            return;
+        };
+        let in_context = std::mem::take(&mut w.session.jump_in_context);
+        w.shown = false;
+        let Some(i) = self.tabs.iter().position(|t| t.engine.path == path) else {
+            return;
+        };
+        self.focus_tab(i);
+        let engine = &mut self.tabs[i].engine;
+        if !(in_context && engine.enter_context(line)) {
+            engine.request_jump(line, self.lang);
         }
     }
 
@@ -3890,6 +4080,7 @@ impl App {
                 }
             }
             Action::GoTo => self.open_prompt(PromptKind::Goto),
+            Action::FindAll => self.open_find(),
             Action::Palette => self.open_palette(),
             Action::Label(n) => self.toggle_label(n),
             Action::LabelPrefix => {
@@ -4020,6 +4211,7 @@ impl App {
                     || self.columns_menu.is_some()
                     || self.palette_dialog.is_some()
                     || self.json_dialog.is_some()
+                    || self.find_window.as_ref().is_some_and(|w| w.shown)
                     || self.show_about
                     || self.tools_editor.is_some()
                     || self.confirm_overwrite.is_some()
@@ -4311,6 +4503,17 @@ impl App {
                     }
                 }
             }
+            // A click selects a row, a click on the selected row runs it (`Enter`).
+            Target::ListItem(i) if self.find_window.as_ref().is_some_and(|w| w.shown) => {
+                if let Some(w) = self.find_window.as_mut() {
+                    w.editing = false;
+                    if w.selected == i {
+                        self.activate_find(false);
+                    } else {
+                        w.selected = i.min(w.row_count().saturating_sub(1));
+                    }
+                }
+            }
             // A click folds or unfolds the node.
             Target::ListItem(i) if self.json_dialog.is_some() => {
                 if let Some(d) = self.json_dialog.as_mut() {
@@ -4404,6 +4607,8 @@ impl App {
                     }
                 } else if self.json_dialog.is_some() {
                     self.json_dialog = None;
+                } else if self.find_window.as_ref().is_some_and(|w| w.shown) {
+                    self.close_find();
                 } else if self.show_about {
                     self.show_about = false;
                 } else if self.palette_dialog.is_some() {
@@ -4493,6 +4698,9 @@ impl App {
                 self.columns_menu = None;
                 self.palette_dialog = None;
                 self.json_dialog = None;
+                if let Some(w) = self.find_window.as_mut() {
+                    w.shown = false;
+                }
                 self.show_about = false;
                 self.prompt = None;
                 self.rules = None;
@@ -4911,6 +5119,9 @@ impl App {
         }
         if self.json_dialog.is_some() {
             self.draw_json(frame, main_area);
+        }
+        if self.find_window.as_ref().is_some_and(|w| w.shown) {
+            self.draw_find(frame, main_area);
         }
         if self.show_about {
             self.draw_about(frame, main_area);
@@ -5979,6 +6190,139 @@ impl App {
             ]));
         }
         frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// The Find results window: the query box, a summary, then one header per stream
+    /// (name, matches, state) and its results (line number, text). Below 60 columns the
+    /// line numbers are left out.
+    fn draw_find(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let lang = self.lang;
+        let dim = Style::default().fg(palette.dim());
+        let width = area.width.saturating_sub(4).clamp(30, 160);
+        let height = area.height.saturating_sub(2).max(9);
+        let title = tx(lang, "Find results");
+        let inner = self.dialog(frame, area, (width, height), title, false);
+        let room = inner.height.saturating_sub(3) as usize;
+        self.find_rows = room.max(1);
+        let Some(w) = self.find_window.as_mut() else {
+            return;
+        };
+        w.reveal(room.max(1));
+        let w = &*w;
+        let (shown, x) = w.field.view(inner.width.saturating_sub(2) as usize);
+        let query_style = if w.editing { Style::default() } else { dim };
+        let mut out = vec![Line::styled(
+            format!("> {}", view::sanitize(&shown)),
+            query_style,
+        )];
+        let session = &w.session;
+        out.push(if session.started_at.is_none() {
+            Line::styled(tx(lang, "Enter search all streams   Esc close"), dim)
+        } else {
+            let mut text = txf(
+                lang,
+                "{0} matches in {1} of {2} streams",
+                &[
+                    &session.total_hits(),
+                    &session.streams_with_hits(),
+                    &session.groups.len(),
+                ],
+            );
+            if session.is_active() {
+                text.push_str("   ");
+                text.push_str(&txf(
+                    lang,
+                    "searching {0}, queued {1}",
+                    &[&session.running_count(), &session.queued_count()],
+                ));
+            }
+            Line::styled(text, Style::default().fg(palette.accent()))
+        });
+        out.push(Line::styled(
+            tx(
+                lang,
+                "Enter go to line   Space fold   r refresh   s stop   Tab query   Esc close",
+            ),
+            dim,
+        ));
+        let numbers = inner.width >= 60;
+        let mut items = Vec::new();
+        for i in w.top..(w.top + room).min(w.row_count()) {
+            let Some(row) = w.row(i) else {
+                break;
+            };
+            let mut line = match row {
+                FindRow::Header(g) => {
+                    let group = &session.groups[g];
+                    let mark = if group.collapsed { "▶" } else { "▼" };
+                    let mut text = format!(
+                        "{mark} {}  {}",
+                        view::sanitize(&group.name),
+                        txf(lang, "{0} matches", &[&group.total])
+                    );
+                    let state = match group.state {
+                        FindState::Queued => Some(tx(lang, "queued").to_string()),
+                        FindState::Running => Some(format!("{:.0}%", group.progress * 100.0)),
+                        FindState::Done => None,
+                        FindState::Stopped => Some(tx(lang, "stopped").to_string()),
+                        FindState::Failed => Some(tx(lang, "failed").to_string()),
+                        FindState::SkippedHex => Some(tx(lang, "HEX: not searched").to_string()),
+                        FindState::Stale => Some(tx(lang, "stale: press r").to_string()),
+                        FindState::SkippedUntimed => Some(tx(lang, "no timestamps").to_string()),
+                    };
+                    if let Some(state) = state {
+                        text.push_str(&format!("  ({state})"));
+                    }
+                    if group.capped() {
+                        text.push_str("  ");
+                        text.push_str(&txf(lang, "first {0} listed", &[&group.hits.len()]));
+                    }
+                    Line::styled(
+                        text,
+                        Style::default()
+                            .fg(palette.accent())
+                            .add_modifier(Modifier::BOLD),
+                    )
+                }
+                FindRow::Hit(g, h) => {
+                    let group = &session.groups[g];
+                    let idx = group.hits[h];
+                    let engine = self
+                        .tabs
+                        .iter()
+                        .map(|t| &t.engine)
+                        .find(|e| e.path == group.path);
+                    let text = engine.and_then(|e| e.get_line(idx)).unwrap_or_default();
+                    let text = view::sanitize(&text);
+                    let style = if group.jumpable() {
+                        Style::default()
+                    } else {
+                        dim
+                    };
+                    let mut spans = vec![if numbers {
+                        let number = engine.map_or(idx + 1, |e| e.shown_line_number(idx));
+                        Span::styled(format!("  {number:>8}  "), dim)
+                    } else {
+                        Span::raw("  ")
+                    }];
+                    spans.extend(find_hit_spans(&text, &session.query, style, palette.hit()));
+                    Line::from(spans)
+                }
+            };
+            if i == w.selected && !w.editing {
+                line = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+            }
+            let y = inner.y + 3 + (i - w.top) as u16;
+            items.push((Rect::new(inner.x, y, inner.width, 1), i));
+            out.push(line);
+        }
+        let editing = w.editing;
+        self.hits.list_items.extend(items);
+        frame.render_widget(Paragraph::new(out), inner);
+        if editing {
+            frame.set_cursor_position((inner.x + 2 + x as u16, inner.y));
+        }
     }
 
     /// The JSON dialog: the tree rows around the selected one, keys coloured as the GUI's
@@ -7216,6 +7560,30 @@ impl App {
 
 /// The help: keys, what they do and the command `Enter` runs from the help (`None` for
 /// entries that only describe, which the cursor steps over).
+/// A Find results row: the text with the query's occurrences (case folded, as the search
+/// matches) in the hit style. Only ASCII is folded here, so a non-ASCII query whose case
+/// differs is drawn plain.
+fn find_hit_spans(text: &str, query: &str, style: Style, hit: Style) -> Vec<Span<'static>> {
+    if query.is_empty() {
+        return vec![Span::styled(text.to_string(), style)];
+    }
+    let folded = text.to_ascii_lowercase();
+    let needle = query.to_ascii_lowercase();
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for (start, m) in folded.match_indices(needle.as_str()) {
+        if start > at {
+            spans.push(Span::styled(text[at..start].to_string(), style));
+        }
+        spans.push(Span::styled(text[start..start + m.len()].to_string(), hit));
+        at = start + m.len();
+    }
+    if at < text.len() {
+        spans.push(Span::styled(text[at..].to_string(), style));
+    }
+    spans
+}
+
 const HELP: &[(&str, &str, Option<Action>)] = &[
     ("Up/Down j/k", en("move the cursor one row"), None),
     (
@@ -7239,7 +7607,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         None,
     ),
     (en("Space"), en("toggle follow"), Some(Action::ToggleFollow)),
-    ("/", en("search"), Some(Action::StartSearch)),
+    (
+        "/  Alt+/",
+        en("search; Alt+/ all streams"),
+        Some(Action::StartSearch),
+    ),
     (
         "n Shift+N  F3",
         en("next / previous hit (Shift+F3 previous)"),
@@ -10516,6 +10888,124 @@ mod tests {
         render(&mut app, 80, 20);
         app.apply(Action::CloseStream);
         assert!(app.closing.is_empty());
+    }
+
+    #[test]
+    fn find_all_lists_every_stream_and_enter_jumps_to_the_line() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let api = "ok\nreq-8812 start\nok\nreq-8812 end\n";
+        let db = "fine\nreq-8812 seen\n";
+        let (mut app, _dir) = app_with(&[("api.log", api), ("db.log", db)], false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs.iter().any(|t| t.engine.index_pending) {
+            assert!(Instant::now() < deadline, "indexing did not finish");
+            render(&mut app, 200, 40);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        app.focus_tab(0);
+        app.tabs[0].engine.search_query = "start".into();
+        let shift_ctrl = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+        app.on_key(KeyEvent::new(KeyCode::Char('F'), shift_ctrl));
+        // The query box holds the focused stream's search.
+        assert_eq!(app.find_window.as_ref().unwrap().field.text(), "start");
+        app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        keys(&mut app, "req-8812");
+        press(&mut app, KeyCode::Enter);
+        while app.find_window.as_ref().unwrap().session.is_active() {
+            assert!(Instant::now() < deadline, "the search did not finish");
+            app.tick();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let screen = render(&mut app, 200, 40);
+        let has = |screen: &[String], text: &str| screen.iter().any(|l| l.contains(text));
+        assert!(has(&screen, "3 matches in 2 of 2 streams"), "{screen:#?}");
+        assert!(has(&screen, "api.log  2 matches"), "{screen:#?}");
+        assert!(has(&screen, "db.log  1 matches"), "{screen:#?}");
+        assert!(has(&screen, "       4  req-8812 end"), "{screen:#?}");
+        // At 80 columns the line numbers stay, below 60 they go first.
+        let screen = render(&mut app, 80, 24);
+        assert!(has(&screen, "       2  req-8812 start"), "{screen:#?}");
+        let screen = render(&mut app, 56, 24);
+        assert!(has(&screen, "  req-8812 start"), "{screen:#?}");
+        assert!(!has(&screen, "2  req-8812 start"), "{screen:#?}");
+        // The last result is db.log's: Enter focuses it on the line, follow paused,
+        // its search untouched; the window hides and the key shows it again.
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.find_window.as_ref().unwrap().shown);
+        assert_eq!(app.active, 1);
+        render(&mut app, 200, 40);
+        let tab = &app.tabs[1];
+        assert_eq!(tab.cursor_line(), Some(1));
+        assert!(!tab.engine.follow_tail);
+        assert!(tab.engine.search_query.is_empty());
+        assert_eq!(app.tabs[0].engine.search_query, "start");
+        app.apply(Action::FindAll);
+        let w = app.find_window.as_ref().unwrap();
+        assert!(w.shown && !w.editing);
+        assert_eq!(w.session.total_hits(), 3);
+        // Esc closes the window and drops the results.
+        press(&mut app, KeyCode::Esc);
+        assert!(app.find_window.is_none());
+    }
+
+    #[test]
+    fn find_results_tint_the_query_in_any_case() {
+        let hit = Style::default().add_modifier(Modifier::BOLD);
+        let spans = find_hit_spans("GET /a timeout, Timeout", "timeout", Style::default(), hit);
+        let texts: Vec<(&str, bool)> = spans
+            .iter()
+            .map(|s| (s.content.as_ref(), s.style == hit))
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                ("GET /a ", false),
+                ("timeout", true),
+                (", ", false),
+                ("Timeout", true)
+            ]
+        );
+    }
+
+    #[test]
+    fn find_all_marks_a_reloaded_stream_stale_and_does_not_jump() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", "boom 1\nboom 2\n")], false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[0].engine.index_pending {
+            assert!(Instant::now() < deadline, "indexing did not finish");
+            render(&mut app, 120, 30);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        app.apply(Action::FindAll);
+        keys(&mut app, "boom");
+        press(&mut app, KeyCode::Enter);
+        while app.find_window.as_ref().unwrap().session.is_active() {
+            assert!(Instant::now() < deadline, "the search did not finish");
+            app.tick();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // The file is truncated and rewritten: its group goes stale.
+        std::fs::write(dir.path().join("a.log"), "x\n").unwrap();
+        while app.find_window.as_ref().unwrap().session.groups[0].state != FindState::Stale {
+            assert!(Instant::now() < deadline, "the group did not go stale");
+            app.tabs[0].engine.poll_updates();
+            app.tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("stale: press r")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.find_window.as_ref().unwrap().shown, "no jump");
+        assert_eq!(
+            app.message.as_deref(),
+            Some("This stream was reloaded since the search: press r to search again")
+        );
     }
 
     #[test]

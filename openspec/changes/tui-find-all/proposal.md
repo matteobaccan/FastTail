@@ -8,14 +8,14 @@ terminal. On a server, looking for a request id across several logs is the commo
 ## What Changes
 
 - `Ctrl+Shift+F` (where the terminal reports it), an alternative key that every terminal
-  delivers, and the palette entry "Search all streams" open a **Find results** window in the terminal dock with the focused stream's query.
+  delivers, and the palette entry "Search all streams" open a **Find results** window over the terminal dock with the focused stream's query.
 - `Enter` searches every open stream with the same rules as the window (each stream's
   filters and the global filter, ANSI stripped where the stream strips it, HEX and ASM
   streams skipped), one background job per stream, at most four at a time.
 - Results are grouped by stream (name, count, progress), collapsible; the arrows and the
   pages walk them; `Enter` focuses the stream on the line (follow paused) without changing
   that stream's own search.
-- `r` refreshes, `Esc` / `[x]` closes and cancels; a stream reloaded since the search is
+- `r` refreshes, `Esc` / `[ OK ]` closes and cancels; a stream reloaded since the search is
   marked stale.
 - Up to 100,000 hits listed per stream, the true total counted, as in the window.
 

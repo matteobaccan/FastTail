@@ -213,7 +213,7 @@ the `tui-interface` plan (PR #132). ✅ done · ◐ partial · — missing.
 | Viewing | Overview strip, timeline histogram | ✅ | — | later |
 | Search | Search, `n` / `N`, hits highlighted | ✅ | ✅ | 0.20.0 |
 | Search | Results pane | ✅ | — | 0.20.0 |
-| Search | Find results across streams | ✅ | — | 0.21.0 |
+| Search | Find results across streams | ✅ | — | 0.26.0 (done: a window over the dock) |
 | Search | Go to line / time | ✅ | — | 0.20.0 |
 | Filters | Include / exclude | ✅ several terms | ◐ first term | 0.20.0 |
 | Filters | Minimum level | ✅ | ✅ | 0.20.0 |
