@@ -53,6 +53,7 @@ pub mod scan_job;
 pub mod screensaver;
 pub mod session;
 pub mod settings_model;
+pub mod spike;
 pub mod split;
 pub mod spool;
 pub mod ssh_source;

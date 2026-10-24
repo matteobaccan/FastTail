@@ -499,6 +499,15 @@ fn popup_contents(
         {
             outcome = Some(false);
         }
+        // Explain the window typed, without applying it.
+        if ui
+            .add_enabled(readable, egui::Button::new(t(lang, "explain_button")))
+            .on_hover_text(t(lang, "explain_button_tip"))
+            .clicked()
+            && engine.explain_texts(draft.from.trim(), draft.to.trim())
+        {
+            outcome = Some(false);
+        }
     });
     outcome
 }

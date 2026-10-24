@@ -63,6 +63,7 @@ pub enum Tab {
     Statistics(PathBuf),
     Query(PathBuf),
     Patterns(PathBuf),
+    Explain(PathBuf),
 }
 
 impl Tab {

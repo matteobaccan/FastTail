@@ -37,6 +37,9 @@ normalised with `normalize_line(…, Numbers, hint)` plus IPv4 / IPv6 masking, c
 4,096 bytes, hashed to 64 bits into a `HashMap<u64, TemplateStat>` keeping the first
 normalised text and the first line in the span. Cap: 50,000 templates per side, the rest
 counted as "other". With `pattern-grouping` shipped, the pattern id replaces the hash.
+*Implemented:* `pattern-grouping` shipped first, so the templates are the Drain tree of
+`patterns`, learnt in the same pass, one tree for both sides (at most 2,000 templates;
+entries past it count as "other"); no 64-bit hash map.
 
 ### D4. Score
 For an item with counts `a` in the span (of `A` entries) and `b` in the baseline (of `B`):
@@ -55,7 +58,9 @@ dropped (ids, timestamps) and named in a footnote. Pairs are scored as templates
 ### D6. Job
 `JobSpec::Explain` walks the line range once, using the timestamp cache to assign each
 entry to span, baseline or neither (timing it first when needed, like the histogram);
-partial results merge every 250 ms, so the tab fills in. Memory: at most 2 × 50,000
+partial results merge every 250 ms, so the tab fills in. *Implemented:* the job sends a
+copy of its whole counts every 500 ms (the Drain tree does not merge), each replacing the
+one before; the sampling interval is estimated from the histogram before the scan. Memory: at most 2 × 50,000
 templates × ~300 bytes and the field maps, well under 64 MB. The tab is a snapshot: new
 lines appended after the job do not change it; a "Recompute" button reruns it. Truncation
 or rotation marks the tab stale.
