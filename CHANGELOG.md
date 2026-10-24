@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Field terms without case (`level=error|fatal`) compare an ASCII value byte by byte,
+  without char iterators (taken from #435). Tooltips on the disabled Start / Open buttons
+  of the Listen, Remote and System source dialogs say what is missing (#450); `smallvec`
+  1.16.4 (#454).
+
 ### Added
 
 - **Patterns tab.** *⧉ Patterns…* in the stream's 💾 menu (or `CTRL + SHIFT + G`) groups

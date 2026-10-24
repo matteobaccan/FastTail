@@ -1593,6 +1593,9 @@ impl FieldTerm {
             self.regexes.iter().any(|re| re.is_match(value))
         } else if self.case_sensitive {
             self.values.iter().any(|v| v == value)
+        } else if value.is_ascii() {
+            // An ASCII value lowercases to ASCII: a byte comparison, no char iterators.
+            self.lower.iter().any(|l| value.eq_ignore_ascii_case(l))
         } else {
             self.lower
                 .iter()
@@ -1742,6 +1745,12 @@ mod tests {
         assert!(t("u=b.t", false, true).eval(Some("bot")));
         assert!(!t("u=b.t", false, true).eval(Some("robot")), "anchored");
         assert!(t("u~=b.t", false, true).eval(Some("robot")));
+        // Case folding on ASCII and non-ASCII values alike.
+        assert!(t("city=ZÜRICH", false, false).eval(Some("zürich")));
+        assert!(t("city=zürich", false, false).eval(Some("ZÜRICH")));
+        assert!(!t("city=zurich", false, false).eval(Some("zürich")));
+        assert!(t("env=PROD", false, false).eval(Some("prod")));
+        assert!(!t("env=PROD", false, false).eval(Some("prod2")));
     }
 
     fn fields(parser: &FieldParser, line: &str) -> (Vec<(String, String)>, bool) {
