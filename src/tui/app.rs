@@ -494,6 +494,7 @@ struct PaneSignature {
     decompressed: Option<u16>,
     hex: Option<(usize, Option<(usize, usize)>)>,
     ansi: AnsiMode,
+    plot: Option<(u64, u16)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1199,6 +1200,10 @@ impl App {
                 .find_window
                 .as_ref()
                 .is_some_and(|w| w.session.is_active())
+            || self
+                .tabs
+                .iter()
+                .any(|t| t.engine.plot.as_ref().is_some_and(|p| p.running()))
     }
 
     fn signature(&self) -> Signature {
@@ -1227,6 +1232,10 @@ impl App {
                 hex: self.tabs[i]
                     .is_hex()
                     .then(|| (e.search_byte_matches.len(), e.current_search_byte())),
+                plot: e
+                    .plot
+                    .as_ref()
+                    .map(|p| (p.generation, (p.progress * 1000.0) as u16)),
             }
         };
         Signature {
@@ -2180,6 +2189,23 @@ impl App {
                 tab.engine.reset_field_columns();
                 self.columns_menu = Some(0);
             }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                if let Some((key, _)) = rows.get(selected) {
+                    tab.engine.set_plots(plot_first(tab.engine.plots(), key));
+                }
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                let key = rows.get(selected).map(|r| r.0.as_str());
+                if let Some(spec) = tab
+                    .engine
+                    .plots()
+                    .iter()
+                    .find(|p| Some(p.key.as_str()) == key)
+                {
+                    let (key, stat) = (spec.key.clone(), spec.stat.next());
+                    tab.engine.set_plot_stat(&key, stat);
+                }
+            }
             _ => return false,
         }
         true
@@ -2219,12 +2245,13 @@ impl App {
             return;
         };
         let rows = Self::column_menu_rows(&tab.engine);
+        let plots = tab.engine.plots().to_vec();
         let height = (rows.len() as u16 + 6).min(area.height);
-        let inner = self.dialog(frame, area, (60, height), tx(self.lang, "Columns"), false);
+        let inner = self.dialog(frame, area, (66, height), tx(self.lang, "Columns"), false);
         let mut out = vec![Line::styled(
             tx(
                 self.lang,
-                "Space shows or hides, Shift+Up/Down moves, r resets, Esc closes",
+                "Space show/hide, Shift+Up/Down move, r reset, p plot, a stat",
             ),
             dim,
         )];
@@ -2250,8 +2277,22 @@ impl App {
                 (true, false) => "☑",
                 (false, false) => "☐",
             };
+            let plotted = plots
+                .iter()
+                .position(|p| p.key == *key)
+                .map(|at| {
+                    let sign = if ascii { "~" } else { "📈" };
+                    let stat = plots[at].stat.name();
+                    // Only the first plotted field has the terminal's sparkline row.
+                    if at == 0 {
+                        format!("  {sign} {stat}")
+                    } else {
+                        format!("  ({sign} {stat})")
+                    }
+                })
+                .unwrap_or_default();
             out.push(Line::styled(
-                head_chars(&format!(" {mark} {key}"), width),
+                head_chars(&format!(" {mark} {key}{plotted}"), width),
                 style,
             ));
         }
@@ -5605,6 +5646,13 @@ impl App {
             inner.y += 1;
             inner.height -= 1;
         }
+        // The first plotted field as a sparkline on the last row, under the log rows.
+        if !tab.is_hex() && !tab.is_asm() && !tab.engine.plots().is_empty() && inner.height > 3 {
+            let row = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+            let line = sparkline_row(&tab.engine, &palette, row.width as usize, self.lang);
+            frame.render_widget(Paragraph::new(line), row);
+            inner.height -= 1;
+        }
         let (lines, row_count) = if tab.is_asm() {
             asm_rows(
                 tab,
@@ -7560,6 +7608,89 @@ impl App {
 
 /// The help: keys, what they do and the command `Enter` runs from the help (`None` for
 /// entries that only describe, which the cursor steps over).
+/// `p` in the columns list: `key` becomes the first plotted field (the one the sparkline
+/// row draws), keeping its statistic; `p` on the first plotted field removes it.
+fn plot_first(plots: &[crate::plot::PlotSpec], key: &str) -> Vec<crate::plot::PlotSpec> {
+    if plots.first().is_some_and(|p| p.key == key) {
+        return plots[1..].to_vec();
+    }
+    let stat = plots
+        .iter()
+        .find(|p| p.key == key)
+        .map_or(crate::plot::PlotStat::Avg, |p| p.stat);
+    let mut out = vec![crate::plot::PlotSpec {
+        key: key.to_string(),
+        stat,
+    }];
+    out.extend(plots.iter().filter(|p| p.key != key).cloned());
+    out.truncate(crate::plot::MAX_PLOTS);
+    out
+}
+
+/// The sparkline row of a stream: `📈 key avg`, the line over the time the values cover,
+/// then the lowest and highest value; the label goes first when the row is narrow.
+fn sparkline_row(
+    engine: &TailEngine,
+    palette: &Palette,
+    columns: usize,
+    lang: crate::i18n::Language,
+) -> Line<'static> {
+    let dim = Style::default().fg(palette.dim());
+    let Some(spec) = engine.plots().first() else {
+        return Line::default();
+    };
+    let mark = if palette.ascii { "~" } else { "📈" };
+    let label = format!(" {mark} {} {} ", spec.key, spec.stat.name());
+    let plot = engine.plot.as_ref();
+    let series = plot.and_then(|p| p.series.iter().find(|s| s.spec.key == spec.key));
+    let note = |text: String| {
+        Line::from(vec![
+            Span::styled(label.clone(), dim),
+            Span::styled(text, dim),
+        ])
+    };
+    let Some(series) = series.filter(|s| !s.is_empty()) else {
+        return match plot.filter(|p| p.running()) {
+            Some(p) => note(txf(
+                lang,
+                "counting {0}%",
+                &[&format!("{:.0}", p.progress * 100.0)],
+            )),
+            None => note(tx(lang, "no numeric values").to_string()),
+        };
+    };
+    let range = |lo: f64, hi: f64| {
+        let unit = series.unit();
+        format!(
+            " {} - {}",
+            crate::plot::format_value(lo, unit),
+            crate::plot::format_value(hi, unit)
+        )
+    };
+    // A first pass measures the scale's ends, the second fits the line beside them.
+    let mut label_w = width(&label);
+    if columns < label_w + 24 {
+        label_w = 0;
+    }
+    let ends = crate::tui::spark::spark(
+        series,
+        columns.saturating_sub(label_w + 16).max(1),
+        palette.ascii,
+    )
+    .map_or(0, |s| width(&range(s.min, s.max)));
+    let room = columns.saturating_sub(label_w + ends);
+    let Some(sp) = crate::tui::spark::spark(series, room.max(1), palette.ascii) else {
+        return note(tx(lang, "no numeric values").to_string());
+    };
+    let mut spans = Vec::new();
+    if label_w > 0 {
+        spans.push(Span::styled(label, dim));
+    }
+    spans.push(Span::styled(sp.text, Style::default().fg(palette.accent())));
+    spans.push(Span::styled(range(sp.min, sp.max), dim));
+    Line::from(spans)
+}
+
 /// A Find results row: the text with the query's occurrences (case folded, as the search
 /// matches) in the hit style. Only ASCII is folded here, so a non-ASCII query whose case
 /// differs is drawn plain.
@@ -10966,6 +11097,95 @@ mod tests {
                 ("Timeout", true)
             ]
         );
+    }
+
+    #[test]
+    fn p_in_the_fields_list_draws_the_field_as_a_sparkline_row() {
+        use crossterm::event::KeyCode;
+        let log: String = (0..40)
+            .map(|i| {
+                format!(
+                    "{{\"ts\":\"2026-10-24T10:00:{:02}Z\",\"level\":\"info\",\"ms\":{}}}\n",
+                    i,
+                    if i < 20 { 10 } else { 500 }
+                )
+            })
+            .collect();
+        let (mut app, _dir) = app_with(&[("api.log", log.as_str())], false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let settle = |app: &mut App| {
+            while app.busy() {
+                assert!(Instant::now() < deadline, "the scans did not finish");
+                render(app, 100, 20);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+        settle(&mut app);
+        render(&mut app, 100, 20);
+        let row = App::column_menu_rows(&app.tabs[0].engine)
+            .iter()
+            .position(|r| r.0 == "ms")
+            .expect("the ms field is listed");
+        app.columns_menu = Some(row);
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.tabs[0].engine.plots()[0].key, "ms");
+        let menu = render(&mut app, 100, 20);
+        // (A wide character takes two cells: the buffer shows a blank after it.)
+        assert!(
+            menu.iter()
+                .any(|l| l.contains("☑ ms  📈") && l.contains("avg")),
+            "{menu:#?}"
+        );
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Esc);
+        settle(&mut app);
+        let screen = render(&mut app, 100, 20);
+        let spark = screen
+            .iter()
+            .find(|l| l.contains("📈") && l.contains(" ms max "))
+            .unwrap_or_else(|| panic!("{screen:#?}"));
+        assert!(spark.contains('▁') && spark.contains('█'), "{spark}");
+        assert!(spark.contains("10 - 500"), "{spark}");
+        // Narrow: the label goes, the line and the scale stay.
+        let narrow = render(&mut app, 30, 20);
+        assert!(
+            narrow
+                .iter()
+                .any(|l| l.contains("10 - 500") && !l.contains("📈")),
+            "{narrow:#?}"
+        );
+        // `p` on the drawn field removes it, and the row with it.
+        app.columns_menu = Some(row);
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.tabs[0].engine.plots().is_empty());
+        let screen = render(&mut app, 100, 20);
+        assert!(
+            !screen.iter().any(|l| l.contains("10 - 500")),
+            "{screen:#?}"
+        );
+    }
+
+    #[test]
+    fn plot_first_puts_the_field_first_and_keeps_its_statistic() {
+        use crate::plot::{PlotSpec, PlotStat};
+        let spec = |k: &str, stat| PlotSpec {
+            key: k.into(),
+            stat,
+        };
+        let plots = vec![spec("a", PlotStat::Avg), spec("b", PlotStat::P95)];
+        assert_eq!(
+            plot_first(&plots, "b"),
+            vec![spec("b", PlotStat::P95), spec("a", PlotStat::Avg)]
+        );
+        assert_eq!(plot_first(&plots, "a"), vec![spec("b", PlotStat::P95)]);
+        let full = vec![
+            spec("a", PlotStat::Avg),
+            spec("b", PlotStat::Avg),
+            spec("c", PlotStat::Avg),
+        ];
+        assert_eq!(plot_first(&full, "d").len(), crate::plot::MAX_PLOTS);
+        assert_eq!(plot_first(&full, "d")[0].key, "d");
     }
 
     #[test]

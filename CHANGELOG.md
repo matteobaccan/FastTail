@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Field sparkline in the terminal.** `p` in the `[Fields...]` list of a structured
+  stream plots the selected numeric field as a sparkline row at the bottom of the window
+  (`📈 ms avg ▁▂▅█▃ 10 - 500`), over the time its values cover, with its lowest and
+  highest value; `a` cycles avg / max / min / p95 and `p` again removes it. It is the
+  window's Plot over time (the same `plot=` key), the terminal drawing the first plotted
+  field. Completes `field-sparkline`.
+
 ## [0.26.0] - 2026-10-24
 
 The **Event Log and terminal search** milestone: Windows Event Log channels and `.evtx`

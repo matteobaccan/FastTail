@@ -49,6 +49,12 @@ impl PlotStat {
     pub fn from_name(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.name() == s.trim())
     }
+
+    /// The next one of `ALL`, back to the first after the last.
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
 }
 
 /// A plotted field: its key and what is drawn.
@@ -245,6 +251,17 @@ impl Series {
 
     pub fn is_empty(&self) -> bool {
         self.buckets.is_empty()
+    }
+
+    /// The instants its buckets cover, `[start_ms, end_ms)`; none while it is empty.
+    pub fn span(&self) -> Option<(i64, i64)> {
+        let end = self.first_bucket.saturating_add(self.buckets.len() as i64);
+        (!self.buckets.is_empty()).then(|| {
+            (
+                self.first_bucket.saturating_mul(self.bucket_ms),
+                end.saturating_mul(self.bucket_ms),
+            )
+        })
     }
 
     /// Adds the value text of a line timed `ts` (an untimed line, or no number, is
