@@ -457,7 +457,8 @@ together after 0.26.0).
 ### 0.26.0 — Event Log and terminal search
 
 0.26.0 and 0.27.0 merged by the maintainer on 2026-10-24, after the other changes of both
-releases moved to the backlog.
+releases moved to the backlog. Released on 2026-10-24; both changes are archived, the
+Event Log hand check on Windows is left to the maintainer.
 
 | Change | Gaps | Effort |
 |---|---|---|

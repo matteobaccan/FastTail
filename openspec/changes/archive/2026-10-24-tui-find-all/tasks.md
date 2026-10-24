@@ -13,4 +13,4 @@
 
 - [x] 3.1 Terminal texts in every language; `docs/tui.md`, the parity checklist, CHANGELOG
 - [x] 3.2 Capture tests at 80 and 200 columns; a test that walks results across two streams
-- [ ] 3.3 `cargo fmt`, clippy (GUI and TUI builds), focused tests; PR with Linux and Windows CI green
+- [x] 3.3 `cargo fmt`, clippy (GUI and TUI builds), focused tests; PR with Linux and Windows CI green

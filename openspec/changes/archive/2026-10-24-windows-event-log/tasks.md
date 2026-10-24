@@ -28,6 +28,6 @@
 
 ## 5. Wrap-up
 
-- [ ] 5.1 Manual check as a standard user: Application, System, PowerShell Operational live; Security refused with the reason; a 50 MB `.evtx`
-- [ ] 5.2 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
-- [ ] 5.3 After the release, archive the change so `windows-event-log` becomes a spec
+- [ ] 5.1 Manual check as a standard user: Application, System, PowerShell Operational live; Security refused with the reason; a 50 MB `.evtx` (left to the maintainer, after 0.26.0)
+- [x] 5.2 `cargo fmt`, `cargo clippy --all-targets`, `cargo test` green on Linux and Windows CI
+- [x] 5.3 After the release, archive the change so `windows-event-log` becomes a spec
