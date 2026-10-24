@@ -26,6 +26,7 @@ mod picker;
 mod presets;
 mod rules;
 mod settings;
+mod spark;
 mod tools;
 mod view;
 mod workspace;

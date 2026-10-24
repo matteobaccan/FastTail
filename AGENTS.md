@@ -121,8 +121,9 @@ Update this section in each release PR.
   archived; the Event Log hand check on Windows (task 5.1: Application, System,
   PowerShell Operational, Security refused, a 50 MB `.evtx`) is left to the maintainer.
 - 0.25.0 shipped (patterns and analysis): `pattern-grouping` and `spike-explanation`
-  archived; `field-sparkline` stays open for its terminal sparkline row (task 2.2: the
-  terminal has no histogram row yet, maintainer to decide).
+  archived; `field-sparkline` was completed after 0.26.0 (its terminal sparkline row, asked
+  by the maintainer on 2026-10-24, the last row of the stream window) and archived; it
+  waits in `[Unreleased]` for the next release.
 - 0.24.0 shipped (queries and statistics): `field-statistics`, `cross-line-regex` and
   `query-language` archived.
 - 0.23.0 shipped (remote and system sources): `system-sources`, `ssh-sources`,

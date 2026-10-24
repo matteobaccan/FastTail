@@ -27,8 +27,9 @@ any size.
    the strip's edge; lines with no value or a non-numeric value are skipped and counted.
 4. **Units:** a number followed by `ns` `µs` `ms` `s` `m` `h` or `B` `KB` `MB` `GB` is
    normalised when all values of the field use the same family.
-5. **Terminal:** one field, one row of block characters (`▁▂▃▄▅▆▇█`), braille when the
-   terminal supports it.
+5. **Terminal:** one field, one row of block characters (`▁▂▃▄▅▆▇█`). As built: no
+   braille (block characters read in every terminal font), and the row is the last of the
+   stream window, since the terminal has no histogram; the first plotted field is drawn.
 
 ## Risks / Trade-offs
 
