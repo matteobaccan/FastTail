@@ -17,12 +17,13 @@
 //! reloaded since (truncation, rotation, rewrite, pattern switch) bumps the engine's
 //! `reload_generation`; its group turns stale and its hits no longer jump.
 
+use std::borrow::Borrow;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::paths::paths_equal_fast;
 use crate::scan_job::{JobSpec, ScanBatch, ScanJob, VisibleSet};
-use crate::tail_engine::{time_window_contains, TailEngine, ViewMode};
+use crate::tail_engine::{time_window_contains, TailEngine};
 
 /// Hits stored per stream; past it they are counted, not listed.
 pub const FIND_ALL_MAX_HITS: usize = 100_000;
@@ -48,7 +49,7 @@ pub enum FindState {
     Stopped,
     /// The file could not be read.
     Failed,
-    /// The stream is in HEX view: its search is byte-level, not searched.
+    /// The stream is in HEX or ASM view: its search is byte-level, not searched.
     SkippedHex,
     /// The stream was reloaded since its job started: its line numbers mean other lines.
     Stale,
@@ -160,7 +161,7 @@ impl FindAllSession {
 
     /// Runs the query box text over `engines` (in that order). The previous results and
     /// their jobs are dropped (dropping a job cancels it). An empty query only clears.
-    pub fn start(&mut self, engines: &[TailEngine]) {
+    pub fn start<E: Borrow<TailEngine>>(&mut self, engines: &[E]) {
         self.groups.clear();
         self.query = self.input.trim().to_string();
         if self.query.is_empty() {
@@ -172,7 +173,8 @@ impl FindAllSession {
         self.started_at = Some(Instant::now());
         self.groups = engines
             .iter()
-            .map(|engine| StreamFind {
+            .map(Borrow::borrow)
+            .map(|engine: &TailEngine| StreamFind {
                 path: engine.path.clone(),
                 name: stream_name(engine),
                 reload_generation: engine.reload_generation,
@@ -182,7 +184,7 @@ impl FindAllSession {
                 hits: Vec::new(),
                 total: 0,
                 progress: 0.0,
-                state: if engine.view_mode == ViewMode::Hex {
+                state: if engine.view_mode.is_bytes() {
                     FindState::SkippedHex
                 } else {
                     FindState::Queued
@@ -194,7 +196,7 @@ impl FindAllSession {
     }
 
     /// Runs the last query again over the streams as they are now.
-    pub fn refresh(&mut self, engines: &[TailEngine]) {
+    pub fn refresh<E: Borrow<TailEngine>>(&mut self, engines: &[E]) {
         self.input = self.query.clone();
         if let Some((from, to)) = &self.time_scope {
             self.time_from = from.clone();
@@ -226,7 +228,7 @@ impl FindAllSession {
 
     /// Once per frame: drops the groups of closed streams, marks reloaded ones stale,
     /// drains the running jobs and starts queued ones in the free slots.
-    pub fn poll(&mut self, engines: &[TailEngine]) {
+    pub fn poll<E: Borrow<TailEngine>>(&mut self, engines: &[E]) {
         if self.groups.is_empty() {
             return;
         }
@@ -270,9 +272,9 @@ impl FindAllSession {
 
     /// Streams queued behind their timing: under a time scope a stream is searched once
     /// it is timed, and the app asks each of these to be timed (`request_timing`).
-    pub fn waiting_for_timing<'a>(
+    pub fn waiting_for_timing<'a, E: Borrow<TailEngine>>(
         &'a self,
-        engines: &'a [TailEngine],
+        engines: &'a [E],
     ) -> impl Iterator<Item = &'a std::path::Path> + 'a {
         let scoped = self.time_scope.is_some();
         self.groups
@@ -287,7 +289,7 @@ impl FindAllSession {
     /// Starts queued jobs, in order, while fewer than `limit` run. A stream still being
     /// indexed, or whose time window waits for its timing, keeps its place in the queue;
     /// so does one still being timed under a time scope.
-    fn launch(&mut self, engines: &[TailEngine]) {
+    fn launch<E: Borrow<TailEngine>>(&mut self, engines: &[E]) {
         let mut running = self.running_count();
         let query_lower = self.query.to_lowercase();
         for g in &mut self.groups {
@@ -445,11 +447,14 @@ fn drain(g: &mut StreamFind, engine: &TailEngine, max_hits: usize) {
     }
 }
 
-fn find_engine<'a>(engines: &'a [TailEngine], path: &std::path::Path) -> Option<&'a TailEngine> {
-    engines
-        .iter()
-        .find(|e| e.path == path)
-        .or_else(|| engines.iter().find(|e| paths_equal_fast(&e.path, path)))
+fn find_engine<'a, E: Borrow<TailEngine>>(
+    engines: &'a [E],
+    path: &std::path::Path,
+) -> Option<&'a TailEngine> {
+    let all = || engines.iter().map(Borrow::borrow);
+    all()
+        .find(|e: &&TailEngine| e.path == path)
+        .or_else(|| all().find(|e: &&TailEngine| paths_equal_fast(&e.path, path)))
 }
 
 /// The stream as its tab names it: the pattern and the file it resolves to, the archive
@@ -482,6 +487,7 @@ pub fn stream_name(engine: &TailEngine) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tail_engine::ViewMode;
     use std::time::Duration;
 
     fn open(dir: &std::path::Path, name: &str, text: &str) -> TailEngine {
@@ -677,12 +683,14 @@ payment timeout retry=0 job
     }
 
     #[test]
-    fn hex_streams_are_skipped() {
+    fn hex_and_asm_streams_are_skipped() {
         let dir = tempfile::tempdir().unwrap();
         let mut hex = open(dir.path(), "a.log", "needle\n");
         hex.set_view_mode(ViewMode::Hex);
         let text = open(dir.path(), "b.log", "needle\n");
-        let engines = vec![hex, text];
+        let mut asm = open(dir.path(), "c.bin", "needle\n");
+        asm.set_view_mode(ViewMode::Asm);
+        let engines = vec![hex, text, asm];
         let mut session = FindAllSession::with_limits(4, 10);
         session.input = "needle".into();
         session.start(&engines);
@@ -690,6 +698,7 @@ payment timeout retry=0 job
         assert_eq!(session.groups[0].state, FindState::SkippedHex);
         assert!(session.groups[0].hits.is_empty());
         assert_eq!(session.groups[1].hits, vec![0]);
+        assert_eq!(session.groups[2].state, FindState::SkippedHex);
     }
 
     #[test]

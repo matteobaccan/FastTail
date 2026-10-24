@@ -28,6 +28,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
     Some(match id {
         ActionId::Follow => (Action::ToggleFollow, "Space"),
         ActionId::GoToLine => (Action::GoTo, "Ctrl+G"),
+        ActionId::FindAll => (Action::FindAll, "Alt+/"),
         ActionId::Copy => (Action::Copy, "y"),
         ActionId::ViewText | ActionId::ViewHex => (Action::ToggleHex, "h"),
         ActionId::ViewAsm => (Action::ToggleAsm, "d"),

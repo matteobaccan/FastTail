@@ -96,6 +96,8 @@ pub enum Action {
     EditNote,
     /// CTRL + K: the cursor row in context (filters suspended), and back.
     ToggleContext,
+    /// CTRL + SHIFT + F, ALT + /: search all streams (the Find results window).
+    FindAll,
     /// CTRL + G: go to a line (`N`, `+N`, `-N`) or a time (`14:02`).
     GoTo,
     /// `:`: the command palette (a number there goes to that line).
@@ -177,6 +179,11 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
                 }
             }
         }
+        if key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Char('f') | KeyCode::Char('F'))
+        {
+            return Some(Action::FindAll);
+        }
         return match key.code {
             KeyCode::Char('c') | KeyCode::Char('C') => Some(Action::CopyOrQuit),
             KeyCode::Char('b') => Some(Action::PageUp),
@@ -198,6 +205,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char(c @ '1'..='9') => Some(Action::GotoTab(c as usize - '1' as usize)),
             KeyCode::Char('x') => Some(Action::ClosePane),
             KeyCode::Char('f') => Some(Action::ToggleFloat),
+            KeyCode::Char('/') => Some(Action::FindAll),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),

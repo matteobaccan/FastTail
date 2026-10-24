@@ -20,6 +20,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   channels a standard user can read; Security says it needs them. `.evtx` files open as
   their events. Before, Windows events had to be exported and converted. First change of
   the 0.26.0 plan (`windows-event-log`).
+- **Search all streams in the terminal.** `Alt+/` (or `Ctrl+Shift+F` where the terminal
+  reports it, or *Search all streams* in the palette) opens a Find results window with the
+  focused stream's query: every open stream is searched in the background as the window's
+  Find results does, and the hits are listed by stream with the count and progress, each
+  stream folding. `Enter` puts that stream's cursor on the line with follow paused and its
+  own search unchanged; `r` searches again, a stream reloaded since is marked stale, `Esc`
+  closes and cancels. Second change of the 0.26.0 plan (`tui-find-all`).
+
+### Fixed
+
+- Find results skips streams in ASM view, as it skips HEX ones (it searched their bytes
+  as text lines).
 
 ## [0.25.0] - 2026-10-24
 

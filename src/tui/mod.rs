@@ -14,6 +14,7 @@ mod calendar;
 mod clipboard;
 mod colors;
 mod dock;
+mod find;
 mod form;
 mod global;
 mod hex;

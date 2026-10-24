@@ -13,16 +13,18 @@ dialogs; the `terminal-interface` spec excluded Find results from 0.20.0.
 
 ## Decisions
 
-1. **Reuse `find_all`** unchanged; the terminal adds a window kind that is not a stream,
-   so the dock gains a variant for it (it is not saved in the layout, as in the window).
+1. **Reuse `find_all`** (made generic over the engines, `Borrow<TailEngine>`, since the
+   terminal keeps its engines inside its tabs); the terminal adds a window that is not a
+   stream and is not saved in the layout, as in the window.
 2. **Keys:** `Ctrl+Shift+F` when the terminal reports it, plus a palette entry and a key
    that works everywhere: `Alt+/` (to be confirmed against the key map; `F` is the global
    filter editor).
 3. **Rows:** a group header (`▼ app.log — 57 matches 40%`), then `line  text` rows with the
    query highlighted, virtualized like the stream rows.
 4. **Enter** focuses the stream's window and puts its cursor on the line, follow paused,
-   without touching its search; the results window keeps the keyboard so the arrows walk
-   on, as in the window.
+   without touching its search. As built, the results are a window drawn over the dock
+   (`src/tui/find.rs`), not a dock leaf, so `Enter` hides it to show the line; the key
+   (`Alt+/`, `Ctrl+Shift+F`) shows it again with the results and the selection kept.
 5. **Narrow terminals:** below 60 columns the line numbers are dropped first.
 
 ## Risks / Trade-offs
