@@ -88,6 +88,8 @@ pub enum Action {
     /// Listen (palette): asks for a listener URL.
     OpenListen,
     OpenDebugOutput,
+    /// Open Event Log (palette, Windows): asks for an `eventlog://` URI.
+    OpenEventLog,
     PrevOutOfOrder,
     PrevBookmark,
     /// `m`: the note of the cursor row's bookmark.

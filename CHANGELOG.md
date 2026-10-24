@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Windows Event Log as a stream.** `eventlog://<channel>` (the 🗒 toolbar button, *Open
+  Event Log…* in the palette, Windows only) follows a channel: its newest events
+  (`event_log_initial_events`, 10,000 by default) oldest first, then the live ones, with no
+  gap or repeat. Each event is one line FastTail reads like any log:
+  `2026-09-28T14:02:05.123+02:00 ERROR [Service Control Manager] 7031: The Print Spooler
+  service terminated unexpectedly.` A level and event-ID pre-filter is applied by Windows
+  (`?levels=1,2&ids=7031,7034-7040`, kept in sessions). No administrator rights for the
+  channels a standard user can read; Security says it needs them. `.evtx` files open as
+  their events. Before, Windows events had to be exported and converted. First change of
+  the 0.26.0 plan (`windows-event-log`).
+
 ## [0.25.0] - 2026-10-24
 
 The **patterns and analysis** milestone: the Patterns tab, Explain a spike, and numeric

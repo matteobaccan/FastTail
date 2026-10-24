@@ -7,6 +7,7 @@ pub mod calendar;
 pub mod compare_tab;
 pub mod debug_dialog;
 pub mod dock;
+pub mod eventlog_dialog;
 pub mod explain_tab;
 pub mod export_dialog;
 pub mod export_html;

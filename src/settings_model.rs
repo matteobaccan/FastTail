@@ -30,6 +30,9 @@ pub const COMPRESSED_MAX_GB: RangeInclusive<u32> =
 /// `[general] stdin_spool_max_mb`: size the standard-input spool restarts from empty at.
 pub const STDIN_SPOOL_MAX_MB: RangeInclusive<u32> =
     crate::stdin_source::MIN_MAX_MB..=crate::stdin_source::MAX_MAX_MB;
+/// `[general] event_log_initial_events`: events of history a Windows Event Log stream
+/// reads before following.
+pub const EVENT_LOG_INITIAL_EVENTS: RangeInclusive<u32> = 0..=1_000_000;
 /// `[general] system_source_backlog_lines`: lines a system source reads at open.
 pub const SYSTEM_SOURCE_BACKLOG_LINES: RangeInclusive<u32> =
     0..=crate::system_source::MAX_BACKLOG_LINES;

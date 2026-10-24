@@ -26,6 +26,7 @@ mod bookmark_report;
 mod char_selection;
 mod compare_lines;
 mod disassembly_view;
+mod event_log;
 mod export_formats;
 mod external_tools;
 mod field_sparkline;

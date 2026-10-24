@@ -1403,6 +1403,37 @@ fn render_listener_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, 
         .request_repaint_after(std::time::Duration::from_secs(1));
 }
 
+/// Stream bar part of an Event Log stream: reading the history, following (with the
+/// events read), resubscribing, or the error that stopped it.
+fn render_eventlog_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
+    let Some(e) = engine.event_log.as_ref() else {
+        return;
+    };
+    use crate::eventlog::State;
+    ui.separator();
+    let n = crate::ui::dock::group_thousands(e.events() as usize);
+    let (key, warn) = match e.state() {
+        State::History => ("eventlog_state_history", false),
+        State::Live => ("eventlog_state_live", false),
+        State::Resubscribing => ("eventlog_state_resubscribing", true),
+        State::Done => ("eventlog_state_done", false),
+        State::Failed => ("eventlog_state_failed", true),
+    };
+    let mut text = t(lang, key).replace("{0}", &n);
+    if let Some(err) = e.error() {
+        text.push_str(&format!(": {err}"));
+    }
+    let color = if warn {
+        theme.warn_color()
+    } else {
+        theme.text_dim()
+    };
+    ui.label(RichText::new(format!("🗒 {text}")).monospace().color(color))
+        .on_hover_text(e.spec.to_path().display().to_string());
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs(1));
+}
+
 /// Stream bar part of a debug-output capture: messages received and dropped, the
 /// filter in the tooltip.
 fn render_debug_status(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language) {
@@ -2266,6 +2297,7 @@ fn render_log_stream(
         render_ssh_status(ui, engine, theme, lang);
         render_listener_status(ui, engine, theme, lang);
         render_debug_status(ui, engine, theme, lang);
+        render_eventlog_status(ui, engine, theme, lang);
 
         // Pattern stream: the pattern, the file being tailed, and the switch notice
         if let Some(glob) = engine.folder.as_ref().map(|f| {

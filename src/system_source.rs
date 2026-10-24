@@ -68,6 +68,7 @@ pub fn is_system_path(path: &Path) -> bool {
         s.starts_with(JOURNALD) || s.starts_with(DOCKER) || s.starts_with("ssh://")
     }) || crate::net_listener::is_listen_path(path)
         || crate::debug_output::is_dbwin_path(path)
+        || crate::eventlog::is_eventlog_path(path)
 }
 
 /// A unit name journalctl accepts and cannot take for an option.
