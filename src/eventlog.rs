@@ -47,11 +47,17 @@ pub fn is_eventlog_path(path: &Path) -> bool {
 
 /// Whether the file at `path` is an `.evtx` export (by its magic bytes).
 pub fn is_evtx_file(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(meta) = file.metadata() else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
     let mut head = [0u8; 8];
-    std::fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut head))
-        .is_ok()
-        && &head == EVTX_MAGIC
+    file.read_exact(&mut head).is_ok() && &head == EVTX_MAGIC
 }
 
 /// An event ID or an inclusive range of them.
@@ -1381,7 +1387,12 @@ mod tests {
         std::fs::write(&a, b"ElfFile\0rest").unwrap();
         let b = dir.path().join("b.evtx");
         std::fs::write(&b, b"plain text").unwrap();
+        let sub_dir = dir.path().join("sub_dir");
+        std::fs::create_dir(&sub_dir).unwrap();
+
         assert!(is_evtx_file(&a));
         assert!(!is_evtx_file(&b));
+        assert!(!is_evtx_file(&sub_dir));
+        assert!(!is_evtx_file(&dir.path().join("non_existent.evtx")));
     }
 }
