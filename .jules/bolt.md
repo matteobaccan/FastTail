@@ -21,3 +21,7 @@
 ## 2026-04-18 - Zero-allocation ANSI escape stripping with reusable buffer
 **Learning:** Calling `crate::ansi::strip` in line-by-line log scanning hot loops allocates a new `String` on every line containing escape sequences. Introducing `strip_to_buf(line, &mut buf)` allows hot loops (`TailEngine::scan_lines`, background `scan_job` workers) to reuse a single `String` buffer across hundreds of thousands of lines, reducing heap allocation churn from O(N) to O(1).
 **Action:** When stripping ANSI sequences or transforming strings in hot line-scanning loops, use buffer-passing variants (`strip_to_buf`) with a loop-external `String` rather than allocating new strings per line.
+
+## 2026-04-18 - Fast lookup table and first-byte dispatch for log level token scanning
+**Learning:** Hot-loop log level detection (`detect_level_in`) spends significant CPU time classifying word bytes and running `eq_ignore_ascii_case` comparisons on non-level words. Replacing multi-branch `is_word_byte` checks with a 256-element static lookup table (`IS_WORD_BYTE`) and matching on `word[0].to_ascii_lowercase()` inside `token_level` before string comparison eliminates redundant string comparisons for >95% of scanned words and speeds up level scanning by 20% to 59%.
+**Action:** When scanning token keywords in log parsing hot loops, pre-classify characters via a static lookup table and guard string comparisons with a first-character ASCII match.

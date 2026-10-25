@@ -102,64 +102,60 @@ pub fn level_word(word: &str) -> Option<LogLevel> {
 
 /// Level of a token (a whole word already isolated), or `None` if it is not a level word.
 fn token_level(word: &[u8]) -> Option<LogLevel> {
-    // Branch on length first to eliminate array scans and limit string comparisons.
-    // Length dispatch turns level matching into an O(1) lookup per scanned word.
+    // Branch on length and first character first to eliminate string comparisons
+    // for non-candidate words in the window.
     match word.len() {
-        4 => {
-            if word.eq_ignore_ascii_case(b"WARN") {
-                Some(LogLevel::Warn)
-            } else if word.eq_ignore_ascii_case(b"INFO") {
-                Some(LogLevel::Info)
-            } else {
-                None
-            }
-        }
-        5 => {
-            if word.eq_ignore_ascii_case(b"ERROR") {
-                Some(LogLevel::Error)
-            } else if word.eq_ignore_ascii_case(b"DEBUG") {
-                Some(LogLevel::Debug)
-            } else if word.eq_ignore_ascii_case(b"TRACE") {
-                Some(LogLevel::Trace)
-            } else if word.eq_ignore_ascii_case(b"FATAL") {
-                Some(LogLevel::Fatal)
-            } else {
-                None
-            }
-        }
-        6 => {
-            if word.eq_ignore_ascii_case(b"NOTICE") {
-                Some(LogLevel::Info)
-            } else if word.eq_ignore_ascii_case(b"SEVERE") {
-                Some(LogLevel::Error)
-            } else {
-                None
-            }
-        }
-        7 => {
-            if word.eq_ignore_ascii_case(b"WARNING") {
-                Some(LogLevel::Warn)
-            } else if word.eq_ignore_ascii_case(b"VERBOSE") {
-                Some(LogLevel::Trace)
-            } else {
-                None
-            }
-        }
-        8 => {
-            if word.eq_ignore_ascii_case(b"CRITICAL") {
-                Some(LogLevel::Fatal)
-            } else {
-                None
-            }
-        }
+        4 => match word[0].to_ascii_lowercase() {
+            b'w' => word.eq_ignore_ascii_case(b"WARN").then_some(LogLevel::Warn),
+            b'i' => word.eq_ignore_ascii_case(b"INFO").then_some(LogLevel::Info),
+            _ => None,
+        },
+        5 => match word[0].to_ascii_lowercase() {
+            b'e' => word.eq_ignore_ascii_case(b"ERROR").then_some(LogLevel::Error),
+            b'd' => word.eq_ignore_ascii_case(b"DEBUG").then_some(LogLevel::Debug),
+            b't' => word.eq_ignore_ascii_case(b"TRACE").then_some(LogLevel::Trace),
+            b'f' => word.eq_ignore_ascii_case(b"FATAL").then_some(LogLevel::Fatal),
+            _ => None,
+        },
+        6 => match word[0].to_ascii_lowercase() {
+            b'n' => word.eq_ignore_ascii_case(b"NOTICE").then_some(LogLevel::Info),
+            b's' => word.eq_ignore_ascii_case(b"SEVERE").then_some(LogLevel::Error),
+            _ => None,
+        },
+        7 => match word[0].to_ascii_lowercase() {
+            b'w' => word.eq_ignore_ascii_case(b"WARNING").then_some(LogLevel::Warn),
+            b'v' => word.eq_ignore_ascii_case(b"VERBOSE").then_some(LogLevel::Trace),
+            _ => None,
+        },
+        8 => match word[0].to_ascii_lowercase() {
+            b'c' => word.eq_ignore_ascii_case(b"CRITICAL").then_some(LogLevel::Fatal),
+            _ => None,
+        },
         _ => None,
     }
 }
 
+/// Lookup table for fast word byte classification.
+static IS_WORD_BYTE: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < 256 {
+        let b = i as u8;
+        table[i] = (b >= b'0' && b <= b'9')
+            || (b >= b'A' && b <= b'Z')
+            || (b >= b'a' && b <= b'z')
+            || b == b'_'
+            || b >= 0x80;
+        i += 1;
+    }
+    table
+};
+
 /// Word characters: a level token must not be glued to letters, digits, `_` or non-ASCII
 /// bytes (`ERRORS`, `INFO2`, `error_count` are not levels).
+#[inline(always)]
 fn is_word_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80
+    IS_WORD_BYTE[b as usize]
 }
 
 /// Syslog priority `<n>` at the very start of the line: the severity is `n & 7`.
@@ -205,22 +201,28 @@ pub fn detect_level_in(line: &str, window: usize) -> LogLevel {
         return level;
     }
     let window = &bytes[..bytes.len().min(window)];
+    let win_len = window.len();
     let mut i = 0;
-    while i < window.len() {
-        if !is_word_byte(window[i]) {
+    while i < win_len {
+        while i < win_len && !is_word_byte(window[i]) {
             i += 1;
-            continue;
+        }
+        if i >= win_len {
+            break;
         }
         let start = i;
-        while i < window.len() && is_word_byte(window[i]) {
+        while i < win_len && is_word_byte(window[i]) {
             i += 1;
         }
         // A word cut by the window is not a whole word.
-        if i == window.len() && bytes.len() > window.len() && is_word_byte(bytes[i]) {
+        if i == win_len && bytes.len() > win_len && is_word_byte(bytes[i]) {
             break;
         }
-        if let Some(level) = token_level(&window[start..i]) {
-            return level;
+        let len = i - start;
+        if (4..=8).contains(&len) {
+            if let Some(level) = token_level(&window[start..i]) {
+                return level;
+            }
         }
     }
     LogLevel::Unknown
