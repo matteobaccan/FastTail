@@ -165,6 +165,7 @@ impl ExportDialog {
                         !busy && count > 0,
                         egui::Button::new(t(lang, "export_save")),
                     )
+                    .on_disabled_hover_text(t(lang, "status_no_file"))
                     .clicked()
                 {
                     let stem = engine
