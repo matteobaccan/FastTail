@@ -643,6 +643,7 @@ mod tests {
         let mut f = feeder(dir.path(), &[&a, &b]);
         // b is being written: a's first line waits.
         f.sources[1].seen_len = Some(b.file_size);
+        f.sources[1].seen_at = Instant::now();
         f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
         f.sources[1].seen_at = Instant::now();
         f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
