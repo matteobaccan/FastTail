@@ -117,6 +117,7 @@ impl EventLogDialog {
                         .desired_width(300.0),
                 );
             });
+            let mut open_now = false;
             let needle = self.search.trim().to_lowercase();
             egui::ScrollArea::vertical()
                 .id_salt("fasttail_eventlog_channels")
@@ -135,11 +136,14 @@ impl EventLogDialog {
                         .iter()
                         .filter(|c| needle.is_empty() || c.to_lowercase().contains(&needle))
                     {
-                        if ui
-                            .selectable_label(*c == self.channel, RichText::new(c).monospace())
-                            .clicked()
-                        {
+                        let resp =
+                            ui.selectable_label(*c == self.channel, RichText::new(c).monospace());
+                        if resp.clicked() {
                             self.channel = c.clone();
+                        }
+                        if resp.double_clicked() {
+                            self.channel = c.clone();
+                            open_now = true;
                         }
                     }
                 });
@@ -188,11 +192,11 @@ impl EventLogDialog {
                     Ok(_) => "",
                     Err(key) => t(lang, key),
                 };
-                if ui
+                let open = ui
                     .add_enabled(spec.is_ok(), egui::Button::new(t(lang, "system_open")))
                     .on_disabled_hover_text(tip)
-                    .clicked()
-                {
+                    .clicked();
+                if (open || open_now) && spec.is_ok() {
                     if let Ok(spec) = &spec {
                         outcome = Some(EventLogChoice::Open(spec.to_path()));
                     }

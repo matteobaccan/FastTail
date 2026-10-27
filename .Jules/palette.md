@@ -1,3 +1,7 @@
+## 2026-10-24 - Double-click Activation Pattern in List Picker Dialogs
+**Learning:** In modal selection dialogs with scrollable lists (such as containers or event log channels), users expect double-clicking a list item to both select and immediately trigger the primary action (e.g., Open). Handling `resp.double_clicked()` alongside `resp.clicked()` creates a seamless desktop interaction pattern.
+**Action:** When adding selectable list items in modal pickers, always attach `resp.double_clicked()` to immediately confirm/open the selection.
+
 ## 2026-04-20 - Disabled Control Tooltips in egui
 **Learning:** In `egui`, standard `.on_hover_text(...)` tooltips are suppressed when a widget is disabled (e.g. `add_enabled(false, ...)`). For interactive controls like "Open" or reordering buttons that can be disabled based on state, users need explicit feedback on why the control is disabled.
 **Action:** Always chain `.on_disabled_hover_text(...)` when disabling interactive buttons in `egui` so users receive clear contextual guidance.
