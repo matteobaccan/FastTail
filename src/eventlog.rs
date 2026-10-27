@@ -906,7 +906,8 @@ mod platform {
                         .map(|d| d.as_nanos())
                         .unwrap_or(0)
                 ));
-                let mut f = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
+                let file = crate::paths::create_export_file(&path).ok()?;
+                let mut f = std::io::BufWriter::new(file);
                 for l in lines {
                     f.write_all(l).ok()?;
                 }
@@ -1372,6 +1373,21 @@ mod tests {
         format_event(&mut out, "t", "INFO", "p", 1, &"x".repeat(MAX_MESSAGE + 10));
         assert!(out.len() < MAX_MESSAGE + 100);
         assert!(String::from_utf8(out).unwrap().trim_end().ends_with('…'));
+    }
+
+    #[test]
+    fn temp_lines_write_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_target = temp_dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+
+        // Calling crate::paths::create_export_file on a directory fails with InvalidInput error.
+        let result = crate::paths::create_export_file(&dir_target);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
