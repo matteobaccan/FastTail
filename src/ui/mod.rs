@@ -20,6 +20,7 @@ pub mod keys;
 pub mod listen_dialog;
 pub mod log_formats;
 pub mod merge_dialog;
+pub mod operations_tab;
 pub mod overview_strip;
 pub mod palette;
 pub mod patterns_tab;

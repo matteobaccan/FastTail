@@ -8243,6 +8243,7 @@ fn progress_text(e: &TailEngine, lang: Language) -> String {
             ScanKind::Patterns => "patterns",
             ScanKind::Explain => "explain",
             ScanKind::Plot => "plot",
+            ScanKind::Operations => "operations",
         };
         s.push_str(&format!(" - {name} {:.0}%", p * 100.0));
         if kind == ScanKind::Search {

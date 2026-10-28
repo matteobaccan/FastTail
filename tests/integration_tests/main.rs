@@ -256,6 +256,8 @@ mod debug_output;
 
 mod field_statistics;
 
+mod operation_timeline;
+
 mod search_modes;
 
 mod query_language;

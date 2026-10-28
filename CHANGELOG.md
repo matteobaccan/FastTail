@@ -8,7 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Operations timeline.** *⏱ Operations…* in the stream's 💾 menu (or *Operations by
+  `trace_id`* in a column header's menu) opens an **Operations** tab: the entries the
+  stream shows grouped by an id (a field, or the capture group of a regex such as
+  `req=(\w+)`), one row per operation with its start, duration, line count and worst
+  level beside a Gantt bar on a shared time axis (wheel zooms, drag pans). Sort by
+  duration to find the slow request, by level to find the failed one; click to go to its
+  first line, right-click to filter to it or set its span as the time window. It runs in
+  the background, follows the filters and appended lines, and tracks up to 100,000
+  operations (`operation-timeline`, from the backlog).
+
 ### Changed
+
+- Level detection is 10 to 32 % faster (`benches/level_window`): a first-letter dispatch
+  and a byte table for level words (taken from #489; #479, #483 and #486, slower than
+  `main`, closed).
 
 - A double click on a channel in the Event Log dialog opens it (taken from #487).
 - Tooltips on disabled controls: *Save…* in the Export dialog when no line matches, its

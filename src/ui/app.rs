@@ -1486,6 +1486,33 @@ impl FastTailApp {
         true
     }
 
+    /// Opens the Operations tab a stream asked for: by a field, or of the stream (its
+    /// first field, or the regex picker without a parser). Returns whether one opened.
+    pub fn apply_ops_requests(&mut self) -> bool {
+        let Some(idx) = self.engines.iter().position(|e| e.ops_request.is_some()) else {
+            return false;
+        };
+        let engine = &mut self.engines[idx];
+        let wanted = engine.ops_request.take().flatten();
+        let key = wanted.or_else(|| {
+            if engine.operations.is_some() {
+                None
+            } else {
+                engine.field_catalogue().keys().first().cloned()
+            }
+        });
+        if let Some(key) = key {
+            let name = engine
+                .operations
+                .as_ref()
+                .map_or(crate::operations::NameSource::None, |o| o.name.clone());
+            engine.open_operations(crate::field_stats::StatsSource::Field(key), name);
+        }
+        let path = engine.path.clone();
+        crate::ui::operations_tab::open_tab(&mut self.dock_state, &path);
+        true
+    }
+
     /// Feeds the derived streams from their sources (a few milliseconds each per frame)
     /// and applies their requests: a filter to open as a tab, a line to show in the
     /// source. Returns whether anything changed.
@@ -4542,6 +4569,9 @@ impl FastTailApp {
             ctx.request_repaint();
         }
         if self.apply_stats_requests() {
+            ctx.request_repaint();
+        }
+        if self.apply_ops_requests() {
             ctx.request_repaint();
         }
         if self.apply_query_requests() {
