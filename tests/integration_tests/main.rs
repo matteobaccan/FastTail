@@ -268,6 +268,8 @@ mod plugin_api;
 
 mod source_links;
 
+mod rotated_files;
+
 mod search_modes;
 
 mod query_language;

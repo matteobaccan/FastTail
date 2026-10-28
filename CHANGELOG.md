@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Rotated files as one stream.** A file with rotations next to it (`app.log.1`,
+  `app.log.2.gz`, `app.log-20261027`, `app.2026-10-27.log`) is offered with them: the
+  pieces are read oldest first, compressed ones decompressed, the live file last and still
+  followed, a rotation while following keeps every line; dashed lines mark where pieces
+  start and *↻ N rotations* jumps to one. `rotations=ask|always|never`, `--rotations`,
+  `R` in the terminal (`rotated-files`).
 - **Source locations open in the editor.** Hold Ctrl over a stack frame, a compiler error
   or a `path:line` and click it, or use the row menu (*Open source location*, *Open in
   FastTail* at that line; `Ctrl+O` in the terminal). Java / Kotlin, Python, .NET, Go, Node

@@ -241,13 +241,14 @@ fn run_args(args: Vec<String>) -> i32 {
     // What to open, as in the GUI: a named session or the saved workspace (not with
     // --fresh), then the files named on the command line.
     // `--all`: each pattern opens its matches (no folder group here: no later files).
-    let expanded;
-    let cli_paths = if cli.all {
-        expanded = crate::folder_source::expand_all(&cli.paths, settings.config.folder_max_streams);
-        &expanded
+    let expanded: Vec<std::path::PathBuf> = if cli.all {
+        crate::folder_source::expand_all(&cli.paths, settings.config.folder_max_streams)
     } else {
-        &cli.paths
+        cli.paths.clone()
     };
+    // `--rotations`: each file with its rotations.
+    let expanded: Vec<std::path::PathBuf> = expanded.iter().map(|p| cli.opened_path(p)).collect();
+    let cli_paths = &expanded;
     let plan =
         match workspace::start_plan(&mut settings, cli.session.as_deref(), cli.fresh, cli_paths) {
             Ok(plan) => plan,

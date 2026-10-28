@@ -48,6 +48,8 @@ OPTIONS:
     --follow             Enable follow mode on the files opened from the command line
     --all                Open every file a pattern PATH matches as its own stream (in the
                          window, a folder group that also opens the files created later)
+    --rotations          Open each file with its rotations (app.log.1, app.log.2.gz ...) as
+                         one stream, oldest first
     --listen <URL>       Receive lines on a local port: tcp://127.0.0.1:5140,
                          udp://127.0.0.1:5140 or syslog://127.0.0.1:5514 (repeatable)
     --no-follow          Disable follow mode on those files
@@ -208,6 +210,8 @@ pub struct CliArgs {
     pub fresh: bool,
     /// `--all`: a pattern path opens every match, not just the newest.
     pub all: bool,
+    /// `--rotations`: a file opens with its rotations (`app.log.1`, `.2.gz`, ...).
+    pub rotations: bool,
     /// Include terms in the order given: print mode uses them all (at most
     /// `MAX_FILTER_TERMS`), the window the last one (`window_filter`).
     pub filter: Vec<String>,
@@ -330,6 +334,7 @@ impl CliArgs {
                 }
                 "--fresh" => out.fresh = true,
                 "--all" => out.all = true,
+                "--rotations" => out.rotations = true,
                 "--follow" => out.follow = Some(true),
                 "--no-follow" => out.follow = Some(false),
                 "-V" | "--version" => out.show_version = true,
@@ -464,6 +469,16 @@ impl CliArgs {
 
     /// The include term the window applies: the last `--filter` given, as before print
     /// mode made the option repeatable.
+    /// The path a file of the command line opens as: with `--rotations`, the file with
+    /// its rotations (`rotated:<file>`).
+    pub fn opened_path(&self, path: &std::path::Path) -> std::path::PathBuf {
+        if self.rotations && path.is_file() {
+            crate::rotation::identity(path)
+        } else {
+            path.to_path_buf()
+        }
+    }
+
     pub fn window_filter(&self) -> Option<&String> {
         self.filter.last()
     }
@@ -785,8 +800,16 @@ mod tests {
             assert!(m.contains(name) && m.contains("needs"), "{name}: {m}");
         }
         for flag in [
-            "--tui", "--gui", "--fresh", "--follow", "--split", "--ascii", "--print", "--all",
+            "--tui",
+            "--gui",
+            "--fresh",
+            "--follow",
+            "--split",
+            "--ascii",
+            "--print",
+            "--all",
             "--mcp",
+            "--rotations",
         ] {
             assert!(!VALUE_OPTIONS.contains(&flag));
             assert!(CliArgs::parse(["--print", flag], &cwd()).is_ok(), "{flag}");

@@ -86,6 +86,27 @@ fn open_event_log(
 /// Opens `path`. `wake` is called from the watcher threads when new data arrives, so a
 /// front end waiting on input can redraw.
 pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -> OpenOutcome {
+    // A file with its rotations: asked for (`rotated:<file>`), or always when the setting
+    // says so and the file has some.
+    let rotated = crate::rotation::parse(path).or_else(|| {
+        (config.rotations == crate::rotation::Policy::Always
+            && path.is_file()
+            && !crate::rotation::siblings(path).is_empty())
+        .then(|| path.to_path_buf())
+    });
+    if let Some(live) = rotated {
+        let settings = crate::stdin_source::Settings::from_config(
+            config.spool_dir.as_deref(),
+            config.compressed_max_gb.saturating_mul(1024),
+        );
+        return match crate::rotation::open_engine(&live, &settings, wake) {
+            Ok(engine) => OpenOutcome::Opened(Box::new(engine)),
+            Err(e) => OpenOutcome::Failed {
+                error: OpenError::Io(e),
+                report: true,
+            },
+        };
+    }
     if let Some(uri) = crate::plugins::PluginUri::parse(path) {
         let dir = crate::plugins::default_dir();
         let catalog = crate::plugins::discover(&dir);

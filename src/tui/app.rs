@@ -3202,6 +3202,15 @@ impl App {
                     if !engine.is_stdin() {
                         s.config.add_recent_file(&engine.path);
                     }
+                    // A plain file with rotations next to it: the stream bar offers them.
+                    if s.config.rotations == crate::rotation::Policy::Ask
+                        && engine.rotation.is_none()
+                        && engine.compressed.is_none()
+                        && engine.piped().is_none()
+                        && engine.path.is_file()
+                    {
+                        engine.rotation_offer = crate::rotation::offer(&engine.path);
+                    }
                 }
                 let place = self.focused_place();
                 let path = engine.path.clone();
@@ -4932,6 +4941,15 @@ impl App {
                     self.message =
                         Some(tx(self.lang, "No fields: the lines are plain text").into());
                 }
+            }
+            Action::IncludeRotations => {
+                if tab.engine.rotation_offer.is_none() {
+                    self.message = Some(tx(self.lang, "No rotations to include").into());
+                    return;
+                }
+                let id = crate::rotation::identity(&tab.engine.path);
+                self.close_stream();
+                self.open_file(&id);
             }
             Action::OpenSource => {
                 let Some(line) = tab.cursor_line() else {
@@ -7808,8 +7826,8 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ),
     ("l", en("cycle the minimum level"), Some(Action::CycleLevel)),
     (
-        "H",
-        en("hide the selected lines or the cursor row"),
+        "H  R",
+        en("hide rows; R: include the rotations"),
         Some(Action::HideLines),
     ),
     (

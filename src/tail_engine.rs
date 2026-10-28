@@ -2003,6 +2003,13 @@ pub struct TailEngine {
     pub listener: Option<crate::net_listener::ListenerStream>,
     /// The capture of a Windows debug-output stream (see `debug_output`).
     pub debug_output: Option<crate::debug_output::DebugStream>,
+    /// The producer, copier and spool of a file read with its rotations (see `rotation`);
+    /// `path` is then `rotated:<file>` and `current_file` the spool.
+    pub rotation: Option<crate::rotation::RotationStream>,
+    /// The rotations the stream bar offers to include: how many and their bytes.
+    pub rotation_offer: Option<(usize, u64)>,
+    /// The stream bar's Include rotations was clicked (applied by the front end).
+    pub rotation_request: bool,
     /// A source location the row menu or a Ctrl + click asked to open (applied by the
     /// front end, which has the editor command and the source roots).
     pub source_request: Option<(crate::source_links::Location, crate::source_links::Target)>,
@@ -2668,6 +2675,9 @@ impl TailEngine {
             listener: None,
             debug_output: None,
             source_request: None,
+            rotation: None,
+            rotation_offer: None,
+            rotation_request: false,
             plugin: None,
             event_log: None,
             stats: None,

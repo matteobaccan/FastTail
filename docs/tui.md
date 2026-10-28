@@ -91,6 +91,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `e` `E`, `w` `W` (`10j`, `3e`: counts) | next / previous ERROR, WARN line |
 | `b` (`Ctrl+F2`), `]` `[` (`F2` `Shift+F2`), `m` | bookmark, next / previous, note |
 | `Ctrl+K` | the row in context (filters off) and back |
+| `R` | when the stream bar offers `R: include N rotations`: open the stream again with its file's rotations (`app.log.1`, `.2.gz` …) as one stream, oldest first |
 | `Ctrl+O` | open the cursor row's source location (`Orders.java:42`, `src/x.rs:3:9`) in the editor of Settings; pressed again on the same row, the next location |
 | `Ctrl+G` | go to a line (`N`, `+N`, `-N`) or a time (`14:02`) |
 | `h` | HEX view (go to `1024` or `0x400`) and back |
