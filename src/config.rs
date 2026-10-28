@@ -266,6 +266,18 @@ pub struct FastTailConfig {
     /// id of another build survives a save.
     #[serde(default)]
     pub shortcuts: std::collections::BTreeMap<String, String>,
+    /// The web view (`web`), `[web] enabled`: off by default.
+    #[serde(default)]
+    pub web_enabled: bool,
+    /// Its port, `[web] port` (`web::DEFAULT_PORT`).
+    #[serde(default)]
+    pub web_port: u16,
+    /// Its access token, `[web] token`; made on the first enable.
+    #[serde(default)]
+    pub web_token: String,
+    /// Other computers may connect (every interface is bound), `[web] allow_remote`.
+    #[serde(default)]
+    pub web_allow_remote: bool,
     /// Bookmarked lines per file (most recently used first) with the notes of some of
     /// them, see `set_bookmarks_with_notes`.
     #[serde(default)]
@@ -569,6 +581,10 @@ impl Default for FastTailConfig {
             query_history: Vec::new(),
             palette_recent: Vec::new(),
             shortcuts: std::collections::BTreeMap::new(),
+            web_enabled: false,
+            web_port: crate::web::DEFAULT_PORT,
+            web_token: String::new(),
+            web_allow_remote: false,
             bookmarks: Vec::new(),
             wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
@@ -1136,6 +1152,18 @@ impl FastTailConfig {
             }
         }
 
+        if self.web_enabled
+            || self.web_allow_remote
+            || !self.web_token.is_empty()
+            || self.web_port != crate::web::DEFAULT_PORT
+        {
+            conf.with_section(Some("web"))
+                .set("enabled", self.web_enabled.to_string())
+                .set("port", self.web_port.to_string())
+                .set("token", self.web_token.as_str())
+                .set("allow_remote", self.web_allow_remote.to_string());
+        }
+
         if !self.shortcuts.is_empty() {
             let mut sec = conf.with_section(Some("shortcuts"));
             for (id, bindings) in &self.shortcuts {
@@ -1686,6 +1714,22 @@ impl FastTailConfig {
                 }
                 i += 1;
             }
+        }
+
+        if let Some(sec) = conf.section(Some("web")) {
+            let flag = |k: &str| sec.get(k).and_then(|v| v.trim().parse::<bool>().ok());
+            cfg.web_enabled = flag("enabled").unwrap_or(false);
+            cfg.web_allow_remote = flag("allow_remote").unwrap_or(false);
+            cfg.web_port = sec
+                .get("port")
+                .and_then(|v| v.trim().parse::<u16>().ok())
+                .filter(|p| *p >= 1024)
+                .unwrap_or(crate::web::DEFAULT_PORT);
+            cfg.web_token = sec
+                .get("token")
+                .map(|v| v.trim().to_string())
+                .filter(|v| v.len() >= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric()))
+                .unwrap_or_default();
         }
 
         if let Some(sec) = conf.section(Some("shortcuts")) {
@@ -2378,6 +2422,33 @@ mod tests {
             FastTailConfig::from_ini(&ini).palette_recent,
             vec!["view.wrap.toggle".to_string()]
         );
+    }
+
+    #[test]
+    fn test_web_settings_round_trip_and_default_off() {
+        let cfg = FastTailConfig {
+            web_enabled: true,
+            web_port: 48000,
+            web_token: crate::web::new_token(),
+            web_allow_remote: true,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(loaded.web_enabled && loaded.web_allow_remote);
+        assert_eq!(
+            (loaded.web_port, loaded.web_token.as_str()),
+            (48000, cfg.web_token.as_str())
+        );
+        let default = FastTailConfig::default();
+        assert!(!default.web_enabled && default.web_port == crate::web::DEFAULT_PORT);
+        assert!(default.to_ini().section(Some("web")).is_none());
+        // A short or odd token is made again; a low port falls back.
+        let mut ini = FastTailConfig::default().to_ini();
+        ini.with_section(Some("web"))
+            .set("token", "x")
+            .set("port", "80");
+        let odd = FastTailConfig::from_ini(&ini);
+        assert!(odd.web_token.is_empty() && odd.web_port == crate::web::DEFAULT_PORT);
     }
 
     #[test]

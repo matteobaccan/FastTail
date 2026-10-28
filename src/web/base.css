@@ -1,0 +1,25 @@
+/* FastTail web view. Colours come from the theme (rules inserted by app.js). */
+:root { --bg: #0b0f14; --fg: #d6e2ee; --dim: #6c7a89; --accent: #34d6ff; --hit: rgba(255, 210, 0, 0.25); }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 13px/1.35 ui-monospace, Consolas, Menlo, monospace; display: flex; flex-direction: column; }
+header, footer { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--dim); }
+footer { border-top: 1px solid var(--dim); border-bottom: 0; color: var(--dim); font-size: 11px; }
+.brand { color: var(--accent); font-weight: bold; margin-right: 6px; }
+select, input, button { background: var(--bg); color: var(--fg); border: 1px solid var(--dim); border-radius: 3px; font: inherit; padding: 2px 6px; }
+button { cursor: pointer; }
+button.on { border-color: var(--accent); color: var(--accent); }
+.search { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
+#found { color: var(--dim); min-width: 4ch; }
+main { flex: 1; display: flex; min-height: 0; }
+.pane { flex: 1; overflow: auto; padding: 4px 8px; min-width: 0; }
+.pane + .pane { border-left: 1px solid var(--dim); }
+.hidden { display: none; }
+.earlier { margin: 2px 0 6px; }
+.rows .l { white-space: pre-wrap; word-break: break-all; }
+.rows .n { color: var(--dim); user-select: none; display: inline-block; min-width: 7ch; text-align: right; margin-right: 1ch; }
+.rows .bm { color: var(--accent); user-select: none; }
+.rows .l.hit { outline: 1px solid var(--accent); background: var(--hit); }
+.rows .l.cur { outline: 2px solid var(--accent); }
+.note { color: var(--dim); }
+@media (max-width: 900px) { .wide-only { display: none; } .pane + .pane { display: none; } }

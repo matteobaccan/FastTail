@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FastTail</title>
+<link rel="stylesheet" href="/base.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <span class="brand">FastTail</span>
+  <select id="stream-a" aria-label="stream"></select>
+  <select id="stream-b" aria-label="second stream" class="wide-only"></select>
+  <label class="wide-only"><input type="checkbox" id="two"> <span data-t="web_two_panes">2</span></label>
+  <button id="follow" type="button" data-t="web_pause">Pause</button>
+  <span class="search">
+    <input id="query" type="search" data-ph="web_search" placeholder="Search">
+    <button id="prev" type="button" aria-label="previous">▲</button>
+    <button id="next" type="button" aria-label="next">▼</button>
+    <span id="found"></span>
+  </span>
+</header>
+<main id="panes">
+  <section class="pane" id="pane-a"><button class="earlier" type="button" data-t="web_earlier">Earlier lines</button><div class="rows"></div><p class="note"></p></section>
+  <section class="pane hidden" id="pane-b"><button class="earlier" type="button" data-t="web_earlier">Earlier lines</button><div class="rows"></div><p class="note"></p></section>
+</main>
+<footer><span data-t="web_read_only">Read-only view of FastTail</span> · <span id="status"></span></footer>
+</body>
+</html>

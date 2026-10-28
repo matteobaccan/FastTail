@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Web view.** Settings → *🌐 Web view…* serves a read-only page of the open streams
+  on `127.0.0.1:47820` (off by default): the lines as FastTail shows them, filters and
+  colours included, live through Server-Sent Events, with paging, two panes on a wide
+  screen and search over the whole visible stream. A token (cookie after the first
+  visit), a strict Content-Security-Policy, no external resource, at most 8 browsers;
+  *Allow other computers* binds every interface after a confirmation. `[web]` in
+  `fasttail.ini`; `🔗 N` in the title bar while it is on (`web-ui`, from the backlog).
 - **Remappable keyboard shortcuts.** *⌨ Keyboard shortcuts…* (Settings, or the palette)
   lists every command with its keys: click a key and press a new one, add a second key,
   remove one, reset one or all. A key another command uses is named, with *Move here* or

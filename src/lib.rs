@@ -75,6 +75,7 @@ pub mod tray;
 pub mod tui;
 #[cfg(feature = "gui")]
 pub mod ui;
+pub mod web;
 pub mod wildcard;
 pub mod workspace;
 pub mod wrap_layout;
