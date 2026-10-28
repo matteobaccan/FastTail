@@ -4791,6 +4791,11 @@ fn render_extended_rows(
                     || row_galley(label.clone()),
                     &mut token_pick,
                 );
+                // Ctrl + click on a source location opens it instead of selecting rows.
+                if let Some(loc) = source_link_pick(ui, &click, || row_galley(label.clone())) {
+                    picks.source = Some((loc, crate::source_links::Target::Editor));
+                    row_click = None;
+                }
                 let in_cells = !cell_galleys.is_empty();
                 if let Some(pick) = row_char_selection(
                     ui,
@@ -5587,10 +5592,15 @@ struct RowMenuPicks {
     format: Option<usize>,
     /// Row a compare was asked on, and what it is.
     compare: Option<(usize, crate::compare::CompareRequest)>,
+    /// A source location to open, and where.
+    source: Option<(crate::source_links::Location, crate::source_links::Target)>,
 }
 
 impl RowMenuPicks {
     fn apply(self, ui: &Ui, engine: &mut TailEngine) {
+        if let Some(request) = self.source {
+            engine.source_request = Some(request);
+        }
         if let Some(line) = self.anchor {
             engine.toggle_time_anchor(line);
         }
@@ -6039,6 +6049,92 @@ fn token_under(galley: &egui::Galley, pos: egui::Pos2, pointer: egui::Pos2) -> O
     Some(text[start..end].to_string())
 }
 
+/// With Ctrl held over a row's text: the source location under the pointer is
+/// underlined and the pointer becomes a hand; a click on it returns it. `galley` is laid
+/// out on demand (only while Ctrl is held over the row).
+fn source_link_pick(
+    ui: &Ui,
+    click: &egui::Response,
+    galley: impl FnOnce() -> Option<(std::sync::Arc<egui::Galley>, egui::Pos2)>,
+) -> Option<crate::source_links::Location> {
+    if !click.hovered() || !ui.input(|i| i.modifiers.command) {
+        return None;
+    }
+    let pointer = ui.input(|i| i.pointer.hover_pos())?;
+    let (galley, pos) = galley()?;
+    if !over_text(&galley, pos, pointer) {
+        return None;
+    }
+    let text = galley.text();
+    let local = pointer - pos;
+    let cursor = galley.cursor_from_pos(local);
+    let mut idx = cursor.index.0;
+    if idx > 0 && local.x < galley.pos_from_cursor(cursor).min.x {
+        idx -= 1;
+    }
+    let loc = crate::source_links::at(text, char_to_byte(text, idx))?;
+    let rect = text_range_rect(&galley, pos, loc.start, loc.end);
+    ui.painter().line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        Stroke::new(1.0, ui.visuals().hyperlink_color),
+    );
+    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    click.clicked().then_some(loc)
+}
+
+/// Row menu entries of the source locations of line `line`: open in the editor, open in
+/// FastTail (a submenu each when the line has several).
+fn source_link_menu(
+    ui: &mut Ui,
+    engine: &TailEngine,
+    line: usize,
+    lang: Language,
+    picks: &mut RowMenuPicks,
+) {
+    use crate::source_links::Target;
+    let Some(text) = engine.get_line(line) else {
+        return;
+    };
+    let mut locations = crate::source_links::find(&text);
+    locations.truncate(8);
+    let label = |l: &crate::source_links::Location| format!("{}:{}", l.path, l.line);
+    match locations.as_slice() {
+        [] => {}
+        [loc] => {
+            let open = format!("↗ {} ({})", t(lang, "src_open"), label(loc));
+            if ui.button(RichText::new(open).monospace()).clicked() {
+                picks.source = Some((loc.clone(), Target::Editor));
+                ui.close();
+            }
+            if ui
+                .button(RichText::new(format!("⧉ {}", t(lang, "src_open_here"))).monospace())
+                .clicked()
+            {
+                picks.source = Some((loc.clone(), Target::Stream));
+                ui.close();
+            }
+        }
+        several => {
+            for (key, icon, target) in [
+                ("src_open", "↗", Target::Editor),
+                ("src_open_here", "⧉", Target::Stream),
+            ] {
+                ui.menu_button(
+                    RichText::new(format!("{icon} {}", t(lang, key))).monospace(),
+                    |ui| {
+                        for loc in several {
+                            if ui.button(RichText::new(label(loc)).monospace()).clicked() {
+                                picks.source = Some((loc.clone(), target));
+                                ui.close();
+                            }
+                        }
+                    },
+                );
+            }
+        }
+    }
+}
+
 /// A double-click or a right click on a row's text: the double-click toggles the
 /// outlined token (empty space clears it), the right click keeps the token under the
 /// pointer for the row menu. `galley` is laid out on demand (only on such a click).
@@ -6372,6 +6468,7 @@ fn row_context_menu(
             picks.copy = Some((line, true));
             ui.close();
         }
+        source_link_menu(ui, engine, line, lang, picks);
         if let Some(text) = engine
             .char_selection
             .as_ref()
@@ -7382,6 +7479,12 @@ fn render_wrapped_rows(
                 || text_spans.then(|| (r.galley.clone(), text_pos)),
                 &mut token_pick,
             );
+            if let Some(loc) = source_link_pick(ui, &click, || {
+                text_spans.then(|| (r.galley.clone(), text_pos))
+            }) {
+                picks.source = Some((loc, crate::source_links::Target::Editor));
+                row_click = None;
+            }
             if let Some(pick) =
                 row_char_selection(ui, eng.char_selection.as_ref(), &click, line, || {
                     if text_spans {

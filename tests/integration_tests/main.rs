@@ -266,6 +266,8 @@ mod mcp_server;
 
 mod plugin_api;
 
+mod source_links;
+
 mod search_modes;
 
 mod query_language;

@@ -944,6 +944,17 @@ fn test_i18n_exhaustive_coverage() {
         "plug_title",
         "plug_value_needed",
         "plugin_failed",
+        "src_open",
+        "src_open_here",
+        "src_settings",
+        "src_editor",
+        "src_editor_hint",
+        "src_editor_tip",
+        "src_presets",
+        "src_roots",
+        "src_roots_tip",
+        "src_not_found",
+        "src_failed",
         "ops_open",
         "ops_open_tip",
         "ops_by_field",
@@ -1823,6 +1834,8 @@ fn test_i18n_exhaustive_coverage() {
     // the English one only where that is the right translation (a product name, an
     // abbreviation, a word several languages share), and those keys are listed here.
     const SAME_AS_ENGLISH: &[&str] = &[
+        // "Editor" in German, Spanish, Italian, Dutch and Portuguese.
+        "src_editor",
         // "Plugins" in several languages, French "source" and "formats".
         "plug_open",
         "plug_title",

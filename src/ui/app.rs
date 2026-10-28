@@ -1348,6 +1348,7 @@ impl FastTailApp {
     /// Opens the Log formats dialog a row menu asked for, with the lines picked.
     fn apply_format_requests(&mut self) {
         self.apply_plugin_requests();
+        self.apply_source_requests();
         let commands = self.config.system_commands();
         let lang = self.config.language;
         for engine in &mut self.engines {
@@ -2597,6 +2598,98 @@ impl FastTailApp {
             OpenError::System { .. } => err.system_text(lang).unwrap_or_default(),
         };
         format!("{}: {reason}", path.display())
+    }
+
+    /// Settings rows of the source links: the editor command (with presets) and the
+    /// source roots; saved when a field loses the focus or a preset is picked.
+    fn source_link_settings(&mut self, ui: &mut egui::Ui) {
+        let lang = self.config.language;
+        ui.add_space(6.0);
+        ui.label(RichText::new(t(lang, "src_settings")).monospace().strong());
+        let mut save = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{}:", t(lang, "src_editor"))).monospace());
+            let resp = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.config.editor_command)
+                        .hint_text(t(lang, "src_editor_hint"))
+                        .desired_width(260.0),
+                )
+                .on_hover_text(t(lang, "src_editor_tip"));
+            save |= resp.lost_focus();
+            egui::ComboBox::from_id_salt("src_editor_presets")
+                .selected_text(t(lang, "src_presets"))
+                .show_ui(ui, |ui| {
+                    for (name, template) in crate::source_links::PRESETS {
+                        if ui.selectable_label(false, name).clicked() {
+                            self.config.editor_command = template.to_string();
+                            save = true;
+                        }
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{}:", t(lang, "src_roots"))).monospace());
+            let id = egui::Id::new("src_roots_text");
+            let mut text = ui.data_mut(|d| {
+                d.get_temp::<String>(id)
+                    .unwrap_or_else(|| crate::source_links::roots_text(&self.config.source_roots))
+            });
+            let resp = ui
+                .add(egui::TextEdit::singleline(&mut text).desired_width(320.0))
+                .on_hover_text(t(lang, "src_roots_tip"));
+            if resp.changed() {
+                self.config.source_roots = crate::source_links::parse_roots(&text);
+            }
+            if resp.lost_focus() {
+                save = true;
+                ui.data_mut(|d| d.remove::<String>(id));
+            } else {
+                ui.data_mut(|d| d.insert_temp(id, text));
+            }
+        });
+        if save {
+            let _ = self.config.save();
+        }
+    }
+
+    /// Opens a source location a row asked for: in the editor of Settings, or in FastTail
+    /// as a stream at that line; a location whose file is not found says so.
+    fn apply_source_requests(&mut self) {
+        let Some(idx) = self.engines.iter().position(|e| e.source_request.is_some()) else {
+            return;
+        };
+        let Some((loc, target)) = self.engines[idx].source_request.take() else {
+            return;
+        };
+        let lang = self.config.language;
+        let Some(file) = crate::source_links::resolve(&loc, &self.config.source_roots) else {
+            self.engines[idx].view_notice =
+                Some(t(lang, "src_not_found").replace("{0}", &loc.path));
+            return;
+        };
+        match target {
+            crate::source_links::Target::Editor => {
+                if let Err(e) = crate::source_links::open_in_editor(
+                    &self.config.editor_command,
+                    &file,
+                    loc.line,
+                    loc.col,
+                ) {
+                    self.engines[idx].view_notice = Some(t(lang, "src_failed").replace("{0}", &e));
+                }
+            }
+            crate::source_links::Target::Stream => {
+                self.open_log_file(file.clone());
+                if let Some(engine) = self
+                    .engines
+                    .iter_mut()
+                    .find(|e| paths_equal(&e.path, &file))
+                {
+                    engine.open_at_line(loc.line as usize, lang);
+                }
+            }
+        }
     }
 
     /// Opens the source plugin `name` with `values`: a new stream, or the stream of the
@@ -5216,6 +5309,10 @@ impl FastTailApp {
                         {
                             self.plugins_view.open = true;
                         }
+
+                        // Source links: the editor a location opens in, and the folders a
+                        // relative one is looked for in.
+                        self.source_link_settings(ui);
 
                         // Rendering backend: applies at the next start.
                         ui.add_space(6.0);

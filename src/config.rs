@@ -226,6 +226,14 @@ pub struct FastTailConfig {
     /// The OpenSSH client run for `ssh://` streams.
     #[serde(default = "default_ssh_program")]
     pub ssh_program: String,
+    /// The editor a source location opens in (`source_links`), `[general] editor_command`:
+    /// a template with `{file}`, `{line}`, `{col}`; empty for the system opener.
+    #[serde(default)]
+    pub editor_command: String,
+    /// Folders a relative source location is looked for in, `[general] source_roots`
+    /// (separated by `;`).
+    #[serde(default)]
+    pub source_roots: Vec<PathBuf>,
     /// Size in MB at which a remote stream's spool restarts from empty (64..=65536,
     /// default 2048).
     #[serde(default = "default_remote_spool_max_mb")]
@@ -587,6 +595,8 @@ impl Default for FastTailConfig {
             docker_command: default_docker_command(),
             journalctl_command: default_journalctl_command(),
             ssh_program: default_ssh_program(),
+            editor_command: String::new(),
+            source_roots: Vec::new(),
             remote_spool_max_mb: default_remote_spool_max_mb(),
             remote_initial_mb: default_remote_initial_mb(),
             listener_spool_max_mb: default_listener_spool_max_mb(),
@@ -1089,6 +1099,11 @@ impl FastTailConfig {
             .set("docker_command", self.docker_command.clone())
             .set("journalctl_command", self.journalctl_command.clone())
             .set("ssh_program", self.ssh_program.clone())
+            .set("editor_command", self.editor_command.clone())
+            .set(
+                "source_roots",
+                crate::source_links::roots_text(&self.source_roots),
+            )
             .set("remote_spool_max_mb", self.remote_spool_max_mb.to_string())
             .set("remote_initial_mb", self.remote_initial_mb.to_string())
             .set(
@@ -1657,6 +1672,12 @@ impl FastTailConfig {
                 if let Some(s) = general.get(key).map(str::trim).filter(|s| !s.is_empty()) {
                     *value = s.to_string();
                 }
+            }
+            if let Some(s) = general.get("editor_command") {
+                cfg.editor_command = s.trim().to_string();
+            }
+            if let Some(s) = general.get("source_roots") {
+                cfg.source_roots = crate::source_links::parse_roots(s);
             }
             if let Some(s) = general.get("size_unit") {
                 cfg.size_unit = match s.to_lowercase().as_str() {
@@ -2552,6 +2573,20 @@ mod tests {
             .set("port", "80");
         let odd = FastTailConfig::from_ini(&ini);
         assert!(odd.web_token.is_empty() && odd.web_port == crate::web::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn test_source_link_settings_round_trip() {
+        let cfg = FastTailConfig {
+            editor_command: "code -g {file}:{line}:{col}".into(),
+            source_roots: vec![PathBuf::from("/src/shop"), PathBuf::from("D:\\work")],
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.editor_command, cfg.editor_command);
+        assert_eq!(loaded.source_roots, cfg.source_roots);
+        let default = FastTailConfig::from_ini(&FastTailConfig::default().to_ini());
+        assert!(default.editor_command.is_empty() && default.source_roots.is_empty());
     }
 
     #[test]

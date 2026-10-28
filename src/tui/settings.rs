@@ -67,6 +67,10 @@ pub enum Key {
     NotifyAlways,
     /// Opens the external tools editor (`Enter`); the tools are not part of the form.
     Tools,
+    /// `editor_command`: the editor a source location opens in.
+    EditorCommand,
+    /// `source_roots`: folders separated by `;`.
+    SourceRoots,
     /// The idle lock switch (`lock_enabled`), the idle minutes
     /// (`screensaver_timeout_mins`), a new PIN typed twice, and removing the PIN.
     LockEnabled,
@@ -393,6 +397,18 @@ impl SettingsForm {
             )
             .starts(en("External tools")),
             Field::new(
+                Key::EditorCommand,
+                en("Editor for source locations ({file} {line} {col})"),
+                Widget::Text(TextField::new(&c.editor_command)),
+            ),
+            Field::new(
+                Key::SourceRoots,
+                en("Source folders (separated by ;)"),
+                Widget::Text(TextField::new(&crate::source_links::roots_text(
+                    &c.source_roots,
+                ))),
+            ),
+            Field::new(
                 Key::LockEnabled,
                 en("Lock when idle"),
                 check(c.lock_enabled),
@@ -622,6 +638,17 @@ impl SettingsForm {
                 Key::FlashOnAlert => c.flash_on_alert = on,
                 Key::Notifications => c.notifications_enabled = on,
                 Key::NotifyAlways => c.notify_always = on,
+                Key::EditorCommand | Key::SourceRoots => {
+                    let text = match &f.widget {
+                        Widget::Text(t) => t.text().trim().to_string(),
+                        _ => String::new(),
+                    };
+                    if f.key == Key::EditorCommand {
+                        c.editor_command = text;
+                    } else {
+                        c.source_roots = crate::source_links::parse_roots(&text);
+                    }
+                }
                 Key::Tools | Key::PinConfirm => {}
                 Key::LockEnabled => c.lock_enabled = on,
                 Key::IdleMinutes => c.screensaver_timeout_mins = num() as u32,

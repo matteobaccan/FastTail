@@ -441,6 +441,12 @@ The 🗂 button in the title bar saves the workspace under a name and loads it b
 
 Paths are written absolute and, when the file lies under the session's folder, also relative to it: a session saved next to a log bundle still opens after the bundle is moved or copied elsewhere. "Save current as default workspace" writes the workspace back into `fasttail.ini` and leaves the named session. `fasttail --session incident.fasttail-session.ini` loads a session at startup.
 
+### Source locations
+
+Stack traces, compiler errors and test output name source locations, and FastTail opens them in your editor at that line: hold **Ctrl** over a row and the location under the pointer is underlined; **Ctrl + click** opens it (a Ctrl + click elsewhere keeps its row meaning). The row menu has **↗ Open source location** and **⧉ Open in FastTail** (the file as a stream at that line), with a submenu when the row names several; in the terminal **`Ctrl+O`** opens the cursor row's location, pressed again the next one. Recognised: `path:line[:col]` (Go, Node, gcc, test runners), Java / Kotlin / Scala frames `at com.acme.Orders.save(Orders.java:42)`, Python `File "app.py", line 12`, .NET `in X.cs:line 33`, Rust and compilers `--> src/x.rs:3:9`; times of day, `host:port` in URLs and IP addresses are not locations.
+
+Settings → *Source locations* (and the terminal Settings, External tools): **Editor**, a command whose `{file}`, `{line}` and `{col}` are each expanded inside one argument and run without a shell (presets for VS Code `code -g {file}:{line}:{col}`, JetBrains `idea --line {line} {file}`, Sublime Text, Notepad++, Vim in a terminal, Emacs; empty: the system opener, without the line), and **Source folders**, separated by `;`: a relative location (`src/x.rs`) is looked for in each folder in turn, a JVM frame also under its package (`com/acme/Orders.java`); an absolute path that exists opens as it is, and a location found nowhere says so instead of running anything. Saved in `fasttail.ini` as `editor_command` and `source_roots`.
+
 ### External tools
 What they are for, with ready-made recipes (open the row in an editor, SSH to the host in the line, pretty-print its JSON, alert on a rule): **[External tools cookbook](docs/external-tools-cookbook.md)**.
 

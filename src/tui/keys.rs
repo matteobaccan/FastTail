@@ -42,6 +42,9 @@ pub enum Action {
     CycleLevel,
     /// Hide the selected lines (or the cursor row) from the view.
     HideLines,
+    /// Open the cursor row's source location in the editor (the next one when pressed
+    /// again on the same row).
+    OpenSource,
     /// The column view of the fields on or off.
     ToggleColumns,
     /// `s` `|`: the focused window splits side by side; `_`: stacked. A window with
@@ -193,6 +196,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('g') => Some(Action::GoTo),
             KeyCode::Char('w') => Some(Action::CloseStream),
             KeyCode::Char('l') => Some(Action::Lock),
+            KeyCode::Char('o') => Some(Action::OpenSource),
             KeyCode::PageUp => Some(Action::PrevInPane),
             KeyCode::PageDown => Some(Action::NextInPane),
             KeyCode::Left => Some(Action::ScrollLeftFast),

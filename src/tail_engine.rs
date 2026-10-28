@@ -2003,6 +2003,9 @@ pub struct TailEngine {
     pub listener: Option<crate::net_listener::ListenerStream>,
     /// The capture of a Windows debug-output stream (see `debug_output`).
     pub debug_output: Option<crate::debug_output::DebugStream>,
+    /// A source location the row menu or a Ctrl + click asked to open (applied by the
+    /// front end, which has the editor command and the source roots).
+    pub source_request: Option<(crate::source_links::Location, crate::source_links::Target)>,
     /// Program, copier and spool of a source plugin stream (see `plugin_source`); `path`
     /// is then its URI without the secrets and `current_file` the spool.
     pub plugin: Option<crate::plugin_source::PluginStream>,
@@ -2664,6 +2667,7 @@ impl TailEngine {
             ssh: None,
             listener: None,
             debug_output: None,
+            source_request: None,
             plugin: None,
             event_log: None,
             stats: None,

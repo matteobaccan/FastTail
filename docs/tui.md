@@ -91,6 +91,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `e` `E`, `w` `W` (`10j`, `3e`: counts) | next / previous ERROR, WARN line |
 | `b` (`Ctrl+F2`), `]` `[` (`F2` `Shift+F2`), `m` | bookmark, next / previous, note |
 | `Ctrl+K` | the row in context (filters off) and back |
+| `Ctrl+O` | open the cursor row's source location (`Orders.java:42`, `src/x.rs:3:9`) in the editor of Settings; pressed again on the same row, the next location |
 | `Ctrl+G` | go to a line (`N`, `+N`, `-N`) or a time (`14:02`) |
 | `h` | HEX view (go to `1024` or `0x400`) and back |
 | `d`, `Shift+D` | ASM view of x86 code (go to an offset, `0x401000` or `entry`) and back to HEX; the next architecture (16, 32, 64 bit), shown in the window's bottom border |
