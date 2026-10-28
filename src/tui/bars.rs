@@ -355,6 +355,12 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             BarChip::SourceEnded,
         ));
     }
+    if let Some((count, _)) = e.rotation_offer {
+        second.push(text(txf(lang, "R: include {0} rotations", &[&count]), warn));
+    }
+    if let Some(r) = e.rotation.as_ref() {
+        second.push(text(txf(lang, "+{0} rotations", &[&r.pieces]), dim));
+    }
     if let Some(p) = e.plugin.as_ref() {
         use crate::plugin_source::{Block, Status};
         let name = p.uri.name.as_str();

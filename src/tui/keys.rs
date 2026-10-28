@@ -45,6 +45,8 @@ pub enum Action {
     /// Open the cursor row's source location in the editor (the next one when pressed
     /// again on the same row).
     OpenSource,
+    /// Open the stream again with its file's rotations (when the stream bar offers them).
+    IncludeRotations,
     /// The column view of the fields on or off.
     ToggleColumns,
     /// `s` `|`: the focused window splits side by side; `_`: stacked. A window with
@@ -249,6 +251,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('c') => Action::CycleCollapse,
         KeyCode::Char('l') => Action::CycleLevel,
         KeyCode::Char('H') => Action::HideLines,
+        KeyCode::Char('R') => Action::IncludeRotations,
         KeyCode::Char('C') => Action::ToggleColumns,
         KeyCode::Char('s') | KeyCode::Char('|') => Action::SplitRight,
         KeyCode::Char('_') => Action::SplitDown,

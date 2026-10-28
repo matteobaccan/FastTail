@@ -226,6 +226,9 @@ pub struct FastTailConfig {
     /// The OpenSSH client run for `ssh://` streams.
     #[serde(default = "default_ssh_program")]
     pub ssh_program: String,
+    /// What a stream does with a file's rotations, `[general] rotations=ask|always|never`.
+    #[serde(default)]
+    pub rotations: crate::rotation::Policy,
     /// The editor a source location opens in (`source_links`), `[general] editor_command`:
     /// a template with `{file}`, `{line}`, `{col}`; empty for the system opener.
     #[serde(default)]
@@ -595,6 +598,7 @@ impl Default for FastTailConfig {
             docker_command: default_docker_command(),
             journalctl_command: default_journalctl_command(),
             ssh_program: default_ssh_program(),
+            rotations: crate::rotation::Policy::Ask,
             editor_command: String::new(),
             source_roots: Vec::new(),
             remote_spool_max_mb: default_remote_spool_max_mb(),
@@ -1099,6 +1103,7 @@ impl FastTailConfig {
             .set("docker_command", self.docker_command.clone())
             .set("journalctl_command", self.journalctl_command.clone())
             .set("ssh_program", self.ssh_program.clone())
+            .set("rotations", self.rotations.name())
             .set("editor_command", self.editor_command.clone())
             .set(
                 "source_roots",
@@ -1672,6 +1677,12 @@ impl FastTailConfig {
                 if let Some(s) = general.get(key).map(str::trim).filter(|s| !s.is_empty()) {
                     *value = s.to_string();
                 }
+            }
+            if let Some(p) = general
+                .get("rotations")
+                .and_then(crate::rotation::Policy::from_name)
+            {
+                cfg.rotations = p;
             }
             if let Some(s) = general.get("editor_command") {
                 cfg.editor_command = s.trim().to_string();
@@ -2584,6 +2595,14 @@ mod tests {
         };
         let loaded = FastTailConfig::from_ini(&cfg.to_ini());
         assert_eq!(loaded.editor_command, cfg.editor_command);
+        let always = FastTailConfig {
+            rotations: crate::rotation::Policy::Always,
+            ..Default::default()
+        };
+        assert_eq!(
+            FastTailConfig::from_ini(&always.to_ini()).rotations,
+            crate::rotation::Policy::Always
+        );
         assert_eq!(loaded.source_roots, cfg.source_roots);
         let default = FastTailConfig::from_ini(&FastTailConfig::default().to_ini());
         assert!(default.editor_command.is_empty() && default.source_roots.is_empty());

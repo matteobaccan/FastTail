@@ -70,6 +70,7 @@ pub fn is_system_path(path: &Path) -> bool {
         || crate::debug_output::is_dbwin_path(path)
         || crate::eventlog::is_eventlog_path(path)
         || crate::plugins::is_plugin_path(path)
+        || crate::rotation::is_rotated_path(path)
 }
 
 /// A unit name journalctl accepts and cannot take for an option.
@@ -459,6 +460,16 @@ impl TailEngine {
                 self.plugin
                     .as_ref()
                     .map(crate::plugin_source::PluginStream::title)
+            })
+            .or_else(|| {
+                self.rotation.as_ref().map(|r| {
+                    let name = r
+                        .live
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    format!("{name} (+{})", r.pieces)
+                })
             })
     }
 

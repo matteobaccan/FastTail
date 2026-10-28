@@ -955,6 +955,17 @@ fn test_i18n_exhaustive_coverage() {
         "src_roots_tip",
         "src_not_found",
         "src_failed",
+        "rot_offer",
+        "rot_offer_tip",
+        "rot_dismiss_tip",
+        "rot_pieces",
+        "rot_goto",
+        "rot_failed",
+        "rot_setting",
+        "rot_setting_tip",
+        "rot_ask",
+        "rot_always",
+        "rot_never",
         "ops_open",
         "ops_open_tip",
         "ops_by_field",
@@ -1834,6 +1845,8 @@ fn test_i18n_exhaustive_coverage() {
     // the English one only where that is the right translation (a product name, an
     // abbreviation, a word several languages share), and those keys are listed here.
     const SAME_AS_ENGLISH: &[&str] = &[
+        // French "{0} rotations".
+        "rot_pieces",
         // "Editor" in German, Spanish, Italian, Dutch and Portuguese.
         "src_editor",
         // "Plugins" in several languages, French "source" and "formats".

@@ -32,6 +32,20 @@ identity, the chain appends the new live file instead of reloading.
 A first open shows the offer; `always` and `never` remember the choice per setting, not per
 file. Sessions keep `rotations=1` for the stream.
 
+### Implementation notes (deviations)
+
+- D2: no chained source in `file_source`. Scan jobs open the stream's file by path and
+  the engine's rotation and size checks assume one file, so a producer thread writes the
+  pieces (decompressed) and then the followed live file into a pipe that the
+  standard-input copier spools; the engine tails the spool like any piped stream. Plain
+  pieces are copied once (bounded by `compressed_max_gb`); the trade is disk space for a
+  stream on which every feature works unchanged.
+- D3: a rotation while following is seen when the live path's identity changes (device
+  and inode on Unix) or its length drops below what was read; the rest of the old file
+  is read first.
+- D4: the choice is kept as the stream's identity `rotated:<file>` instead of a
+  `rotations=1` key; the terminal opens the stream again without carrying the filters.
+
 ## Risks / Trade-offs
 
 - [A folder with thousands of dated pieces] → the 256 cap, newest kept, a notice.

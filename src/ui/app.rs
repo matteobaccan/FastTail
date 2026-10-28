@@ -1346,8 +1346,56 @@ impl FastTailApp {
     }
 
     /// Opens the Log formats dialog a row menu asked for, with the lines picked.
+    /// The stream bar's Include rotations: the stream is opened again with its file's
+    /// rotations, in the same tab, its filters and search kept.
+    fn apply_rotation_requests(&mut self) {
+        let Some(idx) = self.engines.iter().position(|e| e.rotation_request) else {
+            return;
+        };
+        self.engines[idx].rotation_request = false;
+        let old_path = self.engines[idx].path.clone();
+        let id = crate::rotation::identity(&old_path);
+        let lang = self.config.language;
+        let wake = Self::make_wake(&self.egui_ctx);
+        match crate::workspace::open_target(&id, &self.config, Some(wake)) {
+            OpenOutcome::Opened(engine) => {
+                let mut engine = *engine;
+                crate::workspace::apply_settings(&mut engine, &self.config);
+                engine.set_quick_labels(&self.quick_labels);
+                let old = &self.engines[idx];
+                let (include, exclude, search) = (
+                    old.include_filter().to_string(),
+                    old.exclude_filter().to_string(),
+                    old.search_query.clone(),
+                );
+                if !include.is_empty() {
+                    engine.set_include_filter(&include);
+                }
+                if !exclude.is_empty() {
+                    engine.set_exclude_filter(&exclude);
+                }
+                engine.search_query = search;
+                engine.search_edited_at = None;
+                self.engines[idx] = engine;
+                rename_tab(&mut self.dock_state, &old_path, Some(id.clone()));
+                for p in &mut self.config.open_files {
+                    if paths_equal(p, &old_path) {
+                        *p = id.clone();
+                    }
+                }
+                self.config.add_recent_file(&id);
+                let _ = self.config.save();
+                self.save_dock_layout();
+            }
+            _ => {
+                self.engines[idx].view_notice = Some(t(lang, "rot_failed").to_string());
+            }
+        }
+    }
+
     fn apply_format_requests(&mut self) {
         self.apply_plugin_requests();
+        self.apply_rotation_requests();
         self.apply_source_requests();
         let commands = self.config.system_commands();
         let lang = self.config.language;
@@ -2358,9 +2406,11 @@ impl FastTailApp {
                 }
                 continue;
             }
-            self.open_log_file(path.clone());
+            // `--rotations`: the file with its rotations.
+            let opened = cli.opened_path(path);
+            self.open_log_file(opened.clone());
             // A plugin stream is kept under its stored identity (no secrets).
-            self.apply_cli_to(&crate::plugins::stored_path(path), cli);
+            self.apply_cli_to(&crate::plugins::stored_path(&opened), cli);
         }
     }
 
@@ -2646,6 +2696,22 @@ impl FastTailApp {
                 ui.data_mut(|d| d.remove::<String>(id));
             } else {
                 ui.data_mut(|d| d.insert_temp(id, text));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{}:", t(lang, "rot_setting"))).monospace());
+            for (policy, key) in [
+                (crate::rotation::Policy::Ask, "rot_ask"),
+                (crate::rotation::Policy::Always, "rot_always"),
+                (crate::rotation::Policy::Never, "rot_never"),
+            ] {
+                if ui
+                    .radio_value(&mut self.config.rotations, policy, t(lang, key))
+                    .on_hover_text(t(lang, "rot_setting_tip"))
+                    .changed()
+                {
+                    save = true;
+                }
             }
         });
         if save {
@@ -3086,8 +3152,9 @@ impl FastTailApp {
             }
         };
         // A plugin stream is kept, listed and shown under its stored identity, never the
-        // path it was opened with (which may hold a secret).
-        let path = if engine.plugin.is_some() {
+        // path it was opened with (which may hold a secret); a file opened with its
+        // rotations (`rotations=always`) under `rotated:<file>`.
+        let path = if engine.plugin.is_some() || engine.rotation.is_some() {
             engine.path.clone()
         } else {
             path
@@ -3095,6 +3162,15 @@ impl FastTailApp {
         crate::workspace::apply_settings(&mut engine, &self.config);
         engine.set_quick_labels(&self.quick_labels);
         crate::workspace::restore_stream(&mut engine, &self.config, &path);
+        // A plain file with rotations next to it: the stream bar offers them.
+        if self.config.rotations == crate::rotation::Policy::Ask
+            && engine.rotation.is_none()
+            && engine.compressed.is_none()
+            && engine.piped().is_none()
+            && path.is_file()
+        {
+            engine.rotation_offer = crate::rotation::offer(&path);
+        }
         self.engines.push(engine);
 
         // Add to open_files

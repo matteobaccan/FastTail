@@ -870,6 +870,42 @@ fn marker_glyph(
     }
 }
 
+/// A dashed line above the first row of each piece of a stream with rotations, the piece's
+/// file name on hover.
+fn paint_piece_start(
+    ui: &Ui,
+    pieces: &[(usize, String)],
+    line: usize,
+    rect: egui::Rect,
+    theme: &CyberTheme,
+) {
+    // The first piece starts the stream: no line above it.
+    let Some((_, name)) = pieces.iter().skip(1).find(|(l, _)| *l == line) else {
+        return;
+    };
+    let y = rect.top() + 0.5;
+    let left = ui.max_rect().left();
+    let right = ui.max_rect().right().max(rect.right());
+    ui.painter().add(egui::Shape::dashed_line(
+        &[egui::pos2(left, y), egui::pos2(right, y)],
+        Stroke::new(1.0, theme.accent_color().gamma_multiply(0.7)),
+        6.0,
+        4.0,
+    ));
+    let strip = egui::Rect::from_min_max(egui::pos2(left, y - 2.0), egui::pos2(right, y + 2.0));
+    if ui.rect_contains_pointer(strip) {
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            egui::Id::new("piece_start").with(line),
+            egui::PopupAnchor::Pointer,
+        )
+        .show(|ui| {
+            ui.label(format!("↻ {name}"));
+        });
+    }
+}
+
 /// Tints the whole row of a search hit, drawing behind the widgets laid out in `row_rect`.
 #[allow(clippy::too_many_arguments)]
 fn paint_search_row_background(
@@ -1534,6 +1570,73 @@ fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
     if !matches!(state, crate::ssh_source::SshState::Following) {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(500));
+    }
+}
+
+/// Stream bar part of rotations: the offer to include a file's rotations, or for a stream
+/// with them their count and Go to piece.
+fn render_rotation_status(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    if let Some((count, bytes)) = engine.rotation_offer {
+        ui.separator();
+        let text = t(lang, "rot_offer")
+            .replace("{0}", &count.to_string())
+            .replace("{1}", &crate::ui::zip_picker::human_size(bytes));
+        if ui
+            .button(
+                RichText::new(format!("↻ {text}"))
+                    .monospace()
+                    .color(theme.accent_color()),
+            )
+            .on_hover_text(t(lang, "rot_offer_tip"))
+            .clicked()
+        {
+            engine.rotation_request = true;
+            engine.rotation_offer = None;
+            ui.ctx().request_repaint();
+        }
+        if ui
+            .small_button("✕")
+            .on_hover_text(t(lang, "rot_dismiss_tip"))
+            .clicked()
+        {
+            engine.rotation_offer = None;
+        }
+        return;
+    }
+    if engine.rotation.is_none() {
+        return;
+    }
+    let pieces = engine.rotation_pieces();
+    ui.separator();
+    let rotations = engine.rotation.as_ref().map_or(0, |r| r.pieces);
+    let mut jump = None;
+    ui.menu_button(
+        RichText::new(format!(
+            "↻ {}",
+            t(lang, "rot_pieces").replace("{0}", &rotations.to_string())
+        ))
+        .monospace()
+        .color(theme.text_dim()),
+        |ui| {
+            ui.label(RichText::new(t(lang, "rot_goto")).strong());
+            for (line, name) in &pieces {
+                if ui
+                    .button(RichText::new(format!("{name}  #{}", line + 1)).monospace())
+                    .clicked()
+                {
+                    jump = Some(*line);
+                    ui.close();
+                }
+            }
+        },
+    );
+    if let Some(line) = jump {
+        let _ = engine.request_jump(line, lang);
     }
 }
 
@@ -2396,6 +2499,7 @@ fn render_log_stream(
         render_stdin_status(ui, engine, theme, lang);
         render_system_status(ui, engine, theme, lang);
         render_plugin_status(ui, engine, theme, lang);
+        render_rotation_status(ui, engine, theme, lang);
         render_ssh_status(ui, engine, theme, lang);
         render_listener_status(ui, engine, theme, lang);
         render_debug_status(ui, engine, theme, lang);
@@ -4400,6 +4504,8 @@ fn render_extended_rows(
     external_tools: &[ExternalTool],
     columns: Option<&ColumnLayout>,
 ) -> RowInteractions {
+    // Where the pieces of a stream with rotations start, marked above their first row.
+    let pieces = engine.rotation_pieces();
     let mut toggle_json = None;
     let mut json_fold: Option<(usize, crate::json_tree::Fold)> = None;
     let mut row_click: Option<(usize, egui::Modifiers)> = None;
@@ -4743,6 +4849,7 @@ fn render_extended_rows(
                     is_bookmarked,
                     continues,
                 );
+                paint_piece_start(ui, &pieces, actual_line_idx, row_resp.rect, theme);
 
                 // Row selection: click, Shift+click (range), Ctrl+click (toggle)
                 let click_rect = egui::Rect::from_min_max(
@@ -6974,6 +7081,7 @@ fn render_wrapped_rows(
 ) -> RowInteractions {
     use std::collections::HashMap;
 
+    let pieces = engine.rotation_pieces();
     let ctx = ui.ctx().clone();
     let font_id = egui::FontId::monospace(font_size);
     let font_row_h = ctx.fonts_mut(|f| f.row_height(&font_id));
@@ -7268,6 +7376,7 @@ fn render_wrapped_rows(
                 egui::pos2(origin.x, y),
                 egui::pos2(origin.x + content_w, y + r.height),
             );
+            paint_piece_start(ui, &pieces, line, row_rect, theme);
             // A collapsed row is marked for the lines it hides too.
             let (matches_search, is_active, is_bookmarked) = eng.row_marks(row, line, has_search);
             let continues = matches_search && eng.search_hit_continues(line);
