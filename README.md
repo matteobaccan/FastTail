@@ -150,6 +150,8 @@ others, with what each has that FastTail does not yet — is kept in the
 
 Search and navigation shortcuts act on the stream in the **focused dock panel** (click a panel to focus it).
 
+The shortcuts below are the defaults. **⌨ Keyboard shortcuts…** (in Settings, or the palette) lists every command with its keys, grouped as the palette groups them and searchable by name or key: click a key and press the new one to change it (`Esc` cancels; `Esc`, `Enter`, `Tab` and `Backspace` cannot be bound), `+` adds a second key, `✖` removes one, `↺` restores an action's default and **Reset all** every one. A key another command already uses (in the window, or in the same place: a stream key and a result-list key may coincide) is named, with **Move here** (the other command loses it) or Cancel; a key an external tool uses is flagged the same way. Changes apply at once, and the menus, the palette and this window's help (`F1`) show the new keys. They are saved in `fasttail.ini` under `[shortcuts]`, one line per command that differs from its default: `bookmark.toggle=Ctrl+B`, `search.next=F3, Ctrl+N`, or an empty value for a command left without a key (`Cmd` reads as `Ctrl`). Unknown commands and values that do not parse are ignored and listed in the window. The zoom keys (handled by the window toolkit), `Alt + 1..9`, `Ctrl + Shift + 1..9` and the navigation keys of the rows stay as they are; the terminal interface keeps its own keys.
+
 | Shortcut | Description |
 | :--- | :--- |
 | `Ctrl + Shift + P` | Open or close the command palette (also `⌨` in the title bar): type part of a command's name, in the interface language or in English, then `↑` / `↓` / `PgUp` / `PgDown` and `Enter` run it, `Esc` closes. Lists every window, stream, search, bookmark, session and view action with its shortcut, and every on / off or multiple-choice setting; stream commands act on the stream focused when it opened |
@@ -406,7 +408,7 @@ Paths are written absolute and, when the file lies under the session's folder, a
 ### External tools
 What they are for, with ready-made recipes (open the row in an editor, SSH to the host in the line, pretty-print its JSON, alert on a rule): **[External tools cookbook](docs/external-tools-cookbook.md)**.
 
-Settings → External tools. Each tool has a name, a program, an argument list and optional extras. The arguments are split like a command line (quotes group words) and every entry is expanded and passed to the program as its own argv element, so a log line containing `; rm -rf /` is only text.
+Settings → External tools. Each tool has a name, a program, an argument list and optional extras. A tool's shortcut on a key a built-in command uses is flagged in its row and does not fire: the built-in command wins. The arguments are split like a command line (quotes group words) and every entry is expanded and passed to the program as its own argv element, so a log line containing `; rm -rf /` is only text.
 
 | Placeholder | Value |
 |---|---|

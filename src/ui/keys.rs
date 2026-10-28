@@ -3,9 +3,97 @@
 // SPDX-License-Identifier: MIT
 
 //! The GUI side of the neutral shortcut types in `external_tools`: egui keys and
-//! modifiers for a `Shortcut`.
+//! modifiers for a `Shortcut`, and the dispatch of the remapped shortcuts (`keymap`).
 
+use crate::actions::ActionId;
 use crate::external_tools::{KeyName, Mods, Shortcut};
+use crate::keymap::{KeyBinding, KeyMap};
+
+thread_local! {
+    /// The key map the menus label their items with (set by the app when it rebuilds it).
+    static CURRENT: std::cell::RefCell<KeyMap> = std::cell::RefCell::new(KeyMap::default());
+}
+
+/// Makes `map` the one menu labels read (`with_key`).
+pub fn set_current(map: &KeyMap) {
+    CURRENT.with(|c| *c.borrow_mut() = map.clone());
+}
+
+/// `text` followed by the key of `id` as menus write it (`Copy  (CTRL + C)`), or `text`
+/// alone when the action has no key.
+pub fn with_key(text: &str, id: ActionId) -> String {
+    CURRENT.with(|c| match c.borrow().label(id) {
+        Some(label) => format!("{text}  ({label})"),
+        None => text.to_string(),
+    })
+}
+
+/// The built-in action holding the key of tool shortcut `sc` (the tool then does not
+/// fire), in the current key map.
+pub fn built_in_holder(sc: Shortcut) -> Option<ActionId> {
+    let b = KeyBinding {
+        mods: sc.mods,
+        key: sc.key,
+    };
+    CURRENT.with(|c| {
+        c.borrow().holder(
+            b,
+            crate::actions::Scope::Window,
+            ActionId::KeyboardShortcuts,
+        )
+    })
+}
+
+/// The binding of a pressed egui key (`None` for a key the key map cannot name).
+pub fn binding_of(key: egui::Key, modifiers: egui::Modifiers) -> Option<KeyBinding> {
+    Some(KeyBinding {
+        mods: Mods {
+            ctrl: modifiers.command || modifiers.ctrl,
+            shift: modifiers.shift,
+            alt: modifiers.alt,
+        },
+        key: KeyName::from_name(key.name())?,
+    })
+}
+
+/// Takes this frame's key presses the key map reroutes, before any handler reads them:
+/// a key of a changed binding is removed and its action returned (to run as the palette
+/// runs it); a default key whose action moved away is removed. A key without `Ctrl` or
+/// `Alt` is left to a text field that has the keyboard.
+pub fn take_remapped(ctx: &egui::Context, map: &KeyMap) -> Vec<ActionId> {
+    let mut out = Vec::new();
+    if !map.has_changes() {
+        return out;
+    }
+    let typing = ctx.egui_wants_keyboard_input();
+    ctx.input_mut(|i| {
+        i.events.retain(|e| {
+            let egui::Event::Key {
+                key,
+                pressed,
+                modifiers,
+                ..
+            } = e
+            else {
+                return true;
+            };
+            let Some(b) = binding_of(*key, *modifiers) else {
+                return true;
+            };
+            if typing && b.plain() {
+                return true;
+            }
+            if let Some(id) = map.changed_action(b) {
+                if *pressed {
+                    out.push(id);
+                }
+                return false;
+            }
+            !map.is_retired(b)
+        })
+    });
+    out
+}
 
 /// The egui key of `key`. Every `KeyName` is spelled as egui names its keys.
 pub fn egui_key(key: KeyName) -> egui::Key {

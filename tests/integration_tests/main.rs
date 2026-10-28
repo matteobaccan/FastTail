@@ -258,6 +258,8 @@ mod field_statistics;
 
 mod operation_timeline;
 
+mod keyboard_shortcuts;
+
 mod search_modes;
 
 mod query_language;

@@ -257,7 +257,7 @@ struct Row {
     label: String,
     english: String,
     category: &'static str,
-    shortcut: Option<&'static str>,
+    shortcut: Option<String>,
     disabled: Option<&'static str>,
     checked: Option<bool>,
     current: bool,
@@ -545,6 +545,8 @@ impl CommandPalette {
                 .collect();
         }
         let recent = &cfg.palette_recent[..cfg.palette_recent.len().min(MAX_RECENT)];
+        // The keys as the key map has them (`[shortcuts]` applied).
+        let keys = crate::keymap::KeyMap::build(&cfg.shortcuts, &cfg.external_tools);
         entries(cfg, state)
             .into_iter()
             .map(|e| Row {
@@ -552,7 +554,7 @@ impl CommandPalette {
                 label: e.name,
                 english: e.english,
                 category: e.category,
-                shortcut: e.action.shortcut,
+                shortcut: keys.label(e.action.id),
                 disabled: e.disabled,
                 checked: e.checked,
                 current: false,
@@ -608,7 +610,7 @@ fn draw_row(ui: &mut egui::Ui, row: &Row, selected: bool, cfg: &FastTailConfig) 
         );
         right -= 12.0;
     };
-    if let Some(shortcut) = row.shortcut {
+    if let Some(shortcut) = row.shortcut.as_deref() {
         place(shortcut, accent.into(), &painter);
     }
     place(row.category, theme.text_dim().into(), &painter);

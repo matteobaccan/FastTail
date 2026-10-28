@@ -50,6 +50,12 @@ mod win_util {
     pub const SW_RESTORE: i32 = 9;
 }
 
+/// What the key map is built from: `[shortcuts]` and the tools' shortcuts.
+type KeymapInputs = (
+    std::collections::BTreeMap<String, String>,
+    Vec<Option<String>>,
+);
+
 pub struct FastTailApp {
     pub config: FastTailConfig,
     pub engines: Vec<TailEngine>,
@@ -191,6 +197,13 @@ pub struct FastTailApp {
     /// this frame (see `DockContext::palette_action`); kept for a few frames when that
     /// stream is not drawn, with the frames left.
     palette_action: Option<crate::actions::PendingAction>,
+    /// The keyboard shortcuts (`keymap`), built from `[shortcuts]` and the tools'
+    /// shortcuts; rebuilt when they change (`refresh_keymap`).
+    pub keymap: crate::keymap::KeyMap,
+    /// What `keymap` was built from (`None` before the first build).
+    keymap_inputs: Option<KeymapInputs>,
+    /// The Keyboard shortcuts window (`ui::shortcuts_dialog`).
+    shortcuts_dialog: crate::ui::shortcuts_dialog::ShortcutsDialog,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -669,6 +682,9 @@ impl FastTailApp {
             global_key: None,
             palette: Default::default(),
             palette_action: None,
+            keymap: crate::keymap::KeyMap::default(),
+            keymap_inputs: None,
+            shortcuts_dialog: Default::default(),
         };
         app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
@@ -3005,6 +3021,18 @@ impl FastTailApp {
         // now, a stream action when that stream is drawn below.
         self.render_palette(&ctx);
 
+        // 0c. Remapped shortcuts (`[shortcuts]`): a key given to an action runs it as the
+        // palette does; a default key whose action moved away fires nothing. Before every
+        // handler, so the handlers never see those keys.
+        self.refresh_keymap();
+        self.shortcuts_dialog.capture(&ctx);
+        if !self.locked && !self.palette.is_open() && !self.shortcuts_dialog.recording() {
+            for id in crate::ui::keys::take_remapped(&ctx, &self.keymap) {
+                let target = self.focused_stream_path();
+                self.run_action(&ctx, crate::actions::get(id), target);
+            }
+        }
+
         // 1. Detect user activity to reset screensaver & handle window closing and viewport bounds
         let mut escape_pressed = false;
         let mut wheel_zoom = 1.0_f32;
@@ -4272,6 +4300,10 @@ impl FastTailApp {
                 .iter()
                 .enumerate()
                 .find_map(|(n, tool)| {
+                    // A tool on a built-in key does not fire: the built-in wins.
+                    if self.keymap.tool_conflicts.contains(&n) {
+                        return None;
+                    }
                     let sc = tool.parsed_shortcut()?;
                     let (mods, key) = crate::ui::keys::egui_shortcut(sc);
                     i.consume_key(mods, key).then_some(n)
@@ -4825,6 +4857,15 @@ impl FastTailApp {
             }
         }
 
+        // 8b. Keyboard shortcuts window: a change rebuilds the key map next frame.
+        let theme_now = self.config.theme;
+        if self
+            .shortcuts_dialog
+            .show(&ctx, &mut self.config, &self.keymap, &theme_now)
+        {
+            let _ = self.config.save();
+        }
+
         // 9. Render Settings Dialog if open (Popup modal)
         if self.config.settings_open {
             let mut is_open = true;
@@ -4904,6 +4945,13 @@ impl FastTailApp {
                             .clicked()
                         {
                             open_formats = true;
+                        }
+                        // Keyboard shortcuts: their own window.
+                        if ui
+                            .button(format!("⌨ {}", t(self.config.language, "keys_open")))
+                            .clicked()
+                        {
+                            self.shortcuts_dialog.open = true;
                         }
 
                         // Rendering backend: applies at the next start.
@@ -5816,6 +5864,15 @@ impl FastTailApp {
             let mut is_open = true;
             let theme = self.config.theme;
             let lang = self.config.language;
+            // The keys as the key map has them: a rebound action shows its new key.
+            use crate::actions::ActionId as A;
+            let km = self.keymap.clone();
+            let keys = |ids: &[crate::actions::ActionId]| -> String {
+                ids.iter()
+                    .map(|id| km.label(*id).unwrap_or_else(|| "—".to_string()))
+                    .collect::<Vec<_>>()
+                    .join("  /  ")
+            };
 
             let win = egui::Window::new(
                 RichText::new(format!("❓ {}", t(lang, "shortcuts_title")))
@@ -5928,28 +5985,32 @@ impl FastTailApp {
                                     ui.label(RichText::new(t(lang, "help_desc_space")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + F").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::SearchFocus])).monospace().strong(),
+                                    );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_search")).monospace(),
                                     );
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + F").monospace().strong(),
+                                        RichText::new(keys(&[A::FindAll])).monospace().strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_find_all")).monospace(),
                                     );
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + K").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::ShowContext])).monospace().strong(),
+                                    );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_context")).monospace(),
                                     );
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + G").monospace().strong(),
+                                        RichText::new(keys(&[A::Patterns])).monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "act_patterns")).monospace());
                                     ui.end_row();
@@ -5965,7 +6026,9 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + H").monospace().strong(),
+                                        RichText::new(keys(&[A::GlobalFilterBar]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_global_filter"))
@@ -5974,7 +6037,7 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + D").monospace().strong(),
+                                        RichText::new(keys(&[A::Collapse])).monospace().strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_collapse")).monospace(),
@@ -5989,7 +6052,9 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("F3  /  SHIFT + F3").monospace().strong(),
+                                        RichText::new(keys(&[A::SearchNext, A::SearchPrev]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_find_next")).monospace(),
@@ -6007,16 +6072,20 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + A  /  CTRL + C").monospace().strong(),
+                                        RichText::new(keys(&[A::SelectAll, A::Copy]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "help_desc_copy")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + G").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::GoToLine])).monospace().strong(),
+                                    );
                                     ui.label(RichText::new(t(lang, "help_desc_goto")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("ALT + W").monospace().strong());
+                                    ui.label(RichText::new(keys(&[A::Wrap])).monospace().strong());
                                     ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
                                     ui.end_row();
 
@@ -6051,19 +6120,25 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + T").monospace().strong(),
+                                        RichText::new(keys(&[A::AlwaysOnTop])).monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "pin_tip")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + L").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::LockNow])).monospace().strong(),
+                                    );
                                     ui.label(RichText::new(t(lang, "help_desc_lock")).monospace());
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + F2  /  F2  /  SHIFT + F2")
-                                            .monospace()
-                                            .strong(),
+                                        RichText::new(keys(&[
+                                            A::BookmarkToggle,
+                                            A::BookmarkNext,
+                                            A::BookmarkPrev,
+                                        ]))
+                                        .monospace()
+                                        .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_bookmark")).monospace(),
@@ -6071,7 +6146,9 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("F4  /  SHIFT + F4").monospace().strong(),
+                                        RichText::new(keys(&[A::RuleNext, A::RulePrev]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_rule_nav")).monospace(),
@@ -6813,6 +6890,27 @@ impl FastTailApp {
         }
     }
 
+    /// Rebuilds the key map when `[shortcuts]` or a tool's shortcut changed.
+    pub fn refresh_keymap(&mut self) {
+        let tools: Vec<Option<String>> = self
+            .config
+            .external_tools
+            .iter()
+            .map(|t| t.shortcut.clone())
+            .collect();
+        if self
+            .keymap_inputs
+            .as_ref()
+            .is_some_and(|(s, t)| *s == self.config.shortcuts && *t == tools)
+        {
+            return;
+        }
+        self.keymap =
+            crate::keymap::KeyMap::build(&self.config.shortcuts, &self.config.external_tools);
+        crate::ui::keys::set_current(&self.keymap);
+        self.keymap_inputs = Some((self.config.shortcuts.clone(), tools));
+    }
+
     /// "Open pattern": the prompt, seeded with the folder of the most recent file.
     fn open_pattern_prompt(&mut self) {
         let seed = self
@@ -6972,6 +7070,7 @@ impl FastTailApp {
                 self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
             }
             A::LogFormats => self.open_log_formats(None, None),
+            A::KeyboardShortcuts => self.shortcuts_dialog.open = true,
             A::SystemReconnect => {
                 let focused = self.focused_stream_path();
                 if let Some(e) = focused.and_then(|p| self.engines.iter_mut().find(|e| e.path == p))

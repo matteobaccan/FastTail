@@ -28,6 +28,7 @@ pub mod query_tab;
 pub mod remote_dialog;
 pub mod report_dialog;
 pub mod scratchpad;
+pub mod shortcuts_dialog;
 pub mod split_dialog;
 pub mod stats_tab;
 pub mod system_dialog;

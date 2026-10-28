@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Remappable keyboard shortcuts.** *⌨ Keyboard shortcuts…* (Settings, or the palette)
+  lists every command with its keys: click a key and press a new one, add a second key,
+  remove one, reset one or all. A key another command uses is named, with *Move here* or
+  Cancel. Saved under `[shortcuts]` in `fasttail.ini` (`bookmark.toggle=Ctrl+B`,
+  `search.next=F3, Ctrl+N`), only for the commands that differ from their defaults; the
+  menus, the palette and the help show the current keys (`remappable-shortcuts`, from the
+  backlog). **Changed:** an external tool whose shortcut is a built-in key no longer
+  fires on it (the built-in command wins); its row in Settings says so.
 - **Operations timeline.** *⏱ Operations…* in the stream's 💾 menu (or *Operations by
   `trace_id`* in a column header's menu) opens an **Operations** tab: the entries the
   stream shows grouped by an id (a field, or the capture group of a regex such as

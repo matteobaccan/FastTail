@@ -36,6 +36,7 @@ pub mod html_converter;
 pub mod i18n;
 pub mod i18n_tui;
 pub mod json_tree;
+pub mod keymap;
 pub mod lock;
 pub mod log_format;
 pub mod log_level;
