@@ -906,7 +906,10 @@ mod platform {
                         .map(|d| d.as_nanos())
                         .unwrap_or(0)
                 ));
-                let mut f = std::io::BufWriter::new(std::fs::File::create(&path).ok()?);
+                // Security: use create_export_file to ensure the temporary file is verified as
+                // a regular file on the opened OS handle before writing or truncating.
+                let file = crate::paths::create_export_file(&path).ok()?;
+                let mut f = std::io::BufWriter::new(file);
                 for l in lines {
                     f.write_all(l).ok()?;
                 }
