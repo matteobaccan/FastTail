@@ -72,6 +72,11 @@ rotated log.
 
 ## 3. Jump to the source file named in a stack trace
 
+Since 0.28.0 this is built in: hold `Ctrl` over a stack frame and click it (or use the row
+menu **Open source location**; `Ctrl+O` in the terminal), with the editor and the source
+folders set in Settings → *Source locations* (see the README). The tool below is still
+useful for a shape FastTail does not recognise, or to pass extra arguments.
+
 Java, Python and .NET stack frames carry a file and a line. A `{match}` regex pulls the
 path out of the row and hands it to the editor.
 

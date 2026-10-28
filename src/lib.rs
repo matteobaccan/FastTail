@@ -60,6 +60,7 @@ pub mod scan_job;
 pub mod screensaver;
 pub mod session;
 pub mod settings_model;
+pub mod source_links;
 pub mod spike;
 pub mod split;
 pub mod spool;

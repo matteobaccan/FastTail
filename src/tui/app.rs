@@ -575,6 +575,8 @@ pub struct App {
     /// The configuration new streams are set up with (none in tests and benchmarks:
     /// the defaults).
     pub settings: Option<crate::tui::workspace::Settings>,
+    /// The row and the index of the source location `Ctrl+O` opened last.
+    source_cycle: Option<(usize, usize)>,
     /// Saves the configuration every `SAVE_EVERY` when it changed (the interactive run;
     /// not captures, benchmarks or tests).
     pub autosave: bool,
@@ -702,6 +704,7 @@ impl App {
                 crate::handoff::start_gui
             },
             settings: None,
+            source_cycle: None,
             autosave: false,
             last_save: Instant::now(),
             save_error: None,
@@ -4930,6 +4933,51 @@ impl App {
                         Some(tx(self.lang, "No fields: the lines are plain text").into());
                 }
             }
+            Action::OpenSource => {
+                let Some(line) = tab.cursor_line() else {
+                    return;
+                };
+                let text = tab.engine.get_line(line).unwrap_or_default();
+                let locations = crate::source_links::find(&text);
+                if locations.is_empty() {
+                    self.message = Some(tx(self.lang, "No source location on this row").into());
+                    return;
+                }
+                let next = match self.source_cycle {
+                    Some((l, i)) if l == line => (i + 1) % locations.len(),
+                    _ => 0,
+                };
+                self.source_cycle = Some((line, next));
+                let loc = &locations[next];
+                let (editor, roots) = self
+                    .settings
+                    .as_ref()
+                    .map(|s| {
+                        (
+                            s.config.editor_command.clone(),
+                            s.config.source_roots.clone(),
+                        )
+                    })
+                    .unwrap_or_default();
+                self.message = Some(match crate::source_links::resolve(loc, &roots) {
+                    None => txf(
+                        self.lang,
+                        "{0} not found under the source roots",
+                        &[&loc.path],
+                    ),
+                    Some(file) => {
+                        match crate::source_links::open_in_editor(&editor, &file, loc.line, loc.col)
+                        {
+                            Ok(()) => txf(
+                                self.lang,
+                                "Opened {0}:{1} ({2} of {3})",
+                                &[&loc.path, &loc.line, &(next + 1), &locations.len()],
+                            ),
+                            Err(e) => txf(self.lang, "The editor did not start: {0}", &[&e]),
+                        }
+                    }
+                });
+            }
             Action::HideLines if tab.engine.context_line().is_some() || tab.is_hex() => {}
             Action::HideLines => {
                 // The selection, else the cursor row (its whole group when collapsed).
@@ -7763,6 +7811,11 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         "H",
         en("hide the selected lines or the cursor row"),
         Some(Action::HideLines),
+    ),
+    (
+        "Ctrl+O",
+        en("open the row's source location in the editor (again: the next one)"),
+        Some(Action::OpenSource),
     ),
     (
         "C",

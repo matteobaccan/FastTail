@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Source locations open in the editor.** Hold Ctrl over a stack frame, a compiler error
+  or a `path:line` and click it, or use the row menu (*Open source location*, *Open in
+  FastTail* at that line; `Ctrl+O` in the terminal). Java / Kotlin, Python, .NET, Go, Node
+  and Rust shapes; the editor command (presets for VS Code, JetBrains, Sublime, Notepad++,
+  Vim, Emacs) expands `{file}`, `{line}`, `{col}` one argument each without a shell;
+  relative paths are looked for in the source folders, JVM frames under their package
+  (`editor_command`, `source_roots`; `source-links`).
+
 ## [0.27.0] - 2026-10-28
 
 ### Added
