@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- A double click on a channel in the Event Log dialog opens it (taken from #487).
+- Tooltips on disabled controls: *Save…* in the Export dialog when no line matches, its
+  *Selected lines* and *Search matches* choices without a selection or a match, the
+  address field of the listener while *This machine only* is ticked, *Copy as CSV* of a
+  Query tab without a result, and *Explain* of the time range popup with an invalid time
+  (taken from #477 and #485; #481 closed).
+- Dependency updates: `zip` 9.1.3, `similar` 3.2.1, `unicode-width` 0.2.3, `notify`
+  9.0.0-rc.7 (#475, #476, #490, #491). `lzma-rust2` 0.24 waits for a `sevenz-rust2` on it
+  (#480 closed).
+
+### Fixed
+
+- Archive entry names with `..` no longer put parent parts in the entry's stream path
+  (#478).
+- The Event Log history spill file is checked as a regular file before it is truncated
+  (#484; #488, a duplicate, and #482 closed).
+
 ## [0.26.1] - 2026-10-24
 
 ### Added

@@ -130,7 +130,8 @@ impl ListenDialog {
                         ui.add_enabled(
                             !self.loopback,
                             egui::TextEdit::singleline(&mut self.address).desired_width(160.0),
-                        );
+                        )
+                        .on_disabled_hover_text(t(lang, "listen_loopback"));
                     });
                     ui.end_row();
                     ui.label(t(lang, "listen_port"));
