@@ -6272,7 +6272,13 @@ fn row_context_menu(
     click.context_menu(|ui| {
         ui.set_min_width(160.0);
         if ui
-            .button(RichText::new(format!("{}  (CTRL + C)", t(lang, "copy_rows"))).monospace())
+            .button(
+                RichText::new(crate::ui::keys::with_key(
+                    t(lang, "copy_rows"),
+                    crate::actions::ActionId::Copy,
+                ))
+                .monospace(),
+            )
             .clicked()
         {
             picks.copy = Some((line, false));
@@ -6301,8 +6307,14 @@ fn row_context_menu(
         }
         if ui
             .button(
-                RichText::new(format!("🗒 {}  (CTRL + SHIFT + N)", t(lang, "scratch_send")))
-                    .monospace(),
+                RichText::new(format!(
+                    "🗒 {}",
+                    crate::ui::keys::with_key(
+                        t(lang, "scratch_send"),
+                        crate::actions::ActionId::ScratchpadSend
+                    )
+                ))
+                .monospace(),
             )
             .clicked()
         {
@@ -6414,7 +6426,14 @@ fn row_context_menu(
         }
         if !rules.is_empty() {
             ui.menu_button(
-                RichText::new(format!("⇣ {}  (F4)", t(lang, "rule_next_menu"))).monospace(),
+                RichText::new(format!(
+                    "⇣ {}",
+                    crate::ui::keys::with_key(
+                        t(lang, "rule_next_menu"),
+                        crate::actions::ActionId::RuleNext
+                    )
+                ))
+                .monospace(),
                 |ui| {
                     for (index, pattern) in rules {
                         let current = engine.rule_cursor() == Some(index);
@@ -6439,8 +6458,14 @@ fn row_context_menu(
         if bookmarked
             && ui
                 .button(
-                    RichText::new(format!("☆ {}  (CTRL + F2)", t(lang, "bookmark_remove")))
-                        .monospace(),
+                    RichText::new(format!(
+                        "☆ {}",
+                        crate::ui::keys::with_key(
+                            t(lang, "bookmark_remove"),
+                            crate::actions::ActionId::BookmarkToggle
+                        )
+                    ))
+                    .monospace(),
                 )
                 .clicked()
         {
@@ -6464,7 +6489,14 @@ fn row_context_menu(
         if engine.context_line().is_none()
             && ui
                 .button(
-                    RichText::new(format!("🙈 {}  (CTRL + H)", t(lang, "hide_lines"))).monospace(),
+                    RichText::new(format!(
+                        "🙈 {}",
+                        crate::ui::keys::with_key(
+                            t(lang, "hide_lines"),
+                            crate::actions::ActionId::HideLines
+                        )
+                    ))
+                    .monospace(),
                 )
                 .on_hover_text(t(lang, "hide_lines_tip"))
                 .clicked()
@@ -6483,7 +6515,14 @@ fn row_context_menu(
         if filtered {
             if ui
                 .button(
-                    RichText::new(format!("◆ {}  (CTRL + K)", t(lang, "context_show"))).monospace(),
+                    RichText::new(format!(
+                        "◆ {}",
+                        crate::ui::keys::with_key(
+                            t(lang, "context_show"),
+                            crate::actions::ActionId::ShowContext
+                        )
+                    ))
+                    .monospace(),
                 )
                 .clicked()
             {
@@ -9832,6 +9871,20 @@ fn render_external_tools_editor(
                                 RichText::new(t(lang, "ext_tool_bad_shortcut"))
                                     .small()
                                     .color(warn),
+                            );
+                        }
+                        // A built-in shortcut on the same key wins: the tool does not fire.
+                        if let Some(id) = tool
+                            .parsed_shortcut()
+                            .and_then(crate::ui::keys::built_in_holder)
+                        {
+                            ui.label(
+                                RichText::new(
+                                    t(lang, "keys_tool_conflict")
+                                        .replace("{0}", t(lang, crate::actions::get(id).name)),
+                                )
+                                .small()
+                                .color(warn),
                             );
                         }
                     });

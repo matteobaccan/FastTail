@@ -261,6 +261,11 @@ pub struct FastTailConfig {
     /// `actions::MAX_RECENT`), `[general] palette_recent` comma separated.
     #[serde(default)]
     pub palette_recent: Vec<String>,
+    /// Keyboard shortcuts that differ from the defaults (`keymap`): action id → bindings
+    /// (`F3, Ctrl+N`, empty for none), the `[shortcuts]` section. Kept as written, so an
+    /// id of another build survives a save.
+    #[serde(default)]
+    pub shortcuts: std::collections::BTreeMap<String, String>,
     /// Bookmarked lines per file (most recently used first) with the notes of some of
     /// them, see `set_bookmarks_with_notes`.
     #[serde(default)]
@@ -563,6 +568,7 @@ impl Default for FastTailConfig {
             search_history: Vec::new(),
             query_history: Vec::new(),
             palette_recent: Vec::new(),
+            shortcuts: std::collections::BTreeMap::new(),
             bookmarks: Vec::new(),
             wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
@@ -1130,6 +1136,13 @@ impl FastTailConfig {
             }
         }
 
+        if !self.shortcuts.is_empty() {
+            let mut sec = conf.with_section(Some("shortcuts"));
+            for (id, bindings) in &self.shortcuts {
+                sec.set(id.as_str(), bindings.as_str());
+            }
+        }
+
         if let Some(layout) = &self.dock_layout {
             conf.with_section(Some("dock")).set("layout", layout);
         }
@@ -1673,6 +1686,14 @@ impl FastTailConfig {
                 }
                 i += 1;
             }
+        }
+
+        if let Some(sec) = conf.section(Some("shortcuts")) {
+            cfg.shortcuts = sec
+                .iter()
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+                .filter(|(k, _)| !k.is_empty())
+                .collect();
         }
 
         if let Some(sec) = conf.section(Some("query")) {
@@ -2357,6 +2378,29 @@ mod tests {
             FastTailConfig::from_ini(&ini).palette_recent,
             vec!["view.wrap.toggle".to_string()]
         );
+    }
+
+    #[test]
+    fn test_shortcuts_round_trip_and_default_to_none() {
+        let mut shortcuts = std::collections::BTreeMap::new();
+        shortcuts.insert("bookmark.toggle".to_string(), "Ctrl+B".to_string());
+        shortcuts.insert("search.next".to_string(), "F3, Ctrl+N".to_string());
+        shortcuts.insert("view.wrap.toggle".to_string(), String::new());
+        let cfg = FastTailConfig {
+            shortcuts,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.shortcuts, cfg.shortcuts);
+        assert!(
+            FastTailConfig::from_ini(&FastTailConfig::default().to_ini())
+                .shortcuts
+                .is_empty()
+        );
+        assert!(FastTailConfig::default()
+            .to_ini()
+            .section(Some("shortcuts"))
+            .is_none());
     }
 
     #[test]
