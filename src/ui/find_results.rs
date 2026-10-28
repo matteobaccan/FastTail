@@ -393,6 +393,7 @@ pub fn without_find_results(dock: &DockState<FastTailTab>) -> DockState<FastTail
             && !matches!(
                 tab,
                 FastTailTab::Statistics(_)
+                    | FastTailTab::Operations(_)
                     | FastTailTab::Query(_)
                     | FastTailTab::Patterns(_)
                     | FastTailTab::Explain(_)

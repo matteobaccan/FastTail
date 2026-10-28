@@ -1912,6 +1912,8 @@ pub struct TailEngine {
     pub filter_tab_request: bool,
     /// The Statistics tab was asked for: of this field, or of the stream (`None`).
     pub stats_request: Option<Option<String>>,
+    /// The Operations tab was asked for: by this field, or of the stream (`None`).
+    pub ops_request: Option<Option<String>>,
     /// The row menu asked for a compare (applied by the app).
     pub compare_request: Option<crate::compare::CompareRequest>,
     /// "Show in context" on a derived stream: the source line to show in the source.
@@ -2005,6 +2007,8 @@ pub struct TailEngine {
     pub event_log: Option<crate::eventlog::EventLogStream>,
     /// The Statistics tab of the stream, while it is open (see `open_stats`).
     pub stats: Option<crate::field_stats::StatsState>,
+    /// The Operations tab of the stream, while it is open (see `open_operations`).
+    pub operations: Option<crate::operations::OpsState>,
     /// The Query tab of the stream: its last query, run or result (see `run_query`).
     pub query: Option<QueryState>,
     /// The Query tab was asked for (stream menu, palette).
@@ -2620,6 +2624,7 @@ impl TailEngine {
             format_request: None,
             filter_tab_request: false,
             stats_request: None,
+            ops_request: None,
             compare_request: None,
             source_context_request: None,
             markdown_text_cache: None,
@@ -2658,6 +2663,7 @@ impl TailEngine {
             debug_output: None,
             event_log: None,
             stats: None,
+            operations: None,
             query: None,
             query_request: false,
             query_jump: None,
@@ -3562,6 +3568,7 @@ impl TailEngine {
         if unchanged_lines == 0 {
             // New content (reload, rotation, another encoding).
             self.restart_stats();
+            self.restart_operations();
             self.restart_patterns(true);
             self.restart_plots();
             self.cancel_query_on_reload();
@@ -4031,6 +4038,7 @@ impl TailEngine {
         if !same {
             // Another parser reads other fields: the statistics count again.
             self.restart_stats();
+            self.restart_operations();
             self.restart_patterns(true);
             self.restart_plots();
             // A table opens in the column view, unless the view was chosen already.
@@ -4305,6 +4313,7 @@ impl TailEngine {
         self.poll_context_rebuild();
         self.drain_job();
         self.poll_stats();
+        self.poll_operations();
         self.poll_patterns();
         self.poll_explain();
         self.poll_plots();
@@ -5026,6 +5035,7 @@ impl TailEngine {
         if start == 0 {
             // A new view: the statistics count it again, the patterns are learnt again.
             self.restart_stats();
+            self.restart_operations();
             self.restart_patterns(false);
             self.restart_plots();
         }
@@ -7938,6 +7948,238 @@ impl TailEngine {
         }
     }
 
+    // ----- Operations (see `operations`) -----
+
+    /// Opens (or changes) the Operations of the stream: its entries grouped by the value
+    /// of `source`, named by `name`, computed in the background.
+    pub fn open_operations(
+        &mut self,
+        source: crate::field_stats::StatsSource,
+        name: crate::operations::NameSource,
+    ) {
+        self.operations = Some(crate::operations::OpsState::new(source, name));
+        self.poll_operations();
+    }
+
+    pub fn close_operations(&mut self) {
+        self.operations = None;
+    }
+
+    /// The view changed from its first line (filters, parser, reload): the operations
+    /// are computed again.
+    fn restart_operations(&mut self) {
+        if let Some(o) = self.operations.as_mut() {
+            o.restart = true;
+        }
+    }
+
+    /// Starts from scratch: a scan over the visible lines present now.
+    fn start_operations(&mut self) {
+        if !self.stats_view_settled(false) {
+            return;
+        }
+        let visible = if self.is_filter_active() {
+            VisibleSet::Lines(Arc::from(self.filtered_lines.as_slice()))
+        } else {
+            VisibleSet::All
+        };
+        let lines = self.stats_complete_lines();
+        let (file, mut range) = self.full_scan_range();
+        if lines < self.total_lines() {
+            // Not the unterminated last line: it is added once complete.
+            range.end_offset = self
+                .line_offsets
+                .get(lines)
+                .copied()
+                .unwrap_or(range.end_offset);
+        }
+        let Some(o) = self.operations.as_mut() else {
+            return;
+        };
+        o.restart = false;
+        o.failed = false;
+        o.map = crate::operations::OpMap::default();
+        o.covered = lines;
+        o.last_ts = NO_TIMESTAMP;
+        o.current = None;
+        o.progress = 0.0;
+        o.generation = o.generation.wrapping_add(1);
+        o.job_generation = o.job_generation.wrapping_add(1);
+        o.job = Some(ScanJob::spawn(
+            o.job_generation,
+            &file,
+            range,
+            JobSpec::Operations {
+                source: o.source.clone(),
+                name: o.name.clone(),
+                visible,
+            },
+        ));
+    }
+
+    /// The timestamp and the operation id where a scan of `0..covered` ended, for the
+    /// appended lines: read back from the last lines (an entry's first line gives the id
+    /// its continuation lines belong to).
+    fn operations_resume_point(&self, covered: usize) -> (i64, Option<Box<str>>) {
+        const LOOK: usize = 1000;
+        let parser = self.field_parser.clone();
+        let mut ts = NO_TIMESTAMP;
+        let mut id = None;
+        let Some(o) = self.operations.as_ref() else {
+            return (ts, id);
+        };
+        let filtered = self.is_filter_active();
+        let mut scratch = crate::field_stats::Scratch::default();
+        for idx in (covered.saturating_sub(LOOK)..covered).rev() {
+            let Some(line) = self.get_line(idx) else {
+                continue;
+            };
+            if ts == NO_TIMESTAMP {
+                if let Some(t) = self.line_timestamp(idx).or_else(|| {
+                    crate::fields::line_timestamp(
+                        parser.as_deref(),
+                        &line,
+                        crate::timestamp::FormatHint::default(),
+                    )
+                    .map(|(ms, _)| ms)
+                }) {
+                    ts = t;
+                }
+            }
+            if !crate::fields::is_continuation(parser.as_deref(), &line) {
+                if !filtered || self.filtered_lines.binary_search(&idx).is_ok() {
+                    id = o
+                        .source
+                        .with_value(parser.as_deref(), &line, &mut scratch, |v| {
+                            v.filter(|v| !v.is_empty())
+                                .map(|v| Box::from(crate::operations::kept_id(v)))
+                        });
+                }
+                break;
+            }
+        }
+        (ts, id)
+    }
+
+    /// Merges what the operations scan sent, and adds the visible lines appended since
+    /// (a bounded number per poll).
+    fn poll_operations(&mut self) {
+        const APPEND_BATCH: usize = 20_000;
+        let Some(o) = self.operations.as_mut() else {
+            return;
+        };
+        if !o.restart && o.covered > self.line_offsets.len() {
+            // Truncated or replaced.
+            o.restart = true;
+        }
+        if o.restart {
+            self.start_operations();
+            return;
+        }
+        if let Some(job) = o.job.as_ref() {
+            let mut finished = false;
+            while let Some(batch) = job.try_recv() {
+                match batch {
+                    ScanBatch::Operations(part) => {
+                        o.map.merge(*part);
+                        o.generation = o.generation.wrapping_add(1);
+                    }
+                    ScanBatch::Progress(p) => o.progress = p,
+                    ScanBatch::Done { .. } => finished = true,
+                    ScanBatch::Failed => {
+                        o.failed = true;
+                        finished = true;
+                    }
+                    _ => {}
+                }
+            }
+            if !finished {
+                return;
+            }
+            o.job = None;
+            o.progress = 1.0;
+            o.generation = o.generation.wrapping_add(1);
+            let covered = o.covered;
+            let (ts, id) = self.operations_resume_point(covered);
+            if let Some(o) = self.operations.as_mut() {
+                o.last_ts = ts;
+                o.current = id;
+            }
+        }
+        // Lines appended after the scan started, once the filters placed them.
+        if !self.stats_view_settled(true) {
+            return;
+        }
+        let Some(mut o) = self.operations.take() else {
+            return;
+        };
+        let from = o.covered;
+        let to = self.stats_complete_lines().min(from + APPEND_BATCH);
+        if from < to {
+            let filtered = self.is_filter_active();
+            let parser = self.field_parser.clone();
+            let window = self.level_window();
+            let mut scratch = crate::field_stats::Scratch::default();
+            let mut spans = crate::fields::FieldSpans::new();
+            for idx in from..to {
+                let Some(line) = self.get_line(idx) else {
+                    continue;
+                };
+                // Timed as the scan does: its own timestamp, else the one above.
+                let own = self.line_timestamp(idx).or_else(|| {
+                    crate::fields::line_timestamp(
+                        parser.as_deref(),
+                        &line,
+                        crate::timestamp::FormatHint::default(),
+                    )
+                    .map(|(ms, _)| ms)
+                });
+                if let Some(ts) = own {
+                    o.last_ts = ts;
+                }
+                if filtered && self.filtered_lines.binary_search(&idx).is_err() {
+                    continue;
+                }
+                let level = crate::fields::line_level(parser.as_deref(), &line, window) as u8;
+                let ts = o.last_ts;
+                if crate::fields::is_continuation(parser.as_deref(), &line) {
+                    match o.current.as_deref() {
+                        Some(id) => o.map.add_continuation(id, idx, ts, level),
+                        None => o.map.add_other(),
+                    }
+                    continue;
+                }
+                let crate::operations::OpsState {
+                    source,
+                    name,
+                    map,
+                    current,
+                    ..
+                } = &mut o;
+                source.with_value(parser.as_deref(), &line, &mut scratch, |v| match v {
+                    Some(id) if !id.is_empty() => {
+                        let id = crate::operations::kept_id(id);
+                        map.add_entry(
+                            id,
+                            || name.name_of(parser.as_deref(), &line, &mut spans),
+                            idx,
+                            ts,
+                            level,
+                        );
+                        *current = Some(Box::from(id));
+                    }
+                    _ => {
+                        map.add_other();
+                        *current = None;
+                    }
+                });
+            }
+            o.covered = to;
+            o.generation = o.generation.wrapping_add(1);
+        }
+        self.operations = Some(o);
+    }
+
     // ----- Patterns (see `patterns`) -----
 
     /// Opens the Patterns of the stream: its entries grouped by template, learnt and
@@ -9064,7 +9306,8 @@ impl TailEngine {
                 | ScanBatch::PatternTree(_)
                 | ScanBatch::PatternCounts(_)
                 | ScanBatch::Explain(_)
-                | ScanBatch::Plot(_) => {}
+                | ScanBatch::Plot(_)
+                | ScanBatch::Operations(_) => {}
                 ScanBatch::MultiHits(found) => {
                     // The visible set was exact (hidden lines and time window included):
                     // only the search scope applies, on the first line of each hit.
@@ -9120,7 +9363,8 @@ impl TailEngine {
                         | ScanKind::Query
                         | ScanKind::Patterns
                         | ScanKind::Explain
-                        | ScanKind::Plot => {}
+                        | ScanKind::Plot
+                        | ScanKind::Operations => {}
                         ScanKind::Filter => {
                             self.extend_filtered(lines);
                             self.filter_generation = self.filter_generation.wrapping_add(1);
@@ -9266,7 +9510,8 @@ impl TailEngine {
             | ScanKind::Query
             | ScanKind::Patterns
             | ScanKind::Explain
-            | ScanKind::Plot => {}
+            | ScanKind::Plot
+            | ScanKind::Operations => {}
             ScanKind::Index => {
                 self.index_pending = false;
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);

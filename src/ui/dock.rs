@@ -62,6 +62,8 @@ pub enum FastTailTab {
     Compare,
     /// Statistics of a field of a stream (`ui::stats_tab`); never saved.
     Statistics(PathBuf),
+    /// Operations of a stream as a Gantt view (`ui::operations_tab`); never saved.
+    Operations(PathBuf),
     /// Queries over a stream (`ui::query_tab`); never saved.
     Query(PathBuf),
     /// The patterns of a stream (`ui::patterns_tab`); never saved.
@@ -397,6 +399,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 .monospace()
                 .strong(),
             ),
+            FastTailTab::Operations(path) => WidgetText::from(
+                RichText::new(crate::ui::operations_tab::title(
+                    find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
+                    *self.ctx.language,
+                ))
+                .monospace()
+                .strong(),
+            ),
             FastTailTab::Statistics(path) => WidgetText::from(
                 RichText::new(crate::ui::stats_tab::title(
                     find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
@@ -556,6 +566,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
                 crate::ui::stats_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
             }
+            FastTailTab::Operations(path) => {
+                let engine =
+                    find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
+                crate::ui::operations_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
+            }
             FastTailTab::Patterns(path) => {
                 let engine =
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
@@ -653,6 +668,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
             FastTailTab::Statistics(path) => {
                 if let Some(i) = find_engine_index(self.ctx.engines, path) {
                     self.ctx.engines[i].close_stats();
+                }
+            }
+            FastTailTab::Operations(path) => {
+                if let Some(i) = find_engine_index(self.ctx.engines, path) {
+                    self.ctx.engines[i].close_operations();
                 }
             }
             FastTailTab::Query(path) => {
@@ -1624,6 +1644,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Patterns => "scan_patterns",
         crate::scan_job::ScanKind::Explain => "scan_explain",
         crate::scan_job::ScanKind::Plot => "scan_plot",
+        crate::scan_job::ScanKind::Operations => "scan_operations",
     }
 }
 
@@ -3030,6 +3051,14 @@ fn render_log_stream(
                 .clicked()
             {
                 engine.stats_request = Some(None);
+                ui.close();
+            }
+            if ui
+                .button(RichText::new(format!("⏱ {}", t(lang, "ops_open"))).monospace())
+                .on_hover_text(t(lang, "ops_open_tip"))
+                .clicked()
+            {
+                engine.ops_request = Some(None);
                 ui.close();
             }
             if ui
@@ -5121,6 +5150,8 @@ enum HeaderAction {
     Reset,
     /// Statistics of this field.
     Stats(String),
+    /// Operations grouped by this field.
+    Operations(String),
     /// Plot this field over the timeline.
     Plot(String),
 }
@@ -5258,6 +5289,7 @@ fn render_field_header(
         Some(HeaderAction::Width(key, cells)) => engine.set_field_width(&key, cells),
         Some(HeaderAction::Reset) => engine.reset_field_columns(),
         Some(HeaderAction::Stats(key)) => engine.stats_request = Some(Some(key)),
+        Some(HeaderAction::Operations(key)) => engine.ops_request = Some(Some(key)),
         Some(HeaderAction::Plot(key)) => {
             if engine.add_plot(&key) && !engine.timeline_open {
                 // Plotted over the histogram: it opens with it.
@@ -5323,6 +5355,16 @@ fn header_menu(
             .clicked()
         {
             action = Some(HeaderAction::Stats(keys[i].clone()));
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "⏱ {}",
+                t(lang, "ops_by_field").replace("{0}", &keys[i])
+            ))
+            .clicked()
+        {
+            action = Some(HeaderAction::Operations(keys[i].clone()));
             ui.close();
         }
         let plotted = engine.plots().iter().any(|p| p.key == keys[i]);

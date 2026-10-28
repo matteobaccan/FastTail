@@ -43,6 +43,7 @@ pub mod merged_stream;
 pub mod multiline_search;
 pub mod net_listener;
 pub mod notifications;
+pub mod operations;
 pub mod otlp;
 pub mod paths;
 pub mod patterns;
