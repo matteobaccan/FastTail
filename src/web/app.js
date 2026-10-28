@@ -77,7 +77,13 @@ class Pane {
     this.earlierBtn.addEventListener('click', () => this.earlier());
     // At the top, the page before loads.
     el.addEventListener('scroll', () => { if (el.scrollTop === 0 && this.first > 0) this.earlier(); });
-    this.id = null; this.es = null; this.first = 0; this.next = 0; this.gen = 0; this.loading = false;
+    // `ticket` drops the answers of an older open(); `live` is false while the pane shows
+    // rows before the end (it then loads more on scroll instead of following).
+    el.addEventListener('scroll', () => {
+      if (!this.live && el.scrollTop + el.clientHeight >= el.scrollHeight - 2) this.later();
+    });
+    this.id = null; this.es = null; this.first = 0; this.next = 0; this.gen = 0; this.total = 0;
+    this.loading = false; this.ticket = 0; this.live = false;
   }
 
   close() {
@@ -86,24 +92,52 @@ class Pane {
 
   async open(id, from) {
     this.close();
+    const ticket = ++this.ticket;
     this.id = id;
     this.rows.replaceChildren();
     this.note.textContent = '';
     if (!id) return;
     const q = '/api/lines?s=' + encodeURIComponent(id) + (from === undefined ? '' : '&from=' + from);
     let page;
-    try { page = await api(q); } catch (e) { this.note.textContent = t('web_gone', 'The stream was closed.'); return; }
+    try { page = await api(q); } catch (e) {
+      if (ticket === this.ticket) this.note.textContent = t('web_gone', 'The stream was closed.');
+      return;
+    }
+    if (ticket !== this.ticket) return;
     addCss(page.css);
-    this.first = page.first; this.next = page.next; this.gen = page.gen;
+    this.first = page.first; this.next = page.next; this.gen = page.gen; this.total = page.total;
     const frag = document.createDocumentFragment();
     for (const row of page.rows) frag.appendChild(rowElement(row));
     this.rows.appendChild(frag);
     this.earlierBtn.disabled = this.first === 0;
     if (from === undefined) this.toBottom();
-    this.listen();
+    // Live only at the end: a page in the middle loads the rest as it is scrolled.
+    this.live = this.next >= this.total;
+    if (this.live) this.listen();
+  }
+
+  async later() {
+    if (this.loading || this.live || !this.id) return;
+    this.loading = true;
+    const ticket = this.ticket;
+    let page;
+    try {
+      page = await api('/api/lines?s=' + encodeURIComponent(this.id) + '&from=' + this.next + '&count=500');
+    } finally {
+      this.loading = false;
+    }
+    if (ticket !== this.ticket) return;
+    if (page.gen !== this.gen) { this.open(this.id); return; }
+    addCss(page.css);
+    const frag = document.createDocumentFragment();
+    for (const row of page.rows) frag.appendChild(rowElement(row));
+    this.rows.appendChild(frag);
+    this.next = page.next; this.total = page.total;
+    if (this.next >= this.total) { this.live = true; this.listen(); }
   }
 
   listen() {
+    if (this.es) this.es.close();
     const url = '/api/events?s=' + encodeURIComponent(this.id) + '&after=' + this.next + '&gen=' + this.gen;
     this.es = new EventSource(url);
     this.es.addEventListener('lines', (e) => this.append(JSON.parse(e.data)));
@@ -129,6 +163,7 @@ class Pane {
   async earlier() {
     if (this.first === 0 || this.loading) return;
     this.loading = true;
+    const ticket = this.ticket;
     const from = Math.max(0, this.first - 500);
     let page;
     try {
@@ -136,6 +171,8 @@ class Pane {
     } finally {
       this.loading = false;
     }
+    if (ticket !== this.ticket) return;
+    if (page.gen !== this.gen) { this.open(this.id); return; }
     addCss(page.css);
     const before = this.el.scrollHeight;
     const frag = document.createDocumentFragment();
@@ -153,8 +190,19 @@ class Pane {
     if (!q || !this.id) return;
     const cur = this.rows.querySelector('.cur');
     const at = cur ? Number(cur.dataset.row) : (forward ? this.first - 1 : this.next);
-    const res = await api('/api/search?s=' + encodeURIComponent(this.id) + '&row=' + at + '&dir=' + (forward ? 'next' : 'prev') + '&q=' + encodeURIComponent(q));
     const found = document.getElementById('found');
+    // A long search answers in steps (`more`): ask again from there, a bounded number of times.
+    // Past the end (or the start) it goes round once, as F3 does in the window.
+    const search = async (from) => {
+      let res = { more: from };
+      for (let step = 0; step < 200 && res.more !== undefined && res.more !== null; step++) {
+        res = await api('/api/search?s=' + encodeURIComponent(this.id) + '&row=' + res.more + '&dir=' + (forward ? 'next' : 'prev') + '&q=' + encodeURIComponent(q));
+        if (res.more !== undefined) found.textContent = '…';
+      }
+      return res;
+    };
+    let res = await search(at);
+    if (res.row === null || res.row === undefined) res = await search(forward ? -1 : Number.MAX_SAFE_INTEGER);
     if (res.row === null || res.row === undefined) { found.textContent = t('web_no_match', 'no match'); return; }
     found.textContent = '';
     // The match stays on screen: new lines no longer scroll it away.

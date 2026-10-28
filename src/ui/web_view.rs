@@ -19,6 +19,21 @@ use std::collections::HashMap;
 const PER_FRAME: usize = 32;
 /// Rows a search request looks at, at most.
 const SEARCH_ROWS: usize = 200_000;
+/// Time a search request takes on the window's thread, at most.
+const SEARCH_BUDGET: std::time::Duration = std::time::Duration::from_millis(30);
+
+/// Whether `hay` contains `needle_lower` (lower case) without case: ASCII byte by byte
+/// without allocating, else through `to_lowercase`.
+fn contains_ignore_case(hay: &str, needle_lower: &str) -> bool {
+    if !needle_lower.is_ascii() {
+        return hay.to_lowercase().contains(needle_lower);
+    }
+    let (h, n) = (hay.as_bytes(), needle_lower.as_bytes());
+    n.is_empty()
+        || n.len() <= h.len()
+            && h.windows(n.len())
+                .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
+}
 /// Bytes of a row sent at most.
 const MAX_ROW_BYTES: usize = 64 * 1024;
 
@@ -126,6 +141,15 @@ impl WebView {
         let Some(server) = self.server.as_ref() else {
             return;
         };
+        // What each stream shows, for the event streams (only while a browser is here).
+        if server.connections() > 0 {
+            server.publish(
+                engines
+                    .iter()
+                    .map(|e| (stream_id(e), (e.visible_lines(), generation(e))))
+                    .collect(),
+            );
+        }
         let mut pending = Vec::new();
         while pending.len() < PER_FRAME {
             match server.requests.try_recv() {
@@ -236,16 +260,36 @@ impl WebView {
                 let hit = |pos: usize| {
                     e.line_at(pos)
                         .and_then(|idx| e.get_line(idx))
-                        .is_some_and(|l| l.to_lowercase().contains(&needle))
+                        .is_some_and(|l| contains_ignore_case(&l, &needle))
                 };
-                let found = if *forward {
-                    let start = (row + 1).max(0) as usize;
-                    (start..total).take(SEARCH_ROWS).find(|&p| hit(p))
+                // A bounded look on the window's thread: past SEARCH_ROWS rows or
+                // SEARCH_BUDGET, the page asks again from where this one stopped (`more`).
+                let started = std::time::Instant::now();
+                let out_of_time = |n: usize| {
+                    n >= SEARCH_ROWS || (n % 1024 == 1023 && started.elapsed() >= SEARCH_BUDGET)
+                };
+                if *forward {
+                    let start = row.saturating_add(1).max(0) as usize;
+                    for (n, p) in (start..total).enumerate() {
+                        if hit(p) {
+                            return Some(json!({ "row": p }));
+                        }
+                        if out_of_time(n) {
+                            return Some(json!({ "row": null, "more": p }));
+                        }
+                    }
                 } else {
                     let end = (*row).clamp(0, total as i64) as usize;
-                    (0..end).rev().take(SEARCH_ROWS).find(|&p| hit(p))
-                };
-                Some(json!({ "row": found }))
+                    for (n, p) in (0..end).rev().enumerate() {
+                        if hit(p) {
+                            return Some(json!({ "row": p }));
+                        }
+                        if out_of_time(n) {
+                            return Some(json!({ "row": null, "more": p }));
+                        }
+                    }
+                }
+                Some(json!({ "row": null }))
             }
         }
     }
@@ -440,5 +484,18 @@ impl WebView {
             self.confirm_remote = false;
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_ignores_case_without_allocating_for_ascii() {
+        assert!(contains_ignore_case("GET /Orders 500", "orders 5"));
+        assert!(!contains_ignore_case("GET /", "get /x"));
+        assert!(contains_ignore_case("Größe ÄNDERN", "änd"));
+        assert!(contains_ignore_case("abc", ""));
     }
 }

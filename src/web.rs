@@ -34,6 +34,8 @@ pub const PAGE_LINES: usize = 500;
 const COOKIE: &str = "fasttail_web";
 /// Longest request head read.
 const MAX_HEAD: usize = 16 * 1024;
+/// How long a client may take to send its request head.
+const HEAD_WAIT: Duration = Duration::from_secs(5);
 /// How long a request waits for the window to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(5);
 /// How often an event stream asks for appended lines (at most 5 batches a second).
@@ -123,6 +125,11 @@ pub struct WebServer {
     pub requests: Receiver<WebRequest>,
     connections: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    /// The acceptor, joined on drop so the port is free again at once.
+    acceptor: Option<std::thread::JoinHandle<()>>,
+    /// What each stream shows now (`publish`): event streams ask the window only when
+    /// their stream changed.
+    views: Arc<std::sync::Mutex<HashMap<String, (usize, u64)>>>,
 }
 
 impl WebServer {
@@ -135,14 +142,18 @@ impl WebServer {
         let (tx, rx) = channel();
         let connections = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
+        let views = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let shared = Arc::new(Shared {
             token,
             tx,
             wake,
             connections: Arc::clone(&connections),
             stop: Arc::clone(&stop),
+            views: Arc::clone(&views),
+            loopback_only: addr.ip().is_loopback(),
+            port: addr.port(),
         });
-        std::thread::Builder::new()
+        let acceptor = std::thread::Builder::new()
             .name("fasttail-web".into())
             .spawn(move || accept(listener, shared))?;
         Ok(Self {
@@ -150,7 +161,16 @@ impl WebServer {
             requests: rx,
             connections,
             stop,
+            acceptor: Some(acceptor),
+            views,
         })
+    }
+
+    /// Records what each stream shows now: id → (visible rows, view generation).
+    pub fn publish(&self, views: HashMap<String, (usize, u64)>) {
+        if let Ok(mut v) = self.views.lock() {
+            *v = views;
+        }
     }
 
     /// Browsers connected now (pages loading and event streams).
@@ -162,6 +182,9 @@ impl WebServer {
 impl Drop for WebServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(acceptor) = self.acceptor.take() {
+            let _ = acceptor.join();
+        }
     }
 }
 
@@ -171,6 +194,10 @@ struct Shared {
     wake: Option<WakeFn>,
     connections: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    views: Arc<std::sync::Mutex<HashMap<String, (usize, u64)>>>,
+    /// Bound to loopback: only `Host: 127.0.0.1` / `localhost` is answered.
+    loopback_only: bool,
+    port: u16,
 }
 
 impl Shared {
@@ -276,14 +303,44 @@ fn url_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
-    let mut line = String::new();
-    let mut budget = MAX_HEAD;
-    let n = reader.read_line(&mut line).ok()?;
-    if n == 0 || n > budget {
-        return None;
+/// One line of the head, at most `budget` bytes, before `deadline`: `None` past either.
+fn head_line(
+    reader: &mut BufReader<TcpStream>,
+    budget: usize,
+    deadline: Instant,
+) -> Option<String> {
+    use std::io::Read;
+    let mut raw = Vec::new();
+    loop {
+        let left = deadline.checked_duration_since(Instant::now())?;
+        reader
+            .get_ref()
+            .set_read_timeout(Some(left.max(Duration::from_millis(1))))
+            .ok()?;
+        let room = budget.saturating_sub(raw.len()) as u64;
+        if room == 0 {
+            return None;
+        }
+        let n = reader
+            .by_ref()
+            .take(room)
+            .read_until(b'\n', &mut raw)
+            .ok()?;
+        if n == 0 {
+            return None;
+        }
+        if raw.ends_with(b"\n") {
+            return Some(String::from_utf8_lossy(&raw).into_owned());
+        }
     }
-    budget -= n;
+}
+
+fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
+    // The whole head within HEAD_WAIT: a client trickling bytes cannot hold a slot.
+    let deadline = Instant::now() + HEAD_WAIT;
+    let mut budget = MAX_HEAD;
+    let mut line = head_line(reader, budget, deadline)?;
+    budget -= line.len();
     let mut parts = line.split_whitespace();
     let method = parts.next()?.to_string();
     let target = parts.next()?.to_string();
@@ -298,12 +355,8 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
         req.query.insert(url_decode(k), url_decode(v));
     }
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line).ok()?;
-        if n == 0 || n > budget {
-            return None;
-        }
-        budget -= n;
+        line = head_line(reader, budget, deadline)?;
+        budget -= line.len();
         let l = line.trim_end();
         if l.is_empty() {
             break;
@@ -348,6 +401,17 @@ fn same_origin(req: &Request) -> bool {
     }
 }
 
+/// Whether `Host` names this machine (`127.0.0.1`, `localhost`, `[::1]`) on `port`: a
+/// page served under another name (DNS rebinding) is not answered.
+fn loopback_host(req: &Request, port: u16) -> bool {
+    let Some(host) = req.header("host") else {
+        return false;
+    };
+    ["127.0.0.1", "localhost", "[::1]"]
+        .iter()
+        .any(|name| host.eq_ignore_ascii_case(&format!("{name}:{port}")))
+}
+
 /// Compares the tokens in constant time.
 fn token_matches(given: &str, token: &str) -> bool {
     given.len() == token.len()
@@ -381,6 +445,16 @@ fn serve(stream: TcpStream, shared: &Shared) {
         );
         return;
     }
+    if shared.loopback_only && !loopback_host(&req, shared.port) {
+        let _ = respond(
+            &mut stream,
+            "421 Misdirected Request",
+            "text/plain",
+            b"",
+            "",
+        );
+        return;
+    }
     if !same_origin(&req) {
         let _ = respond(&mut stream, "403 Forbidden", "text/plain", b"", "");
         return;
@@ -389,9 +463,8 @@ fn serve(stream: TcpStream, shared: &Shared) {
     if let Some(given) = req.param("token") {
         if token_matches(given, &shared.token) {
             let cookie = format!(
-                "Set-Cookie: {COOKIE}={}; HttpOnly; SameSite=Strict; Path=/\r\nLocation: {}\r\n",
-                shared.token,
-                if req.path.is_empty() { "/" } else { &req.path }
+                "Set-Cookie: {COOKIE}={}; HttpOnly; SameSite=Strict; Path=/\r\nLocation: /\r\n",
+                shared.token
             );
             let _ = respond(&mut stream, "303 See Other", "text/plain", b"", &cookie);
         } else {
@@ -504,6 +577,25 @@ fn events(mut stream: TcpStream, shared: &Shared, id: String, mut after: usize, 
     let mut last_write = Instant::now();
     while !shared.stop.load(Ordering::Relaxed) {
         std::thread::sleep(EVENT_PERIOD);
+        if browser_left(&stream) {
+            return;
+        }
+        // The window is asked only when the stream changed since the page's view.
+        let unchanged = shared
+            .views
+            .lock()
+            .ok()
+            .and_then(|v| v.get(&id).copied())
+            .is_some_and(|(rows, g)| rows == after && g == gen);
+        if unchanged {
+            if last_write.elapsed() >= KEEPALIVE {
+                if stream.write_all(b": keepalive\n\n").is_err() {
+                    return;
+                }
+                last_write = Instant::now();
+            }
+            continue;
+        }
         let answer = shared.ask(WebQuery::Tail {
             stream: id.clone(),
             after,
@@ -544,6 +636,21 @@ fn events(mut stream: TcpStream, shared: &Shared, id: String, mut after: usize, 
         }
         last_write = Instant::now();
     }
+}
+
+/// Whether the browser closed the connection (an event stream never sends anything).
+fn browser_left(stream: &TcpStream) -> bool {
+    if stream.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let mut byte = [0u8; 1];
+    let left = match stream.peek(&mut byte) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(e) => e.kind() != std::io::ErrorKind::WouldBlock,
+    };
+    let _ = stream.set_nonblocking(false);
+    left
 }
 
 #[cfg(test)]
@@ -619,6 +726,49 @@ mod tests {
         assert!(get(&srv, "/api/streams", &foreign).starts_with("HTTP/1.1 403"));
         let own = format!("{cookie}Origin: http://{}\r\n", srv.addr);
         assert!(get(&srv, "/api/streams", &own).starts_with("HTTP/1.1 200"));
+    }
+
+    #[test]
+    fn other_host_names_and_slow_or_endless_heads_are_refused() {
+        let (srv, token) = server();
+        let mut s = TcpStream::connect(srv.addr).unwrap();
+        write!(
+            s,
+            "GET /?token={token} HTTP/1.1\r\nHost: evil.example:{}\r\n\r\n",
+            srv.addr.port()
+        )
+        .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        assert!(out.starts_with("HTTP/1.1 421"), "{out}");
+        // A head without an end: cut at MAX_HEAD, the connection closed.
+        let mut s = TcpStream::connect(srv.addr).unwrap();
+        let chunk = vec![b'a'; 4096];
+        let mut sent = 0;
+        while sent < 4 * MAX_HEAD {
+            if s.write_all(&chunk).is_err() {
+                break;
+            }
+            sent += chunk.len();
+        }
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = [0u8; 16];
+        assert!(matches!(s.read(&mut buf), Ok(0) | Err(_)));
+        // The redirect always goes to `/`.
+        let r = get(&srv, &format!("/%0d%0aX:%20y?token={token}"), "");
+        assert!(
+            r.contains("Location: /\r\n") && !r.contains("\r\nX: y"),
+            "{r}"
+        );
+    }
+
+    #[test]
+    fn a_stopped_server_frees_its_port_at_once() {
+        let (srv, token) = server();
+        let addr = srv.addr;
+        drop(srv);
+        let again = WebServer::start(addr, token, None).expect("the port is free again");
+        assert_eq!(again.addr, addr);
     }
 
     #[test]
