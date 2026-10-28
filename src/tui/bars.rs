@@ -355,6 +355,43 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             BarChip::SourceEnded,
         ));
     }
+    if let Some(p) = e.plugin.as_ref() {
+        use crate::plugin_source::{Block, Status};
+        let name = p.uri.name.as_str();
+        let (status, bad) = match p.status() {
+            Status::Running => (tx(lang, "plugin running").to_string(), false),
+            Status::Restarting { attempt, .. } => {
+                (txf(lang, "plugin restarting ({0})", &[&attempt]), true)
+            }
+            Status::Ended(Some(code)) => (txf(lang, "plugin ended (exit {0})", &[&code]), true),
+            Status::Ended(None) => (tx(lang, "plugin ended").to_string(), true),
+            Status::Failed => (tx(lang, "plugin failed to start").to_string(), true),
+            Status::Blocked(Block::Missing) => {
+                (txf(lang, "plugin {0} not installed", &[&name]), true)
+            }
+            Status::Blocked(Block::NotEnabled) => (
+                txf(
+                    lang,
+                    "plugin {0} not enabled (enable it in the window)",
+                    &[&name],
+                ),
+                true,
+            ),
+            Status::Blocked(Block::Changed) => (
+                txf(
+                    lang,
+                    "plugin {0} changed (approve it in the window)",
+                    &[&name],
+                ),
+                true,
+            ),
+            Status::Blocked(Block::NeedsValues) => (
+                tx(lang, "plugin values needed (open it in the window)").to_string(),
+                true,
+            ),
+        };
+        second.push(text(status, if bad { warn } else { dim }));
+    }
     let hidden = e.hidden_count();
     if hidden > 0 {
         let text = txf(lang, "{0} hidden", &[&hidden]);

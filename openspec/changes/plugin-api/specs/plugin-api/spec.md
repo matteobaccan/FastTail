@@ -24,7 +24,7 @@ A source plugin SHALL declare a command, its arguments and parameters of type `t
 
 #### Scenario: Secret not stored
 - **WHEN** a stream of a plugin with a `secret` parameter `token` is saved in a session and the session is loaded
-- **THEN** the session file holds no token, and the parameter dialog opens with the other values filled and the token empty.
+- **THEN** the session file holds no token, the stream says that values are needed, and its Start opens the parameter dialog with the other values filled and the token empty.
 
 ### Requirement: Plugin Trust
 A source plugin SHALL NOT start until the user has enabled it in Settings ▸ Plugins through a confirmation that shows its command and arguments. The SHA-256 of the approved manifest SHALL be stored in `fasttail.ini`, and a plugin whose manifest has changed since SHALL be disabled until approved again. Opening a session, a workspace or a `plugin://` command-line argument SHALL NOT approve a plugin; a stream of a plugin that is missing or not approved SHALL open saying so and keep its identity.

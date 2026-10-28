@@ -69,6 +69,7 @@ pub fn is_system_path(path: &Path) -> bool {
     }) || crate::net_listener::is_listen_path(path)
         || crate::debug_output::is_dbwin_path(path)
         || crate::eventlog::is_eventlog_path(path)
+        || crate::plugins::is_plugin_path(path)
 }
 
 /// A unit name journalctl accepts and cannot take for an option.
@@ -454,6 +455,11 @@ impl TailEngine {
             .or_else(|| self.ssh.as_ref().map(crate::ssh_source::SshStream::title))
             .or_else(|| self.listener.as_ref().map(|l| l.spec.title()))
             .or_else(|| self.debug_output.as_ref().map(|d| d.spec.title()))
+            .or_else(|| {
+                self.plugin
+                    .as_ref()
+                    .map(crate::plugin_source::PluginStream::title)
+            })
     }
 
     /// Called from `poll_updates`: once the copier saw the end of the pipe, collects the

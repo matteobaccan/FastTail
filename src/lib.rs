@@ -50,6 +50,8 @@ pub mod otlp;
 pub mod paths;
 pub mod patterns;
 pub mod plot;
+pub mod plugin_source;
+pub mod plugins;
 pub mod print_mode;
 pub mod query;
 pub mod renderer;

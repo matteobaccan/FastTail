@@ -208,6 +208,8 @@ pub struct FastTailApp {
     web_view: crate::ui::web_view::WebView,
     /// The MCP server for AI assistants and its settings window (`ui::mcp_view`).
     pub mcp_view: crate::ui::mcp_view::McpView,
+    /// The plugins menu, parameter window and settings (`ui::plugins_view`).
+    pub plugins_view: crate::ui::plugins_view::PluginsView,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -691,6 +693,7 @@ impl FastTailApp {
             shortcuts_dialog: Default::default(),
             web_view: Default::default(),
             mcp_view: Default::default(),
+            plugins_view: Default::default(),
         };
         app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
@@ -1344,6 +1347,7 @@ impl FastTailApp {
 
     /// Opens the Log formats dialog a row menu asked for, with the lines picked.
     fn apply_format_requests(&mut self) {
+        self.apply_plugin_requests();
         let commands = self.config.system_commands();
         let lang = self.config.language;
         for engine in &mut self.engines {
@@ -2354,7 +2358,8 @@ impl FastTailApp {
                 continue;
             }
             self.open_log_file(path.clone());
-            self.apply_cli_to(path, cli);
+            // A plugin stream is kept under its stored identity (no secrets).
+            self.apply_cli_to(&crate::plugins::stored_path(path), cli);
         }
     }
 
@@ -2594,6 +2599,96 @@ impl FastTailApp {
         format!("{}: {reason}", path.display())
     }
 
+    /// Opens the source plugin `name` with `values`: a new stream, or the stream of the
+    /// same identity started again (the secrets, which the identity leaves out, given).
+    pub fn open_plugin(&mut self, name: &str, values: std::collections::BTreeMap<String, String>) {
+        // The manifests as they are now: one changed since the menu was built is refused.
+        self.plugins_view.refresh();
+        let catalog = self.plugins_view.catalog().clone();
+        let plugin = catalog.find(name);
+        let uri = crate::plugins::PluginUri {
+            name: name.to_string(),
+            values: values.clone(),
+        };
+        let path = PathBuf::from(uri.to_uri(plugin));
+        self.open_log_file(path.clone());
+        let config_dir = crate::config::FastTailConfig::config_path()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let lang = self.config.language;
+        if let Some(engine) = self.engines.iter_mut().find(|e| e.path == path) {
+            if let Some(s) = engine.plugin.as_mut() {
+                if s.status() != crate::plugin_source::Status::Running
+                    && s.start(plugin, &self.config.plugins, Some(values), &config_dir)
+                        .is_err()
+                {
+                    engine.view_notice = Some(t(lang, "plug_status_values").to_string());
+                }
+            }
+        }
+    }
+
+    /// After a change of the approvals: the streams of a plugin no longer enabled stop
+    /// and say why (a running program is ended, a restart does not come).
+    fn block_unapproved_plugins(&mut self) {
+        use crate::plugin_source::{Block, Status};
+        let catalog = self.plugins_view.catalog().clone();
+        for s in self.engines.iter_mut().filter_map(|e| e.plugin.as_mut()) {
+            if !matches!(s.status(), Status::Running | Status::Restarting { .. }) {
+                continue;
+            }
+            let block = match catalog
+                .find(&s.uri.name)
+                .map(|p| self.config.plugins.state(p))
+            {
+                Some(crate::plugins::State::Enabled) => continue,
+                Some(crate::plugins::State::Changed) => Block::Changed,
+                Some(crate::plugins::State::Disabled) => Block::NotEnabled,
+                None => Block::Missing,
+            };
+            s.block(block);
+        }
+    }
+
+    /// The stream bar's Start of plugin streams: the values asked when some are missing,
+    /// the Plugins settings when the plugin is missing or not approved, else a new run.
+    fn apply_plugin_requests(&mut self) {
+        let asked: Vec<crate::plugins::PluginUri> = self
+            .engines
+            .iter_mut()
+            .filter_map(|e| e.plugin.as_mut())
+            .filter_map(|s| std::mem::take(&mut s.start_requested).then(|| s.uri.clone()))
+            .collect();
+        if asked.is_empty() {
+            return;
+        }
+        self.plugins_view.reload(&self.config);
+        let catalog = self.plugins_view.catalog().clone();
+        let config_dir = crate::config::FastTailConfig::config_path()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        for uri in asked {
+            use crate::plugin_source::Block;
+            let plugin = catalog.find(&uri.name);
+            match crate::plugin_source::block_of(plugin, &self.config.plugins, &uri) {
+                Some(Block::NeedsValues) => self.plugins_view.ask(&uri.name, &uri.values),
+                Some(_) => self.plugins_view.open = true,
+                None => {
+                    if let Some(s) = self
+                        .engines
+                        .iter_mut()
+                        .filter_map(|e| e.plugin.as_mut())
+                        .find(|s| s.uri == uri)
+                    {
+                        let _ = s.start(plugin, &self.config.plugins, None, &config_dir);
+                    }
+                }
+            }
+        }
+    }
+
     /// Answers the MCP requests waiting and opens the files `open_file` asked for.
     pub fn serve_mcp(&mut self) {
         let opens = self.mcp_view.serve(&mut self.engines, &self.config);
@@ -2828,9 +2923,10 @@ impl FastTailApp {
             return None;
         }
 
-        // Avoid duplicate tabs for same path
+        // Avoid duplicate tabs for same path (a plugin URI in its stored form)
+        let key = crate::plugins::stored_path(&path);
         for eng in &self.engines {
-            if eng.path == path || paths_equal(&eng.path, &path) {
+            if eng.path == key || paths_equal(&eng.path, &key) {
                 // Already open, select tab
                 let tab = FastTailTab::LogStream(eng.path.clone());
                 if let (Some(locator), false) = (self.dock_state.find_tab(&tab), quiet) {
@@ -2895,6 +2991,13 @@ impl FastTailApp {
                 self.open_notice = Some(format!("{}: {reason}", archive.display()));
                 return None;
             }
+        };
+        // A plugin stream is kept, listed and shown under its stored identity, never the
+        // path it was opened with (which may hold a secret).
+        let path = if engine.plugin.is_some() {
+            engine.path.clone()
+        } else {
+            path
         };
         crate::workspace::apply_settings(&mut engine, &self.config);
         engine.set_quick_labels(&self.quick_labels);
@@ -3841,6 +3944,26 @@ impl FastTailApp {
                         .clicked()
                     {
                         self.remote_dialog = Some(Default::default());
+                    }
+
+                    // Plugins: the enabled source plugins, and their settings.
+                    let plugin_btn =
+                        egui::Button::new(RichText::new("🔌").monospace().strong().color(text_pri))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.2, accent))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(30.0, 26.0));
+                    let mut plugin_to_open = None;
+                    let theme_now = self.config.theme;
+                    let plugin_menu =
+                        egui::menu::MenuButton::from_button(plugin_btn).ui(ui, |ui| {
+                            plugin_to_open = self.plugins_view.menu(ui, &self.config, &theme_now);
+                        });
+                    let _ = plugin_menu
+                        .0
+                        .on_hover_text(t(self.config.language, "plug_menu_tip"));
+                    if let Some((name, values)) = plugin_to_open {
+                        self.open_plugin(&name, values);
                     }
 
                     // Listen: lines received on a local port.
@@ -4974,6 +5097,19 @@ impl FastTailApp {
         {
             let _ = self.config.save();
         }
+        if self
+            .plugins_view
+            .show_settings(&ctx, &mut self.config, &theme_now)
+        {
+            let _ = self.config.save();
+            self.block_unapproved_plugins();
+        }
+        if let Some((name, values)) = self
+            .plugins_view
+            .show_dialog(&ctx, &self.config, &theme_now)
+        {
+            self.open_plugin(&name, values);
+        }
 
         // 9. Render Settings Dialog if open (Popup modal)
         if self.config.settings_open {
@@ -5073,6 +5209,12 @@ impl FastTailApp {
                             .clicked()
                         {
                             self.mcp_view.open = true;
+                        }
+                        if ui
+                            .button(format!("🔌 {}", t(self.config.language, "plug_open")))
+                            .clicked()
+                        {
+                            self.plugins_view.open = true;
                         }
 
                         // Rendering backend: applies at the next start.

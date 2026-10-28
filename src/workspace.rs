@@ -86,6 +86,28 @@ fn open_event_log(
 /// Opens `path`. `wake` is called from the watcher threads when new data arrives, so a
 /// front end waiting on input can redraw.
 pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -> OpenOutcome {
+    if let Some(uri) = crate::plugins::PluginUri::parse(path) {
+        let dir = crate::plugins::default_dir();
+        let catalog = crate::plugins::discover(&dir);
+        let config_dir = dir.parent().map(Path::to_path_buf).unwrap_or_default();
+        return match crate::plugin_source::open_engine(
+            uri,
+            &catalog,
+            &config.plugins,
+            &config.stdin_settings(),
+            &config_dir,
+            wake,
+        ) {
+            Ok(engine) => OpenOutcome::Opened(Box::new(engine)),
+            Err(e) => OpenOutcome::Failed {
+                error: OpenError::System {
+                    key: "plugin_failed",
+                    detail: e.to_string(),
+                },
+                report: true,
+            },
+        };
+    }
     if let Some(parsed) = crate::debug_output::DbwinSpec::parse(path) {
         let error = match parsed {
             Err(key) => OpenError::System {

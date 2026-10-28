@@ -278,6 +278,9 @@ pub struct FastTailConfig {
     /// Other computers may connect (every interface is bound), `[web] allow_remote`.
     #[serde(default)]
     pub web_allow_remote: bool,
+    /// Approved source plugins and turned-off formats plugins (`plugins`), `[plugins]`.
+    #[serde(default)]
+    pub plugins: crate::plugins::Approvals,
     /// The MCP server for AI assistants (`mcp`), `[mcp] enabled`: off by default.
     #[serde(default)]
     pub mcp_enabled: bool,
@@ -600,6 +603,7 @@ impl Default for FastTailConfig {
             web_port: crate::web::DEFAULT_PORT,
             web_token: String::new(),
             web_allow_remote: false,
+            plugins: Default::default(),
             mcp_enabled: false,
             mcp_port: crate::mcp::DEFAULT_PORT,
             mcp_token: String::new(),
@@ -1182,6 +1186,17 @@ impl FastTailConfig {
                 .set("port", self.web_port.to_string())
                 .set("token", self.web_token.as_str())
                 .set("allow_remote", self.web_allow_remote.to_string());
+        }
+
+        if !self.plugins.approved.is_empty() || !self.plugins.disabled.is_empty() {
+            let mut sec = conf.with_section(Some("plugins"));
+            for (name, hash) in &self.plugins.approved {
+                sec.set(format!("approved.{name}"), hash.as_str());
+            }
+            if !self.plugins.disabled.is_empty() {
+                let names: Vec<&str> = self.plugins.disabled.iter().map(String::as_str).collect();
+                sec.set("disabled", names.join(","));
+            }
         }
 
         if self.mcp_enabled
@@ -1768,6 +1783,29 @@ impl FastTailConfig {
                 .get("token")
                 .map(|v| v.trim().to_string())
                 .filter(|v| v.len() >= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric()))
+                .unwrap_or_default();
+        }
+
+        if let Some(sec) = conf.section(Some("plugins")) {
+            for (key, value) in sec.iter() {
+                if let Some(name) = key.strip_prefix("approved.") {
+                    let hash = value.trim();
+                    if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        cfg.plugins
+                            .approved
+                            .insert(name.to_string(), hash.to_string());
+                    }
+                }
+            }
+            cfg.plugins.disabled = sec
+                .get("disabled")
+                .map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|n| !n.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
                 .unwrap_or_default();
         }
 
@@ -2514,6 +2552,26 @@ mod tests {
             .set("port", "80");
         let odd = FastTailConfig::from_ini(&ini);
         assert!(odd.web_token.is_empty() && odd.web_port == crate::web::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn test_plugin_approvals_round_trip() {
+        let mut cfg = FastTailConfig::default();
+        let hash = crate::plugins::sha256_hex(b"manifest");
+        cfg.plugins
+            .approved
+            .insert("kafka-topic".into(), hash.clone());
+        cfg.plugins.disabled.insert("acme".into());
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.plugins, cfg.plugins);
+        assert!(FastTailConfig::default()
+            .to_ini()
+            .section(Some("plugins"))
+            .is_none());
+        // A value that is no hash is not an approval.
+        let mut ini = FastTailConfig::default().to_ini();
+        ini.with_section(Some("plugins")).set("approved.x", "yes");
+        assert!(FastTailConfig::from_ini(&ini).plugins.approved.is_empty());
     }
 
     #[test]

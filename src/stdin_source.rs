@@ -566,6 +566,7 @@ impl TailEngine {
             .or_else(|| self.ssh.as_ref().map(|s| &s.copier))
             .or_else(|| self.listener.as_ref().map(|s| &s.copier))
             .or_else(|| self.debug_output.as_ref().map(|s| &s.copier))
+            .or_else(|| self.plugin.as_ref().map(|s| &s.copier))
     }
 
     pub(crate) fn piped_mut(&mut self) -> Option<&mut StdinStream> {
@@ -581,7 +582,10 @@ impl TailEngine {
         if let Some(s) = self.listener.as_mut() {
             return Some(&mut s.copier);
         }
-        self.debug_output.as_mut().map(|s| &mut s.copier)
+        if let Some(s) = self.debug_output.as_mut() {
+            return Some(&mut s.copier);
+        }
+        self.plugin.as_mut().map(|s| &mut s.copier)
     }
 
     /// Called from `poll_updates` before the file is checked: after a spool restart the

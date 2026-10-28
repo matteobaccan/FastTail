@@ -78,6 +78,24 @@ parameters are not written; on restore the parameter dialog opens with the other
 A missing or disabled plugin restores as a stream that says so, with the identity kept so
 enabling the plugin and reopening works.
 
+### Implementation notes (deviations)
+
+- D2: a bare command name is looked up on `PATH` only; a command with a path separator
+  (`./run.sh`, `bin/tool`) is the plugin folder's, so a file dropped next to the manifest
+  cannot replace a `PATH` program without a new approval. The plugins folder is made
+  absolute. A parameter value starting with `-` is refused unless the parameter says
+  `allow_dash = true` (option injection through a session, as `ssh -oProxyCommand=`).
+  Every value is also in the environment as `FASTTAIL_PARAM_<ID>`, so a secret need not
+  appear on the command line.
+- D4: a restart reads the manifest again and stops when its hash changed; turning a
+  plugin off stops its running streams.
+- D5: the process tree is ended with `taskkill /T /F` on Windows and the process group
+  on Unix (no job object: it would need a new crate), off the window's thread. A helper
+  the plugin detached from its group survives it.
+- D6: the stored identity keeps only the known, non-secret values; for a plugin that is
+  not installed, none. A restored stream needing values shows Start, which opens the
+  parameter dialog.
+
 ## Risks / Trade-offs
 
 - [Users run a shared plugin without reading it] → explicit approval showing the

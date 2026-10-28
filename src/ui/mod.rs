@@ -25,6 +25,7 @@ pub mod operations_tab;
 pub mod overview_strip;
 pub mod palette;
 pub mod patterns_tab;
+pub mod plugins_view;
 pub mod query_tab;
 pub mod remote_dialog;
 pub mod report_dialog;

@@ -1537,6 +1537,86 @@ fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
     }
 }
 
+/// Stream bar part of a source plugin stream: running, restarting, ended (its standard
+/// error in the tooltip, its last line shown) or why it does not run, and Start.
+fn render_plugin_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    use crate::plugin_source::{Block, Status};
+    let Some(s) = engine.plugin.as_mut() else {
+        return;
+    };
+    ui.separator();
+    let name = s.uri.name.clone();
+    let status = s.status();
+    let (icon, text) = match status {
+        Status::Running => ("▶", t(lang, "plug_status_running").to_string()),
+        Status::Restarting { attempt, .. } => (
+            "⟳",
+            t(lang, "plug_status_restarting").replace("{0}", &attempt.to_string()),
+        ),
+        Status::Ended(Some(code)) => (
+            "⏹",
+            t(lang, "plug_status_ended").replace("{0}", &code.to_string()),
+        ),
+        Status::Ended(None) => ("⏹", t(lang, "plug_status_ended_plain").to_string()),
+        Status::Failed => (
+            "⚠",
+            t(lang, "plug_status_failed").replace("{0}", s.error.as_deref().unwrap_or("")),
+        ),
+        Status::Blocked(block) => {
+            let key = match block {
+                Block::Missing => "plug_status_missing",
+                Block::NotEnabled => "plug_status_disabled",
+                Block::Changed => "plug_status_changed",
+                Block::NeedsValues => "plug_status_values",
+            };
+            ("⚠", t(lang, key).replace("{0}", &name))
+        }
+    };
+    let color = if status == Status::Running {
+        theme.text_dim()
+    } else {
+        theme.warn_color()
+    };
+    let label = ui.label(
+        RichText::new(format!("🔌 {icon} {text}"))
+            .monospace()
+            .color(color),
+    );
+    let stderr = s.stderr_tail();
+    let failed =
+        matches!(status, Status::Ended(code) if code != Some(0)) || status == Status::Failed;
+    if !stderr.trim().is_empty() {
+        label.on_hover_text(stderr.trim_end());
+        if failed {
+            let last: String = stderr
+                .trim_end()
+                .lines()
+                .last()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect();
+            ui.label(RichText::new(last).monospace().color(theme.warn_color()));
+        }
+    }
+    match status {
+        Status::Running => {}
+        Status::Restarting { .. } => ui
+            .ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500)),
+        _ => {
+            if ui
+                .button(format!("▶ {}", t(lang, "plug_start")))
+                .on_hover_text(t(lang, "plug_start_tip"))
+                .clicked()
+            {
+                s.start_requested = true;
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+}
+
 /// Stream bar part of a system source once its command ended: the exit code and the
 /// last line it wrote, and Reconnect.
 fn render_system_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
@@ -2315,6 +2395,7 @@ fn render_log_stream(
         render_compressed_status(ui, engine, theme, lang);
         render_stdin_status(ui, engine, theme, lang);
         render_system_status(ui, engine, theme, lang);
+        render_plugin_status(ui, engine, theme, lang);
         render_ssh_status(ui, engine, theme, lang);
         render_listener_status(ui, engine, theme, lang);
         render_debug_status(ui, engine, theme, lang);

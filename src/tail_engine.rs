@@ -2003,6 +2003,9 @@ pub struct TailEngine {
     pub listener: Option<crate::net_listener::ListenerStream>,
     /// The capture of a Windows debug-output stream (see `debug_output`).
     pub debug_output: Option<crate::debug_output::DebugStream>,
+    /// Program, copier and spool of a source plugin stream (see `plugin_source`); `path`
+    /// is then its URI without the secrets and `current_file` the spool.
+    pub plugin: Option<crate::plugin_source::PluginStream>,
     /// The worker of a Windows Event Log stream (see `eventlog`).
     pub event_log: Option<crate::eventlog::EventLogStream>,
     /// The Statistics tab of the stream, while it is open (see `open_stats`).
@@ -2661,6 +2664,7 @@ impl TailEngine {
             ssh: None,
             listener: None,
             debug_output: None,
+            plugin: None,
             event_log: None,
             stats: None,
             operations: None,
@@ -4420,6 +4424,9 @@ impl TailEngine {
         }
         if self.system.is_some() {
             self.poll_system_exit();
+        }
+        if self.plugin.is_some() {
+            self.poll_plugin();
         }
 
         // Update throughput measurement once every 500ms
