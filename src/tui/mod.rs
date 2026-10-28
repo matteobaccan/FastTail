@@ -213,6 +213,10 @@ fn run_args(args: Vec<String>) -> i32 {
         // Headless, as `fasttail --print`: the configuration is only read.
         return crate::print_mode::run(cli);
     }
+    if cli.mcp {
+        // The stdio MCP transport, as `fasttail --mcp`.
+        return crate::mcp::run_stdio(cli);
+    }
     if cli.gui {
         return hand_off_to_gui(&args);
     }

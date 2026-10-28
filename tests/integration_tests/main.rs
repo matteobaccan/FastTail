@@ -262,6 +262,8 @@ mod keyboard_shortcuts;
 
 mod web_view;
 
+mod mcp_server;
+
 mod search_modes;
 
 mod query_language;

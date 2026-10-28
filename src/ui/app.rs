@@ -206,6 +206,8 @@ pub struct FastTailApp {
     shortcuts_dialog: crate::ui::shortcuts_dialog::ShortcutsDialog,
     /// The web view server and its settings window (`ui::web_view`).
     web_view: crate::ui::web_view::WebView,
+    /// The MCP server for AI assistants and its settings window (`ui::mcp_view`).
+    pub mcp_view: crate::ui::mcp_view::McpView,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -688,6 +690,7 @@ impl FastTailApp {
             keymap_inputs: None,
             shortcuts_dialog: Default::default(),
             web_view: Default::default(),
+            mcp_view: Default::default(),
         };
         app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
@@ -2591,6 +2594,22 @@ impl FastTailApp {
         format!("{}: {reason}", path.display())
     }
 
+    /// Answers the MCP requests waiting and opens the files `open_file` asked for.
+    pub fn serve_mcp(&mut self) {
+        let opens = self.mcp_view.serve(&mut self.engines, &self.config);
+        let lang = self.config.language;
+        for path in opens {
+            self.open_log_file(path.clone());
+            if let Some(engine) = self
+                .engines
+                .iter_mut()
+                .find(|e| paths_equal(&e.path, &path))
+            {
+                engine.view_notice = Some(t(lang, "mcp_notice_open").to_string());
+            }
+        }
+    }
+
     pub fn open_log_file(&mut self, path: PathBuf) {
         if let Some(opened) = self.attach_stream(path, false) {
             self.add_stream_tab(opened);
@@ -3038,6 +3057,14 @@ impl FastTailApp {
             self.config.level_colors,
             self.config.language,
         );
+        // 0e. The MCP server: as the web view, a long search in steps over the frames;
+        // the files `open_file` asked for open now, marked as opened by the assistant.
+        self.mcp_view
+            .sync(&mut self.config, || Self::make_wake(&ctx));
+        self.serve_mcp();
+        if self.mcp_view.busy() {
+            ctx.request_repaint();
+        }
         self.shortcuts_dialog.capture(&ctx);
         if !self.locked && !self.palette.is_open() && !self.shortcuts_dialog.recording() {
             for id in crate::ui::keys::take_remapped(&ctx, &self.keymap) {
@@ -3474,6 +3501,28 @@ impl FastTailApp {
                                 .clicked()
                             {
                                 self.web_view.open = true;
+                            }
+                        }
+
+                        // MCP server: while it is on, the requests of the last minute
+                        // (click: its settings).
+                        if let Some(n) = self.mcp_view.requests_last_minute() {
+                            let color = if n > 0 {
+                                self.config.theme.accent_color()
+                            } else {
+                                self.config.theme.text_dim()
+                            };
+                            if ui
+                                .button(
+                                    RichText::new(format!(" MCP {n} ")).monospace().color(color),
+                                )
+                                .on_hover_text(
+                                    t(self.config.language, "mcp_indicator_tip")
+                                        .replace("{0}", &n.to_string()),
+                                )
+                                .clicked()
+                            {
+                                self.mcp_view.open = true;
                             }
                         }
 
@@ -4904,6 +4953,12 @@ impl FastTailApp {
         {
             let _ = self.config.save();
         }
+        if self
+            .mcp_view
+            .show_settings(&ctx, &mut self.config, &theme_now)
+        {
+            let _ = self.config.save();
+        }
 
         // 9. Render Settings Dialog if open (Popup modal)
         if self.config.settings_open {
@@ -4997,6 +5052,12 @@ impl FastTailApp {
                             .clicked()
                         {
                             self.web_view.open = true;
+                        }
+                        if ui
+                            .button(format!("✨ {}", t(self.config.language, "mcp_open")))
+                            .clicked()
+                        {
+                            self.mcp_view.open = true;
                         }
 
                         // Rendering backend: applies at the next start.

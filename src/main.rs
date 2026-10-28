@@ -352,6 +352,10 @@ fn parse_command_line() -> CliArgs {
         // The config loader reads FASTTAIL_CONFIG first; set it before anything loads it.
         std::env::set_var("FASTTAIL_CONFIG", cfg);
     }
+    if cli.mcp {
+        // The stdio MCP transport: to the window's server, or headless over the files.
+        std::process::exit(fasttail::mcp::run_stdio(&cli));
+    }
     if cli.print {
         // Headless: no window, no workspace, no spool; the configuration is only read.
         let code = fasttail::print_mode::run(&cli);

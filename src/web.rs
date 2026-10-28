@@ -253,15 +253,15 @@ fn accept(listener: TcpListener, shared: Arc<Shared>) {
 
 /// A parsed request head.
 #[derive(Debug, Default)]
-struct Request {
-    method: String,
-    path: String,
-    query: HashMap<String, String>,
-    headers: HashMap<String, String>,
+pub(crate) struct Request {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) query: HashMap<String, String>,
+    pub(crate) headers: HashMap<String, String>,
 }
 
 impl Request {
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).map(String::as_str)
     }
 
@@ -279,7 +279,7 @@ impl Request {
 }
 
 /// `%xx` and `+` decoded.
-fn url_decode(s: &str) -> String {
+pub(crate) fn url_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -335,7 +335,7 @@ fn head_line(
     }
 }
 
-fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
+pub(crate) fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
     // The whole head within HEAD_WAIT: a client trickling bytes cannot hold a slot.
     let deadline = Instant::now() + HEAD_WAIT;
     let mut budget = MAX_HEAD;
@@ -370,13 +370,13 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> Option<Request> {
 }
 
 /// Headers every response carries.
-const SECURITY: &str = "Cache-Control: no-store\r\n\
+pub(crate) const SECURITY: &str = "Cache-Control: no-store\r\n\
      Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; \
      connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n\
      X-Content-Type-Options: nosniff\r\n\
      Referrer-Policy: no-referrer\r\n";
 
-fn respond(
+pub(crate) fn respond(
     stream: &mut TcpStream,
     status: &str,
     content_type: &str,
@@ -393,7 +393,7 @@ fn respond(
 
 /// Whether the request comes from this server's own page: no `Origin`, or the `Host` it
 /// was sent to.
-fn same_origin(req: &Request) -> bool {
+pub(crate) fn same_origin(req: &Request) -> bool {
     match (req.header("origin"), req.header("host")) {
         (None, _) => true,
         (Some(origin), Some(host)) => origin == format!("http://{host}"),
@@ -403,7 +403,7 @@ fn same_origin(req: &Request) -> bool {
 
 /// Whether `Host` names this machine (`127.0.0.1`, `localhost`, `[::1]`) on `port`: a
 /// page served under another name (DNS rebinding) is not answered.
-fn loopback_host(req: &Request, port: u16) -> bool {
+pub(crate) fn loopback_host(req: &Request, port: u16) -> bool {
     let Some(host) = req.header("host") else {
         return false;
     };
@@ -413,7 +413,7 @@ fn loopback_host(req: &Request, port: u16) -> bool {
 }
 
 /// Compares the tokens in constant time.
-fn token_matches(given: &str, token: &str) -> bool {
+pub(crate) fn token_matches(given: &str, token: &str) -> bool {
     given.len() == token.len()
         && given
             .bytes()
