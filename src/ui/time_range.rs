@@ -503,6 +503,7 @@ fn popup_contents(
         if ui
             .add_enabled(readable, egui::Button::new(t(lang, "explain_button")))
             .on_hover_text(t(lang, "explain_button_tip"))
+            .on_disabled_hover_text(t(lang, "time_range_invalid"))
             .clicked()
             && engine.explain_texts(draft.from.trim(), draft.to.trim())
         {
