@@ -114,9 +114,10 @@ Update this section in each release PR.
   review (the duplicates and the changes without a measurable gain were closed). 0.20.1
   brought the ASM view (`disassembly-view`, `src/disasm.rs`, dependency `iced-x86`) and the
   fix of issue #161; 0.20.0 made the terminal interface complete.
-- Next: nothing is planned after 0.27.0 (no nightly releases since 2026-10-24); the next
-  features come when the maintainer asks (`docs/competitor-analysis.md` section 8, to be
-  refreshed after this release). Hand checks left to the maintainer: an MCP client
+- Next: the post-0.27.0 scan (2026-10-28) proposes **0.28.0** with six changes in
+  `openspec/changes/`: `source-links`, `rotated-files`, `field-units` (M), `column-pinning`,
+  `clipboard-stream`, `print-output-formats` (S); planned when the maintainer agrees
+  (`docs/competitor-analysis.md` sections 6 and 8). No nightly releases since 2026-10-24. Hand checks left to the maintainer: an MCP client
   (Claude Desktop / Code), the Plugins windows and source plugins on Windows, the web view
   in a browser.
 - 0.27.0 shipped (the backlog, asked by the maintainer on 2026-10-28): `operation-timeline`,
