@@ -10,6 +10,8 @@
     <a href="https://github.com/matteobaccan/FastTail/releases"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platforms" /></a>
   </p>
 
+  <p><a href="https://matteobaccan.github.io/FastTail/"><strong>matteobaccan.github.io/FastTail</strong></a></p>
+
   <p>
     <img src="assets/screenshots/fasttail_main_view.png" alt="FastTail Main Interface" width="850" />
   </p>
