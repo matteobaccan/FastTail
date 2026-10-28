@@ -7813,11 +7813,6 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::HideLines),
     ),
     (
-        "Ctrl+O",
-        en("open the row's source location in the editor (again: the next one)"),
-        Some(Action::OpenSource),
-    ),
-    (
         "C",
         en("column view of the fields on or off"),
         Some(Action::ToggleColumns),
@@ -7928,8 +7923,8 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
         Some(Action::GoTo),
     ),
     (
-        "o",
-        en("open: browse folders, a path or *.log"),
+        "o  Ctrl+O",
+        en("open a file; Ctrl+O: the row's source"),
         Some(Action::OpenFile),
     ),
     (
