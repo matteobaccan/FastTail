@@ -31,7 +31,7 @@ expectation (section 3).
 - New `fasttail.ini` section `[web]`: `enabled` (default `false`), `port`, `token`,
   `allow_remote` (default `false`).
 
-Target release: **none, backlog** (moved out of 0.27.0 by the maintainer on 2026-10-24: kept for the future, not planned). Before that: 0.27.0 (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
+Target release: **the next minor** (taken from the backlog by the maintainer on 2026-10-28; moved out of 0.27.0 by the maintainer on 2026-10-24: kept for the future, not planned). Before that: 0.27.0 (re-planned by the maintainer on 2026-10-06, from 0.22.0: about one large, two medium and three small changes per release) (planned for 0.15.0, moved after the terminal interface of 0.20.0; sources and integrations), per the release plan in
 `docs/competitor-analysis.md` section 8. Priority: **Low**. Effort: **M**.
 
 ### Non-goals

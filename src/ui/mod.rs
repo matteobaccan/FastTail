@@ -35,6 +35,7 @@ pub mod system_dialog;
 pub mod theme;
 pub mod time_range;
 pub mod timeline_strip;
+pub mod web_view;
 pub mod zip_picker;
 
 pub use app::FastTailApp;

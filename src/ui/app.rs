@@ -204,6 +204,8 @@ pub struct FastTailApp {
     keymap_inputs: Option<KeymapInputs>,
     /// The Keyboard shortcuts window (`ui::shortcuts_dialog`).
     shortcuts_dialog: crate::ui::shortcuts_dialog::ShortcutsDialog,
+    /// The web view server and its settings window (`ui::web_view`).
+    web_view: crate::ui::web_view::WebView,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -685,6 +687,7 @@ impl FastTailApp {
             keymap: crate::keymap::KeyMap::default(),
             keymap_inputs: None,
             shortcuts_dialog: Default::default(),
+            web_view: Default::default(),
         };
         app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
@@ -3025,6 +3028,16 @@ impl FastTailApp {
         // palette does; a default key whose action moved away fires nothing. Before every
         // handler, so the handlers never see those keys.
         self.refresh_keymap();
+        // 0d. The web view: the server follows the settings, its requests are answered
+        // from the streams as they are now.
+        self.web_view
+            .sync(&mut self.config, || Self::make_wake(&ctx));
+        self.web_view.serve(
+            &self.engines,
+            &self.config.theme,
+            self.config.level_colors,
+            self.config.language,
+        );
         self.shortcuts_dialog.capture(&ctx);
         if !self.locked && !self.palette.is_open() && !self.shortcuts_dialog.recording() {
             for id in crate::ui::keys::take_remapped(&ctx, &self.keymap) {
@@ -3442,6 +3455,26 @@ impl FastTailApp {
                         {
                             let target = self.focused_stream_path();
                             self.palette.toggle(&ctx, target);
+                        }
+
+                        // Web view: while it is on, the browsers connected (click: its
+                        // settings).
+                        if let Some(n) = self.web_view.connections() {
+                            let color = if n > 0 {
+                                self.config.theme.accent_color()
+                            } else {
+                                self.config.theme.text_dim()
+                            };
+                            if ui
+                                .button(RichText::new(format!(" 🔗 {n} ")).monospace().color(color))
+                                .on_hover_text(
+                                    t(self.config.language, "web_indicator_tip")
+                                        .replace("{0}", &n.to_string()),
+                                )
+                                .clicked()
+                            {
+                                self.web_view.open = true;
+                            }
                         }
 
                         // Global filter bar (CTRL + SHIFT + H); lit while the filter applies.
@@ -4865,6 +4898,12 @@ impl FastTailApp {
         {
             let _ = self.config.save();
         }
+        if self
+            .web_view
+            .show_settings(&ctx, &mut self.config, &theme_now)
+        {
+            let _ = self.config.save();
+        }
 
         // 9. Render Settings Dialog if open (Popup modal)
         if self.config.settings_open {
@@ -4946,12 +4985,18 @@ impl FastTailApp {
                         {
                             open_formats = true;
                         }
-                        // Keyboard shortcuts: their own window.
+                        // Keyboard shortcuts and the web view: their own windows.
                         if ui
                             .button(format!("⌨ {}", t(self.config.language, "keys_open")))
                             .clicked()
                         {
                             self.shortcuts_dialog.open = true;
+                        }
+                        if ui
+                            .button(format!("🌐 {}", t(self.config.language, "web_open")))
+                            .clicked()
+                        {
+                            self.web_view.open = true;
                         }
 
                         // Rendering backend: applies at the next start.

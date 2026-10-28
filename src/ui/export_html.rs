@@ -52,8 +52,66 @@ impl HtmlWriter {
     }
 }
 
+/// The row `idx` as the view draws it: the class of its own style (a whole-row rule, else
+/// its level colour), and its text cut into runs, each with the class of its style
+/// (highlight rules, quick labels, ANSI colours, automatic tokens, search hits of
+/// `query`). `class` turns a CSS declaration into a class number. Shared by the HTML
+/// export and the web view.
+pub fn row_runs(
+    engine: &TailEngine,
+    theme: &CyberTheme,
+    level_colors: bool,
+    query: &str,
+    idx: usize,
+    row: &RowText,
+    class: &mut dyn FnMut(String) -> usize,
+) -> (Option<usize>, Vec<(String, Option<usize>)>) {
+    let text = &row.line;
+    let found = engine.match_row_spans(row);
+    let base: Option<HighlightStyle> = found
+        .rest
+        .or_else(|| crate::ui::dock::level_fallback(engine, theme, level_colors, idx));
+    let spans: Vec<HighlightSpan> = crate::ui::dock::cell_spans(found.spans, text, query);
+    let row_class = base.map(|s| class(css(Some(s.fg), Some(s.bg), s.bold, s.italic, false)));
+    let base_fg = base.map_or(theme.text_primary(), |s| s.fg);
+    let base_bg = base.map_or(Rgba::TRANSPARENT, |s| s.bg);
+    let mut runs = Vec::new();
+    let mut pos = 0;
+    for sp in &spans {
+        let (start, end) = (sp.start.min(text.len()), sp.end.min(text.len()));
+        if start < pos
+            || start >= end
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+        {
+            continue;
+        }
+        if start > pos {
+            runs.push((text[pos..start].to_string(), None));
+        }
+        let style = match sp.style {
+            SpanStyle::Rule(s) => css(Some(s.fg), Some(s.bg), s.bold, s.italic, false),
+            SpanStyle::Label(n) => {
+                let (fg, bg) = theme.label_style(n);
+                css(Some(fg), Some(bg), false, false, false)
+            }
+            SpanStyle::Ansi(s) => {
+                let (fg, bg) = theme.ansi_colors(&s, base_fg, base_bg);
+                css(Some(fg), Some(bg), s.bold, s.italic, s.underline)
+            }
+            SpanStyle::Token(kind) => css(Some(theme.token_color(kind)), None, false, false, false),
+        };
+        runs.push((text[start..end].to_string(), Some(class(style))));
+        pos = end;
+    }
+    if pos < text.len() {
+        runs.push((text[pos..].to_string(), None));
+    }
+    (row_class, runs)
+}
+
 /// `#rrggbb` of a colour (un-premultiplied), `None` for a transparent one.
-fn hex(c: Rgba) -> Option<String> {
+pub(crate) fn hex(c: Rgba) -> Option<String> {
     if c.a == 0 {
         return None;
     }
@@ -121,15 +179,13 @@ impl RowWriter for HtmlWriter {
         idx: usize,
         row: &RowText,
     ) -> std::io::Result<()> {
-        let text = &row.line;
-        let found = engine.match_row_spans(row);
-        // The row's own style: a whole-row rule, else its level colour.
-        let base: Option<HighlightStyle> = found.rest.or_else(|| {
-            crate::ui::dock::level_fallback(engine, &self.theme, self.level_colors, idx)
-        });
-        let spans: Vec<HighlightSpan> = crate::ui::dock::cell_spans(found.spans, text, &self.query);
-        let row_class =
-            base.map(|s| self.class(css(Some(s.fg), Some(s.bg), s.bold, s.italic, false)));
+        let (theme, level_colors) = (self.theme, self.level_colors);
+        let query = std::mem::take(&mut self.query);
+        let (row_class, runs) =
+            row_runs(engine, &theme, level_colors, &query, idx, row, &mut |css| {
+                self.class(css)
+            });
+        self.query = query;
         match row_class {
             Some(c) => write!(out, "<div class=\"l c{c}\">")?,
             None => out.write_all(b"<div class=\"l\">")?,
@@ -139,49 +195,11 @@ impl RowWriter for HtmlWriter {
             "<span class=\"n\">{}</span>",
             engine.shown_line_number(idx)
         )?;
-        let base_fg = base.map_or(self.theme.text_primary(), |s| s.fg);
-        let base_bg = base.map_or(Rgba::TRANSPARENT, |s| s.bg);
-        let mut pos = 0;
-        for sp in &spans {
-            let (start, end) = (sp.start.min(text.len()), sp.end.min(text.len()));
-            if start < pos
-                || start >= end
-                || !text.is_char_boundary(start)
-                || !text.is_char_boundary(end)
-            {
-                continue;
+        for (text, class) in runs {
+            match class {
+                Some(c) => write!(out, "<span class=\"c{c}\">{}</span>", escape(&text))?,
+                None => out.write_all(escape(&text).as_bytes())?,
             }
-            if start > pos {
-                out.write_all(escape(&text[pos..start]).as_bytes())?;
-            }
-            let style = match sp.style {
-                SpanStyle::Rule(s) => css(Some(s.fg), Some(s.bg), s.bold, s.italic, false),
-                SpanStyle::Label(n) => {
-                    let (fg, bg) = self.theme.label_style(n);
-                    css(Some(fg), Some(bg), false, false, false)
-                }
-                SpanStyle::Ansi(s) => {
-                    let (fg, bg) = self.theme.ansi_colors(&s, base_fg, base_bg);
-                    css(Some(fg), Some(bg), s.bold, s.italic, s.underline)
-                }
-                SpanStyle::Token(kind) => css(
-                    Some(self.theme.token_color(kind)),
-                    None,
-                    false,
-                    false,
-                    false,
-                ),
-            };
-            let c = self.class(style);
-            write!(
-                out,
-                "<span class=\"c{c}\">{}</span>",
-                escape(&text[start..end])
-            )?;
-            pos = end;
-        }
-        if pos < text.len() {
-            out.write_all(escape(&text[pos..]).as_bytes())?;
         }
         out.write_all(b"</div>\n")
     }

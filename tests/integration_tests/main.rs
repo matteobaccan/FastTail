@@ -260,6 +260,8 @@ mod operation_timeline;
 
 mod keyboard_shortcuts;
 
+mod web_view;
+
 mod search_modes;
 
 mod query_language;
