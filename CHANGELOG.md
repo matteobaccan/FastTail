@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-28
+
 ### Added
 
 - **Plugins.** Folders with a `plugin.toml` (`api = 1`) in `plugins/` next to
@@ -2340,6 +2342,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.27.0]: https://github.com/matteobaccan/FastTail/compare/v0.26.1...v0.27.0
 [0.26.1]: https://github.com/matteobaccan/FastTail/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/matteobaccan/FastTail/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/matteobaccan/FastTail/compare/v0.24.0...v0.25.0
