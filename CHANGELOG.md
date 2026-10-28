@@ -10,6 +10,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Plugins.** Folders with a `plugin.toml` (`api = 1`) in `plugins/` next to
+  `fasttail.ini`. A source plugin runs a program, without a shell and with its
+  parameters (`text`, `number`, `choice`, `secret`) one argument each, and its standard
+  output becomes a stream: 🔌 toolbar menu and parameter window, the last 4 KB of
+  standard error in the stream bar, `restart = "on-exit"` with back-off, the process tree
+  ended with the stream, `plugin://name?param=value` in the workspace, sessions and on
+  the command line (secrets never stored, asked again). It runs only once enabled in
+  Settings → *🔌 Plugins…*, which shows its command; a changed manifest (SHA-256 in
+  `[plugins]`) needs a new approval. Plugins can ship log formats, loaded read-only as
+  `<plugin>/<format>` and detected; `docs/plugins.md` (`plugin-api`, from the backlog).
 - **MCP server for AI assistants.** Settings → *✨ AI assistants (MCP)…* (off by default,
   with a warning) lets Claude, Copilot, Cursor and other MCP clients read the open
   streams: `list_streams`, `read_lines` (visible or all lines), `search` (500 hits and

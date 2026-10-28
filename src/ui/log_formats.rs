@@ -291,7 +291,10 @@ impl FormatsDialog {
 
     /// A copy of the draft as a new format, `<name> copy`.
     pub fn duplicate(&mut self) {
-        self.draft.name = format!("{} copy", self.draft.name.trim());
+        // A plugin's format (`acme/server`) becomes the user's own `server copy`.
+        let name = self.draft.name.trim();
+        let name = name.rsplit_once('/').map_or(name, |(_, n)| n);
+        self.draft.name = format!("{name} copy");
         self.editing = Editing::New;
         self.confirm_delete = None;
         self.refresh_preview();
@@ -454,13 +457,19 @@ impl FormatsDialog {
                         (Editing::Builtin, None) => self.draft.name == format.name(),
                         _ => false,
                     };
-                    let label = if format.builtin {
+                    let label = if format.plugin.is_some() {
+                        format!("🔌 {}", format.name())
+                    } else if format.builtin {
                         format!("🔒 {}", format.name())
                     } else {
                         format!("◇ {}", format.name())
                     };
                     let mut resp = ui.selectable_label(current, RichText::new(label).monospace());
                     resp = match (&format.file, format.builtin) {
+                        (_, true) if format.plugin.is_some() => resp.on_hover_text(
+                            t(lang, "fmt_plugin_tip")
+                                .replace("{0}", format.plugin.as_deref().unwrap_or("")),
+                        ),
                         (_, true) => resp.on_hover_text(t(lang, "fmt_builtin_tip")),
                         (Some(f), _) => resp.on_hover_text(f.display().to_string()),
                         _ => resp,

@@ -264,6 +264,8 @@ mod web_view;
 
 mod mcp_server;
 
+mod plugin_api;
+
 mod search_modes;
 
 mod query_language;
