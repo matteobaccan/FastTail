@@ -131,6 +131,7 @@ pub fn render(
                 table.is_some(),
                 egui::Button::new(t(lang, "query_copy_csv")),
             )
+            .on_disabled_hover_text(t(lang, "query_none"))
             .clicked()
         {
             if let Some(table) = table {

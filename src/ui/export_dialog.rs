@@ -160,13 +160,18 @@ impl ExportDialog {
                 ui.add(egui::ProgressBar::new(job.progress()).show_percentage());
             }
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        !busy && count > 0,
-                        egui::Button::new(t(lang, "export_save")),
-                    )
-                    .clicked()
-                {
+                let save = ui.add_enabled(
+                    !busy && count > 0,
+                    egui::Button::new(t(lang, "export_save")),
+                );
+                // While an export runs its progress bar says why; else there is nothing to
+                // write.
+                let save = if busy {
+                    save
+                } else {
+                    save.on_disabled_hover_text(t(lang, "no_matching_lines"))
+                };
+                if save.clicked() {
                     let stem = engine
                         .path
                         .file_stem()
@@ -223,21 +228,33 @@ impl ExportDialog {
                 t(lang, "export_scope_visible"),
             );
             let has_selection = !engine.selection.is_empty();
-            ui.add_enabled_ui(has_selection, |ui| {
-                ui.radio_value(
-                    &mut self.scope,
-                    Scope::Selected,
-                    t(lang, "export_scope_selected"),
+            if ui
+                .add_enabled(
+                    has_selection,
+                    egui::RadioButton::new(
+                        self.scope == Scope::Selected,
+                        t(lang, "export_scope_selected"),
+                    ),
                 )
-            });
+                .on_disabled_hover_text(t(lang, "palette_no_selection"))
+                .clicked()
+            {
+                self.scope = Scope::Selected;
+            }
             let has_matches = !engine.search_matches.is_empty();
-            ui.add_enabled_ui(has_matches, |ui| {
-                ui.radio_value(
-                    &mut self.scope,
-                    Scope::Matches,
-                    t(lang, "export_scope_matches"),
+            if ui
+                .add_enabled(
+                    has_matches,
+                    egui::RadioButton::new(
+                        self.scope == Scope::Matches,
+                        t(lang, "export_scope_matches"),
+                    ),
                 )
-            });
+                .on_disabled_hover_text(t(lang, "search_pane_no_matches"))
+                .clicked()
+            {
+                self.scope = Scope::Matches;
+            }
         });
         ui.horizontal(|ui| {
             ui.label(format!("{}:", t(lang, "export_format")));

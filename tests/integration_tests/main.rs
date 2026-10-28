@@ -256,6 +256,16 @@ mod debug_output;
 
 mod field_statistics;
 
+mod operation_timeline;
+
+mod keyboard_shortcuts;
+
+mod web_view;
+
+mod mcp_server;
+
+mod plugin_api;
+
 mod search_modes;
 
 mod query_language;

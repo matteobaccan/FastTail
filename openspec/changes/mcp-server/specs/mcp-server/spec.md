@@ -1,18 +1,18 @@
 ## ADDED Requirements
 
 ### Requirement: MCP Server Enabling
-FastTail SHALL include a Model Context Protocol server that is off by default and is enabled in Settings, with the state kept in `fasttail.ini` `[mcp]` (`enabled`, `http`, `port`, `token`, `allow_write`, `open_roots`). Enabling it SHALL show a warning that log content becomes readable by the connected assistants. While it is on, the title bar SHALL show an indicator with the number of requests in the last minute, and the Settings page SHALL list the last 200 requests with tool name, arguments and response size.
+FastTail SHALL include a Model Context Protocol server that is off by default and is enabled in Settings, with the state kept in `fasttail.ini` `[mcp]` (`enabled`, `port`, `token`, `allow_write`, `open_roots`). Enabling it SHALL show a warning that log content becomes readable by the connected assistants. While it is on, the title bar SHALL show an indicator with the number of requests in the last minute, and the Settings page SHALL list the last 200 requests with tool name, arguments and response size.
 
 #### Scenario: Off by default
 - **WHEN** FastTail starts with no `[mcp]` section
-- **THEN** no port is bound and `fasttail --mcp` reports that the server is disabled in the running window.
+- **THEN** no port is bound and `fasttail --mcp` reports that no FastTail window has the server on, then serves the files on its command line.
 
 #### Scenario: Indicator
 - **WHEN** the server is on and an assistant calls `search` three times
 - **THEN** the title-bar indicator shows 3 requests and the log lists the three calls.
 
 ### Requirement: MCP Transports
-The server SHALL offer a stdio transport through `fasttail --mcp`, which connects to the running FastTail window, and, when no window is running, serves the files given on its command line read-only without opening a window. When `[mcp] http=true` the window SHALL also serve MCP over HTTP bound to `127.0.0.1` only, on the configured port (default `47821`). Every HTTP request SHALL carry the bearer token of `[mcp] token`, generated randomly on first enable; a request without the right token, or with an `Origin` header that is not a loopback origin, SHALL be rejected with status 401 or 403.
+The server SHALL offer a stdio transport through `fasttail --mcp`, which connects to the running FastTail window, and, when no window is running, serves the files given on its command line read-only without opening a window. While the server is on, the window SHALL serve MCP over HTTP bound to `127.0.0.1` only (the stdio transport reaches it there), on the configured port (default `47821`). Every HTTP request SHALL carry the bearer token of `[mcp] token`, generated randomly on first enable; a request without the right token, or with an `Origin` header that is not a loopback origin, SHALL be rejected with status 401 or 403.
 
 #### Scenario: Missing token
 - **WHEN** a client posts to the MCP endpoint without an Authorization header
@@ -23,7 +23,7 @@ The server SHALL offer a stdio transport through `fasttail --mcp`, which connect
 - **THEN** `list_streams` returns `app.log` and no window opens.
 
 ### Requirement: Read-Only Tools
-The server SHALL offer the tools `list_streams`, `read_lines`, `search`, `get_context`, `list_bookmarks`, `get_filters` and `level_summary`, and each open stream as a resource. They SHALL answer from the state shown in the window: `read_lines` and `search` SHALL use the stream's visible lines unless the call asks for all lines, and `list_bookmarks` SHALL include the notes. Line text SHALL be returned as data fields with the line number, cut at the long line cap. A result SHALL hold at most 2,000 lines and 1 MB, and `search` at most 500 hits plus the total count, with a flag saying when it was truncated. Tool calls SHALL run off the UI thread.
+The server SHALL offer the tools `list_streams`, `read_lines`, `search`, `get_context`, `list_bookmarks`, `get_filters` and `level_summary`, and each open stream as a resource. They SHALL answer from the state shown in the window: `read_lines` and `search` SHALL use the stream's visible lines unless the call asks for all lines, and `list_bookmarks` SHALL include the notes. Line text SHALL be returned as data fields with the line number, cut at the long line cap. A result SHALL hold at most 2,000 lines and 1 MB, and `search` at most 500 hits plus the total count, with a flag saying when it was truncated. Tool calls SHALL NOT stall the window: the requests SHALL take at most 15 ms of a frame, a search going on in steps over the next frames.
 
 #### Scenario: Assistant reads an error's context
 - **WHEN** the assistant calls `get_context` for line 812 of `app.log` with `before=5, after=5`

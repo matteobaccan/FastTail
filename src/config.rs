@@ -261,6 +261,41 @@ pub struct FastTailConfig {
     /// `actions::MAX_RECENT`), `[general] palette_recent` comma separated.
     #[serde(default)]
     pub palette_recent: Vec<String>,
+    /// Keyboard shortcuts that differ from the defaults (`keymap`): action id → bindings
+    /// (`F3, Ctrl+N`, empty for none), the `[shortcuts]` section. Kept as written, so an
+    /// id of another build survives a save.
+    #[serde(default)]
+    pub shortcuts: std::collections::BTreeMap<String, String>,
+    /// The web view (`web`), `[web] enabled`: off by default.
+    #[serde(default)]
+    pub web_enabled: bool,
+    /// Its port, `[web] port` (`web::DEFAULT_PORT`).
+    #[serde(default)]
+    pub web_port: u16,
+    /// Its access token, `[web] token`; made on the first enable.
+    #[serde(default)]
+    pub web_token: String,
+    /// Other computers may connect (every interface is bound), `[web] allow_remote`.
+    #[serde(default)]
+    pub web_allow_remote: bool,
+    /// Approved source plugins and turned-off formats plugins (`plugins`), `[plugins]`.
+    #[serde(default)]
+    pub plugins: crate::plugins::Approvals,
+    /// The MCP server for AI assistants (`mcp`), `[mcp] enabled`: off by default.
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    /// Its loopback port, `[mcp] port` (`mcp::DEFAULT_PORT`).
+    #[serde(default)]
+    pub mcp_port: u16,
+    /// Its bearer token, `[mcp] token`; made on the first enable.
+    #[serde(default)]
+    pub mcp_token: String,
+    /// The write tools (`add_bookmark`, `set_search`, `open_file`), `[mcp] allow_write`.
+    #[serde(default)]
+    pub mcp_allow_write: bool,
+    /// Folders `open_file` may open from, `[mcp] open_roots` (separated by `;`).
+    #[serde(default)]
+    pub mcp_open_roots: Vec<PathBuf>,
     /// Bookmarked lines per file (most recently used first) with the notes of some of
     /// them, see `set_bookmarks_with_notes`.
     #[serde(default)]
@@ -563,6 +598,17 @@ impl Default for FastTailConfig {
             search_history: Vec::new(),
             query_history: Vec::new(),
             palette_recent: Vec::new(),
+            shortcuts: std::collections::BTreeMap::new(),
+            web_enabled: false,
+            web_port: crate::web::DEFAULT_PORT,
+            web_token: String::new(),
+            web_allow_remote: false,
+            plugins: Default::default(),
+            mcp_enabled: false,
+            mcp_port: crate::mcp::DEFAULT_PORT,
+            mcp_token: String::new(),
+            mcp_allow_write: false,
+            mcp_open_roots: Vec::new(),
             bookmarks: Vec::new(),
             wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
@@ -1130,6 +1176,55 @@ impl FastTailConfig {
             }
         }
 
+        if self.web_enabled
+            || self.web_allow_remote
+            || !self.web_token.is_empty()
+            || self.web_port != crate::web::DEFAULT_PORT
+        {
+            conf.with_section(Some("web"))
+                .set("enabled", self.web_enabled.to_string())
+                .set("port", self.web_port.to_string())
+                .set("token", self.web_token.as_str())
+                .set("allow_remote", self.web_allow_remote.to_string());
+        }
+
+        if !self.plugins.approved.is_empty() || !self.plugins.disabled.is_empty() {
+            let mut sec = conf.with_section(Some("plugins"));
+            for (name, hash) in &self.plugins.approved {
+                sec.set(format!("approved.{name}"), hash.as_str());
+            }
+            if !self.plugins.disabled.is_empty() {
+                let names: Vec<&str> = self.plugins.disabled.iter().map(String::as_str).collect();
+                sec.set("disabled", names.join(","));
+            }
+        }
+
+        if self.mcp_enabled
+            || self.mcp_allow_write
+            || !self.mcp_token.is_empty()
+            || !self.mcp_open_roots.is_empty()
+            || self.mcp_port != crate::mcp::DEFAULT_PORT
+        {
+            let roots: Vec<String> = self
+                .mcp_open_roots
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            conf.with_section(Some("mcp"))
+                .set("enabled", self.mcp_enabled.to_string())
+                .set("port", self.mcp_port.to_string())
+                .set("token", self.mcp_token.as_str())
+                .set("allow_write", self.mcp_allow_write.to_string())
+                .set("open_roots", roots.join(";"));
+        }
+
+        if !self.shortcuts.is_empty() {
+            let mut sec = conf.with_section(Some("shortcuts"));
+            for (id, bindings) in &self.shortcuts {
+                sec.set(id.as_str(), bindings.as_str());
+            }
+        }
+
         if let Some(layout) = &self.dock_layout {
             conf.with_section(Some("dock")).set("layout", layout);
         }
@@ -1673,6 +1768,79 @@ impl FastTailConfig {
                 }
                 i += 1;
             }
+        }
+
+        if let Some(sec) = conf.section(Some("web")) {
+            let flag = |k: &str| sec.get(k).and_then(|v| v.trim().parse::<bool>().ok());
+            cfg.web_enabled = flag("enabled").unwrap_or(false);
+            cfg.web_allow_remote = flag("allow_remote").unwrap_or(false);
+            cfg.web_port = sec
+                .get("port")
+                .and_then(|v| v.trim().parse::<u16>().ok())
+                .filter(|p| *p >= 1024)
+                .unwrap_or(crate::web::DEFAULT_PORT);
+            cfg.web_token = sec
+                .get("token")
+                .map(|v| v.trim().to_string())
+                .filter(|v| v.len() >= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric()))
+                .unwrap_or_default();
+        }
+
+        if let Some(sec) = conf.section(Some("plugins")) {
+            for (key, value) in sec.iter() {
+                if let Some(name) = key.strip_prefix("approved.") {
+                    let hash = value.trim();
+                    if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        cfg.plugins
+                            .approved
+                            .insert(name.to_string(), hash.to_string());
+                    }
+                }
+            }
+            cfg.plugins.disabled = sec
+                .get("disabled")
+                .map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|n| !n.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+
+        if let Some(sec) = conf.section(Some("mcp")) {
+            let flag = |k: &str| sec.get(k).and_then(|v| v.trim().parse::<bool>().ok());
+            cfg.mcp_enabled = flag("enabled").unwrap_or(false);
+            cfg.mcp_allow_write = flag("allow_write").unwrap_or(false);
+            cfg.mcp_port = sec
+                .get("port")
+                .and_then(|v| v.trim().parse::<u16>().ok())
+                .filter(|p| *p >= 1024)
+                .unwrap_or(crate::mcp::DEFAULT_PORT);
+            cfg.mcp_token = sec
+                .get("token")
+                .map(|v| v.trim().to_string())
+                .filter(|v| v.len() >= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric()))
+                .unwrap_or_default();
+            cfg.mcp_open_roots = sec
+                .get("open_roots")
+                .map(|v| {
+                    v.split(';')
+                        .map(str::trim)
+                        .filter(|r| !r.is_empty())
+                        .map(PathBuf::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+
+        if let Some(sec) = conf.section(Some("shortcuts")) {
+            cfg.shortcuts = sec
+                .iter()
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+                .filter(|(k, _)| !k.is_empty())
+                .collect();
         }
 
         if let Some(sec) = conf.section(Some("query")) {
@@ -2357,6 +2525,99 @@ mod tests {
             FastTailConfig::from_ini(&ini).palette_recent,
             vec!["view.wrap.toggle".to_string()]
         );
+    }
+
+    #[test]
+    fn test_web_settings_round_trip_and_default_off() {
+        let cfg = FastTailConfig {
+            web_enabled: true,
+            web_port: 48000,
+            web_token: crate::web::new_token(),
+            web_allow_remote: true,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(loaded.web_enabled && loaded.web_allow_remote);
+        assert_eq!(
+            (loaded.web_port, loaded.web_token.as_str()),
+            (48000, cfg.web_token.as_str())
+        );
+        let default = FastTailConfig::default();
+        assert!(!default.web_enabled && default.web_port == crate::web::DEFAULT_PORT);
+        assert!(default.to_ini().section(Some("web")).is_none());
+        // A short or odd token is made again; a low port falls back.
+        let mut ini = FastTailConfig::default().to_ini();
+        ini.with_section(Some("web"))
+            .set("token", "x")
+            .set("port", "80");
+        let odd = FastTailConfig::from_ini(&ini);
+        assert!(odd.web_token.is_empty() && odd.web_port == crate::web::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn test_plugin_approvals_round_trip() {
+        let mut cfg = FastTailConfig::default();
+        let hash = crate::plugins::sha256_hex(b"manifest");
+        cfg.plugins
+            .approved
+            .insert("kafka-topic".into(), hash.clone());
+        cfg.plugins.disabled.insert("acme".into());
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.plugins, cfg.plugins);
+        assert!(FastTailConfig::default()
+            .to_ini()
+            .section(Some("plugins"))
+            .is_none());
+        // A value that is no hash is not an approval.
+        let mut ini = FastTailConfig::default().to_ini();
+        ini.with_section(Some("plugins")).set("approved.x", "yes");
+        assert!(FastTailConfig::from_ini(&ini).plugins.approved.is_empty());
+    }
+
+    #[test]
+    fn test_mcp_settings_round_trip_and_default_off() {
+        let cfg = FastTailConfig {
+            mcp_enabled: true,
+            mcp_port: 48001,
+            mcp_token: crate::web::new_token(),
+            mcp_allow_write: true,
+            mcp_open_roots: vec![PathBuf::from("/var/log"), PathBuf::from("D:\\logs")],
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(loaded.mcp_enabled && loaded.mcp_allow_write);
+        assert_eq!(
+            (loaded.mcp_port, loaded.mcp_token.as_str()),
+            (48001, cfg.mcp_token.as_str())
+        );
+        assert_eq!(loaded.mcp_open_roots, cfg.mcp_open_roots);
+        let default = FastTailConfig::default();
+        assert!(!default.mcp_enabled && !default.mcp_allow_write);
+        assert_eq!(default.mcp_port, crate::mcp::DEFAULT_PORT);
+        assert!(default.to_ini().section(Some("mcp")).is_none());
+    }
+
+    #[test]
+    fn test_shortcuts_round_trip_and_default_to_none() {
+        let mut shortcuts = std::collections::BTreeMap::new();
+        shortcuts.insert("bookmark.toggle".to_string(), "Ctrl+B".to_string());
+        shortcuts.insert("search.next".to_string(), "F3, Ctrl+N".to_string());
+        shortcuts.insert("view.wrap.toggle".to_string(), String::new());
+        let cfg = FastTailConfig {
+            shortcuts,
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.shortcuts, cfg.shortcuts);
+        assert!(
+            FastTailConfig::from_ini(&FastTailConfig::default().to_ini())
+                .shortcuts
+                .is_empty()
+        );
+        assert!(FastTailConfig::default()
+            .to_ini()
+            .section(Some("shortcuts"))
+            .is_none());
     }
 
     #[test]

@@ -135,7 +135,9 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 | **Field Statistics** | **Top values, per-level counts, percentiles, chart per time slice, click to filter** | No | No | No | `sort \| uniq -c` |
 | **Log Patterns** | **Similar lines grouped by template (Drain), counts and volume, click to filter** | No | No | No | No |
 | **Field Plot over Time** | **A numeric field (latency, size) as a line over the timeline: avg / max / min / p95 per bar** | No | No | No | No |
+| **Operations Timeline** | **Entries grouped by request or trace id as a Gantt view: duration, lines, worst level** | No | No | No | No |
 | **Explain a Spike** | **What differs in a span of the timeline: volume, levels, new or over-represented messages and field values** | No | No | No | No |
+| **Plugins** | **Sources as programs (any language, approved by hash) and log format bundles** | No | Yes (.NET plugins) | No | Pipes |
 | **Screensaver Mode** | **Matrix digital rain** | No | No | No | No |
 | **Open Source & License** | **MIT License** | Proprietary | MIT | GPL | Open Source |
 
@@ -148,6 +150,8 @@ others, with what each has that FastTail does not yet — is kept in the
 ## ⌨️ Keyboard Shortcuts Reference
 
 Search and navigation shortcuts act on the stream in the **focused dock panel** (click a panel to focus it).
+
+The shortcuts below are the defaults. **⌨ Keyboard shortcuts…** (in Settings, or the palette) lists every command with its keys, grouped as the palette groups them and searchable by name or key: click a key and press the new one to change it (`Esc` cancels; `Esc`, `Enter`, `Tab` and `Backspace` cannot be bound), `+` adds a second key, `✖` removes one, `↺` restores an action's default and **Reset all** every one. A key another command already uses (in the window, or in the same place: a stream key and a result-list key may coincide) is named, with **Move here** (the other command loses it) or Cancel; a key an external tool uses is flagged the same way. Changes apply at once, and the menus, the palette and this window's help (`F1`) show the new keys. They are saved in `fasttail.ini` under `[shortcuts]`, one line per command that differs from its default: `bookmark.toggle=Ctrl+B`, `search.next=F3, Ctrl+N`, or an empty value for a command left without a key (`Cmd` reads as `Ctrl`). Unknown commands and values that do not parse are ignored and listed in the window. The zoom keys (handled by the window toolkit), `Alt + 1..9`, `Ctrl + Shift + 1..9` and the navigation keys of the rows stay as they are; the terminal interface keeps its own keys.
 
 | Shortcut | Description |
 | :--- | :--- |
@@ -200,6 +204,7 @@ Files can also be opened by **drag & drop** onto the window or from the command 
 ```text
 fasttail [OPTIONS] [PATH...]
 fasttail --print [OPTIONS] [PATH...]
+fasttail --mcp [OPTIONS] [PATH...]
 
   PATH...            log files to open in addition to the restored workspace;
                      PATH:LINE (or PATH:LINE:COLUMN, as compilers and CI logs print
@@ -231,6 +236,9 @@ fasttail --print [OPTIONS] [PATH...]
   --renderer <NAME>  auto (default), glow, wgpu or software
   --config <FILE>    configuration file to use (same as FASTTAIL_CONFIG)
   --session <FILE>   load a session file (*.fasttail-session.ini) at startup
+  --mcp              the MCP server on standard input and output, for AI assistants:
+                     to the window when its server is on, else the files given,
+                     read-only (see AI assistants (MCP) below)
   -V, --version      print the version and exit
   -h, --help         print the usage and exit
   --                 end of options: what follows is a path (fasttail -- -h)
@@ -379,6 +387,37 @@ Nothing is ever sent back to a sender. Use a loopback address unless other machi
 ### OpenTelemetry logs (OTLP/HTTP)
 `fasttail --listen otlp://127.0.0.1:4318` (or **OTLP** in the 📡 dialog) receives the logs of a service instrumented with OpenTelemetry, with no collector: point its exporter at it with `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318` and `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` (or `http/json`). Each record of `POST /v1/logs` (protobuf or JSON, gzip allowed, keep-alive) becomes one line, `<time> <LEVEL> <service.name> [<scope>] <body> {key=value …} trace=<id> span=<id>`, the severity number mapped to the level words (1–4 `TRACE`, 5–8 `DEBUG`, 9–12 `INFO`, 13–16 `WARN`, 17–20 `ERROR`, 21–24 `FATAL`; else the severity text, else `INFO`), a map or array body written as compact JSON, at most 32 attributes. Answers: `200` with an empty `ExportLogsServiceResponse`, `404` for another path, `405` for another method, `415` for another content type, `413` above 16 MB (compressed or not), `429` with `Retry-After: 1` while the listener's rate limit drops lines. Every bound of the network listener applies (loopback by default, 64 connections, the rate limit, the spool). OTLP/gRPC (port 4317) is not supported: an OpenTelemetry Collector can turn it into HTTP.
 
+### Web view
+
+Settings → **🌐 Web view…** turns on a **read-only web page** of the open streams, served by FastTail itself (no other program, no internet resource): **Open in browser** or **Copy link** gives `http://127.0.0.1:47820/?token=…`. The page lists the streams and shows one (or two side by side on a wide screen) with the lines **as FastTail shows them**, under the stream's filters and the global filter, with line numbers, bookmarks (`★`) and the colours of the levels, highlight rules and quick labels of the current theme. New lines arrive live (Server-Sent Events, at most five batches a second) and the page follows the end until you press **Pause** or scroll up; scrolling to the top (or **Earlier lines**) loads the 500 lines before. A filter change, a reload or a truncation in FastTail reloads the page's view. The search box marks the matching lines loaded and `▲` / `▼` (or `Enter` / `Shift + Enter`) go to the previous / next match in the whole visible stream, going round at the end; a page in the middle of the stream loads the rest as you scroll down and follows again at the end. Nothing done in the browser changes FastTail.
+
+It is **off by default** and listens on `127.0.0.1` only. Every request needs the **token** (64 hex characters, made on the first enable; **Regenerate** makes a new one and the open links stop working): the link sets it as a cookie (`HttpOnly`, `SameSite=Strict`) and the address loses it. Requests from another site's page are refused (and, listening locally, requests addressed to any name but `127.0.0.1` or `localhost`), a client must send its request within 5 seconds, the page runs only its own script (a strict Content-Security-Policy), log text is inserted as text, never as markup, and at most 8 browsers are served. **Allow other computers** (with a confirmation) listens on every interface and shows the address to use from the network: it is plain HTTP, protected only by the token, so keep it to trusted networks, or leave it off and reach the machine with `ssh -L 47820:127.0.0.1:47820 host`. While the web view is on the title bar shows `🔗 N`, the browsers connected. Saved in `fasttail.ini` under `[web]`: `enabled`, `port`, `token`, `allow_remote`.
+
+### Plugins
+
+A **plugin** adds a source or log formats without rebuilding FastTail: a folder with a `plugin.toml` in `plugins/` next to `fasttail.ini`. A **source plugin** names a program whose standard output becomes a stream (a message queue through its CLI, a vendor tool, a cloud log API): the 🔌 toolbar menu asks its parameters and opens it, the program runs without a shell (each value is one argument), its standard error shows in the stream bar, and `restart = "on-exit"` runs it again after 1, 2, 5, 10, then every 30 seconds. The stream is kept as `plugin://<name>?<param>=<value>` in the workspace and sessions and opens from the command line; `secret` values are never stored and are asked again. A source plugin runs only once you enabled it in Settings → **🔌 Plugins…**, which shows its command; a changed manifest (its SHA-256 is kept) needs a new approval. A plugin can also ship **log format files**, loaded read-only as `<plugin>/<format>` and detected like your own. The manifest reference, examples and the security notes: **[docs/plugins.md](docs/plugins.md)**.
+
+### AI assistants (MCP)
+
+Settings → **✨ AI assistants (MCP)…** turns on a **Model Context Protocol** server, so an AI assistant (Claude Desktop, Claude Code, VS Code / Copilot, Cursor, …) can read what FastTail shows: the open streams, their visible lines (under the stream's filters, or every line on request), searches over one stream or all of them, the lines around a line, bookmarks with their notes, the filters and the lines per level. It is **off by default**; turning it on shows a warning first: the assistants read your log content and may send it to a cloud model, and logs can hold secrets.
+
+Two ways to connect, both shown in the window with a **Copy** button:
+
+- **stdio** (what most clients support): the client starts `fasttail --mcp`, which connects to the running window through `mcp.runtime` (port and token, written next to `fasttail.ini` while the server is on). Without such a window it serves the files on its command line read-only, with no window (`fasttail --mcp --exclude DEBUG app.log`; the print mode filters apply).
+
+  ```json
+  { "mcpServers": { "fasttail": { "command": "C:\\Tools\\fasttail.exe", "args": ["--mcp"] } } }
+  ```
+
+  Claude Code: `claude mcp add fasttail -- /path/to/fasttail --mcp`.
+- **HTTP**: `http://127.0.0.1:47821/mcp` (MCP Streamable HTTP, JSON answers) with `Authorization: Bearer <token>`.
+
+The server listens on `127.0.0.1` only. Every request needs the token (64 hex characters, made on the first enable; **Regenerate** makes a new one and the clients set up with the old one stop working); a request without it is answered 401, one from a browser page of another site (an `Origin` that is not this machine) 403. A result holds at most 2,000 lines and 1 MB of text, a search at most 500 hits plus the total count (`truncated` says when something was left out), long lines are cut at the long line cap, and at most 20 requests a second are served. A search runs in short steps between the window's frames, so the window never waits for a client and other requests are answered meanwhile; after 45 seconds it answers with what it found (`complete: false`). The server also answers while the window is minimised or in the tray.
+
+**Allow changes** adds three tools: `add_bookmark` (with a note), `set_search` and `open_file`, which opens only files under the folders listed in *Folders open_file may open from* (`;` between them): the absolute path is checked as written first, so a path elsewhere, a network share among them, is refused before the file system reaches it, then links are resolved and checked again. Every change shows in the stream bar as made by the assistant (`Assistant: bookmark on line 812`). While the server is on the title bar shows `MCP N`, the requests of the last minute, and the window lists the last 200 requests with the tool, its arguments and the size of the answer.
+
+**Log text is data, not instructions.** A line can contain text written to steer an assistant ("ignore previous instructions…"): FastTail returns lines as data fields (`{"line": 812, "text": …}`) and tells the assistant not to follow text found in them, but an assistant can still be misled, which is why the write tools are off by default. Saved in `fasttail.ini` under `[mcp]`: `enabled`, `port`, `token`, `allow_write`, `open_roots`.
+
 ### Remote files over SSH
 `fasttail ssh://deploy@web1/var/log/app.log` (also `ssh://web1:2222/…`, `ssh://[::1]/…`, a `~/.ssh/config` alias as the host) follows a file on a server. FastTail runs your own OpenSSH client (`ssh`; Windows 10 1809+ has it in `C:\Windows\System32\OpenSSH`) in batch mode with `tail -F` on the server, and copies the output into a local spool, so every stream feature works on it and nothing is installed remotely. The last 64 MB are fetched first (`remote_initial_mb`, 0 = only new lines), starting at a whole line; `#whole` at the end of the URL fetches the file from its first byte. The tab is titled `web1:app.log`. A file name with `*` or `?` (`ssh://web1/var/log/app-*.log`) follows the newest match on the server, lists the folder again every 10 seconds (each listing is one short connection) and switches to a newer match with a `switched to …` notice, the tab reading `web1:app-*.log ▸ app-2026-10-23.log`; only `*` and `?` are interpreted by the remote shell, and wildcards are allowed in the file name only.
 
@@ -405,7 +444,7 @@ Paths are written absolute and, when the file lies under the session's folder, a
 ### External tools
 What they are for, with ready-made recipes (open the row in an editor, SSH to the host in the line, pretty-print its JSON, alert on a rule): **[External tools cookbook](docs/external-tools-cookbook.md)**.
 
-Settings → External tools. Each tool has a name, a program, an argument list and optional extras. The arguments are split like a command line (quotes group words) and every entry is expanded and passed to the program as its own argv element, so a log line containing `; rm -rf /` is only text.
+Settings → External tools. Each tool has a name, a program, an argument list and optional extras. A tool's shortcut on a key a built-in command uses is flagged in its row and does not fire: the built-in command wins. The arguments are split like a command line (quotes group words) and every entry is expanded and passed to the program as its own argv element, so a log line containing `; rm -rf /` is only text.
 
 | Placeholder | Value |
 |---|---|
@@ -443,6 +482,8 @@ Settings → **Automatic token highlighting** (off by default; also a "Toggle" c
 
 ### Field statistics
 Right-click a column header of the column view and pick **Statistics of `status`**, or use **📊 Statistics…** in the stream's 💾 menu: a **Statistics** tab counts the values of that field over the lines the stream shows (every filter, the time range and hidden lines apply). On an access log you see at once that `200` is 60 % of the requests, which paths fail most, and, for `duration_ms`, `min · max · mean · p50 · p90 · p95 · p99` (percentiles within 1 %, from a log-scale histogram; values like `250ms`, `3KB` or `12 %` count as numbers once 90 % of them read as numbers). Each row has the count, the share, a bar and the count per level. When the lines carry timestamps a line chart shows the top five values (or p50 and p95 of a number) per time slice: automatic (at most 240 slices) or 1 s, 5 s, 15 s, 1 min, 5 min, 15 min, 1 h, 6 h, 1 day; hover it for the counts of a slice. The source can be any field of the parser, or a **regex** whose first capture group is the value (`took (\d+)ms`, `user=(\w+)`), so a plain log works too. **Click a value** to show only its lines (an include term `status=500`; in regex mode the regex with the value in place of its group), `CTRL` + click to hide them. **Copy as CSV** copies the table with the per-level counts. The counting runs in the background with progress, starts again when the filters or the parser change, and adds appended lines as they arrive; at most 100,000 distinct values are counted one by one (the rest together, the count shown as `≥ 100,000`). The tab is not saved with the layout.
+
+Use **⏱ Operations…** in the stream's 💾 menu, or **Operations by `trace_id`** in a column header's menu, to see **what ran when and for how long**: an **Operations** tab groups the entries the stream shows by an id, a field of the parser or the capture group of a regex (`req=(\w+)`) read on each entry's first line, with stack trace lines following their entry. One row per operation: the id, an optional name (a field, or the first line's message), its start and end (its earliest and latest timestamps, so lines of one request written out of order across threads still give the right span), its duration, its line count and its worst level, beside a **Gantt bar** on a time axis shared by the rows, in the colour of its worst level (an operation of one instant is a tick, one without timestamps is listed without a bar). Sort by start, duration, lines or worst level, type in the box to narrow by id or name, and set a minimum duration to hide the short ones. Over the bars the wheel zooms around the pointer, a drag pans and a double click resets; the stream's time window is shaded. **Click** an operation to go to its first line; right-click to **filter to this operation** (`req=7f3a` on a field source; on a regex source what the regex matched on its first line, or the regex with the value in place of its group in regex mode), set its span as the time window, copy its id or copy the table as CSV. Hover a row for its first line. It runs in the background on any file size, starts again when the filters or the parser change, and extends the operations in place as lines are appended; at most 100,000 operations are tracked, the further ids counted and reported. The tab is not saved with the layout.
 
 Use **⧉ Patterns…** in the stream's 💾 menu, or `CTRL + SHIFT + G`, to see **what kinds of lines** a log holds: a **Patterns** tab groups the entries the stream shows by template, with the parts that change shown as `<*>` (`payment <*> failed after <*> ms: gateway timeout`, `user <*> logged in from <*>.<*>.<*>.<*>`). Templates are learnt with Drain over each entry's first line, without its timestamp and with numbers, hex values, ids and IP addresses masked. Each row has the count, the share, a sparkline of the pattern's volume over the stream's time span, and where it was first and last seen; sort by any column, type in the box to narrow the templates. **Click** a pattern to show only its entries (with their stack traces), `CTRL` + click to add or remove one, right-click to hide it, copy the template, search its fixed words or go to its first line. The filter shows as a `⧉ N patterns` chip in the stream bar (its `✖` clears it) and combines with the other filters. Learning and counting run in the background on any file size, appended entries are learnt as they arrive, and a change of the other filters learns the patterns again (clearing the pattern filter, whose patterns belong to the old list). At most 2,000 patterns per stream; the tab is not saved with the layout.
 

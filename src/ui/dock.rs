@@ -62,6 +62,8 @@ pub enum FastTailTab {
     Compare,
     /// Statistics of a field of a stream (`ui::stats_tab`); never saved.
     Statistics(PathBuf),
+    /// Operations of a stream as a Gantt view (`ui::operations_tab`); never saved.
+    Operations(PathBuf),
     /// Queries over a stream (`ui::query_tab`); never saved.
     Query(PathBuf),
     /// The patterns of a stream (`ui::patterns_tab`); never saved.
@@ -397,6 +399,14 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                 .monospace()
                 .strong(),
             ),
+            FastTailTab::Operations(path) => WidgetText::from(
+                RichText::new(crate::ui::operations_tab::title(
+                    find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
+                    *self.ctx.language,
+                ))
+                .monospace()
+                .strong(),
+            ),
             FastTailTab::Statistics(path) => WidgetText::from(
                 RichText::new(crate::ui::stats_tab::title(
                     find_engine_index(self.ctx.engines, path).map(|i| &self.ctx.engines[i]),
@@ -556,6 +566,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
                 crate::ui::stats_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
             }
+            FastTailTab::Operations(path) => {
+                let engine =
+                    find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
+                crate::ui::operations_tab::render(ui, engine, self.ctx.theme, *self.ctx.language);
+            }
             FastTailTab::Patterns(path) => {
                 let engine =
                     find_engine_index(self.ctx.engines, path).map(|i| &mut self.ctx.engines[i]);
@@ -653,6 +668,11 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
             FastTailTab::Statistics(path) => {
                 if let Some(i) = find_engine_index(self.ctx.engines, path) {
                     self.ctx.engines[i].close_stats();
+                }
+            }
+            FastTailTab::Operations(path) => {
+                if let Some(i) = find_engine_index(self.ctx.engines, path) {
+                    self.ctx.engines[i].close_operations();
                 }
             }
             FastTailTab::Query(path) => {
@@ -1517,6 +1537,86 @@ fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
     }
 }
 
+/// Stream bar part of a source plugin stream: running, restarting, ended (its standard
+/// error in the tooltip, its last line shown) or why it does not run, and Start.
+fn render_plugin_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
+    use crate::plugin_source::{Block, Status};
+    let Some(s) = engine.plugin.as_mut() else {
+        return;
+    };
+    ui.separator();
+    let name = s.uri.name.clone();
+    let status = s.status();
+    let (icon, text) = match status {
+        Status::Running => ("▶", t(lang, "plug_status_running").to_string()),
+        Status::Restarting { attempt, .. } => (
+            "⟳",
+            t(lang, "plug_status_restarting").replace("{0}", &attempt.to_string()),
+        ),
+        Status::Ended(Some(code)) => (
+            "⏹",
+            t(lang, "plug_status_ended").replace("{0}", &code.to_string()),
+        ),
+        Status::Ended(None) => ("⏹", t(lang, "plug_status_ended_plain").to_string()),
+        Status::Failed => (
+            "⚠",
+            t(lang, "plug_status_failed").replace("{0}", s.error.as_deref().unwrap_or("")),
+        ),
+        Status::Blocked(block) => {
+            let key = match block {
+                Block::Missing => "plug_status_missing",
+                Block::NotEnabled => "plug_status_disabled",
+                Block::Changed => "plug_status_changed",
+                Block::NeedsValues => "plug_status_values",
+            };
+            ("⚠", t(lang, key).replace("{0}", &name))
+        }
+    };
+    let color = if status == Status::Running {
+        theme.text_dim()
+    } else {
+        theme.warn_color()
+    };
+    let label = ui.label(
+        RichText::new(format!("🔌 {icon} {text}"))
+            .monospace()
+            .color(color),
+    );
+    let stderr = s.stderr_tail();
+    let failed =
+        matches!(status, Status::Ended(code) if code != Some(0)) || status == Status::Failed;
+    if !stderr.trim().is_empty() {
+        label.on_hover_text(stderr.trim_end());
+        if failed {
+            let last: String = stderr
+                .trim_end()
+                .lines()
+                .last()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect();
+            ui.label(RichText::new(last).monospace().color(theme.warn_color()));
+        }
+    }
+    match status {
+        Status::Running => {}
+        Status::Restarting { .. } => ui
+            .ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500)),
+        _ => {
+            if ui
+                .button(format!("▶ {}", t(lang, "plug_start")))
+                .on_hover_text(t(lang, "plug_start_tip"))
+                .clicked()
+            {
+                s.start_requested = true;
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+}
+
 /// Stream bar part of a system source once its command ended: the exit code and the
 /// last line it wrote, and Reconnect.
 fn render_system_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Language) {
@@ -1624,6 +1724,7 @@ fn scan_kind_key(kind: crate::scan_job::ScanKind) -> &'static str {
         crate::scan_job::ScanKind::Patterns => "scan_patterns",
         crate::scan_job::ScanKind::Explain => "scan_explain",
         crate::scan_job::ScanKind::Plot => "scan_plot",
+        crate::scan_job::ScanKind::Operations => "scan_operations",
     }
 }
 
@@ -2294,6 +2395,7 @@ fn render_log_stream(
         render_compressed_status(ui, engine, theme, lang);
         render_stdin_status(ui, engine, theme, lang);
         render_system_status(ui, engine, theme, lang);
+        render_plugin_status(ui, engine, theme, lang);
         render_ssh_status(ui, engine, theme, lang);
         render_listener_status(ui, engine, theme, lang);
         render_debug_status(ui, engine, theme, lang);
@@ -3030,6 +3132,14 @@ fn render_log_stream(
                 .clicked()
             {
                 engine.stats_request = Some(None);
+                ui.close();
+            }
+            if ui
+                .button(RichText::new(format!("⏱ {}", t(lang, "ops_open"))).monospace())
+                .on_hover_text(t(lang, "ops_open_tip"))
+                .clicked()
+            {
+                engine.ops_request = Some(None);
                 ui.close();
             }
             if ui
@@ -5121,6 +5231,8 @@ enum HeaderAction {
     Reset,
     /// Statistics of this field.
     Stats(String),
+    /// Operations grouped by this field.
+    Operations(String),
     /// Plot this field over the timeline.
     Plot(String),
 }
@@ -5258,6 +5370,7 @@ fn render_field_header(
         Some(HeaderAction::Width(key, cells)) => engine.set_field_width(&key, cells),
         Some(HeaderAction::Reset) => engine.reset_field_columns(),
         Some(HeaderAction::Stats(key)) => engine.stats_request = Some(Some(key)),
+        Some(HeaderAction::Operations(key)) => engine.ops_request = Some(Some(key)),
         Some(HeaderAction::Plot(key)) => {
             if engine.add_plot(&key) && !engine.timeline_open {
                 // Plotted over the histogram: it opens with it.
@@ -5323,6 +5436,16 @@ fn header_menu(
             .clicked()
         {
             action = Some(HeaderAction::Stats(keys[i].clone()));
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "⏱ {}",
+                t(lang, "ops_by_field").replace("{0}", &keys[i])
+            ))
+            .clicked()
+        {
+            action = Some(HeaderAction::Operations(keys[i].clone()));
             ui.close();
         }
         let plotted = engine.plots().iter().any(|p| p.key == keys[i]);
@@ -6230,7 +6353,13 @@ fn row_context_menu(
     click.context_menu(|ui| {
         ui.set_min_width(160.0);
         if ui
-            .button(RichText::new(format!("{}  (CTRL + C)", t(lang, "copy_rows"))).monospace())
+            .button(
+                RichText::new(crate::ui::keys::with_key(
+                    t(lang, "copy_rows"),
+                    crate::actions::ActionId::Copy,
+                ))
+                .monospace(),
+            )
             .clicked()
         {
             picks.copy = Some((line, false));
@@ -6259,8 +6388,14 @@ fn row_context_menu(
         }
         if ui
             .button(
-                RichText::new(format!("🗒 {}  (CTRL + SHIFT + N)", t(lang, "scratch_send")))
-                    .monospace(),
+                RichText::new(format!(
+                    "🗒 {}",
+                    crate::ui::keys::with_key(
+                        t(lang, "scratch_send"),
+                        crate::actions::ActionId::ScratchpadSend
+                    )
+                ))
+                .monospace(),
             )
             .clicked()
         {
@@ -6372,7 +6507,14 @@ fn row_context_menu(
         }
         if !rules.is_empty() {
             ui.menu_button(
-                RichText::new(format!("⇣ {}  (F4)", t(lang, "rule_next_menu"))).monospace(),
+                RichText::new(format!(
+                    "⇣ {}",
+                    crate::ui::keys::with_key(
+                        t(lang, "rule_next_menu"),
+                        crate::actions::ActionId::RuleNext
+                    )
+                ))
+                .monospace(),
                 |ui| {
                     for (index, pattern) in rules {
                         let current = engine.rule_cursor() == Some(index);
@@ -6397,8 +6539,14 @@ fn row_context_menu(
         if bookmarked
             && ui
                 .button(
-                    RichText::new(format!("☆ {}  (CTRL + F2)", t(lang, "bookmark_remove")))
-                        .monospace(),
+                    RichText::new(format!(
+                        "☆ {}",
+                        crate::ui::keys::with_key(
+                            t(lang, "bookmark_remove"),
+                            crate::actions::ActionId::BookmarkToggle
+                        )
+                    ))
+                    .monospace(),
                 )
                 .clicked()
         {
@@ -6422,7 +6570,14 @@ fn row_context_menu(
         if engine.context_line().is_none()
             && ui
                 .button(
-                    RichText::new(format!("🙈 {}  (CTRL + H)", t(lang, "hide_lines"))).monospace(),
+                    RichText::new(format!(
+                        "🙈 {}",
+                        crate::ui::keys::with_key(
+                            t(lang, "hide_lines"),
+                            crate::actions::ActionId::HideLines
+                        )
+                    ))
+                    .monospace(),
                 )
                 .on_hover_text(t(lang, "hide_lines_tip"))
                 .clicked()
@@ -6441,7 +6596,14 @@ fn row_context_menu(
         if filtered {
             if ui
                 .button(
-                    RichText::new(format!("◆ {}  (CTRL + K)", t(lang, "context_show"))).monospace(),
+                    RichText::new(format!(
+                        "◆ {}",
+                        crate::ui::keys::with_key(
+                            t(lang, "context_show"),
+                            crate::actions::ActionId::ShowContext
+                        )
+                    ))
+                    .monospace(),
                 )
                 .clicked()
             {
@@ -9790,6 +9952,20 @@ fn render_external_tools_editor(
                                 RichText::new(t(lang, "ext_tool_bad_shortcut"))
                                     .small()
                                     .color(warn),
+                            );
+                        }
+                        // A built-in shortcut on the same key wins: the tool does not fire.
+                        if let Some(id) = tool
+                            .parsed_shortcut()
+                            .and_then(crate::ui::keys::built_in_holder)
+                        {
+                            ui.label(
+                                RichText::new(
+                                    t(lang, "keys_tool_conflict")
+                                        .replace("{0}", t(lang, crate::actions::get(id).name)),
+                                )
+                                .small()
+                                .color(warn),
                             );
                         }
                     });

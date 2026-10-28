@@ -50,6 +50,12 @@ mod win_util {
     pub const SW_RESTORE: i32 = 9;
 }
 
+/// What the key map is built from: `[shortcuts]` and the tools' shortcuts.
+type KeymapInputs = (
+    std::collections::BTreeMap<String, String>,
+    Vec<Option<String>>,
+);
+
 pub struct FastTailApp {
     pub config: FastTailConfig,
     pub engines: Vec<TailEngine>,
@@ -191,6 +197,19 @@ pub struct FastTailApp {
     /// this frame (see `DockContext::palette_action`); kept for a few frames when that
     /// stream is not drawn, with the frames left.
     palette_action: Option<crate::actions::PendingAction>,
+    /// The keyboard shortcuts (`keymap`), built from `[shortcuts]` and the tools'
+    /// shortcuts; rebuilt when they change (`refresh_keymap`).
+    pub keymap: crate::keymap::KeyMap,
+    /// What `keymap` was built from (`None` before the first build).
+    keymap_inputs: Option<KeymapInputs>,
+    /// The Keyboard shortcuts window (`ui::shortcuts_dialog`).
+    shortcuts_dialog: crate::ui::shortcuts_dialog::ShortcutsDialog,
+    /// The web view server and its settings window (`ui::web_view`).
+    web_view: crate::ui::web_view::WebView,
+    /// The MCP server for AI assistants and its settings window (`ui::mcp_view`).
+    pub mcp_view: crate::ui::mcp_view::McpView,
+    /// The plugins menu, parameter window and settings (`ui::plugins_view`).
+    pub plugins_view: crate::ui::plugins_view::PluginsView,
 }
 
 /// Frame rate the mouse-move throttle targets on a software rasterizer: WARP rasterizes
@@ -669,6 +688,12 @@ impl FastTailApp {
             global_key: None,
             palette: Default::default(),
             palette_action: None,
+            keymap: crate::keymap::KeyMap::default(),
+            keymap_inputs: None,
+            shortcuts_dialog: Default::default(),
+            web_view: Default::default(),
+            mcp_view: Default::default(),
+            plugins_view: Default::default(),
         };
         app.global_key = app.config.global_filter.applied_key();
         app.global_spec = app.config.global_filter.compile();
@@ -1322,6 +1347,7 @@ impl FastTailApp {
 
     /// Opens the Log formats dialog a row menu asked for, with the lines picked.
     fn apply_format_requests(&mut self) {
+        self.apply_plugin_requests();
         let commands = self.config.system_commands();
         let lang = self.config.language;
         for engine in &mut self.engines {
@@ -1483,6 +1509,33 @@ impl FastTailApp {
         }
         let path = engine.path.clone();
         crate::ui::stats_tab::open_tab(&mut self.dock_state, &path);
+        true
+    }
+
+    /// Opens the Operations tab a stream asked for: by a field, or of the stream (its
+    /// first field, or the regex picker without a parser). Returns whether one opened.
+    pub fn apply_ops_requests(&mut self) -> bool {
+        let Some(idx) = self.engines.iter().position(|e| e.ops_request.is_some()) else {
+            return false;
+        };
+        let engine = &mut self.engines[idx];
+        let wanted = engine.ops_request.take().flatten();
+        let key = wanted.or_else(|| {
+            if engine.operations.is_some() {
+                None
+            } else {
+                engine.field_catalogue().keys().first().cloned()
+            }
+        });
+        if let Some(key) = key {
+            let name = engine
+                .operations
+                .as_ref()
+                .map_or(crate::operations::NameSource::None, |o| o.name.clone());
+            engine.open_operations(crate::field_stats::StatsSource::Field(key), name);
+        }
+        let path = engine.path.clone();
+        crate::ui::operations_tab::open_tab(&mut self.dock_state, &path);
         true
     }
 
@@ -2305,7 +2358,8 @@ impl FastTailApp {
                 continue;
             }
             self.open_log_file(path.clone());
-            self.apply_cli_to(path, cli);
+            // A plugin stream is kept under its stored identity (no secrets).
+            self.apply_cli_to(&crate::plugins::stored_path(path), cli);
         }
     }
 
@@ -2545,6 +2599,112 @@ impl FastTailApp {
         format!("{}: {reason}", path.display())
     }
 
+    /// Opens the source plugin `name` with `values`: a new stream, or the stream of the
+    /// same identity started again (the secrets, which the identity leaves out, given).
+    pub fn open_plugin(&mut self, name: &str, values: std::collections::BTreeMap<String, String>) {
+        // The manifests as they are now: one changed since the menu was built is refused.
+        self.plugins_view.refresh();
+        let catalog = self.plugins_view.catalog().clone();
+        let plugin = catalog.find(name);
+        let uri = crate::plugins::PluginUri {
+            name: name.to_string(),
+            values: values.clone(),
+        };
+        let path = PathBuf::from(uri.to_uri(plugin));
+        self.open_log_file(path.clone());
+        let config_dir = crate::config::FastTailConfig::config_path()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let lang = self.config.language;
+        if let Some(engine) = self.engines.iter_mut().find(|e| e.path == path) {
+            if let Some(s) = engine.plugin.as_mut() {
+                if s.status() != crate::plugin_source::Status::Running
+                    && s.start(plugin, &self.config.plugins, Some(values), &config_dir)
+                        .is_err()
+                {
+                    engine.view_notice = Some(t(lang, "plug_status_values").to_string());
+                }
+            }
+        }
+    }
+
+    /// After a change of the approvals: the streams of a plugin no longer enabled stop
+    /// and say why (a running program is ended, a restart does not come).
+    fn block_unapproved_plugins(&mut self) {
+        use crate::plugin_source::{Block, Status};
+        let catalog = self.plugins_view.catalog().clone();
+        for s in self.engines.iter_mut().filter_map(|e| e.plugin.as_mut()) {
+            if !matches!(s.status(), Status::Running | Status::Restarting { .. }) {
+                continue;
+            }
+            let block = match catalog
+                .find(&s.uri.name)
+                .map(|p| self.config.plugins.state(p))
+            {
+                Some(crate::plugins::State::Enabled) => continue,
+                Some(crate::plugins::State::Changed) => Block::Changed,
+                Some(crate::plugins::State::Disabled) => Block::NotEnabled,
+                None => Block::Missing,
+            };
+            s.block(block);
+        }
+    }
+
+    /// The stream bar's Start of plugin streams: the values asked when some are missing,
+    /// the Plugins settings when the plugin is missing or not approved, else a new run.
+    fn apply_plugin_requests(&mut self) {
+        let asked: Vec<crate::plugins::PluginUri> = self
+            .engines
+            .iter_mut()
+            .filter_map(|e| e.plugin.as_mut())
+            .filter_map(|s| std::mem::take(&mut s.start_requested).then(|| s.uri.clone()))
+            .collect();
+        if asked.is_empty() {
+            return;
+        }
+        self.plugins_view.reload(&self.config);
+        let catalog = self.plugins_view.catalog().clone();
+        let config_dir = crate::config::FastTailConfig::config_path()
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        for uri in asked {
+            use crate::plugin_source::Block;
+            let plugin = catalog.find(&uri.name);
+            match crate::plugin_source::block_of(plugin, &self.config.plugins, &uri) {
+                Some(Block::NeedsValues) => self.plugins_view.ask(&uri.name, &uri.values),
+                Some(_) => self.plugins_view.open = true,
+                None => {
+                    if let Some(s) = self
+                        .engines
+                        .iter_mut()
+                        .filter_map(|e| e.plugin.as_mut())
+                        .find(|s| s.uri == uri)
+                    {
+                        let _ = s.start(plugin, &self.config.plugins, None, &config_dir);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Answers the MCP requests waiting and opens the files `open_file` asked for.
+    pub fn serve_mcp(&mut self) {
+        let opens = self.mcp_view.serve(&mut self.engines, &self.config);
+        let lang = self.config.language;
+        for path in opens {
+            self.open_log_file(path.clone());
+            if let Some(engine) = self
+                .engines
+                .iter_mut()
+                .find(|e| paths_equal(&e.path, &path))
+            {
+                engine.view_notice = Some(t(lang, "mcp_notice_open").to_string());
+            }
+        }
+    }
+
     pub fn open_log_file(&mut self, path: PathBuf) {
         if let Some(opened) = self.attach_stream(path, false) {
             self.add_stream_tab(opened);
@@ -2763,9 +2923,10 @@ impl FastTailApp {
             return None;
         }
 
-        // Avoid duplicate tabs for same path
+        // Avoid duplicate tabs for same path (a plugin URI in its stored form)
+        let key = crate::plugins::stored_path(&path);
         for eng in &self.engines {
-            if eng.path == path || paths_equal(&eng.path, &path) {
+            if eng.path == key || paths_equal(&eng.path, &key) {
                 // Already open, select tab
                 let tab = FastTailTab::LogStream(eng.path.clone());
                 if let (Some(locator), false) = (self.dock_state.find_tab(&tab), quiet) {
@@ -2830,6 +2991,13 @@ impl FastTailApp {
                 self.open_notice = Some(format!("{}: {reason}", archive.display()));
                 return None;
             }
+        };
+        // A plugin stream is kept, listed and shown under its stored identity, never the
+        // path it was opened with (which may hold a secret).
+        let path = if engine.plugin.is_some() {
+            engine.path.clone()
+        } else {
+            path
         };
         crate::workspace::apply_settings(&mut engine, &self.config);
         engine.set_quick_labels(&self.quick_labels);
@@ -2906,6 +3074,21 @@ impl FastTailApp {
         }
         self.run_rule_bound_tools();
         self.run_notifications(ctx);
+        // The web view and the MCP server answer while the window shows nothing too.
+        self.web_view
+            .sync(&mut self.config, || Self::make_wake(ctx));
+        self.web_view.serve(
+            &self.engines,
+            &self.config.theme,
+            self.config.level_colors,
+            self.config.language,
+        );
+        self.mcp_view
+            .sync(&mut self.config, || Self::make_wake(ctx));
+        self.serve_mcp();
+        if self.mcp_view.busy() {
+            ctx.request_repaint();
+        }
         let alert = self.engines.iter().any(|e| e.unseen_severity >= 2);
         if self.config.flash_on_alert && alert && !self.attention_requested {
             self.attention_requested = true;
@@ -2977,6 +3160,36 @@ impl FastTailApp {
         // input, so that while it is open the keyboard is its own; what it picks runs
         // now, a stream action when that stream is drawn below.
         self.render_palette(&ctx);
+
+        // 0c. Remapped shortcuts (`[shortcuts]`): a key given to an action runs it as the
+        // palette does; a default key whose action moved away fires nothing. Before every
+        // handler, so the handlers never see those keys.
+        self.refresh_keymap();
+        // 0d. The web view: the server follows the settings, its requests are answered
+        // from the streams as they are now.
+        self.web_view
+            .sync(&mut self.config, || Self::make_wake(&ctx));
+        self.web_view.serve(
+            &self.engines,
+            &self.config.theme,
+            self.config.level_colors,
+            self.config.language,
+        );
+        // 0e. The MCP server: as the web view, a long search in steps over the frames;
+        // the files `open_file` asked for open now, marked as opened by the assistant.
+        self.mcp_view
+            .sync(&mut self.config, || Self::make_wake(&ctx));
+        self.serve_mcp();
+        if self.mcp_view.busy() {
+            ctx.request_repaint();
+        }
+        self.shortcuts_dialog.capture(&ctx);
+        if !self.locked && !self.palette.is_open() && !self.shortcuts_dialog.recording() {
+            for id in crate::ui::keys::take_remapped(&ctx, &self.keymap) {
+                let target = self.focused_stream_path();
+                self.run_action(&ctx, crate::actions::get(id), target);
+            }
+        }
 
         // 1. Detect user activity to reset screensaver & handle window closing and viewport bounds
         let mut escape_pressed = false;
@@ -3389,6 +3602,48 @@ impl FastTailApp {
                             self.palette.toggle(&ctx, target);
                         }
 
+                        // Web view: while it is on, the browsers connected (click: its
+                        // settings).
+                        if let Some(n) = self.web_view.connections() {
+                            let color = if n > 0 {
+                                self.config.theme.accent_color()
+                            } else {
+                                self.config.theme.text_dim()
+                            };
+                            if ui
+                                .button(RichText::new(format!(" 🔗 {n} ")).monospace().color(color))
+                                .on_hover_text(
+                                    t(self.config.language, "web_indicator_tip")
+                                        .replace("{0}", &n.to_string()),
+                                )
+                                .clicked()
+                            {
+                                self.web_view.open = true;
+                            }
+                        }
+
+                        // MCP server: while it is on, the requests of the last minute
+                        // (click: its settings).
+                        if let Some(n) = self.mcp_view.requests_last_minute() {
+                            let color = if n > 0 {
+                                self.config.theme.accent_color()
+                            } else {
+                                self.config.theme.text_dim()
+                            };
+                            if ui
+                                .button(
+                                    RichText::new(format!(" MCP {n} ")).monospace().color(color),
+                                )
+                                .on_hover_text(
+                                    t(self.config.language, "mcp_indicator_tip")
+                                        .replace("{0}", &n.to_string()),
+                                )
+                                .clicked()
+                            {
+                                self.mcp_view.open = true;
+                            }
+                        }
+
                         // Global filter bar (CTRL + SHIFT + H); lit while the filter applies.
                         let globe_color = if self.config.global_filter.is_applied() {
                             self.config.theme.accent_color()
@@ -3689,6 +3944,26 @@ impl FastTailApp {
                         .clicked()
                     {
                         self.remote_dialog = Some(Default::default());
+                    }
+
+                    // Plugins: the enabled source plugins, and their settings.
+                    let plugin_btn =
+                        egui::Button::new(RichText::new("🔌").monospace().strong().color(text_pri))
+                            .fill(self.config.theme.button_bg())
+                            .stroke(Stroke::new(1.2, accent))
+                            .corner_radius(CornerRadius::same(6))
+                            .min_size(egui::vec2(30.0, 26.0));
+                    let mut plugin_to_open = None;
+                    let theme_now = self.config.theme;
+                    let plugin_menu =
+                        egui::menu::MenuButton::from_button(plugin_btn).ui(ui, |ui| {
+                            plugin_to_open = self.plugins_view.menu(ui, &self.config, &theme_now);
+                        });
+                    let _ = plugin_menu
+                        .0
+                        .on_hover_text(t(self.config.language, "plug_menu_tip"));
+                    if let Some((name, values)) = plugin_to_open {
+                        self.open_plugin(&name, values);
                     }
 
                     // Listen: lines received on a local port.
@@ -4245,6 +4520,10 @@ impl FastTailApp {
                 .iter()
                 .enumerate()
                 .find_map(|(n, tool)| {
+                    // A tool on a built-in key does not fire: the built-in wins.
+                    if self.keymap.tool_conflicts.contains(&n) {
+                        return None;
+                    }
                     let sc = tool.parsed_shortcut()?;
                     let (mods, key) = crate::ui::keys::egui_shortcut(sc);
                     i.consume_key(mods, key).then_some(n)
@@ -4544,6 +4823,9 @@ impl FastTailApp {
         if self.apply_stats_requests() {
             ctx.request_repaint();
         }
+        if self.apply_ops_requests() {
+            ctx.request_repaint();
+        }
         if self.apply_query_requests() {
             ctx.request_repaint();
         }
@@ -4795,6 +5077,40 @@ impl FastTailApp {
             }
         }
 
+        // 8b. Keyboard shortcuts window: a change rebuilds the key map next frame.
+        let theme_now = self.config.theme;
+        if self
+            .shortcuts_dialog
+            .show(&ctx, &mut self.config, &self.keymap, &theme_now)
+        {
+            let _ = self.config.save();
+        }
+        if self
+            .web_view
+            .show_settings(&ctx, &mut self.config, &theme_now)
+        {
+            let _ = self.config.save();
+        }
+        if self
+            .mcp_view
+            .show_settings(&ctx, &mut self.config, &theme_now)
+        {
+            let _ = self.config.save();
+        }
+        if self
+            .plugins_view
+            .show_settings(&ctx, &mut self.config, &theme_now)
+        {
+            let _ = self.config.save();
+            self.block_unapproved_plugins();
+        }
+        if let Some((name, values)) = self
+            .plugins_view
+            .show_dialog(&ctx, &self.config, &theme_now)
+        {
+            self.open_plugin(&name, values);
+        }
+
         // 9. Render Settings Dialog if open (Popup modal)
         if self.config.settings_open {
             let mut is_open = true;
@@ -4874,6 +5190,31 @@ impl FastTailApp {
                             .clicked()
                         {
                             open_formats = true;
+                        }
+                        // Keyboard shortcuts and the web view: their own windows.
+                        if ui
+                            .button(format!("⌨ {}", t(self.config.language, "keys_open")))
+                            .clicked()
+                        {
+                            self.shortcuts_dialog.open = true;
+                        }
+                        if ui
+                            .button(format!("🌐 {}", t(self.config.language, "web_open")))
+                            .clicked()
+                        {
+                            self.web_view.open = true;
+                        }
+                        if ui
+                            .button(format!("✨ {}", t(self.config.language, "mcp_open")))
+                            .clicked()
+                        {
+                            self.mcp_view.open = true;
+                        }
+                        if ui
+                            .button(format!("🔌 {}", t(self.config.language, "plug_open")))
+                            .clicked()
+                        {
+                            self.plugins_view.open = true;
                         }
 
                         // Rendering backend: applies at the next start.
@@ -5786,6 +6127,15 @@ impl FastTailApp {
             let mut is_open = true;
             let theme = self.config.theme;
             let lang = self.config.language;
+            // The keys as the key map has them: a rebound action shows its new key.
+            use crate::actions::ActionId as A;
+            let km = self.keymap.clone();
+            let keys = |ids: &[crate::actions::ActionId]| -> String {
+                ids.iter()
+                    .map(|id| km.label(*id).unwrap_or_else(|| "—".to_string()))
+                    .collect::<Vec<_>>()
+                    .join("  /  ")
+            };
 
             let win = egui::Window::new(
                 RichText::new(format!("❓ {}", t(lang, "shortcuts_title")))
@@ -5898,28 +6248,32 @@ impl FastTailApp {
                                     ui.label(RichText::new(t(lang, "help_desc_space")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + F").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::SearchFocus])).monospace().strong(),
+                                    );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_search")).monospace(),
                                     );
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + F").monospace().strong(),
+                                        RichText::new(keys(&[A::FindAll])).monospace().strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_find_all")).monospace(),
                                     );
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + K").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::ShowContext])).monospace().strong(),
+                                    );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_context")).monospace(),
                                     );
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + G").monospace().strong(),
+                                        RichText::new(keys(&[A::Patterns])).monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "act_patterns")).monospace());
                                     ui.end_row();
@@ -5935,7 +6289,9 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + H").monospace().strong(),
+                                        RichText::new(keys(&[A::GlobalFilterBar]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_global_filter"))
@@ -5944,7 +6300,7 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + D").monospace().strong(),
+                                        RichText::new(keys(&[A::Collapse])).monospace().strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_collapse")).monospace(),
@@ -5959,7 +6315,9 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("F3  /  SHIFT + F3").monospace().strong(),
+                                        RichText::new(keys(&[A::SearchNext, A::SearchPrev]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_find_next")).monospace(),
@@ -5977,16 +6335,20 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + A  /  CTRL + C").monospace().strong(),
+                                        RichText::new(keys(&[A::SelectAll, A::Copy]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "help_desc_copy")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + G").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::GoToLine])).monospace().strong(),
+                                    );
                                     ui.label(RichText::new(t(lang, "help_desc_goto")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("ALT + W").monospace().strong());
+                                    ui.label(RichText::new(keys(&[A::Wrap])).monospace().strong());
                                     ui.label(RichText::new(t(lang, "help_desc_wrap")).monospace());
                                     ui.end_row();
 
@@ -6021,19 +6383,25 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + SHIFT + T").monospace().strong(),
+                                        RichText::new(keys(&[A::AlwaysOnTop])).monospace().strong(),
                                     );
                                     ui.label(RichText::new(t(lang, "pin_tip")).monospace());
                                     ui.end_row();
 
-                                    ui.label(RichText::new("CTRL + L").monospace().strong());
+                                    ui.label(
+                                        RichText::new(keys(&[A::LockNow])).monospace().strong(),
+                                    );
                                     ui.label(RichText::new(t(lang, "help_desc_lock")).monospace());
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("CTRL + F2  /  F2  /  SHIFT + F2")
-                                            .monospace()
-                                            .strong(),
+                                        RichText::new(keys(&[
+                                            A::BookmarkToggle,
+                                            A::BookmarkNext,
+                                            A::BookmarkPrev,
+                                        ]))
+                                        .monospace()
+                                        .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_bookmark")).monospace(),
@@ -6041,7 +6409,9 @@ impl FastTailApp {
                                     ui.end_row();
 
                                     ui.label(
-                                        RichText::new("F4  /  SHIFT + F4").monospace().strong(),
+                                        RichText::new(keys(&[A::RuleNext, A::RulePrev]))
+                                            .monospace()
+                                            .strong(),
                                     );
                                     ui.label(
                                         RichText::new(t(lang, "help_desc_rule_nav")).monospace(),
@@ -6783,6 +7153,27 @@ impl FastTailApp {
         }
     }
 
+    /// Rebuilds the key map when `[shortcuts]` or a tool's shortcut changed.
+    pub fn refresh_keymap(&mut self) {
+        let tools: Vec<Option<String>> = self
+            .config
+            .external_tools
+            .iter()
+            .map(|t| t.shortcut.clone())
+            .collect();
+        if self
+            .keymap_inputs
+            .as_ref()
+            .is_some_and(|(s, t)| *s == self.config.shortcuts && *t == tools)
+        {
+            return;
+        }
+        self.keymap =
+            crate::keymap::KeyMap::build(&self.config.shortcuts, &self.config.external_tools);
+        crate::ui::keys::set_current(&self.keymap);
+        self.keymap_inputs = Some((self.config.shortcuts.clone(), tools));
+    }
+
     /// "Open pattern": the prompt, seeded with the folder of the most recent file.
     fn open_pattern_prompt(&mut self) {
         let seed = self
@@ -6942,6 +7333,7 @@ impl FastTailApp {
                 self.system_dialog = Some(crate::ui::system_dialog::SystemDialog::new());
             }
             A::LogFormats => self.open_log_formats(None, None),
+            A::KeyboardShortcuts => self.shortcuts_dialog.open = true,
             A::SystemReconnect => {
                 let focused = self.focused_stream_path();
                 if let Some(e) = focused.and_then(|p| self.engines.iter_mut().find(|e| e.path == p))

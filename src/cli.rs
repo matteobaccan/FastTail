@@ -65,6 +65,11 @@ TERMINAL OPTIONS (used by the terminal interface, ignored by the window):
     --ascii              Draw borders with +-| instead of box characters
     --no-mouse           Leave the mouse to the terminal (native text selection)
 
+AI ASSISTANTS:
+    --mcp                Serve the Model Context Protocol on standard input and output: to the
+                         FastTail window when its MCP server is on, else the files given,
+                         read-only, without a window (the print mode filters apply)
+
 PRINT MODE:
     --print              Write the lines that pass the filters to standard output and exit,
                          without opening a window (PATH... or `-`; piped input without PATH)
@@ -96,6 +101,7 @@ pub const USAGE: &str = concat!(
 USAGE:
     fasttail [OPTIONS] [PATH...]
     fasttail --print [OPTIONS] [PATH...]
+    fasttail --mcp [OPTIONS] [PATH...]
 ",
     shared_usage!()
 );
@@ -214,6 +220,8 @@ pub struct CliArgs {
     pub until: Option<String>,
     /// `--print`: headless print mode (see `print_mode`).
     pub print: bool,
+    /// `--mcp`: the stdio MCP server (see `mcp::run_stdio`).
+    pub mcp: bool,
     pub regex: bool,
     pub case_sensitive: bool,
     /// Minimum level (`--level`), never `Unknown`.
@@ -330,6 +338,7 @@ impl CliArgs {
                 "--filter-expr" => out.filter_expr = Some(value("expression")?),
                 "--exclude" => out.exclude.push(value("text")?),
                 "--print" => out.print = true,
+                "--mcp" => out.mcp = true,
                 "--regex" => out.regex = true,
                 "--case-sensitive" => out.case_sensitive = true,
                 "--line-numbers" => out.line_numbers = true,
@@ -777,6 +786,7 @@ mod tests {
         }
         for flag in [
             "--tui", "--gui", "--fresh", "--follow", "--split", "--ascii", "--print", "--all",
+            "--mcp",
         ] {
             assert!(!VALUE_OPTIONS.contains(&flag));
             assert!(CliArgs::parse(["--print", flag], &cwd()).is_ok(), "{flag}");

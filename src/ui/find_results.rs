@@ -295,7 +295,13 @@ pub fn render_find_results(
         return;
     }
     let output = GroupedHitList::new(results_list_id(), &groups, &session.query)
-        .context_label(format!("◆ {}  (CTRL + K)", t(lang, "context_show")))
+        .context_label(format!(
+            "◆ {}",
+            crate::ui::keys::with_key(
+                t(lang, "context_show"),
+                crate::actions::ActionId::ShowContext
+            )
+        ))
         .scratch_label(format!("🗒 {}", t(lang, "scratch_send")))
         .font_size(font_size)
         .level_colors(level_colors)
@@ -393,6 +399,7 @@ pub fn without_find_results(dock: &DockState<FastTailTab>) -> DockState<FastTail
             && !matches!(
                 tab,
                 FastTailTab::Statistics(_)
+                    | FastTailTab::Operations(_)
                     | FastTailTab::Query(_)
                     | FastTailTab::Patterns(_)
                     | FastTailTab::Explain(_)

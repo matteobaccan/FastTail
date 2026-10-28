@@ -200,6 +200,9 @@ pub struct LogFormat {
     pub builtin: bool,
     /// The file it was read from.
     pub file: Option<PathBuf>,
+    /// The plugin that ships it (read-only, named `<plugin>/<format>`, detected like
+    /// the user's formats).
+    pub plugin: Option<String>,
 }
 
 impl LogFormat {
@@ -257,6 +260,7 @@ impl LogFormat {
             entry_start,
             builtin: false,
             file: None,
+            plugin: None,
         };
         // A timestamp format no sample reads is a mistake the samples can show.
         if format.timestamp_format.is_some() && !format.spec.timestamp_field.is_empty() {
@@ -414,6 +418,8 @@ pub struct Library {
     pub formats: Vec<Arc<LogFormat>>,
     /// The format files that were not loaded, and why.
     pub errors: Vec<(PathBuf, String)>,
+    /// The format files of plugins that were not loaded: the plugin, the file, why.
+    pub plugin_errors: Vec<crate::plugins::FormatError>,
 }
 
 impl Library {
@@ -422,6 +428,7 @@ impl Library {
         Self {
             formats: builtins(),
             errors: Vec::new(),
+            plugin_errors: Vec::new(),
         }
     }
 
@@ -462,6 +469,28 @@ impl Library {
                 }
                 Err(e) => lib.errors.push((path, e)),
             }
+        }
+        lib
+    }
+
+    /// `load` plus the formats of the enabled plugins of `catalog`.
+    pub fn load_with_plugins(
+        dir: &Path,
+        catalog: &crate::plugins::Catalog,
+        approvals: &crate::plugins::Approvals,
+    ) -> Self {
+        let mut lib = Self::load(dir);
+        let (formats, errors) = crate::plugins::bundled_formats(catalog, approvals);
+        lib.plugin_errors = errors;
+        for format in formats {
+            if lib.find(format.name()).is_some() {
+                let e = format!("a format named {} exists already", format.name());
+                let plugin = format.plugin.clone().unwrap_or_default();
+                lib.plugin_errors
+                    .push((plugin, format.file.clone().unwrap_or_default(), e));
+                continue;
+            }
+            lib.formats.push(format);
         }
         lib
     }
@@ -522,9 +551,21 @@ pub fn set_library(lib: Library) {
     }
 }
 
-/// Loads the formats folder next to `fasttail.ini` as the formats of the process.
+/// Loads the formats folder next to `fasttail.ini`, and the formats of the enabled
+/// plugins, as the formats of the process.
 pub fn load_default() {
-    set_library(Library::load(&default_dir()));
+    let approvals = crate::config::FastTailConfig::load_read_only().plugins;
+    load_with_plugins(&approvals);
+}
+
+/// Loads the formats again, with the plugins `approvals` enables.
+pub fn load_with_plugins(approvals: &crate::plugins::Approvals) {
+    let catalog = crate::plugins::discover(&crate::plugins::default_dir());
+    set_library(Library::load_with_plugins(
+        &default_dir(),
+        &catalog,
+        approvals,
+    ));
 }
 
 /// The format detection picks for the sampled `lines` of the file named `file`: a user
@@ -535,7 +576,11 @@ pub fn detect(lib: &Library, file: Option<&str>, lines: &[&str]) -> Option<Arc<L
     // (named after the file, share in 1/10,000, named groups) and the format.
     type Rank = (bool, usize, usize);
     let mut best: Option<(Rank, &Arc<LogFormat>)> = None;
-    for format in lib.formats.iter().filter(|f| !f.builtin) {
+    for format in lib
+        .formats
+        .iter()
+        .filter(|f| !f.builtin || f.plugin.is_some())
+    {
         let (mut entries, mut matched) = (0usize, 0usize);
         for line in lines.iter().filter(|l| !l.trim().is_empty()) {
             if !format.starts_entry(line) {

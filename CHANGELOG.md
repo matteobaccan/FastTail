@@ -8,6 +8,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Plugins.** Folders with a `plugin.toml` (`api = 1`) in `plugins/` next to
+  `fasttail.ini`. A source plugin runs a program, without a shell and with its
+  parameters (`text`, `number`, `choice`, `secret`) one argument each, and its standard
+  output becomes a stream: 🔌 toolbar menu and parameter window, the last 4 KB of
+  standard error in the stream bar, `restart = "on-exit"` with back-off, the process tree
+  ended with the stream, `plugin://name?param=value` in the workspace, sessions and on
+  the command line (secrets never stored, asked again). It runs only once enabled in
+  Settings → *🔌 Plugins…*, which shows its command; a changed manifest (SHA-256 in
+  `[plugins]`) needs a new approval. Plugins can ship log formats, loaded read-only as
+  `<plugin>/<format>` and detected; `docs/plugins.md` (`plugin-api`, from the backlog).
+- **MCP server for AI assistants.** Settings → *✨ AI assistants (MCP)…* (off by default,
+  with a warning) lets Claude, Copilot, Cursor and other MCP clients read the open
+  streams: `list_streams`, `read_lines` (visible or all lines), `search` (500 hits and
+  the total), `get_context`, `list_bookmarks` (with notes), `get_filters`,
+  `level_summary`, and the streams as resources. `fasttail --mcp` is the stdio transport
+  (to the window, or read-only over the files given when no window has the server on);
+  the window also serves `http://127.0.0.1:47821/mcp` with a bearer token. With *Allow
+  changes*, `add_bookmark`, `set_search` and `open_file` (under the allowed folders
+  only), each shown in the stream bar. `MCP N` in the title bar, a log of the last 200
+  requests, `[mcp]` in `fasttail.ini` (`mcp-server`, from the backlog).
+- **Web view.** Settings → *🌐 Web view…* serves a read-only page of the open streams
+  on `127.0.0.1:47820` (off by default): the lines as FastTail shows them, filters and
+  colours included, live through Server-Sent Events, with paging, two panes on a wide
+  screen and search over the whole visible stream. A token (cookie after the first
+  visit), a strict Content-Security-Policy, no external resource, at most 8 browsers;
+  *Allow other computers* binds every interface after a confirmation. `[web]` in
+  `fasttail.ini`; `🔗 N` in the title bar while it is on (`web-ui`, from the backlog).
+- **Remappable keyboard shortcuts.** *⌨ Keyboard shortcuts…* (Settings, or the palette)
+  lists every command with its keys: click a key and press a new one, add a second key,
+  remove one, reset one or all. A key another command uses is named, with *Move here* or
+  Cancel. Saved under `[shortcuts]` in `fasttail.ini` (`bookmark.toggle=Ctrl+B`,
+  `search.next=F3, Ctrl+N`), only for the commands that differ from their defaults; the
+  menus, the palette and the help show the current keys (`remappable-shortcuts`, from the
+  backlog). **Changed:** an external tool whose shortcut is a built-in key no longer
+  fires on it (the built-in command wins); its row in Settings says so.
+- **Operations timeline.** *⏱ Operations…* in the stream's 💾 menu (or *Operations by
+  `trace_id`* in a column header's menu) opens an **Operations** tab: the entries the
+  stream shows grouped by an id (a field, or the capture group of a regex such as
+  `req=(\w+)`), one row per operation with its start, duration, line count and worst
+  level beside a Gantt bar on a shared time axis (wheel zooms, drag pans). Sort by
+  duration to find the slow request, by level to find the failed one; click to go to its
+  first line, right-click to filter to it or set its span as the time window. It runs in
+  the background, follows the filters and appended lines, and tracks up to 100,000
+  operations (`operation-timeline`, from the backlog).
+
+### Changed
+
+- Level detection is 10 to 32 % faster (`benches/level_window`): a first-letter dispatch
+  and a byte table for level words (taken from #489; #479, #483 and #486, slower than
+  `main`, closed).
+
+- A double click on a channel in the Event Log dialog opens it (taken from #487).
+- Tooltips on disabled controls: *Save…* in the Export dialog when no line matches, its
+  *Selected lines* and *Search matches* choices without a selection or a match, the
+  address field of the listener while *This machine only* is ticked, *Copy as CSV* of a
+  Query tab without a result, and *Explain* of the time range popup with an invalid time
+  (taken from #477 and #485; #481 closed).
+- Dependency updates: `zip` 9.1.3, `similar` 3.2.1, `unicode-width` 0.2.3, `notify`
+  9.0.0-rc.7 (#475, #476, #490, #491). `lzma-rust2` 0.24 waits for a `sevenz-rust2` on it
+  (#480 closed).
+
+### Fixed
+
+- Archive entry names with `..` no longer put parent parts in the entry's stream path
+  (#478).
+- The Event Log history spill file is checked as a regular file before it is truncated
+  (#484; #488, a duplicate, and #482 closed).
+
 ## [0.26.1] - 2026-10-24
 
 ### Added
