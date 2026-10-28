@@ -377,7 +377,9 @@ impl FormatsDialog {
 
     /// Writes the draft as a format file at `to`.
     pub fn export(&self, to: &Path) -> std::io::Result<()> {
-        crate::config::overwrite_regular_file(to, self.draft.to_spec().to_ini().as_bytes())
+        use std::io::Write;
+        let mut file = crate::paths::create_export_file(to)?;
+        file.write_all(self.draft.to_spec().to_ini().as_bytes())
     }
 
     /// Removes the format file `path` and starts a new draft.
