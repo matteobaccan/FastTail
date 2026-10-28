@@ -5,12 +5,12 @@ FastTail does not, and what that suggests for the next releases. It is refreshed
 every release (the post-release scan); each refresh replaces the tables and adds a line to
 the history at the end.
 
-**Last scan:** 2026-10-23 (evening), against FastTail **0.23.0**. Release dates and star
-counts come from the GitHub release and repository pages on that day (stars rounded as
-GitHub shows them), Seq's from Docker Hub; every other claim links its source. The sites of
-LogViewPlus, LogFusion, Seq, lnav's documentation and Grafana could not be reached that day,
-so their rows rest on the earlier scan and search results. What changed since the previous
-scan (the morning of the same day, 0.21.10) is summarised in [section 9](#9-scan-history).
+**Last scan:** 2026-10-28, against FastTail **0.27.0**. Release dates and star counts come
+from the GitHub release and repository pages on that day (stars rounded as GitHub shows
+them), Seq's from Docker Hub; every other claim links its source. The sites of LogViewPlus,
+LogFusion and Seq's blog could not be reached that day, so their rows rest on the earlier
+scans. What changed since the previous scan (2026-10-23, 0.23.0) is summarised in
+[section 9](#9-scan-history).
 
 ## Contents
 
@@ -28,7 +28,7 @@ scan (the morning of the same day, 0.21.10) is summarised in [section 9](#9-scan
 
 | Product | Kind | Licence / price | Platforms | Last release | Activity |
 |---|---|---|---|---|---|
-| **FastTail** | GUI (GPU) and TUI (`fasttail-tui`) | MIT | Windows, Linux, macOS | 0.23.0, 2026-10-23 (0.22.0 and 0.23.0 the same day) | active |
+| **FastTail** | GUI (GPU) and TUI (`fasttail-tui`) | MIT | Windows, Linux, macOS | 0.27.0, 2026-10-28 (0.24.0 to 0.26.1 on 2026-10-24) | active |
 | BareTail / BareTailPro | GUI | freeware / $35 | Windows | 3.50a (2006-11-02) / 2.50a (2006) | abandoned |
 | Tailviewer | GUI | MIT | Windows (.NET 4.7.1) | 1.0.0-rc1, 2022-09-12 | dormant (last commit 2022-09) |
 | LogExpert (LogExperts fork) | GUI | MIT | Windows (.NET 10) | 1.50.0, 2026-10-03 | very active (1.2k ★) |
@@ -37,22 +37,26 @@ scan (the morning of the same day, 0.21.10) is summarised in [section 9](#9-scan
 | SnakeTail | GUI | GPLv3 | Windows (.NET 2.0) | 1.9.8, 2024-02-29 | quiet |
 | LogViewPlus | GUI | $45 / $95 per user | Windows | 3.2.9, 2026-05 | active |
 | LogFusion | GUI | free personal / Pro $19–$899 | Windows | 7.2, 2026-07-21 | active |
-| lnav | TUI | BSD-2 | Linux, macOS, BSD | 0.14.1, 2026-09-05; 0.15.0-beta1, 2026-09-28 (no later release) | very active (10.8k ★) |
+| lnav | TUI | BSD-2 | Linux, macOS, BSD | 0.14.1, 2026-09-05; 0.15.0-beta1, 2026-09-28 (no later release; master active) | very active (10.8k ★) |
 | tailspin | CLI highlighter | MIT (Rust) | all | 7.0.0, 2026-07-14 | active (8k ★) |
 | hl | CLI formatter | MIT (Rust) | all | 0.36.5, 2026-10-21 | active (3.3k ★; bug-fix releases) |
 | gonzo | TUI dashboard | MIT (Go) | all | 0.4.3, 2026-07-15 | active (2.8k ★) |
 | nerdlog | TUI, multi-host SSH | BSD-2 | Linux, macOS | 1.13.0, 2026-10-03 | active (1.6k ★; no release since) |
 | toolong | TUI | MIT (Python) | all | 1.4.0, 2024-03 | dormant (4k ★) |
 | Seq | server + web UI | proprietary, free single user | Windows, Docker | 2026.1 patch build 2026.1.17473, 2026-10-23 on [Docker Hub](https://hub.docker.com/r/datalust/seq/tags) (no 2026.2; notes not reachable) | active |
-| Grafana Loki / Drilldown | server + web UI | AGPL-3.0 | server | 3.7.9, 2026-10-20 | active |
+| Grafana Loki / Drilldown | server + web UI | AGPL-3.0 | server | 3.7.9, 2026-10-20 (fixes) | active (29.1k ★) |
 
 Also watched: Chipmunk (Rust/Electron, DLT / PCAP, 4.3.0 2026-09-18 and 4.4.0 2026-09-29), LogFX, LogoRRR, LogMX,
 LogSquirl (a klogg fork with a table view, beta), angle-grinder, logdy, lazyjournal,
-otel-tui, logana (a young Rust TUI close to FastTail's TUI: 0.7.8, 2026-10-22, adds
-`--merge` of several files by timestamp in headless mode or as a tab, automatic readable
-foreground colours for filters, and the help on `?`; 0.7.7 added filter groups, collapse of
-continuation lines and import of Notepad++ AnalysePlugin / UDL filters;
-[releases](https://github.com/pauloremoli/logana/releases)). LogoRRR moved to a freemium
+otel-tui, logana (a young Rust viewer now closest to FastTail's shape: **0.8.0**
+(2026-10-23) added a native desktop GUI (GPUI) beside its TUI, from one code base, with an
+MCP server, an OTel collector and remappable keys; **0.8.2** (2026-10-26) adds `n` / `N` to
+the next line of the selected filter, a file picker with name search, nested archives in
+the archive picker, **numbered rotations opened as one stream** (`app.log.1`, `.2`, …), a
+time-only timestamp filter and an editor for several field conditions; 0.7.7 imported
+Notepad++ AnalysePlugin / UDL filters; 46 ★,
+[releases](https://github.com/pauloremoli/logana/releases),
+[changelog](https://raw.githubusercontent.com/pauloremoli/logana/main/CHANGELOG.md)). LogoRRR moved to a freemium
 product (LogoRRR Pro).
 
 ## 2. Desktop viewers
@@ -123,7 +127,17 @@ error jumps, Kitty keyboard protocol. **0.15.0-beta1** (2026-09-28,
 - per-column statistics in the details overlay (min..max, p50 / p90 / p99, distinct count);
 - `lnav file split`, cutting a large log into pieces by lines, size or time;
 - arrow keys moving by field rather than half a screen, and indexing of several files in
-  parallel.
+  parallel;
+- **units** on format fields (suffix and divisor, `measure_value()`), so durations and sizes
+  compare and show as read, per-file indexing time and memory in the files panel, and
+  `log2src`, which maps messages to the logging statements of a source tree.
+
+Since the beta, lnav's master (2026-10-24 to 2026-10-28,
+[commits](https://github.com/tstack/lnav/commits/master)) made **source locations in stack
+traces clickable**, opening the user's editor at that line, and cached thread and operation
+ids. Its most-reacted open requests include forcing a format or switching between several
+JSON formats per file (#454, #1274, #634), which FastTail's per-stream parser choice covers,
+and keeping the time column visible while scrolling sideways (#674).
 
 **tailspin** — zero-configuration highlighting of dates, levels, URLs, IPs, UUIDs, paths and
 key=value pairs; pages through `less` ([GitHub](https://github.com/bensadeh/tailspin)).
@@ -179,7 +193,12 @@ live tail with a volume histogram, alerts, and in 2026 MCP servers for AI assist
 - **Sources beyond local files**: journald, Docker / Kubernetes, SSH / SFTP, TCP / syslog.
 - **Patterns and summaries**: grouping similar lines that are not adjacent (Drain), top-N
   values, charts. Drain is now requested in LogExpert too (#654).
-- **AI and MCP**: Seq, gonzo, logana and LogViewPlus added AI prompts or MCP servers in 2026.
+- **AI and MCP**: Seq, gonzo, logana and LogViewPlus added AI prompts or MCP servers in 2026;
+  FastTail has one since 0.27.0.
+- **From the log to the code**: lnav links stack-trace locations to the editor and messages
+  to their logging statements (`log2src`); IDE consoles have done the first for years.
+- **One viewer, two faces**: logana 0.8.0 added a native GUI beside its TUI from one Rust
+  code base, the shape FastTail has had since 0.20.0.
 - **Basics still win**: tailspin's growth shows zero-configuration highlighting sells; the
   top requests of older viewers (wrap, dark theme, all-files search, ANSI) are table stakes.
 
@@ -217,37 +236,61 @@ and patterns over SSH** through the system client, a **TCP / UDP / syslog listen
 **OTLP/HTTP logs receiver**, **desktop notifications** from highlight rules, and the
 **Windows debug output** (`OutputDebugString`) as a stream.
 
+Added in 0.24.0 to 0.27.0: **field statistics** (top values, per-level counts, percentiles,
+a chart per time slice), **regex and multi-line search**, the **Query tab** (where / parse /
+stats by / sort / head), **Drain pattern grouping**, **Explain a spike**, numeric fields
+**plotted over the timeline** (both interfaces), the **Windows Event Log** (channels and
+`.evtx` files), **Search all streams in the terminal**, then the former backlog in 0.27.0:
+the **operations timeline** (a Gantt view of entries grouped by request or trace id),
+**remappable keyboard shortcuts**, a read-only **web view**, an **MCP server** for AI
+assistants and **plugins** (out-of-process sources approved by hash, log format bundles).
+Every gap of the table below that the 2026-09-28 plan listed is now closed.
+
 ## 6. Gaps, ranked
 
 Value for FastTail's users against effort in this code base (S < 1 week, M 1–3 weeks,
 L > 3 weeks).
 
 The numbers are stable: other sections and the OpenSpec changes refer to them. The status
-column says where each gap stands after 0.23.0.
+column says where each gap stands after 0.27.0; rows 22 to 27 come from the 2026-10-28 scan.
 
-| # | Gap | Who has it | Value | Effort | Status after 0.23.0 |
+| # | Gap | Who has it | Value | Effort | Status after 0.27.0 |
 |---|---|---|---|---|---|
 | 1 | **Structured logs**: parse JSON / logfmt / regex with named groups into fields, a column view, hide / show fields | LogExpert, LogViewPlus, lnav, hl, Seq, Loki | High | L | closed: `structured-fields` (0.14.0), JSON tree (0.16.2), field terms and CSV / TSV (0.21.0), user formats (0.22.0) |
 | 2 | **Merged timeline** of several files by timestamp | lnav, Tailviewer, hl, LogViewPlus, Chipmunk | High | L | closed, 0.22.0 |
 | 3 | **Context lines** (±N) around filter matches, `grep -C` style | LogFusion, lnav 0.15 | High | S–M | closed, 0.13.0 |
 | 4 | **Field-scoped and boolean filters** (`status>=500`, OR / NOT) | klogg, hl, Seq, Loki, LogViewPlus | High | M | closed: field terms (0.21.0), boolean expressions (0.22.0) |
 | 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | closed, 0.23.0 (journald, Docker / Podman, SSH files; Kubernetes through `kubectl logs -f` on standard input) |
-| 6 | **Pattern grouping** of similar lines anywhere in the file (Drain) | gonzo, Loki, Kibana; requested in LogExpert (#654) | Medium | M | 0.25.0 |
+| 6 | **Pattern grouping** of similar lines anywhere in the file (Drain) | gonzo, Loki, Kibana; requested in LogExpert (#654) | Medium | M | closed, 0.25.0 |
 | 7 | **Headless mode**: `fasttail --print` filters / highlights to stdout | hl, tailspin, lnav, Chipmunk CLI | Medium | S | closed, 0.13.0 |
 | 8 | **Time zones**: show timestamps in UTC / local / a chosen zone; epoch as dates | hl, LogViewPlus | Medium | S–M | closed, 0.13.0 |
 | 9 | **Automatic highlighting** of IPs, UUIDs, URLs, durations, paths | tailspin, lnav | Medium | S | closed, 0.13.0 |
 | 10 | **Selection helpers**: highlight every occurrence of the selected text; jump to the next line of a given rule | LogViewPlus, SnakeTail, LogExpert | Medium | S | closed, 0.13.0 |
 | 11 | **Rule sets** import / export (share highlight rules) | LogFusion, LogViewPlus | Medium | S | closed, 0.13.0 |
-| 12 | **Windows Event Log** source | SnakeTail, LogFusion, LogViewPlus | Medium | M | 0.26.0 |
+| 12 | **Windows Event Log** source | SnakeTail, LogFusion, LogViewPlus | Medium | M | closed, 0.26.0 |
 | 13 | **TCP / UDP / syslog listener** | LogViewPlus, Chipmunk | Medium | M | closed, 0.23.0 (with an OTLP/HTTP receiver) |
-| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | backlog (2026-10-24) |
-| 15 | **Top-N and statistics** of a field over the view | angle-grinder, goaccess, lnav (per-column stats in 0.15), LogViewPlus | Medium | M | 0.24.0 |
+| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | closed, 0.27.0 |
+| 15 | **Top-N and statistics** of a field over the view | angle-grinder, goaccess, lnav (per-column stats in 0.15), LogViewPlus | Medium | M | closed, 0.24.0 |
 | 16 | **Markdown report** of bookmarks and notes (incident write-up) | logana, lnav | Medium | S | closed, 0.13.0 |
-| 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | backlog (2026-10-24) |
+| 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | closed, 0.27.0 |
 | 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | closed, 0.22.0 |
 | 19 | Partial-line selection | requested (SnakeTail #60, Tailviewer #231) | Low–Med | M | closed, 0.14.0 |
-| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString closed (0.23.0), cross-line regex 0.24.0, plugin API in the backlog (2026-10-24) |
+| 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString closed (0.23.0), cross-line regex closed (0.24.0), plugin API closed (0.27.0) |
 | 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | closed, 0.20.0 (`fasttail-tui`, Linux terminal-only archive) |
+| 22 | **Rotated files as one stream** (`app.log`, `.1`, `.2.gz` read in order) | logana 0.8.2; lnav and hl through globs | Med–High | M | proposed: `rotated-files` |
+| 23 | **Source locations clickable** in stack traces and compiler output, opening the editor at the line | lnav (master, 2026-10-24), IDE consoles | High | M | proposed: `source-links` |
+| 24 | **Units on field values** (`900ms` < `1.2s`, sizes) in statistics, plots, queries and terms | lnav 0.15 | Medium | M | proposed: `field-units` |
+| 25 | **Pinned columns** in the column view (time kept while scrolling sideways) | requested in lnav (#674); spreadsheets | Medium | S | proposed: `column-pinning` |
+| 26 | **Clipboard as a stream** (paste log text without saving a file) | requested in Chipmunk (#495); editors | Low–Med | S | proposed: `clipboard-stream` |
+| 27 | **Machine output of `--print`** (JSON, logfmt, CSV, template) | requested in hl (#611, #1481) | Low–Med | S | proposed: `print-output-formats` |
+
+Seen in the 2026-10-28 scan and not proposed: lnav's `log2src` (needs source trees and
+language parsing; heavy for its value), DLT / BLF automotive formats (Chipmunk, logana; a
+niche a plugin can serve), Notepad++ AnalysePlugin filter import (logana 0.7.7; small, low
+value next to the BareTail bridge and rule-set import), sharing excerpts to Slack or Jira
+(gonzo, logana; the bookmark report's Markdown covers most of it), tab groups and a tab
+strip on the left (LogExpert #53, #142; docking covers it), per-file indexing time and
+memory (lnav 0.15).
 
 ### Candidates from the 2026-10-05 scan
 
@@ -465,18 +508,34 @@ Event Log hand check on Windows is left to the maintainer.
 | `windows-event-log` — Event Log source (from 0.22.0) | 12 | M |
 | `tui-find-all` — Search all streams in the terminal interface (from 0.27.0) | FastTail window, Chipmunk | M |
 
-### Backlog (no release)
+### 0.27.0 — integrations (the former backlog)
 
-Changes kept for the future but not planned, by maintainer decision. They stay in
-`openspec/changes/` and come back into a release only when the maintainer asks.
+Kept in a backlog by the maintainer on 2026-10-24 and taken back on 2026-10-28: the five
+changes shipped one PR each and were released on 2026-10-28 after the maintainer's check of
+the preview; all five are archived.
 
-| Change | Gaps | Effort | Since |
-|---|---|---|---|
-| `web-ui` — read-only local web view, off by default (from 0.27.0) | Seq, Loki | M | 2026-10-24 |
-| `operation-timeline` — Gantt of operations by an id field (from 0.25.0; the table is a `query-language` query) | lnav | M | 2026-10-24 |
-| `plugin-api` — out-of-process source plugins, bundled formats (from 0.26.0) | 20 | L | 2026-10-24 |
-| `remappable-shortcuts` — key bindings on the 0.13.0 action registry (from 0.26.0) | 14 | M | 2026-10-24 |
-| `mcp-server` — read-only MCP server for AI assistants, off by default (from 0.27.0) | 17 | M | 2026-10-24 |
+| Change | Gaps | Effort |
+|---|---|---|
+| `operation-timeline` — Gantt of operations by an id field | lnav | M |
+| `remappable-shortcuts` — key bindings on the action registry | 14 | M |
+| `web-ui` — read-only local web view, off by default | Seq, Loki | M |
+| `mcp-server` — MCP server for AI assistants, off by default, write tools opt-in | 17 | M |
+| `plugin-api` — out-of-process source plugins approved by hash, bundled formats | 20 | L |
+
+### 0.28.0 — from the log to the work (proposed)
+
+Proposed after the 2026-10-28 scan, three medium and three small changes, in the order of
+the table (none depends on another). Each is an OpenSpec change in `openspec/changes/`; the
+release is planned when the maintainer agrees.
+
+| Change | Gaps | Effort |
+|---|---|---|
+| `source-links` — source locations in lines opened in the editor at the line, source roots | 23 | M |
+| `rotated-files` — a file's rotations read as one stream, oldest first, followed | 22 | M |
+| `field-units` — durations, sizes and rates read in a base unit for statistics, plots, queries and terms | 24 | M |
+| `column-pinning` — pinned columns in the column view, the time pinned by default | 25 | S |
+| `clipboard-stream` — the clipboard opened as a stream, later pastes appended | 26 | S |
+| `print-output-formats` — `--print --output json / logfmt / csv / template` | 27 | S |
 
 Open questions are listed in each change's design.
 
@@ -490,3 +549,4 @@ Open questions are listed in each change's design.
 | 2026-10-05 | 0.20.0 | after the terminal interface. New releases: LogExpert 1.50.0 (open at a line, hide lines, overview marker bar), lnav 0.15.0-beta1 (filter context, named searches, CSV / metrics with timeline sparklines, column statistics, `file split`), nerdlog 1.12–1.13 (out-of-order and malformed records shown), Chipmunk 4.3–4.4; no release from BareTail, Tailviewer, klogg, glogg, SnakeTail, toolong, hl, tailspin, gonzo, LogViewPlus, LogFusion or Seq since the previous scan. Gaps 3, 7–11, 16, 19 and the terminal interface (new row 21) marked closed; seven candidates for 0.24.0 or later listed in section 6; section 8 unchanged |
 | 2026-10-23 | 0.21.10 | before the 0.22.0 minor. A quiet fortnight: no release from LogExpert, lnav (0.15.0 still in beta), klogg, Tailviewer, SnakeTail, tailspin, gonzo, nerdlog, toolong, Chipmunk, LogViewPlus or LogFusion; hl 0.36.4–0.36.5 and Loki 3.7.9 are fixes; logana 0.7.8 adds a merge by timestamp. No new request with traction and no new tool worth a row. Gaps 1, 2, 4 and 18 marked closed by 0.21.0 / 0.22.0; five of the seven 2026-10-05 candidates shipped; section 8 unchanged after 0.22.0 |
 | 2026-10-23 (evening) | 0.23.0 | after the 0.23.0 minor, hours after the morning scan: no new release from LogExpert, lnav, klogg, hl, tailspin, gonzo, nerdlog, toolong, Chipmunk, Loki, logana, Tailviewer or SnakeTail, star counts unchanged; Seq 2026.1.17473 is a patch build. LogViewPlus, LogFusion, Seq, lnav docs and Grafana not reachable. Gaps 5 and 13 and the OutputDebugString part of 20 marked closed by 0.23.0; section 8 unchanged (0.24.0 started) |
+| 2026-10-28 | 0.27.0 | after the 0.27.0 minor (the former backlog). New releases: logana 0.8.0–0.8.2 (a native GUI beside its TUI, numbered rotations as one stream, several field conditions); lnav 0.15.0 still in beta, its master adds clickable stack-trace locations; no release from LogExpert, tailspin, hl, gonzo, nerdlog, Chipmunk, Loki (3.7.9 only fixes), klogg, Tailviewer, SnakeTail or toolong; LogViewPlus, LogFusion and Seq's blog not reachable. Gaps 6, 12, 14, 15, 17 and the plugin API of 20 marked closed by 0.24.0–0.27.0; six new gaps (22–27) proposed as the 0.28.0 changes |
