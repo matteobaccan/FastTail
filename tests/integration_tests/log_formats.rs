@@ -45,6 +45,13 @@ const LINES: [&str; 4] = [
     "28.09.26 14:02:13,500 [main] W retry",
 ];
 
+/// The formats of the process are one for every test: a test that installs or reloads
+/// them holds this lock to the end, so another one cannot swap them halfway.
+fn lock_library() -> std::sync::MutexGuard<'static, ()> {
+    static LIBRARY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LIBRARY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Installs the formats of a folder holding `PAYMENTS` (every test installs the same, so
 /// tests running at once do not disturb each other).
 fn install(dir: &Path) {
@@ -83,6 +90,7 @@ fn ms(d: u32, h: i64, m: i64, s: i64, milli: i64) -> i64 {
 #[test]
 fn a_format_named_after_the_file_reads_its_times_levels_and_columns() {
     let dir = tempfile::tempdir().unwrap();
+    let _library = lock_library();
     install(dir.path());
     let file = dir.path().join("payments-2026-09-28.log");
     write_lines(&file, &LINES);
@@ -111,6 +119,7 @@ fn a_format_named_after_the_file_reads_its_times_levels_and_columns() {
 #[test]
 fn a_saved_format_comes_back_and_a_missing_one_falls_back_to_detection() {
     let dir = tempfile::tempdir().unwrap();
+    let _library = lock_library();
     install(dir.path());
     let log = dir.path().join("app.log");
     write_lines(&log, &LINES);
@@ -153,6 +162,7 @@ fn a_saved_format_comes_back_and_a_missing_one_falls_back_to_detection() {
 #[test]
 fn the_presets_are_the_builtin_formats() {
     let dir = tempfile::tempdir().unwrap();
+    let _library = lock_library();
     install(dir.path());
     let file = dir.path().join("syslog");
     write_lines(
@@ -188,6 +198,7 @@ const DEVICE_LINES: [&str; 12] = [
 fn an_entry_start_pattern_keeps_multi_line_entries_together() {
     use fasttail::collapse::CollapseMode;
     let dir = tempfile::tempdir().unwrap();
+    let _library = lock_library();
     install(dir.path());
     let file = dir.path().join("device-1.log");
     write_lines(&file, &DEVICE_LINES);
@@ -376,6 +387,7 @@ mod dialog {
     #[test]
     fn the_row_menu_opens_a_draft_with_the_lines_and_a_reload_refreshes_the_streams() {
         let dir = tempfile::tempdir().unwrap();
+        let _library = super::lock_library();
         install(dir.path());
         let log = dir.path().join("app.log");
         write_lines(&log, &LINES);
