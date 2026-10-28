@@ -40,6 +40,7 @@ pub mod keymap;
 pub mod lock;
 pub mod log_format;
 pub mod log_level;
+pub mod mcp;
 pub mod merged_stream;
 pub mod multiline_search;
 pub mod net_listener;

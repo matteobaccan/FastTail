@@ -10,6 +10,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **MCP server for AI assistants.** Settings → *✨ AI assistants (MCP)…* (off by default,
+  with a warning) lets Claude, Copilot, Cursor and other MCP clients read the open
+  streams: `list_streams`, `read_lines` (visible or all lines), `search` (500 hits and
+  the total), `get_context`, `list_bookmarks` (with notes), `get_filters`,
+  `level_summary`, and the streams as resources. `fasttail --mcp` is the stdio transport
+  (to the window, or read-only over the files given when no window has the server on);
+  the window also serves `http://127.0.0.1:47821/mcp` with a bearer token. With *Allow
+  changes*, `add_bookmark`, `set_search` and `open_file` (under the allowed folders
+  only), each shown in the stream bar. `MCP N` in the title bar, a log of the last 200
+  requests, `[mcp]` in `fasttail.ini` (`mcp-server`, from the backlog).
 - **Web view.** Settings → *🌐 Web view…* serves a read-only page of the open streams
   on `127.0.0.1:47820` (off by default): the lines as FastTail shows them, filters and
   colours included, live through Server-Sent Events, with paging, two panes on a wide

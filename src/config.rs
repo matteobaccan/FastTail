@@ -278,6 +278,21 @@ pub struct FastTailConfig {
     /// Other computers may connect (every interface is bound), `[web] allow_remote`.
     #[serde(default)]
     pub web_allow_remote: bool,
+    /// The MCP server for AI assistants (`mcp`), `[mcp] enabled`: off by default.
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    /// Its loopback port, `[mcp] port` (`mcp::DEFAULT_PORT`).
+    #[serde(default)]
+    pub mcp_port: u16,
+    /// Its bearer token, `[mcp] token`; made on the first enable.
+    #[serde(default)]
+    pub mcp_token: String,
+    /// The write tools (`add_bookmark`, `set_search`, `open_file`), `[mcp] allow_write`.
+    #[serde(default)]
+    pub mcp_allow_write: bool,
+    /// Folders `open_file` may open from, `[mcp] open_roots` (separated by `;`).
+    #[serde(default)]
+    pub mcp_open_roots: Vec<PathBuf>,
     /// Bookmarked lines per file (most recently used first) with the notes of some of
     /// them, see `set_bookmarks_with_notes`.
     #[serde(default)]
@@ -585,6 +600,11 @@ impl Default for FastTailConfig {
             web_port: crate::web::DEFAULT_PORT,
             web_token: String::new(),
             web_allow_remote: false,
+            mcp_enabled: false,
+            mcp_port: crate::mcp::DEFAULT_PORT,
+            mcp_token: String::new(),
+            mcp_allow_write: false,
+            mcp_open_roots: Vec::new(),
             bookmarks: Vec::new(),
             wrapped_files: Vec::new(),
             highlight_rules: Vec::new(),
@@ -1164,6 +1184,25 @@ impl FastTailConfig {
                 .set("allow_remote", self.web_allow_remote.to_string());
         }
 
+        if self.mcp_enabled
+            || self.mcp_allow_write
+            || !self.mcp_token.is_empty()
+            || !self.mcp_open_roots.is_empty()
+            || self.mcp_port != crate::mcp::DEFAULT_PORT
+        {
+            let roots: Vec<String> = self
+                .mcp_open_roots
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            conf.with_section(Some("mcp"))
+                .set("enabled", self.mcp_enabled.to_string())
+                .set("port", self.mcp_port.to_string())
+                .set("token", self.mcp_token.as_str())
+                .set("allow_write", self.mcp_allow_write.to_string())
+                .set("open_roots", roots.join(";"));
+        }
+
         if !self.shortcuts.is_empty() {
             let mut sec = conf.with_section(Some("shortcuts"));
             for (id, bindings) in &self.shortcuts {
@@ -1729,6 +1768,32 @@ impl FastTailConfig {
                 .get("token")
                 .map(|v| v.trim().to_string())
                 .filter(|v| v.len() >= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric()))
+                .unwrap_or_default();
+        }
+
+        if let Some(sec) = conf.section(Some("mcp")) {
+            let flag = |k: &str| sec.get(k).and_then(|v| v.trim().parse::<bool>().ok());
+            cfg.mcp_enabled = flag("enabled").unwrap_or(false);
+            cfg.mcp_allow_write = flag("allow_write").unwrap_or(false);
+            cfg.mcp_port = sec
+                .get("port")
+                .and_then(|v| v.trim().parse::<u16>().ok())
+                .filter(|p| *p >= 1024)
+                .unwrap_or(crate::mcp::DEFAULT_PORT);
+            cfg.mcp_token = sec
+                .get("token")
+                .map(|v| v.trim().to_string())
+                .filter(|v| v.len() >= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric()))
+                .unwrap_or_default();
+            cfg.mcp_open_roots = sec
+                .get("open_roots")
+                .map(|v| {
+                    v.split(';')
+                        .map(str::trim)
+                        .filter(|r| !r.is_empty())
+                        .map(PathBuf::from)
+                        .collect()
+                })
                 .unwrap_or_default();
         }
 
@@ -2449,6 +2514,29 @@ mod tests {
             .set("port", "80");
         let odd = FastTailConfig::from_ini(&ini);
         assert!(odd.web_token.is_empty() && odd.web_port == crate::web::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn test_mcp_settings_round_trip_and_default_off() {
+        let cfg = FastTailConfig {
+            mcp_enabled: true,
+            mcp_port: 48001,
+            mcp_token: crate::web::new_token(),
+            mcp_allow_write: true,
+            mcp_open_roots: vec![PathBuf::from("/var/log"), PathBuf::from("D:\\logs")],
+            ..Default::default()
+        };
+        let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert!(loaded.mcp_enabled && loaded.mcp_allow_write);
+        assert_eq!(
+            (loaded.mcp_port, loaded.mcp_token.as_str()),
+            (48001, cfg.mcp_token.as_str())
+        );
+        assert_eq!(loaded.mcp_open_roots, cfg.mcp_open_roots);
+        let default = FastTailConfig::default();
+        assert!(!default.mcp_enabled && !default.mcp_allow_write);
+        assert_eq!(default.mcp_port, crate::mcp::DEFAULT_PORT);
+        assert!(default.to_ini().section(Some("mcp")).is_none());
     }
 
     #[test]

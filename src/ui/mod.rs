@@ -19,6 +19,7 @@ pub mod json_view;
 pub mod keys;
 pub mod listen_dialog;
 pub mod log_formats;
+pub mod mcp_view;
 pub mod merge_dialog;
 pub mod operations_tab;
 pub mod overview_strip;

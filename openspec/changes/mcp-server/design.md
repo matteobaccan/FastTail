@@ -53,6 +53,18 @@ see open questions.
 at most 20 requests/s per client, excess answered with a JSON-RPC error. Long lines are
 cut at the long line cap with the marker.
 
+### Implementation notes (deviations)
+
+- D1: no snapshot and no worker pool. As the web view does, the requests reach the
+  window's thread through a channel and are answered there from the engines (block cache
+  reads), at most 15 ms per frame; a search is a resumable job stepped over the frames, so
+  the frame budget holds and the answer reflects the state the user sees at that moment.
+- D2: no `http` key. The window listens whenever the server is on, since the stdio bridge
+  reaches it over HTTP; the HTTP helpers are shared with the web view in `src/web.rs`
+  instead of a separate `src/http_local.rs`. The runtime file is `mcp.runtime`.
+- Responses are JSON only (no server-sent stream on `GET`, answered 405), which the
+  Streamable HTTP transport allows; batches are refused, as in protocol 2025-06-18.
+
 ## Risks / Trade-offs
 
 - [Secrets in logs reach a cloud model] → off by default; enabling shows a warning; the
