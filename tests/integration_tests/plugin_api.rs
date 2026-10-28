@@ -293,3 +293,56 @@ fn closing_the_stream_ends_the_processes_it_started() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+fn an_edited_manifest_stops_the_restarts() {
+    let root = tempfile::tempdir().unwrap();
+    let spool = tempfile::tempdir().unwrap();
+    let dir = source_plugin(root.path(), "tock", "echo tock", "restart = \"on-exit\"\n");
+    let catalog = plugins::discover(root.path());
+    let mut approvals = Approvals::default();
+    approvals.set_enabled(&catalog.plugins[0], true);
+    let mut engine = open("plugin://tock", &catalog, &approvals, spool.path());
+    wait(&mut engine, |e| {
+        matches!(e.plugin_status(), Some(Status::Restarting { .. }))
+    });
+    let manifest = dir.join("plugin.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap() + "\n# edited\n";
+    std::fs::write(&manifest, text).unwrap();
+    wait(&mut engine, |e| {
+        e.plugin_status() == Some(Status::Blocked(Block::Changed))
+    });
+    assert_eq!(engine.total_lines(), 1, "not run again");
+}
+
+#[cfg(unix)]
+#[test]
+fn values_are_in_the_environment_and_dashes_need_consent() {
+    let root = tempfile::tempdir().unwrap();
+    let spool = tempfile::tempdir().unwrap();
+    source_plugin(
+        root.path(),
+        "env",
+        "echo \"$FASTTAIL_PARAM_TOKEN|$FASTTAIL_PLUGIN_API\"",
+        "[[source.param]]\nid = \"token\"\ntype = \"secret\"\n[[source.param]]\nid = \"host\"\ndefault = \"h\"\n",
+    );
+    let catalog = plugins::discover(root.path());
+    let mut approvals = Approvals::default();
+    approvals.set_enabled(&catalog.plugins[0], true);
+    let mut engine = open("plugin://env?token=t0k", &catalog, &approvals, spool.path());
+    wait(&mut engine, |e| {
+        matches!(e.plugin_status(), Some(Status::Ended(_)))
+    });
+    assert_eq!(lines(&engine), vec!["t0k|1"]);
+    // A value that could be read as an option is refused.
+    let hostile = open(
+        "plugin://env?token=x&host=-oProxyCommand%3Devil",
+        &catalog,
+        &approvals,
+        spool.path(),
+    );
+    assert_eq!(
+        hostile.plugin_status(),
+        Some(Status::Blocked(Block::NeedsValues))
+    );
+}

@@ -27,7 +27,7 @@ description = "A Kafka topic through kcat"
 kind = "source"               # "source" or "formats" (required)
 
 [source]                      # required for kind = "source"
-command = "kcat"              # a file in the plugin folder, a name on PATH, or a path
+command = "kcat"              # a name on PATH, "./run.sh" in the plugin folder, or a path
 args = ["-C", "-b", "{broker}", "-t", "{topic}", "-o", "end", "-u"]
 restart = "on-exit"           # "never" (default) or "on-exit"
 
@@ -55,6 +55,16 @@ choices = ["end", "beginning"]
   **one argument** whatever the value holds: no shell ever sees it (`orders; rm -rf /` is
   passed as that text). To use shell features, make the command a script of the plugin.
 - `number` values must be numbers, `choice` values one of `choices`; values are one line.
+- A value may not start with `-`, so a value from a session cannot become an option of
+  the program (`-oProxyCommand=…` for `ssh`); `allow_dash = true` on a parameter allows
+  it (a negative number, an option list meant as such).
+- A bare `command` (`kcat`) is always looked up on `PATH`; a program of the plugin is
+  written with a path (`./run.sh`, `bin/tool`, on Windows `.exe` / `.cmd` / `.bat` may be
+  left out). A file dropped into the plugin folder cannot take the place of a `PATH`
+  program.
+- Every value is also in the program's environment as `FASTTAIL_PARAM_<ID>` (the id in
+  upper case, other characters as `_`): read a `secret` from there rather than passing it
+  as an argument, which other local users can see in the process list.
 - At most 16 parameters; a manifest is at most 64 KB.
 
 ## Source plugins
@@ -74,12 +84,16 @@ The 🔌 toolbar menu lists the enabled source plugins. Choosing one asks its pa
   1, 2, 5, 10, then every 30 seconds (back to 1 second once it ran for a minute), the
   stream bar saying `restarting (n)`;
 - closing the stream (or FastTail) ends the program and every process it started (its
-  process group on Linux and macOS, its process tree on Windows).
+  process group on Linux and macOS, its process tree on Windows; a helper that detached
+  itself from them is not followed).
+- turning the plugin off, or editing its manifest, stops its streams: a restart reads the
+  manifest again and waits for a new approval.
 
 The stream's identity is `plugin://<name>?<param>=<value>&…` (values percent-encoded):
 it is kept in the workspace, the recent files and sessions, and `fasttail
 "plugin://kafka-topic?broker=localhost:9092&topic=orders"` opens it from the command line.
-**`secret` parameters are never written**: after a restore the stream opens saying that
+Only the values of the plugin's known parameters are kept (none for a plugin that is not
+installed). **`secret` parameters are never written**: after a restore the stream opens saying that
 values are needed, and **▶ Start…** asks them with the other values filled.
 
 ## Trust

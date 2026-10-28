@@ -2358,7 +2358,8 @@ impl FastTailApp {
                 continue;
             }
             self.open_log_file(path.clone());
-            self.apply_cli_to(path, cli);
+            // A plugin stream is kept under its stored identity (no secrets).
+            self.apply_cli_to(&crate::plugins::stored_path(path), cli);
         }
     }
 
@@ -2601,6 +2602,8 @@ impl FastTailApp {
     /// Opens the source plugin `name` with `values`: a new stream, or the stream of the
     /// same identity started again (the secrets, which the identity leaves out, given).
     pub fn open_plugin(&mut self, name: &str, values: std::collections::BTreeMap<String, String>) {
+        // The manifests as they are now: one changed since the menu was built is refused.
+        self.plugins_view.refresh();
         let catalog = self.plugins_view.catalog().clone();
         let plugin = catalog.find(name);
         let uri = crate::plugins::PluginUri {
@@ -2623,6 +2626,28 @@ impl FastTailApp {
                     engine.view_notice = Some(t(lang, "plug_status_values").to_string());
                 }
             }
+        }
+    }
+
+    /// After a change of the approvals: the streams of a plugin no longer enabled stop
+    /// and say why (a running program is ended, a restart does not come).
+    fn block_unapproved_plugins(&mut self) {
+        use crate::plugin_source::{Block, Status};
+        let catalog = self.plugins_view.catalog().clone();
+        for s in self.engines.iter_mut().filter_map(|e| e.plugin.as_mut()) {
+            if !matches!(s.status(), Status::Running | Status::Restarting { .. }) {
+                continue;
+            }
+            let block = match catalog
+                .find(&s.uri.name)
+                .map(|p| self.config.plugins.state(p))
+            {
+                Some(crate::plugins::State::Enabled) => continue,
+                Some(crate::plugins::State::Changed) => Block::Changed,
+                Some(crate::plugins::State::Disabled) => Block::NotEnabled,
+                None => Block::Missing,
+            };
+            s.block(block);
         }
     }
 
@@ -2898,9 +2923,10 @@ impl FastTailApp {
             return None;
         }
 
-        // Avoid duplicate tabs for same path
+        // Avoid duplicate tabs for same path (a plugin URI in its stored form)
+        let key = crate::plugins::stored_path(&path);
         for eng in &self.engines {
-            if eng.path == path || paths_equal(&eng.path, &path) {
+            if eng.path == key || paths_equal(&eng.path, &key) {
                 // Already open, select tab
                 let tab = FastTailTab::LogStream(eng.path.clone());
                 if let (Some(locator), false) = (self.dock_state.find_tab(&tab), quiet) {
@@ -2965,6 +2991,13 @@ impl FastTailApp {
                 self.open_notice = Some(format!("{}: {reason}", archive.display()));
                 return None;
             }
+        };
+        // A plugin stream is kept, listed and shown under its stored identity, never the
+        // path it was opened with (which may hold a secret).
+        let path = if engine.plugin.is_some() {
+            engine.path.clone()
+        } else {
+            path
         };
         crate::workspace::apply_settings(&mut engine, &self.config);
         engine.set_quick_labels(&self.quick_labels);
@@ -5069,6 +5102,7 @@ impl FastTailApp {
             .show_settings(&ctx, &mut self.config, &theme_now)
         {
             let _ = self.config.save();
+            self.block_unapproved_plugins();
         }
         if let Some((name, values)) = self
             .plugins_view

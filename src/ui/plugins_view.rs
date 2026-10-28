@@ -79,6 +79,11 @@ impl PluginsView {
             .get_or_insert_with(|| crate::plugins::discover(&crate::plugins::default_dir()))
     }
 
+    /// Looks at the plugins folder again.
+    pub fn refresh(&mut self) {
+        self.catalog = Some(crate::plugins::discover(&crate::plugins::default_dir()));
+    }
+
     /// Looks at the plugins folder again and loads the formats of the enabled plugins.
     pub fn reload(&mut self, cfg: &FastTailConfig) {
         self.catalog = Some(crate::plugins::discover(&crate::plugins::default_dir()));

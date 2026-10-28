@@ -71,6 +71,11 @@ pub struct PluginStream {
     program: PathBuf,
     args: Vec<String>,
     dir: PathBuf,
+    /// `FASTTAIL_PARAM_<ID>` of every value, so a program can read a secret from its
+    /// environment instead of its arguments.
+    env: Vec<(String, String)>,
+    /// The SHA-256 of the manifest approved at the last start: a restart checks it again.
+    approved_hash: String,
     child: Option<Child>,
     started: Instant,
     attempts: u32,
@@ -156,6 +161,25 @@ impl PluginStream {
         self.program = crate::plugins::resolve_command(&plugin.dir, &source.command);
         self.args = crate::plugins::expand_args(source, &self.uri.values, &plugin.dir, config_dir);
         self.dir = plugin.dir.clone();
+        self.env = self
+            .uri
+            .values
+            .iter()
+            .map(|(k, v)| {
+                let key: String = k
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() {
+                            c.to_ascii_uppercase()
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
+                (format!("FASTTAIL_PARAM_{key}"), v.clone())
+            })
+            .collect();
+        self.approved_hash = plugin.hash.clone();
         self.restart = source.restart;
         self.attempts = 0;
         self.launch();
@@ -176,6 +200,7 @@ impl PluginStream {
         match spawn(
             &self.program,
             &self.args,
+            &self.env,
             &self.dir,
             Arc::clone(&self.stderr),
         ) {
@@ -199,13 +224,23 @@ impl PluginStream {
 
     fn fail(&mut self, error: String) {
         self.error = Some(error);
-        self.schedule_or(Status::Failed);
+        self.schedule_or(Status::Failed, false);
     }
 
-    /// After an end: the next restart when the plugin asks for them, else `end`.
-    fn schedule_or(&mut self, end: Status) {
+    /// Stops the program (if it runs) and holds the stream for `block`: the plugin was
+    /// turned off or its manifest changed.
+    pub fn block(&mut self, block: Block) {
+        if let Some(child) = self.child.take() {
+            kill_tree(child);
+        }
+        self.status = Status::Blocked(block);
+    }
+
+    /// After an end (`ran`: the program had started): the next restart when the plugin
+    /// asks for them, else `end`. The back-off starts over only after a run of a minute.
+    fn schedule_or(&mut self, end: Status, ran: bool) {
         if self.restart == Restart::OnExit {
-            if self.started.elapsed() >= STEADY {
+            if ran && self.started.elapsed() >= STEADY {
                 self.attempts = 0;
             }
             let delay = RESTART_DELAYS[(self.attempts as usize).min(RESTART_DELAYS.len() - 1)];
@@ -233,6 +268,7 @@ impl Drop for PluginStream {
 fn spawn(
     program: &Path,
     args: &[String],
+    env: &[(String, String)],
     dir: &Path,
     stderr: Arc<Mutex<VecDeque<u8>>>,
 ) -> std::io::Result<(Child, std::process::ChildStdout)> {
@@ -240,6 +276,7 @@ fn spawn(
     cmd.args(args)
         .current_dir(dir)
         .env("FASTTAIL_PLUGIN_API", "1")
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -279,7 +316,14 @@ fn spawn(
 
 /// Ends `child` and the processes it started (its process group on Unix, its tree on
 /// Windows), and reaps it on a detached thread.
-fn kill_tree(mut child: Child) {
+fn kill_tree(child: Child) {
+    // `taskkill` can take a while: never on the window's thread.
+    let _ = std::thread::Builder::new()
+        .name("fasttail-plugin-kill".to_string())
+        .spawn(move || kill_tree_now(child));
+}
+
+fn kill_tree_now(mut child: Child) {
     let pid = child.id().to_string();
     #[cfg(unix)]
     let tree = Command::new("kill")
@@ -330,6 +374,8 @@ pub fn open_engine(
         program: PathBuf::new(),
         args: Vec::new(),
         dir: PathBuf::new(),
+        env: Vec::new(),
+        approved_hash: String::new(),
         child: None,
         started: Instant::now(),
         attempts: 0,
@@ -376,9 +422,19 @@ impl TailEngine {
                     Err(_) => None,
                 };
                 s.child = None;
-                s.schedule_or(Status::Ended(code));
+                s.schedule_or(Status::Ended(code), true);
             }
-            Status::Restarting { at, .. } if Instant::now() >= at => s.launch(),
+            Status::Restarting { at, .. } if Instant::now() >= at => {
+                // The manifest is read again: an edited one runs only once approved again.
+                let hash = std::fs::read(s.dir.join(crate::plugins::MANIFEST))
+                    .map(|b| crate::plugins::sha256_hex(&b))
+                    .unwrap_or_default();
+                if hash == s.approved_hash {
+                    s.launch();
+                } else {
+                    s.block(Block::Changed);
+                }
+            }
             _ => {}
         }
     }

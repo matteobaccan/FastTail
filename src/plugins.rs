@@ -70,6 +70,8 @@ pub struct Param {
     pub default: String,
     /// The values of a `choice`.
     pub choices: Vec<String>,
+    /// `allow_dash = true`: a value may start with `-` (a negative number, an option).
+    pub allow_dash: bool,
 }
 
 /// `[source]` of a manifest.
@@ -173,9 +175,13 @@ impl Catalog {
 /// The plugins folder next to `fasttail.ini`.
 pub fn default_dir() -> PathBuf {
     let config = crate::config::FastTailConfig::config_path();
-    config
+    let dir = config
         .parent()
-        .map_or_else(|| PathBuf::from(PLUGINS_DIR), |d| d.join(PLUGINS_DIR))
+        .map_or_else(|| PathBuf::from(PLUGINS_DIR), |d| d.join(PLUGINS_DIR));
+    // Absolute: a program and `{plugin_dir}` must name the same place once the child
+    // runs in the plugin folder (a `fasttail.ini` found in the working directory gives a
+    // relative path).
+    std::path::absolute(&dir).unwrap_or(dir)
 }
 
 /// SHA-256 of `bytes`, hex.
@@ -199,6 +205,7 @@ fn valid_name(name: &str) -> bool {
 
 /// Reads every plugin folder of `dir` (a missing folder has none), in name order.
 pub fn discover(dir: &Path) -> Catalog {
+    let dir = &std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
     let mut catalog = Catalog {
         dir: dir.to_path_buf(),
         ..Default::default()
@@ -375,7 +382,7 @@ fn parse_source(s: &toml::Table, warnings: &mut Vec<String>) -> Result<Source, S
 fn parse_param(p: &toml::Table, warnings: &mut Vec<String>) -> Result<Param, String> {
     unknown_keys(
         p,
-        &["id", "label", "type", "default", "choices"],
+        &["id", "label", "type", "default", "choices", "allow_dash"],
         "source.param.",
         warnings,
     );
@@ -416,7 +423,13 @@ fn parse_param(p: &toml::Table, warnings: &mut Vec<String>) -> Result<Param, Str
     if kind == ParamType::Secret && !default.is_empty() {
         return Err(format!("the secret `{id}` cannot have a default"));
     }
+    let allow_dash = match p.get("allow_dash") {
+        None => false,
+        Some(toml::Value::Boolean(b)) => *b,
+        Some(_) => return Err(format!("`allow_dash` of `{id}` must be true or false")),
+    };
     Ok(Param {
+        allow_dash,
         label: string(p, "label")?.unwrap_or_else(|| id.clone()),
         id,
         kind,
@@ -437,6 +450,11 @@ pub fn check_value(param: &Param, value: &str) -> Option<String> {
             param.choices.join(", ")
         )),
         _ if value.contains(['\n', '\r', '\0']) => Some(format!("{}: one line only", param.label)),
+        // A value starting with `-` could be read as an option by the program (`ssh
+        // -oProxyCommand=…`): only where the manifest allows it.
+        _ if value.starts_with('-') && !param.allow_dash => {
+            Some(format!("{}: may not start with -", param.label))
+        }
         _ => None,
     }
 }
@@ -490,18 +508,24 @@ pub fn expand_args(
 /// The program to run: a path relative to the plugin folder when the folder has it,
 /// else the command as written (a name looked up on `PATH`, or an absolute path).
 pub fn resolve_command(plugin_dir: &Path, command: &str) -> PathBuf {
-    let local = plugin_dir.join(command);
-    if !Path::new(command).is_absolute() && local.is_file() {
-        return local;
+    // A bare name (`kcat`) is always looked up on `PATH`: a file dropped into the plugin
+    // folder cannot take its place. A path with a separator (`./run.sh`, `bin/tool`) is
+    // the plugin's own program.
+    let path = Path::new(command);
+    if path.is_absolute() || !command.contains(['/', '\\']) {
+        return path.to_path_buf();
     }
+    let local = plugin_dir.join(command);
     #[cfg(windows)]
-    for ext in ["exe", "cmd", "bat"] {
-        let with = local.with_extension(ext);
-        if Path::new(command).extension().is_none() && with.is_file() {
-            return with;
+    if path.extension().is_none() && !local.is_file() {
+        for ext in ["exe", "cmd", "bat"] {
+            let with = local.with_extension(ext);
+            if with.is_file() {
+                return with;
+            }
         }
     }
-    PathBuf::from(command)
+    local
 }
 
 /// A plugin stream's identity: `plugin://<name>?<param>=<value>&…`.
@@ -550,17 +574,19 @@ impl PluginUri {
     /// The URI, without the values of `secret` parameters (all values kept when
     /// `plugin` is not known).
     pub fn to_uri(&self, plugin: Option<&Plugin>) -> String {
-        let secret = |k: &str| {
+        // Only the values of known parameters that are not secret are kept: for a plugin
+        // that is not installed, none (they could be secrets).
+        let kept = |k: &str| {
             plugin.and_then(|p| p.source.as_ref()).is_some_and(|s| {
                 s.params
                     .iter()
-                    .any(|p| p.id == k && p.kind == ParamType::Secret)
+                    .any(|p| p.id == k && p.kind != ParamType::Secret)
             })
         };
         let query: Vec<String> = self
             .values
             .iter()
-            .filter(|(k, _)| !secret(k))
+            .filter(|(k, _)| kept(k))
             .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
             .collect();
         if query.is_empty() {
@@ -577,6 +603,18 @@ impl PluginUri {
                 .iter()
                 .any(|p| p.kind == ParamType::Secret && !self.values.contains_key(&p.id))
         })
+    }
+}
+
+/// The path a stream is kept under: for a plugin URI, the form `to_uri` writes (keys
+/// sorted, values encoded, secrets and unknown values left out); any other path as it is.
+pub fn stored_path(path: &Path) -> PathBuf {
+    match PluginUri::parse(path) {
+        Some(uri) => {
+            let catalog = discover(&default_dir());
+            PathBuf::from(uri.to_uri(catalog.find(&uri.name)))
+        }
+        None => path.to_path_buf(),
     }
 }
 
@@ -712,6 +750,16 @@ type = "secret"
     }
 
     #[test]
+    fn plugin_folders_and_commands_are_absolute_or_on_path() {
+        let catalog = discover(Path::new("no-such-plugins-folder"));
+        assert!(catalog.dir.is_absolute());
+        let dir = std::path::absolute("plugins/p").unwrap();
+        assert_eq!(resolve_command(&dir, "kcat"), PathBuf::from("kcat"));
+        assert_eq!(resolve_command(&dir, "./run.sh"), dir.join("./run.sh"));
+        assert!(resolve_command(&dir, "bin/tool").is_absolute());
+    }
+
+    #[test]
     fn approval_follows_the_manifest_hash() {
         let mut p = parse_manifest(KCAT).unwrap();
         p.hash = sha256_hex(KCAT.as_bytes());
@@ -740,6 +788,8 @@ type = "secret"
         let back = PluginUri::parse(Path::new(&text)).unwrap();
         assert_eq!(back.values["topic"], "a&b+c");
         assert!(back.missing_secrets(&p));
+        // A plugin that is not installed keeps no value: any could be a secret.
+        assert_eq!(uri.to_uri(None), "plugin://kafka-topic");
         assert!(PluginUri::parse(Path::new("plugin://../x")).is_none());
         assert!(PluginUri::parse(Path::new("/var/log/x")).is_none());
     }
@@ -752,8 +802,15 @@ type = "secret"
             kind: ParamType::Number,
             default: String::new(),
             choices: Vec::new(),
+            allow_dash: false,
         };
         assert!(check_value(&p, "12.5").is_none());
+        assert!(check_value(&p, "-3").is_some(), "a dash needs allow_dash");
+        let signed = Param {
+            allow_dash: true,
+            ..p.clone()
+        };
+        assert!(check_value(&signed, "-3").is_none());
         assert!(check_value(&p, "x").is_some());
         let c = Param {
             kind: ParamType::Choice,
