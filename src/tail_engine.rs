@@ -5232,6 +5232,12 @@ impl TailEngine {
         self.collapse.row_of_pos(pos).0
     }
 
+    /// Visible position of `line`, or of the first visible line after it when the
+    /// filters hide it (`visible_lines()` past the last one); collapse does not count.
+    pub fn pos_of_line_or_next(&self, line: usize) -> usize {
+        self.rows_view().pos_of_line_or_next(line)
+    }
+
     /// Lines the filters leave visible (with their context lines), before any collapse.
     pub fn visible_lines(&self) -> usize {
         self.rows_view().len()
@@ -9713,6 +9719,21 @@ impl TailEngine {
         }
         self.bookmark_cursor = Some(idx);
         self.bookmark_changed();
+    }
+
+    /// Gives line `idx` a manual bookmark (an automatic one dismissed on it comes back);
+    /// false when it has one already.
+    pub fn add_bookmark(&mut self, idx: usize) -> bool {
+        if idx >= self.total_lines() || self.bookmarks.contains(&idx) {
+            return false;
+        }
+        self.bookmarks.insert(idx);
+        if self.dismissed_auto.remove(&idx) && self.auto_bookmarks.contains(&idx) {
+            self.live_auto += 1;
+        }
+        self.bookmark_cursor = Some(idx);
+        self.bookmark_changed();
+        true
     }
 
     /// "Remove bookmark" of the row context menu: what CTRL + F2 does on a bookmarked row.

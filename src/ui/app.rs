@@ -2971,6 +2971,21 @@ impl FastTailApp {
         }
         self.run_rule_bound_tools();
         self.run_notifications(ctx);
+        // The web view and the MCP server answer while the window shows nothing too.
+        self.web_view
+            .sync(&mut self.config, || Self::make_wake(ctx));
+        self.web_view.serve(
+            &self.engines,
+            &self.config.theme,
+            self.config.level_colors,
+            self.config.language,
+        );
+        self.mcp_view
+            .sync(&mut self.config, || Self::make_wake(ctx));
+        self.serve_mcp();
+        if self.mcp_view.busy() {
+            ctx.request_repaint();
+        }
         let alert = self.engines.iter().any(|e| e.unseen_severity >= 2);
         if self.config.flash_on_alert && alert && !self.attention_requested {
             self.attention_requested = true;

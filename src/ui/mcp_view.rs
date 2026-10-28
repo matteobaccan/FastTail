@@ -45,8 +45,8 @@ pub struct McpView {
     pub open: bool,
     /// "Turn on" was ticked and waits for the warning to be confirmed.
     confirm_enable: bool,
-    /// The search being answered, its request and its row in the log.
-    current: Option<(McpRequest, Pending, u64)>,
+    /// The searches being answered, oldest first, with their requests and log rows.
+    current: VecDeque<(McpRequest, Pending, u64)>,
     /// The last requests, oldest first, and the number of the next one.
     pub log: VecDeque<LogEntry>,
     logged: u64,
@@ -72,7 +72,7 @@ impl McpView {
             }
         }
         self.running = None;
-        self.current = None;
+        self.current.clear();
     }
 
     /// Starts, restarts or stops the server to match the settings.
@@ -131,7 +131,7 @@ impl McpView {
 
     /// Whether a search goes on (the window keeps drawing frames for it).
     pub fn busy(&self) -> bool {
-        self.current.is_some()
+        !self.current.is_empty()
     }
 
     fn log_request(&mut self, message: &serde_json::Value) -> u64 {
@@ -174,21 +174,16 @@ impl McpView {
             return opens;
         }
         let started = Instant::now();
+        // The oldest search gets half of the frame; the other requests are taken all the
+        // same, so a long search never holds up a ping or a read.
+        if let Some((request, mut pending, number)) = self.current.pop_front() {
+            match pending.step(engines, FRAME_BUDGET / 2) {
+                Some(v) => self.reply(&request, number, Some(v)),
+                None => self.current.push_back((request, pending, number)),
+            }
+        }
         let mut taken = 0;
-        loop {
-            if let Some((request, mut pending, number)) = self.current.take() {
-                let left = FRAME_BUDGET.saturating_sub(started.elapsed());
-                match pending.step(engines, left) {
-                    Some(v) => self.reply(&request, number, Some(v)),
-                    None => {
-                        self.current = Some((request, pending, number));
-                        break;
-                    }
-                }
-            }
-            if taken >= PER_FRAME || started.elapsed() >= FRAME_BUDGET {
-                break;
-            }
+        while taken < PER_FRAME && started.elapsed() < FRAME_BUDGET {
             let Some(server) = self.server.as_ref() else {
                 break;
             };
@@ -197,6 +192,13 @@ impl McpView {
             };
             taken += 1;
             let number = self.log_request(&request.message);
+            // `notifications/cancelled`: the search it names is dropped.
+            if request.message.get("method").and_then(|m| m.as_str())
+                == Some("notifications/cancelled")
+            {
+                let id = &request.message["params"]["requestId"];
+                self.current.retain(|(_, p, _)| p.id() != id);
+            }
             let mut host = Host {
                 engines: &mut *engines,
                 allow_write: cfg.mcp_allow_write,
@@ -206,7 +208,7 @@ impl McpView {
             };
             match crate::mcp::handle(&request.message, &mut host) {
                 Outcome::Reply(v) => self.reply(&request, number, v),
-                Outcome::Pending(p) => self.current = Some((request, p, number)),
+                Outcome::Pending(p) => self.current.push_back((request, p, number)),
             }
         }
         opens

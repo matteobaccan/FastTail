@@ -57,6 +57,11 @@ const MAX_CONNECTIONS: usize = 8;
 const ANSWER_WAIT: Duration = Duration::from_secs(60);
 /// Lines a search step looks at between two looks at the clock.
 const CLOCK_EVERY: usize = 1024;
+/// How long a search runs at most: then it answers with what it found, before the HTTP
+/// request gives up waiting.
+const SEARCH_TIME: Duration = Duration::from_secs(45);
+/// Header of every HTTP response, by which the stdio bridge knows the window's server.
+const IDENT: &str = "X-FastTail-MCP: 1\r\n";
 
 /// The tools that change the window, refused unless `[mcp] allow_write` is on.
 pub const WRITE_TOOLS: [&str; 3] = ["add_bookmark", "set_search", "open_file"];
@@ -91,6 +96,7 @@ pub enum Outcome {
 /// A search in progress.
 pub struct Pending {
     id: Value,
+    started: Instant,
     job: SearchJob,
 }
 
@@ -110,12 +116,19 @@ struct SearchJob {
 }
 
 impl Pending {
-    /// Looks at more lines for `budget`; the finished response once done.
+    /// The id of the request it answers.
+    pub fn id(&self) -> &Value {
+        &self.id
+    }
+
+    /// Looks at more lines for `budget`; the finished response once done (after
+    /// `SEARCH_TIME`, with what was found so far).
     pub fn step(&mut self, engines: &[TailEngine], budget: Duration) -> Option<Value> {
         let started = Instant::now();
         let mut looked = 0usize;
+        let out_of_time = self.started.elapsed() >= SEARCH_TIME;
         let job = &mut self.job;
-        while job.stream < job.streams.len() {
+        while job.stream < job.streams.len() && !out_of_time {
             let Some(engine) = engines
                 .iter()
                 .find(|e| crate::paths::paths_equal_fast(&e.path, &job.streams[job.stream]))
@@ -142,8 +155,9 @@ impl Pending {
                     continue;
                 }
                 job.total += 1;
-                if job.hits.len() < job.max_hits && job.bytes + text.len() <= MAX_BYTES {
-                    job.bytes += text.len();
+                let size = json_len(&text);
+                if job.hits.len() < job.max_hits && job.bytes + size <= MAX_BYTES {
+                    job.bytes += size;
                     let mut hit = line_value(engine, idx, &text);
                     if !job.named {
                         hit["stream"] = Value::from(stream_id(engine));
@@ -161,6 +175,7 @@ impl Pending {
             "total": job.total,
             "hits": std::mem::take(&mut job.hits),
             "truncated": truncated,
+            "complete": job.stream >= job.streams.len(),
         });
         if job.named {
             if let Some(path) = job.streams.first() {
@@ -169,6 +184,18 @@ impl Pending {
         }
         Some(result(&self.id, tool_result(out)))
     }
+}
+
+/// Bytes of `text` as a JSON string (escapes counted), without building it.
+fn json_len(text: &str) -> usize {
+    text.chars()
+        .map(|c| match c {
+            '"' | '\\' | '\n' | '\r' | '\t' => 2,
+            c if (c as u32) < 0x20 => 6,
+            c => c.len_utf8(),
+        })
+        .sum::<usize>()
+        + 2
 }
 
 /// The id of a stream for the assistant: its path.
@@ -346,6 +373,7 @@ pub fn handle(msg: &Value, host: &mut Host<'_>) -> Outcome {
                 Ok(Call::Done(v)) => reply(tool_result(v)),
                 Ok(Call::Search(job)) => Outcome::Pending(Pending {
                     id: id.clone(),
+                    started: Instant::now(),
                     job,
                 }),
                 Err(e) => reply(tool_error(&e)),
@@ -558,7 +586,7 @@ fn read_rows(
             let row = if all {
                 line
             } else {
-                engine.row_of_line_or_next(line)
+                engine.pos_of_line_or_next(line)
             };
             (row.min(rows), count.min(MAX_LINES))
         }
@@ -574,11 +602,11 @@ fn read_rows(
     while row < rows && lines.len() < wanted {
         if let Some(idx) = line_of_row(engine, all, row) {
             if let Some(text) = engine.get_line(idx) {
-                if bytes + text.len() > MAX_BYTES && !lines.is_empty() {
+                if bytes + json_len(&text) > MAX_BYTES && !lines.is_empty() {
                     truncated = true;
                     break;
                 }
-                bytes += text.len();
+                bytes += json_len(&text);
                 lines.push(line_value(engine, idx, &text));
             }
         }
@@ -637,7 +665,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
                 .size_limit(1 << 20)
                 .build()
                 .map_err(|e| format!("Bad regular expression: {e}"))?;
-            let named = args.get("stream").is_some();
+            let named = arg_str(args, "stream").is_some();
             let streams = if named {
                 vec![engines[resolve(engines, args)?].path.clone()]
             } else {
@@ -672,11 +700,11 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             let mut truncated = false;
             for i in first..end {
                 if let Some(text) = engine.get_line(i) {
-                    if bytes + text.len() > MAX_BYTES && !lines.is_empty() {
+                    if bytes + json_len(&text) > MAX_BYTES && !lines.is_empty() {
                         truncated = true;
                         break;
                     }
-                    bytes += text.len();
+                    bytes += json_len(&text);
                     let mut v = line_value(engine, i, &text);
                     if i == idx {
                         v["target"] = Value::Bool(true);
@@ -692,7 +720,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             )
         }
         "list_bookmarks" => {
-            let chosen: Vec<usize> = if args.get("stream").is_some() {
+            let chosen: Vec<usize> = if arg_str(args, "stream").is_some() {
                 vec![resolve(engines, args)?]
             } else {
                 (0..engines.len()).collect()
@@ -704,11 +732,11 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
                 let engine = &engines[i];
                 for &idx in &engine.bookmarks {
                     let text = engine.get_line(idx).unwrap_or_default();
-                    if out.len() >= MAX_LINES || bytes + text.len() > MAX_BYTES {
+                    if out.len() >= MAX_LINES || bytes + json_len(&text) > MAX_BYTES {
                         truncated = true;
                         break 'streams;
                     }
-                    bytes += text.len();
+                    bytes += json_len(&text);
                     let mut v = line_value(engine, idx, &text);
                     v["stream"] = Value::from(stream_id(engine));
                     if let Some(note) = engine.bookmark_notes.get(&idx) {
@@ -762,9 +790,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             let i = resolve(engines, args)?;
             let engine = &mut engines[i];
             let idx = line_arg(engine, args)?;
-            if !engine.bookmarks.contains(&idx) {
-                engine.toggle_bookmark(idx);
-            }
+            engine.add_bookmark(idx);
             if let Some(note) = arg_str(args, "note") {
                 engine.set_bookmark_note(idx, note);
             }
@@ -785,7 +811,8 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             } else {
                 crate::tail_engine::SearchMode::Text
             };
-            engine.set_search_mode(mode, false);
+            let case = engine.search_case_sensitive;
+            engine.set_search_mode(mode, case);
             engine.search_query = query.clone();
             engine.search_edited_at = None;
             engine.view_notice = Some(t(host.lang, "mcp_notice_search").replace("{0}", &query));
@@ -801,26 +828,70 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
     }
 }
 
-/// `path` when it is a file under one of `roots` (both resolved, so `..` and links
-/// cannot leave them).
+/// `path` with `.` and `..` resolved by hand, without the file system.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// How two paths compare: as written, without case on Windows.
+fn path_key(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Whether `path` is under `root`, by their text alone.
+fn under(path: &Path, root: &Path) -> bool {
+    path_key(&lexical(path)).starts_with(path_key(&lexical(root)))
+}
+
+/// `path` when it is a file under one of `roots`. The path is checked as written first,
+/// so a path elsewhere (a network share among them) is refused without the file system
+/// ever reaching it; then both are resolved, so links cannot leave the roots either.
 pub fn allowed_file(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, String> {
     if roots.is_empty() {
         return Err("No folder is allowed for open_file: the user can add one in FastTail's AI assistants (MCP) settings.".into());
+    }
+    if !path.is_absolute() {
+        return Err(format!("{} is not an absolute path.", path.display()));
+    }
+    let outside = || {
+        format!(
+            "{} is outside the folders the user allowed.",
+            path.display()
+        )
+    };
+    let candidates: Vec<&PathBuf> = roots
+        .iter()
+        .filter(|r| r.is_absolute() && under(path, r))
+        .collect();
+    if candidates.is_empty() {
+        return Err(outside());
     }
     let real =
         std::fs::canonicalize(path).map_err(|_| format!("{} does not exist.", path.display()))?;
     if !real.is_file() {
         return Err(format!("{} is not a file.", path.display()));
     }
-    let inside = roots
+    let inside = candidates
         .iter()
         .filter_map(|r| std::fs::canonicalize(r).ok())
         .any(|root| real.starts_with(&root));
     if !inside {
-        return Err(format!(
-            "{} is outside the folders the user allowed.",
-            path.display()
-        ));
+        return Err(outside());
     }
     Ok(real)
 }
@@ -901,7 +972,7 @@ fn accept(listener: TcpListener, shared: Arc<Shared>) {
                         "503 Service Unavailable",
                         "text/plain",
                         b"busy",
-                        "",
+                        IDENT,
                     );
                     continue;
                 }
@@ -965,7 +1036,7 @@ fn respond_json(stream: &mut TcpStream, status: &str, body: &Value) {
         status,
         "application/json",
         body.to_string().as_bytes(),
-        "",
+        IDENT,
     );
 }
 
@@ -987,7 +1058,7 @@ fn serve(stream: TcpStream, shared: &Shared) {
             status,
             "text/plain; charset=utf-8",
             body.as_bytes(),
-            extra,
+            &format!("{IDENT}{extra}"),
         );
     };
     if !loopback_host(&req, shared.port) {
@@ -1057,40 +1128,64 @@ fn serve(stream: TcpStream, shared: &Shared) {
             &error(&id, SERVER_ERROR, "Too many requests: at most 20 a second."),
         );
     }
-    let wants_answer = message.get("method").is_some() && message.get("id").is_some();
-    let (reply, answer) = channel();
-    if shared
-        .tx
-        .send(McpRequest {
-            message: message.clone(),
-            reply,
-        })
-        .is_err()
-    {
-        return text(
-            &mut stream,
-            "503 Service Unavailable",
-            "FastTail is closing.",
-            "",
-        );
-    }
-    if let Some(wake) = &shared.wake {
-        wake();
-    }
-    if !wants_answer {
-        return text(&mut stream, "202 Accepted", "", "");
-    }
-    match answer.recv_timeout(ANSWER_WAIT) {
-        Ok(Some(v)) => respond_json(&mut stream, "200 OK", &v),
-        Ok(None) => text(&mut stream, "202 Accepted", "", ""),
-        Err(_) => {
-            let id = message.get("id").cloned().unwrap_or(Value::Null);
-            respond_json(
+    // A batch (protocol 2025-03-26): each message answered in turn, the answers as one
+    // array; nothing to answer (only notifications), 202.
+    let (messages, batch) = match message {
+        Value::Array(list) if list.is_empty() => {
+            return respond_json(
                 &mut stream,
-                "503 Service Unavailable",
-                &error(&id, SERVER_ERROR, "FastTail did not answer in time."),
+                "400 Bad Request",
+                &error(&Value::Null, INVALID_REQUEST, "An empty batch."),
             );
         }
+        Value::Array(list) => (list, true),
+        single => (vec![single], false),
+    };
+    let mut answers = Vec::new();
+    let mut timed_out = false;
+    for message in messages {
+        match shared.ask(message) {
+            Ok(Some(v)) => answers.push(v),
+            Ok(None) => {}
+            Err(id) => {
+                answers.push(error(&id, SERVER_ERROR, "FastTail did not answer in time."));
+                timed_out = true;
+                break;
+            }
+        }
+    }
+    match (answers.len(), batch) {
+        (0, _) => text(&mut stream, "202 Accepted", "", ""),
+        (_, true) => respond_json(&mut stream, "200 OK", &Value::Array(answers)),
+        (_, false) => {
+            let status = if timed_out {
+                "503 Service Unavailable"
+            } else {
+                "200 OK"
+            };
+            respond_json(&mut stream, status, &answers[0])
+        }
+    }
+}
+
+impl Shared {
+    /// Hands `message` to the window and waits for its answer (`None`: a notification
+    /// or a response, nothing to answer); `Err` with the request's id when the window
+    /// did not answer in time.
+    fn ask(&self, message: Value) -> Result<Option<Value>, Value> {
+        let id = message.get("id").cloned().unwrap_or(Value::Null);
+        let wants_answer = message.get("method").is_some() && message.get("id").is_some();
+        let (reply, answer) = channel();
+        if self.tx.send(McpRequest { message, reply }).is_err() {
+            return Err(id);
+        }
+        if let Some(wake) = &self.wake {
+            wake();
+        }
+        if !wants_answer {
+            return Ok(None);
+        }
+        answer.recv_timeout(ANSWER_WAIT).map_err(|_| id)
     }
 }
 
@@ -1127,6 +1222,29 @@ pub fn read_runtime(path: &Path) -> Option<(u16, String)> {
     let port = value("port=")?.parse().ok()?;
     let token = value("token=").filter(|t| !t.is_empty())?;
     Some((port, token))
+}
+
+/// Whether the FastTail window's server answers on `port` (asked without the token, so
+/// another program that took the port of a stale runtime file never sees it).
+pub fn is_window_server(port: u16) -> bool {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(1)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    if write!(
+        stream,
+        "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let mut head = Vec::new();
+    let _ = stream.take(4096).read_to_end(&mut head);
+    String::from_utf8_lossy(&head)
+        .to_ascii_lowercase()
+        .contains(&IDENT.trim_end().to_ascii_lowercase())
 }
 
 /// Posts `body` to the window's endpoint: the HTTP status and the response body.
@@ -1238,7 +1356,17 @@ pub fn serve_headless(
             lang: Language::En,
             opens: &mut opens,
         };
-        if let Some(v) = handle_now(&message, &mut host) {
+        let answer = match &message {
+            Value::Array(list) if !list.is_empty() => {
+                let answers: Vec<Value> = list
+                    .iter()
+                    .filter_map(|m| handle_now(m, &mut host))
+                    .collect();
+                (!answers.is_empty()).then_some(Value::Array(answers))
+            }
+            _ => handle_now(&message, &mut host),
+        };
+        if let Some(v) = answer {
             write_message(&mut output, &v)?;
         }
     }
@@ -1265,8 +1393,7 @@ pub fn run_stdio(cli: &crate::cli::CliArgs) -> i32 {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     if let Some((port, token)) = read_runtime(&runtime_path()) {
-        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-        if TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok() {
+        if is_window_server(port) {
             eprintln!("fasttail --mcp: connected to the FastTail window on port {port}");
             return match proxy(port, &token, stdin.lock(), stdout.lock()) {
                 Ok(()) => 0,

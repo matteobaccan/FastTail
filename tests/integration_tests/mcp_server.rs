@@ -522,3 +522,76 @@ fn window_view_logs_requests_and_writes_the_runtime_file() {
     assert!(view.port().is_none() && !runtime.exists());
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
 }
+
+#[test]
+fn reading_from_a_line_ignores_collapsed_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("retry.log");
+    let mut lines: Vec<String> = (0..10).map(|i| format!("start {i}")).collect();
+    lines.extend((0..500).map(|_| "retry".to_string()));
+    lines.push("done".into());
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    write_lines(&path, &refs);
+    let mut engine = open(&path);
+    engine.set_collapse_mode(fasttail::collapse::CollapseMode::Exact);
+    super::wait_for_jobs(&mut engine);
+    let mut f = Fixture::new(vec![engine]);
+    let from = f.call("read_lines", json!({"from": 511, "count": 1}));
+    assert_eq!(lines_of(&from, "lines"), vec![511]);
+    let from = f.call("read_lines", json!({"from": 12, "count": 2}));
+    assert_eq!(lines_of(&from, "lines"), vec![12, 13]);
+}
+
+#[test]
+fn open_file_judges_the_path_as_written_first() {
+    let allowed = tempfile::tempdir().unwrap();
+    let roots = vec![allowed.path().to_path_buf()];
+    // Elsewhere: refused before the file system is asked (no "does not exist").
+    let far = if cfg!(windows) {
+        PathBuf::from(r"\\attacker.example\share\x.log")
+    } else {
+        PathBuf::from("/nowhere/at/all.log")
+    };
+    let e = mcp::allowed_file(&far, &roots).unwrap_err();
+    assert!(e.contains("outside"), "{e}");
+    let e = mcp::allowed_file(Path::new("relative.log"), &roots).unwrap_err();
+    assert!(e.contains("absolute"), "{e}");
+    let missing = allowed.path().join("missing.log");
+    let e = mcp::allowed_file(&missing, &roots).unwrap_err();
+    assert!(e.contains("does not exist"), "{e}");
+}
+
+#[test]
+fn batches_get_one_array_and_the_bridge_knows_the_window() {
+    let token = "0123456789abcdef0123456789abcdef";
+    let (port, stop) = serve_on_thread(Vec::new(), token);
+    assert!(mcp::is_window_server(port));
+    let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let other_port = other.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut s, _)) = other.accept() {
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        }
+    });
+    assert!(!mcp::is_window_server(other_port));
+
+    let batch = r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"ping"}]"#;
+    let (status, body) = mcp::post(port, token, batch).unwrap();
+    assert_eq!(status, 200);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let ids: Vec<u64> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![1, 2]);
+    let (status, _) = mcp::post(port, token, "[]").unwrap();
+    assert_eq!(status, 400);
+    // An explicit null stream is no stream.
+    let null = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_bookmarks","arguments":{"stream":null}}}"#;
+    let (_, body) = mcp::post(port, token, null).unwrap();
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["result"]["isError"], false);
+    let _ = stop.send(());
+}
