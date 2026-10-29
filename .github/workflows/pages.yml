@@ -34,7 +34,7 @@ jobs:
           cp -r site/. _site/
           cp assets/logo.svg assets/icon.svg assets/social-preview.png _site/assets/
           cp assets/screenshots/*.png _site/assets/screenshots/
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
