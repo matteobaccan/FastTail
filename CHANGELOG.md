@@ -28,6 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   offers the editor presets and `Alt+O` opens a source location in FastTail; `I` (or `ƒx`
   in the filter row) switches a stream's include side to an expression, and the global
   filter's expression is edited in its dialog.
+- **Compare and scratchpad in the terminal.** `=` compares two selected rows side by side
+  (or marks a region and compares it with the next one), with the window's ignore toggles,
+  the next / previous change and the diff copied; `Ctrl+N` sends rows to the session's
+  scratchpad and `Alt+N` edits it, the same file the window uses.
 
 ## [0.28.1] - 2026-10-29
 

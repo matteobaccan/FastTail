@@ -143,6 +143,13 @@ pub enum Action {
     OpenSourceHere,
     /// The Log formats dialog (palette).
     LogFormats,
+    /// `=`: compare the two selected rows, or mark the selection and compare it with the
+    /// next one.
+    Compare,
+    /// ALT + N: the scratchpad's editor.
+    Scratchpad,
+    /// CTRL + N: the selected rows (or the cursor row) sent to the scratchpad.
+    SendToScratchpad,
     /// ALT + D: the time delta column of the focused stream, on or off.
     ToggleTimeDelta,
     /// How the rows show their leading timestamp (palette, the bar's chip).
@@ -229,6 +236,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('w') => Some(Action::CloseStream),
             KeyCode::Char('l') => Some(Action::Lock),
             KeyCode::Char('o') => Some(Action::OpenSource),
+            KeyCode::Char('n') => Some(Action::SendToScratchpad),
             KeyCode::PageUp => Some(Action::PrevInPane),
             KeyCode::PageDown => Some(Action::NextInPane),
             KeyCode::Left => Some(Action::ScrollLeftFast),
@@ -247,6 +255,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('s') | KeyCode::Char('S') => Some(Action::SearchScope),
             KeyCode::Char('e') | KeyCode::Char('E') => Some(Action::Export),
             KeyCode::Char('o') | KeyCode::Char('O') => Some(Action::OpenSourceHere),
+            KeyCode::Char('n') | KeyCode::Char('N') => Some(Action::Scratchpad),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -297,6 +306,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('>') => Action::MoveNextPane,
         KeyCode::Char('y') => Action::Copy,
         KeyCode::Char('Y') => Action::CopyAsShown,
+        KeyCode::Char('=') => Action::Compare,
         KeyCode::Char('b') => Action::ToggleBookmark,
         KeyCode::Char(']') | KeyCode::F(2) => Action::NextBookmark,
         KeyCode::Char('[') => Action::PrevBookmark,
@@ -482,6 +492,12 @@ mod tests {
         assert_eq!(k(KeyCode::Char('s'), alt), Some(Action::SearchScope));
         assert_eq!(k(KeyCode::Char('e'), alt), Some(Action::Export));
         assert_eq!(k(KeyCode::Char('o'), alt), Some(Action::OpenSourceHere));
+        assert_eq!(k(KeyCode::Char('n'), alt), Some(Action::Scratchpad));
+        assert_eq!(k(KeyCode::Char('n'), ctrl), Some(Action::SendToScratchpad));
+        assert_eq!(
+            k(KeyCode::Char('='), KeyModifiers::NONE),
+            Some(Action::Compare)
+        );
         assert_eq!(k(KeyCode::F(4), KeyModifiers::NONE), Some(Action::RuleNext));
         assert_eq!(
             k(KeyCode::F(4), KeyModifiers::SHIFT),

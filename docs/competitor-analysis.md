@@ -292,11 +292,12 @@ settings and the workspace with the window. Where it stands against the window:
   and debug output (Windows), rotated files with their pieces, the clipboard with Append
 - ✅ Source locations to the editor (`Ctrl+O`), external tools, notifications, sounds, PIN
   lock, themes, languages, `--print` with every output format, `--mcp` over stdio
-- ⬜ The Statistics, Query, Patterns, Explain, Operations and Compare tabs (their dock panels
-  are named but empty)
+- ✅ Compare lines and regions
+- ⬜ The Statistics, Query, Patterns, Explain and Operations tabs (their dock panels are named
+  but empty)
 - ✅ Search results list, search in a range, export (text / CSV / HTML), Copy as shown,
   bookmark report
-- ⬜ Scratchpad
+- ✅ Scratchpad
 - ✅ Rule sets import / export, next / previous match of a rule, clear all bookmarks
 - ✅ Log formats dialog, editor presets, Open in FastTail from a source location
 - ✅ Filter expression toggle per stream, global filter expressions editable
@@ -316,7 +317,7 @@ settings and the workspace with the window. Where it stands against the window:
     bookmark report
   - ⬜ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
   - ⬜ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
-  - ⬜ `tui-compare-scratchpad` (S): Compare tab and scratchpad
+  - ✅ `tui-compare-scratchpad` (S): Compare tab and scratchpad
   - ✅ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all
     bookmarks, Log formats dialog, editor presets, Open in FastTail, filter expressions
   - ✅ `tui-time-columns` (S): time delta column, UTC / local time display, OTLP hint

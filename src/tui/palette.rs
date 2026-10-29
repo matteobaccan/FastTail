@@ -40,6 +40,8 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::RuleNext => (Action::RuleNext, "F4"),
         ActionId::RulePrev => (Action::RulePrev, "Shift+F4"),
         ActionId::LogFormats => (Action::LogFormats, ""),
+        ActionId::ScratchpadOpen => (Action::Scratchpad, "Alt+N"),
+        ActionId::ScratchpadSend => (Action::SendToScratchpad, "Ctrl+N"),
         ActionId::BookmarkReportAll => (Action::BookmarkReportAll, ""),
         ActionId::ViewText | ActionId::ViewHex => (Action::ToggleHex, "h"),
         ActionId::ViewAsm => (Action::ToggleAsm, "d"),
