@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-29
+
 ### Added
 
 - **Analysis views in the terminal.** `Alt+A` opens Statistics of a field, Query, Patterns,
@@ -2446,6 +2448,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.30.0]: https://github.com/matteobaccan/FastTail/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/matteobaccan/FastTail/compare/v0.28.1...v0.29.0
 [0.28.1]: https://github.com/matteobaccan/FastTail/compare/v0.28.0...v0.28.1
 [0.28.0]: https://github.com/matteobaccan/FastTail/compare/v0.27.0...v0.28.0
