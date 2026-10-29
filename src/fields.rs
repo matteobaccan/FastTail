@@ -1418,6 +1418,15 @@ pub fn line_timestamp(
     crate::timestamp::detect_timestamp(line, hint)
 }
 
+/// What a bare number of `key` means on a stream read with `parser`: the `unit.<key>`
+/// of its log format.
+pub fn field_unit(parser: Option<&FieldParser>, key: &str) -> Option<crate::units::Unit> {
+    match parser {
+        Some(FieldParser::Format(f)) => f.unit_of(key),
+        _ => None,
+    }
+}
+
 /// The comparison of a field term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldOp {
@@ -1464,8 +1473,9 @@ pub struct FieldTerm {
     lower: Vec<String>,
     /// In regex mode, the alternatives (anchored for `=` / `!=`) or the `~=` text.
     regexes: Vec<Regex>,
-    /// The number of a numeric comparison; `None` when the term's value is not one.
-    number: Option<f64>,
+    /// The number of a numeric comparison, in its unit's base (`500ms`, `10MiB`); `None`
+    /// when the term's value is not one.
+    number: Option<crate::units::Reading>,
     case_sensitive: bool,
     is_regex: bool,
 }
@@ -1549,7 +1559,7 @@ impl FieldTerm {
             key: key.to_string(),
             op,
             lower: values.iter().map(|v| v.to_lowercase()).collect(),
-            number: op.is_numeric().then(|| value.parse::<f64>().ok()).flatten(),
+            number: op.is_numeric().then(|| crate::units::read(value)).flatten(),
             values,
             regexes,
             case_sensitive,
@@ -1559,6 +1569,20 @@ impl FieldTerm {
 
     /// Whether the field's `value` passes the term; `None` (no such field) fails.
     pub fn eval(&self, value: Option<&str>) -> bool {
+        self.eval_as(value, None)
+    }
+
+    /// The unit family of a numeric comparison with a unit (`latency>=500ms`).
+    pub fn unit_family(&self) -> Option<crate::units::Family> {
+        self.number
+            .map(|r| r.family)
+            .filter(|f| *f != crate::units::Family::Plain)
+    }
+
+    /// `eval`, a bare number of the field meaning `bare` (a log format's `unit.<field>`).
+    /// A bound with a unit compares values of its family in the base unit (`1.2s >= 1s`)
+    /// and fails the others; a bare bound compares any number in its base unit.
+    pub fn eval_as(&self, value: Option<&str>, bare: Option<crate::units::Unit>) -> bool {
         let Some(value) = value else {
             return false;
         };
@@ -1575,9 +1599,14 @@ impl FieldTerm {
                 }
             }
             op => {
-                let (Some(bound), Ok(v)) = (self.number, value.trim().parse::<f64>()) else {
+                let (Some(bound), Some(read)) = (self.number, crate::units::read_as(value, bare))
+                else {
                     return false;
                 };
+                if bound.family != crate::units::Family::Plain && read.family != bound.family {
+                    return false;
+                }
+                let (bound, v) = (bound.value, read.value);
                 match op {
                     FieldOp::Gt => v > bound,
                     FieldOp::Ge => v >= bound,
@@ -1751,6 +1780,43 @@ mod tests {
         assert!(!t("city=zurich", false, false).eval(Some("zürich")));
         assert!(t("env=PROD", false, false).eval(Some("prod")));
         assert!(!t("env=PROD", false, false).eval(Some("prod2")));
+    }
+
+    #[test]
+    fn field_terms_compare_values_with_units() {
+        let t = |s: &str| FieldTerm::parse(s, false, false).unwrap().unwrap();
+        let keep: Vec<&str> = ["900ms", "1.2s", "45ms"]
+            .into_iter()
+            .filter(|v| t("latency>=1s").eval(Some(v)))
+            .collect();
+        assert_eq!(keep, vec!["1.2s"]);
+        assert!(t("latency>=500ms").eval(Some("1m30s")));
+        assert!(!t("latency>=500ms").eval(Some("499ms")));
+        assert!(
+            !t("latency>=500ms").eval(Some("600KB")),
+            "another family fails"
+        );
+        assert!(
+            !t("latency>=500ms").eval(Some("600")),
+            "a bare value has no unit"
+        );
+        let ms = crate::units::unit_named("ms");
+        assert!(
+            t("latency>=500ms").eval_as(Some("600"), ms),
+            "unless the format gives one"
+        );
+        assert!(
+            t("latency>100").eval(Some("120ms")),
+            "a bare bound in the base unit"
+        );
+        assert!(t("size>1000B").eval(Some("1KiB")));
+        assert!(!t("size>1000B").eval(Some("1KB")));
+        assert!(t("size<=1MB").eval(Some("976KiB")));
+        assert_eq!(
+            t("latency>=1s").unit_family(),
+            Some(crate::units::Family::Time)
+        );
+        assert_eq!(t("status>=500").unit_family(), None);
     }
 
     fn fields(parser: &FieldParser, line: &str) -> (Vec<(String, String)>, bool) {

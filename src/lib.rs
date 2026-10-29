@@ -80,6 +80,7 @@ pub mod tray;
 pub mod tui;
 #[cfg(feature = "gui")]
 pub mod ui;
+pub mod units;
 pub mod web;
 pub mod wildcard;
 pub mod workspace;

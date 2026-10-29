@@ -8,14 +8,15 @@
 //!
 //! Buckets work like the histogram's (`time_histogram`): one second wide at first, at
 //! most `MAX_BUCKETS`, doubled (merged in pairs) when the span outgrows them. A value
-//! with a time unit (`ns` `µs` `ms` `s` `m` `h`) is read in milliseconds and one with a
-//! size unit (`B` `KB` `MB` `GB`) in bytes; when a field mixes the two families, or a
-//! family with plain numbers, the series says so and the values are plotted as written.
+//! with a unit is read in its family's base unit (`units`: durations in milliseconds,
+//! sizes in bytes, rates per second); when a field mixes families, or a family with
+//! plain numbers, the series says so and the values are plotted as written.
 
 use std::collections::VecDeque;
 
 use crate::field_stats::NumHist;
 use crate::tail_engine::NO_TIMESTAMP;
+use crate::units::{Family, Scale, Unit};
 
 /// Fields plotted at once at most.
 pub const MAX_PLOTS: usize = 3;
@@ -104,58 +105,9 @@ impl PlotSpec {
     }
 }
 
-/// The unit family of a value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Family {
-    Plain,
-    Time,
-    Size,
-}
-
-impl Family {
-    fn bit(self) -> u8 {
-        match self {
-            Family::Plain => 1,
-            Family::Time => 2,
-            Family::Size => 4,
-        }
-    }
-}
-
-/// `text` as a number and its family, a time in milliseconds, a size in bytes; the
-/// number as written comes third, for a series whose families are mixed.
-pub fn read_value(text: &str) -> Option<(f64, Family, f64)> {
-    const UNITS: [(&str, Family, f64); 14] = [
-        ("ns", Family::Time, 1e-6),
-        ("µs", Family::Time, 1e-3),
-        ("us", Family::Time, 1e-3),
-        ("ms", Family::Time, 1.0),
-        ("s", Family::Time, 1e3),
-        ("m", Family::Time, 6e4),
-        ("h", Family::Time, 3.6e6),
-        ("GB", Family::Size, 1024.0 * 1024.0 * 1024.0),
-        ("MB", Family::Size, 1024.0 * 1024.0),
-        ("KB", Family::Size, 1024.0),
-        ("kB", Family::Size, 1024.0),
-        ("kb", Family::Size, 1024.0),
-        ("mb", Family::Size, 1024.0 * 1024.0),
-        ("B", Family::Size, 1.0),
-    ];
-    let t = text.trim();
-    for (unit, family, factor) in UNITS {
-        if let Some(digits) = t.strip_suffix(unit) {
-            let digits = digits.trim_end();
-            if let Ok(v) = digits.parse::<f64>() {
-                if v.is_finite() {
-                    return Some((v * factor, family, v));
-                }
-            }
-        }
-    }
-    t.parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite())
-        .map(|v| (v, Family::Plain, v))
+/// The bit of a unit family in `Series::families`.
+fn bit(family: Family) -> u8 {
+    1 << family.index()
 }
 
 /// The values of one bucket.
@@ -221,6 +173,11 @@ pub struct Series {
     /// Lines with the field but no number in it.
     pub skipped: u64,
     families: u8,
+    /// Values read with a binary size prefix, of `values`.
+    binary: u64,
+    values: u64,
+    /// What a bare number means (a log format's `unit.<field>`).
+    pub bare: Option<Unit>,
 }
 
 impl Series {
@@ -232,7 +189,16 @@ impl Series {
             buckets: VecDeque::new(),
             skipped: 0,
             families: 0,
+            binary: 0,
+            values: 0,
+            bare: None,
         }
+    }
+
+    /// The same, a bare number meaning `bare`.
+    pub fn with_bare(mut self, bare: Option<Unit>) -> Self {
+        self.bare = bare;
+        self
     }
 
     /// Whether the values mix unit families (plotted as written).
@@ -240,12 +206,16 @@ impl Series {
         self.families.count_ones() > 1
     }
 
-    /// The unit the values are drawn in: `ms`, `B` or none.
-    pub fn unit(&self) -> &'static str {
-        match self.families {
-            2 => "ms",
-            4 => "B",
-            _ => "",
+    /// The scale the values are drawn in: their family when they share one, plain
+    /// (as written) otherwise.
+    pub fn unit(&self) -> Scale {
+        match Family::ALL.iter().find(|f| bit(**f) == self.families) {
+            Some(&family) => Scale {
+                family,
+                binary: matches!(family, Family::Size | Family::ByteRate)
+                    && self.binary * 2 > self.values,
+            },
+            None => Scale::default(),
         }
     }
 
@@ -267,14 +237,19 @@ impl Series {
     /// Adds the value text of a line timed `ts` (an untimed line, or no number, is
     /// skipped).
     pub fn add(&mut self, ts: i64, text: &str) {
-        let Some((v, family, raw)) = read_value(text) else {
+        let Some(read) = crate::units::read_as(text, self.bare) else {
             self.skipped += 1;
             return;
         };
         if ts == NO_TIMESTAMP {
             return;
         }
-        self.families |= family.bit();
+        let (v, raw) = (read.value, read.written);
+        self.families |= bit(read.family);
+        self.values += 1;
+        if read.binary {
+            self.binary += 1;
+        }
         let mut b = ts.div_euclid(self.bucket_ms);
         if self.buckets.is_empty() {
             self.first_bucket = b;
@@ -368,29 +343,9 @@ impl PlotState {
     }
 }
 
-/// `v` for a scale or a tooltip, in `unit` (`ms` shown as s / min / h when large).
-pub fn format_value(v: f64, unit: &str) -> String {
-    let num = |v: f64| {
-        if v.abs() >= 100.0 || v.fract() == 0.0 {
-            format!("{v:.0}")
-        } else if v.abs() >= 1.0 {
-            format!("{v:.1}")
-        } else {
-            format!("{v:.3}")
-        }
-    };
-    match unit {
-        "ms" if v.abs() >= 3_600_000.0 => format!("{} h", num(v / 3_600_000.0)),
-        "ms" if v.abs() >= 60_000.0 => format!("{} min", num(v / 60_000.0)),
-        "ms" if v.abs() >= 1_000.0 => format!("{} s", num(v / 1_000.0)),
-        "B" if v.abs() >= 1024.0 * 1024.0 * 1024.0 => {
-            format!("{} GB", num(v / (1024.0 * 1024.0 * 1024.0)))
-        }
-        "B" if v.abs() >= 1024.0 * 1024.0 => format!("{} MB", num(v / (1024.0 * 1024.0))),
-        "B" if v.abs() >= 1024.0 => format!("{} KB", num(v / 1024.0)),
-        "" => num(v),
-        u => format!("{} {u}", num(v)),
-    }
+/// `v` for a scale or a tooltip, in `unit` (`1.2 s`, `3.4 MB`, or the number).
+pub fn format_value(v: f64, unit: Scale) -> String {
+    crate::units::format(v, unit)
 }
 
 #[cfg(test)]
@@ -414,14 +369,27 @@ mod tests {
 
     #[test]
     fn units_are_normalised_within_a_family() {
-        assert_eq!(read_value("250ms").unwrap().0, 250.0);
-        assert_eq!(read_value("1.5 s").unwrap().0, 1500.0);
-        assert_eq!(read_value("2m").unwrap().0, 120_000.0);
-        assert_eq!(read_value("3KB").unwrap().0, 3072.0);
-        assert_eq!(read_value("12").unwrap().1, Family::Plain);
-        assert!(read_value("n/a").is_none());
-        assert_eq!(format_value(1500.0, "ms"), "1.5 s");
-        assert_eq!(format_value(2048.0, "B"), "2 KB");
+        let mut s = Series::new(PlotSpec::parse("took:max").unwrap());
+        s.add(0, "250ms");
+        s.add(0, "1.5 s");
+        assert_eq!(s.unit().family, Family::Time);
+        assert_eq!(
+            format_value(s.value_between(0, 1000).unwrap(), s.unit()),
+            "1.5 s"
+        );
+        let mut b = Series::new(PlotSpec::parse("size:max").unwrap());
+        b.add(0, "2KiB");
+        assert_eq!(
+            format_value(b.value_between(0, 1000).unwrap(), b.unit()),
+            "2 KiB"
+        );
+        let mut bare = Series::new(PlotSpec::parse("took:max").unwrap())
+            .with_bare(crate::units::unit_named("s"));
+        bare.add(0, "2");
+        assert_eq!(
+            format_value(bare.value_between(0, 1000).unwrap(), bare.unit()),
+            "2 s"
+        );
     }
 
     #[test]
@@ -433,7 +401,7 @@ mod tests {
         }
         s.add(5_500, "x");
         assert_eq!(s.skipped, 1);
-        assert_eq!(s.unit(), "ms");
+        assert_eq!(s.unit().family, Family::Time);
         // Seconds 2..4: 20, 30, 40.
         let a = s.agg_between(2_000, 5_000);
         assert_eq!((a.count, a.min, a.max), (3, 20.0, 40.0));
@@ -459,7 +427,7 @@ mod tests {
         s.add(0, "2s");
         s.add(0, "5KB");
         assert!(s.mixed());
-        assert_eq!(s.unit(), "");
+        assert_eq!(s.unit(), Scale::default());
         assert_eq!(s.value_between(0, 1000), Some(5.0));
     }
 }

@@ -19,6 +19,7 @@ use regex::Regex;
 
 use crate::fields::{FieldParser, FieldSpans};
 use crate::tail_engine::NO_TIMESTAMP;
+use crate::units::{Scale, Tally, Unit, FAMILIES};
 
 /// Distinct values counted one by one; past it new values go to `FieldStats::other`.
 pub const MAX_VALUES: usize = 100_000;
@@ -84,6 +85,15 @@ impl StatsSource {
                 };
                 f(at.map(|(a, b)| &line[a..b]))
             }
+        }
+    }
+
+    /// The unit a bare number of the source means: the `unit.<field>` of the log format
+    /// that reads the stream.
+    pub fn bare_unit(&self, parser: Option<&FieldParser>) -> Option<Unit> {
+        match self {
+            StatsSource::Field(key) => crate::fields::field_unit(parser, key),
+            StatsSource::Capture(_) => None,
         }
     }
 
@@ -323,19 +333,9 @@ impl NumHist {
     }
 }
 
-/// `text` as a number: a plain number, or one followed by a unit (`ms`, `s`, `us`, `%`,
-/// `B`, `KB`, `MB`).
+/// `text` as a number in its unit's base (`1.2s` is 1200, `3KB` is 3000; see `units`).
 pub fn parse_number(text: &str) -> Option<f64> {
-    let t = text.trim();
-    let digits = ["ms", "us", "µs", "KB", "MB", "kb", "mb", "s", "%", "B"]
-        .iter()
-        .find_map(|u| t.strip_suffix(u))
-        .unwrap_or(t)
-        .trim_end();
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse::<f64>().ok().filter(|v| v.is_finite())
+    crate::units::read(text).map(|r| r.value)
 }
 
 /// `value` cut at `MAX_VALUE_BYTES` on a character boundary, with `…`.
@@ -450,14 +450,20 @@ pub struct FieldStats {
     pub lines: u64,
     /// Lines that had a value.
     pub with_value: u64,
-    /// Values that read as numbers, and the others (empty ones not counted).
+    /// Values that read as numbers (of any unit family), and the others (empty ones not
+    /// counted).
     pub numeric_values: u64,
     pub text_values: u64,
-    pub hist: NumHist,
+    /// The numbers per unit family, in the family's base unit: the field's family is the
+    /// one most values have (`units::Tally::dominant`), the others count as text.
+    hists: [NumHist; FAMILIES],
+    pub tally: Tally,
+    /// What a bare number means (a log format's `unit.<field>`).
+    pub bare: Option<Unit>,
     pub slices: Option<Slices>,
-    /// Values per slice, and the numbers of each slice (numeric sources).
+    /// Values per slice, and the numbers of each slice per family (numeric sources).
     slice_totals: Vec<u64>,
-    slice_hists: Vec<NumHist>,
+    slice_hists: Vec<[NumHist; FAMILIES]>,
 }
 
 impl FieldStats {
@@ -467,6 +473,12 @@ impl FieldStats {
             slice_totals: vec![0; slices.map_or(0, |s| s.count)],
             ..Self::default()
         }
+    }
+
+    /// The same, a bare number meaning `bare` (see `StatsSource::bare_unit`).
+    pub fn with_bare(mut self, bare: Option<Unit>) -> Self {
+        self.bare = bare;
+        self
     }
 
     /// One line: its value (if any), its level (`LogLevel as u8`) and its timestamp.
@@ -481,16 +493,18 @@ impl FieldStats {
             self.slice_totals[i] += 1;
         }
         if !value.trim().is_empty() {
-            match parse_number(value) {
-                Some(v) => {
+            match crate::units::read_as(value, self.bare) {
+                Some(r) => {
                     self.numeric_values += 1;
-                    self.hist.add(v);
+                    self.tally.add(&r);
+                    let f = r.family.index();
+                    self.hists[f].add(r.value);
                     if let Some(i) = slice {
                         if self.slice_hists.len() < self.slice_totals.len() {
                             self.slice_hists
-                                .resize_with(self.slice_totals.len(), NumHist::default);
+                                .resize_with(self.slice_totals.len(), Default::default);
                         }
-                        self.slice_hists[i].add(v);
+                        self.slice_hists[i][f].add(r.value);
                     }
                 }
                 None => self.text_values += 1,
@@ -524,16 +538,21 @@ impl FieldStats {
         self.with_value += other.with_value;
         self.numeric_values += other.numeric_values;
         self.text_values += other.text_values;
-        self.hist.merge(&other.hist);
+        for (a, b) in self.hists.iter_mut().zip(&other.hists) {
+            a.merge(b);
+        }
+        self.tally.merge(&other.tally);
         for (a, b) in self.slice_totals.iter_mut().zip(&other.slice_totals) {
             *a += b;
         }
         if self.slice_hists.len() < other.slice_hists.len() {
             self.slice_hists
-                .resize_with(other.slice_hists.len(), NumHist::default);
+                .resize_with(other.slice_hists.len(), Default::default);
         }
         for (a, b) in self.slice_hists.iter_mut().zip(&other.slice_hists) {
-            a.merge(b);
+            for (x, y) in a.iter_mut().zip(b) {
+                x.merge(y);
+            }
         }
         for (value, stats) in other.values {
             if let Some(mine) = self.values.get_mut(&value) {
@@ -557,7 +576,7 @@ impl FieldStats {
         }
         self.slice_totals.resize(count, 0);
         if !self.slice_hists.is_empty() {
-            self.slice_hists.resize_with(count, NumHist::default);
+            self.slice_hists.resize_with(count, Default::default);
         }
     }
 
@@ -584,10 +603,27 @@ impl FieldStats {
         self.values.len()
     }
 
-    /// Whether the values are numbers (at least 90 % of the non-empty ones).
+    /// Whether the values are numbers of one family (at least 90 % of the non-empty ones:
+    /// numbers of another unit family count against it).
     pub fn is_numeric(&self) -> bool {
         let total = self.numeric_values + self.text_values;
-        total > 0 && self.numeric_values as f64 >= NUMERIC_SHARE * total as f64
+        let (_, n) = self.tally.dominant();
+        total > 0 && n as f64 >= NUMERIC_SHARE * total as f64
+    }
+
+    /// The unit family of the numbers and how they are shown.
+    pub fn scale(&self) -> Scale {
+        self.tally.scale()
+    }
+
+    /// The numbers of the field's family, in its base unit.
+    pub fn hist(&self) -> &NumHist {
+        &self.hists[self.tally.dominant().0.index()]
+    }
+
+    /// `v` (in the base unit) as the summary shows it: `1.2 s`, `3.4 MB`, or the number.
+    pub fn show(&self, v: f64) -> String {
+        crate::units::format(v, self.scale())
     }
 
     /// The `n` most frequent values, most frequent first (ties in value order).
@@ -616,7 +652,8 @@ impl FieldStats {
 
     /// The value at quantile `q` of the numbers of slice `i`.
     pub fn slice_percentile(&self, i: usize, q: f64) -> Option<f64> {
-        self.slice_hists.get(i).and_then(|h| h.percentile(q))
+        let f = self.tally.dominant().0.index();
+        self.slice_hists.get(i).and_then(|h| h[f].percentile(q))
     }
 
     /// The table as CSV: value, count, share and the count per level (`level_names`, in
@@ -785,7 +822,8 @@ mod tests {
     fn numbers_and_percentiles() {
         assert_eq!(parse_number(" 250ms"), Some(250.0));
         assert_eq!(parse_number("12.5 %"), Some(12.5));
-        assert_eq!(parse_number("3KB"), Some(3.0));
+        assert_eq!(parse_number("3KB"), Some(3000.0));
+        assert_eq!(parse_number("1.2s"), Some(1200.0));
         assert_eq!(parse_number("-4"), Some(-4.0));
         assert_eq!(parse_number("ms"), None);
         assert_eq!(parse_number("GET"), None);
@@ -867,7 +905,7 @@ mod tests {
             let n = slices.unwrap().count;
             assert_eq!(m.series(n), s.series(n));
         }
-        assert_eq!(a.hist.percentile(0.9), whole.hist.percentile(0.9));
+        assert_eq!(a.hist().percentile(0.9), whole.hist().percentile(0.9));
     }
 
     #[test]
@@ -956,5 +994,35 @@ mod tests {
         }
         assert!(c.values["y"].series.len() <= 2 * 8 + 1);
         assert_eq!(c.values["y"].series(2), vec![5_000, 5_000]);
+    }
+
+    #[test]
+    fn values_with_units_are_counted_in_one_base_unit() {
+        let mut s = FieldStats::new(None);
+        for v in ["900ms", "1.2s", "45ms", "300ms"] {
+            s.add_line(Some(v), 3, NO_TIMESTAMP);
+        }
+        assert!(s.is_numeric());
+        assert_eq!(s.show(s.hist().max), "1.2 s");
+        assert_eq!(s.show(s.hist().min), "45 ms");
+        let p95 = s.hist().percentile(0.95).unwrap();
+        assert!((p95 - 1200.0).abs() < 13.0, "{p95}");
+
+        // Sizes of another family are not numbers of a duration field.
+        let mut mixed = FieldStats::new(None);
+        for v in ["10ms", "20ms", "3KB"] {
+            mixed.add_line(Some(v), 3, NO_TIMESTAMP);
+        }
+        assert!(!mixed.is_numeric());
+        assert_eq!(mixed.hist().count, 2);
+
+        // A log format's unit gives bare numbers their meaning.
+        let mut bare = FieldStats::new(None);
+        bare.bare = crate::units::unit_named("ms");
+        for v in ["250", "1.5s"] {
+            bare.add_line(Some(v), 3, NO_TIMESTAMP);
+        }
+        assert_eq!(bare.show(bare.hist().min), "250 ms");
+        assert_eq!(bare.show(bare.hist().max), "1.5 s");
     }
 }

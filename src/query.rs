@@ -29,6 +29,7 @@ use crate::field_stats::{parse_number, NumHist};
 use crate::fields::{FieldParser, FieldSpans};
 use crate::filter_expr::{FilterExpr, Toggles};
 use crate::tail_engine::NO_TIMESTAMP;
+use crate::units::{Family, Tally, Unit, FAMILIES};
 
 /// Longest query text, in bytes.
 pub const MAX_QUERY_BYTES: usize = 64 * 1024;
@@ -487,15 +488,20 @@ pub struct LineIn<'a> {
     pub ts: i64,
 }
 
-/// The state of one aggregate of one group.
+/// Values of a numeric aggregate read before a `where` comparing a field with a unit
+/// decides the field holds another family (`bytes > 2s`).
+const UNIT_CHECK_VALUES: u64 = 1_000;
+
+/// The state of one aggregate of one group. Numbers are kept per unit family, in its base
+/// unit (`units`); the result is the family most values had, the others are skipped.
 #[derive(Debug, Clone)]
 enum AggState {
     Count(u64),
-    Sum(f64, u64),
-    Min(Option<f64>),
-    Max(Option<f64>),
+    Sum([(f64, u64); FAMILIES], Tally),
+    Min([Option<f64>; FAMILIES], Tally),
+    Max([Option<f64>; FAMILIES], Tally),
     Dc(std::collections::HashSet<Box<str>>, bool),
-    Pct(NumHist),
+    Pct(Box<[NumHist; FAMILIES]>, Tally),
     First(Option<String>),
     Last(Option<String>),
 }
@@ -504,39 +510,44 @@ impl AggState {
     fn new(f: Func) -> Self {
         match f {
             Func::Count => AggState::Count(0),
-            Func::Sum | Func::Avg => AggState::Sum(0.0, 0),
-            Func::Min => AggState::Min(None),
-            Func::Max => AggState::Max(None),
+            Func::Sum | Func::Avg => AggState::Sum(Default::default(), Tally::default()),
+            Func::Min => AggState::Min(Default::default(), Tally::default()),
+            Func::Max => AggState::Max(Default::default(), Tally::default()),
             Func::Dc => AggState::Dc(Default::default(), false),
-            Func::Pct(_) => AggState::Pct(NumHist::default()),
+            Func::Pct(_) => AggState::Pct(Default::default(), Tally::default()),
             Func::First => AggState::First(None),
             Func::Last => AggState::Last(None),
         }
     }
 
-    /// Adds a value; returns false when a number was wanted and `v` is none. `dc_left`:
-    /// the distinct values every `dc` of the query may still keep.
-    fn add(&mut self, v: Option<&str>, dc_left: &mut usize) -> bool {
-        let num = || v.and_then(parse_number);
+    /// Adds a value; returns false when a number was wanted and `v` is none. A bare
+    /// number means `bare` (a log format's `unit.<field>`). `dc_left`: the distinct values
+    /// every `dc` of the query may still keep.
+    fn add(&mut self, v: Option<&str>, bare: Option<Unit>, dc_left: &mut usize) -> bool {
+        let num = |tally: &mut Tally| {
+            let r = crate::units::read_as(v?, bare)?;
+            tally.add(&r);
+            Some((r.family.index(), r.value))
+        };
         match self {
             AggState::Count(n) => {
                 if v.is_some() {
                     *n += 1;
                 }
             }
-            AggState::Sum(s, n) => match num() {
-                Some(x) => {
-                    *s += x;
-                    *n += 1;
+            AggState::Sum(s, tally) => match num(tally) {
+                Some((f, x)) => {
+                    s[f].0 += x;
+                    s[f].1 += 1;
                 }
                 None => return v.is_none(),
             },
-            AggState::Min(m) => match num() {
-                Some(x) => *m = Some(m.map_or(x, |m| m.min(x))),
+            AggState::Min(m, tally) => match num(tally) {
+                Some((f, x)) => m[f] = Some(m[f].map_or(x, |m| m.min(x))),
                 None => return v.is_none(),
             },
-            AggState::Max(m) => match num() {
-                Some(x) => *m = Some(m.map_or(x, |m| m.max(x))),
+            AggState::Max(m, tally) => match num(tally) {
+                Some((f, x)) => m[f] = Some(m[f].map_or(x, |m| m.max(x))),
                 None => return v.is_none(),
             },
             AggState::Dc(set, capped) => {
@@ -550,8 +561,8 @@ impl AggState {
                     }
                 }
             }
-            AggState::Pct(h) => match num() {
-                Some(x) => h.add(x),
+            AggState::Pct(h, tally) => match num(tally) {
+                Some((f, x)) => h[f].add(x),
                 None => return v.is_none(),
             },
             AggState::First(f) => {
@@ -574,26 +585,60 @@ impl AggState {
         true
     }
 
+    /// The numbers of a numeric aggregate read in a family other than its result's.
+    fn other_families(&self) -> u64 {
+        match self {
+            AggState::Sum(_, t)
+            | AggState::Min(_, t)
+            | AggState::Max(_, t)
+            | AggState::Pct(_, t) => t.total() - t.dominant().1,
+            _ => 0,
+        }
+    }
+
     fn value(&self, f: Func) -> String {
-        let num = |x: f64| {
+        let plain = |x: f64| {
             if x.fract() == 0.0 && x.abs() < 1e15 {
                 format!("{x:.0}")
             } else {
                 format!("{x:.3}")
             }
         };
+        // The family most values had, and its numbers shown in their unit.
+        let pick = |t: &Tally| {
+            let scale = t.scale();
+            let show = move |x: f64| {
+                if scale.family == Family::Plain {
+                    plain(x)
+                } else {
+                    crate::units::format(x, scale)
+                }
+            };
+            (scale.family.index(), show)
+        };
         match (self, f) {
             (AggState::Count(n), _) => n.to_string(),
-            (AggState::Sum(s, n), Func::Avg) => {
-                if *n == 0 {
+            (AggState::Sum(s, t), Func::Avg) => {
+                let (i, show) = pick(t);
+                let (sum, n) = s[i];
+                if n == 0 {
                     String::new()
                 } else {
-                    num(s / *n as f64)
+                    show(sum / n as f64)
                 }
             }
-            (AggState::Sum(_, 0), _) => String::new(),
-            (AggState::Sum(s, _), _) => num(*s),
-            (AggState::Min(m) | AggState::Max(m), _) => m.map(num).unwrap_or_default(),
+            (AggState::Sum(s, t), _) => {
+                let (i, show) = pick(t);
+                if s[i].1 == 0 {
+                    String::new()
+                } else {
+                    show(s[i].0)
+                }
+            }
+            (AggState::Min(m, t) | AggState::Max(m, t), _) => {
+                let (i, show) = pick(t);
+                m[i].map(show).unwrap_or_default()
+            }
             (AggState::Dc(set, capped), _) => {
                 if *capped {
                     format!("≥{}", set.len())
@@ -601,10 +646,11 @@ impl AggState {
                     set.len().to_string()
                 }
             }
-            (AggState::Pct(h), Func::Pct(p)) => {
-                h.percentile(p / 100.0).map(num).unwrap_or_default()
+            (AggState::Pct(h, t), Func::Pct(p)) => {
+                let (i, show) = pick(t);
+                h[i].percentile(p / 100.0).map(show).unwrap_or_default()
             }
-            (AggState::Pct(_), _) => String::new(),
+            (AggState::Pct(..), _) => String::new(),
             (AggState::First(v) | AggState::Last(v), _) => v.clone().unwrap_or_default(),
         }
     }
@@ -733,6 +779,12 @@ pub struct Executor<'q> {
     truncated: bool,
     lines_read: u64,
     skipped_values: u64,
+    /// The bare-number unit of each aggregate's field (a log format's `unit.<field>`).
+    agg_bare: Vec<Option<Unit>>,
+    /// The `where` comparisons with a unit (`latency > 1s`): stage, field, the bound's
+    /// family, and the families of the field's first values.
+    unit_checks: Vec<(usize, String, Family, Tally)>,
+    unit_checked: u64,
     error: Option<QueryError>,
     done: bool,
 }
@@ -791,7 +843,33 @@ impl<'q> Executor<'q> {
                 _ => None,
             })
             .collect();
+        let agg_bare = match query.stages.get(split) {
+            Some(Stage::Stats { aggs, .. }) => aggs
+                .iter()
+                .map(|a| {
+                    a.arg
+                        .as_deref()
+                        .and_then(|k| crate::fields::field_unit(parser.as_deref(), k))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let mut unit_checks: Vec<(usize, String, Family, Tally)> = Vec::new();
+        for (i, stage) in query.stages[..split].iter().enumerate() {
+            if let Stage::Where(expr) = stage {
+                for term in expr.operands.iter().filter_map(|o| o.term.field.as_ref()) {
+                    if let Some(family) = term.unit_family() {
+                        if !unit_checks.iter().any(|c| c.1 == term.key && c.2 == family) {
+                            unit_checks.push((i + 1, term.key.clone(), family, Tally::default()));
+                        }
+                    }
+                }
+            }
+        }
         Self {
+            agg_bare,
+            unit_checks,
+            unit_checked: 0,
             query,
             parser,
             split,
@@ -829,6 +907,52 @@ impl<'q> Executor<'q> {
         self.done = true;
     }
 
+    /// Reads the fields of the `where` comparisons with a unit; once the first values tell,
+    /// a field of another family than its bound's (`bytes > 2s`) fails the query, so it
+    /// does not just come back empty.
+    fn check_units(&mut self, text: &str) {
+        let Some(parser) = self.parser.as_deref() else {
+            return;
+        };
+        crate::fields::scan(parser, text, &mut self.spans);
+        let mut any = false;
+        for (_, key, _, tally) in &mut self.unit_checks {
+            if let Some(f) = self.spans.get(text, key) {
+                let bare = crate::fields::field_unit(Some(parser), key);
+                if let Some(r) = crate::units::read_as(&f.value(), bare) {
+                    tally.add(&r);
+                    any = true;
+                }
+            }
+        }
+        if any {
+            self.unit_checked += 1;
+        }
+        if self.unit_checked >= UNIT_CHECK_VALUES {
+            self.verify_units();
+        }
+    }
+
+    fn verify_units(&mut self) {
+        let wrong = self
+            .unit_checks
+            .iter()
+            .find_map(|(stage, key, family, tally)| {
+                let (held, _) = tally.dominant();
+                (tally.total() > 0 && held != *family).then(|| {
+                    (
+                        *stage,
+                        format!("{key}: {} · {}", held.name(), family.name()),
+                    )
+                })
+            });
+        self.unit_checks.clear();
+        if let Some((stage, detail)) = wrong {
+            self.error = Some(QueryError::new(stage, 0, "query_err_units", detail));
+            self.done = true;
+        }
+    }
+
     /// One line, in file order.
     pub fn push(&mut self, line: &LineIn) {
         if self.done {
@@ -836,6 +960,12 @@ impl<'q> Executor<'q> {
         }
         self.lines_read += 1;
         self.captures.clear();
+        if !self.unit_checks.is_empty() && self.unit_checked < UNIT_CHECK_VALUES {
+            self.check_units(line.text);
+            if self.done {
+                return;
+            }
+        }
         let toggles = self.query.toggles;
         let mut slice = None;
         // The line stages, up to the first `stats` or `sort`.
@@ -918,9 +1048,11 @@ impl<'q> Executor<'q> {
                 }
                 let mut skipped = 0;
                 if let Some(states) = self.groups.get_mut(&self.key_buf) {
-                    for (st, (present, v)) in states.iter_mut().zip(&self.val_buf) {
+                    for (i, (st, (present, v))) in states.iter_mut().zip(&self.val_buf).enumerate()
+                    {
                         let v = present.then_some(v.as_str());
-                        if !st.add(v, &mut self.dc_left) {
+                        let bare = self.agg_bare.get(i).copied().flatten();
+                        if !st.add(v, bare, &mut self.dc_left) {
                             skipped += 1;
                         }
                     }
@@ -980,9 +1112,18 @@ impl<'q> Executor<'q> {
 
     /// The result, once every line was pushed (or `wants_more` turned false).
     pub fn finish(mut self) -> Result<Table, QueryError> {
+        if !self.unit_checks.is_empty() {
+            self.verify_units();
+        }
         if let Some(e) = self.error.take() {
             return Err(e);
         }
+        self.skipped_values += self
+            .groups
+            .values()
+            .flatten()
+            .map(AggState::other_families)
+            .sum::<u64>();
         let mut table = match self.query.stages.get(self.split) {
             Some(Stage::Stats { aggs, by }) => {
                 let mut columns = by.clone();
@@ -1343,5 +1484,47 @@ mod tests {
         });
         let err = run(&q("sort -n"), Some(logfmt()), ins).unwrap_err();
         assert_eq!(err.key, "query_err_sort_rows");
+    }
+
+    #[test]
+    fn values_with_units_aggregate_compare_and_refuse_other_families() {
+        let lines: Vec<String> = ["900ms", "1.2s", "45ms", "300ms", "2s"]
+            .iter()
+            .enumerate()
+            .map(|(i, v)| format!("route=/r{} latency={v} bytes={}KB", i % 2, i + 1))
+            .collect();
+        let t = table(
+            "stats max(latency), min(latency), p95(latency), sum(bytes)",
+            &lines,
+        );
+        assert_eq!(t.rows[0][0], "2 s");
+        assert_eq!(t.rows[0][1], "45 ms");
+        assert!(t.rows[0][2].ends_with(" s"), "{:?}", t.rows[0]);
+        assert_eq!(t.rows[0][3], "15 KB");
+        let t = table("where latency>1s | stats count()", &lines);
+        assert_eq!(t.rows, vec![vec!["2"]]);
+        let t = table(
+            "where latency>=300ms | stats count() by route | sort route",
+            &lines,
+        );
+        assert_eq!(t.rows, vec![vec!["/r0", "2"], vec!["/r1", "2"]]);
+        // Sorting the shown values keeps their order in the base unit.
+        let t = table("stats max(latency) as top by route | sort -top", &lines);
+        assert_eq!(t.rows[0], vec!["/r0", "2 s"]);
+        assert_eq!(t.rows[1], vec!["/r1", "1.2 s"]);
+
+        let ins = lines.iter().enumerate().map(|(i, t)| LineIn {
+            idx: i,
+            text: t,
+            level: 3,
+            ts: 0,
+        });
+        let err = run(&q("where bytes>2s | stats count()"), Some(logfmt()), ins).unwrap_err();
+        assert_eq!(err.key, "query_err_units");
+        assert!(
+            err.detail.contains("size") && err.detail.contains("duration"),
+            "{}",
+            err.detail
+        );
     }
 }

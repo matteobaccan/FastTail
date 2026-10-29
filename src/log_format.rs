@@ -57,6 +57,9 @@ pub struct FormatSpec {
     /// `token=level` pairs separated by commas (`W=warn,E=error`), any case.
     pub level_map: String,
     pub message_field: String,
+    /// `field=unit` pairs separated by commas (`latency=ms,size=KiB`): what a bare number
+    /// of the field means. Written as `unit.<field>=` keys.
+    pub units: String,
     /// A line matching it starts an entry; any other line continues the previous one.
     pub entry_start: String,
     /// File name globs (`payments-*.log`) the format is for.
@@ -107,6 +110,15 @@ impl FormatSpec {
             level_field: get("level_field"),
             level_map: get("level_map"),
             message_field: get("message_field"),
+            units: sec
+                .iter()
+                .filter_map(|(k, v)| {
+                    let field = k.strip_prefix("unit.")?.trim();
+                    (!field.is_empty() && !v.trim().is_empty())
+                        .then(|| format!("{field}={}", v.trim()))
+                })
+                .collect::<Vec<_>>()
+                .join(","),
             entry_start: raw("entry_start").unwrap_or_default(),
             files: get("files")
                 .split(';')
@@ -145,6 +157,9 @@ impl FormatSpec {
             if !v.is_empty() {
                 sec.set(key, value(v));
             }
+        }
+        for (field, unit) in unit_pairs(&self.units) {
+            sec.set(format!("unit.{field}"), value(unit));
         }
         if !self.files.is_empty() {
             sec.set("files", value(&self.files.join(";")));
@@ -195,6 +210,8 @@ pub struct LogFormat {
     set: RegexSet,
     pub timestamp_format: Option<TimeFormat>,
     level_map: Vec<(String, LogLevel)>,
+    /// The `unit.<field>` of the format.
+    units: Vec<(String, crate::units::Unit)>,
     pub entry_start: Option<Regex>,
     /// Shipped with FastTail: read-only, duplicated to be changed.
     pub builtin: bool,
@@ -241,6 +258,17 @@ impl LogFormat {
             text => Some(TimeFormat::parse(text).map_err(|e| format!("timestamp_format: {e}"))?),
         };
         let level_map = parse_level_map(&spec.level_map)?;
+        let mut units = Vec::new();
+        for (field, unit) in unit_pairs(&spec.units) {
+            match crate::units::unit_named(unit) {
+                Some(u) => units.push((field.to_string(), u)),
+                None => {
+                    return Err(format!(
+                        "unit.{field}: {unit} is not a unit (ms, s, KB, KiB...)"
+                    ))
+                }
+            }
+        }
         let entry_start = match spec.entry_start.trim() {
             "" => None,
             p => Some(Regex::new(p).map_err(|e| format!("entry_start: {e}"))?),
@@ -257,6 +285,7 @@ impl LogFormat {
             set,
             timestamp_format,
             level_map,
+            units,
             entry_start,
             builtin: false,
             file: None,
@@ -303,6 +332,11 @@ impl LogFormat {
         self.patterns
             .iter()
             .any(|p| crate::fields::scan_regex(p, line, out))
+    }
+
+    /// What a bare number of `field` means (`unit.<field>=`).
+    pub fn unit_of(&self, field: &str) -> Option<crate::units::Unit> {
+        self.units.iter().find(|(f, _)| f == field).map(|(_, u)| *u)
     }
 
     /// The level of a line scanned into `spans`: its level field through the level map,
@@ -355,6 +389,15 @@ impl LogFormat {
 }
 
 /// `W=warn,E=error`: tokens and the levels they name.
+/// The `field=unit` pairs of `FormatSpec::units`, empty ones skipped.
+fn unit_pairs(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.split([',', ';']).filter_map(|pair| {
+        let (field, unit) = pair.split_once('=')?;
+        let (field, unit) = (field.trim(), unit.trim());
+        (!field.is_empty() && !unit.is_empty()).then_some((field, unit))
+    })
+}
+
 fn parse_level_map(text: &str) -> Result<Vec<(String, LogLevel)>, String> {
     let mut out = Vec::new();
     for pair in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
@@ -649,6 +692,22 @@ sample.1 = 28.09.26 14:02:11,123 [main] E card declined
     }
 
     #[test]
+    fn field_units_read_write_and_compile() {
+        let text = "[format]\nname=x\nregex=(?P<took>\\d+) (?P<size>\\d+)\nunit.took = ms\nunit.size=KiB\n";
+        let spec = FormatSpec::from_ini(text).unwrap();
+        assert_eq!(spec.units, "took=ms,size=KiB");
+        assert!(spec.to_ini().contains("unit.took=ms"));
+        assert_eq!(FormatSpec::from_ini(&spec.to_ini()).unwrap(), spec);
+        let format = LogFormat::compile(spec).unwrap();
+        assert_eq!(
+            format.unit_of("took").unwrap().family,
+            crate::units::Family::Time
+        );
+        assert_eq!(format.unit_of("size").unwrap().factor, 1024.0);
+        assert!(format.unit_of("other").is_none());
+    }
+
+    #[test]
     fn invalid_formats_say_why() {
         let bad = |text: &str| LogFormat::compile(FormatSpec::from_ini(text).unwrap()).unwrap_err();
         assert!(bad("[format]\nname=x\nregex=^(?P<a>\\d+\n").contains("pattern 1"));
@@ -667,6 +726,7 @@ sample.1 = 28.09.26 14:02:11,123 [main] E card declined
                 .contains("timestamp_zone")
         );
         assert!(bad("[format]\nregex=(?P<a>.)\n").contains("no name"));
+        assert!(bad("[format]\nname=x\nregex=(?P<a>.)\nunit.a=apples\n").contains("unit.a"));
         assert!(FormatSpec::from_ini("name=x").is_err(), "no section");
     }
 

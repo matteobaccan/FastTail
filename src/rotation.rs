@@ -440,11 +440,15 @@ impl TailEngine {
         let Some(r) = self.rotation.as_ref() else {
             return Vec::new();
         };
-        let indexed = self.file_size;
+        // A piece always starts a line: listed once that line is indexed (the file size
+        // can run ahead of or behind the index while the spool grows).
         r.starts()
             .into_iter()
-            .filter(|(offset, _)| *offset < indexed || *offset == 0)
-            .map(|(offset, name)| (self.line_of_offset(offset), name))
+            .filter_map(|(offset, name)| {
+                let line = self.line_of_offset(offset);
+                (offset == 0 || self.line_offsets.get(line) == Some(&offset))
+                    .then_some((line, name))
+            })
             .collect()
     }
 }

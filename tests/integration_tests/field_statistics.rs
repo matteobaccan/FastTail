@@ -153,7 +153,7 @@ fn a_regex_capture_works_without_a_parser_and_the_job_matches_a_direct_count() {
         .collect();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let exact = sorted[(0.95 * sorted.len() as f64).ceil() as usize - 1];
-    let p95 = s.hist.percentile(0.95).unwrap();
+    let p95 = s.hist().percentile(0.95).unwrap();
     assert!((p95 - exact).abs() <= exact * 0.011, "{p95} vs {exact}");
     engine.close_stats();
     assert!(engine.stats.is_none());
