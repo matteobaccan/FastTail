@@ -8170,15 +8170,21 @@ impl Telemetry {
             return false;
         }
         self.read_at = Some(Instant::now());
-        let system = self.system.get_or_insert_with(|| {
-            let mut s = sysinfo::System::new_with_specifics(
+        if self.system.is_none() {
+            let Ok(mut s) = sysinfo::System::new_with_specifics(
                 sysinfo::RefreshKind::nothing()
                     .with_cpu(sysinfo::CpuRefreshKind::everything())
                     .with_memory(sysinfo::MemoryRefreshKind::everything()),
-            );
+            ) else {
+                // No meters where `sysinfo` cannot read them.
+                return false;
+            };
             s.refresh_cpu_usage();
-            s
-        });
+            self.system = Some(s);
+        }
+        let Some(system) = self.system.as_mut() else {
+            return false;
+        };
         system.refresh_cpu_usage();
         system.refresh_memory();
         let before = (self.cpu.round() as u32, self.used_mb / 100, self.total_mb);

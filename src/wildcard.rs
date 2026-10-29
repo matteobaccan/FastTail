@@ -28,6 +28,33 @@ const RECURSIVE_MARK: &str = "**";
 /// none) and `?` exactly one. On Windows the comparison ignores ASCII case, like the file
 /// system does.
 pub fn wildcard_match(pattern: &str, name: &str) -> bool {
+    // Fast path: ASCII strings operate on byte slices directly with zero allocations.
+    if pattern.is_ascii() && name.is_ascii() {
+        let p = pattern.as_bytes();
+        let n = name.as_bytes();
+        let (mut pi, mut ni) = (0usize, 0usize);
+        let mut star: Option<(usize, usize)> = None;
+        while ni < n.len() {
+            if pi < p.len() && (p[pi] == b'?' || fold_ascii(p[pi]) == fold_ascii(n[ni])) {
+                pi += 1;
+                ni += 1;
+            } else if pi < p.len() && p[pi] == b'*' {
+                star = Some((pi, ni));
+                pi += 1;
+            } else if let Some((sp, sn)) = star {
+                pi = sp + 1;
+                ni = sn + 1;
+                star = Some((sp, sn + 1));
+            } else {
+                return false;
+            }
+        }
+        while pi < p.len() && p[pi] == b'*' {
+            pi += 1;
+        }
+        return pi == p.len();
+    }
+
     let p: Vec<char> = pattern.chars().map(fold).collect();
     let n: Vec<char> = name.chars().map(fold).collect();
     let (mut pi, mut ni) = (0usize, 0usize);
@@ -53,6 +80,18 @@ pub fn wildcard_match(pattern: &str, name: &str) -> bool {
         pi += 1;
     }
     pi == p.len()
+}
+
+#[cfg(windows)]
+#[inline(always)]
+fn fold_ascii(b: u8) -> u8 {
+    b.to_ascii_lowercase()
+}
+
+#[cfg(not(windows))]
+#[inline(always)]
+fn fold_ascii(b: u8) -> u8 {
+    b
 }
 
 #[cfg(windows)]
@@ -259,9 +298,26 @@ pub fn newest_of(files: &[FolderMatch]) -> Option<&FolderMatch> {
 }
 
 fn ends_with_fold(text: &str, suffix: &str) -> bool {
-    let t: Vec<char> = text.chars().map(fold).collect();
-    let s: Vec<char> = suffix.chars().map(fold).collect();
-    t.ends_with(&s)
+    if text.is_ascii() && suffix.is_ascii() {
+        let t = text.as_bytes();
+        let s = suffix.as_bytes();
+        if t.len() < s.len() {
+            return false;
+        }
+        let tail = &t[t.len() - s.len()..];
+        #[cfg(windows)]
+        {
+            tail.eq_ignore_ascii_case(s)
+        }
+        #[cfg(not(windows))]
+        {
+            tail == s
+        }
+    } else {
+        let t: Vec<char> = text.chars().map(fold).collect();
+        let s: Vec<char> = suffix.chars().map(fold).collect();
+        t.ends_with(&s)
+    }
 }
 
 /// True when `path` names a pattern stream rather than a file: its last component holds a
@@ -310,6 +366,10 @@ mod tests {
         assert!(wildcard_match("a*b*c", "aXXbYYc"));
         assert!(!wildcard_match("a*b*c", "aXXbYY"));
         assert!(wildcard_match("**x", "x"));
+        // Non-ASCII unicode filenames
+        assert!(wildcard_match("über-*.log", "über-2026.log"));
+        assert!(wildcard_match("protokoll-?.txt", "protokoll-ä.txt"));
+        assert!(!wildcard_match("über-*.log", "unter-2026.log"));
     }
 
     #[test]

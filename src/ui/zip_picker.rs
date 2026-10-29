@@ -320,14 +320,18 @@ impl ArchivePicker {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for i in self.visible() {
-                        let entry = &self.entries[i];
-                        let size = human_size(entry.size);
-                        ui.horizontal(|ui| match &entry.refusal {
-                            None => {
+                        let is_refused = self.entries[i].refusal.is_some();
+                        let entry_name = self.entries[i].name.clone();
+                        let size = human_size(self.entries[i].size);
+                        let block_size = self.entries[i].block_size;
+                        let refusal = self.entries[i].refusal.clone();
+
+                        ui.horizontal(|ui| {
+                            if !is_refused {
                                 let mut checked = self.selected.contains(&i);
                                 let mut row = ui
-                                    .checkbox(&mut checked, RichText::new(&entry.name).monospace());
-                                if let Some(block) = entry.block_size {
+                                    .checkbox(&mut checked, RichText::new(&entry_name).monospace());
+                                if let Some(block) = block_size {
                                     // The entries before it in its solid block are decoded
                                     // too: say how much.
                                     row = row.on_hover_text(
@@ -342,15 +346,18 @@ impl ArchivePicker {
                                         self.selected.remove(&i);
                                     }
                                 }
+                                if row.double_clicked() {
+                                    self.selected.insert(i);
+                                    outcome = Some(self.open_chosen());
+                                }
                                 ui.label(RichText::new(size).monospace().color(theme.text_dim()));
-                            }
-                            Some(refusal) => {
-                                let reason = refusal_text(lang, refusal);
+                            } else if let Some(refusal) = refusal {
+                                let reason = refusal_text(lang, &refusal);
                                 ui.add_enabled(
                                     false,
                                     egui::Checkbox::new(
                                         &mut false,
-                                        RichText::new(&entry.name).monospace(),
+                                        RichText::new(&entry_name).monospace(),
                                     ),
                                 )
                                 .on_disabled_hover_text(&reason);

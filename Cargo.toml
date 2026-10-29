@@ -83,7 +83,7 @@ smallvec = "1.13"
 rfd = { version = "0.17", optional = true }
 
 # Telemetry
-sysinfo = "0.39"
+sysinfo = "0.40"
 similar = "3"
 
 # Windows Specific
