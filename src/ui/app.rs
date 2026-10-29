@@ -71,7 +71,8 @@ pub struct FastTailApp {
     pub lock_attempts: LockAttempts,
     /// Screensaver state of the previous frame, to catch the moment it ends.
     pub screensaver_was_active: bool,
-    pub system: System,
+    /// CPU and memory of the telemetry meters; `None` where `sysinfo` cannot read them.
+    pub system: Option<System>,
     pub cpu_usage: f32,
     pub mem_used_mb: u64,
     pub last_sys_refresh: Instant,
@@ -577,9 +578,12 @@ impl FastTailApp {
             RefreshKind::nothing()
                 .with_cpu(CpuRefreshKind::everything())
                 .with_memory(MemoryRefreshKind::everything()),
-        );
-        system.refresh_cpu_usage();
-        system.refresh_memory();
+        )
+        .ok();
+        if let Some(system) = system.as_mut() {
+            system.refresh_cpu_usage();
+            system.refresh_memory();
+        }
 
         // Check for BareTail config on Windows if enabled (only done once, then disabled in fasttail.ini)
         let baretail_config = if config.baretail_import && !config.baretail_prompt_shown {
@@ -3636,10 +3640,12 @@ impl FastTailApp {
 
         // 3. Periodic telemetry refresh
         if self.last_sys_refresh.elapsed().as_secs_f32() >= 1.0 {
-            self.system.refresh_cpu_usage();
-            self.system.refresh_memory();
-            self.cpu_usage = self.system.global_cpu_usage();
-            self.mem_used_mb = self.system.used_memory() / (1024 * 1024);
+            if let Some(system) = self.system.as_mut() {
+                system.refresh_cpu_usage();
+                system.refresh_memory();
+                self.cpu_usage = system.global_cpu_usage();
+                self.mem_used_mb = system.used_memory() / (1024 * 1024);
+            }
             self.last_sys_refresh = Instant::now();
         }
 
@@ -3978,9 +3984,10 @@ impl FastTailApp {
 
                         if self.config.telemetry_enabled {
                             // RAM Meter & Progress Bar
-                            let total_mem_gb = (self.system.total_memory() as f32
-                                / (1024.0 * 1024.0 * 1024.0))
-                                .max(1.0);
+                            let total_mem_gb =
+                                (self.system.as_ref().map_or(0, System::total_memory) as f32
+                                    / (1024.0 * 1024.0 * 1024.0))
+                                    .max(1.0);
                             let used_mem_gb = self.mem_used_mb as f32 / 1024.0;
                             let ram_fraction = (used_mem_gb / total_mem_gb).clamp(0.0, 1.0);
 

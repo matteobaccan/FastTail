@@ -43,6 +43,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Vim, Emacs) expands `{file}`, `{line}`, `{col}` one argument each without a shell;
   relative paths are looked for in the source folders, JVM frames under their package
   (`editor_command`, `source_roots`; `source-links`).
+- A double-click on an entry of the archive picker opens it.
+
+### Changed
+
+- Wildcard patterns match ASCII file names without allocating.
+- `sysinfo` 0.40, `sha2` 0.11.1; the Pages workflow on `configure-pages` v6,
+  `upload-pages-artifact` v5 and `deploy-pages` v5.
 
 ## [0.27.0] - 2026-10-28
 

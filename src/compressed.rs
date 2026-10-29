@@ -1470,9 +1470,8 @@ pub fn free_space(dir: &Path) -> Option<(u64, String)> {
     let text = dir.to_string_lossy().to_string();
     // `canonicalize` gives `\\?\C:\...` on Windows; mount points are `C:\`.
     let text = text.strip_prefix(r"\\?\").unwrap_or(&text).to_string();
-    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let disks = sysinfo::Disks::new_with_refreshed_list().ok()?;
     disks
-        .list()
         .iter()
         .filter_map(|d| {
             let mount = d.mount_point().to_string_lossy().to_string();

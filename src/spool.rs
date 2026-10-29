@@ -168,7 +168,10 @@ pub fn sweep(dir: &Path) -> usize {
         .collect();
     pids.sort_unstable();
     pids.dedup();
-    let mut system = sysinfo::System::new();
+    // Without process information no spool can be told stale: none is removed.
+    let Ok(mut system) = sysinfo::System::new() else {
+        return 0;
+    };
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::Some(&pids),
         true,
