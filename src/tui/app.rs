@@ -15256,14 +15256,21 @@ mod tests {
         e.explain_span((a, b), crate::spike::Baseline::Rest, false);
         for _ in 0..500 {
             app.tabs[0].engine.poll_updates();
-            if app.tabs[0].engine.explain.as_ref().is_some_and(|x| !x.running()) {
+            if app.tabs[0]
+                .engine
+                .explain
+                .as_ref()
+                .is_some_and(|x| !x.running())
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         let t = build(Kind::Explain, &mut app.tabs[0].engine, Language::En, false);
         assert!(
-            t.summary.iter().any(|l| l.contains("10 entries in the span")),
+            t.summary
+                .iter()
+                .any(|l| l.contains("10 entries in the span")),
             "{t:?}"
         );
     }
