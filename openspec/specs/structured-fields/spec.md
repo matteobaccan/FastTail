@@ -108,3 +108,21 @@ The column view SHALL offer a delimited parser for CSV and TSV files, detected f
 #### Scenario: Semicolons and no header
 - **WHEN** the user opens a file of numeric rows separated by `;`
 - **THEN** the separator is detected and the columns are named `1`, `2`, `3`.
+
+### Requirement: Values with Units
+A numeric field value with a duration, size or rate suffix SHALL be read in its family's base unit (milliseconds, bytes, per second), the family of a field being detected from its values or set by its log format (`unit.<field>`). Field statistics, sparklines, the query language and field filter terms SHALL compare and aggregate in the base unit and show results in the most readable unit.
+
+#### Scenario: Durations compared
+- **WHEN** a field `latency` holds `900ms`, `1.2s` and `45ms`
+- **THEN** its maximum is shown as `1.2 s`, and the filter term `latency>=1s` keeps only the line with `1.2s`.
+
+#### Scenario: Mixed families
+- **WHEN** a query compares the size field `bytes` with the literal `2s`
+- **THEN** the query is refused with a message naming the two units.
+
+### Requirement: Pinned Columns
+In the column view of the window and of the terminal, the user SHALL be able to pin columns, which then stay at the left while the other columns scroll horizontally; the timestamp column SHALL be pinned by default (`pin_time_column=true`), and the pins SHALL be kept per stream in the workspace and sessions.
+
+#### Scenario: Scrolling a wide JSON log
+- **WHEN** a JSON stream shows twenty columns with `ts` pinned and the user scrolls right to `user_agent`
+- **THEN** `ts` stays visible at the left of every row, aligned with its row.
