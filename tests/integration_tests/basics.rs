@@ -1123,6 +1123,8 @@ fn test_i18n_exhaustive_coverage() {
         "system_reconnect_tip",
         "system_reconnect_failed",
         "palette_no_ended_source",
+        "clip_append_act",
+        "palette_not_clipboard",
         "export_title",
         "export_what",
         "export_scope_visible",

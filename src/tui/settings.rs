@@ -42,6 +42,10 @@ pub enum Key {
     Token(TokenKind),
     TimeDelta,
     TimeDeltaGap,
+    /// `pin_time_column`: the time column pinned in the column view of new streams.
+    PinTimeColumn,
+    /// `rotations`: a file with rotations next to it offers them, opens with them, or not.
+    Rotations,
     /// `level_detect_bytes`: where the level is looked for in streams without their own.
     LevelBytes,
     SizeUnit,
@@ -361,6 +365,27 @@ impl SettingsForm {
                 check(c.show_time_delta),
             ),
             Field::new(
+                Key::PinTimeColumn,
+                en("Pin the time column in the column view"),
+                check(c.pin_time_column),
+            ),
+            Field::new(
+                Key::Rotations,
+                en("Rotations of a file"),
+                Widget::Radio(RadioList::new(
+                    &[
+                        tx(c.language, "ask"),
+                        tx(c.language, "always"),
+                        tx(c.language, "never"),
+                    ],
+                    match c.rotations {
+                        crate::rotation::Policy::Ask => 0,
+                        crate::rotation::Policy::Always => 1,
+                        crate::rotation::Policy::Never => 2,
+                    },
+                )),
+            ),
+            Field::new(
                 Key::LevelBytes,
                 en("Level searched in the first N bytes"),
                 Widget::Number(level_bytes),
@@ -588,6 +613,14 @@ impl SettingsForm {
                 Key::AutoHighlight => c.auto_highlight = on,
                 Key::Token(kind) => c.auto_highlight_kinds.set(kind, on),
                 Key::TimeDelta => c.show_time_delta = on,
+                Key::PinTimeColumn => c.pin_time_column = on,
+                Key::Rotations => {
+                    c.rotations = match choice {
+                        1 => crate::rotation::Policy::Always,
+                        2 => crate::rotation::Policy::Never,
+                        _ => crate::rotation::Policy::Ask,
+                    }
+                }
                 Key::TimeDeltaGap => c.time_delta_gap_ms = num(),
                 Key::LevelBytes => c.level_detect_bytes = num() as usize,
                 Key::SizeUnit => c.size_unit = SIZE_UNITS[choice],
@@ -731,6 +764,8 @@ mod tests {
             spool_dir: Some("/var/spool/ft".into()),
             size_unit: SizeUnit::GB,
             interface: Interface::Tui,
+            rotations: crate::rotation::Policy::Never,
+            pin_time_column: false,
             ..Default::default()
         };
         let before = c.clone();
@@ -741,6 +776,8 @@ mod tests {
         assert_eq!(c.spool_dir, before.spool_dir);
         assert_eq!(c.size_unit, SizeUnit::GB);
         assert_eq!(c.interface, Interface::Tui);
+        assert_eq!(c.rotations, crate::rotation::Policy::Never);
+        assert!(!c.pin_time_column);
         let ini = |c: &FastTailConfig| {
             let mut buf = Vec::new();
             c.to_ini().write_to(&mut buf).unwrap();

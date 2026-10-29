@@ -92,6 +92,8 @@ pub enum Action {
     OpenRemote,
     /// The clipboard text as a new stream (palette).
     PasteStream,
+    /// The clipboard text at the end of the focused clipboard stream (palette).
+    PasteAppend,
     /// Listen (palette): asks for a listener URL.
     OpenListen,
     OpenDebugOutput,

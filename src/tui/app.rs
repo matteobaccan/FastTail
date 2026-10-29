@@ -548,6 +548,8 @@ pub struct App {
     pub tool_menu: Option<ToolMenu>,
     /// The list of the lines hidden by hand in the active stream: the range selected.
     pub hidden_menu: Option<usize>,
+    /// The pieces list of a stream with rotations (`R`): the selected row.
+    pub piece_menu: Option<usize>,
     /// The list of the active stream's fields for the column view: the row selected.
     pub columns_menu: Option<usize>,
     /// The external tools editor (from Settings, or `e` in the menu).
@@ -688,6 +690,7 @@ impl App {
             global_due: None,
             tool_menu: None,
             hidden_menu: None,
+            piece_menu: None,
             columns_menu: None,
             tools_editor: None,
             palette_dialog: None,
@@ -1303,6 +1306,9 @@ impl App {
         }
         if self.hidden_menu.is_some() {
             return self.on_hidden_menu_key(key);
+        }
+        if self.piece_menu.is_some() {
+            return self.on_piece_menu_key(key);
         }
         if self.columns_menu.is_some() {
             return self.on_columns_menu_key(key);
@@ -2096,6 +2102,94 @@ impl App {
             }
             _ => self.apply(action),
         }
+    }
+
+    /// Keys of the pieces list: arrows choose, Enter goes to the piece's first line.
+    fn on_piece_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let count = self
+            .tabs
+            .get(self.active)
+            .map_or(0, |t| t.engine.rotation_pieces().len());
+        let Some(selected) = self.piece_menu.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => self.piece_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                *selected = (*selected + 1).min(count.saturating_sub(1))
+            }
+            KeyCode::Enter => {
+                let i = *selected;
+                self.go_to_piece(i);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Moves the cursor to the first line of piece `i` (the next visible one when the
+    /// filters hide it) and closes the list.
+    fn go_to_piece(&mut self, i: usize) {
+        self.piece_menu = None;
+        let lang = self.lang;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some((line, _)) = tab.engine.rotation_pieces().get(i).cloned() else {
+            return;
+        };
+        tab.engine.follow_tail = false;
+        let current = tab.cursor_line().unwrap_or(0);
+        let target = tab.engine.resolve_goto(&(line + 1).to_string(), current);
+        self.message = goto_target(tab, target, &(line + 1).to_string(), lang);
+    }
+
+    fn draw_piece_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.piece_menu else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let rows = tab.engine.rotation_pieces();
+        let height = (rows.len() as u16 + 6).min(area.height);
+        let inner = self.dialog(
+            frame,
+            area,
+            (64, height),
+            tx(self.lang, "Go to piece"),
+            false,
+        );
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Enter goes to the piece, Up/Down choose, Esc closes",
+            ),
+            dim,
+        )];
+        let room = inner.height.saturating_sub(3) as usize;
+        let top = selected.saturating_sub(room.saturating_sub(1));
+        let width = inner.width as usize;
+        for (i, (line, name)) in rows.iter().enumerate().skip(top).take(room) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let text = format!(" {:>12}  {name}", group_digits(line + 1));
+            out.push(Line::styled(head_chars(&text, width), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// Keys of the hidden lines list: arrows choose, Enter shows the range, `a` shows all.
@@ -3284,6 +3378,45 @@ impl App {
         self.focus_tab(self.tabs.len() - 1);
     }
 
+    /// Appends the clipboard text to the focused clipboard stream, on a line of its own.
+    fn paste_append(&mut self) {
+        let unreadable = "The clipboard holds no text (or cannot be read here)";
+        if !self
+            .tabs
+            .get(self.active)
+            .is_some_and(|t| t.engine.is_clipboard())
+        {
+            self.message = Some(tx(self.lang, "Not a clipboard stream").into());
+            return;
+        }
+        let Some(text) = self.clipboard.paste() else {
+            self.message = Some(tx(self.lang, unreadable).into());
+            return;
+        };
+        let settings = match &self.settings {
+            Some(s) => s.config.stdin_settings(),
+            None => crate::config::FastTailConfig::default().stdin_settings(),
+        };
+        let lang = self.lang;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if let Err(e) = tab.engine.append_clipboard(&text, &settings, None) {
+            self.message = Some(match e {
+                crate::clipboard_source::PasteError::TooLarge(cap) => txf(
+                    lang,
+                    "The clipboard text is larger than {0}",
+                    &[&crate::tui::picker::human_size(cap)],
+                ),
+                crate::clipboard_source::PasteError::Empty => tx(lang, unreadable).into(),
+                crate::clipboard_source::PasteError::Busy => {
+                    tx(lang, "The previous paste is still being read").into()
+                }
+                other => other.to_string(),
+            });
+        }
+    }
+
     /// Opens the clipboard text as a new stream (`clipboard 14:02`).
     fn paste_stream(&mut self) {
         let unreadable = "The clipboard holds no text (or cannot be read here)";
@@ -4102,6 +4235,7 @@ impl App {
                 Action::OpenSystem => self.open_prompt(PromptKind::System),
                 Action::OpenRemote => self.open_prompt(PromptKind::Remote),
                 Action::PasteStream => self.paste_stream(),
+                Action::PasteAppend => self.paste_append(),
                 Action::OpenListen => self.open_prompt(PromptKind::Listen),
                 Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
                 Action::OpenEventLog => self.open_prompt(PromptKind::EventLog),
@@ -4162,6 +4296,7 @@ impl App {
             Action::OpenSystem => self.open_prompt(PromptKind::System),
             Action::OpenRemote => self.open_prompt(PromptKind::Remote),
             Action::PasteStream => self.paste_stream(),
+            Action::PasteAppend => self.paste_append(),
             Action::OpenListen => self.open_prompt(PromptKind::Listen),
             Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
             Action::OpenEventLog => self.open_prompt(PromptKind::EventLog),
@@ -4310,6 +4445,7 @@ impl App {
                     || self.global.is_some()
                     || self.tool_menu.is_some()
                     || self.hidden_menu.is_some()
+                    || self.piece_menu.is_some()
                     || self.columns_menu.is_some()
                     || self.palette_dialog.is_some()
                     || self.json_dialog.is_some()
@@ -4634,6 +4770,8 @@ impl App {
             Target::ListItem(i) if self.hidden_menu.is_some() => {
                 self.show_hidden(Some(i));
             }
+            // A click goes to that piece.
+            Target::ListItem(i) if self.piece_menu.is_some() => self.go_to_piece(i),
             // A click shows or hides that column.
             Target::ListItem(i) if self.columns_menu.is_some() => {
                 self.columns_menu = Some(i);
@@ -4722,7 +4860,10 @@ impl App {
                     if !self.on_palette_key(enter) {
                         self.palette_dialog = None;
                     }
-                } else if self.hidden_menu.take().is_some() || self.columns_menu.take().is_some() {
+                } else if self.hidden_menu.take().is_some()
+                    || self.piece_menu.take().is_some()
+                    || self.columns_menu.take().is_some()
+                {
                 } else if let Some(m) = self.tool_menu.take() {
                     if m.count > 0 {
                         self.run_tool(m.selected);
@@ -4992,6 +5133,11 @@ impl App {
                 }
             }
             Action::IncludeRotations => {
+                // A stream read with its rotations: the list of its pieces.
+                if tab.engine.rotation.is_some() {
+                    self.piece_menu = Some(0);
+                    return;
+                }
                 if tab.engine.rotation_offer.is_none() {
                     self.message = Some(tx(self.lang, "No rotations to include").into());
                     return;
@@ -5269,6 +5415,9 @@ impl App {
         }
         if self.hidden_menu.is_some() {
             self.draw_hidden_menu(frame, main_area);
+        }
+        if self.piece_menu.is_some() {
+            self.draw_piece_menu(frame, main_area);
         }
         if self.palette_dialog.is_some() {
             self.draw_palette(frame, main_area);
@@ -7876,7 +8025,7 @@ const HELP: &[(&str, &str, Option<Action>)] = &[
     ("l", en("cycle the minimum level"), Some(Action::CycleLevel)),
     (
         "H  R",
-        en("hide rows; R: include the rotations"),
+        en("hide rows; R: rotations, pieces"),
         Some(Action::HideLines),
     ),
     (
@@ -8958,6 +9107,9 @@ fn row_mark(engine: &TailEngine, line_idx: usize, hit: bool, bookmarked: bool) -
         '>'
     } else if engine.out_of_order_jump(line_idx).is_some() && !engine.timestamps_go_backwards() {
         '<'
+    } else if engine.is_piece_start(line_idx) {
+        // The first line of a rotation piece (the window draws a dashed line).
+        '~'
     } else {
         ' '
     }
@@ -9883,6 +10035,49 @@ mod tests {
 
     fn press(app: &mut App, code: crossterm::event::KeyCode) {
         app.on_key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn r_lists_the_rotation_pieces_and_goes_to_one() {
+        use crossterm::event::KeyCode;
+        let dir = tempfile::tempdir().unwrap();
+        let spool = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.log.1"), "one-a\none-b\n").unwrap();
+        std::fs::write(dir.path().join("app.log"), "live-a\n").unwrap();
+        let settings = crate::stdin_source::Settings::from_config(Some(spool.path()), 64);
+        let engine =
+            crate::rotation::open_engine(&dir.path().join("app.log"), &settings, None).unwrap();
+        let palette = Palette::new(CyberTheme::Tron, ColorDepth::TrueColor, true);
+        let mut app = App::new(vec![Tab::new(engine)], palette);
+        let started = std::time::Instant::now();
+        while app.tabs[0].engine.total_lines() < 3 || app.tabs[0].engine.rotation_pieces().len() < 2
+        {
+            render(&mut app, 100, 20);
+            assert!(started.elapsed() < std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // The first line of the live file carries the piece mark.
+        let screen = render(&mut app, 100, 20).join("\n");
+        assert!(screen.lines().any(|l| l.contains("3~live-a")), "{screen}");
+        keys(&mut app, "R");
+        assert_eq!(app.piece_menu, Some(0));
+        let screen = render(&mut app, 100, 20).join("\n");
+        assert!(
+            screen.contains("app.log.1") && screen.contains("Go to piece"),
+            "{screen}"
+        );
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.piece_menu, None);
+        assert_eq!(app.tabs[0].cursor_line(), Some(2));
+        assert!(!app.tabs[0].engine.follow_tail);
+    }
+
+    #[test]
+    fn append_needs_a_clipboard_stream() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], true);
+        app.apply(Action::PasteAppend);
+        assert_eq!(app.message.as_deref(), Some("Not a clipboard stream"));
     }
 
     #[test]

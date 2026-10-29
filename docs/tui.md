@@ -2,7 +2,8 @@
 
 `fasttail-tui` is FastTail's terminal interface: the same engine, the same `fasttail.ini`
 (workspace, dock layout, sessions, bookmarks, filters, highlight rules, theme and
-language) and the same features as the window, drawn in a terminal. Use it over SSH, on a
+language) and most of the window's features, drawn in a terminal (see [Limits](#limits)
+for what only the window has). Use it over SSH, on a
 server without a desktop, or in Windows Terminal. The window and the terminal can take
 turns on one configuration; each writes back only what it changed, so the last writer
 wins.
@@ -83,7 +84,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | palette | *Split file…*: asks `100000` (lines), `10mb`, `1h`, `1d` or `30m`; the pieces go next to the file (`app.part-001.log`, `app.2026-10-05T14.log`), the progress and the outcome in the message line; existing pieces are kept unless the answer ends with `!` |
 | Windows | `dbwin://local` (or *Capture debug output…* in the palette, with no stream open too) follows the `OutputDebugString` messages; the filter row shows `N debug messages · N dropped` |
 | any | `--listen syslog://127.0.0.1:5514` (or `tcp://`, `udp://` URLs, or *Listen on a port…* in the palette, with no stream open too) receives lines on a local port; Settings has the three listener limits; the filter row shows `listening on … · N connections · N dropped` |
-| any | *Paste as stream* in the palette (works with no stream open) opens the system clipboard's text as a new stream `clipboard 14:02`, spooled like standard input and not kept by the workspace; without a readable clipboard (over SSH) the status line says so |
+| any | *Paste as stream* in the palette (works with no stream open) opens the system clipboard's text as a new stream `clipboard 14:02`, spooled like standard input and not kept by the workspace; *Append the clipboard to this stream* adds the next paste at the end of the focused clipboard stream; without a readable clipboard (over SSH) the status line says so |
 | any | `ssh://user@host/var/log/app.log` on the command line, typed in the Open dialog or given to *Open remote file (SSH)…* in the palette (which works with no stream open) follows a remote file; Settings has *SSH client*, *Remote files: first fetch* and *Remote files: spool*; the filter row shows `[following]`, `[reconnecting (n)]` or `[disconnected: … · Reconnect]`, a click on the last one (or *Reconnect source* in the palette) connects again |
 | palette | *Open system source…*: asks for `docker://<container>`, `journald://<unit>` or `journald://user/<unit>` (works with no stream open; the Open dialog accepts a typed URI too); an ended source shows `[⏹ ended (exit N) · Reconnect]` in the filter row, a click (or *Reconnect source* in the palette) runs it again from the last timestamp |
 | palette | *Next / Previous line out of order*: a line whose time is earlier than the line above's shows `<` after its number, and `[↶ N out of order]` in the filter row goes to the next one |
@@ -92,7 +93,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `e` `E`, `w` `W` (`10j`, `3e`: counts) | next / previous ERROR, WARN line |
 | `b` (`Ctrl+F2`), `]` `[` (`F2` `Shift+F2`), `m` | bookmark, next / previous, note |
 | `Ctrl+K` | the row in context (filters off) and back |
-| `R` | when the stream bar offers `R: include N rotations`: open the stream again with its file's rotations (`app.log.1`, `.2.gz` …) as one stream, oldest first |
+| `R` | when the stream bar offers `R: include N rotations`: open the stream again with its file's rotations (`app.log.1`, `.2.gz` …) as one stream, oldest first; on a stream read with its rotations (`+N rotations (R: pieces)`), the list of its pieces: `Enter` goes to a piece's first line. The first line of each piece after the first has `~` in the gutter |
 | `Ctrl+O` | open the cursor row's source location (`Orders.java:42`, `src/x.rs:3:9`) in the editor of Settings; pressed again on the same row, the next location |
 | `Ctrl+G` | go to a line (`N`, `+N`, `-N`) or a time (`14:02`) |
 | `h` | HEX view (go to `1024` or `0x400`) and back |
@@ -170,9 +171,20 @@ command-line usage stays in English.
 
 ## Limits
 
-Not in the terminal: line wrap, the overview strip and the timeline histogram, the time scope
-of Find results, the Markdown view, the screensaver, and the window-only settings (renderer, zoom, font, always-on-top, borderless, tray). Filter tabs
-made in the window are kept in the workspace but not shown.
+Not in the terminal: line wrap, the overview strip and the timeline histogram (one plotted
+field is drawn as a sparkline row), the time scope of Find results, the Markdown view, the
+screensaver, and the window-only settings (renderer, zoom, font, always-on-top, borderless,
+tray). Filter tabs and merged views made in the window are kept in the workspace but not
+shown.
+
+Only in the window for now: the Statistics, Query, Patterns, Explain, Operations and Compare
+tabs, the scratchpad, the search results pane and search in a range, Export (text, CSV,
+HTML), the Log formats dialog, rule sets and next / previous rule match, the bookmark
+report, Copy as shown, the time delta column and the time display (UTC / local), the web
+view, the MCP server of a running window (`fasttail-tui --mcp` serves the files given),
+managing plugins (a plugin stream approved in the window runs here), remappable shortcuts
+(the terminal keys are fixed), and Open in FastTail from a source location (`Ctrl+O` opens
+the editor).
 
 ## Appendix: measurements
 

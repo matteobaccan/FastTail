@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Terminal parity for 0.28.0.** In the terminal, `R` on a stream read with its rotations
+  lists its pieces to go to, and `~` in the gutter marks where each starts; *Append the
+  clipboard to this stream* in the palette (in the window's palette too); Settings has
+  *Pin the time column in the column view* and *Rotations of a file*.
+
+### Changed
+
+- `docs/tui.md` lists what only the window has.
+
 ## [0.28.0] - 2026-10-29
 
 ### Added
