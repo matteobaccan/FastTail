@@ -26,4 +26,6 @@ and `name-filtered.csv`.
 
 ## Open Questions
 
-- Put the results pane in its own dock panel instead of under the rows? Proposed: under the rows, as the window does.
+- Put the results pane in its own dock panel instead of under the rows? Decided: a list over
+  the stream, as the Find results window (a pane under the rows would take the room of the
+  rows on a small terminal). The search scope takes a line range or `from..to` times.

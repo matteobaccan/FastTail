@@ -22,6 +22,7 @@ pub mod disasm;
 pub mod dock_layout;
 pub mod eventlog;
 pub mod export;
+pub mod export_html;
 pub mod external_tools;
 pub mod field_stats;
 pub mod fields;

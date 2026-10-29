@@ -7702,6 +7702,8 @@ impl FastTailApp {
             A::SessionClearRecent => self.run_session_action(SessionAction::ClearRecent),
             A::SessionSaveDefault => self.run_session_action(SessionAction::SaveDefault),
             A::SearchPane => self.config.search_pane = !self.config.search_pane,
+            // The scope is chosen in the results pane's header.
+            A::SearchScope => self.config.search_pane = true,
             A::Toggle(setting) => {
                 let meta = crate::actions::bool_setting(setting);
                 let value = !(meta.get)(&self.config);

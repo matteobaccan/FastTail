@@ -70,8 +70,8 @@ pub fn row_runs(
     let found = engine.match_row_spans(row);
     let base: Option<HighlightStyle> = found
         .rest
-        .or_else(|| crate::ui::dock::level_fallback(engine, theme, level_colors, idx));
-    let spans: Vec<HighlightSpan> = crate::ui::dock::cell_spans(found.spans, text, query);
+        .or_else(|| level_fallback(engine, theme, level_colors, idx));
+    let spans: Vec<HighlightSpan> = cell_spans(found.spans, text, query);
     let row_class = base.map(|s| class(css(Some(s.fg), Some(s.bg), s.bold, s.italic, false)));
     let base_fg = base.map_or(theme.text_primary(), |s| s.fg);
     let base_bg = base.map_or(Rgba::TRANSPARENT, |s| s.bg);
@@ -108,6 +108,90 @@ pub fn row_runs(
         runs.push((text[pos..].to_string(), None));
     }
     (row_class, runs)
+}
+
+/// The background of a search hit.
+const SEARCH_MATCH_BG: Rgba = Rgba::from_rgb(255, 230, 0);
+
+/// The spans of a cell's text: the rules' and labels' spans of that text, with the search
+/// query's occurrences (`query_lower`, case-insensitive) drawn over them as hits. At most
+/// `MAX_ROW_SPANS`, sorted and non-overlapping.
+pub fn cell_spans(
+    rule_spans: Vec<HighlightSpan>,
+    text: &str,
+    query_lower: &str,
+) -> Vec<HighlightSpan> {
+    let matcher = crate::tail_engine::SearchMatcher::Text(query_lower.to_string());
+    cell_spans_with(rule_spans, text, Some(&matcher))
+}
+
+/// `cell_spans` with the stream's search as it reads its query (text or regex).
+pub fn cell_spans_with(
+    mut rule_spans: Vec<HighlightSpan>,
+    text: &str,
+    matcher: Option<&crate::tail_engine::SearchMatcher>,
+) -> Vec<HighlightSpan> {
+    let hits: Vec<(usize, usize)> = matcher.map_or_else(Vec::new, |m| {
+        m.ranges(text, crate::tail_engine::MAX_ROW_SPANS)
+    });
+    if hits.is_empty() {
+        return rule_spans;
+    }
+    let hit_style = SpanStyle::Rule(HighlightStyle {
+        fg: Rgba::BLACK,
+        bg: SEARCH_MATCH_BG,
+        bold: false,
+        italic: false,
+    });
+    let mut out: Vec<HighlightSpan> = Vec::new();
+    // A rule span keeps the parts no hit covers.
+    for sp in rule_spans.drain(..) {
+        let mut start = sp.start;
+        for &(h0, h1) in hits
+            .iter()
+            .filter(|(h0, h1)| *h1 > sp.start && *h0 < sp.end)
+        {
+            if h0 > start {
+                out.push(HighlightSpan {
+                    start,
+                    end: h0,
+                    ..sp
+                });
+            }
+            start = start.max(h1);
+        }
+        if start < sp.end {
+            out.push(HighlightSpan { start, ..sp });
+        }
+    }
+    out.extend(hits.iter().map(|&(start, end)| HighlightSpan {
+        start,
+        end,
+        style: hit_style,
+    }));
+    out.sort_by_key(|sp| sp.start);
+    out.truncate(crate::tail_engine::MAX_ROW_SPANS);
+    out
+}
+
+/// The level palette entry of a row, when level colouring is on.
+pub fn level_fallback(
+    engine: &TailEngine,
+    theme: &CyberTheme,
+    level_colors: bool,
+    line_idx: usize,
+) -> Option<HighlightStyle> {
+    if !level_colors {
+        return None;
+    }
+    theme
+        .level_style(engine.level_of(line_idx))
+        .map(|s| HighlightStyle {
+            fg: s.fg,
+            bg: s.bg,
+            bold: s.bold,
+            italic: false,
+        })
 }
 
 /// `#rrggbb` of a colour (un-premultiplied), `None` for a transparent one.

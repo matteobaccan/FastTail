@@ -121,6 +121,17 @@ pub enum Action {
     CycleAnsi,
     /// `#`: the line numbers of the focused stream, on or off.
     ToggleLineNumbers,
+    /// ALT + R: the search results of the focused stream as a list.
+    SearchResults,
+    /// ALT + S: the part of the view the search covers (lines or times).
+    SearchScope,
+    /// ALT + E: export visible lines, selected lines or matches as text, CSV or HTML.
+    Export,
+    /// `Y`: copies the selected rows (or the cursor row) as the view shows them.
+    CopyAsShown,
+    /// The bookmark report of the focused stream, or of every stream (palette).
+    BookmarkReport,
+    BookmarkReportAll,
     /// ALT + D: the time delta column of the focused stream, on or off.
     ToggleTimeDelta,
     /// How the rows show their leading timestamp (palette, the bar's chip).
@@ -221,6 +232,9 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('f') => Some(Action::ToggleFloat),
             KeyCode::Char('/') => Some(Action::FindAll),
             KeyCode::Char('d') | KeyCode::Char('D') => Some(Action::ToggleTimeDelta),
+            KeyCode::Char('r') | KeyCode::Char('R') => Some(Action::SearchResults),
+            KeyCode::Char('s') | KeyCode::Char('S') => Some(Action::SearchScope),
+            KeyCode::Char('e') | KeyCode::Char('E') => Some(Action::Export),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -267,6 +281,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('<') => Action::MovePrevPane,
         KeyCode::Char('>') => Action::MoveNextPane,
         KeyCode::Char('y') => Action::Copy,
+        KeyCode::Char('Y') => Action::CopyAsShown,
         KeyCode::Char('b') => Action::ToggleBookmark,
         KeyCode::Char(']') | KeyCode::F(2) => Action::NextBookmark,
         KeyCode::Char('[') => Action::PrevBookmark,
@@ -448,6 +463,13 @@ mod tests {
         assert_eq!(k(KeyCode::Char('x'), alt), Some(Action::ClosePane));
         assert_eq!(k(KeyCode::Char('f'), alt), Some(Action::ToggleFloat));
         assert_eq!(k(KeyCode::Char('d'), alt), Some(Action::ToggleTimeDelta));
+        assert_eq!(k(KeyCode::Char('r'), alt), Some(Action::SearchResults));
+        assert_eq!(k(KeyCode::Char('s'), alt), Some(Action::SearchScope));
+        assert_eq!(k(KeyCode::Char('e'), alt), Some(Action::Export));
+        assert_eq!(
+            k(KeyCode::Char('Y'), KeyModifiers::NONE),
+            Some(Action::CopyAsShown)
+        );
         assert_eq!(k(KeyCode::Char('e'), none), Some(Action::NextError));
         assert_eq!(k(KeyCode::Char('E'), shift), Some(Action::PrevError));
         assert_eq!(k(KeyCode::Char('w'), none), Some(Action::NextWarn));

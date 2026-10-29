@@ -300,6 +300,13 @@ pub enum PromptKind {
     DebugOutput,
     /// Open Event Log (palette, Windows): an `eventlog://` URI.
     EventLog,
+    /// The part of the view the search covers: `1200-5000` or `14:00..15:00`.
+    SearchScope,
+    /// The file an export of these lines, in this format, is written to.
+    Export(crate::export::Scope, crate::export::Format),
+    /// The file the bookmark report is saved to (empty: the clipboard); `true` for every
+    /// stream.
+    Report(bool),
 }
 
 pub struct Prompt {
@@ -552,6 +559,12 @@ pub struct App {
     pub piece_menu: Option<usize>,
     /// The list of the active stream's fields for the column view: the row selected.
     pub columns_menu: Option<usize>,
+    /// The search results of the active stream as a list (`Alt+R`): the hit selected.
+    pub results_menu: Option<usize>,
+    /// What to export (`Alt+E`): the entry selected of `EXPORT_CHOICES`.
+    pub export_menu: Option<usize>,
+    /// An export being written: the stream's path and the job, stepped by `tick`.
+    pub export: Option<(PathBuf, crate::export::ExportJob)>,
     /// The external tools editor (from Settings, or `e` in the menu).
     pub tools_editor: Option<ToolsDialog>,
     /// The command palette (`:`).
@@ -692,6 +705,9 @@ impl App {
             hidden_menu: None,
             piece_menu: None,
             columns_menu: None,
+            results_menu: None,
+            export_menu: None,
+            export: None,
             tools_editor: None,
             palette_dialog: None,
             locked: None,
@@ -1053,6 +1069,7 @@ impl App {
 
     pub fn tick(&mut self) -> bool {
         self.step_split();
+        self.step_export();
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1202,6 +1219,7 @@ impl App {
             || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
             || self.split.is_some()
             || self.split_waiting.is_some()
+            || self.export.is_some()
             || self
                 .find_window
                 .as_ref()
@@ -1309,6 +1327,12 @@ impl App {
         }
         if self.piece_menu.is_some() {
             return self.on_piece_menu_key(key);
+        }
+        if self.results_menu.is_some() {
+            return self.on_results_menu_key(key);
+        }
+        if self.export_menu.is_some() {
+            return self.on_export_menu_key(key);
         }
         if self.columns_menu.is_some() {
             return self.on_columns_menu_key(key);
@@ -2130,6 +2154,438 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Keys of the search results list: arrows, `PgUp` `PgDn`, `Home` `End` choose,
+    /// Enter goes to the hit.
+    fn on_results_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let count = self
+            .tabs
+            .get(self.active)
+            .map_or(0, |t| t.engine.search_matches.len());
+        let page = self
+            .tabs
+            .get(self.active)
+            .map_or(10, |t| t.height.max(2) - 1);
+        let Some(selected) = self.results_menu.as_mut() else {
+            return false;
+        };
+        let last = count.saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => self.results_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(last),
+            KeyCode::PageUp => *selected = selected.saturating_sub(page),
+            KeyCode::PageDown => *selected = (*selected + page).min(last),
+            KeyCode::Home => *selected = 0,
+            KeyCode::End => *selected = last,
+            KeyCode::Enter => {
+                let i = *selected;
+                self.go_to_result(i);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Makes hit `i` of the search results current, moves the cursor to its line and
+    /// closes the list.
+    fn go_to_result(&mut self, i: usize) {
+        self.results_menu = None;
+        let lang = self.lang;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(&line) = tab.engine.search_matches.get(i) else {
+            return;
+        };
+        tab.engine.follow_tail = false;
+        tab.engine.current_match_idx = Some(i);
+        let current = tab.cursor_line().unwrap_or(0);
+        let target = tab.engine.resolve_goto(&(line + 1).to_string(), current);
+        self.message = goto_target(tab, target, &(line + 1).to_string(), lang);
+    }
+
+    fn draw_results_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.results_menu else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let count = tab.engine.search_matches.len();
+        let height = (count as u16 + 6).min(area.height.saturating_sub(2));
+        let width = area.width.saturating_sub(4).min(120);
+        let scoped = !tab.engine.search_scope().is_all();
+        let title = if scoped {
+            txf(
+                self.lang,
+                "{0} search results in range",
+                &[&group_digits(count)],
+            )
+        } else {
+            txf(self.lang, "{0} search results", &[&group_digits(count)])
+        };
+        let inner = self.dialog(frame, area, (width, height), &title, false);
+        let tab = &self.tabs[self.active];
+        let hits = &tab.engine.search_matches;
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Enter goes to the line, Up/Down PgUp/PgDn choose, Esc closes",
+            ),
+            dim,
+        )];
+        let room = inner.height.saturating_sub(3) as usize;
+        let top = selected.saturating_sub(room.saturating_sub(1));
+        let cells = inner.width as usize;
+        let digits = group_digits(tab.engine.total_lines()).len();
+        let engine = &tab.engine;
+        for (i, &line) in hits.iter().enumerate().skip(top).take(room) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                palette_level(&self.palette, engine, line)
+            };
+            let text = engine.get_line(line).unwrap_or_default();
+            let text = view::sanitize(text.trim_end_matches(['\r', '\n']));
+            let row = format!(" {:>digits$}  {text}", group_digits(line + 1));
+            out.push(Line::styled(head_chars(&row, cells), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// Keys of the export menu: arrows choose, Enter asks for the file.
+    fn on_export_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let Some(selected) = self.export_menu.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => self.export_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                *selected = (*selected + 1).min(EXPORT_CHOICES.len() - 1)
+            }
+            KeyCode::Enter => {
+                let i = *selected;
+                self.choose_export(i);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Export choice `i`: asks for the file when the scope holds lines.
+    fn choose_export(&mut self, i: usize) {
+        self.export_menu = None;
+        let Some(&(scope, format)) = EXPORT_CHOICES.get(i) else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if crate::export::scope_len(&tab.engine, scope) == 0 {
+            self.message = Some(tx(self.lang, "Nothing to export").into());
+            return;
+        }
+        if self.export.is_some() {
+            self.message = Some(tx(self.lang, "An export is still being written").into());
+            return;
+        }
+        self.open_prompt(PromptKind::Export(scope, format));
+    }
+
+    fn draw_export_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.export_menu else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let counts: Vec<usize> = EXPORT_CHOICES
+            .iter()
+            .map(|&(scope, _)| crate::export::scope_len(&tab.engine, scope))
+            .collect();
+        let height = (EXPORT_CHOICES.len() as u16 + 4).min(area.height);
+        let inner = self.dialog(frame, area, (60, height), tx(self.lang, "Export"), false);
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Enter asks for the file, Up/Down choose, Esc closes",
+            ),
+            dim,
+        )];
+        let width = inner.width as usize;
+        for (i, &(scope, format)) in EXPORT_CHOICES.iter().enumerate() {
+            let y = inner.y + 1 + i as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let n = counts[i];
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else if n == 0 {
+                dim
+            } else {
+                Style::default()
+            };
+            let what = match scope {
+                crate::export::Scope::Visible => tx(self.lang, "Visible lines"),
+                crate::export::Scope::Selected => tx(self.lang, "Selected lines"),
+                crate::export::Scope::Matches => tx(self.lang, "Search matches"),
+            };
+            let text = format!(
+                " {:<16} {:<5} {:>12}",
+                what,
+                export_format_name(format),
+                group_digits(n)
+            );
+            out.push(Line::styled(head_chars(&text, width), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// Starts writing `scope` of the active stream as `format` to `text` (a trailing `!`
+    /// replaces an existing file).
+    fn start_export(
+        &mut self,
+        scope: crate::export::Scope,
+        format: crate::export::Format,
+        text: &str,
+    ) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let path = PathBuf::from(text);
+        if path.exists() && !replace {
+            self.message = Some(txf(
+                self.lang,
+                "{0} exists: add ! to replace it",
+                &[&path.display()],
+            ));
+            return;
+        }
+        let config = self.settings.as_ref().map(|s| &s.config);
+        let csv = crate::export::CsvOptions {
+            sep: config
+                .and_then(|c| crate::export::separator_from_name(&c.export_csv_separator))
+                .unwrap_or(b','),
+            bom: config.is_none_or(|c| c.export_csv_bom),
+            protect: config.is_none_or(|c| c.export_csv_protect),
+        };
+        let theme = self.palette.theme;
+        let level_colors = self.palette.level_colors;
+        let tab = &self.tabs[self.active];
+        let engine = &tab.engine;
+        let (writer, max): (Box<dyn crate::export::RowWriter>, Option<usize>) = match format {
+            crate::export::Format::Text => (Box::new(crate::export::TextWriter), None),
+            crate::export::Format::Csv => (Box::new(crate::export::CsvWriter::new(csv)), None),
+            crate::export::Format::Html => (
+                Box::new(crate::export_html::HtmlWriter::new(
+                    engine,
+                    theme,
+                    level_colors,
+                    &stream_title(engine),
+                )),
+                Some(crate::export::HTML_MAX_LINES),
+            ),
+        };
+        match crate::export::ExportJob::start(engine, scope, path, writer, max) {
+            Ok(job) => {
+                self.export = Some((engine.path.clone(), job));
+                self.step_export();
+            }
+            Err(e) => self.message = Some(txf(self.lang, "Export failed: {0}", &[&e])),
+        }
+    }
+
+    /// Writes the running export for a few milliseconds; says how far it got, and where
+    /// it went once done. Closing its stream cancels it.
+    fn step_export(&mut self) {
+        let Some((path, mut job)) = self.export.take() else {
+            return;
+        };
+        let Some(tab) = self.tabs.iter().find(|t| t.engine.path == path) else {
+            job.cancel();
+            return;
+        };
+        if job.step(&tab.engine, Duration::from_millis(20)) {
+            self.message = Some(match &job.error {
+                Some(e) => txf(self.lang, "Export failed: {0}", &[e]),
+                None if job.capped => txf(
+                    self.lang,
+                    "Exported {0} lines to {1} (an HTML page holds at most 200,000)",
+                    &[&group_digits(job.lines), &job.path.display()],
+                ),
+                None => txf(
+                    self.lang,
+                    "Exported {0} lines to {1}",
+                    &[&group_digits(job.lines), &job.path.display()],
+                ),
+            });
+        } else {
+            self.message = Some(txf(
+                self.lang,
+                "Export: {0}%",
+                &[&format!("{:.0}", job.progress() * 100.0)],
+            ));
+            self.export = Some((path, job));
+        }
+    }
+
+    /// The search scope typed in the prompt: a line range (`1200-5000`, `1200-`, `-5000`,
+    /// `1200`), a time range (`14:00..15:30`, an open side allowed), or empty for every
+    /// line.
+    fn submit_search_scope(&mut self, text: &str) {
+        use crate::tail_engine::SearchScope;
+        let scope = if text.is_empty() {
+            Some(SearchScope::All)
+        } else if let Some((from, to)) = text.split_once("..") {
+            Some(SearchScope::Time {
+                from: from.trim().to_string(),
+                to: to.trim().to_string(),
+            })
+        } else {
+            SearchScope::parse_lines(text)
+        };
+        let Some(scope) = scope else {
+            self.message = Some(txf(self.lang, "Cannot read \"{0}\" as a range", &[&text]));
+            return;
+        };
+        let tab = &mut self.tabs[self.active];
+        let (from_ok, to_ok) = tab.engine.set_search_scope(scope);
+        self.message = Some(if !(from_ok && to_ok) {
+            txf(self.lang, "Cannot read \"{0}\" as a range", &[&text])
+        } else if tab.engine.search_scope().is_all() {
+            tx(self.lang, "Search everywhere").into()
+        } else {
+            txf(self.lang, "Search in {0}", &[&text])
+        });
+    }
+
+    /// Copies the selected rows, or the cursor row, as the view shows them: the column
+    /// view's cells separated by tabs, a closed group with its badge.
+    fn copy_as_shown(&mut self) {
+        let tab = &mut self.tabs[self.active];
+        let text = if tab.engine.has_selection() {
+            tab.engine.copy_selection_as_shown()
+        } else {
+            tab.cursor_line().and_then(|line| {
+                tab.engine.select_row(line);
+                let text = tab.engine.copy_selection_as_shown();
+                tab.engine.clear_selection();
+                text
+            })
+        };
+        match text {
+            Some(text) => self.copy_text(&text),
+            None => self.message = Some(tx(self.lang, "Nothing to copy").into()),
+        }
+    }
+
+    /// Puts `text` on the clipboard and says how many lines went.
+    fn copy_text(&mut self, text: &str) {
+        let lines = text.lines().count();
+        self.message = Some(match self.clipboard.copy(text) {
+            Ok(Copied::System) => txf(self.lang, "Copied {0} lines to the clipboard", &[&lines]),
+            Ok(Copied::Osc52) => txf(
+                self.lang,
+                "Sent {0} lines to the terminal clipboard (OSC 52)",
+                &[&lines],
+            ),
+            Err(e) => txf(self.lang, "Copy failed: {0}", &[&e]),
+        });
+    }
+
+    /// The bookmark report of the active stream (or of every stream) as Markdown, with
+    /// the context and order of the window's last report: saved to `text`, or copied
+    /// when it is empty.
+    fn write_report(&mut self, all: bool, text: &str) {
+        use crate::bookmark_report::{ReportJob, ReportOptions, ReportOrder};
+        let options = match self.settings.as_ref().map(|s| &s.config) {
+            Some(c) => ReportOptions {
+                context: (c.report_context as usize)
+                    .min(crate::bookmark_report::MAX_REPORT_CONTEXT),
+                include_auto: c.report_auto,
+                tags: Vec::new(),
+                order: if c.report_order_time {
+                    ReportOrder::Time
+                } else {
+                    ReportOrder::Stream
+                },
+            },
+            None => ReportOptions::default(),
+        };
+        let engines: Vec<&TailEngine> = if all {
+            self.tabs.iter().map(|t| &t.engine).collect()
+        } else {
+            self.tabs
+                .get(self.active)
+                .map(|t| &t.engine)
+                .into_iter()
+                .collect()
+        };
+        let streams: Vec<_> = engines
+            .iter()
+            .map(|e| e.bookmark_report_stream(stream_title(e), &options))
+            .filter(|s| !s.bookmarks.is_empty())
+            .collect();
+        if streams.is_empty() {
+            self.message = Some(tx(self.lang, "No bookmarks to report").into());
+            return;
+        }
+        let with: Vec<&TailEngine> = engines
+            .into_iter()
+            .filter(|e| e.bookmark_report_count(&options) > 0)
+            .collect();
+        let mut job = ReportJob::new(streams, options);
+        job.step(Duration::MAX, |s, line| {
+            with.get(s)
+                .and_then(|e| e.get_line(line))
+                .map(|t| t.trim_end_matches(['\r', '\n']).to_string())
+        });
+        let now = crate::timestamp::format_millis(crate::timestamp::local_now_millis());
+        let markdown = job.markdown(&now, env!("CARGO_PKG_VERSION"));
+        if text.is_empty() {
+            if markdown.len() > crate::bookmark_report::MAX_CLIPBOARD_BYTES {
+                self.message = Some(
+                    tx(
+                        self.lang,
+                        "The report is too large for the clipboard: save it",
+                    )
+                    .into(),
+                );
+            } else {
+                self.copy_text(&markdown);
+            }
+            return;
+        }
+        use std::io::Write;
+        let path = PathBuf::from(text);
+        let result = crate::paths::create_export_file(&path)
+            .and_then(|mut f| f.write_all(markdown.as_bytes()));
+        self.message = Some(match result {
+            Ok(()) => txf(self.lang, "Report saved to {0}", &[&path.display()]),
+            Err(e) => txf(self.lang, "Could not save the report: {0}", &[&e]),
+        });
     }
 
     /// Moves the cursor to the first line of piece `i` (the next visible one when the
@@ -3601,6 +4057,9 @@ impl App {
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
             PromptKind::Split => self.submit_split(&text),
+            PromptKind::SearchScope => self.submit_search_scope(&text),
+            PromptKind::Export(scope, format) => self.start_export(scope, format, &text),
+            PromptKind::Report(all) => self.write_report(all, &text),
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -3691,6 +4150,20 @@ impl App {
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
             PromptKind::Split => "100000".to_string(),
+            PromptKind::SearchScope => match e.search_scope() {
+                crate::tail_engine::SearchScope::All => String::new(),
+                crate::tail_engine::SearchScope::Lines { first, last } => format!(
+                    "{}-{}",
+                    first + 1,
+                    last.map(|l| (l + 1).to_string()).unwrap_or_default()
+                ),
+                crate::tail_engine::SearchScope::Time { from, to } => format!("{from}..{to}"),
+            },
+            PromptKind::Export(scope, format) => export_path(e, scope, format),
+            PromptKind::Report(_) => {
+                let date = crate::timestamp::format_millis(crate::timestamp::local_now_millis());
+                crate::bookmark_report::report_file_name(&date[..10.min(date.len())])
+            }
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -4402,16 +4875,7 @@ impl App {
             self.message = Some(tx(self.lang, "Nothing to copy").into());
             return;
         };
-        let lines = text.lines().count();
-        self.message = Some(match self.clipboard.copy(&text) {
-            Ok(Copied::System) => txf(self.lang, "Copied {0} lines to the clipboard", &[&lines]),
-            Ok(Copied::Osc52) => txf(
-                self.lang,
-                "Sent {0} lines to the terminal clipboard (OSC 52)",
-                &[&lines],
-            ),
-            Err(e) => txf(self.lang, "Copy failed: {0}", &[&e]),
-        });
+        self.copy_text(&text);
     }
 
     // ----- Mouse -----
@@ -4451,6 +4915,8 @@ impl App {
                     || self.tool_menu.is_some()
                     || self.hidden_menu.is_some()
                     || self.piece_menu.is_some()
+                    || self.results_menu.is_some()
+                    || self.export_menu.is_some()
                     || self.columns_menu.is_some()
                     || self.palette_dialog.is_some()
                     || self.json_dialog.is_some()
@@ -4777,6 +5243,8 @@ impl App {
             }
             // A click goes to that piece.
             Target::ListItem(i) if self.piece_menu.is_some() => self.go_to_piece(i),
+            Target::ListItem(i) if self.results_menu.is_some() => self.go_to_result(i),
+            Target::ListItem(i) if self.export_menu.is_some() => self.choose_export(i),
             // A click shows or hides that column.
             Target::ListItem(i) if self.columns_menu.is_some() => {
                 self.columns_menu = Some(i);
@@ -4867,6 +5335,8 @@ impl App {
                     }
                 } else if self.hidden_menu.take().is_some()
                     || self.piece_menu.take().is_some()
+                    || self.results_menu.take().is_some()
+                    || self.export_menu.take().is_some()
                     || self.columns_menu.take().is_some()
                 {
                 } else if let Some(m) = self.tool_menu.take() {
@@ -5295,6 +5765,19 @@ impl App {
                     .into(),
                 );
             }
+            Action::SearchResults => {
+                if tab.engine.search_matches.is_empty() {
+                    self.message = Some(tx(self.lang, "No search results: / searches").into());
+                } else {
+                    let at = tab.engine.current_match_idx.unwrap_or(0);
+                    self.results_menu = Some(at.min(tab.engine.search_matches.len() - 1));
+                }
+            }
+            Action::SearchScope => self.open_prompt(PromptKind::SearchScope),
+            Action::Export => self.export_menu = Some(0),
+            Action::CopyAsShown => self.copy_as_shown(),
+            Action::BookmarkReport => self.open_prompt(PromptKind::Report(false)),
+            Action::BookmarkReportAll => self.open_prompt(PromptKind::Report(true)),
             Action::ToggleTimeDelta => {
                 let on = !tab.engine.show_time_delta;
                 tab.engine.set_show_time_delta(on);
@@ -5443,6 +5926,12 @@ impl App {
         }
         if self.piece_menu.is_some() {
             self.draw_piece_menu(frame, main_area);
+        }
+        if self.results_menu.is_some() {
+            self.draw_results_menu(frame, main_area);
+        }
+        if self.export_menu.is_some() {
+            self.draw_export_menu(frame, main_area);
         }
         if self.palette_dialog.is_some() {
             self.draw_palette(frame, main_area);
@@ -6198,6 +6687,18 @@ impl App {
             PromptKind::EventLog => tx(
                 self.lang,
                 "Follow an Event Log channel: eventlog://Application (?levels=1,2&ids=7031,7034-7040)",
+            ),
+            PromptKind::SearchScope => tx(
+                self.lang,
+                "Search in lines 1200-5000 or times 14:00..15:30 (empty: everywhere)",
+            ),
+            PromptKind::Export(..) => tx(
+                self.lang,
+                "Export to this file (a trailing ! replaces it)",
+            ),
+            PromptKind::Report(_) => tx(
+                self.lang,
+                "Save the bookmark report to (empty: copy it to the clipboard)",
             ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
@@ -8607,8 +9108,13 @@ fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
             .current_search_line()
             .and_then(|l| e.search_matches.binary_search(&l).ok())
             .map_or("-".to_string(), |i| (i + 1).to_string());
+        let scope = if e.search_scope().is_all() {
+            String::new()
+        } else {
+            format!(" {}", tx(lang, "in range"))
+        };
         parts.push(format!(
-            "/{} {}/{}",
+            "/{} {}/{}{scope}",
             e.search_query.trim(),
             current,
             e.search_total()
@@ -8619,6 +9125,63 @@ fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
     } else {
         parts.join("  ")
     }
+}
+
+/// The export menu's entries: each scope in each format.
+const EXPORT_CHOICES: [(crate::export::Scope, crate::export::Format); 9] = {
+    use crate::export::{Format as F, Scope as S};
+    [
+        (S::Visible, F::Text),
+        (S::Visible, F::Csv),
+        (S::Visible, F::Html),
+        (S::Selected, F::Text),
+        (S::Selected, F::Csv),
+        (S::Selected, F::Html),
+        (S::Matches, F::Text),
+        (S::Matches, F::Csv),
+        (S::Matches, F::Html),
+    ]
+};
+
+fn export_format_name(format: crate::export::Format) -> &'static str {
+    match format {
+        crate::export::Format::Text => "TXT",
+        crate::export::Format::Csv => "CSV",
+        crate::export::Format::Html => "HTML",
+    }
+}
+
+/// Where an export goes by default: next to the stream's file (the working folder for a
+/// stream without one), named after it and the scope (`app-matches.csv`).
+fn export_path(
+    engine: &TailEngine,
+    scope: crate::export::Scope,
+    format: crate::export::Format,
+) -> String {
+    let what = match scope {
+        crate::export::Scope::Visible => "visible",
+        crate::export::Scope::Selected => "selected",
+        crate::export::Scope::Matches => "matches",
+    };
+    let file = engine.current_file.as_deref().unwrap_or(&engine.path);
+    let stem = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty() && file.is_file())
+        .unwrap_or_else(|| "fasttail".to_string());
+    let name = format!("{stem}-{what}.{}", format.extension());
+    match file
+        .parent()
+        .filter(|p| file.is_file() && !p.as_os_str().is_empty())
+    {
+        Some(dir) => dir.join(name).display().to_string(),
+        None => name,
+    }
+}
+
+/// The level colour of a line for a list, as the rows draw it.
+fn palette_level(palette: &Palette, engine: &TailEngine, line: usize) -> Style {
+    palette.level_style(engine.level_of(line))
 }
 
 /// Moves the cursor to a go-to target; the status message when there is one to show.
@@ -12877,6 +13440,75 @@ mod tests {
         app.apply(Action::ToggleTimeDelta);
         let screen = render(&mut app, 120, 30);
         assert!(!screen.iter().any(|l| l.contains("+1.200")), "{screen:#?}");
+    }
+
+    #[test]
+    fn search_results_scope_export_and_report_work_in_the_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let text: String = (1..=20)
+            .map(|i| {
+                if i % 5 == 0 {
+                    format!("ERROR line {i}\n")
+                } else {
+                    format!("INFO line {i}\n")
+                }
+            })
+            .collect();
+        std::fs::write(&a, text).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.search("ERROR");
+        assert_eq!(app.tabs[0].engine.search_matches, vec![4, 9, 14, 19]);
+        // The results list goes to the hit chosen.
+        app.apply(Action::SearchResults);
+        assert!(app.results_menu.is_some());
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("4 search results")),
+            "{screen:#?}"
+        );
+        app.go_to_result(2);
+        assert_eq!(app.tabs[0].cursor_line(), Some(14));
+        assert!(app.results_menu.is_none());
+        // A line range: only the hits inside it count.
+        app.submit_search_scope("6-15");
+        assert_eq!(app.tabs[0].engine.search_matches, vec![9, 14]);
+        let screen = render(&mut app, 100, 30);
+        assert!(screen.iter().any(|l| l.contains("in range")), "{screen:#?}");
+        // The matches as CSV, refused over an existing file until `!`.
+        let csv = dir.path().join("m.csv");
+        std::fs::write(&csv, "old").unwrap();
+        app.start_export(
+            crate::export::Scope::Matches,
+            crate::export::Format::Csv,
+            &csv.display().to_string(),
+        );
+        assert!(app.export.is_none());
+        app.start_export(
+            crate::export::Scope::Matches,
+            crate::export::Format::Csv,
+            &format!("{}!", csv.display()),
+        );
+        while app.export.is_some() {
+            app.step_export();
+        }
+        let written = std::fs::read_to_string(&csv).unwrap();
+        assert!(written.contains("ERROR line 10"), "{written}");
+        assert!(!written.contains("ERROR line 5\n"), "{written}");
+        // The bookmark report saved to a file.
+        app.tabs[0].engine.toggle_bookmark(9);
+        let md = dir.path().join("report.md");
+        app.write_report(false, &md.display().to_string());
+        let report = std::fs::read_to_string(&md).unwrap();
+        assert!(report.contains("ERROR line 10"), "{report}");
     }
 
     #[test]
