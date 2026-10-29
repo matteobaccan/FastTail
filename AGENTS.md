@@ -17,6 +17,8 @@ plus binary. Maintainer: Matteo Baccan. Licence: MIT.
 - `benches/` criterion-style benchmarks (`cargo bench`).
 - `openspec/` specs (`specs/`) and pending change proposals (`changes/`, shipped ones
   in `changes/archive/`).
+- `site/` the product site (one page, GitHub Pages through `.github/workflows/pages.yml`;
+  the workflow copies `assets/` in): keep it in step with the README highlights.
 - `docs/` design notes: `ui-design.md` (keep it in sync with UI changes),
   `competitor-analysis.md` (roadmap and release plan in section 8).
 - `tests/logs/` and `fasttail.ini` in the repo root are the maintainer's local files

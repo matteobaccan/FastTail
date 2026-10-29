@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Product site.** A one-page site in `site/`, published to GitHub Pages by
+  `.github/workflows/pages.yml` on merges to `main`.
 - **Rotated files as one stream.** A file with rotations next to it (`app.log.1`,
   `app.log.2.gz`, `app.log-20261027`, `app.2026-10-27.log`) is offered with them: the
   pieces are read oldest first, compressed ones decompressed, the live file last and still

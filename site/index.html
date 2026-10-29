@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FastTail · Ultra-fast log monitor and tail viewer</title>
+<meta name="description" content="FastTail is a free, open-source, ultra-fast multi-stream log monitor and tail viewer for Windows, Linux and macOS, written in Rust: multi-GB files, filters, highlight rules, structured logs, a terminal interface.">
+<meta property="og:title" content="FastTail">
+<meta property="og:description" content="Ultra-fast multi-stream log monitor and tail viewer for Windows, Linux and macOS.">
+<meta property="og:image" content="https://matteobaccan.github.io/FastTail/assets/social-preview.png">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<style>
+:root {
+  --bg: #0b0e17; --panel: #121726; --line: #232b42; --text: #d8deef; --dim: #8a93ad;
+  --cyan: #2de2e6; --pink: #ff3d8b; --yellow: #f9c80e; --green: #3ddc84;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--cyan); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 .3em; font-size: .9em; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+header.top {
+  position: sticky; top: 0; z-index: 10; background: rgba(11, 14, 23, .92);
+  backdrop-filter: blur(6px); border-bottom: 1px solid var(--line);
+}
+header.top .wrap { display: flex; align-items: center; gap: 24px; height: 56px; }
+header.top .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; letter-spacing: .04em; }
+header.top .brand img { width: 28px; height: 28px; }
+header.top nav { display: flex; gap: 18px; margin-left: auto; flex-wrap: wrap; }
+header.top nav a { color: var(--dim); font-size: .95em; }
+header.top nav a:hover { color: var(--cyan); text-decoration: none; }
+.hero { text-align: center; padding: 64px 0 32px; }
+.hero .logo { width: min(640px, 100%); height: auto; }
+.hero p.lead { font-size: 1.25em; color: var(--dim); max-width: 760px; margin: 16px auto 28px; }
+.btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.btn {
+  display: inline-block; padding: 12px 22px; border-radius: 6px; font-weight: 600;
+  border: 1px solid var(--cyan); color: var(--cyan);
+}
+.btn.primary { background: var(--cyan); color: var(--bg); }
+.btn:hover { text-decoration: none; filter: brightness(1.15); }
+.shot { margin: 40px auto 0; max-width: 1000px; }
+.shot img {
+  width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line);
+  box-shadow: 0 0 40px rgba(45, 226, 230, .15), 0 0 80px rgba(255, 61, 139, .08);
+}
+section { padding: 56px 0; border-top: 1px solid var(--line); }
+h2 { font-size: 1.8em; margin: 0 0 8px; }
+h2 .accent { color: var(--pink); }
+p.sub { color: var(--dim); margin: 0 0 32px; max-width: 760px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
+.card h3 { margin: 0 0 6px; font-size: 1.1em; color: var(--cyan); }
+.card p { margin: 0; color: var(--dim); font-size: .95em; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; text-align: center; }
+.stats div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
+.stats b { display: block; font-size: 1.8em; color: var(--yellow); }
+.stats span { color: var(--dim); font-size: .9em; }
+pre {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 16px; overflow-x: auto; font-size: .9em; line-height: 1.5;
+}
+pre .c { color: var(--dim); }
+table { width: 100%; border-collapse: collapse; font-size: .95em; }
+.table { overflow-x: auto; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--dim); font-weight: 600; }
+td.y { color: var(--green); font-weight: 600; }
+td.n { color: var(--dim); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } header.top nav { display: none; } }
+footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); font-size: .9em; text-align: center; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="assets/icon.svg" alt="">FastTail</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#terminal">Terminal</a>
+      <a href="#compare">Compare</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/matteobaccan/FastTail">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap hero">
+  <img class="logo" src="assets/logo.svg" alt="FastTail">
+  <p class="lead">An ultra-fast, multi-stream log monitor and tail viewer for Windows, Linux and macOS.
+    Open multi-gigabyte logs instantly, follow dozens of them at once and find what matters.
+    Free and open source, written in Rust.</p>
+  <div class="btns">
+    <a class="btn primary" href="https://github.com/matteobaccan/FastTail/releases/latest">Download the latest release</a>
+    <a class="btn" href="https://github.com/matteobaccan/FastTail">View on GitHub</a>
+  </div>
+  <div class="shot"><img src="assets/screenshots/fasttail_main_view.png" alt="FastTail main window with several log streams" loading="lazy"></div>
+</div>
+
+<section>
+  <div class="wrap stats">
+    <div><b>&gt; 50 GB</b><span>files open instantly, never loaded into memory</span></div>
+    <div><b>~60 MB</b><span>RAM for ten 50 MB logs that keep growing</span></div>
+    <div><b>1 binary</b><span>no runtime, no installer needed</span></div>
+    <div><b>16</b><span>interface languages</span></div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Everything you need to <span class="accent">read logs</span></h2>
+    <p class="sub">FastTail began as a successor to BareTail and has grown into a full log workbench. Every feature works on files that are still being written.</p>
+    <div class="grid">
+      <div class="card"><h3>Zero-lag streaming engine</h3><p>Rows are read on demand through a block cache, and appends are indexed as they arrive. Rotation, truncation and rewrites are detected without locking the writer.</p></div>
+      <div class="card"><h3>Multi-stream docking</h3><p>Tabs, splits and floating windows. Each stream has its own Follow, filters, search and view mode. Save the whole layout as a named session.</p></div>
+      <div class="card"><h3>Filters and highlight rules</h3><p>Include and exclude terms (text, regex or boolean expressions), a minimum level, a global filter, context lines, and priority-ordered colour rules with sounds and notifications.</p></div>
+      <div class="card"><h3>Structured logs</h3><p>JSON, logfmt, Apache and syslog lines, CSV and TSV tables, and your own named log formats, shown in a column view. Filter on fields: <code>status&gt;=500</code>.</p></div>
+      <div class="card"><h3>Search, queries and statistics</h3><p>Regex and multi-line search, a results pane, search across all open streams, a pipeline query language, field statistics, and grouping of lines into patterns.</p></div>
+      <div class="card"><h3>Time-aware</h3><p>Timestamps are detected automatically. Get a time-range filter, go to a time, a timeline histogram, Δt columns, a merged timeline of several streams, and marks on lines out of order.</p></div>
+      <div class="card"><h3>Any source</h3><p>Compressed files and archives, rotated files as one stream, folders, stdin, SSH, Docker, journald, syslog, TCP and UDP, OTLP, the Windows Event Log, and debug output.</p></div>
+      <div class="card"><h3>Four views</h3><p>Text with inline JSON trees, a live HEX dump with byte search, x86 disassembly of PE and ELF files, and rendered Markdown or HTML.</p></div>
+      <div class="card"><h3>Integrations</h3><p>A web view for a browser, an MCP server for AI assistants, plugins, external tools, remappable shortcuts, and links from stack traces to your editor.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="terminal">
+  <div class="wrap two">
+    <div>
+      <h2>A <span class="accent">terminal</span> interface too</h2>
+      <p class="sub">The terminal interface, <code>fasttail-tui</code>, brings the same engine to SSH sessions and servers without a desktop. It has windows, menus, mouse support, filters, rules, bookmarks, the column view and search across all streams.</p>
+      <p class="sub">Print mode runs FastTail's filters in scripts, with no window at all.</p>
+    </div>
+    <pre><span class="c"># follow a log in the window</span>
+fasttail app.log
+
+<span class="c"># every match of a pattern, as a folder group</span>
+fasttail --all "logs/**/*.log"
+
+<span class="c"># a file with its rotations, oldest first</span>
+fasttail --rotations /var/log/syslog
+
+<span class="c"># the terminal interface, over SSH</span>
+fasttail-tui ssh://ops@web1/var/log/nginx/error.log
+
+<span class="c"># pipe a command in, like less</span>
+docker logs -f api 2&gt;&amp;1 | fasttail -</pre>
+  </div>
+</section>
+
+<section id="compare">
+  <div class="wrap">
+    <h2>How it <span class="accent">compares</span></h2>
+    <p class="sub">A short extract. See the README for the full table.</p>
+    <div class="table"><table>
+      <tr><th>Feature</th><th>FastTail</th><th>BareTail</th><th>Tailviewer</th><th><code>tail -f</code></th></tr>
+      <tr><td>Windows, Linux, macOS</td><td class="y">Yes</td><td class="n">Windows</td><td class="n">Windows</td><td class="n">Linux / macOS</td></tr>
+      <tr><td>Files larger than 50 GB</td><td class="y">Instant</td><td>Good</td><td class="n">Slow</td><td>Fast</td></tr>
+      <tr><td>Include / exclude filters</td><td class="y">Live, regex, expressions</td><td class="n">Pro only</td><td>Yes</td><td class="n"><code>grep</code></td></tr>
+      <tr><td>Structured logs, column view</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n"><code>jq</code></td></tr>
+      <tr><td>Compressed logs</td><td class="y">gz, bz2, xz, zst, zip, 7z, tar</td><td class="n">No</td><td class="n">No</td><td class="n"><code>zcat</code></td></tr>
+      <tr><td>Time-range filter, timeline</td><td class="y">Yes</td><td class="n">No</td><td>Yes</td><td class="n">No</td></tr>
+      <tr><td>Terminal interface</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td>Yes</td></tr>
+    </table></div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <h2><span class="accent">Download</span></h2>
+    <p class="sub">Every release has installers and archives for each platform. Get them from the <a href="https://github.com/matteobaccan/FastTail/releases/latest">latest release</a>.</p>
+    <div class="grid">
+      <div class="card"><h3>Windows x86_64</h3><p>A per-user <code>.msi</code> installer (no administrator rights needed) or a <code>.zip</code> with <code>fasttail.exe</code> and <code>fasttail-tui.exe</code>.</p></div>
+      <div class="card"><h3>Linux x86_64 / ARM64</h3><p><code>.deb</code>, <code>.rpm</code>, AppImage or <code>.tar.gz</code>, plus a terminal-only archive for servers. Requires glibc 2.35 or later.</p></div>
+      <div class="card"><h3>macOS</h3><p>A universal <code>.dmg</code> for Apple Silicon and Intel, or a <code>.tar.gz</code> per architecture. The builds are unsigned: see the README for the first launch.</p></div>
+      <div class="card"><h3>From source</h3><p>Use stable Rust: <code>cargo build --release</code>. The README lists the prerequisites.</p></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    FastTail is MIT licensed · © Matteo Baccan ·
+    <a href="https://github.com/matteobaccan/FastTail">Source</a> ·
+    <a href="https://github.com/matteobaccan/FastTail/blob/main/CHANGELOG.md">Changelog</a> ·
+    <a href="https://github.com/matteobaccan/FastTail/issues">Issues</a>
+  </div>
+</footer>
+</body>
+</html>
