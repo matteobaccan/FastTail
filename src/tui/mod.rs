@@ -13,6 +13,7 @@ mod browser;
 mod calendar;
 mod clipboard;
 mod colors;
+mod compare;
 mod dock;
 mod find;
 mod form;
@@ -22,6 +23,7 @@ mod hex;
 mod json;
 mod keys;
 mod mouse;
+mod pad;
 mod palette;
 mod picker;
 mod presets;
@@ -569,6 +571,7 @@ where
             }
         }
     }
+    app.save_scratchpad();
     Ok(())
 }
 

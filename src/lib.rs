@@ -61,6 +61,7 @@ pub mod query;
 pub mod renderer;
 pub mod rotation;
 pub mod scan_job;
+pub mod scratchpad;
 #[cfg(feature = "gui")]
 pub mod screensaver;
 pub mod session;

@@ -571,6 +571,14 @@ pub struct App {
     pub rules: Option<RulesDialog>,
     /// The Log formats dialog (palette).
     pub formats: Option<FormatsView>,
+    /// Two lines or regions side by side (`=`).
+    pub compare: Option<crate::tui::compare::CompareView>,
+    /// The lines marked to be compared with the next selection.
+    pub compare_mark: Option<crate::tui::compare::Side>,
+    /// The session's scratchpad, loaded when first used.
+    pub scratchpad: Option<crate::scratchpad::Scratchpad>,
+    /// The scratchpad's editor, while it is shown (`Alt+N`).
+    pub pad_editor: Option<crate::tui::pad::PadEditor>,
     /// The filter presets (`p`).
     pub presets: Option<PresetsDialog>,
     /// The global filter editor (`F`), and when its pending edit is applied.
@@ -724,6 +732,10 @@ impl App {
             settings_before: None,
             rules: None,
             formats: None,
+            compare: None,
+            compare_mark: None,
+            scratchpad: None,
+            pad_editor: None,
             presets: None,
             global: None,
             global_due: None,
@@ -1097,6 +1109,9 @@ impl App {
         self.step_split();
         self.step_export();
         self.step_rule_seeks();
+        if let Some(pad) = self.scratchpad.as_mut() {
+            pad.save_if_due();
+        }
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1336,6 +1351,12 @@ impl App {
         }
         if self.prompt.as_ref().is_some_and(|p| p.kind.over_dialogs()) {
             return self.on_prompt_key(key);
+        }
+        if self.compare.is_some() {
+            return self.on_compare_key(key);
+        }
+        if self.pad_editor.is_some() {
+            return self.on_pad_key(key);
         }
         // The tools editor opens over Settings, so it has the keys first.
         if self.tools_editor.is_some() {
@@ -1633,6 +1654,13 @@ impl App {
         // Nothing reaches the screens under the lock, not even pasted text.
         if self.locked.is_some() {
             return false;
+        }
+        if self.pad_editor.is_some() && self.prompt.is_none() {
+            if let Some(e) = self.pad_editor.as_mut() {
+                e.insert(text);
+            }
+            self.pad_edited();
+            return true;
         }
         if let Some(form) = self.tools_editor.as_mut().and_then(|d| d.form.as_mut()) {
             if let Some(ToolWidget::Text(t)) =
@@ -3326,6 +3354,394 @@ impl App {
             RulesKey::Other => return false,
         }
         true
+    }
+
+    /// `=`: the two selected rows against each other; else the selection (or the cursor
+    /// row) against the marked lines, or marked to be compared with the next one.
+    fn compare_selection(&mut self) {
+        use crate::tui::compare::{CompareView, Side};
+        let tab = &self.tabs[self.active];
+        let e = &tab.engine;
+        let mut lines = e.selected_lines();
+        if lines.is_empty() {
+            lines.extend(tab.cursor_line());
+        }
+        lines.truncate(crate::compare::MAX_REGION_LINES);
+        let Some(&first) = lines.first() else {
+            return;
+        };
+        let text = |l: usize| {
+            e.get_line(l)
+                .map(|t| t.trim_end_matches(['\r', '\n']).to_string())
+                .unwrap_or_default()
+        };
+        let name = stream_title(e);
+        let side = |ls: &[usize]| Side {
+            name: name.clone(),
+            first: ls[0],
+            lines: ls.iter().map(|&l| text(l)).collect(),
+        };
+        let pair = match self.compare_mark.take() {
+            Some(mark) => Some((mark, side(&lines))),
+            None if lines.len() == 2 => Some((side(&lines[..1]), side(&lines[1..]))),
+            None => None,
+        };
+        match pair {
+            Some((left, right)) => {
+                self.compare = Some(CompareView::new(left, right, Default::default()));
+            }
+            None => {
+                let n = lines.len();
+                self.compare_mark = Some(side(&lines));
+                self.message = Some(txf(
+                    self.lang,
+                    "Marked {0} lines from line {1}: select others and press = to compare",
+                    &[&n, &(first + 1)],
+                ));
+            }
+        }
+    }
+
+    fn on_compare_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::compare::CompareKey;
+        let Some(v) = self.compare.as_mut() else {
+            return false;
+        };
+        match v.on_key(key) {
+            CompareKey::Copy(text) => self.copy_text(&text),
+            CompareKey::Close => self.compare = None,
+            CompareKey::Moved => {}
+            CompareKey::Other => return false,
+        }
+        true
+    }
+
+    /// The two sides side by side: a header with the toggles, then one row per aligned
+    /// pair, the changed tokens marked, removed lines in the error colour and added ones
+    /// in the info colour.
+    fn draw_compare(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let removed = Style::default().fg(palette.level_color(LogLevel::Error));
+        let added = Style::default().fg(palette.level_color(LogLevel::Info));
+        let marked = Style::default()
+            .fg(palette.level_color(LogLevel::Warn))
+            .add_modifier(Modifier::REVERSED);
+        let inner = self.dialog(
+            frame,
+            area,
+            (area.width, area.height),
+            tx(self.lang, "Compare"),
+            false,
+        );
+        let lang = self.lang;
+        let Some(v) = self.compare.as_mut() else {
+            return;
+        };
+        let width = inner.width as usize;
+        let half = width.saturating_sub(3) / 2;
+        let mut out = Vec::new();
+        let toggles: String = v
+            .toggles()
+            .iter()
+            .map(|(k, name, on)| {
+                format!(
+                    "[{}] {} ({k})  ",
+                    if *on { 'x' } else { ' ' },
+                    tx(lang, name)
+                )
+            })
+            .collect();
+        out.push(Line::styled(head_chars(&toggles, width), dim));
+        let state = if v.is_equal() {
+            tx(lang, "Equal (with the options above)").to_string()
+        } else {
+            txf(
+                lang,
+                "{0} changes: ] / [ go to the next / previous, y copies the diff, Esc closes",
+                &[&v.diff.changes.len()],
+            )
+        };
+        out.push(Line::styled(head_chars(&state, width), dim));
+        let head = |s: &crate::tui::compare::Side| format!("{}:{}", s.name, s.first + 1);
+        out.push(Line::from(vec![
+            Span::styled(
+                pad_cell(&head(&v.left), half),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" | ", dim),
+            Span::styled(
+                pad_cell(&head(&v.right), half),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        let room = (inner.height as usize).saturating_sub(out.len());
+        v.page = room.max(1);
+        let cell =
+            |text: &str, ranges: &[std::ops::Range<usize>], base: Style| -> Vec<Span<'static>> {
+                let mut spans = Vec::new();
+                let mut pos = 0;
+                for r in ranges {
+                    let (a, b) = (r.start.min(text.len()), r.end.min(text.len()));
+                    if a < pos || !text.is_char_boundary(a) || !text.is_char_boundary(b) {
+                        continue;
+                    }
+                    spans.push((text[pos..a].to_string(), base));
+                    spans.push((text[a..b].to_string(), marked));
+                    pos = b;
+                }
+                spans.push((text[pos..].to_string(), base));
+                // Cut or pad to `half` cells.
+                let mut used = 0;
+                let mut out = Vec::new();
+                for (s, style) in spans {
+                    let s = view::sanitize(&s);
+                    let mut piece = String::new();
+                    for c in s.chars() {
+                        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                        if used + w > half {
+                            break;
+                        }
+                        piece.push(c);
+                        used += w;
+                    }
+                    if !piece.is_empty() {
+                        out.push(Span::styled(piece, style));
+                    }
+                }
+                out.push(Span::raw(" ".repeat(half.saturating_sub(used))));
+                out
+            };
+        for row in v.diff.rows.iter().skip(v.top).take(room) {
+            use crate::compare::RowKind;
+            let left = row
+                .left
+                .and_then(|i| v.shown.0.get(i))
+                .map_or("", |s| s.as_str());
+            let right = row
+                .right
+                .and_then(|i| v.shown.1.get(i))
+                .map_or("", |s| s.as_str());
+            let (lw, rw): (&[std::ops::Range<usize>], &[std::ops::Range<usize>]) = match &row.words
+            {
+                Some(w) => (&w.left, &w.right),
+                None => (&[], &[]),
+            };
+            let (lb, rb) = match row.kind {
+                RowKind::Equal => (Style::default(), Style::default()),
+                RowKind::Changed => (Style::default(), Style::default()),
+                RowKind::Removed => (removed, Style::default()),
+                RowKind::Added => (Style::default(), added),
+            };
+            let mut spans = cell(left, lw, lb);
+            spans.push(Span::styled(" | ", dim));
+            spans.extend(cell(right, rw, rb));
+            out.push(Line::from(spans));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// The file the session's pad is kept in: beside the named session, else
+    /// `scratchpad.txt` beside `fasttail.ini` (as the window keeps it).
+    fn pad_file(&self) -> PathBuf {
+        let settings = self.settings.as_ref();
+        match settings.and_then(|s| s.config.current_session.as_deref()) {
+            Some(session) => crate::scratchpad::sidecar_of(session),
+            None => crate::scratchpad::default_pad_of(
+                &settings.map_or_else(crate::config::FastTailConfig::config_path, |s| {
+                    s.path.clone()
+                }),
+            ),
+        }
+    }
+
+    /// The session's pad, loaded on first use.
+    fn pad(&mut self) -> &mut crate::scratchpad::Scratchpad {
+        if self.scratchpad.is_none() {
+            self.scratchpad = Some(crate::scratchpad::Scratchpad::load(self.pad_file()));
+        }
+        self.scratchpad.as_mut().expect("loaded above")
+    }
+
+    fn open_pad(&mut self) {
+        let text = self.pad().text.clone();
+        self.pad_editor = Some(crate::tui::pad::PadEditor::new(&text));
+    }
+
+    /// The editor's text written back to the pad, saved a second later.
+    fn pad_edited(&mut self) {
+        let Some(text) = self.pad_editor.as_ref().map(|e| e.text()) else {
+            return;
+        };
+        let pad = self.pad();
+        pad.text = text;
+        pad.touch();
+    }
+
+    /// Saves the pad now when it changed (on exit).
+    pub fn save_scratchpad(&mut self) {
+        if let Some(pad) = self.scratchpad.as_mut() {
+            pad.save_on_exit();
+        }
+    }
+
+    fn on_pad_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::pad::PadKey;
+        let Some(e) = self.pad_editor.as_mut() else {
+            return false;
+        };
+        match e.on_key(key) {
+            PadKey::Edited => self.pad_edited(),
+            PadKey::Moved => {}
+            PadKey::Close => {
+                self.pad_editor = None;
+                if let Some(pad) = self.scratchpad.as_mut() {
+                    if pad.is_dirty() {
+                        if let Err(err) = pad.save() {
+                            self.message = Some(err.to_string());
+                        }
+                    }
+                }
+            }
+            PadKey::Jump(name, line) => self.pad_jump(&name, line),
+            PadKey::Other => return false,
+        }
+        true
+    }
+
+    /// A reference of the pad: its stream focused at that line (opened when needed).
+    fn pad_jump(&mut self, name: &str, line: usize) {
+        let open: Vec<(String, PathBuf)> = self
+            .tabs
+            .iter()
+            .map(|t| (stream_title(&t.engine), t.engine.path.clone()))
+            .collect();
+        let Some(path) = self.pad().resolve(name, &open) else {
+            self.message = Some(txf(self.lang, "{0}: not found", &[&name]));
+            return;
+        };
+        self.open_file(&path);
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| crate::paths::paths_equal(&t.engine.path, &path))
+        {
+            self.pad_editor = None;
+            self.focus_tab(i);
+            self.tabs[i].engine.open_at_line(line + 1, self.lang);
+        }
+    }
+
+    /// `Ctrl+N`: the selected rows (or the cursor row) at the end of the pad, under a
+    /// reference line naming their stream and first line.
+    fn send_to_pad(&mut self) {
+        let tab = &mut self.tabs[self.active];
+        let lines = tab.engine.selected_lines();
+        let first = lines.first().copied().or_else(|| tab.cursor_line());
+        let text = if tab.engine.has_selection() {
+            tab.engine.copy_selection_text()
+        } else {
+            tab.cursor_line().and_then(|l| {
+                tab.engine
+                    .get_line(l)
+                    .map(|t| t.trim_end_matches(['\r', '\n']).to_string())
+            })
+        };
+        let (Some(first), Some(text)) = (first, text) else {
+            self.message = Some(tx(self.lang, "Nothing to send").into());
+            return;
+        };
+        let name = stream_title(&tab.engine);
+        let path = tab.engine.path.clone();
+        let n = text.lines().count();
+        let lang = self.lang;
+        let sent = self.pad().send(&name, &path, first, &text, true);
+        self.message = Some(match sent {
+            Ok(()) => txf(
+                lang,
+                "{0} lines sent to the scratchpad (Alt+N shows it)",
+                &[&n],
+            ),
+            Err(crate::scratchpad::SendRefused::TooLarge) => {
+                tx(lang, "The scratchpad is full (4 MB)").into()
+            }
+            Err(crate::scratchpad::SendRefused::Empty) => tx(lang, "Nothing to send").into(),
+        });
+        if let Some(e) = self.pad_editor.as_mut() {
+            let text = self
+                .scratchpad
+                .as_ref()
+                .map(|p| p.text.clone())
+                .unwrap_or_default();
+            *e = crate::tui::pad::PadEditor::new(&text);
+        }
+    }
+
+    /// The scratchpad's editor over the windows: its lines, the cursor, the reference
+    /// lines in the accent colour.
+    fn draw_pad(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let accent = Style::default().fg(palette.accent());
+        let width = area.width.saturating_sub(4).max(20);
+        let height = area.height.saturating_sub(2).max(6);
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, height),
+            tx(self.lang, "Scratchpad"),
+            false,
+        );
+        let hint = tx(
+            self.lang,
+            "Type to write, Ctrl+G goes to the reference line above, Ctrl+Z undoes, Esc closes",
+        );
+        let notice = self
+            .scratchpad
+            .as_ref()
+            .and_then(|p| p.notice.as_ref().map(|(t, _)| t.clone()));
+        let Some(e) = self.pad_editor.as_mut() else {
+            return;
+        };
+        let rows = inner.height.saturating_sub(1) as usize;
+        e.scroll(rows);
+        let cells = inner.width as usize;
+        let mut out = vec![Line::styled(
+            head_chars(notice.as_deref().unwrap_or(hint), cells),
+            dim,
+        )];
+        let mut cursor = None;
+        for (i, line) in e.lines.iter().enumerate().skip(e.top).take(rows) {
+            let shown = view::sanitize(line);
+            let style = if crate::scratchpad::parse_reference(line).is_some() {
+                accent
+            } else {
+                Style::default()
+            };
+            // The line scrolls sideways so the cursor stays inside.
+            let (text, x) = if i == e.row {
+                let field = TextField::new(line);
+                let mut field = field;
+                for _ in 0..line.chars().count().saturating_sub(e.col) {
+                    field.on_key(crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Left,
+                        crossterm::event::KeyModifiers::NONE,
+                    ));
+                }
+                let (t, x) = field.view(cells);
+                (view::sanitize(&t), Some(x))
+            } else {
+                (head_chars(&shown, cells), None)
+            };
+            if let Some(x) = x {
+                cursor = Some((inner.x + x as u16, inner.y + 1 + (i - e.top) as u16));
+            }
+            out.push(Line::styled(text, style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        if let Some(at) = cursor {
+            frame.set_cursor_position(at);
+        }
     }
 
     /// Adds the rules of a rule set file to the rules (skipping those already there), or
@@ -5238,6 +5654,7 @@ impl App {
                 Action::PlayAll | Action::PauseAll => {}
                 Action::About => self.show_about = !self.show_about,
                 Action::LogFormats => self.open_formats(),
+                Action::Scratchpad => self.open_pad(),
                 _ => self.message = Some(tx(self.lang, NO_FILE).into()),
             }
             return;
@@ -5424,6 +5841,8 @@ impl App {
                     || self.settings_form.is_some()
                     || self.rules.is_some()
                     || self.formats.is_some()
+                    || self.compare.is_some()
+                    || self.pad_editor.is_some()
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
@@ -6289,6 +6708,9 @@ impl App {
             }
             Action::SearchScope => self.open_prompt(PromptKind::SearchScope),
             Action::LogFormats => self.open_formats(),
+            Action::Scratchpad => self.open_pad(),
+            Action::SendToScratchpad => self.send_to_pad(),
+            Action::Compare => self.compare_selection(),
             Action::ToggleFilterExpr => {
                 let on = !tab.engine.filter_expr_mode();
                 tab.engine.set_filter_expr_mode(on);
@@ -6484,6 +6906,12 @@ impl App {
         }
         if self.export_menu.is_some() {
             self.draw_export_menu(frame, main_area);
+        }
+        if self.pad_editor.is_some() {
+            self.draw_pad(frame, main_area);
+        }
+        if self.compare.is_some() {
+            self.draw_compare(frame, main_area);
         }
         if self.prompt.as_ref().is_some_and(|p| p.kind.over_dialogs()) {
             self.draw_prompt(frame, main_area);
@@ -14187,6 +14615,77 @@ mod tests {
         app.tabs[0].engine.toggle_bookmark(2);
         app.apply(Action::ClearBookmarks);
         assert!(app.tabs[0].engine.bookmarks.is_empty());
+    }
+
+    #[test]
+    fn lines_are_compared_and_sent_to_the_scratchpad() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(
+            &a,
+            "GET /api took=120\nGET /api took=480\nother\nGET /api took=120\n",
+        )
+        .unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        // Two rows selected: compared at once.
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::SelectDown);
+        app.apply(Action::Compare);
+        let v = app.compare.as_ref().expect("compare open");
+        assert!(!v.is_equal());
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("1 changes")),
+            "{screen:#?}"
+        );
+        app.on_compare_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(app.compare.is_none());
+        // One row: marked, then compared with another.
+        app.tabs[0].engine.clear_selection();
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::Compare);
+        assert!(app.compare_mark.is_some());
+        app.tabs[0].set_cursor(3);
+        app.apply(Action::Compare);
+        assert!(app.compare.as_ref().is_some_and(|v| v.is_equal()));
+        app.compare = None;
+        // Sent to the pad under a reference line, saved beside fasttail.ini.
+        app.tabs[0].set_cursor(1);
+        app.apply(Action::SendToScratchpad);
+        let pad = app.scratchpad.as_ref().unwrap();
+        assert_eq!(pad.text, "── a.log:2 ──\nGET /api took=480\n");
+        app.save_scratchpad();
+        let file = dir.path().join("scratchpad.txt");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), pad_text(&app));
+        // The editor: Ctrl+G on the line goes to its stream line.
+        app.apply(Action::Scratchpad);
+        let e = app.pad_editor.as_mut().unwrap();
+        e.row = 1;
+        app.on_pad_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('g'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(app.pad_editor.is_none());
+        render(&mut app, 120, 30);
+        assert_eq!(app.tabs[0].cursor_line(), Some(1));
+    }
+
+    fn pad_text(app: &App) -> String {
+        app.scratchpad
+            .as_ref()
+            .map(|p| p.text.clone())
+            .unwrap_or_default()
     }
 
     #[test]

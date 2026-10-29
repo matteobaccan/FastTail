@@ -98,6 +98,8 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `R` | when the stream bar offers `R: include N rotations`: open the stream again with its file's rotations (`app.log.1`, `.2.gz` …) as one stream, oldest first; on a stream read with its rotations (`+N rotations (R: pieces)`), the list of its pieces: `Enter` goes to a piece's first line. The first line of each piece after the first has `~` in the gutter |
 | `Ctrl+O` | open the cursor row's source location (`Orders.java:42`, `src/x.rs:3:9`) in the editor of Settings; pressed again on the same row, the next location |
 | `Alt+O` | open the cursor row's source location in FastTail itself, as a stream at that line |
+| `=` | compare: two selected rows side by side at once; otherwise the selection (or the cursor row) is marked, and `=` on another selection (in any stream) compares the two regions. The window aligns the lines as the window's Compare tab does, marks the differing tokens, draws removed lines in the error colour and added ones in the info colour; `t` `u` `i` `w` `c` `J` ignore the time, numbers, ids, spaces, case or compare as JSON; `]` / `[` go to the next / previous change, `y` copies the compare as a unified diff, `Esc` closes |
+| `Ctrl+N`, `Alt+N` | send the selected rows (or the cursor row) to the session's scratchpad under a `── app.log:1204 ──` reference line; show the scratchpad: an editor over the same file the window uses (`scratchpad.txt` beside `fasttail.ini`, or beside the session), saved a second after a change and on exit; `Ctrl+G` goes to the reference line at or above the cursor, `Ctrl+Z` undoes the last change, `Esc` closes |
 | `I` | the include side as an expression (`ƒx` in the filter row; `i` then edits the expression) or back to terms |
 | `Ctrl+G` | go to a line (`N`, `+N`, `-N`) or a time (`14:02`) |
 | `h` | HEX view (go to `1024` or `0x400`) and back |
@@ -201,8 +203,8 @@ screensaver, and the window-only settings (renderer, zoom, font, always-on-top, 
 tray). Filter tabs and merged views made in the window are kept in the workspace but not
 shown.
 
-Only in the window for now: the Statistics, Query, Patterns, Explain, Operations and Compare
-tabs, the scratchpad, the web view, the MCP server of a running window (`fasttail-tui --mcp`
+Only in the window for now: the Statistics, Query, Patterns, Explain and Operations tabs, the
+web view, the MCP server of a running window (`fasttail-tui --mcp`
 serves the files given), managing plugins (a plugin stream approved in the window runs
 here), and remappable shortcuts (the terminal keys are fixed).
 

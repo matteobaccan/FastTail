@@ -6,12 +6,12 @@ The terminal names a Compare panel but draws nothing, and has no scratchpad.
 
 ## What Changes
 
-- **Compare** (palette, `=` on two selected rows, or mark then compare): the two lines or
-  regions side by side, differing tokens highlighted, the ignore toggles of the window
+- **Compare** (`=` on two selected rows, or mark then compare): the two lines or regions side
+  by side in a window over the dock, differing tokens highlighted, the ignore toggles of the window
   (timestamps, numbers, ids, whitespace, case, as JSON), `]` / `[` to walk the changes,
   copy as unified diff.
-- **Scratchpad** (palette, `Ctrl+N` to send the selected rows): the session's pad as a
-  dock panel, editable, with the `── app.log:1204 ──` references and Enter on one to go
+- **Scratchpad** (palette, `Alt+N`; `Ctrl+N` sends the selected rows): the session's pad in
+  a window over the dock, editable, with the `── app.log:1204 ──` references and Ctrl+G on one to go
   to its line; saved beside the session as in the window.
 
 Target release: the next minor after 0.28.1 (terminal parity with the window, proposed on 2026-10-29 at the maintainer's request; planned when the maintainer agrees), per `docs/competitor-analysis.md` sections 7 and 8. Priority: **Low–Med**. Effort: **S**.
