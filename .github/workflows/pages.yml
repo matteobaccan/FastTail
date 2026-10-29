@@ -35,7 +35,7 @@ jobs:
           cp assets/logo.svg assets/icon.svg assets/social-preview.png _site/assets/
           cp assets/screenshots/*.png _site/assets/screenshots/
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
       - id: deployment
