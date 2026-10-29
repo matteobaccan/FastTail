@@ -50,6 +50,8 @@ pub enum BarChip {
     Columns,
     /// The time delta column on or off.
     TimeDelta,
+    /// The include side as an expression (`a AND (b OR c)`) or as terms.
+    FilterExpr,
     /// How the rows show their time (as written, UTC, local): the next one.
     TimeDisplay,
     /// The columns shown: opens their list.
@@ -281,9 +283,16 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
     };
     let include = e.include_display();
     let exclude = e.exclude_filter();
+    let expr = e.filter_expr_mode();
+    let broken = expr && e.expr_error().is_some();
     let mut second = vec![
         text(tx(lang, "Include").into(), accent),
-        chip(field(include), Style::default(), BarChip::Include),
+        check(if ascii { "fx" } else { "ƒx" }, expr, BarChip::FilterExpr),
+        chip(
+            field(include),
+            if broken { warn } else { Style::default() },
+            BarChip::Include,
+        ),
         text(tx(lang, "Exclude").into(), warn),
         chip(field(exclude), Style::default(), BarChip::Exclude),
         chip(

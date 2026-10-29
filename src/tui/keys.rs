@@ -132,6 +132,17 @@ pub enum Action {
     /// The bookmark report of the focused stream, or of every stream (palette).
     BookmarkReport,
     BookmarkReportAll,
+    /// `I`: the include side of the focused stream as an expression, or back to terms.
+    ToggleFilterExpr,
+    /// F4 / SHIFT + F4: the next / previous line of the navigation rule.
+    RuleNext,
+    RulePrev,
+    /// Remove every bookmark of the focused stream (palette).
+    ClearBookmarks,
+    /// ALT + O: the cursor row's source location opened in FastTail, at its line.
+    OpenSourceHere,
+    /// The Log formats dialog (palette).
+    LogFormats,
     /// ALT + D: the time delta column of the focused stream, on or off.
     ToggleTimeDelta,
     /// How the rows show their leading timestamp (palette, the bar's chip).
@@ -235,6 +246,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('r') | KeyCode::Char('R') => Some(Action::SearchResults),
             KeyCode::Char('s') | KeyCode::Char('S') => Some(Action::SearchScope),
             KeyCode::Char('e') | KeyCode::Char('E') => Some(Action::Export),
+            KeyCode::Char('o') | KeyCode::Char('O') => Some(Action::OpenSourceHere),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -248,6 +260,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Down => return Some(Action::SelectDown),
             KeyCode::F(2) => return Some(Action::PrevBookmark),
             KeyCode::F(3) => return Some(Action::SearchPrev),
+            KeyCode::F(4) => return Some(Action::RulePrev),
             _ => {}
         }
     }
@@ -270,6 +283,8 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('N') => Action::SearchPrev,
         KeyCode::Esc => Action::ClearSearch,
         KeyCode::Char('i') => Action::EditInclude,
+        KeyCode::Char('I') => Action::ToggleFilterExpr,
+        KeyCode::F(4) => Action::RuleNext,
         KeyCode::Char('x') => Action::EditExclude,
         KeyCode::Char('c') => Action::CycleCollapse,
         KeyCode::Char('l') => Action::CycleLevel,
@@ -466,6 +481,16 @@ mod tests {
         assert_eq!(k(KeyCode::Char('r'), alt), Some(Action::SearchResults));
         assert_eq!(k(KeyCode::Char('s'), alt), Some(Action::SearchScope));
         assert_eq!(k(KeyCode::Char('e'), alt), Some(Action::Export));
+        assert_eq!(k(KeyCode::Char('o'), alt), Some(Action::OpenSourceHere));
+        assert_eq!(k(KeyCode::F(4), KeyModifiers::NONE), Some(Action::RuleNext));
+        assert_eq!(
+            k(KeyCode::F(4), KeyModifiers::SHIFT),
+            Some(Action::RulePrev)
+        );
+        assert_eq!(
+            k(KeyCode::Char('I'), KeyModifiers::NONE),
+            Some(Action::ToggleFilterExpr)
+        );
         assert_eq!(
             k(KeyCode::Char('Y'), KeyModifiers::NONE),
             Some(Action::CopyAsShown)

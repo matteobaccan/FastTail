@@ -297,11 +297,9 @@ settings and the workspace with the window. Where it stands against the window:
 - ✅ Search results list, search in a range, export (text / CSV / HTML), Copy as shown,
   bookmark report
 - ⬜ Scratchpad
-- ⬜ Rule sets import / export, next / previous match of a rule, clear all bookmarks
-- ⬜ Log formats dialog (formats load at start), editor presets, Open in FastTail from a
-  source location
-- ⬜ Filter expression toggle per stream (only `--filter-expr`), global filter expressions
-  editable
+- ✅ Rule sets import / export, next / previous match of a rule, clear all bookmarks
+- ✅ Log formats dialog, editor presets, Open in FastTail from a source location
+- ✅ Filter expression toggle per stream, global filter expressions editable
 - ⬜ Remappable keys (the terminal keys are fixed), the palette's setting toggles
 - ⬜ Web view and the MCP server of a running interface; plugin management (enable,
   approve, parameters: today it says to use the window)
@@ -319,7 +317,7 @@ settings and the workspace with the window. Where it stands against the window:
   - ⬜ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
   - ⬜ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
   - ⬜ `tui-compare-scratchpad` (S): Compare tab and scratchpad
-  - ⬜ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all
+  - ✅ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all
     bookmarks, Log formats dialog, editor presets, Open in FastTail, filter expressions
   - ✅ `tui-time-columns` (S): time delta column, UTC / local time display, OTLP hint
 - ⬜ Hand checks by the maintainer: the clipboard in the window and the terminal, sideways

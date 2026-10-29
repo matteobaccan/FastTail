@@ -16,6 +16,7 @@ mod colors;
 mod dock;
 mod find;
 mod form;
+mod formats;
 mod global;
 mod hex;
 mod json;

@@ -21,6 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   palette writes the bookmark report of a stream or of all of them to a file or the
   clipboard. *Search in a range…* is in the window's palette too (it opens the results
   pane, where the range is chosen).
+- **Rules, formats and filter expressions in the terminal.** The rule editor imports
+  (`i`) and exports (`x`) rule sets and `F4` / `Shift+F4` walk the lines of a rule; *Clear
+  bookmarks* is in the palette; the palette's *Log formats* opens a formats dialog (list,
+  form with a live share of entries read, new, copy, delete, import, export); Settings
+  offers the editor presets and `Alt+O` opens a source location in FastTail; `I` (or `ƒx`
+  in the filter row) switches a stream's include side to an expression, and the global
+  filter's expression is edited in its dialog.
 
 ## [0.28.1] - 2026-10-29
 

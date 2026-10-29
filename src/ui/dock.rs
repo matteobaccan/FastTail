@@ -9129,14 +9129,7 @@ fn render_expr_field(
 
 /// `message at character N (detail)` for an expression error.
 pub fn expr_error_text(lang: Language, text: &str, e: &crate::filter_expr::ExprError) -> String {
-    let column = text.char_indices().take_while(|(i, _)| *i < e.pos).count() + 1;
-    let mut out = t(lang, "expr_error_at")
-        .replace("{0}", t(lang, e.key))
-        .replace("{1}", &column.to_string());
-    if let Some(detail) = &e.detail {
-        out.push_str(&format!(" ({detail})"));
-    }
-    out
+    crate::filter_expr::error_text(lang, text, e)
 }
 
 /// The term rows of one side of a stream: each row a field, its remove button and its
