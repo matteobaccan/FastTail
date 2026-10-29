@@ -328,6 +328,7 @@ fn run_args(args: Vec<String>) -> i32 {
     app.idle_poll = settings.poll_interval();
     app.lang = settings.config.language;
     // Streams opened later (`o`, the entry picker) get the same setup.
+    app.keymap = keys::KeyMap::build(&settings.config.shortcuts);
     app.settings = Some(settings);
     if !notices.is_empty() {
         app.message = Some(notices.join("  |  "));

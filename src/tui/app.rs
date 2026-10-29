@@ -343,6 +343,16 @@ pub struct Prompt {
     pub field: TextField,
 }
 
+/// The Keys dialog: the row of `keys::REMAPPABLE` selected, and whether the next key
+/// pressed is recorded for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeysDialog {
+    pub selected: usize,
+    pub top: usize,
+    pub capturing: bool,
+    pub notice: Option<String>,
+}
+
 /// The dialog after the graphical interface was picked in Settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InterfaceSwitch {
@@ -589,6 +599,10 @@ pub struct App {
     pub analysis: Option<crate::tui::analysis::AnalysisView>,
     /// The list of the analysis views (`Alt+A`): the row selected.
     pub analysis_menu: Option<usize>,
+    /// The terminal keys in force: the defaults with `[shortcuts]`'s `tui.` entries.
+    pub keymap: keys::KeyMap,
+    /// The Keys dialog (palette): the remappable keys.
+    pub keys_dialog: Option<KeysDialog>,
     /// The filter presets (`p`).
     pub presets: Option<PresetsDialog>,
     /// The global filter editor (`F`), and when its pending edit is applied.
@@ -748,6 +762,8 @@ impl App {
             pad_editor: None,
             analysis: None,
             analysis_menu: None,
+            keymap: keys::KeyMap::default(),
+            keys_dialog: None,
             presets: None,
             global: None,
             global_due: None,
@@ -1352,7 +1368,7 @@ impl App {
             return self.on_lock_key(key);
         }
         // Ctrl+L locks over any dialog, which is there again after the unlock.
-        if keys::map_key(key) == Some(Action::Lock) {
+        if self.keymap.map(key) == Some(Action::Lock) {
             self.lock();
             return true;
         }
@@ -1373,6 +1389,9 @@ impl App {
         }
         if self.analysis_menu.is_some() {
             return self.on_analysis_menu_key(key);
+        }
+        if self.keys_dialog.is_some() {
+            return self.on_keys_dialog_key(key);
         }
         if self.analysis.is_some() && self.prompt.is_none() {
             return self.on_analysis_key(key);
@@ -1479,7 +1498,7 @@ impl App {
             self.message = None;
             return true;
         }
-        let Some(action) = keys::map_key(key) else {
+        let Some(action) = self.keymap.map(key) else {
             if count.is_some() {
                 self.message = None;
                 return true;
@@ -1840,6 +1859,7 @@ impl App {
         self.palette.theme = config.theme;
         self.palette.level_colors = config.level_colors;
         self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
+        self.keymap = keys::KeyMap::build(&config.shortcuts);
         for tab in &mut self.tabs {
             let columns = (tab.engine.show_line_numbers, tab.engine.show_time_delta);
             crate::workspace::apply_settings(&mut tab.engine, config);
@@ -2051,7 +2071,7 @@ impl App {
             return false;
         };
         // The key that opened the window also takes it back to the query box.
-        if keys::map_key(key) == Some(Action::FindAll) {
+        if self.keymap.map(key) == Some(Action::FindAll) {
             w.editing = true;
             return true;
         }
@@ -3380,6 +3400,177 @@ impl App {
             RulesKey::Other => return false,
         }
         true
+    }
+
+    /// A boolean setting of the palette flipped, applied and saved.
+    fn toggle_setting(&mut self, setting: crate::actions::BoolSetting) {
+        let meta = crate::actions::bool_setting(setting);
+        let config = &mut self.settings_mut().config;
+        let on = !(meta.get)(config);
+        (meta.set)(config, on);
+        self.apply_running_config();
+        self.save_config();
+        let name = crate::i18n::t(self.lang, meta.name);
+        self.message = Some(if on {
+            txf(self.lang, "{0}: on", &[&name])
+        } else {
+            txf(self.lang, "{0}: off", &[&name])
+        });
+    }
+
+    /// Sets the `[shortcuts]` entry of the terminal action `name` (`None`: its default
+    /// keys again), then rebuilds the keys and saves.
+    fn set_shortcut(&mut self, name: &str, keys: Option<String>) {
+        let key = format!("{}{name}", keys::TUI_PREFIX);
+        let config = &mut self.settings_mut().config;
+        match keys {
+            Some(k) => {
+                config.shortcuts.insert(key, k);
+            }
+            None => {
+                config.shortcuts.remove(&key);
+            }
+        }
+        self.keymap = keys::KeyMap::build(&self.settings_mut().config.shortcuts);
+        self.save_config();
+    }
+
+    fn on_keys_dialog_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let Some(d) = self.keys_dialog.as_mut() else {
+            return false;
+        };
+        let last = keys::REMAPPABLE.len() - 1;
+        let name = keys::REMAPPABLE[d.selected.min(last)].0;
+        if d.capturing {
+            d.capturing = false;
+            if key.code == KeyCode::Esc {
+                d.notice = None;
+                return true;
+            }
+            let k = keys::TuiKey::from_event(key);
+            let holder = self.keymap.holder(k).filter(|h| *h != name);
+            // The action that had the key keeps its other keys.
+            if let Some(other) = holder {
+                let rest: Vec<String> = self
+                    .keymap
+                    .keys_text(other)
+                    .0
+                    .split_whitespace()
+                    .filter(|t| keys::TuiKey::parse(t) != Some(k))
+                    .map(str::to_string)
+                    .collect();
+                self.set_shortcut(other, Some(rest.join(", ")));
+            }
+            self.set_shortcut(name, Some(k.text()));
+            let lang = self.lang;
+            if let Some(d) = self.keys_dialog.as_mut() {
+                d.notice = Some(match holder {
+                    Some(other) => txf(
+                        lang,
+                        "{0}: {1} (taken from {2})",
+                        &[&name, &k.text(), &other],
+                    ),
+                    None => format!("{name}: {}", k.text()),
+                });
+            }
+            return true;
+        }
+        match key.code {
+            KeyCode::Esc => self.keys_dialog = None,
+            KeyCode::Up | KeyCode::Char('k') => d.selected = d.selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => d.selected = (d.selected + 1).min(last),
+            KeyCode::PageUp => d.selected = d.selected.saturating_sub(10),
+            KeyCode::PageDown => d.selected = (d.selected + 10).min(last),
+            KeyCode::Home => d.selected = 0,
+            KeyCode::End => d.selected = last,
+            KeyCode::Enter => {
+                d.capturing = true;
+                d.notice = Some(txf(
+                    self.lang,
+                    "Press the new key for {0} (Esc cancels)",
+                    &[&name],
+                ));
+            }
+            KeyCode::Delete | KeyCode::Char('d') => {
+                d.notice = Some(txf(self.lang, "{0}: no key", &[&name]));
+                self.set_shortcut(name, Some(String::new()));
+            }
+            KeyCode::Char('r') => {
+                d.notice = Some(txf(self.lang, "{0}: default keys", &[&name]));
+                self.set_shortcut(name, None);
+            }
+            KeyCode::Char('R') => {
+                self.settings_mut()
+                    .config
+                    .shortcuts
+                    .retain(|k, _| !k.starts_with(keys::TUI_PREFIX));
+                self.keymap = keys::KeyMap::build(&self.settings_mut().config.shortcuts);
+                self.save_config();
+                if let Some(d) = self.keys_dialog.as_mut() {
+                    d.notice = Some(tx(self.lang, "Every key is back to its default").into());
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The remappable keys: the action's name, its keys (`*` when set in `[shortcuts]`).
+    fn draw_keys_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let accent = Style::default().fg(self.palette.accent());
+        let height = area.height.saturating_sub(2).clamp(8, 40);
+        let inner = self.dialog(frame, area, (64, height), tx(self.lang, "Keys"), false);
+        let lang = self.lang;
+        let notices = self.keymap.notices.clone();
+        let rows: Vec<(String, bool)> = keys::REMAPPABLE
+            .iter()
+            .map(|(n, _, _)| self.keymap.keys_text(n))
+            .collect();
+        let Some(d) = self.keys_dialog.as_mut() else {
+            return;
+        };
+        let mut out = vec![Line::styled(
+            tx(
+                lang,
+                "Enter records a key, d no key, r default, R all defaults, Esc closes",
+            ),
+            dim,
+        )];
+        let info = d.notice.clone().or_else(|| notices.first().cloned());
+        out.push(Line::styled(
+            head_chars(info.as_deref().unwrap_or(""), inner.width as usize),
+            accent,
+        ));
+        let room = (inner.height as usize).saturating_sub(out.len());
+        if d.selected < d.top {
+            d.top = d.selected;
+        } else if room > 0 && d.selected >= d.top + room {
+            d.top = d.selected + 1 - room;
+        }
+        for (i, ((name, _, _), (text, set))) in keys::REMAPPABLE
+            .iter()
+            .zip(&rows)
+            .enumerate()
+            .skip(d.top)
+            .take(room)
+        {
+            let style = if i == d.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else if *set {
+                accent
+            } else {
+                Style::default()
+            };
+            let mark = if *set { '*' } else { ' ' };
+            let shown = if text.is_empty() { "-" } else { text.as_str() };
+            out.push(Line::styled(format!(" {name:<22}{mark} {shown}"), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// Opens the analysis view `kind` on the focused stream: Statistics and Operations ask
@@ -6083,6 +6274,8 @@ impl App {
                 Action::About => self.show_about = !self.show_about,
                 Action::LogFormats => self.open_formats(),
                 Action::Scratchpad => self.open_pad(),
+                Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
+                Action::ToggleSetting(s) => self.toggle_setting(s),
                 _ => self.message = Some(tx(self.lang, NO_FILE).into()),
             }
             return;
@@ -6273,6 +6466,7 @@ impl App {
                     || self.pad_editor.is_some()
                     || self.analysis.is_some()
                     || self.analysis_menu.is_some()
+                    || self.keys_dialog.is_some()
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
@@ -7148,6 +7342,8 @@ impl App {
             Action::Scratchpad => self.open_pad(),
             Action::SendToScratchpad => self.send_to_pad(),
             Action::Analysis => self.analysis_menu = Some(0),
+            Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
+            Action::ToggleSetting(s) => self.toggle_setting(s),
             Action::Patterns => self.open_analysis(crate::tui::analysis::Kind::Patterns),
             Action::Compare => self.compare_selection(),
             Action::ToggleFilterExpr => {
@@ -7354,6 +7550,9 @@ impl App {
         }
         if self.analysis_menu.is_some() {
             self.draw_analysis_menu(frame, main_area);
+        }
+        if self.keys_dialog.is_some() {
+            self.draw_keys_dialog(frame, main_area);
         }
         if self.compare.is_some() {
             self.draw_compare(frame, main_area);
@@ -15273,6 +15472,69 @@ mod tests {
                 .any(|l| l.contains("10 entries in the span")),
             "{t:?}"
         );
+    }
+
+    #[test]
+    fn keys_are_remapped_in_the_keys_dialog_and_settings_toggle_from_the_palette() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, "one\ntwo\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::KeysDialog);
+        let follow = keys::REMAPPABLE
+            .iter()
+            .position(|(n, _, _)| *n == "follow")
+            .unwrap();
+        app.keys_dialog.as_mut().unwrap().selected = follow;
+        let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('f'));
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(
+            saved.shortcuts.get("tui.follow").map(String::as_str),
+            Some("f")
+        );
+        assert_eq!(
+            saved.shortcuts.get("tui.global.toggle").map(String::as_str),
+            Some(""),
+            "f was taken from the global filter switch"
+        );
+        let screen = render(&mut app, 100, 40);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("taken from global.toggle")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert!(app.keys_dialog.is_none());
+        let before = app.tabs[0].engine.follow_tail;
+        press(&mut app, KeyCode::Char('f'));
+        assert_ne!(app.tabs[0].engine.follow_tail, before, "f follows now");
+        press(&mut app, KeyCode::Char(' '));
+        assert_ne!(
+            app.tabs[0].engine.follow_tail, before,
+            "Space no longer does"
+        );
+        // A setting toggled from the palette.
+        let colors = app.settings_mut().config.level_colors;
+        app.apply(Action::ToggleSetting(
+            crate::actions::BoolSetting::LevelColors,
+        ));
+        assert_eq!(app.settings_mut().config.level_colors, !colors);
+        assert_eq!(app.palette.level_colors, !colors);
+        assert!(crate::tui::palette::entries(Language::En)
+            .iter()
+            .any(|e| e.action == Action::ToggleSetting(crate::actions::BoolSetting::Sound)));
     }
 
     #[test]

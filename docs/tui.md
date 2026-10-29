@@ -143,6 +143,23 @@ button can be clicked; a click outside a dialog closes it, a drag released outsi
 not. While the mouse is captured, `Shift`+drag (`Option` on macOS
 terminals) selects text natively.
 
+## Remapping the keys
+
+The keys above are the defaults. *Keyboard shortcuts* in the palette opens the **Keys**
+dialog: every remappable action by its name (`follow`, `search.next`, `bookmark`, ...) and
+its keys, `*` beside the ones changed. `Enter` records the next key pressed for the action
+(a key another action had is taken from it, which keeps its other keys), `d` leaves the
+action without a key, `r` brings its default keys back, `R` every default. The keys are
+saved in `fasttail.ini` under `[shortcuts]` with a `tui.` prefix, one line per action
+changed (`tui.follow=f`, `tui.search.next=n, F3`, an empty value for no key); the window
+keeps its own keys there under the registry's names, and an entry that does not read is
+named in the dialog. The arrows, `PgUp` / `PgDn`, `Tab`, `Alt+1..9`, the count digits and
+the keys inside dialogs stay as they are.
+
+The palette also lists the window's settings that apply to a terminal (line numbers and the
+time delta column in new streams, level colours, automatic highlighting, sound, the bell on
+background alerts, the PIN lock, telemetry): choosing one switches it and saves it.
+
 ## Settings, editors, tools
 
 - **Settings** (`,`): interface, theme, language (or the system's), view, automatic token
@@ -207,7 +224,7 @@ shown.
 Only in the window for now: the charts of the analysis tabs (the terminal draws tables and
 bars), the web view, the MCP server of a running window (`fasttail-tui --mcp`
 serves the files given), managing plugins (a plugin stream approved in the window runs
-here), and remappable shortcuts (the terminal keys are fixed).
+here).
 
 ## Appendix: measurements
 

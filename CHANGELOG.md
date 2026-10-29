@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   background jobs: sort by a column (`s`), narrow (`/`), and `Enter` (or `x`) filters on a
   value, a pattern or a `field=value` pair, or goes to a line. `S` and `O` in `[Fields...]`
   open the Statistics and Operations of the selected field.
+- **Remappable keys in the terminal.** *Keyboard shortcuts* in the palette opens a Keys
+  dialog: `Enter` records a new key for an action (taken from the action that had it),
+  `d` removes it, `r` / `R` bring the defaults back; saved in `[shortcuts]` as
+  `tui.<action>=<keys>`, beside the window's own. The palette also switches the settings
+  that apply to a terminal (level colours, line numbers in new streams, sound, ...).
 
 ## [0.29.0] - 2026-10-29
 

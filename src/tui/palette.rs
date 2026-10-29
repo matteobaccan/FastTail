@@ -9,7 +9,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
-use crate::actions::{ActionId, ACTIONS};
+use crate::actions::ActionId;
 use crate::i18n::{t, Language};
 use crate::timestamp::TimeDisplay;
 use crate::tui::form::{FieldKey, TextField};
@@ -42,6 +42,12 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::LogFormats => (Action::LogFormats, ""),
         ActionId::ScratchpadOpen => (Action::Scratchpad, "Alt+N"),
         ActionId::Patterns => (Action::Patterns, "Alt+A"),
+        ActionId::KeyboardShortcuts => (Action::KeysDialog, ""),
+        ActionId::Toggle(setting) if terminal_setting(setting) => {
+            (Action::ToggleSetting(setting), "")
+        }
+        ActionId::Choose(crate::actions::EnumSetting::Theme) => (Action::CycleTheme, "T"),
+        ActionId::Choose(crate::actions::EnumSetting::Language) => (Action::Settings, ","),
         ActionId::ScratchpadSend => (Action::SendToScratchpad, "Ctrl+N"),
         ActionId::BookmarkReportAll => (Action::BookmarkReportAll, ""),
         ActionId::ViewText | ActionId::ViewHex => (Action::ToggleHex, "h"),
@@ -89,9 +95,26 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
     })
 }
 
-/// The palette's entries in the registry's order, named in `lang`.
+/// The boolean settings that apply to a terminal (not the window's screensaver, tray,
+/// borders or timeline strip).
+fn terminal_setting(setting: crate::actions::BoolSetting) -> bool {
+    use crate::actions::BoolSetting as B;
+    matches!(
+        setting,
+        B::LockEnabled
+            | B::Telemetry
+            | B::Sound
+            | B::LineNumbers
+            | B::TimeDelta
+            | B::LevelColors
+            | B::AutoHighlight
+            | B::FlashOnAlert
+    )
+}
+
+/// The palette's entries in the registry's order (the settings last), named in `lang`.
 pub fn entries(lang: Language) -> Vec<Entry> {
-    ACTIONS
+    crate::actions::all()
         .iter()
         .filter_map(|a| {
             let (action, key) = terminal_action(a.id)?;
