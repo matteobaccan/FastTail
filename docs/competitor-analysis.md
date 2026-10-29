@@ -311,8 +311,16 @@ settings and the workspace with the window. Where it stands against the window:
 
 ## 8. To do
 
-- ⬜ The terminal gaps of section 7, to be planned as OpenSpec changes when the maintainer
-  asks
+- ⬜ The terminal gaps of section 7, as OpenSpec changes in `openspec/changes/`:
+  - ⬜ `tui-analysis-tabs` (L): Statistics, Query, Patterns, Explain, Operations tabs
+  - ⬜ `tui-output` (M): search results pane, search in a range, export, Copy as shown,
+    bookmark report
+  - ⬜ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
+  - ⬜ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
+  - ⬜ `tui-compare-scratchpad` (S): Compare tab and scratchpad
+  - ⬜ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all
+    bookmarks, Log formats dialog, editor presets, Open in FastTail, filter expressions
+  - ⬜ `tui-time-columns` (S): time delta column, UTC / local time display, OTLP hint
 - ⬜ Hand checks by the maintainer: the clipboard in the window and the terminal, sideways
   scrolling with pinned columns, rotated files on Windows, an editor opened from a source
   location, an MCP client (Claude Desktop / Code), the Plugins windows and source plugins on
