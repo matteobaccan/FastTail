@@ -152,6 +152,10 @@ pub enum Action {
     Analysis,
     /// The Patterns view of the focused stream (palette).
     Patterns,
+    /// The Keys dialog: the remappable terminal keys (palette).
+    KeysDialog,
+    /// A boolean setting of the palette ("Toggle line numbers in new streams"...).
+    ToggleSetting(crate::actions::BoolSetting),
     /// CTRL + N: the selected rows (or the cursor row) sent to the scratchpad.
     SendToScratchpad,
     /// ALT + D: the time delta column of the focused stream, on or off.
@@ -344,6 +348,337 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
     })
 }
 
+/// Prefix of the terminal's keys in `[shortcuts]` (`tui.follow=f`): the window keeps its
+/// own keys under the registry's names.
+pub const TUI_PREFIX: &str = "tui.";
+
+/// A terminal key with its modifiers, as `[shortcuts]` writes it: `Ctrl+O`, `Alt+/`, `G`,
+/// `#`, `Shift+F4`, `Space`. A character is kept as typed, so `G` is `Shift+g`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TuiKey {
+    pub ctrl: bool,
+    pub alt: bool,
+    /// Only for keys that are not characters (`Shift+F4`, `Shift+Up`).
+    pub shift: bool,
+    pub code: KeyCode,
+}
+
+/// The names of the keys that are not characters.
+const NAMED: &[(&str, KeyCode)] = &[
+    ("Space", KeyCode::Char(' ')),
+    ("Enter", KeyCode::Enter),
+    ("Tab", KeyCode::Tab),
+    ("Esc", KeyCode::Esc),
+    ("Backspace", KeyCode::Backspace),
+    ("Delete", KeyCode::Delete),
+    ("Insert", KeyCode::Insert),
+    ("Up", KeyCode::Up),
+    ("Down", KeyCode::Down),
+    ("Left", KeyCode::Left),
+    ("Right", KeyCode::Right),
+    ("Home", KeyCode::Home),
+    ("End", KeyCode::End),
+    ("PgUp", KeyCode::PageUp),
+    ("PgDn", KeyCode::PageDown),
+];
+
+impl TuiKey {
+    /// Parses `Ctrl+O`, `alt+/`, `G`, `Shift+F4`, `Space`, `+` (case-insensitive names,
+    /// a character as written).
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let (mut ctrl, mut alt, mut shift) = (false, false, false);
+        // The last `+`-separated part is the key; `Ctrl++` is Ctrl and `+`.
+        let (mods, key) = match text.rfind('+') {
+            Some(at) if at + 1 == text.len() && at > 0 => (&text[..at - 1], "+"),
+            Some(at) if at + 1 < text.len() => (&text[..at], &text[at + 1..]),
+            _ => ("", text),
+        };
+        for m in mods.split('+').map(str::trim).filter(|m| !m.is_empty()) {
+            match m.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => ctrl = true,
+                "alt" => alt = true,
+                "shift" => shift = true,
+                _ => return None,
+            }
+        }
+        let code = if let Some((_, code)) = NAMED.iter().find(|(n, _)| n.eq_ignore_ascii_case(key))
+        {
+            *code
+        } else if let Some(n) = key
+            .strip_prefix(['F', 'f'])
+            .and_then(|n| n.parse::<u8>().ok())
+            .filter(|n| (1..=12).contains(n))
+        {
+            KeyCode::F(n)
+        } else {
+            let mut chars = key.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            // With Ctrl or Alt a letter is written either case (`Ctrl+O`); Shift is named.
+            KeyCode::Char(if ctrl || alt {
+                c.to_ascii_lowercase()
+            } else {
+                c
+            })
+        };
+        // A plain character carries its own case: `Shift` only counts with the others.
+        let shift = shift && (ctrl || alt || !matches!(code, KeyCode::Char(_)));
+        Some(TuiKey {
+            ctrl,
+            alt,
+            shift,
+            code,
+        })
+    }
+
+    /// The key of a terminal event, as `parse` reads it.
+    pub fn from_event(mut key: KeyEvent) -> Self {
+        if let KeyCode::Char(c) = key.code {
+            if key.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() {
+                key.code = KeyCode::Char(c.to_ascii_uppercase());
+            }
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let mut shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let code = match key.code {
+            KeyCode::Char(c) if ctrl || alt => KeyCode::Char(c.to_ascii_lowercase()),
+            KeyCode::Char(c) => {
+                shift = false;
+                KeyCode::Char(c)
+            }
+            KeyCode::BackTab => {
+                shift = true;
+                KeyCode::Tab
+            }
+            code => code,
+        };
+        TuiKey {
+            ctrl,
+            alt,
+            shift,
+            code,
+        }
+    }
+
+    /// As `[shortcuts]` and the Keys dialog write it.
+    pub fn text(self) -> String {
+        let mut out = String::new();
+        for (on, name) in [
+            (self.ctrl, "Ctrl+"),
+            (self.alt, "Alt+"),
+            (self.shift, "Shift+"),
+        ] {
+            if on {
+                out.push_str(name);
+            }
+        }
+        match self.code {
+            KeyCode::F(n) => out.push_str(&format!("F{n}")),
+            KeyCode::Char(c) if c != ' ' => out.push(if self.ctrl || self.alt {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }),
+            code => {
+                let name = NAMED
+                    .iter()
+                    .find(|(_, k)| *k == code)
+                    .map_or("?", |(n, _)| n);
+                out.push_str(name);
+            }
+        }
+        out
+    }
+}
+
+/// The terminal actions a key can be given in `[shortcuts]`: their `tui.` name, the
+/// action, and the default keys as `docs/tui.md` lists them.
+pub const REMAPPABLE: &[(&str, Action, &str)] = &[
+    ("quit", Action::Quit, "q"),
+    ("follow", Action::ToggleFollow, "Space"),
+    ("top", Action::Top, "g Home"),
+    ("bottom", Action::Bottom, "G End"),
+    ("search", Action::StartSearch, "/"),
+    ("search.next", Action::SearchNext, "n F3"),
+    ("search.prev", Action::SearchPrev, "N Shift+F3"),
+    ("search.clear", Action::ClearSearch, "Esc"),
+    ("search.all", Action::FindAll, "Alt+/"),
+    ("search.results", Action::SearchResults, "Alt+R"),
+    ("search.scope", Action::SearchScope, "Alt+S"),
+    ("goto", Action::GoTo, "Ctrl+G"),
+    ("palette", Action::Palette, ":"),
+    ("include", Action::EditInclude, "i"),
+    ("include.expression", Action::ToggleFilterExpr, "I"),
+    ("exclude", Action::EditExclude, "x"),
+    ("level", Action::CycleLevel, "l"),
+    ("collapse", Action::CycleCollapse, "c"),
+    ("ansi", Action::CycleAnsi, "a"),
+    ("line_numbers", Action::ToggleLineNumbers, "#"),
+    ("time_delta", Action::ToggleTimeDelta, "Alt+D"),
+    ("time_range", Action::TimeRange, "t"),
+    ("context", Action::ToggleContext, "Ctrl+K"),
+    ("hide", Action::HideLines, "H"),
+    ("columns", Action::ToggleColumns, "C"),
+    ("rotations", Action::IncludeRotations, "R"),
+    ("hex", Action::ToggleHex, "h"),
+    ("asm", Action::ToggleAsm, "d"),
+    ("asm.arch", Action::CycleArch, "D"),
+    ("json", Action::JsonTree, "J"),
+    ("copy", Action::Copy, "y"),
+    ("copy.as_shown", Action::CopyAsShown, "Y"),
+    ("export", Action::Export, "Alt+E"),
+    ("compare", Action::Compare, "="),
+    ("bookmark", Action::ToggleBookmark, "b Ctrl+F2"),
+    ("bookmark.next", Action::NextBookmark, "] F2"),
+    ("bookmark.prev", Action::PrevBookmark, "[ Shift+F2"),
+    ("bookmark.note", Action::EditNote, "m"),
+    ("error.next", Action::NextError, "e"),
+    ("error.prev", Action::PrevError, "E"),
+    ("warn.next", Action::NextWarn, "w"),
+    ("warn.prev", Action::PrevWarn, "W"),
+    ("rule.next", Action::RuleNext, "F4"),
+    ("rule.prev", Action::RulePrev, "Shift+F4"),
+    ("source.editor", Action::OpenSource, "Ctrl+O"),
+    ("source.here", Action::OpenSourceHere, "Alt+O"),
+    ("scratchpad", Action::Scratchpad, "Alt+N"),
+    ("scratchpad.send", Action::SendToScratchpad, "Ctrl+N"),
+    ("analysis", Action::Analysis, "Alt+A"),
+    ("split.right", Action::SplitRight, "s |"),
+    ("split.down", Action::SplitDown, "_"),
+    ("window.close", Action::ClosePane, "Alt+X"),
+    ("window.float", Action::ToggleFloat, "Alt+F"),
+    ("stream.close", Action::CloseStream, "Ctrl+W"),
+    ("stream.move_prev", Action::MovePrevPane, "<"),
+    ("stream.move_next", Action::MoveNextPane, ">"),
+    ("open", Action::OpenFile, "o"),
+    ("session.open", Action::OpenSession, "O"),
+    ("session.save", Action::SaveSession, "S"),
+    ("theme", Action::CycleTheme, "T"),
+    ("settings", Action::Settings, ","),
+    ("rules", Action::EditRules, "r"),
+    ("presets", Action::Presets, "p"),
+    ("global", Action::EditGlobal, "F"),
+    ("global.toggle", Action::ToggleGlobal, "f"),
+    ("tools", Action::Tools, "!"),
+    ("lock", Action::Lock, "Ctrl+L"),
+    ("help", Action::ToggleHelp, "? F1"),
+];
+
+/// The terminal keys in force: the defaults of `map_key`, with the `tui.` entries of
+/// `[shortcuts]` over them. An action given keys there loses its default keys; a key
+/// given to an action is taken from the one that had it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyMap {
+    /// The keys set in `[shortcuts]`, and their action.
+    pub overrides: Vec<(TuiKey, Action)>,
+    /// The actions whose keys `[shortcuts]` sets (an empty value: no key at all).
+    pub replaced: Vec<Action>,
+    /// Entries that could not be read (an unknown name, a key that does not parse).
+    pub notices: Vec<String>,
+}
+
+impl KeyMap {
+    pub fn build(shortcuts: &std::collections::BTreeMap<String, String>) -> Self {
+        let mut map = KeyMap::default();
+        for (key, value) in shortcuts {
+            let Some(name) = key.strip_prefix(TUI_PREFIX) else {
+                continue;
+            };
+            let Some(&(_, action, _)) = REMAPPABLE.iter().find(|(n, _, _)| *n == name) else {
+                map.notices
+                    .push(format!("[shortcuts] {key}: unknown action"));
+                continue;
+            };
+            let mut keys = Vec::new();
+            for part in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                match TuiKey::parse(part) {
+                    Some(k) => keys.push(k),
+                    None => map
+                        .notices
+                        .push(format!("[shortcuts] {key}={value}: not a key")),
+                }
+            }
+            map.replaced.push(action);
+            for k in keys {
+                map.overrides.retain(|(o, _)| *o != k);
+                map.overrides.push((k, action));
+            }
+        }
+        map
+    }
+
+    /// The action of `key`: a key set in `[shortcuts]`, else the default unless its
+    /// action was given other keys or its key was given to another action.
+    pub fn map(&self, key: KeyEvent) -> Option<Action> {
+        if key.kind == KeyEventKind::Release {
+            return None;
+        }
+        let k = TuiKey::from_event(key);
+        if let Some((_, a)) = self.overrides.iter().find(|(o, _)| *o == k) {
+            return Some(*a);
+        }
+        let a = map_key(key)?;
+        (!self.replaced.contains(&a)).then_some(a)
+    }
+
+    /// The keys of `action` as the Keys dialog shows them: the ones set, or the default.
+    pub fn keys_text(&self, name: &str) -> (String, bool) {
+        let Some(&(_, action, default)) = REMAPPABLE.iter().find(|(n, _, _)| *n == name) else {
+            return (String::new(), false);
+        };
+        if !self.replaced.contains(&action) {
+            return (default.to_string(), false);
+        }
+        let keys: Vec<String> = self
+            .overrides
+            .iter()
+            .filter(|(_, a)| *a == action)
+            .map(|(k, _)| k.text())
+            .collect();
+        (keys.join(" "), true)
+    }
+
+    /// The remappable action that `key` reaches now, by its name.
+    pub fn holder(&self, key: TuiKey) -> Option<&'static str> {
+        let action = self
+            .overrides
+            .iter()
+            .find(|(o, _)| *o == key)
+            .map(|(_, a)| *a)
+            .or_else(|| {
+                // A default key: the action it maps to, unless that one was remapped.
+                let ev = to_event(key)?;
+                map_key(ev).filter(|a| !self.replaced.contains(a))
+            })?;
+        REMAPPABLE
+            .iter()
+            .find(|(_, a, _)| *a == action)
+            .map(|(n, _, _)| *n)
+    }
+}
+
+/// The terminal event of `key` (for looking a default key up).
+fn to_event(key: TuiKey) -> Option<KeyEvent> {
+    let mut mods = KeyModifiers::NONE;
+    if key.ctrl {
+        mods |= KeyModifiers::CONTROL;
+    }
+    if key.alt {
+        mods |= KeyModifiers::ALT;
+    }
+    if key.shift {
+        mods |= KeyModifiers::SHIFT;
+    }
+    Some(KeyEvent::new(key.code, mods))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,5 +865,54 @@ mod tests {
         assert_eq!(k(KeyCode::Char('>'), shift), Some(Action::MoveNextPane));
         assert_eq!(k(KeyCode::PageDown, ctrl), Some(Action::NextInPane));
         assert_eq!(k(KeyCode::PageUp, ctrl), Some(Action::PrevInPane));
+    }
+
+    #[test]
+    fn tui_keys_parse_and_print_back() {
+        for text in [
+            "Ctrl+O",
+            "Alt+/",
+            "G",
+            "#",
+            "Shift+F4",
+            "Space",
+            "F1",
+            "Ctrl+Shift+F",
+            "=",
+        ] {
+            let k = TuiKey::parse(text).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!(k.text(), text, "{text}");
+        }
+        assert_eq!(TuiKey::parse("ctrl+o"), TuiKey::parse("Ctrl+O"));
+        assert!(TuiKey::parse("Hyper+X").is_none());
+        assert!(TuiKey::parse("ab").is_none());
+        let g = press(KeyCode::Char('G'), KeyModifiers::SHIFT);
+        assert_eq!(TuiKey::from_event(g), TuiKey::parse("G").unwrap());
+        let co = press(KeyCode::Char('o'), KeyModifiers::CONTROL);
+        assert_eq!(TuiKey::from_event(co), TuiKey::parse("Ctrl+O").unwrap());
+    }
+
+    #[test]
+    fn shortcuts_move_keys_between_actions() {
+        let mut s = std::collections::BTreeMap::new();
+        s.insert("tui.follow".to_string(), "f".to_string());
+        s.insert("tui.help".to_string(), String::new());
+        s.insert("tui.nonsense".to_string(), "x".to_string());
+        s.insert("view.line_numbers.toggle".to_string(), "Ctrl+L".to_string());
+        let map = KeyMap::build(&s);
+        let k = |c| map.map(press(KeyCode::Char(c), KeyModifiers::NONE));
+        assert_eq!(
+            k('f'),
+            Some(Action::ToggleFollow),
+            "the key moved to follow"
+        );
+        assert_eq!(k(' '), None, "follow lost its default key");
+        assert_eq!(k('?'), None, "help has no key");
+        assert_eq!(k('q'), Some(Action::Quit), "the others keep theirs");
+        assert_eq!(map.notices.len(), 1, "{:?}", map.notices);
+        assert_eq!(map.keys_text("follow"), ("f".to_string(), true));
+        assert_eq!(map.keys_text("quit"), ("q".to_string(), false));
+        assert_eq!(map.holder(TuiKey::parse("f").unwrap()), Some("follow"));
+        assert_eq!(map.holder(TuiKey::parse("q").unwrap()), Some("quit"));
     }
 }

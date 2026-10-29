@@ -300,7 +300,7 @@ settings and the workspace with the window. Where it stands against the window:
 - ✅ Rule sets import / export, next / previous match of a rule, clear all bookmarks
 - ✅ Log formats dialog, editor presets, Open in FastTail from a source location
 - ✅ Filter expression toggle per stream, global filter expressions editable
-- ⬜ Remappable keys (the terminal keys are fixed), the palette's setting toggles
+- ✅ Remappable keys, the palette's setting toggles
 - ⬜ Web view and the MCP server of a running interface; plugin management (enable,
   approve, parameters: today it says to use the window)
 - ✅ Time delta column, time display (as written / UTC / local), the OTLP hint in the
@@ -315,7 +315,7 @@ settings and the workspace with the window. Where it stands against the window:
   - ✅ `tui-output` (M): search results pane, search in a range, export, Copy as shown,
     bookmark report
   - ⬜ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
-  - ⬜ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
+  - ✅ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
   - ✅ `tui-compare-scratchpad` (S): Compare tab and scratchpad
   - ✅ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all
     bookmarks, Log formats dialog, editor presets, Open in FastTail, filter expressions
