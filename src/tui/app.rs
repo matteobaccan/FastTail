@@ -316,6 +316,12 @@ pub enum PromptKind {
     FormatImport,
     /// The file the format being edited is written to.
     FormatExport,
+    /// The field (or `/regex/`) the Statistics count.
+    StatsField,
+    /// The field (or `/regex/`) whose values group the Operations.
+    OpsField,
+    /// The span Explain compares with the rest: `14:00..14:05`.
+    ExplainSpan,
 }
 
 impl PromptKind {
@@ -579,6 +585,10 @@ pub struct App {
     pub scratchpad: Option<crate::scratchpad::Scratchpad>,
     /// The scratchpad's editor, while it is shown (`Alt+N`).
     pub pad_editor: Option<crate::tui::pad::PadEditor>,
+    /// An analysis view over the windows (`Alt+A`).
+    pub analysis: Option<crate::tui::analysis::AnalysisView>,
+    /// The list of the analysis views (`Alt+A`): the row selected.
+    pub analysis_menu: Option<usize>,
     /// The filter presets (`p`).
     pub presets: Option<PresetsDialog>,
     /// The global filter editor (`F`), and when its pending edit is applied.
@@ -736,6 +746,8 @@ impl App {
             compare_mark: None,
             scratchpad: None,
             pad_editor: None,
+            analysis: None,
+            analysis_menu: None,
             presets: None,
             global: None,
             global_due: None,
@@ -1262,6 +1274,7 @@ impl App {
             || self.split.is_some()
             || self.split_waiting.is_some()
             || self.export.is_some()
+            || self.analysis.is_some()
             || self
                 .tabs
                 .iter()
@@ -1357,6 +1370,12 @@ impl App {
         }
         if self.pad_editor.is_some() {
             return self.on_pad_key(key);
+        }
+        if self.analysis_menu.is_some() {
+            return self.on_analysis_menu_key(key);
+        }
+        if self.analysis.is_some() && self.prompt.is_none() {
+            return self.on_analysis_key(key);
         }
         // The tools editor opens over Settings, so it has the keys first.
         if self.tools_editor.is_some() {
@@ -2813,6 +2832,13 @@ impl App {
                     tab.engine.set_plots(plot_first(tab.engine.plots(), key));
                 }
             }
+            KeyCode::Char('S') | KeyCode::Char('O') => {
+                let stats = key.code == KeyCode::Char('S');
+                if let Some((field, _)) = rows.get(selected).cloned() {
+                    self.columns_menu = None;
+                    self.open_source_view(crate::field_stats::StatsSource::Field(field), stats);
+                }
+            }
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 // Pins or unpins a shown column; the row follows it.
                 if let Some((key, true)) = rows.get(selected).cloned() {
@@ -3354,6 +3380,367 @@ impl App {
             RulesKey::Other => return false,
         }
         true
+    }
+
+    /// Opens the analysis view `kind` on the focused stream: Statistics and Operations ask
+    /// for their field, Explain for its span, Patterns start learning at once.
+    fn open_analysis(&mut self, kind: crate::tui::analysis::Kind) {
+        use crate::tui::analysis::{AnalysisView, Kind};
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        match kind {
+            Kind::Stats => self.open_prompt(PromptKind::StatsField),
+            Kind::Operations => self.open_prompt(PromptKind::OpsField),
+            Kind::Explain => self.open_prompt(PromptKind::ExplainSpan),
+            Kind::Patterns => {
+                if tab.engine.patterns.is_none() {
+                    tab.engine.open_patterns();
+                }
+                self.analysis = Some(AnalysisView::new(kind, tab.engine.path.clone()));
+            }
+            Kind::Query => {
+                let mut v = AnalysisView::new(kind, tab.engine.path.clone());
+                if let Some(q) = &tab.engine.query {
+                    v.query = TextField::new(&q.text);
+                }
+                self.analysis = Some(v);
+            }
+        }
+    }
+
+    /// The Statistics (`stats`) or the Operations of the focused stream over `source`.
+    fn open_source_view(&mut self, source: crate::field_stats::StatsSource, stats: bool) {
+        use crate::tui::analysis::{AnalysisView, Kind};
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let kind = if stats {
+            tab.engine
+                .open_stats(source, crate::field_stats::SliceChoice::Off);
+            Kind::Stats
+        } else {
+            tab.engine
+                .open_operations(source, crate::operations::NameSource::Message);
+            Kind::Operations
+        };
+        self.analysis = Some(AnalysisView::new(kind, tab.engine.path.clone()));
+    }
+
+    fn on_analysis_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::analysis::Kind;
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let Some(selected) = self.analysis_menu.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => self.analysis_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                *selected = (*selected + 1).min(Kind::ALL.len() - 1)
+            }
+            KeyCode::Enter => {
+                let kind = Kind::ALL[*selected];
+                self.analysis_menu = None;
+                self.open_analysis(kind);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn draw_analysis_menu(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::tui::analysis::Kind;
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.analysis_menu else {
+            return;
+        };
+        let inner = self.dialog(
+            frame,
+            area,
+            (48, Kind::ALL.len() as u16 + 4),
+            tx(self.lang, "Analysis"),
+            false,
+        );
+        let mut out = vec![Line::styled(
+            tx(self.lang, "Enter opens, Up/Down choose, Esc closes"),
+            dim,
+        )];
+        for (i, kind) in Kind::ALL.iter().enumerate() {
+            let y = inner.y + 1 + i as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            out.push(Line::styled(
+                format!(" {}", tx(self.lang, kind.title())),
+                style,
+            ));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// The tab the analysis view reads, when it is still open.
+    fn analysis_tab(&self) -> Option<usize> {
+        let path = &self.analysis.as_ref()?.path;
+        self.tabs.iter().position(|t| &t.engine.path == path)
+    }
+
+    fn on_analysis_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::analysis::{build, AnalysisKey, Kind, RowAction};
+        let Some(i) = self.analysis_tab() else {
+            self.analysis = None;
+            return true;
+        };
+        let (lang, ascii) = (self.lang, self.palette.ascii);
+        let Some(kind) = self.analysis.as_ref().map(|v| v.kind) else {
+            return false;
+        };
+        let table = build(kind, &mut self.tabs[i].engine, lang, ascii);
+        let Some(v) = self.analysis.as_mut() else {
+            return false;
+        };
+        match v.on_key(key, &table) {
+            AnalysisKey::Moved => {}
+            AnalysisKey::Other => return false,
+            AnalysisKey::Close => {
+                // Patterns and Explain keep counting only while shown, as in the window.
+                let e = &mut self.tabs[i].engine;
+                match kind {
+                    Kind::Stats => e.close_stats(),
+                    Kind::Operations => e.close_operations(),
+                    Kind::Explain => e.close_explain(),
+                    Kind::Patterns if e.pattern_filter().is_none() => e.close_patterns(),
+                    _ => {}
+                }
+                self.analysis = None;
+            }
+            AnalysisKey::RunQuery(text) => {
+                if !text.is_empty() {
+                    self.tabs[i].engine.run_query(&text);
+                    if let Some(v) = self.analysis.as_mut() {
+                        v.editing = false;
+                        v.selected = 0;
+                    }
+                }
+            }
+            AnalysisKey::Activate(action, exclude) => {
+                let e = &mut self.tabs[i].engine;
+                match action {
+                    RowAction::None => {}
+                    RowAction::Value(value) => {
+                        if let Some(source) = e.stats.as_ref().map(|s| s.source.clone()) {
+                            let term =
+                                crate::field_stats::filter_term(&source, &value, e.filter_is_regex);
+                            e.add_filter_term(&term, !exclude);
+                            self.message = Some(if exclude {
+                                txf(lang, "Excluded {0}", &[&term])
+                            } else {
+                                txf(lang, "Included {0}", &[&term])
+                            });
+                        }
+                    }
+                    RowAction::Pair(key, value) => {
+                        let source = crate::field_stats::StatsSource::Field(key);
+                        let term =
+                            crate::field_stats::filter_term(&source, &value, e.filter_is_regex);
+                        e.add_filter_term(&term, !exclude);
+                        self.message = Some(if exclude {
+                            txf(lang, "Excluded {0}", &[&term])
+                        } else {
+                            txf(lang, "Included {0}", &[&term])
+                        });
+                    }
+                    RowAction::Pattern(id) => {
+                        let (mut inc, mut exc) = e
+                            .pattern_filter()
+                            .map(|f| (f.include.clone(), f.exclude.clone()))
+                            .unwrap_or_default();
+                        if exclude {
+                            inc.retain(|&x| x != id);
+                            if !exc.contains(&id) {
+                                exc.push(id);
+                            }
+                        } else {
+                            inc = vec![id];
+                            exc.clear();
+                        }
+                        e.set_pattern_filter(inc, exc);
+                        self.analysis = None;
+                        self.tabs[i].top = 0;
+                    }
+                    RowAction::Line(line) => {
+                        self.analysis = None;
+                        self.focus_tab(i);
+                        let tab = &mut self.tabs[i];
+                        tab.engine.follow_tail = false;
+                        let current = tab.cursor_line().unwrap_or(0);
+                        let target = tab.engine.resolve_goto(&(line + 1).to_string(), current);
+                        self.message = goto_target(tab, target, &(line + 1).to_string(), lang);
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// The analysis view over the windows: its summary, then the table with its header,
+    /// the selected row reversed, numbers to the right.
+    fn draw_analysis(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::tui::analysis::{build, Kind};
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let Some(i) = self.analysis_tab() else {
+            self.analysis = None;
+            return;
+        };
+        let Some(kind) = self.analysis.as_ref().map(|v| v.kind) else {
+            return;
+        };
+        let (lang, ascii) = (self.lang, palette.ascii);
+        let table = build(kind, &mut self.tabs[i].engine, lang, ascii);
+        let title = format!(
+            "{} - {}",
+            tx(lang, kind.title()),
+            stream_title(&self.tabs[i].engine)
+        );
+        let inner = self.dialog(frame, area, (area.width, area.height), &title, false);
+        let Some(v) = self.analysis.as_mut() else {
+            return;
+        };
+        let width = inner.width as usize;
+        let mut out = Vec::new();
+        let mut cursor = None;
+        if kind == Kind::Query {
+            let (shown, x) = v.query.view(width.saturating_sub(2));
+            let style = if v.editing {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            if v.editing {
+                cursor = Some((inner.x + 2 + x as u16, inner.y));
+            }
+            out.push(Line::from(vec![
+                Span::styled("> ", dim),
+                Span::styled(
+                    format!(
+                        "{:<w$}",
+                        view::sanitize(&shown),
+                        w = width.saturating_sub(2)
+                    ),
+                    style,
+                ),
+            ]));
+        }
+        let hint = if v.narrowing || !v.narrow.text().is_empty() {
+            format!("/{}", v.narrow.text())
+        } else if kind == Kind::Query && v.editing {
+            tx(
+                lang,
+                "Enter runs the query, Tab goes to the rows, Esc closes",
+            )
+            .to_string()
+        } else {
+            tx(
+                lang,
+                "Enter filters or goes to the line, x excludes, s/S sort, / narrows, Esc closes",
+            )
+            .to_string()
+        };
+        out.push(Line::styled(head_chars(&hint, width), dim));
+        for line in &table.summary {
+            out.push(Line::styled(head_chars(line, width), dim));
+        }
+        if let Some(e) = &table.error {
+            out.push(Line::styled(head_chars(e, width), error));
+        }
+        let shown = v.shown(&table);
+        // Column widths: as wide as the widest cell on screen, the last takes the rest.
+        let n = table.header.len();
+        if n > 0 {
+            let room = (inner.height as usize).saturating_sub(out.len() + 1);
+            v.page = room.max(1);
+            v.selected = v.selected.min(shown.len().saturating_sub(1));
+            if v.selected < v.top {
+                v.top = v.selected;
+            } else if v.selected >= v.top + v.page {
+                v.top = v.selected + 1 - v.page;
+            }
+            let rows: Vec<usize> = shown.iter().skip(v.top).take(room).copied().collect();
+            let cell_w = |s: &str| unicode_width::UnicodeWidthStr::width(s);
+            let mut widths: Vec<usize> = (0..n)
+                .map(|c| {
+                    rows.iter()
+                        .filter_map(|&r| table.rows[r].cells.get(c))
+                        .map(|s| cell_w(s))
+                        .chain(std::iter::once(cell_w(&table.header[c])))
+                        .max()
+                        .unwrap_or(1)
+                        .min(48)
+                })
+                .collect();
+            let fixed: usize = widths[..n - 1].iter().map(|w| w + 2).sum();
+            widths[n - 1] = width.saturating_sub(fixed).max(4);
+            let line_of = |cells: &[String], style: Style| -> Line<'static> {
+                let mut spans = Vec::new();
+                for (c, w) in widths.iter().enumerate() {
+                    let text = cells.get(c).map(String::as_str).unwrap_or("");
+                    let text = view::sanitize(text);
+                    let cut = head_chars(&text, *w);
+                    let pad = w.saturating_sub(cell_w(&cut));
+                    let cell = if table.right.get(c).copied().unwrap_or(false) {
+                        format!("{}{cut}", " ".repeat(pad))
+                    } else {
+                        format!("{cut}{}", " ".repeat(pad))
+                    };
+                    spans.push(Span::styled(cell, style));
+                    if c + 1 < n {
+                        spans.push(Span::styled("  ", style));
+                    }
+                }
+                Line::from(spans)
+            };
+            let mut head = table.header.clone();
+            if let Some((c, reverse)) = v.sort {
+                if let Some(h) = head.get_mut(c) {
+                    h.push(if reverse { '^' } else { 'v' });
+                }
+            }
+            out.push(line_of(
+                &head,
+                Style::default()
+                    .fg(palette.accent())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            for (k, &r) in rows.iter().enumerate() {
+                let row = &table.rows[r];
+                let base = row
+                    .level
+                    .map_or(Style::default(), |l| palette.level_style(l));
+                let style = if v.top + k == v.selected {
+                    base.add_modifier(Modifier::REVERSED)
+                } else {
+                    base
+                };
+                out.push(line_of(&row.cells, style));
+            }
+            if rows.is_empty() && table.error.is_none() {
+                out.push(Line::styled(tx(lang, "(nothing yet)"), dim));
+            }
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        if let Some(at) = cursor {
+            frame.set_cursor_position(at);
+        }
     }
 
     /// `=`: the two selected rows against each other; else the selection (or the cursor
@@ -4961,6 +5348,35 @@ impl App {
             | PromptKind::RulesExport
             | PromptKind::FormatImport
             | PromptKind::FormatExport => {}
+            PromptKind::StatsField | PromptKind::OpsField => {
+                let stats = prompt.kind == PromptKind::StatsField;
+                match crate::tui::analysis::parse_source(&text) {
+                    Some(source) => self.open_source_view(source, stats),
+                    None => {
+                        self.message = Some(txf(
+                            self.lang,
+                            "Cannot read \"{0}\" as a field or /regex/",
+                            &[&text],
+                        ))
+                    }
+                }
+            }
+            PromptKind::ExplainSpan => {
+                let (from, to) = text.split_once("..").unwrap_or((text.as_str(), ""));
+                if tab.engine.explain_texts(from.trim(), to.trim()) {
+                    if let Some(span) = tab.engine.explain_request.take() {
+                        tab.engine
+                            .explain_span(span, crate::spike::Baseline::Rest, false);
+                    }
+                    let path = tab.engine.path.clone();
+                    self.analysis = Some(crate::tui::analysis::AnalysisView::new(
+                        crate::tui::analysis::Kind::Explain,
+                        path,
+                    ));
+                } else {
+                    self.message = Some(txf(self.lang, "Cannot read \"{0}\" as a range", &[&text]));
+                }
+            }
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -5091,6 +5507,18 @@ impl App {
             | PromptKind::RulesExport
             | PromptKind::FormatImport
             | PromptKind::FormatExport => unreachable!("opened above"),
+            PromptKind::StatsField | PromptKind::OpsField => {
+                let cols = e.drawn_field_columns().0;
+                cols.first().cloned().unwrap_or_default()
+            }
+            PromptKind::ExplainSpan => {
+                let (f, t) = (e.time_from_text.trim(), e.time_to_text.trim());
+                if f.is_empty() && t.is_empty() {
+                    String::new()
+                } else {
+                    format!("{f}..{t}")
+                }
+            }
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -5843,6 +6271,8 @@ impl App {
                     || self.formats.is_some()
                     || self.compare.is_some()
                     || self.pad_editor.is_some()
+                    || self.analysis.is_some()
+                    || self.analysis_menu.is_some()
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
@@ -6178,6 +6608,12 @@ impl App {
             Target::ListItem(i) if self.piece_menu.is_some() => self.go_to_piece(i),
             Target::ListItem(i) if self.results_menu.is_some() => self.go_to_result(i),
             Target::ListItem(i) if self.export_menu.is_some() => self.choose_export(i),
+            Target::ListItem(i) if self.analysis_menu.is_some() => {
+                self.analysis_menu = None;
+                if let Some(&kind) = crate::tui::analysis::Kind::ALL.get(i) {
+                    self.open_analysis(kind);
+                }
+            }
             // A click shows or hides that column.
             Target::ListItem(i) if self.columns_menu.is_some() => {
                 self.columns_menu = Some(i);
@@ -6270,6 +6706,7 @@ impl App {
                     || self.piece_menu.take().is_some()
                     || self.results_menu.take().is_some()
                     || self.export_menu.take().is_some()
+                    || self.analysis_menu.take().is_some()
                     || self.columns_menu.take().is_some()
                 {
                 } else if let Some(m) = self.tool_menu.take() {
@@ -6710,6 +7147,8 @@ impl App {
             Action::LogFormats => self.open_formats(),
             Action::Scratchpad => self.open_pad(),
             Action::SendToScratchpad => self.send_to_pad(),
+            Action::Analysis => self.analysis_menu = Some(0),
+            Action::Patterns => self.open_analysis(crate::tui::analysis::Kind::Patterns),
             Action::Compare => self.compare_selection(),
             Action::ToggleFilterExpr => {
                 let on = !tab.engine.filter_expr_mode();
@@ -6909,6 +7348,12 @@ impl App {
         }
         if self.pad_editor.is_some() {
             self.draw_pad(frame, main_area);
+        }
+        if self.analysis.is_some() {
+            self.draw_analysis(frame, main_area);
+        }
+        if self.analysis_menu.is_some() {
+            self.draw_analysis_menu(frame, main_area);
         }
         if self.compare.is_some() {
             self.draw_compare(frame, main_area);
@@ -7692,6 +8137,18 @@ impl App {
                 "Export the rules to this file (a trailing ! replaces it)",
             ),
             PromptKind::FormatImport => tx(self.lang, "Import a format file"),
+            PromptKind::StatsField => tx(
+                self.lang,
+                "Statistics of the field (or /regex/ for its first group)",
+            ),
+            PromptKind::OpsField => tx(
+                self.lang,
+                "Operations grouped by the field (or /regex/ for its first group)",
+            ),
+            PromptKind::ExplainSpan => tx(
+                self.lang,
+                "Explain the span 14:00..14:05 against the rest of the log",
+            ),
             PromptKind::FormatExport => tx(
                 self.lang,
                 "Export the format to this file (a trailing ! replaces it)",
@@ -14686,6 +15143,129 @@ mod tests {
             .as_ref()
             .map(|p| p.text.clone())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_analysis_views_count_filter_and_go_to_lines() {
+        use crate::tui::analysis::{build, AnalysisKey, Kind, RowAction};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let mut text = String::new();
+        for i in 0..30 {
+            let status = if i % 3 == 0 { 500 } else { 200 };
+            text.push_str(&format!(
+                "ts=2026-10-29T10:00:{i:02}Z level=info status={status} id=op{} msg=\"done {i}\"\n",
+                i % 4
+            ));
+        }
+        std::fs::write(&a, text).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        let settle = |app: &mut App| {
+            for _ in 0..500 {
+                app.tabs[0].engine.poll_updates();
+                let e = &app.tabs[0].engine;
+                let busy = e.stats.as_ref().is_some_and(|s| !s.done())
+                    || e.operations.as_ref().is_some_and(|o| !o.done())
+                    || e.patterns.as_ref().is_some_and(|p| p.running())
+                    || e.query.as_ref().is_some_and(|q| q.running());
+                if !busy {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        // Statistics of `status`: 200 then 500, Enter includes the value.
+        app.open_source_view(
+            crate::field_stats::StatsSource::Field("status".into()),
+            true,
+        );
+        settle(&mut app);
+        let t = build(Kind::Stats, &mut app.tabs[0].engine, Language::En, false);
+        assert_eq!(t.rows[0].cells[0], "200", "{t:?}");
+        assert_eq!(t.rows[0].cells[1], "20");
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("status: 30 lines")),
+            "{screen:#?}"
+        );
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.on_analysis_key(enter);
+        app.on_analysis_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.tabs[0].engine.include_filter(), "status=500");
+        app.tabs[0].engine.set_include_filter("");
+        app.analysis = None;
+        // Query: a stats pipeline.
+        app.open_analysis(Kind::Query);
+        app.tabs[0].engine.run_query("stats count() by status");
+        settle(&mut app);
+        let t = build(Kind::Query, &mut app.tabs[0].engine, Language::En, false);
+        assert_eq!(t.rows.len(), 2, "{t:?}");
+        app.analysis = None;
+        // Operations by `id`: four of them, Enter goes to the first line of one.
+        app.open_source_view(crate::field_stats::StatsSource::Field("id".into()), false);
+        settle(&mut app);
+        let t = build(
+            Kind::Operations,
+            &mut app.tabs[0].engine,
+            Language::En,
+            false,
+        );
+        assert_eq!(t.rows.len(), 4, "{t:?}");
+        assert_eq!(t.rows[1].action, RowAction::Line(1));
+        let v = app.analysis.as_mut().unwrap();
+        v.selected = 0;
+        let shown = v.shown(&t);
+        let k = v.on_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &t,
+        );
+        assert!(
+            matches!(k, AnalysisKey::Activate(RowAction::Line(_), false)),
+            "{shown:?}"
+        );
+        // Patterns: learnt in the background, listed most frequent first.
+        app.analysis = None;
+        app.open_analysis(Kind::Patterns);
+        settle(&mut app);
+        let t = build(Kind::Patterns, &mut app.tabs[0].engine, Language::En, false);
+        assert!(!t.rows.is_empty(), "{t:?}");
+        // Explain the last ten seconds against the rest.
+        let e = &mut app.tabs[0].engine;
+        e.ensure_timestamps();
+        while !e.timestamps_complete() {
+            e.fill_timestamps();
+        }
+        let (a, b) = (e.line_timestamp(20).unwrap(), e.line_timestamp(29).unwrap());
+        e.explain_span((a, b), crate::spike::Baseline::Rest, false);
+        for _ in 0..500 {
+            app.tabs[0].engine.poll_updates();
+            if app.tabs[0].engine.explain.as_ref().is_some_and(|x| !x.running()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let t = build(Kind::Explain, &mut app.tabs[0].engine, Language::En, false);
+        assert!(
+            t.summary.iter().any(|l| l.contains("10 entries in the span")),
+            "{t:?}"
+        );
     }
 
     #[test]

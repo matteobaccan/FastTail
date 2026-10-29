@@ -7,6 +7,7 @@
 //! feasibility prototype of `docs/tui-feasibility.md`; openspec/changes/tui-interface
 //! brings it to parity with the GUI.
 
+mod analysis;
 mod app;
 pub mod bars;
 mod browser;

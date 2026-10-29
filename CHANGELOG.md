@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Analysis views in the terminal.** `Alt+A` opens Statistics of a field, Query, Patterns,
+  Explain a span and Operations over the windows, as tables read from the window's own
+  background jobs: sort by a column (`s`), narrow (`/`), and `Enter` (or `x`) filters on a
+  value, a pattern or a `field=value` pair, or goes to a line. `S` and `O` in `[Fields...]`
+  open the Statistics and Operations of the selected field.
+
 ## [0.29.0] - 2026-10-29
 
 ### Added

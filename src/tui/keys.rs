@@ -148,6 +148,10 @@ pub enum Action {
     Compare,
     /// ALT + N: the scratchpad's editor.
     Scratchpad,
+    /// ALT + A: the analysis views (Statistics, Query, Patterns, Explain, Operations).
+    Analysis,
+    /// The Patterns view of the focused stream (palette).
+    Patterns,
     /// CTRL + N: the selected rows (or the cursor row) sent to the scratchpad.
     SendToScratchpad,
     /// ALT + D: the time delta column of the focused stream, on or off.
@@ -256,6 +260,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('e') | KeyCode::Char('E') => Some(Action::Export),
             KeyCode::Char('o') | KeyCode::Char('O') => Some(Action::OpenSourceHere),
             KeyCode::Char('n') | KeyCode::Char('N') => Some(Action::Scratchpad),
+            KeyCode::Char('a') | KeyCode::Char('A') => Some(Action::Analysis),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -493,6 +498,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('e'), alt), Some(Action::Export));
         assert_eq!(k(KeyCode::Char('o'), alt), Some(Action::OpenSourceHere));
         assert_eq!(k(KeyCode::Char('n'), alt), Some(Action::Scratchpad));
+        assert_eq!(k(KeyCode::Char('a'), alt), Some(Action::Analysis));
         assert_eq!(k(KeyCode::Char('n'), ctrl), Some(Action::SendToScratchpad));
         assert_eq!(
             k(KeyCode::Char('='), KeyModifiers::NONE),
