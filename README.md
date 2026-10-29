@@ -327,7 +327,13 @@ overrides the colour detection.
   --color <WHEN>     auto (default: on a terminal, unless NO_COLOR is set), always, never
   --line-numbers     prefix each line with its line number and `:`
   --no-prefix        no `file:` prefix when several inputs are given
+  --output <FORMAT>  text (default), json, logfmt, csv or template: each line as a record
+  --template <TEXT>  with --output template: `{time} {level} {msg}`
+  --format <NAME>    the field parser: json, logfmt, csv, tsv, apache, syslog or a log
+                     format's name (default: detected, as in the window)
 ```
+
+**Records** (`--output`): the same lines `text` prints, each written as a record with the fields the window's parser reads (detected from the first lines of a file, from the first line of a pipe or a compressed file, or `--format NAME`); the time comes from the time field when there is one. `json` writes one object per line (NDJSON) with `file`, `line`, `level`, `time` (ISO 8601 on the clock the log printed), `text`, the parsed `fields` (values as strings) and `"context": true` for `--context` lines; absent keys are left out. `logfmt` writes `file=… line=… time=… level=…` then the fields (or `text=` without a parser), quoting where needed. `csv` writes a header `file,line,time,level,<fields of the first record>,text` and one row per line (RFC 4180, formula protection; later files map their fields by name). `template` fills `{name}` with a field or the built-ins `{line}`, `{file}`, `{time}`, `{level}`, `{text}`; an unknown name prints empty and `{{` / `}}` are braces. Records are never coloured, have no `file:` / line-number prefixes and no `--` separators; `--follow` keeps writing records.
 
 Inputs are plain files, file-name patterns (`logs/app-*.log`, the newest match), single compressed files (`.gz`, `.bz2`, `.xz`, `.zst`, decompressed as they are read, nothing written to disk) and `-` for standard input; with no PATH, piped input is read. They are printed one after the other, in the order given; with several, each line starts with `name:`. Zip, tar and 7z archives are refused with a message (their entries need the picker). With `--follow`, appended lines are printed within a fraction of a second; a truncated or rewritten file is read again from the start after a notice on stderr, a pattern switches to a newer file, compressed inputs are not followed, and standard input ends the program when it ends. Colours are the theme's level colours, the highlight rules of `fasttail.ini` and the log's own ANSI colours, in 24-bit colour when `COLORTERM` says so (and on Windows), 256 colours otherwise; without colour, escape sequences are removed. Exit codes: `0` lines printed, `1` nothing matched, `2` usage error, `3` an input could not be read (the others are still printed). A reader that stops early (`| head`) ends FastTail quietly with `0`.
 
@@ -340,6 +346,10 @@ kubectl logs pod-7 | fasttail --print --exclude DEBUG | wc -l
 fasttail --print --level fatal build.log && exit 1
 # two terms over a live log and a rotated one
 fasttail --print --filter payment --filter timeout gateway.log payment.log.1.gz
+# the status of each error of a JSON log, through jq
+fasttail --print --output json --level error app.json | jq .fields.status
+# one line per request, in your own shape
+fasttail --print --output template --template '{time} {status} {path}' access.log
 ```
 
 On Windows `fasttail.exe` is a GUI-subsystem program: redirected or piped output (`> out.txt`, `| findstr payment`, Git Bash) is used as it is, and in an interactive console it attaches to the console of cmd or PowerShell. Those shells do not wait for a GUI-subsystem program, so the prompt can come back while lines are still being printed: use `start /wait /b fasttail --print ...` in cmd, or pipe the output (`| more`, `| Out-Host`), when the order matters.

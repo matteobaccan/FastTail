@@ -511,3 +511,132 @@ fn follow_prints_appends_truncations_and_newer_pattern_files() {
     expect_line(&out, "ERROR in two", Duration::from_secs(1));
     drop(child);
 }
+
+const JSON_LOG: &str = r#"{"ts":"2026-10-29T10:00:00.250Z","level":"info","msg":"started","status":"200"}
+{"ts":"2026-10-29T10:00:01Z","level":"error","msg":"card declined","status":"503"}
+{"ts":"2026-10-29T10:00:02Z","level":"info","msg":"done","status":"200"}
+"#;
+
+#[test]
+fn json_records_carry_the_fields_and_the_context() {
+    let fx = Fixture::new();
+    fx.write("app.json", JSON_LOG);
+    let out = fx.run(&[
+        "--print", "--output", "json", "--filter", "declined", "app.json",
+    ]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "{text}");
+    let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(v["file"], "app.json");
+    assert_eq!(v["line"], 2);
+    assert_eq!(v["level"], "ERROR");
+    assert_eq!(v["time"], "2026-10-29T10:00:01");
+    assert_eq!(v["fields"]["status"], "503");
+    assert_eq!(v["fields"]["msg"], "card declined");
+    assert!(v.get("context").is_none());
+
+    // Context lines are records too, marked; no `--` separator.
+    let out = fx.run(&[
+        "--print",
+        "--output",
+        "json",
+        "--context",
+        "1",
+        "--filter",
+        "declined",
+        "app.json",
+    ]);
+    let text = stdout(&out);
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(records.len(), 3, "{text}");
+    assert_eq!(records[0]["context"], true);
+    assert!(records[1].get("context").is_none());
+    assert_eq!(records[2]["context"], true);
+    assert!(!text.contains("\n--\n"));
+}
+
+#[test]
+fn csv_logfmt_and_template_outputs() {
+    let fx = Fixture::new();
+    fx.write("app.json", JSON_LOG);
+    let out = fx.run(&["--print", "--output", "csv", "app.json"]);
+    let text = stdout(&out);
+    let rows: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        rows[0], "file,line,time,level,ts,level,msg,status,text",
+        "{text}"
+    );
+    assert!(
+        rows[2].starts_with("app.json,2,2026-10-29T10:00:01,ERROR,"),
+        "{}",
+        rows[2]
+    );
+    assert!(rows[2].contains(",card declined,503,"), "{}", rows[2]);
+    assert_eq!(rows.len(), 4);
+
+    let out = fx.run(&[
+        "--print", "--output", "logfmt", "--filter", "declined", "app.json",
+    ]);
+    assert!(
+        stdout(&out).starts_with("file=app.json line=2 time=2026-10-29T10:00:01 level=ERROR "),
+        "{}",
+        stdout(&out)
+    );
+    assert!(stdout(&out).contains("msg=\"card declined\""));
+
+    // A template: fields, built-ins, a missing field left empty, `{{` a brace.
+    let out = fx.run(&[
+        "--print",
+        "--output",
+        "template",
+        "--template",
+        "{line} {{{level}}} {msg} [{nope}]",
+        "app.json",
+    ]);
+    assert_eq!(
+        stdout(&out),
+        "1 {INFO} started []\n2 {ERROR} card declined []\n3 {INFO} done []\n"
+    );
+
+    // A forced parser on a plain log, and an unknown one.
+    fx.write("kv.log", "user=ann action=login\nuser=bob action=logout\n");
+    let out = fx.run(&[
+        "--print",
+        "--output",
+        "template",
+        "--template",
+        "{user}",
+        "--format",
+        "logfmt",
+        "kv.log",
+    ]);
+    assert_eq!(stdout(&out), "ann\nbob\n");
+    let out = fx.run(&["--print", "--output", "json", "--format", "nope", "kv.log"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("unknown format"), "{}", stderr(&out));
+}
+
+#[test]
+fn json_records_while_following() {
+    let fx = Fixture::new();
+    let log = fx.write("app.json", JSON_LOG);
+    let mut child = Killed(
+        fx.command(&[
+            "--print", "--follow", "--output", "json", "--filter", "error", "app.json",
+        ])
+        .spawn()
+        .unwrap(),
+    );
+    let out = lines_of(child.0.stdout.take().unwrap());
+    expect_line(&out, "\"card declined\"", Duration::from_secs(5));
+    append(
+        &log,
+        "{\"ts\":\"2026-10-29T10:00:03Z\",\"level\":\"error\",\"msg\":\"late\",\"status\":\"500\"}\n",
+    );
+    expect_line(&out, "\"status\":\"500\"", Duration::from_secs(2));
+}

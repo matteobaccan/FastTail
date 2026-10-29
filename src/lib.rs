@@ -54,6 +54,7 @@ pub mod plot;
 pub mod plugin_source;
 pub mod plugins;
 pub mod print_mode;
+pub mod print_records;
 pub mod query;
 pub mod renderer;
 pub mod rotation;

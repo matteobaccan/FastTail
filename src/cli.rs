@@ -90,6 +90,11 @@ PRINT MODE:
                          always or never
     --line-numbers       Prefix each line with its line number
     --no-prefix          Do not prefix each line with its file name when several are given
+    --output <FORMAT>    text (default), json (one object per line), logfmt, csv or template
+    --template <TEXT>    With --output template: `{time} {level} {msg}`, field names and
+                         {line}, {file}, {time}, {level}, {text}; `{{` is a brace
+    --format <NAME>      Read the fields with this parser (json, logfmt, csv, tsv, apache,
+                         syslog or a log format's name) instead of detecting it
     Exit codes: 0 lines printed, 1 no line matched, 2 usage error, 3 an input could not be
     read (the others are still printed)
 "
@@ -140,6 +145,9 @@ pub const VALUE_OPTIONS: &[&str] = &[
     "--level-bytes",
     "--line",
     "--context",
+    "--output",
+    "--template",
+    "--format",
     "--color",
     "--colour",
     "--config",
@@ -165,6 +173,33 @@ impl ColorChoice {
             "auto" => Some(Self::Auto),
             "always" => Some(Self::Always),
             "never" => Some(Self::Never),
+            _ => None,
+        }
+    }
+}
+
+/// What print mode writes for each line (`--output`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PrintOutput {
+    /// The line as it is.
+    #[default]
+    Text,
+    /// One JSON object per line (NDJSON).
+    Json,
+    Logfmt,
+    Csv,
+    /// `--template`.
+    Template,
+}
+
+impl PrintOutput {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "text" => Some(Self::Text),
+            "json" | "ndjson" => Some(Self::Json),
+            "logfmt" => Some(Self::Logfmt),
+            "csv" => Some(Self::Csv),
+            "template" => Some(Self::Template),
             _ => None,
         }
     }
@@ -233,6 +268,10 @@ pub struct CliArgs {
     /// `--level-bytes N`: the bytes of a line the level is looked for in (print mode).
     pub level_bytes: Option<usize>,
     pub context: Option<usize>,
+    /// `--output`, `--template` and `--format` (print mode).
+    pub output: Option<PrintOutput>,
+    pub template: Option<String>,
+    pub parser_format: Option<String>,
     pub color: Option<ColorChoice>,
     pub line_numbers: bool,
     pub no_prefix: bool,
@@ -426,6 +465,16 @@ impl CliArgs {
                         })?;
                     out.context = Some(n);
                 }
+                "--output" => {
+                    let v = value("format")?;
+                    out.output = Some(PrintOutput::parse(&v).ok_or_else(|| {
+                        CliError::Usage(format!(
+                            "unknown output '{v}' (expected text, json, logfmt, csv or template)"
+                        ))
+                    })?);
+                }
+                "--template" => out.template = Some(value("text")?),
+                "--format" => out.parser_format = Some(value("name")?),
                 "--color" | "--colour" => {
                     let v = value("value")?;
                     out.color = Some(ColorChoice::parse(&v).ok_or_else(|| {
@@ -537,8 +586,24 @@ impl CliArgs {
                 )));
             }
         }
+        match (self.output, &self.template) {
+            (Some(PrintOutput::Template), None) => {
+                return Err(CliError::Usage(
+                    "--output template needs --template <TEXT>".to_string(),
+                ))
+            }
+            (o, Some(_)) if o != Some(PrintOutput::Template) => {
+                return Err(CliError::Usage(
+                    "--template is only valid with --output template".to_string(),
+                ))
+            }
+            _ => {}
+        }
         if !self.print {
             let print_only = [
+                ("--output", self.output.is_some()),
+                ("--template", self.template.is_some()),
+                ("--format", self.parser_format.is_some()),
                 ("--level", self.level.is_some()),
                 ("--level-bytes", self.level_bytes.is_some()),
                 ("--context", self.context.is_some()),
@@ -920,6 +985,37 @@ mod tests {
             Err(CliError::Usage(m)) => m,
             Ok(a) => panic!("{args:?} parsed: {a:?}"),
         }
+    }
+
+    #[test]
+    fn print_output_options() {
+        let a = CliArgs::parse(
+            [
+                "--print",
+                "--output=template",
+                "--template",
+                "{time} {msg}",
+                "--format",
+                "logfmt",
+                "app.log",
+            ],
+            &cwd(),
+        )
+        .unwrap();
+        assert_eq!(a.output, Some(PrintOutput::Template));
+        assert_eq!(a.template.as_deref(), Some("{time} {msg}"));
+        assert_eq!(a.parser_format.as_deref(), Some("logfmt"));
+        assert_eq!(
+            CliArgs::parse(["--print", "--output", "JSON", "a.log"], &cwd())
+                .unwrap()
+                .output,
+            Some(PrintOutput::Json)
+        );
+        assert!(usage_error(&["--print", "--output", "xml"]).contains("unknown output"));
+        assert!(usage_error(&["--print", "--output", "template"]).contains("--template"));
+        assert!(usage_error(&["--print", "--template", "{x}"]).contains("--output template"));
+        assert!(usage_error(&["--output", "json"]).contains("only valid with --print"));
+        assert!(usage_error(&["--format", "json"]).contains("only valid with --print"));
     }
 
     #[test]

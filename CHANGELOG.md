@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Print mode records.** `fasttail --print --output json|logfmt|csv|template` writes the
+  same lines as text, each as a record with its file, line, level, time and the fields the
+  parser reads (`--format NAME` to force one; `--template '{time} {msg}'`); JSON marks
+  `--context` lines and works with `--follow` (`print-output-formats`).
 - **Clipboard as a stream.** *Paste as stream* (`Ctrl + Shift + V`, the 🗂 menu, the
   palette; the terminal's palette too) opens the clipboard text as a new stream, spooled
   like standard input; *Append* in its stream bar adds the next paste to it. Not kept by
