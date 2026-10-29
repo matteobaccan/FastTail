@@ -99,17 +99,31 @@ pub fn run(cli: &CliArgs) -> i32 {
     });
     let mut matcher = Matcher::from_cli(cli);
     matcher.filter.level_window = level_window;
+    let output = cli.output.unwrap_or_default();
+    matcher.fields =
+        match crate::print_records::ParserMode::of(output, cli.parser_format.as_deref()) {
+            Ok(mode) => mode,
+            Err(msg) => {
+                eprintln!("fasttail: {msg}");
+                return EXIT_USAGE;
+            }
+        };
+    let records =
+        crate::print_records::RecordWriter::new(output, cli.template.as_deref(), level_window);
+    // Records carry their file and line, and are never coloured.
+    let plain = records.is_some();
     let options = PrinterOptions {
-        prefix: inputs.len() > 1 && !cli.no_prefix,
-        line_numbers: cli.line_numbers,
-        separators: matcher.context > 0,
+        prefix: inputs.len() > 1 && !cli.no_prefix && !plain,
+        line_numbers: cli.line_numbers && !plain,
+        separators: matcher.context > 0 && !plain,
     };
     let stdout = io::stdout();
     let mut printer = Printer::new(
         BufWriter::with_capacity(IO_BYTES, stdout.lock()),
-        palette,
+        if plain { None } else { palette },
         options,
     );
+    printer.records = records;
     let follow = cli.follow == Some(true);
     // `--line N` / `app.log:N`: where each input starts printing (1 = from the top).
     let starts: Vec<u64> = inputs
@@ -180,7 +194,7 @@ fn print_inputs(
     let mut followed = Vec::new();
     let mut next_id = 0u64;
     for (n, spec) in inputs.into_iter().enumerate() {
-        let mut input = match Input::open(spec, follow, &mut next_id) {
+        let mut input = match Input::open(spec, follow, &mut next_id, &matcher.fields) {
             Ok(input) => input,
             Err(msg) => {
                 eprintln!("fasttail: {msg}");
@@ -317,10 +331,34 @@ struct Input {
     /// Standard input arrives as it is written: every read is flushed to the output.
     flush_each_read: bool,
     buf: Vec<u8>,
+    /// The plain file read (for the field detection) and whether it is decompressed.
+    file: Option<PathBuf>,
+    compressed: bool,
 }
 
 impl Input {
-    fn open(spec: InputSpec, follow: bool, next_id: &mut u64) -> Result<Self, String> {
+    fn open(
+        spec: InputSpec,
+        follow: bool,
+        next_id: &mut u64,
+        fields: &crate::print_records::ParserMode,
+    ) -> Result<Self, String> {
+        let mut input = Self::open_reader(spec, follow, next_id)?;
+        // The fields of a plain file from its first lines, as the window detects them; a
+        // pipe or a compressed file from its first line.
+        if !matches!(fields, crate::print_records::ParserMode::Off) {
+            match input.follow.as_ref().map(|f| f.path.clone()) {
+                Some(path) => input.pipeline.parser = head_parser(fields, &path),
+                None if !input.flush_each_read && !input.compressed => {
+                    input.pipeline.parser = input.file.clone().and_then(|p| head_parser(fields, &p))
+                }
+                None => input.pipeline.detect_first = Some(fields.clone()),
+            }
+        }
+        Ok(input)
+    }
+
+    fn open_reader(spec: InputSpec, follow: bool, next_id: &mut u64) -> Result<Self, String> {
         let id = *next_id;
         *next_id += 1;
         let path = match spec {
@@ -393,7 +431,9 @@ impl Input {
                     eprintln!("fasttail: {name} is compressed and is not followed");
                 }
                 let reader = crate::compressed::open_decoder(codec, BufReader::new(file));
-                Ok(Self::new(name, id, reader, None, false))
+                let mut input = Self::new(name, id, reader, None, false);
+                input.compressed = true;
+                Ok(input)
             }
             Format::EmptyZip => Err(format!(
                 "{name} is a zip archive: its entries cannot be printed (not supported in print mode)"
@@ -406,7 +446,9 @@ impl Input {
                     head: Vec::new(),
                     last_rescan: Instant::now(),
                 });
-                Ok(Self::new(name, id, Box::new(file), follow, false))
+                let mut input = Self::new(name, id, Box::new(file), follow, false);
+                input.file = Some(file_path);
+                Ok(input)
             }
         }
     }
@@ -427,6 +469,8 @@ impl Input {
             follow,
             flush_each_read,
             buf: vec![0u8; IO_BYTES],
+            file: None,
+            compressed: false,
         }
     }
 
@@ -448,6 +492,7 @@ impl Input {
             follow,
             flush_each_read,
             buf,
+            ..
         } = self;
         let source = Source {
             name: name.as_str(),
@@ -574,7 +619,10 @@ impl Input {
             .map_err(Stop::Output)?;
         self.reader = Box::new(file);
         self.splitter = Splitter::default();
+        // The fields are read as before (the parser of the first file of a pattern).
+        let parser = self.pipeline.parser.take();
         self.pipeline = Pipeline::default();
+        self.pipeline.parser = parser;
         self.id = *next_id;
         *next_id += 1;
         self.name = display_name(&path);
@@ -585,6 +633,16 @@ impl Input {
         }
         Ok(())
     }
+}
+
+/// The field parser of the file at `path`, from its first lines.
+fn head_parser(
+    mode: &crate::print_records::ParserMode,
+    path: &Path,
+) -> Option<std::sync::Arc<crate::fields::FieldParser>> {
+    let head = crate::print_records::head_lines(path);
+    let refs: Vec<&str> = head.iter().map(String::as_str).collect();
+    mode.parser_for(Some(path), &refs)
 }
 
 /// How an input is named in notices and in the `file:` prefix: its path relative to the
@@ -739,6 +797,8 @@ impl Splitter {
 
 /// The filters of the command line, compiled once.
 struct Matcher {
+    /// How the records read the fields (`ParserMode::Off` for text).
+    fields: crate::print_records::ParserMode,
     filter: FilterSpec,
     since: Option<String>,
     until: Option<String>,
@@ -766,6 +826,7 @@ impl Matcher {
             .with_levels(cli.level.unwrap_or(LogLevel::Unknown), false)
             .with_level_window(cli.level_bytes.unwrap_or(crate::log_level::DEFAULT_WINDOW));
         Self {
+            fields: crate::print_records::ParserMode::Off,
             filter,
             since: cli.since.clone(),
             until: cli.until.clone(),
@@ -801,6 +862,7 @@ struct HeldLine {
     number: u64,
     raw: String,
     truncated: bool,
+    ts: i64,
 }
 
 /// The per-input state of the line evaluation.
@@ -820,6 +882,10 @@ struct Pipeline {
     /// The first line printed (`--line N`); the lines before it are still evaluated, so
     /// stack traces and inherited timestamps carry on across it.
     first_line: u64,
+    /// The field parser of the records (`--output` other than text).
+    parser: Option<std::sync::Arc<crate::fields::FieldParser>>,
+    /// The parser is chosen from the first non-empty line (a pipe, a compressed file).
+    detect_first: Option<crate::print_records::ParserMode>,
 }
 
 impl Default for Pipeline {
@@ -833,6 +899,8 @@ impl Default for Pipeline {
             before: VecDeque::new(),
             after: 0,
             first_line: 1,
+            parser: None,
+            detect_first: None,
         }
     }
 }
@@ -852,20 +920,43 @@ impl Pipeline {
         self.number += 1;
         // The cut bytes hold no newline, so decoding them as a whole line is the same.
         let raw = decode_line(bytes, encoding, false);
+        if self.detect_first.is_some() && !raw.trim().is_empty() {
+            if let Some(mode) = self.detect_first.take() {
+                let text = crate::ansi::strip(&raw);
+                self.parser = mode.parser_for(None, &[&text]);
+            }
+        }
         let matched = self.evaluate(matcher, &raw, truncated);
         if self.number < self.first_line {
             return Ok(());
         }
+        let ts = self.inherited;
+        let parser = self.parser.as_deref();
         if matched {
             while let Some(held) = self.before.pop_front() {
-                printer.line(source, held.number, &held.raw, held.truncated)?;
+                let at = LineAt {
+                    number: held.number,
+                    ts: held.ts,
+                    context: true,
+                };
+                printer.line(source, &at, &held.raw, held.truncated, parser)?;
             }
-            printer.line(source, self.number, &raw, truncated)?;
+            let at = LineAt {
+                number: self.number,
+                ts,
+                context: false,
+            };
+            printer.line(source, &at, &raw, truncated, parser)?;
             printer.printed += 1;
             self.after = matcher.context;
         } else if self.after > 0 {
             self.after -= 1;
-            printer.line(source, self.number, &raw, truncated)?;
+            let at = LineAt {
+                number: self.number,
+                ts,
+                context: true,
+            };
+            printer.line(source, &at, &raw, truncated, parser)?;
         } else if matcher.context > 0 {
             if self.before.len() == matcher.context {
                 self.before.pop_front();
@@ -874,6 +965,7 @@ impl Pipeline {
                 number: self.number,
                 raw,
                 truncated,
+                ts,
             });
         }
         Ok(())
@@ -887,7 +979,12 @@ impl Pipeline {
         if truncated {
             text.to_mut().push_str(TRUNCATED_LINE_MARKER);
         }
-        if let Some((millis, format)) = detect_timestamp(&text, self.hint) {
+        // With a field parser (record output) the time field first, as in the window.
+        let found = match self.parser.as_deref() {
+            Some(parser) => crate::fields::line_timestamp(Some(parser), &text, self.hint),
+            None => detect_timestamp(&text, self.hint),
+        };
+        if let Some((millis, format)) = found {
             self.hint = format;
             self.inherited = millis;
             if self.window.is_none() && matcher.has_window() {
@@ -938,9 +1035,18 @@ struct PrinterOptions {
     separators: bool,
 }
 
-/// Writes lines to the output, plain or coloured.
+/// Where a printed line stands: its number, its time (inherited by a line without one)
+/// and whether it is context around a match.
+struct LineAt {
+    number: u64,
+    ts: i64,
+    context: bool,
+}
+
+/// Writes lines to the output, plain or coloured, or as records (`--output`).
 struct Printer<W: Write> {
     out: W,
+    records: Option<crate::print_records::RecordWriter>,
     palette: Option<Palette>,
     options: PrinterOptions,
     /// The input and the number of the last line written, for the separators.
@@ -1037,6 +1143,7 @@ impl<W: Write> Printer<W> {
     fn new(out: W, palette: Option<Palette>, options: PrinterOptions) -> Self {
         Self {
             out,
+            records: None,
             palette,
             options,
             last: None,
@@ -1053,10 +1160,29 @@ impl<W: Write> Printer<W> {
     fn line(
         &mut self,
         source: &Source<'_>,
-        number: u64,
+        at: &LineAt,
         raw: &str,
         truncated: bool,
+        parser: Option<&crate::fields::FieldParser>,
     ) -> io::Result<()> {
+        let number = at.number;
+        if let Some(records) = self.records.as_mut() {
+            let mut text = crate::ansi::strip(raw);
+            if truncated {
+                text.to_mut().push_str(TRUNCATED_LINE_MARKER);
+            }
+            return records.write(
+                &mut self.out,
+                &crate::print_records::Line {
+                    file: source.name,
+                    number,
+                    text: &text,
+                    ts: at.ts,
+                    context: at.context,
+                    parser,
+                },
+            );
+        }
         if self.options.separators {
             if let Some((id, last)) = self.last {
                 if id != source.id || number != last + 1 {
@@ -1424,6 +1550,14 @@ pub mod console {
 mod tests {
     use super::*;
 
+    fn at(number: u64) -> LineAt {
+        LineAt {
+            number,
+            ts: NO_TIMESTAMP,
+            context: false,
+        }
+    }
+
     fn cli(args: &[&str]) -> CliArgs {
         let mut all = vec!["--print"];
         all.extend_from_slice(args);
@@ -1638,8 +1772,13 @@ mod tests {
 
     fn follow_input(path: &Path) -> (Input, u64) {
         let mut next_id = 0;
-        let input = Input::open(InputSpec::Path(path.to_path_buf()), true, &mut next_id)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let input = Input::open(
+            InputSpec::Path(path.to_path_buf()),
+            true,
+            &mut next_id,
+            &crate::print_records::ParserMode::Off,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         (input, next_id)
     }
 
@@ -1808,13 +1947,15 @@ mod tests {
         let mut printer = Printer::new(Vec::new(), Some(palette), PrinterOptions::default());
         let source = Source { name: "t", id: 0 };
         printer
-            .line(&source, 1, "ERROR payment timeout", false)
+            .line(&source, &at(1), "ERROR payment timeout", false, None)
             .unwrap();
-        printer.line(&source, 2, "ERROR refused", false).unwrap();
         printer
-            .line(&source, 3, "plain \x1b[32mgreen\x1b[0m", false)
+            .line(&source, &at(2), "ERROR refused", false, None)
             .unwrap();
-        printer.line(&source, 4, "plain", false).unwrap();
+        printer
+            .line(&source, &at(3), "plain \x1b[32mgreen\x1b[0m", false, None)
+            .unwrap();
+        printer.line(&source, &at(4), "plain", false, None).unwrap();
         let out = String::from_utf8(printer.out).unwrap();
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(
@@ -1855,8 +1996,12 @@ mod tests {
         };
         let mut printer = Printer::new(Vec::new(), Some(palette), PrinterOptions::default());
         let source = Source { name: "t", id: 0 };
-        printer.line(&source, 1, "from 10.0.0.1 ok", false).unwrap();
-        printer.line(&source, 2, "10.0.0.1 refused", false).unwrap();
+        printer
+            .line(&source, &at(1), "from 10.0.0.1 ok", false, None)
+            .unwrap();
+        printer
+            .line(&source, &at(2), "10.0.0.1 refused", false, None)
+            .unwrap();
         let out = String::from_utf8(printer.out).unwrap();
         let lines: Vec<&str> = out.lines().collect();
         let ip = CyberTheme::Tron.token_color(TokenKind::Ip).rgb();
