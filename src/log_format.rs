@@ -548,11 +548,14 @@ impl Library {
 
 /// Reads and compiles one format file.
 pub fn read_file(path: &Path) -> Result<LogFormat, String> {
-    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
         return Err("not a format file".to_string());
     }
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).map_err(|e| e.to_string())?;
     LogFormat::compile(FormatSpec::from_ini(&text)?)
 }
 
@@ -778,5 +781,15 @@ sample.1 = 28.09.26 14:02:11,123 [main] E card declined
                 );
             });
         }
+    }
+
+    #[test]
+    fn read_file_rejects_non_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = read_file(dir.path()).expect_err("read_file should fail on directory");
+        assert!(
+            err.contains("not a format file") || !err.is_empty(),
+            "unexpected error message: {err}"
+        );
     }
 }
