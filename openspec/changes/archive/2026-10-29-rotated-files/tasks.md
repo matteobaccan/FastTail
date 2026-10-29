@@ -21,6 +21,6 @@
 
 ## 5. Wrap-up
 
-- [ ] 5.1 `cargo fmt`, `cargo clippy --all-targets`, focused tests; PR with Linux and Windows CI green
-- [ ] 5.2 Local preview exe for the maintainer before the release
-- [ ] 5.3 After the release, archive the change
+- [x] 5.1 `cargo fmt`, `cargo clippy --all-targets`, focused tests; PR with Linux and Windows CI green
+- [x] 5.2 Local preview exe for the maintainer before the release (skipped: the maintainer asked for the release directly, 2026-10-29)
+- [x] 5.3 After the release, archive the change

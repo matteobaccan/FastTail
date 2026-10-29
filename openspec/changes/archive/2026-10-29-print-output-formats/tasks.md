@@ -11,4 +11,4 @@
 ## 3. Wrap-up
 
 - [x] 3.1 `cargo fmt`, `cargo clippy --all-targets`, focused tests; PR with Linux and Windows CI green
-- [ ] 3.2 After the release, archive the change
+- [x] 3.2 After the release, archive the change

@@ -277,12 +277,12 @@ column says where each gap stands after 0.27.0; rows 22 to 27 come from the 2026
 | 19 | Partial-line selection | requested (SnakeTail #60, Tailviewer #231) | Low–Med | M | closed, 0.14.0 |
 | 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | 7z closed (0.13.0), tray icon on Windows (0.14.0); Linux tray (0.21.0, hand check on KDE / GNOME pending), OutputDebugString closed (0.23.0), cross-line regex closed (0.24.0), plugin API closed (0.27.0) |
 | 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | closed, 0.20.0 (`fasttail-tui`, Linux terminal-only archive) |
-| 22 | **Rotated files as one stream** (`app.log`, `.1`, `.2.gz` read in order) | logana 0.8.2; lnav and hl through globs | Med–High | M | proposed: `rotated-files` |
-| 23 | **Source locations clickable** in stack traces and compiler output, opening the editor at the line | lnav (master, 2026-10-24), IDE consoles | High | M | proposed: `source-links` |
-| 24 | **Units on field values** (`900ms` < `1.2s`, sizes) in statistics, plots, queries and terms | lnav 0.15 | Medium | M | proposed: `field-units` |
-| 25 | **Pinned columns** in the column view (time kept while scrolling sideways) | requested in lnav (#674); spreadsheets | Medium | S | proposed: `column-pinning` |
-| 26 | **Clipboard as a stream** (paste log text without saving a file) | requested in Chipmunk (#495); editors | Low–Med | S | proposed: `clipboard-stream` |
-| 27 | **Machine output of `--print`** (JSON, logfmt, CSV, template) | requested in hl (#611, #1481) | Low–Med | S | proposed: `print-output-formats` |
+| 22 | **Rotated files as one stream** (`app.log`, `.1`, `.2.gz` read in order) | logana 0.8.2; lnav and hl through globs | Med–High | M | closed by `rotated-files` (0.28.0) |
+| 23 | **Source locations clickable** in stack traces and compiler output, opening the editor at the line | lnav (master, 2026-10-24), IDE consoles | High | M | closed by `source-links` (0.28.0) |
+| 24 | **Units on field values** (`900ms` < `1.2s`, sizes) in statistics, plots, queries and terms | lnav 0.15 | Medium | M | closed by `field-units` (0.28.0) |
+| 25 | **Pinned columns** in the column view (time kept while scrolling sideways) | requested in lnav (#674); spreadsheets | Medium | S | closed by `column-pinning` (0.28.0) |
+| 26 | **Clipboard as a stream** (paste log text without saving a file) | requested in Chipmunk (#495); editors | Low–Med | S | closed by `clipboard-stream` (0.28.0) |
+| 27 | **Machine output of `--print`** (JSON, logfmt, CSV, template) | requested in hl (#611, #1481) | Low–Med | S | closed by `print-output-formats` (0.28.0) |
 
 Seen in the 2026-10-28 scan and not proposed: lnav's `log2src` (needs source trees and
 language parsing; heavy for its value), DLT / BLF automotive formats (Chipmunk, logana; a
@@ -522,11 +522,11 @@ the preview; all five are archived.
 | `mcp-server` — MCP server for AI assistants, off by default, write tools opt-in | 17 | M |
 | `plugin-api` — out-of-process source plugins approved by hash, bundled formats | 20 | L |
 
-### 0.28.0 — from the log to the work (proposed)
+### 0.28.0 — from the log to the work (shipped)
 
-Proposed after the 2026-10-28 scan, three medium and three small changes, in the order of
-the table (none depends on another). Each is an OpenSpec change in `openspec/changes/`; the
-release is planned when the maintainer agrees.
+Proposed after the 2026-10-28 scan, three medium and three small changes, implemented in the
+order of the table (one PR each, #506 to #516) and shipped in 0.28.0; the six changes are
+archived.
 
 | Change | Gaps | Effort |
 |---|---|---|

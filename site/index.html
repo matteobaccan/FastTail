@@ -123,10 +123,10 @@ footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); 
       <div class="card"><h3>Zero-lag streaming engine</h3><p>Rows are read on demand through a block cache, and appends are indexed as they arrive. Rotation, truncation and rewrites are detected without locking the writer.</p></div>
       <div class="card"><h3>Multi-stream docking</h3><p>Tabs, splits and floating windows. Each stream has its own Follow, filters, search and view mode. Save the whole layout as a named session.</p></div>
       <div class="card"><h3>Filters and highlight rules</h3><p>Include and exclude terms (text, regex or boolean expressions), a minimum level, a global filter, context lines, and priority-ordered colour rules with sounds and notifications.</p></div>
-      <div class="card"><h3>Structured logs</h3><p>JSON, logfmt, Apache and syslog lines, CSV and TSV tables, and your own named log formats, shown in a column view. Filter on fields: <code>status&gt;=500</code>.</p></div>
+      <div class="card"><h3>Structured logs</h3><p>JSON, logfmt, Apache and syslog lines, CSV and TSV tables, and your own named log formats, shown in a column view with pinned columns. Filter on fields, units included: <code>latency&gt;=500ms</code>.</p></div>
       <div class="card"><h3>Search, queries and statistics</h3><p>Regex and multi-line search, a results pane, search across all open streams, a pipeline query language, field statistics, and grouping of lines into patterns.</p></div>
       <div class="card"><h3>Time-aware</h3><p>Timestamps are detected automatically. Get a time-range filter, go to a time, a timeline histogram, Δt columns, a merged timeline of several streams, and marks on lines out of order.</p></div>
-      <div class="card"><h3>Any source</h3><p>Compressed files and archives, rotated files as one stream, folders, stdin, SSH, Docker, journald, syslog, TCP and UDP, OTLP, the Windows Event Log, and debug output.</p></div>
+      <div class="card"><h3>Any source</h3><p>Compressed files and archives, rotated files as one stream, folders, stdin, the clipboard, SSH, Docker, journald, syslog, TCP and UDP, OTLP, the Windows Event Log, and debug output.</p></div>
       <div class="card"><h3>Four views</h3><p>Text with inline JSON trees, a live HEX dump with byte search, x86 disassembly of PE and ELF files, and rendered Markdown or HTML.</p></div>
       <div class="card"><h3>Integrations</h3><p>A web view for a browser, an MCP server for AI assistants, plugins, external tools, remappable shortcuts, and links from stack traces to your editor.</p></div>
     </div>
@@ -138,7 +138,7 @@ footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); 
     <div>
       <h2>A <span class="accent">terminal</span> interface too</h2>
       <p class="sub">The terminal interface, <code>fasttail-tui</code>, brings the same engine to SSH sessions and servers without a desktop. It has windows, menus, mouse support, filters, rules, bookmarks, the column view and search across all streams.</p>
-      <p class="sub">Print mode runs FastTail's filters in scripts, with no window at all.</p>
+      <p class="sub">Print mode runs FastTail's filters in scripts, with no window at all, and writes plain lines or JSON, logfmt, CSV and templated records.</p>
     </div>
     <pre><span class="c"># follow a log in the window</span>
 fasttail app.log
@@ -151,6 +151,9 @@ fasttail --rotations /var/log/syslog
 
 <span class="c"># the terminal interface, over SSH</span>
 fasttail-tui ssh://ops@web1/var/log/nginx/error.log
+
+<span class="c"># the errors of a JSON log, through jq</span>
+fasttail --print --output json --level error app.json | jq .fields.status
 
 <span class="c"># pipe a command in, like less</span>
 docker logs -f api 2&gt;&amp;1 | fasttail -</pre>
