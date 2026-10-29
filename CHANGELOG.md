@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-10-29
+
 ### Added
 
 - **Terminal parity for 0.28.0.** In the terminal, `R` on a stream read with its rotations
@@ -17,7 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `docs/tui.md` lists what only the window has.
+- `docs/tui.md` lists what only the window has; `docs/competitor-analysis.md` shows the
+  state (done and to do) instead of the release history.
 
 ## [0.28.0] - 2026-10-29
 
@@ -2398,6 +2401,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.28.1]: https://github.com/matteobaccan/FastTail/compare/v0.28.0...v0.28.1
 [0.28.0]: https://github.com/matteobaccan/FastTail/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/matteobaccan/FastTail/compare/v0.26.1...v0.27.0
 [0.26.1]: https://github.com/matteobaccan/FastTail/compare/v0.26.0...v0.26.1
