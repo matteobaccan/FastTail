@@ -10,7 +10,7 @@ expression. Each is small; together they are the everyday friction of using the 
 
 - Rule editor: **Import / Export** a rule set (`.fasttail-rules.ini`), and `F4` / `Shift+F4`
   for the next / previous line of the selected rule.
-- Bookmarks: **Clear all** (palette, confirmed).
+- Bookmarks: **Clear all** (palette; the message says how many went).
 - **Log formats** dialog (palette): the list (built-in locked), edit a format's fields with
   the samples' match count as a preview, save, import, export; the streams are refreshed.
 - Source locations: **editor presets** in Settings and **Open in FastTail at that line**

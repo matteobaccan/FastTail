@@ -35,6 +35,7 @@ use crate::tui::colors::{Chrome, Palette};
 use crate::tui::dock::{self, Place, Zone};
 use crate::tui::find::{FindWindow, Row as FindRow};
 use crate::tui::form::{FieldKey, TextField};
+use crate::tui::formats::{FormatsKey, FormatsView};
 use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
 use crate::tui::json::{JsonDialog, JsonKey};
@@ -307,6 +308,28 @@ pub enum PromptKind {
     /// The file the bookmark report is saved to (empty: the clipboard); `true` for every
     /// stream.
     Report(bool),
+    /// A rule set file to add to the rules (a trailing `!` replaces them).
+    RulesImport,
+    /// The file the rules are written to (a trailing `!` replaces it).
+    RulesExport,
+    /// A format file to copy into the formats folder.
+    FormatImport,
+    /// The file the format being edited is written to.
+    FormatExport,
+}
+
+impl PromptKind {
+    /// A prompt opened from a dialog (the rules, the formats): drawn over it and given
+    /// the keys before it.
+    fn over_dialogs(&self) -> bool {
+        matches!(
+            self,
+            PromptKind::RulesImport
+                | PromptKind::RulesExport
+                | PromptKind::FormatImport
+                | PromptKind::FormatExport
+        )
+    }
 }
 
 pub struct Prompt {
@@ -546,6 +569,8 @@ pub struct App {
     settings_before: Option<crate::config::FastTailConfig>,
     /// The highlight-rule editor (`r`).
     pub rules: Option<RulesDialog>,
+    /// The Log formats dialog (palette).
+    pub formats: Option<FormatsView>,
     /// The filter presets (`p`).
     pub presets: Option<PresetsDialog>,
     /// The global filter editor (`F`), and when its pending edit is applied.
@@ -698,6 +723,7 @@ impl App {
             settings_form: None,
             settings_before: None,
             rules: None,
+            formats: None,
             presets: None,
             global: None,
             global_due: None,
@@ -1070,6 +1096,7 @@ impl App {
     pub fn tick(&mut self) -> bool {
         self.step_split();
         self.step_export();
+        self.step_rule_seeks();
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1221,6 +1248,10 @@ impl App {
             || self.split_waiting.is_some()
             || self.export.is_some()
             || self
+                .tabs
+                .iter()
+                .any(|t| t.engine.rule_seek_pattern().is_some())
+            || self
                 .find_window
                 .as_ref()
                 .is_some_and(|w| w.session.is_active())
@@ -1303,6 +1334,9 @@ impl App {
         if self.interface_switch.is_some() {
             return self.on_interface_switch_key(key);
         }
+        if self.prompt.as_ref().is_some_and(|p| p.kind.over_dialogs()) {
+            return self.on_prompt_key(key);
+        }
         // The tools editor opens over Settings, so it has the keys first.
         if self.tools_editor.is_some() {
             return self.on_tools_editor_key(key);
@@ -1312,6 +1346,9 @@ impl App {
         }
         if self.rules.is_some() {
             return self.on_rules_key(key);
+        }
+        if self.formats.is_some() {
+            return self.on_formats_key(key);
         }
         if self.presets.is_some() {
             return self.on_presets_key(key);
@@ -3283,10 +3320,439 @@ impl App {
                 self.sync_labels();
             }
             RulesKey::Close => self.rules = None,
+            RulesKey::Import => self.open_prompt(PromptKind::RulesImport),
+            RulesKey::Export => self.open_prompt(PromptKind::RulesExport),
             RulesKey::Moved => {}
             RulesKey::Other => return false,
         }
         true
+    }
+
+    /// Adds the rules of a rule set file to the rules (skipping those already there), or
+    /// with a trailing `!` replaces every rule with them.
+    fn import_rules(&mut self, text: &str) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let path = PathBuf::from(text);
+        let incoming = match crate::config::read_rule_set(&path) {
+            Ok(rules) => rules,
+            Err(e) => {
+                use crate::config::RuleSetError;
+                let why = match e {
+                    RuleSetError::NotARuleSet => tx(self.lang, "not a rule set file").to_string(),
+                    RuleSetError::NewerVersion(v) => txf(
+                        self.lang,
+                        "written by a newer FastTail (version {0})",
+                        &[&v],
+                    ),
+                    RuleSetError::Io(e) => e,
+                };
+                self.message = Some(txf(self.lang, "Cannot import {0}: {1}", &[&text, &why]));
+                return;
+            }
+        };
+        let config = &mut self.settings_mut().config;
+        let mut rules = if replace {
+            Vec::new()
+        } else {
+            config.highlight_rules.clone()
+        };
+        let n = incoming.len();
+        let added = crate::config::append_rules(&mut rules, incoming);
+        let tools = config.external_tools.clone();
+        let labels = self.quick_labels.clone();
+        let mut d = RulesDialog::new(&rules, &tools);
+        d.labels = labels;
+        if let Some(old) = self.rules.as_ref() {
+            d.list.selected = old.list.selected.min(rules.len().saturating_sub(1));
+        }
+        self.rules = Some(d);
+        self.apply_rules();
+        self.message = Some(if replace {
+            txf(self.lang, "{0} rules imported, replacing the rules", &[&n])
+        } else {
+            txf(
+                self.lang,
+                "{0} of {1} rules added (the others were there already)",
+                &[&added, &n],
+            )
+        });
+    }
+
+    /// Writes every rule to a rule set file (a trailing `!` replaces an existing one).
+    fn export_rules(&mut self, text: &str) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let path = PathBuf::from(text);
+        if path.exists() && !replace {
+            self.message = Some(txf(
+                self.lang,
+                "{0} exists: add ! to replace it",
+                &[&path.display()],
+            ));
+            return;
+        }
+        let rules = self.settings_mut().config.highlight_rules.clone();
+        self.message = Some(match crate::config::write_rule_set(&path, &rules) {
+            Ok(()) => txf(
+                self.lang,
+                "{0} rules exported to {1}",
+                &[&rules.len(), &path.display()],
+            ),
+            Err(e) => txf(self.lang, "Export failed: {0}", &[&e]),
+        });
+    }
+
+    /// Walks the rule seeks of the streams on screen for a few milliseconds; a line found
+    /// is reached through the engine's jump (see `tick`), a walk that found nothing says
+    /// so.
+    fn step_rule_seeks(&mut self) {
+        let lang = self.lang;
+        for i in self.visible_tabs() {
+            let tab = &mut self.tabs[i];
+            let sought = tab.engine.rule_seek_pattern().map(str::to_owned);
+            match tab
+                .engine
+                .step_rule_seek(crate::tail_engine::RULE_SEEK_BUDGET, lang)
+            {
+                Some(crate::tail_engine::RuleSeekStep::Found { line, wrapped }) => {
+                    tab.engine.pending_jump = None;
+                    tab.engine.reveal_line(line);
+                    if let Some(row) = tab.engine.get_visible_row_of_line(line) {
+                        tab.set_cursor(row);
+                    }
+                    tab.engine.follow_tail = false;
+                    if wrapped {
+                        self.message = Some(tx(lang, "Search wrapped around").into());
+                    }
+                }
+                Some(crate::tail_engine::RuleSeekStep::NotFound) => {
+                    self.message = Some(txf(
+                        lang,
+                        "No line matches the rule {0}",
+                        &[&sought.unwrap_or_default()],
+                    ));
+                }
+                Some(crate::tail_engine::RuleSeekStep::Pending) | None => {}
+            }
+        }
+    }
+
+    /// The Log formats dialog, previewing over the focused stream's first lines.
+    fn open_formats(&mut self) {
+        let lines = self
+            .tabs
+            .get(self.active)
+            .map(|t| {
+                let e = &t.engine;
+                (0..e.total_lines().min(crate::log_format_edit::PREVIEW_LINES))
+                    .filter_map(|i| e.get_line(i).map(|l| l.into_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.formats = Some(FormatsView::new(crate::log_format::default_dir(), lines));
+    }
+
+    fn on_formats_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let lib = crate::log_format::library();
+        let lang = self.lang;
+        let Some(v) = self.formats.as_mut() else {
+            return false;
+        };
+        match v.on_key(key, &lib, lang) {
+            FormatsKey::Changed => self.reload_formats(),
+            FormatsKey::Import => self.open_prompt(PromptKind::FormatImport),
+            FormatsKey::Export => self.open_prompt(PromptKind::FormatExport),
+            FormatsKey::Close => self.formats = None,
+            FormatsKey::Moved => {}
+            FormatsKey::Other => return false,
+        }
+        true
+    }
+
+    /// Loads the formats folder again and gives every stream the new formats.
+    fn reload_formats(&mut self) {
+        let dir = self
+            .formats
+            .as_ref()
+            .map_or_else(crate::log_format::default_dir, |f| f.state.dir.clone());
+        crate::log_format::set_library(crate::log_format::Library::load(&dir));
+        for tab in &mut self.tabs {
+            tab.engine.reload_field_parser();
+        }
+    }
+
+    fn import_format(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let lib = crate::log_format::library();
+        let lang = self.lang;
+        let Some(v) = self.formats.as_mut() else {
+            return;
+        };
+        match v.state.import(&lib, Path::new(text)) {
+            Ok(path) => {
+                v.notice = Some((txf(lang, "Imported {0}", &[&path.display()]), false));
+                self.reload_formats();
+            }
+            Err(e) => {
+                let name = Path::new(text).display().to_string();
+                v.notice = Some((crate::tui::formats::save_error(lang, &e, &name), true));
+            }
+        }
+    }
+
+    fn export_format(&mut self, text: &str) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let lang = self.lang;
+        let Some(v) = self.formats.as_mut() else {
+            return;
+        };
+        let path = PathBuf::from(text);
+        v.notice = Some(if path.exists() && !replace {
+            (
+                txf(lang, "{0} exists: add ! to replace it", &[&path.display()]),
+                true,
+            )
+        } else {
+            match v.state.export(&path) {
+                Ok(()) => (txf(lang, "Exported to {0}", &[&path.display()]), false),
+                Err(e) => (txf(lang, "Export failed: {0}", &[&e]), true),
+            }
+        });
+    }
+
+    /// The cursor row's source location opened in FastTail at its line (the next one
+    /// when pressed again on the same row, as `Ctrl+O`).
+    fn open_source_here(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let Some(line) = tab.cursor_line() else {
+            return;
+        };
+        let text = tab.engine.get_line(line).unwrap_or_default();
+        let locations = crate::source_links::find(&text);
+        if locations.is_empty() {
+            self.message = Some(tx(self.lang, "No source location on this row").into());
+            return;
+        }
+        let next = match self.source_cycle {
+            Some((l, i)) if l == line => (i + 1) % locations.len(),
+            _ => 0,
+        };
+        self.source_cycle = Some((line, next));
+        let loc = locations[next].clone();
+        let roots = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.source_roots.clone())
+            .unwrap_or_default();
+        let Some(file) = crate::source_links::resolve(&loc, &roots) else {
+            self.message = Some(txf(
+                self.lang,
+                "{0} not found under the source roots",
+                &[&loc.path],
+            ));
+            return;
+        };
+        let before = self.tabs.len();
+        self.open_file(&file);
+        let opened = self
+            .tabs
+            .iter()
+            .position(|t| crate::paths::paths_equal(&t.engine.path, &file));
+        if let Some(i) = opened {
+            self.focus_tab(i);
+            self.tabs[i]
+                .engine
+                .open_at_line(loc.line as usize, self.lang);
+            if self.tabs.len() > before || self.message.is_none() {
+                self.message = Some(txf(
+                    self.lang,
+                    "Opened {0}:{1} ({2} of {3})",
+                    &[&loc.path, &loc.line, &(next + 1), &locations.len()],
+                ));
+            }
+        }
+    }
+
+    /// The Log formats dialog: the list of formats, or the form of the one being edited
+    /// with what it reads.
+    fn draw_formats(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let lib = crate::log_format::library();
+        let Some(v) = self.formats.as_ref() else {
+            return;
+        };
+        let rows = if v.editing {
+            v.fields.len() + 10
+        } else {
+            lib.formats.len() + lib.errors.len() + 4
+        };
+        let height = (rows as u16 + 4).min(area.height);
+        let width = area.width.saturating_sub(4).clamp(40, 100);
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, height),
+            tx(self.lang, "Log formats"),
+            false,
+        );
+        let Some(v) = self.formats.as_ref() else {
+            return;
+        };
+        let cells = inner.width as usize;
+        let mut out = Vec::new();
+        let mut cursor = None;
+        if v.confirm_delete {
+            out.push(Line::styled(
+                txf(
+                    self.lang,
+                    "Delete the format {0}? y deletes, any other key keeps it",
+                    &[&v.state.draft.name],
+                ),
+                error,
+            ));
+        } else if v.editing {
+            let hint = if v.read_only() {
+                tx(self.lang, "Built-in: c makes a copy to change. Esc back")
+            } else {
+                tx(
+                    self.lang,
+                    "Tab/Up/Down move, type to edit, Enter saves, Ctrl+D deletes, Esc back",
+                )
+            };
+            out.push(Line::styled(hint, dim));
+        } else {
+            out.push(Line::styled(
+                tx(
+                    self.lang,
+                    "Enter edit  n new  c copy  d delete  i import  x export  Esc close",
+                ),
+                dim,
+            ));
+        }
+        if let Some((text, bad)) = &v.notice {
+            out.push(Line::styled(
+                head_chars(text, cells),
+                if *bad { error } else { dim },
+            ));
+        }
+        if v.editing {
+            let label_w = 16usize;
+            let field_w = cells.saturating_sub(label_w + 1).max(10);
+            for (i, (part, field)) in v.fields.iter().enumerate() {
+                let label = match part {
+                    crate::tui::formats::Part::Pattern(n) => {
+                        format!("{} {}", tx(self.lang, part.label()), n + 1)
+                    }
+                    _ => tx(self.lang, part.label()).to_string(),
+                };
+                let (shown, x) = field.view(field_w);
+                let style = if i == v.focus {
+                    let y = inner.y + out.len() as u16;
+                    if y < inner.bottom() {
+                        cursor = Some((inner.x + label_w as u16 + 1 + x as u16, y));
+                    }
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                out.push(Line::from(vec![
+                    Span::styled(format!("{:<label_w$} ", head_chars(&label, label_w)), dim),
+                    Span::styled(format!("{:<field_w$}", view::sanitize(&shown)), style),
+                ]));
+            }
+            let (summary, bad) = v.summary(self.lang);
+            out.push(Line::raw(""));
+            out.push(Line::styled(
+                head_chars(&summary, cells),
+                if bad { error } else { Style::default() },
+            ));
+            let room = (inner.height as usize).saturating_sub(out.len());
+            for row in v.state.preview.rows.iter().take(room) {
+                let style = if !row.starts_entry {
+                    dim
+                } else if row.matched {
+                    palette.level_style(row.level)
+                } else {
+                    error
+                };
+                let mark = if !row.starts_entry {
+                    ' '
+                } else if row.matched {
+                    '+'
+                } else {
+                    '-'
+                };
+                let text = format!("{mark} {}", view::sanitize(&row.text));
+                out.push(Line::styled(head_chars(&text, cells), style));
+            }
+        } else {
+            let start = out.len() as u16;
+            for (i, f) in lib.formats.iter().enumerate() {
+                let y = inner.y + start + i as u16;
+                self.hits
+                    .list_items
+                    .push((Rect::new(inner.x, y, inner.width, 1), i));
+                let kind = if f.builtin {
+                    tx(self.lang, "built-in").to_string()
+                } else if let Some(p) = &f.plugin {
+                    p.clone()
+                } else {
+                    f.file
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                };
+                let style = if i == v.selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                let text = format!(" {:<28} {kind}", head_chars(f.name(), 28));
+                out.push(Line::styled(head_chars(&text, cells), style));
+            }
+            for (j, (path, why)) in lib.errors.iter().enumerate() {
+                let i = lib.formats.len() + j;
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let style = if i == v.selected {
+                    error.add_modifier(Modifier::REVERSED)
+                } else {
+                    error
+                };
+                let text = format!(" {name}: {why}");
+                out.push(Line::styled(head_chars(&text, cells), style));
+            }
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        if let Some(at) = cursor {
+            frame.set_cursor_position(at);
+        }
     }
 
     /// The editor's rules reach every stream and `fasttail.ini` at once, as in the GUI;
@@ -4019,8 +4485,16 @@ impl App {
             self.open_file(Path::new(&text));
             return;
         }
-        let tab = &mut self.tabs[self.active];
         let text = prompt.field.text().trim().to_string();
+        match prompt.kind {
+            PromptKind::RulesImport => return self.import_rules(&text),
+            PromptKind::RulesExport => return self.export_rules(&text),
+            PromptKind::FormatImport => return self.import_format(&text),
+            PromptKind::FormatExport => return self.export_format(&text),
+            PromptKind::Report(true) => return self.write_report(true, &text),
+            _ => {}
+        }
+        let tab = &mut self.tabs[self.active];
         match prompt.kind {
             PromptKind::Search => {
                 // `re:` makes the query a regex (`re:(?-i)` for case), as the window's
@@ -4045,6 +4519,13 @@ impl App {
                 }
                 tab.pending_first_hit = !query.is_empty();
             }
+            PromptKind::Include if tab.engine.filter_expr_mode() => {
+                tab.engine.set_filter_expr(&text);
+                tab.top = 0;
+                if let Some(e) = tab.engine.expr_error() {
+                    self.message = Some(crate::filter_expr::error_text(self.lang, &text, e));
+                }
+            }
             PromptKind::Include => {
                 tab.engine.set_include_filter(&text);
                 tab.top = 0;
@@ -4060,6 +4541,10 @@ impl App {
             PromptKind::SearchScope => self.submit_search_scope(&text),
             PromptKind::Export(scope, format) => self.start_export(scope, format, &text),
             PromptKind::Report(all) => self.write_report(all, &text),
+            PromptKind::RulesImport
+            | PromptKind::RulesExport
+            | PromptKind::FormatImport
+            | PromptKind::FormatExport => {}
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -4135,6 +4620,27 @@ impl App {
             });
             return;
         }
+        if kind.over_dialogs() || kind == PromptKind::Report(true) {
+            let text = match kind {
+                PromptKind::RulesExport => format!("highlights{}", crate::config::RULE_SET_SUFFIX),
+                PromptKind::FormatExport => self
+                    .formats
+                    .as_ref()
+                    .map(|f| f.state.draft.to_spec().file_name())
+                    .unwrap_or_default(),
+                PromptKind::Report(_) => {
+                    let date =
+                        crate::timestamp::format_millis(crate::timestamp::local_now_millis());
+                    crate::bookmark_report::report_file_name(&date[..10.min(date.len())])
+                }
+                _ => String::new(),
+            };
+            self.prompt = Some(Prompt {
+                kind,
+                field: TextField::new(&text),
+            });
+            return;
+        }
         let e = &self.tabs[self.active].engine;
         let text = match kind {
             // A regex search opens with its `re:` prefix.
@@ -4145,6 +4651,7 @@ impl App {
                 format!("mre:{}", e.search_query)
             }
             PromptKind::Search => e.search_query.clone(),
+            PromptKind::Include if e.filter_expr_mode() => e.filter_expr().to_string(),
             PromptKind::Include => e.include_filter().to_string(),
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
@@ -4164,6 +4671,10 @@ impl App {
                 let date = crate::timestamp::format_millis(crate::timestamp::local_now_millis());
                 crate::bookmark_report::report_file_name(&date[..10.min(date.len())])
             }
+            PromptKind::RulesImport
+            | PromptKind::RulesExport
+            | PromptKind::FormatImport
+            | PromptKind::FormatExport => unreachable!("opened above"),
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -4438,6 +4949,7 @@ impl App {
             C::SourceEnded => self.apply(Action::Reconnect),
             C::Columns => self.apply(Action::ToggleColumns),
             C::TimeDelta => self.apply(Action::ToggleTimeDelta),
+            C::FilterExpr => self.apply(Action::ToggleFilterExpr),
             C::TimeDisplay => {
                 let next = crate::tui::bars::next_time_display(e.time_display());
                 self.apply(Action::SetTimeDisplay(next));
@@ -4725,6 +5237,7 @@ impl App {
                 Action::CycleTheme => self.cycle_theme(),
                 Action::PlayAll | Action::PauseAll => {}
                 Action::About => self.show_about = !self.show_about,
+                Action::LogFormats => self.open_formats(),
                 _ => self.message = Some(tx(self.lang, NO_FILE).into()),
             }
             return;
@@ -4910,6 +5423,7 @@ impl App {
                     || self.sessions.is_some()
                     || self.settings_form.is_some()
                     || self.rules.is_some()
+                    || self.formats.is_some()
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
@@ -5774,6 +6288,41 @@ impl App {
                 }
             }
             Action::SearchScope => self.open_prompt(PromptKind::SearchScope),
+            Action::LogFormats => self.open_formats(),
+            Action::ToggleFilterExpr => {
+                let on = !tab.engine.filter_expr_mode();
+                tab.engine.set_filter_expr_mode(on);
+                tab.top = 0;
+                self.message = Some(if on {
+                    txf(
+                        self.lang,
+                        "Include as an expression: {0} (i edits it)",
+                        &[&tab.engine.filter_expr()],
+                    )
+                } else {
+                    tx(self.lang, "Include as terms").into()
+                });
+            }
+            Action::RuleNext | Action::RulePrev => {
+                let Some(from) = tab.cursor_line() else {
+                    return;
+                };
+                let forward = action == Action::RuleNext;
+                match tab.engine.start_rule_seek(None, forward, from) {
+                    Ok(()) => self.step_rule_seeks(),
+                    Err(crate::tail_engine::RuleNavError::NoRuleOnRow) => {
+                        self.message =
+                            Some(tx(self.lang, "No highlight rule matches this row").into())
+                    }
+                    Err(crate::tail_engine::RuleNavError::Empty) => {}
+                }
+            }
+            Action::ClearBookmarks => {
+                let n = tab.engine.bookmarks.len();
+                tab.engine.clear_bookmarks();
+                self.message = Some(txf(self.lang, "{0} bookmarks removed", &[&n]));
+            }
+            Action::OpenSourceHere => self.open_source_here(),
             Action::Export => self.export_menu = Some(0),
             Action::CopyAsShown => self.copy_as_shown(),
             Action::BookmarkReport => self.open_prompt(PromptKind::Report(false)),
@@ -5888,7 +6437,7 @@ impl App {
             // The whole screen: the keys need the room more than the windows do.
             self.draw_help(frame, frame.area());
         }
-        if self.prompt.is_some() {
+        if self.prompt.as_ref().is_some_and(|p| !p.kind.over_dialogs()) {
             self.draw_prompt(frame, main_area);
         }
         if self.time_range.is_some() {
@@ -5908,6 +6457,9 @@ impl App {
         }
         if self.rules.is_some() {
             self.draw_rules(frame, main_area);
+        }
+        if self.formats.is_some() {
+            self.draw_formats(frame, main_area);
         }
         if self.presets.is_some() {
             self.draw_presets(frame, main_area);
@@ -5932,6 +6484,9 @@ impl App {
         }
         if self.export_menu.is_some() {
             self.draw_export_menu(frame, main_area);
+        }
+        if self.prompt.as_ref().is_some_and(|p| p.kind.over_dialogs()) {
+            self.draw_prompt(frame, main_area);
         }
         if self.palette_dialog.is_some() {
             self.draw_palette(frame, main_area);
@@ -6700,6 +7255,19 @@ impl App {
                 self.lang,
                 "Save the bookmark report to (empty: copy it to the clipboard)",
             ),
+            PromptKind::RulesImport => tx(
+                self.lang,
+                "Import a rule set file (a trailing ! replaces every rule)",
+            ),
+            PromptKind::RulesExport => tx(
+                self.lang,
+                "Export the rules to this file (a trailing ! replaces it)",
+            ),
+            PromptKind::FormatImport => tx(self.lang, "Import a format file"),
+            PromptKind::FormatExport => tx(
+                self.lang,
+                "Export the format to this file (a trailing ! replaces it)",
+            ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
         let Some(p) = &self.prompt else {
@@ -7326,17 +7894,14 @@ impl App {
             ),
             false,
         );
-        // In expression mode (set in the window) the include rows do not apply: say so.
-        let expression = {
-            let gf = &self.settings_mut().config.global_filter;
-            gf.expr_mode.then(|| gf.expression.clone())
-        };
-        let hint = match &expression {
-            Some(expr) => txf(
-                self.lang,
-                "Expression mode (set in the window): {0}; the include rows do not apply",
-                &[expr],
-            ),
+        // An expression that does not compile says why (the last valid one filters).
+        let base = self.settings_mut().config.global_filter.clone();
+        let broken = self
+            .global
+            .as_ref()
+            .and_then(|d| d.expr_error(&base, self.lang));
+        let hint = match &broken {
+            Some(why) => why.clone(),
             None => tx(
                 self.lang,
                 "Tab/Up/Down move, Space ticks, type a term; applied as you type. Enter/Esc close",
@@ -7348,7 +7913,7 @@ impl App {
         };
         let mut out = vec![Line::styled(
             hint,
-            if expression.is_some() { error } else { dim },
+            if broken.is_some() { error } else { dim },
         )];
         let mut cursor = None;
         for (k, row) in rows.iter().enumerate() {
@@ -7363,6 +7928,11 @@ impl App {
                 global::Row::Enabled => (tx(self.lang, "On (f)"), d.enabled.text("")),
                 global::Row::MatchCase => (tx(self.lang, "Match case"), d.case_sensitive.text("")),
                 global::Row::Regex => (tx(self.lang, "Regular expressions"), d.is_regex.text("")),
+                global::Row::ExprMode => (tx(self.lang, "Expression"), d.expr_mode.text("")),
+                global::Row::Expression => (
+                    tx(self.lang, "Include (expression)"),
+                    d.expression.text().to_string(),
+                ),
                 global::Row::Include(i) => (
                     if *i == 0 {
                         tx(self.lang, "Include (all match)")
@@ -7380,7 +7950,10 @@ impl App {
                     d.term(*row).to_string(),
                 ),
             };
-            let term_row = matches!(row, global::Row::Include(_) | global::Row::Exclude(_));
+            let term_row = matches!(
+                row,
+                global::Row::Include(_) | global::Row::Exclude(_) | global::Row::Expression
+            );
             let mut style = Style::default();
             if k == d.focus {
                 style = style.add_modifier(Modifier::REVERSED);
@@ -7388,6 +7961,7 @@ impl App {
                     let field = match row {
                         global::Row::Include(i) => d.include.get(*i),
                         global::Row::Exclude(i) => d.exclude.get(*i),
+                        global::Row::Expression => Some(&d.expression),
                         _ => None,
                     };
                     let x = field.map_or(0, |f| f.view(40).1);
@@ -7659,7 +8233,7 @@ impl App {
         out.push(Line::styled(
             tx(
                 self.lang,
-                "Enter edit  a add  d delete  Space on/off  Alt+Up/Down K/J move  Esc close",
+                "Enter edit  a add  d delete  Space on/off  K/J move  i import  x export  Esc",
             ),
             dim,
         ));
@@ -13521,7 +14095,7 @@ mod tests {
     }
 
     #[test]
-    fn the_global_dialog_says_when_the_window_set_an_expression() {
+    fn the_global_expression_is_shown_and_a_stream_switches_to_an_expression() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.log");
         std::fs::write(&a, "payment\nrefund\nother\n").unwrap();
@@ -13541,13 +14115,106 @@ mod tests {
         assert!(
             screen
                 .iter()
-                .any(|l| l.contains("Expression mode (set in the window): payment OR refund")),
+                .any(|l| l.contains("Include (expression)") && l.contains("payment OR refund")),
             "{screen:#?}"
         );
-        // The bar shows a stream's own expression in place of its include term.
-        app.tabs[0].engine.set_filter_expr("refund");
-        app.tabs[0].engine.set_filter_expr_mode(true);
+        app.global = None;
+        // `I` switches the stream's include side to an expression built from its terms.
+        app.tabs[0].engine.set_include_filter("refund");
+        app.apply(Action::ToggleFilterExpr);
+        assert!(app.tabs[0].engine.filter_expr_mode());
         assert_eq!(app.tabs[0].engine.include_display(), "refund");
+        // `i` then edits the expression.
+        app.submit_prompt(Prompt {
+            kind: PromptKind::Include,
+            field: TextField::new("payment OR refund"),
+        });
+        assert_eq!(app.tabs[0].engine.filter_expr(), "payment OR refund");
+        let screen = render(&mut app, 120, 30);
+        assert!(screen.iter().any(|l| l.contains("[x] ƒx")), "{screen:#?}");
+    }
+
+    #[test]
+    fn rules_are_walked_imported_and_exported_and_bookmarks_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let text: String = (1..=12)
+            .map(|i| {
+                if i % 4 == 0 {
+                    format!("timeout {i}\n")
+                } else {
+                    format!("ok {i}\n")
+                }
+            })
+            .collect();
+        std::fs::write(&a, text).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            highlight_rules: vec![crate::tail_engine::HighlightRule::new(
+                "timeout",
+                [255, 255, 0],
+                [0, 0, 0],
+                false,
+            )],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.tabs[0].engine.follow_tail = false;
+        app.tabs[0].set_cursor(3);
+        // F4 from a matching row: the next line of that rule, then wrapping round.
+        app.apply(Action::RuleNext);
+        assert_eq!(app.tabs[0].cursor_line(), Some(7));
+        app.apply(Action::RulePrev);
+        assert_eq!(app.tabs[0].cursor_line(), Some(3));
+        // Export, then import adds nothing new; with `!` it replaces.
+        let set = dir.path().join("team.fasttail-rules.ini");
+        app.export_rules(&set.display().to_string());
+        assert!(set.exists());
+        app.import_rules(&set.display().to_string());
+        assert_eq!(app.settings_mut().config.highlight_rules.len(), 1);
+        app.import_rules(&format!("{}!", set.display()));
+        assert_eq!(app.settings_mut().config.highlight_rules.len(), 1);
+        assert!(app
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("replacing")));
+        // Clear all bookmarks.
+        app.tabs[0].engine.toggle_bookmark(1);
+        app.tabs[0].engine.toggle_bookmark(2);
+        app.apply(Action::ClearBookmarks);
+        assert!(app.tabs[0].engine.bookmarks.is_empty());
+    }
+
+    #[test]
+    fn a_source_location_opens_in_fasttail_at_its_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("Orders.java");
+        let body: String = (1..=50).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&src, body).unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, format!("boom at {}:42\n", src.display())).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::OpenSourceHere);
+        assert_eq!(app.tabs.len(), 2, "{:?}", app.message);
+        assert!(crate::paths::paths_equal(
+            &app.tabs[app.active].engine.path,
+            &src
+        ));
+        render(&mut app, 100, 30);
+        assert_eq!(app.tabs[app.active].cursor_line(), Some(41));
     }
 
     #[test]
@@ -13575,12 +14242,12 @@ mod tests {
             screen.iter().any(|l| l.contains("Exclude (none match)")),
             "{screen:#?}"
         );
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Char(' '));
-        // On, Match case, Regex, Include, then the exclude row.
         for _ in 0..4 {
+            press(&mut app, KeyCode::Up);
+        }
+        press(&mut app, KeyCode::Char(' '));
+        // On, Match case, Regex, Expression, Include, then the exclude row.
+        for _ in 0..5 {
             press(&mut app, KeyCode::Down);
         }
         keys(&mut app, "healthcheck");

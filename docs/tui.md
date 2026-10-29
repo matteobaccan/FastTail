@@ -97,6 +97,8 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `Ctrl+K` | the row in context (filters off) and back |
 | `R` | when the stream bar offers `R: include N rotations`: open the stream again with its file's rotations (`app.log.1`, `.2.gz` …) as one stream, oldest first; on a stream read with its rotations (`+N rotations (R: pieces)`), the list of its pieces: `Enter` goes to a piece's first line. The first line of each piece after the first has `~` in the gutter |
 | `Ctrl+O` | open the cursor row's source location (`Orders.java:42`, `src/x.rs:3:9`) in the editor of Settings; pressed again on the same row, the next location |
+| `Alt+O` | open the cursor row's source location in FastTail itself, as a stream at that line |
+| `I` | the include side as an expression (`ƒx` in the filter row; `i` then edits the expression) or back to terms |
 | `Ctrl+G` | go to a line (`N`, `+N`, `-N`) or a time (`14:02`) |
 | `h` | HEX view (go to `1024` or `0x400`) and back |
 | `d`, `Shift+D` | ASM view of x86 code (go to an offset, `0x401000` or `entry`) and back to HEX; the next architecture (16, 32, 64 bit), shown in the window's bottom border |
@@ -148,8 +150,24 @@ terminals) selects text natively.
   saves, `Esc` brings back the values Settings opened with.
 - **Highlight rules** (`r`): every field of the window's rules (the *Desktop notification*
   box included: a stream not on screen notifies a matching appended line), order, colours,
-  quick labels. **Presets** (`p`), **global filter** (`F`), **external tools** (`!`, with their
-  shortcuts and rule-bound runs, and their editor in Settings).
+  quick labels; `i` imports a `*.fasttail-rules.ini` rule set (the rules already there are
+  skipped; a trailing `!` replaces every rule) and `x` exports the rules. `F4` / `Shift+F4`
+  go to the next / previous line of the rule matching the cursor row (wrapping round, in
+  the background on a large file). **Presets** (`p`), **global filter** (`F`: its
+  *Expression* box turns the include rows into one expression, `a AND (b OR c)`, built from
+  the terms the first time; an expression that does not compile says why and the last valid
+  one filters), **external tools** (`!`, with their shortcuts and rule-bound runs, and their
+  editor in Settings).
+- **Log formats** (palette): the formats (built-in ones locked, plugin ones named by their
+  plugin) and the format files that did not load with their error. `Enter` edits a format
+  as a form (name, up to 8 regexes, time field, format and zone, level field and map,
+  message field, units, entry start, files, columns) with what it reads from the focused
+  stream's first 200 lines (`Reads 92% of 180 entries`, the lines marked `+` / `-`); `Enter`
+  saves and the streams read with the new version, `Esc` goes back. `n` new, `c` copy (a
+  built-in format is changed through a copy), `d` delete, `i` import, `x` export: the same
+  files as the window's dialog.
+- **Editor preset** (Settings): VS Code, JetBrains, Sublime Text, Notepad++, Vim, Emacs fill
+  the editor command `Ctrl+O` runs.
 - **Lock** (`Ctrl+L`, and after the idle minutes when the lock is on): a PIN dialog on a
   blank screen. The lock deters onlookers; it is not security.
 
@@ -184,11 +202,9 @@ tray). Filter tabs and merged views made in the window are kept in the workspace
 shown.
 
 Only in the window for now: the Statistics, Query, Patterns, Explain, Operations and Compare
-tabs, the scratchpad, the Log formats dialog, rule sets and next / previous rule match, the web
-view, the MCP server of a running window (`fasttail-tui --mcp` serves the files given),
-managing plugins (a plugin stream approved in the window runs here), remappable shortcuts
-(the terminal keys are fixed), and Open in FastTail from a source location (`Ctrl+O` opens
-the editor).
+tabs, the scratchpad, the web view, the MCP server of a running window (`fasttail-tui --mcp`
+serves the files given), managing plugins (a plugin stream approved in the window runs
+here), and remappable shortcuts (the terminal keys are fixed).
 
 ## Appendix: measurements
 

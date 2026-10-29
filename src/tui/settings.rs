@@ -71,6 +71,8 @@ pub enum Key {
     NotifyAlways,
     /// Opens the external tools editor (`Enter`); the tools are not part of the form.
     Tools,
+    /// A preset of `source_links::PRESETS`: picking one fills `EditorCommand`.
+    EditorPreset,
     /// `editor_command`: the editor a source location opens in.
     EditorCommand,
     /// `source_roots`: folders separated by `;`.
@@ -141,6 +143,20 @@ pub struct SettingsForm {
     has_pin: bool,
     /// The language of the texts (the one being chosen, while Settings is open).
     pub lang: Language,
+}
+
+/// The choice of the editor preset row: "as typed", then each preset.
+fn preset_of(command: &str) -> usize {
+    crate::source_links::PRESETS
+        .iter()
+        .position(|(_, t)| *t == command.trim())
+        .map_or(0, |i| i + 1)
+}
+
+fn editor_presets(command: &str, lang: Language) -> RadioList {
+    let mut options = vec![tx(lang, "as typed")];
+    options.extend(crate::source_links::PRESETS.iter().map(|(name, _)| *name));
+    RadioList::new(&options, preset_of(command))
 }
 
 fn number<T: Copy + Into<u64>>(value: T, range: &std::ops::RangeInclusive<T>) -> Widget {
@@ -422,6 +438,11 @@ impl SettingsForm {
             )
             .starts(en("External tools")),
             Field::new(
+                Key::EditorPreset,
+                en("Editor preset"),
+                Widget::Radio(editor_presets(&c.editor_command, c.language)),
+            ),
+            Field::new(
                 Key::EditorCommand,
                 en("Editor for source locations ({file} {line} {col})"),
                 Widget::Text(TextField::new(&c.editor_command)),
@@ -507,6 +528,7 @@ impl SettingsForm {
         };
         if done == FieldKey::Edited {
             self.rejected = false;
+            self.follow_editor_preset();
             // Picking a language stops following the system's, as in the GUI.
             if self.fields[self.focus].key == Key::Language {
                 if let Some(Widget::Check(c)) = self
@@ -520,6 +542,43 @@ impl SettingsForm {
             }
         }
         done
+    }
+
+    /// A preset picked fills the editor command; a command typed picks its preset, or
+    /// "as typed".
+    fn follow_editor_preset(&mut self) {
+        let key = self.fields[self.focus].key;
+        let at = |fields: &[Field], k: Key| fields.iter().position(|f| f.key == k);
+        let (Some(p), Some(c)) = (
+            at(&self.fields, Key::EditorPreset),
+            at(&self.fields, Key::EditorCommand),
+        ) else {
+            return;
+        };
+        match key {
+            Key::EditorPreset => {
+                let choice = match &self.fields[p].widget {
+                    Widget::Radio(r) => r.selected,
+                    _ => 0,
+                };
+                if let Some((_, template)) = choice
+                    .checked_sub(1)
+                    .and_then(|i| crate::source_links::PRESETS.get(i))
+                {
+                    self.fields[c].widget = Widget::Text(TextField::new(template));
+                }
+            }
+            Key::EditorCommand => {
+                let text = match &self.fields[c].widget {
+                    Widget::Text(t) => t.text().trim().to_string(),
+                    _ => return,
+                };
+                if let Widget::Radio(r) = &mut self.fields[p].widget {
+                    r.selected = preset_of(&text);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn move_focus(&mut self, delta: isize) -> FieldKey {
@@ -682,7 +741,7 @@ impl SettingsForm {
                         c.source_roots = crate::source_links::parse_roots(&text);
                     }
                 }
-                Key::Tools | Key::PinConfirm => {}
+                Key::Tools | Key::PinConfirm | Key::EditorPreset => {}
                 Key::LockEnabled => c.lock_enabled = on,
                 Key::IdleMinutes => c.screensaver_timeout_mins = num() as u32,
                 Key::PinNew => {
@@ -810,6 +869,25 @@ mod tests {
         assert_eq!(c.poll_interval_ms, 900);
         assert_eq!(c.theme, CyberTheme::Matrix);
         assert_eq!(c.sound_enabled, !FastTailConfig::default().sound_enabled);
+    }
+
+    #[test]
+    fn an_editor_preset_fills_the_command_and_a_typed_one_picks_its_preset() {
+        let mut c = FastTailConfig::default();
+        let mut form = SettingsForm::from_config(&c);
+        focus_on(&mut form, Key::EditorPreset);
+        form.on_key(key(KeyCode::Right));
+        form.apply(&mut c).unwrap();
+        assert_eq!(c.editor_command, crate::source_links::PRESETS[0].1);
+        // Typing past the preset's text turns the row back to "as typed".
+        focus_on(&mut form, Key::EditorCommand);
+        form.on_key(key(KeyCode::Char('x')));
+        let preset = form
+            .fields
+            .iter()
+            .find(|f| f.key == Key::EditorPreset)
+            .unwrap();
+        assert!(matches!(&preset.widget, Widget::Radio(r) if r.selected == 0));
     }
 
     #[test]

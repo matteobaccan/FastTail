@@ -41,6 +41,7 @@ pub mod json_tree;
 pub mod keymap;
 pub mod lock;
 pub mod log_format;
+pub mod log_format_edit;
 pub mod log_level;
 pub mod mcp;
 pub mod merged_stream;

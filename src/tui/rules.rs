@@ -111,6 +111,10 @@ pub enum RulesKey {
     Labels,
     /// The dialog closes.
     Close,
+    /// `i`: the caller asks for a rule set file to import.
+    Import,
+    /// `x`: the caller asks for the file to export the rules to.
+    Export,
     /// The key does nothing here.
     Other,
 }
@@ -498,6 +502,8 @@ impl RulesDialog {
                 let delete = KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE);
                 return self.list_key(delete);
             }
+            KeyCode::Char('i') if plain => return RulesKey::Import,
+            KeyCode::Char('x') if plain => return RulesKey::Export,
             _ => {}
         }
         self.list_key(key)
