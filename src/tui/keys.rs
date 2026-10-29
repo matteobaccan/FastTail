@@ -90,6 +90,8 @@ pub enum Action {
     OpenSystem,
     /// Open remote file (palette): asks for an `ssh://` URL.
     OpenRemote,
+    /// The clipboard text as a new stream (palette).
+    PasteStream,
     /// Listen (palette): asks for a listener URL.
     OpenListen,
     OpenDebugOutput,

@@ -268,6 +268,7 @@ mod plugin_api;
 
 mod source_links;
 
+mod clipboard_stream;
 mod rotated_files;
 
 mod search_modes;

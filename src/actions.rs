@@ -51,6 +51,7 @@ pub enum ActionId {
     PlayAll,
     PauseAll,
     OpenFile,
+    PasteAsStream,
     OpenPattern,
     MergedView,
     LogFormats,
@@ -426,6 +427,7 @@ pub const ACTIONS: &[Action] = &[
     action(A::ScratchpadSend, "scratchpad.send", "scratch_send", C::Stream, S::Stream, Some("CTRL + SHIFT + N"), &[N::Row]),
     // Window
     action(A::OpenFile, "window.open_file", "open_file", C::Window, S::Window, None, &[]),
+    action(A::PasteAsStream, "stream.paste", "clip_paste", C::Window, S::Window, Some("CTRL + SHIFT + V"), &[]),
     action(A::OpenPattern, "window.open_pattern", "act_open_pattern", C::Window, S::Window, None, &[]),
     action(A::OpenSystemSource, "window.open_system_source", "act_open_system", C::Window, S::Window, None, &[]),
     action(A::OpenRemote, "window.open_remote", "act_open_remote", C::Window, S::Window, None, &[]),

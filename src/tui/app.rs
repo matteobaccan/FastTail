@@ -3211,44 +3211,7 @@ impl App {
         };
         let shown = path.display();
         match open_target(path, config, None) {
-            OpenOutcome::Opened(engine) => {
-                let mut engine = *engine;
-                if let Some(s) = self.settings.as_mut() {
-                    s.prepare(&mut engine);
-                    if !engine.is_stdin() {
-                        s.config.add_recent_file(&engine.path);
-                    }
-                    // A plain file with rotations next to it: the stream bar offers them.
-                    if s.config.rotations == crate::rotation::Policy::Ask
-                        && engine.rotation.is_none()
-                        && engine.compressed.is_none()
-                        && engine.piped().is_none()
-                        && engine.path.is_file()
-                    {
-                        engine.rotation_offer = crate::rotation::offer(&engine.path);
-                    }
-                }
-                let place = self.focused_place();
-                let path = engine.path.clone();
-                engine.set_quick_labels(&self.quick_labels);
-                self.tabs.push(Tab::new(engine));
-                // The new stream is a tab of the focused window, as in the GUI.
-                match place {
-                    Place::Float(f) => {
-                        if let Pane::Leaf { tabs, active } = &mut self.floats[f].pane {
-                            tabs.push(DockTab::LogStream(path));
-                            *active = tabs.len() - 1;
-                        }
-                        self.dock_dirty = true;
-                    }
-                    Place::Dock(leaf) => {
-                        let mut dock = self.dock.clone();
-                        dock.add_tab(&leaf, DockTab::LogStream(path));
-                        self.set_dock(dock);
-                    }
-                }
-                self.focus_tab(self.tabs.len() - 1);
-            }
+            OpenOutcome::Opened(engine) => self.add_engine_tab(*engine),
             OpenOutcome::OpenEntry(entry) => self.open_file(&entry),
             OpenOutcome::Missing => {
                 self.message = Some(txf(self.lang, "{0}: not found", &[&shown]))
@@ -3277,6 +3240,74 @@ impl App {
             }
             OpenOutcome::ListFailed { error, .. } => {
                 self.message = Some(format!("{shown}: {error}"))
+            }
+        }
+    }
+
+    /// Adds `engine` as a tab of the focused window and focuses it, with the settings'
+    /// stream defaults (recorded in the recent files unless it is ephemeral).
+    fn add_engine_tab(&mut self, mut engine: TailEngine) {
+        if let Some(s) = self.settings.as_mut() {
+            s.prepare(&mut engine);
+            if !engine.is_stdin() && !engine.is_clipboard() {
+                s.config.add_recent_file(&engine.path);
+            }
+            // A plain file with rotations next to it: the stream bar offers them.
+            if s.config.rotations == crate::rotation::Policy::Ask
+                && engine.rotation.is_none()
+                && engine.compressed.is_none()
+                && engine.piped().is_none()
+                && engine.path.is_file()
+            {
+                engine.rotation_offer = crate::rotation::offer(&engine.path);
+            }
+        }
+        let place = self.focused_place();
+        let path = engine.path.clone();
+        engine.set_quick_labels(&self.quick_labels);
+        self.tabs.push(Tab::new(engine));
+        // The new stream is a tab of the focused window, as in the GUI.
+        match place {
+            Place::Float(f) => {
+                if let Pane::Leaf { tabs, active } = &mut self.floats[f].pane {
+                    tabs.push(DockTab::LogStream(path));
+                    *active = tabs.len() - 1;
+                }
+                self.dock_dirty = true;
+            }
+            Place::Dock(leaf) => {
+                let mut dock = self.dock.clone();
+                dock.add_tab(&leaf, DockTab::LogStream(path));
+                self.set_dock(dock);
+            }
+        }
+        self.focus_tab(self.tabs.len() - 1);
+    }
+
+    /// Opens the clipboard text as a new stream (`clipboard 14:02`).
+    fn paste_stream(&mut self) {
+        let unreadable = "The clipboard holds no text (or cannot be read here)";
+        let Some(text) = self.clipboard.paste() else {
+            self.message = Some(tx(self.lang, unreadable).into());
+            return;
+        };
+        let settings = match &self.settings {
+            Some(s) => s.config.stdin_settings(),
+            None => crate::config::FastTailConfig::default().stdin_settings(),
+        };
+        let clock = crate::clipboard_source::clock_now();
+        match crate::clipboard_source::open_engine(&text, &clock, &settings, None) {
+            Ok(engine) => self.add_engine_tab(engine),
+            Err(e) => {
+                self.message = Some(match e {
+                    crate::clipboard_source::PasteError::TooLarge(cap) => txf(
+                        self.lang,
+                        "The clipboard text is larger than {0}",
+                        &[&crate::tui::picker::human_size(cap)],
+                    ),
+                    crate::clipboard_source::PasteError::Empty => tx(self.lang, unreadable).into(),
+                    other => other.to_string(),
+                })
             }
         }
     }
@@ -4070,6 +4101,7 @@ impl App {
                 Action::OpenFile => self.open_browser(),
                 Action::OpenSystem => self.open_prompt(PromptKind::System),
                 Action::OpenRemote => self.open_prompt(PromptKind::Remote),
+                Action::PasteStream => self.paste_stream(),
                 Action::OpenListen => self.open_prompt(PromptKind::Listen),
                 Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
                 Action::OpenEventLog => self.open_prompt(PromptKind::EventLog),
@@ -4129,6 +4161,7 @@ impl App {
             Action::Split => self.open_prompt(PromptKind::Split),
             Action::OpenSystem => self.open_prompt(PromptKind::System),
             Action::OpenRemote => self.open_prompt(PromptKind::Remote),
+            Action::PasteStream => self.paste_stream(),
             Action::OpenListen => self.open_prompt(PromptKind::Listen),
             Action::OpenDebugOutput => self.open_prompt(PromptKind::DebugOutput),
             Action::OpenEventLog => self.open_prompt(PromptKind::EventLog),

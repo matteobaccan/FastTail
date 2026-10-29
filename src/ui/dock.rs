@@ -1575,6 +1575,36 @@ fn render_ssh_status(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, l
 
 /// Stream bar part of rotations: the offer to include a file's rotations, or for a stream
 /// with them their count and Go to piece.
+/// The Append button of a clipboard stream: the next paste goes at its end.
+fn render_clipboard_status(
+    ui: &mut Ui,
+    engine: &mut TailEngine,
+    theme: &CyberTheme,
+    lang: Language,
+) {
+    let Some(c) = engine.clipboard.as_mut() else {
+        return;
+    };
+    ui.separator();
+    let busy = c.copier.is_reading();
+    if ui
+        .add_enabled(
+            !busy,
+            egui::Button::new(
+                RichText::new(format!("📋 {}", t(lang, "clip_append")))
+                    .monospace()
+                    .color(theme.accent_color()),
+            ),
+        )
+        .on_hover_text(t(lang, "clip_append_tip"))
+        .on_disabled_hover_text(t(lang, "clip_busy"))
+        .clicked()
+    {
+        c.append_requested = true;
+        ui.ctx().request_repaint();
+    }
+}
+
 fn render_rotation_status(
     ui: &mut Ui,
     engine: &mut TailEngine,
@@ -2500,6 +2530,7 @@ fn render_log_stream(
         render_system_status(ui, engine, theme, lang);
         render_plugin_status(ui, engine, theme, lang);
         render_rotation_status(ui, engine, theme, lang);
+        render_clipboard_status(ui, engine, theme, lang);
         render_ssh_status(ui, engine, theme, lang);
         render_listener_status(ui, engine, theme, lang);
         render_debug_status(ui, engine, theme, lang);

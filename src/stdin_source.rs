@@ -48,6 +48,12 @@ pub fn is_stdin_path(path: &Path) -> bool {
     path.as_os_str() == STDIN_PATH
 }
 
+/// True for the streams whose text goes with the process (standard input, a clipboard
+/// stream): no workspace, session or layout keeps them.
+pub fn is_ephemeral_path(path: &Path) -> bool {
+    is_stdin_path(path) || crate::clipboard_source::is_clipboard_path(path)
+}
+
 /// What standard input is attached to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StdinKind {
@@ -568,6 +574,7 @@ impl TailEngine {
             .or_else(|| self.debug_output.as_ref().map(|s| &s.copier))
             .or_else(|| self.plugin.as_ref().map(|s| &s.copier))
             .or_else(|| self.rotation.as_ref().map(|s| &s.copier))
+            .or_else(|| self.clipboard.as_ref().map(|s| &s.copier))
     }
 
     pub(crate) fn piped_mut(&mut self) -> Option<&mut StdinStream> {
@@ -589,7 +596,10 @@ impl TailEngine {
         if let Some(s) = self.plugin.as_mut() {
             return Some(&mut s.copier);
         }
-        self.rotation.as_mut().map(|s| &mut s.copier)
+        if let Some(s) = self.rotation.as_mut() {
+            return Some(&mut s.copier);
+        }
+        self.clipboard.as_mut().map(|s| &mut s.copier)
     }
 
     /// Called from `poll_updates` before the file is checked: after a spool restart the

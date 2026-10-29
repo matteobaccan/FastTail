@@ -99,6 +99,9 @@ pub struct FastTailApp {
     pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
     /// The Remote file (SSH) dialog (`🌐`, the palette).
     pub remote_dialog: Option<crate::ui::remote_dialog::RemoteDialog>,
+    /// A paste asked for (palette, menu, Append) and when: the clipboard text comes back
+    /// as egui's paste event a frame later.
+    paste_request: Option<(PasteTarget, std::time::Instant)>,
     /// The Listen dialog (`📡`, the palette).
     pub listen_dialog: Option<crate::ui::listen_dialog::ListenDialog>,
     /// The Debug output dialog (Windows).
@@ -641,6 +644,7 @@ impl FastTailApp {
             merge_prompt: None,
             system_dialog: None,
             remote_dialog: None,
+            paste_request: None,
             listen_dialog: None,
             debug_dialog: None,
             eventlog_dialog: None,
@@ -818,7 +822,7 @@ impl FastTailApp {
         let mut paths: Vec<PathBuf> = Vec::new();
         for (_, tab) in self.dock_state.iter_all_tabs() {
             if let FastTailTab::LogStream(p) = tab {
-                let stdin = crate::stdin_source::is_stdin_path(p);
+                let stdin = crate::stdin_source::is_ephemeral_path(p);
                 if !stdin && !paths.iter().any(|e| paths_equal(e, p)) {
                     paths.push(p.clone());
                 }
@@ -2066,7 +2070,9 @@ impl FastTailApp {
                         _ => None,
                     })
                     .collect();
-                let matches = !tabs.iter().any(|p| crate::stdin_source::is_stdin_path(p))
+                let matches = !tabs
+                    .iter()
+                    .any(|p| crate::stdin_source::is_ephemeral_path(p))
                     && tabs.len() == self.engines.len()
                     && tabs.iter().all(|t| {
                         self.engines
@@ -2528,6 +2534,101 @@ impl FastTailApp {
         );
         self.add_stream_tab(path);
         self.save_dock_layout();
+    }
+
+    /// Asks the window for the clipboard text (egui answers with a paste event).
+    fn request_paste(&mut self, ctx: &egui::Context, target: PasteTarget) {
+        self.paste_request = Some((target, std::time::Instant::now()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        ctx.request_repaint();
+    }
+
+    /// Takes this frame's paste for a clipboard stream: the text a request asked for, or
+    /// `Ctrl + Shift + V` outside a text field; a stream bar's Append asks for one.
+    fn take_clipboard_paste(&mut self, ctx: &egui::Context) {
+        if let Some(path) = self.engines.iter_mut().find_map(|e| {
+            let c = e.clipboard.as_mut()?;
+            std::mem::take(&mut c.append_requested).then(|| e.path.clone())
+        }) {
+            self.request_paste(ctx, PasteTarget::Append(path));
+        }
+        if self
+            .paste_request
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() > std::time::Duration::from_secs(2))
+        {
+            // The clipboard held no text: no paste event came.
+            self.paste_request = None;
+        }
+        let shortcut = crate::keymap::KeyBinding::parse(PASTE_STREAM_KEYS).is_some_and(|b| {
+            self.keymap
+                .bindings(crate::actions::ActionId::PasteAsStream)
+                .contains(&b)
+        });
+        let typing = ctx.egui_wants_keyboard_input();
+        let wanted = self.paste_request.is_some();
+        let mut text = None;
+        ctx.input_mut(|i| {
+            let keys = i.modifiers.command && i.modifiers.shift;
+            i.events.retain(|e| match e {
+                egui::Event::Paste(t)
+                    if text.is_none() && (wanted || (keys && shortcut && !typing)) =>
+                {
+                    text = Some(t.clone());
+                    false
+                }
+                _ => true,
+            });
+        });
+        let Some(text) = text else {
+            return;
+        };
+        let target = self
+            .paste_request
+            .take()
+            .map_or(PasteTarget::New, |(target, _)| target);
+        self.paste_text(&text, target);
+    }
+
+    /// Opens `text` as a clipboard stream, or appends it to the one of `target`.
+    pub fn paste_text(&mut self, text: &str, target: PasteTarget) {
+        let lang = self.config.language;
+        let settings = self.config.stdin_settings();
+        let wake = Self::make_wake(&self.egui_ctx);
+        let result = match &target {
+            PasteTarget::Append(path) => match self.engines.iter_mut().find(|e| e.path == *path) {
+                Some(engine) => engine.append_clipboard(text, &settings, Some(wake)),
+                None => return,
+            },
+            PasteTarget::New => {
+                let clock = crate::clipboard_source::clock_now();
+                crate::clipboard_source::open_engine(text, &clock, &settings, Some(wake)).map(
+                    |mut engine| {
+                        crate::workspace::apply_settings(&mut engine, &self.config);
+                        engine.set_quick_labels(&self.quick_labels);
+                        let path = engine.path.clone();
+                        self.engines.push(engine);
+                        self.add_stream_tab(path);
+                    },
+                )
+            }
+        };
+        if let Err(e) = result {
+            let message = match e {
+                crate::clipboard_source::PasteError::Empty => t(lang, "clip_empty").to_string(),
+                crate::clipboard_source::PasteError::TooLarge(cap) => t(lang, "clip_too_large")
+                    .replace("{0}", &crate::ui::zip_picker::human_size(cap)),
+                crate::clipboard_source::PasteError::Busy => t(lang, "clip_busy").to_string(),
+                crate::clipboard_source::PasteError::Io(e) => e.to_string(),
+            };
+            let at = match &target {
+                PasteTarget::Append(path) => Some(path.clone()),
+                PasteTarget::New => self.focused_stream_path(),
+            };
+            if let Some(engine) = at.and_then(|p| self.engines.iter_mut().find(|e| e.path == p)) {
+                engine.view_notice = Some(message);
+            }
+        }
     }
 
     /// Puts the tab of `path` in the dock unless it is there already.
@@ -3353,6 +3454,9 @@ impl FastTailApp {
             ctx.request_repaint();
         }
         self.shortcuts_dialog.capture(&ctx);
+        if !self.locked && !self.shortcuts_dialog.recording() {
+            self.take_clipboard_paste(&ctx);
+        }
         if !self.locked && !self.palette.is_open() && !self.shortcuts_dialog.recording() {
             for id in crate::ui::keys::take_remapped(&ctx, &self.keymap) {
                 let target = self.focused_stream_path();
@@ -4194,6 +4298,7 @@ impl FastTailApp {
                     let mut session_action: Option<SessionAction> = None;
                     let mut report_all = false;
                     let mut open_pad = false;
+                    let mut paste_stream = false;
                     let lang = self.config.language;
                     let has_session = self.config.current_session.is_some();
                     let recent_sessions = self.config.recent_sessions.clone();
@@ -4262,6 +4367,17 @@ impl FastTailApp {
                                 open_pad = true;
                                 ui.close();
                             }
+                            if ui
+                                .button(crate::ui::keys::with_key(
+                                    &format!("📋 {}", t(lang, "clip_paste")),
+                                    crate::actions::ActionId::PasteAsStream,
+                                ))
+                                .on_hover_text(t(lang, "clip_paste_tip"))
+                                .clicked()
+                            {
+                                paste_stream = true;
+                                ui.close();
+                            }
                             // Every open stream's bookmarks as one Markdown report.
                             if ui
                                 .add_enabled(
@@ -4287,6 +4403,10 @@ impl FastTailApp {
                     }
                     if open_pad {
                         self.open_scratchpad();
+                    }
+                    if paste_stream {
+                        let ctx = ui.ctx().clone();
+                        self.request_paste(&ctx, PasteTarget::New);
                     }
 
                     // Filter button with amber border
@@ -4582,10 +4702,19 @@ impl FastTailApp {
                         .iter()
                         .find_map(|e| e.stdin.as_ref())
                         .map(|s| s.spool_path().display().to_string());
+                    let clipboard_spool = active_path.as_ref().and_then(|p| {
+                        self.engines
+                            .iter()
+                            .find(|e| e.path == *p)
+                            .and_then(|e| e.clipboard.as_ref())
+                            .map(|c| c.copier.spool_path().display().to_string())
+                    });
                     let path_str = if let Some(path) = active_path {
                         if crate::stdin_source::is_stdin_path(&path) {
                             t(self.config.language, "stdin_footer")
                                 .replace("{path}", stdin_spool.as_deref().unwrap_or("?"))
+                        } else if let Some(spool) = &clipboard_spool {
+                            t(self.config.language, "clip_footer").replace("{path}", spool)
                         } else if path.is_absolute() {
                             path.display().to_string()
                         } else if let Ok(cwd) = std::env::current_dir() {
@@ -7508,6 +7637,7 @@ impl FastTailApp {
             }
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
+            A::PasteAsStream => self.request_paste(ctx, PasteTarget::New),
             A::OpenRemote => self.remote_dialog = Some(Default::default()),
             A::OpenListener => self.listen_dialog = Some(Default::default()),
             A::OpenDebugOutput => self.debug_dialog = Some(Default::default()),
@@ -7637,9 +7767,19 @@ fn rename_tab(dock: &mut DockState<FastTailTab>, from: &Path, to: Option<PathBuf
 
 /// Tabs no workspace or session keeps as they are: standard input, and a derived stream
 /// still named after its spool (`rename_derived_tabs` gives it its saved name first).
+/// Where a paste goes: a new clipboard stream, or the end of that clipboard stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasteTarget {
+    New,
+    Append(PathBuf),
+}
+
+/// The default keys of Paste as stream (egui turns them into a paste event, not a key).
+const PASTE_STREAM_KEYS: &str = "CTRL + SHIFT + V";
+
 fn is_stdin_tab(tab: &FastTailTab) -> bool {
     matches!(tab, FastTailTab::LogStream(p)
-        if crate::stdin_source::is_stdin_path(p)
+        if crate::stdin_source::is_ephemeral_path(p)
             || crate::filter_tab::is_derived_path(p)
             || crate::merged_stream::is_merged_path(p))
 }

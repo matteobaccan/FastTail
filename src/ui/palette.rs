@@ -818,6 +818,7 @@ mod tests {
             (ActionId::Wrap, M::ALT, Key::W),
             (ActionId::Collapse, M::COMMAND.plus(M::SHIFT), Key::D),
             (ActionId::ScratchpadSend, M::COMMAND.plus(M::SHIFT), Key::N),
+            (ActionId::PasteAsStream, M::COMMAND.plus(M::SHIFT), Key::V),
             (ActionId::SearchFocus, M::CTRL, Key::F),
             (ActionId::SearchNext, M::NONE, Key::F3),
             (ActionId::SearchPrev, M::SHIFT, Key::F3),

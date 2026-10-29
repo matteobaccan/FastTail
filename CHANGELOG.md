@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Clipboard as a stream.** *Paste as stream* (`Ctrl + Shift + V`, the 🗂 menu, the
+  palette; the terminal's palette too) opens the clipboard text as a new stream, spooled
+  like standard input; *Append* in its stream bar adds the next paste to it. Not kept by
+  the workspace (`clipboard-stream`).
 - **Pinned columns.** In the column view, *Pin column* in a header's menu keeps that
   column at the left while the others scroll sideways; the time column is pinned by
   default (`pin_time_column`). Pins are saved per stream (`pinned=`) and the terminal's
