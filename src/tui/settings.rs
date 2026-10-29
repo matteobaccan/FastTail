@@ -71,6 +71,15 @@ pub enum Key {
     NotifyAlways,
     /// Opens the external tools editor (`Enter`); the tools are not part of the form.
     Tools,
+    /// The Plugins dialog (a button).
+    Plugins,
+    /// `[web] enabled`, `port`: the read-only web view of the open streams.
+    WebEnabled,
+    WebPort,
+    /// `[mcp] enabled`, `port`, `allow_write`: the MCP server for AI assistants.
+    McpEnabled,
+    McpPort,
+    McpAllowWrite,
     /// A preset of `source_links::PRESETS`: picking one fills `EditorCommand`.
     EditorPreset,
     /// `editor_command`: the editor a source location opens in.
@@ -455,6 +464,37 @@ impl SettingsForm {
                 ))),
             ),
             Field::new(
+                Key::WebEnabled,
+                en("Web view of the streams (read-only)"),
+                check(c.web_enabled),
+            )
+            .starts(en("Web view and AI assistants")),
+            Field::new(
+                Key::WebPort,
+                en("Web view port"),
+                number(c.web_port, &(1024..=65535)),
+            ),
+            Field::new(
+                Key::McpEnabled,
+                en("MCP server for AI assistants"),
+                check(c.mcp_enabled),
+            ),
+            Field::new(
+                Key::McpPort,
+                en("MCP port"),
+                number(c.mcp_port, &(1024..=65535)),
+            ),
+            Field::new(
+                Key::Plugins,
+                en("Plugins"),
+                Widget::Button(tx(c.language, en("Enter lists them")).to_string()),
+            ),
+            Field::new(
+                Key::McpAllowWrite,
+                en("Assistants may change filters and bookmarks"),
+                check(c.mcp_allow_write),
+            ),
+            Field::new(
                 Key::LockEnabled,
                 en("Lock when idle"),
                 check(c.lock_enabled),
@@ -726,6 +766,11 @@ impl SettingsForm {
                     };
                 }
                 Key::AutoBookmarkMax => c.auto_bookmark_max = num() as usize,
+                Key::WebEnabled => c.web_enabled = on,
+                Key::WebPort => c.web_port = num() as u16,
+                Key::McpEnabled => c.mcp_enabled = on,
+                Key::McpPort => c.mcp_port = num() as u16,
+                Key::McpAllowWrite => c.mcp_allow_write = on,
                 Key::Sound => c.sound_enabled = on,
                 Key::FlashOnAlert => c.flash_on_alert = on,
                 Key::Notifications => c.notifications_enabled = on,
@@ -741,7 +786,7 @@ impl SettingsForm {
                         c.source_roots = crate::source_links::parse_roots(&text);
                     }
                 }
-                Key::Tools | Key::PinConfirm | Key::EditorPreset => {}
+                Key::Tools | Key::PinConfirm | Key::EditorPreset | Key::Plugins => {}
                 Key::LockEnabled => c.lock_enabled = on,
                 Key::IdleMinutes => c.screensaver_timeout_mins = num() as u32,
                 Key::PinNew => {

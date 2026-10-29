@@ -191,6 +191,22 @@ background alerts, the PIN lock, telemetry): choosing one switches it and saves 
 - **Lock** (`Ctrl+L`, and after the idle minutes when the lock is on): a PIN dialog on a
   blank screen. The lock deters onlookers; it is not security.
 
+## Web view, AI assistants and plugins
+
+- **Web view** and **MCP server**: Settings > *Web view and AI assistants* turns on the
+  read-only web view of the open streams (`[web]`, its port) and the MCP server for AI
+  assistants (`[mcp]`, its port, whether assistants may change filters and bookmarks).
+  The terminal serves its own streams with the window's servers, the same pages and tools;
+  the status bar's bottom border says `web :8080 · MCP :7777` while they listen, and a
+  port taken by another interface is reported there. The token and the link are the
+  window's (`fasttail.ini`).
+- **Plugins** (Settings > *Plugins*, or a key given in the Keys dialog): the plugins of the
+  `plugins` folder with their kind, version and state, and the folders that did not load.
+  `Space` enables or disables one; a source plugin asks first, showing the SHA-256 of its
+  manifest (`y` runs its programs). `o` opens an enabled source plugin as a stream: the
+  prompt holds `plugin://name?key=value` with the defaults, secrets typed there are given
+  to the program and never saved. `r` reads the folder again.
+
 ## Languages
 
 The terminal speaks the language of `fasttail.ini` (Settings > Language), or the system's
@@ -222,9 +238,7 @@ tray). Filter tabs and merged views made in the window are kept in the workspace
 shown.
 
 Only in the window for now: the charts of the analysis tabs (the terminal draws tables and
-bars), the web view, the MCP server of a running window (`fasttail-tui --mcp`
-serves the files given), managing plugins (a plugin stream approved in the window runs
-here).
+text bars).
 
 ## Appendix: measurements
 

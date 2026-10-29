@@ -322,6 +322,8 @@ pub enum PromptKind {
     OpsField,
     /// The span Explain compares with the rest: `14:00..14:05`.
     ExplainSpan,
+    /// A source plugin to open, with its values: `plugin://name?key=value`.
+    OpenPlugin,
 }
 
 impl PromptKind {
@@ -334,6 +336,7 @@ impl PromptKind {
                 | PromptKind::RulesExport
                 | PromptKind::FormatImport
                 | PromptKind::FormatExport
+                | PromptKind::OpenPlugin
         )
     }
 }
@@ -341,6 +344,14 @@ impl PromptKind {
 pub struct Prompt {
     pub kind: PromptKind,
     pub field: TextField,
+}
+
+/// The Plugins dialog: the plugins found, the row selected (the plugins, then the folders
+/// that did not load), and the source plugin whose approval waits for `y`.
+pub struct PluginsDialog {
+    pub catalog: crate::plugins::Catalog,
+    pub selected: usize,
+    pub confirm: Option<String>,
 }
 
 /// The Keys dialog: the row of `keys::REMAPPABLE` selected, and whether the next key
@@ -603,6 +614,12 @@ pub struct App {
     pub keymap: keys::KeyMap,
     /// The Keys dialog (palette): the remappable keys.
     pub keys_dialog: Option<KeysDialog>,
+    /// The read-only web view of the open streams, when `[web]` is on.
+    pub web_view: crate::web_view::WebView,
+    /// The MCP server for AI assistants, when `[mcp]` is on.
+    pub mcp_view: crate::mcp_serve::McpView,
+    /// The Plugins dialog (palette).
+    pub plugins: Option<PluginsDialog>,
     /// The filter presets (`p`).
     pub presets: Option<PresetsDialog>,
     /// The global filter editor (`F`), and when its pending edit is applied.
@@ -764,6 +781,9 @@ impl App {
             analysis_menu: None,
             keymap: keys::KeyMap::default(),
             keys_dialog: None,
+            web_view: Default::default(),
+            mcp_view: Default::default(),
+            plugins: None,
             presets: None,
             global: None,
             global_due: None,
@@ -1140,6 +1160,7 @@ impl App {
         if let Some(pad) = self.scratchpad.as_mut() {
             pad.save_if_due();
         }
+        self.serve_integrations();
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1291,6 +1312,7 @@ impl App {
             || self.split_waiting.is_some()
             || self.export.is_some()
             || self.analysis.is_some()
+            || self.mcp_view.busy()
             || self
                 .tabs
                 .iter()
@@ -1392,6 +1414,9 @@ impl App {
         }
         if self.keys_dialog.is_some() {
             return self.on_keys_dialog_key(key);
+        }
+        if self.plugins.is_some() {
+            return self.on_plugins_key(key);
         }
         if self.analysis.is_some() && self.prompt.is_none() {
             return self.on_analysis_key(key);
@@ -3402,6 +3427,280 @@ impl App {
         true
     }
 
+    /// Starts or stops the web view and the MCP server as `fasttail.ini` says, and
+    /// answers their requests from the open streams; files the MCP server asked to open
+    /// are opened.
+    fn serve_integrations(&mut self) {
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        let config = &mut settings.config;
+        let wake = || -> crate::tail_engine::WakeFn { std::sync::Arc::new(|| {}) };
+        self.web_view.sync(config, wake);
+        self.mcp_view.sync(config, wake);
+        if let Some(e) = self.web_view.error.take() {
+            self.message = Some(txf(self.lang, "Web view: {0}", &[&e]));
+        }
+        if let Some(e) = self.mcp_view.error.take() {
+            self.message = Some(txf(self.lang, "MCP server: {0}", &[&e]));
+        }
+        let refs: Vec<&TailEngine> = self.tabs.iter().map(|t| &t.engine).collect();
+        self.web_view.serve(
+            &refs,
+            &self.palette.theme,
+            self.palette.level_colors,
+            self.lang,
+        );
+        let config = config.clone();
+        let mut refs: Vec<&mut TailEngine> = self.tabs.iter_mut().map(|t| &mut t.engine).collect();
+        let opens = self.mcp_view.serve(&mut refs, &config);
+        for path in opens {
+            self.open_file(&path);
+        }
+    }
+
+    fn open_plugins(&mut self) {
+        self.plugins = Some(PluginsDialog {
+            catalog: crate::plugins::discover(&crate::plugins::default_dir()),
+            selected: 0,
+            confirm: None,
+        });
+    }
+
+    fn on_plugins_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::plugins::{Kind, State};
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let lang = self.lang;
+        let Some(d) = self.plugins.as_mut() else {
+            return false;
+        };
+        if let Some(name) = d.confirm.take() {
+            if key.code == KeyCode::Char('y') {
+                if let Some(p) = d.catalog.find(&name).cloned() {
+                    self.settings_mut().config.plugins.set_enabled(&p, true);
+                    self.plugins_changed();
+                    self.message = Some(txf(lang, "{0} enabled", &[&name]));
+                }
+            }
+            return true;
+        }
+        let rows = d.catalog.plugins.len() + d.catalog.broken.len();
+        match key.code {
+            KeyCode::Esc => self.plugins = None,
+            KeyCode::Up | KeyCode::Char('k') => d.selected = d.selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                d.selected = (d.selected + 1).min(rows.saturating_sub(1))
+            }
+            KeyCode::Char('r') => {
+                d.catalog = crate::plugins::discover(&crate::plugins::default_dir());
+                d.selected = d.selected.min(rows.saturating_sub(1));
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                let Some(p) = d.catalog.plugins.get(d.selected).cloned() else {
+                    return true;
+                };
+                let state = self.settings_mut().config.plugins.state(&p);
+                if state == State::Enabled {
+                    self.settings_mut().config.plugins.set_enabled(&p, false);
+                    self.plugins_changed();
+                    self.message = Some(txf(lang, "{0} disabled", &[&p.name]));
+                } else if p.kind == Kind::Source {
+                    // A program the plugin runs: approved only after its hash is seen.
+                    if let Some(d) = self.plugins.as_mut() {
+                        d.confirm = Some(p.name.clone());
+                    }
+                } else {
+                    self.settings_mut().config.plugins.set_enabled(&p, true);
+                    self.plugins_changed();
+                    self.message = Some(txf(lang, "{0} enabled", &[&p.name]));
+                }
+            }
+            KeyCode::Char('o') => {
+                let source = d
+                    .catalog
+                    .plugins
+                    .get(d.selected)
+                    .filter(|p| p.kind == Kind::Source)
+                    .cloned();
+                match source {
+                    Some(p) if self.settings_mut().config.plugins.state(&p) == State::Enabled => {
+                        self.open_prompt(PromptKind::OpenPlugin)
+                    }
+                    Some(_) => {
+                        self.message = Some(tx(lang, "Enable the plugin first (Space)").into())
+                    }
+                    None => {}
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// After a change of the approvals: saved, the formats of the plugins loaded again,
+    /// and the plugin streams no longer enabled stopped.
+    fn plugins_changed(&mut self) {
+        use crate::plugin_source::{Block, Status};
+        self.save_config();
+        let approvals = self.settings_mut().config.plugins.clone();
+        crate::log_format::load_with_plugins(&approvals);
+        for tab in &mut self.tabs {
+            tab.engine.reload_field_parser();
+        }
+        let Some(catalog) = self.plugins.as_ref().map(|d| d.catalog.clone()) else {
+            return;
+        };
+        for s in self
+            .tabs
+            .iter_mut()
+            .filter_map(|t| t.engine.plugin.as_mut())
+        {
+            if !matches!(s.status(), Status::Running | Status::Restarting { .. }) {
+                continue;
+            }
+            let block = match catalog.find(&s.uri.name).map(|p| approvals.state(p)) {
+                Some(crate::plugins::State::Enabled) => continue,
+                Some(crate::plugins::State::Changed) => Block::Changed,
+                Some(crate::plugins::State::Disabled) => Block::NotEnabled,
+                None => Block::Missing,
+            };
+            s.block(block);
+        }
+    }
+
+    /// Opens the source plugin of `text` (`plugin://name?key=value`) as a stream, its
+    /// values given to the program (secrets included, which the stream's name leaves out).
+    fn open_plugin(&mut self, text: &str) {
+        let Some(uri) = crate::plugins::PluginUri::parse(Path::new(text.trim())) else {
+            self.message = Some(txf(self.lang, "Not a plugin URI: {0}", &[&text]));
+            return;
+        };
+        let catalog = crate::plugins::discover(&crate::plugins::default_dir());
+        let plugin = catalog.find(&uri.name).cloned();
+        let path = PathBuf::from(uri.to_uri(plugin.as_ref()));
+        self.open_file(&path);
+        let config_dir = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        let approvals = self.settings_mut().config.plugins.clone();
+        let lang = self.lang;
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.engine.path == path) {
+            if let Some(s) = tab.engine.plugin.as_mut() {
+                if s.status() != crate::plugin_source::Status::Running
+                    && s.start(plugin.as_ref(), &approvals, Some(uri.values), &config_dir)
+                        .is_err()
+                {
+                    self.message = Some(tx(lang, "The plugin needs other values").into());
+                }
+            }
+        }
+        self.plugins = None;
+    }
+
+    /// The plugins found: name, kind, version and whether it runs; the folders that did
+    /// not load in the error colour; a source plugin's hash before it is approved.
+    fn draw_plugins(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::plugins::{Kind, State};
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let approvals = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.plugins.clone())
+            .unwrap_or_default();
+        let Some(d) = self.plugins.as_ref() else {
+            return;
+        };
+        let rows = d.catalog.plugins.len() + d.catalog.broken.len();
+        let height = (rows as u16 + 7).min(area.height);
+        let inner = self.dialog(frame, area, (84, height), tx(self.lang, "Plugins"), false);
+        let Some(d) = self.plugins.as_ref() else {
+            return;
+        };
+        let cells = inner.width as usize;
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Space enables or disables, o opens a source plugin, r reads the folder again, Esc closes",
+            ),
+            dim,
+        )];
+        out.push(Line::styled(
+            head_chars(&d.catalog.dir.display().to_string(), cells),
+            dim,
+        ));
+        if let Some(name) = &d.confirm {
+            let hash = d
+                .catalog
+                .find(name)
+                .map(|p| p.hash.clone())
+                .unwrap_or_default();
+            out.push(Line::styled(
+                head_chars(
+                    &txf(
+                        self.lang,
+                        "y runs the programs of {0}, any other key does not (manifest {1})",
+                        &[name, &hash],
+                    ),
+                    cells,
+                ),
+                error,
+            ));
+        }
+        if rows == 0 {
+            out.push(Line::styled(tx(self.lang, "(no plugin installed)"), dim));
+        }
+        for (i, p) in d.catalog.plugins.iter().enumerate() {
+            let state = match approvals.state(p) {
+                State::Enabled => tx(self.lang, "enabled"),
+                State::Disabled => tx(self.lang, "disabled"),
+                State::Changed => tx(self.lang, "changed since approved"),
+            };
+            let kind = match p.kind {
+                Kind::Source => tx(self.lang, "source"),
+                Kind::Formats => tx(self.lang, "formats"),
+            };
+            let style = if i == d.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let text = format!(
+                " {:<24} {:<8} {:<10} {:<22} {}",
+                head_chars(&p.name, 24),
+                kind,
+                head_chars(&p.version, 10),
+                state,
+                p.description
+            );
+            out.push(Line::styled(head_chars(&text, cells), style));
+        }
+        for (j, b) in d.catalog.broken.iter().enumerate() {
+            let i = d.catalog.plugins.len() + j;
+            let style = if i == d.selected {
+                error.add_modifier(Modifier::REVERSED)
+            } else {
+                error
+            };
+            let name = b
+                .dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            out.push(Line::styled(
+                head_chars(&format!(" {name}: {}", b.error), cells),
+                style,
+            ));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
     /// A boolean setting of the palette flipped, applied and saved.
     fn toggle_setting(&mut self, setting: crate::actions::BoolSetting) {
         let meta = crate::actions::bool_setting(setting);
@@ -4781,6 +5080,17 @@ impl App {
             self.open_tools_editor();
             return true;
         }
+        let on_plugins = form
+            .fields
+            .get(form.focus)
+            .is_some_and(|f| f.key == crate::tui::settings::Key::Plugins);
+        if on_plugins
+            && key.code == crossterm::event::KeyCode::Enter
+            && key.kind != crossterm::event::KeyEventKind::Release
+        {
+            self.open_plugins();
+            return true;
+        }
         match form.on_key(key) {
             FieldKey::Submit => self.submit_settings(),
             FieldKey::Cancel => self.cancel_settings(),
@@ -5486,6 +5796,7 @@ impl App {
             PromptKind::FormatImport => return self.import_format(&text),
             PromptKind::FormatExport => return self.export_format(&text),
             PromptKind::Report(true) => return self.write_report(true, &text),
+            PromptKind::OpenPlugin => return self.open_plugin(&text),
             _ => {}
         }
         let tab = &mut self.tabs[self.active];
@@ -5539,6 +5850,7 @@ impl App {
             | PromptKind::RulesExport
             | PromptKind::FormatImport
             | PromptKind::FormatExport => {}
+            PromptKind::OpenPlugin => {}
             PromptKind::StatsField | PromptKind::OpsField => {
                 let stats = prompt.kind == PromptKind::StatsField;
                 match crate::tui::analysis::parse_source(&text) {
@@ -5643,6 +5955,19 @@ impl App {
             });
             return;
         }
+        if kind == PromptKind::OpenPlugin {
+            let text = self
+                .plugins
+                .as_ref()
+                .and_then(|d| d.catalog.plugins.get(d.selected))
+                .map(plugin_uri_with_defaults)
+                .unwrap_or_default();
+            self.prompt = Some(Prompt {
+                kind,
+                field: TextField::new(&text),
+            });
+            return;
+        }
         if kind.over_dialogs() || kind == PromptKind::Report(true) {
             let text = match kind {
                 PromptKind::RulesExport => format!("highlights{}", crate::config::RULE_SET_SUFFIX),
@@ -5702,6 +6027,7 @@ impl App {
                 let cols = e.drawn_field_columns().0;
                 cols.first().cloned().unwrap_or_default()
             }
+            PromptKind::OpenPlugin => unreachable!("opened above"),
             PromptKind::ExplainSpan => {
                 let (f, t) = (e.time_from_text.trim(), e.time_to_text.trim());
                 if f.is_empty() && t.is_empty() {
@@ -6276,6 +6602,7 @@ impl App {
                 Action::Scratchpad => self.open_pad(),
                 Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
                 Action::ToggleSetting(s) => self.toggle_setting(s),
+                Action::Plugins => self.open_plugins(),
                 _ => self.message = Some(tx(self.lang, NO_FILE).into()),
             }
             return;
@@ -6467,6 +6794,7 @@ impl App {
                     || self.analysis.is_some()
                     || self.analysis_menu.is_some()
                     || self.keys_dialog.is_some()
+                    || self.plugins.is_some()
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
@@ -7344,6 +7672,7 @@ impl App {
             Action::Analysis => self.analysis_menu = Some(0),
             Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
             Action::ToggleSetting(s) => self.toggle_setting(s),
+            Action::Plugins => self.open_plugins(),
             Action::Patterns => self.open_analysis(crate::tui::analysis::Kind::Patterns),
             Action::Compare => self.compare_selection(),
             Action::ToggleFilterExpr => {
@@ -7553,6 +7882,9 @@ impl App {
         }
         if self.keys_dialog.is_some() {
             self.draw_keys_dialog(frame, main_area);
+        }
+        if self.plugins.is_some() {
+            self.draw_plugins(frame, main_area);
         }
         if self.compare.is_some() {
             self.draw_compare(frame, main_area);
@@ -8115,6 +8447,22 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
             );
+        // The web view and the MCP server, while they listen.
+        let mut serving = Vec::new();
+        if let (Some(c), true) = (
+            self.settings.as_ref().map(|s| &s.config),
+            self.web_view.connections().is_some(),
+        ) {
+            serving.push(format!("web :{}", c.web_port));
+        }
+        if let Some(port) = self.mcp_view.port() {
+            serving.push(format!("MCP :{port}"));
+        }
+        let block = if serving.is_empty() {
+            block
+        } else {
+            block.title_bottom(Line::from(format!(" {} ", serving.join(" · "))).right_aligned())
+        };
         let note = self.tabs.get(self.active).and_then(|tab| {
             tab.cursor_line()
                 .and_then(|l| tab.engine.bookmark_note(l))
@@ -8347,6 +8695,10 @@ impl App {
             PromptKind::ExplainSpan => tx(
                 self.lang,
                 "Explain the span 14:00..14:05 against the rest of the log",
+            ),
+            PromptKind::OpenPlugin => tx(
+                self.lang,
+                "Open the plugin source: plugin://name?key=value&other=value",
             ),
             PromptKind::FormatExport => tx(
                 self.lang,
@@ -10785,6 +11137,31 @@ fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
     }
 }
 
+/// `plugin://name?key=default&...` of a source plugin, for the prompt that opens it.
+fn plugin_uri_with_defaults(p: &crate::plugins::Plugin) -> String {
+    let values: std::collections::BTreeMap<String, String> = p
+        .source
+        .as_ref()
+        .map(|s| {
+            s.params
+                .iter()
+                .map(|q| (q.id.clone(), q.default.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let uri = crate::plugins::PluginUri {
+        name: p.name.clone(),
+        values: values.clone(),
+    };
+    // Every value written, secrets too (the user types them here).
+    let mut text = uri.to_uri(None);
+    if !values.is_empty() {
+        let query: Vec<String> = values.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        text = format!("{text}?{}", query.join("&"));
+    }
+    text
+}
+
 /// The export menu's entries: each scope in each format.
 const EXPORT_CHOICES: [(crate::export::Scope, crate::export::Format); 9] = {
     use crate::export::{Format as F, Scope as S};
@@ -13151,7 +13528,7 @@ mod tests {
         let saved = std::fs::read(&ini).unwrap();
         let mut app = app_over(&ini);
         app.apply(Action::Settings);
-        let screen = render(&mut app, 200, 80);
+        let screen = render(&mut app, 200, 110);
         let d = app.hits.dialog.unwrap();
         let start = d.outer;
         let x = d.close.expect("[x]");
@@ -13160,9 +13537,9 @@ mod tests {
         // The title row moves it; released outside, it stays open where it was left.
         app.on_mouse(click(start.x + 5, start.y));
         app.on_mouse(drag(start.x + 35, start.y + 5));
-        app.on_mouse(release(199, 79));
+        app.on_mouse(release(199, 109));
         assert!(app.settings_form.is_some(), "a drag never closes it");
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let moved = app.hits.dialog.unwrap().outer;
         assert_eq!(
             (moved.x, moved.y, moved.width, moved.height),
@@ -13176,7 +13553,7 @@ mod tests {
         app.on_mouse(click(moved.right() - 1, moved.bottom() - 1));
         app.on_mouse(drag(moved.x + 2, moved.y + 2));
         app.on_mouse(release(moved.x + 2, moved.y + 2));
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let small = app.hits.dialog.unwrap().outer;
         assert_eq!(
             (small.x, small.y, small.width, small.height),
@@ -13188,7 +13565,7 @@ mod tests {
         f.focus = f.fields.iter().position(|x| x.label == "Theme").unwrap();
         press(&mut app, KeyCode::Right);
         assert_ne!(app.palette.theme, theme);
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let x = app.hits.dialog.unwrap().close.unwrap();
         app.on_mouse(click(x.x + 1, x.y));
         assert!(app.settings_form.is_none());
@@ -13196,19 +13573,19 @@ mod tests {
         assert_eq!(std::fs::read(&ini).unwrap(), saved);
         // Reopened where it was left; kept inside a smaller terminal.
         app.apply(Action::Settings);
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         assert_eq!(app.hits.dialog.unwrap().outer, small);
         render(&mut app, 80, 24);
         let fit = app.hits.dialog.unwrap().outer;
         assert!(fit.right() <= 80 && fit.bottom() <= 24, "{fit:?}");
         // A double click on the title: centred at the default size again.
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let t = app.hits.dialog.unwrap().outer;
         app.on_mouse(click(t.x + 5, t.y));
         app.on_mouse(release(t.x + 5, t.y));
         app.on_mouse(click(t.x + 5, t.y));
         app.on_mouse(release(t.x + 5, t.y));
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         assert_eq!(app.hits.dialog.unwrap().outer, start);
     }
 
@@ -15535,6 +15912,92 @@ mod tests {
         assert!(crate::tui::palette::entries(Language::En)
             .iter()
             .any(|e| e.action == Action::ToggleSetting(crate::actions::BoolSetting::Sound)));
+    }
+
+    #[test]
+    fn the_web_view_mcp_server_and_plugins_run_from_the_terminal() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let free = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, "one\ntwo\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            web_enabled: true,
+            web_port: free(),
+            mcp_enabled: true,
+            mcp_port: free(),
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.mcp_view.runtime_path = Some(dir.path().join("mcp.runtime"));
+        app.tick();
+        assert!(app.web_view.connections().is_some(), "{:?}", app.message);
+        assert!(app.mcp_view.port().is_some(), "{:?}", app.message);
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("web :") && l.contains("MCP :")),
+            "{screen:#?}"
+        );
+        // Off in Settings: both stop.
+        app.settings_mut().config.web_enabled = false;
+        app.settings_mut().config.mcp_enabled = false;
+        app.tick();
+        assert!(app.web_view.connections().is_none());
+        assert!(app.mcp_view.port().is_none());
+        // A source plugin is approved only after its hash is shown.
+        let plugins = dir.path().join("plugins");
+        let one = plugins.join("echo");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::write(
+            one.join("plugin.toml"),
+            "api = 1\nname = \"echo\"\nversion = \"1.0\"\nkind = \"source\"\n[source]\ncommand = \"echo\"\n",
+        )
+        .unwrap();
+        app.plugins = Some(PluginsDialog {
+            catalog: crate::plugins::discover(&plugins),
+            selected: 0,
+            confirm: None,
+        });
+        let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(
+            app.plugins.as_ref().unwrap().confirm.as_deref(),
+            Some("echo")
+        );
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("y runs the programs of echo")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app
+            .settings_mut()
+            .config
+            .plugins
+            .approved
+            .contains_key("echo"));
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!app
+            .settings_mut()
+            .config
+            .plugins
+            .approved
+            .contains_key("echo"));
     }
 
     #[test]

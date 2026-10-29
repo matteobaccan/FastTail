@@ -301,8 +301,8 @@ settings and the workspace with the window. Where it stands against the window:
 - ✅ Log formats dialog, editor presets, Open in FastTail from a source location
 - ✅ Filter expression toggle per stream, global filter expressions editable
 - ✅ Remappable keys, the palette's setting toggles
-- ⬜ Web view and the MCP server of a running interface; plugin management (enable,
-  approve, parameters: today it says to use the window)
+- ✅ Web view and the MCP server of a running interface; plugin management (enable,
+  approve, parameters)
 - ✅ Time delta column, time display (as written / UTC / local), the OTLP hint in the
   listener prompt
 - By design not in a terminal: Markdown view, line wrap, overview strip, timeline histogram,
@@ -314,7 +314,7 @@ settings and the workspace with the window. Where it stands against the window:
   - ✅ `tui-analysis-tabs` (L): Statistics, Query, Patterns, Explain, Operations tabs
   - ✅ `tui-output` (M): search results pane, search in a range, export, Copy as shown,
     bookmark report
-  - ⬜ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
+  - ✅ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
   - ✅ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
   - ✅ `tui-compare-scratchpad` (S): Compare tab and scratchpad
   - ✅ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all

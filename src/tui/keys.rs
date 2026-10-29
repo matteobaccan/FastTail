@@ -154,6 +154,8 @@ pub enum Action {
     Patterns,
     /// The Keys dialog: the remappable terminal keys (palette).
     KeysDialog,
+    /// The Plugins dialog (palette).
+    Plugins,
     /// A boolean setting of the palette ("Toggle line numbers in new streams"...).
     ToggleSetting(crate::actions::BoolSetting),
     /// CTRL + N: the selected rows (or the cursor row) sent to the scratchpad.
@@ -569,6 +571,8 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("tools", Action::Tools, "!"),
     ("lock", Action::Lock, "Ctrl+L"),
     ("help", Action::ToggleHelp, "? F1"),
+    ("plugins", Action::Plugins, ""),
+    ("keys", Action::KeysDialog, ""),
 ];
 
 /// The terminal keys in force: the defaults of `map_key`, with the `tui.` entries of

@@ -58,8 +58,9 @@ impl Fixture {
     }
 
     fn send(&mut self, msg: Value) -> Option<Value> {
+        let mut refs: Vec<&mut TailEngine> = self.engines.iter_mut().collect();
         let mut host = Host {
-            engines: &mut self.engines,
+            engines: &mut refs,
             allow_write: self.allow_write,
             open_roots: &self.roots,
             lang: Language::En,
@@ -229,8 +230,9 @@ fn search_counts_everything_and_returns_at_most_the_cap() {
     assert_eq!(which["isError"], true);
 
     // In steps, as the window runs it: the same answer.
+    let mut refs: Vec<&mut TailEngine> = f.engines.iter_mut().collect();
     let mut host = Host {
-        engines: &mut f.engines,
+        engines: &mut refs,
         allow_write: false,
         open_roots: &[],
         lang: Language::En,
@@ -243,7 +245,8 @@ fn search_counts_everything_and_returns_at_most_the_cap() {
     let mut steps = 0;
     let answer = loop {
         steps += 1;
-        if let Some(v) = pending.step(&f.engines, Duration::ZERO) {
+        let refs: Vec<&mut TailEngine> = f.engines.iter_mut().collect();
+        if let Some(v) = pending.step(&refs, Duration::ZERO) {
             break v;
         }
     };
@@ -358,8 +361,9 @@ fn serve_on_thread(engines: Vec<TailEngine>, token: &str) -> (u16, std::sync::mp
             match server.requests.recv_timeout(Duration::from_millis(20)) {
                 Ok(req) => {
                     let mut opens = Vec::new();
+                    let mut refs: Vec<&mut TailEngine> = engines.iter_mut().collect();
                     let mut host = Host {
-                        engines: &mut engines,
+                        engines: &mut refs,
                         allow_write: false,
                         open_roots: &[],
                         lang: Language::En,
@@ -474,7 +478,7 @@ fn bridge_without_a_window_serves_the_files() {
 fn window_view_logs_requests_and_writes_the_runtime_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = app_log(dir.path(), "app.log");
-    let mut engines = vec![open(&path)];
+    let mut engines = [open(&path)];
     let mut cfg = FastTailConfig {
         mcp_enabled: true,
         mcp_port: 0,
@@ -501,7 +505,8 @@ fn window_view_logs_requests_and_writes_the_runtime_file() {
     });
     let started = Instant::now();
     while !client.is_finished() {
-        let opens = view.serve(&mut engines, &cfg);
+        let mut refs: Vec<&mut TailEngine> = engines.iter_mut().collect();
+        let opens = view.serve(&mut refs, &cfg);
         assert!(opens.is_empty());
         assert!(started.elapsed() < Duration::from_secs(30));
         std::thread::sleep(Duration::from_millis(2));
