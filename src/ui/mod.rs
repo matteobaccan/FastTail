@@ -10,7 +10,7 @@ pub mod dock;
 pub mod eventlog_dialog;
 pub mod explain_tab;
 pub mod export_dialog;
-pub mod export_html;
+pub use crate::export_html;
 pub mod find_results;
 pub mod folder_dialog;
 pub mod global_filter_bar;

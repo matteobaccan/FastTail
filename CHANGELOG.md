@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   draws the gap to the row above before each line, in the accent colour past the *Time
   delta gap* setting; the `🌐` chip shows the times as written, in UTC or in local time, as
   the window does (also in the palette). The listener prompt mentions `otlp://`.
+- **Search results, search in a range, export and reports in the terminal.** `Alt+R` lists
+  the search results (`Enter` goes to one); `Alt+S` limits the search to lines
+  (`1200-5000`) or times (`14:00..15:30`); `Alt+E` exports the visible lines, the selection
+  or the matches as text, CSV or HTML with the window's writers; `Y` copies as shown; the
+  palette writes the bookmark report of a stream or of all of them to a file or the
+  clipboard. *Search in a range…* is in the window's palette too (it opens the results
+  pane, where the range is chosen).
 
 ## [0.28.1] - 2026-10-29
 

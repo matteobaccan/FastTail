@@ -1734,6 +1734,7 @@ fn test_i18n_exhaustive_coverage() {
         "act_collapse",
         "act_timeline",
         "act_search_pane",
+        "act_search_scope",
         "act_search",
         "act_search_next",
         "act_search_prev",

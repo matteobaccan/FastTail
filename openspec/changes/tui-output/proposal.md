@@ -7,7 +7,8 @@ errors of the last hour to someone, or write an incident note.
 
 ## What Changes
 
-- **Search results pane** (`Alt+R`, the palette): the matching lines under the rows,
+- **Search results pane** (`Alt+R`, the palette): the matching lines in a list over
+  the stream (as the Find results window),
   Enter goes to a hit; the hit counter says `[3 / 17 in range]` with a scope.
 - **Search in a range** (palette, `R` in the search prompt's history): Selection, Lines
   (`1200-5000`) or Time; `F3`-style `n` / `N` stay inside it.

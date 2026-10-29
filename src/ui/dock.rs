@@ -703,6 +703,10 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
 const SEARCH_ACTIVE_BG: Color32 = Color32::from_rgb(0, 255, 230);
 /// Background of the text of the other search hits.
 const SEARCH_MATCH_BG: Color32 = Color32::from_rgb(255, 230, 0);
+
+#[cfg(test)]
+use crate::export_html::cell_spans;
+pub(crate) use crate::export_html::{cell_spans_with, level_fallback};
 /// Background of the text of the rows a multi-line hit continues on.
 const SEARCH_CONT_BG: Color32 = Color32::from_rgb(255, 242, 150);
 
@@ -5201,67 +5205,6 @@ fn field_header_id(engine: &TailEngine) -> egui::Id {
     egui::Id::new("fields_header").with(&engine.path)
 }
 
-/// The spans of a cell's text: the rules' and labels' spans of that text, with the search
-/// query's occurrences (`query_lower`, case-insensitive) drawn over them as hits. At most
-/// `MAX_ROW_SPANS`, sorted and non-overlapping.
-pub(crate) fn cell_spans(
-    rule_spans: Vec<HighlightSpan>,
-    text: &str,
-    query_lower: &str,
-) -> Vec<HighlightSpan> {
-    let matcher = crate::tail_engine::SearchMatcher::Text(query_lower.to_string());
-    cell_spans_with(rule_spans, text, Some(&matcher))
-}
-
-/// `cell_spans` with the stream's search as it reads its query (text or regex).
-pub(crate) fn cell_spans_with(
-    mut rule_spans: Vec<HighlightSpan>,
-    text: &str,
-    matcher: Option<&crate::tail_engine::SearchMatcher>,
-) -> Vec<HighlightSpan> {
-    let hits: Vec<(usize, usize)> = matcher.map_or_else(Vec::new, |m| {
-        m.ranges(text, crate::tail_engine::MAX_ROW_SPANS)
-    });
-    if hits.is_empty() {
-        return rule_spans;
-    }
-    let hit_style = SpanStyle::Rule(HighlightStyle {
-        fg: Color32::BLACK.into(),
-        bg: SEARCH_MATCH_BG.into(),
-        bold: false,
-        italic: false,
-    });
-    let mut out: Vec<HighlightSpan> = Vec::new();
-    // A rule span keeps the parts no hit covers.
-    for sp in rule_spans.drain(..) {
-        let mut start = sp.start;
-        for &(h0, h1) in hits
-            .iter()
-            .filter(|(h0, h1)| *h1 > sp.start && *h0 < sp.end)
-        {
-            if h0 > start {
-                out.push(HighlightSpan {
-                    start,
-                    end: h0,
-                    ..sp
-                });
-            }
-            start = start.max(h1);
-        }
-        if start < sp.end {
-            out.push(HighlightSpan { start, ..sp });
-        }
-    }
-    out.extend(hits.iter().map(|&(start, end)| HighlightSpan {
-        start,
-        end,
-        style: hit_style,
-    }));
-    out.sort_by_key(|sp| sp.start);
-    out.truncate(crate::tail_engine::MAX_ROW_SPANS);
-    out
-}
-
 /// The cells of one row: each shown field clipped to its column, then the message.
 /// A line without the parser's shape (or a continuation line) runs across the columns,
 /// dimmed when it is not a continuation. `spans` gives a cell text its rule, label and
@@ -7060,26 +7003,6 @@ fn row_highlight(
     engine
         .match_highlight(raw_line)
         .or_else(|| level_fallback(engine, theme, level_colors, line_idx))
-}
-
-/// The level palette entry of a row, when level colouring is on.
-pub(crate) fn level_fallback(
-    engine: &TailEngine,
-    theme: &CyberTheme,
-    level_colors: bool,
-    line_idx: usize,
-) -> Option<HighlightStyle> {
-    if !level_colors {
-        return None;
-    }
-    theme
-        .level_style(engine.level_of(line_idx))
-        .map(|s| HighlightStyle {
-            fg: s.fg,
-            bg: s.bg,
-            bold: s.bold,
-            italic: false,
-        })
 }
 
 /// Lays out `text` as sections: `base` for the bytes no span claimed, and per span the

@@ -101,7 +101,10 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `h` | HEX view (go to `1024` or `0x400`) and back |
 | `d`, `Shift+D` | ASM view of x86 code (go to an offset, `0x401000` or `entry`) and back to HEX; the next architecture (16, 32, 64 bit), shown in the window's bottom border |
 | `J` | the cursor row's JSON as a tree (`y` value, `Y` path) |
-| `y` (`Ctrl+C`) | copy the selection or the cursor row |
+| `y` (`Ctrl+C`), `Y` | copy the selection or the cursor row; as shown (the column view's cells separated by tabs, a closed group with its badge) |
+| `Alt+R` | the search results as a list (line number and text in the level colour); `Enter` goes to the hit, `PgUp` `PgDn` `Home` `End` move |
+| `Alt+S` | search in a range: lines `1200-5000` (`1200-`, `-5000`, `1200`) or times `14:00..15:30` (an open side allowed); empty searches everywhere, and the counter says `in range` |
+| `Alt+E` | export the visible lines, the selected lines or the search matches as text, CSV (the window's separator, BOM and formula protection) or HTML (the theme's colours, at most 200,000 lines): the file is asked for (next to the stream's file, `app-matches.csv`), a trailing `!` replaces an existing one, the progress shows in the status line |
 | `s` `\|` `_` | new window beside / below |
 | `<` `>`, `Ctrl+PgUp` `Ctrl+PgDn` | move the stream to another window, tabs of a window |
 | `Alt+D` | the time delta column on or off |
@@ -181,9 +184,8 @@ tray). Filter tabs and merged views made in the window are kept in the workspace
 shown.
 
 Only in the window for now: the Statistics, Query, Patterns, Explain, Operations and Compare
-tabs, the scratchpad, the search results pane and search in a range, Export (text, CSV,
-HTML), the Log formats dialog, rule sets and next / previous rule match, the bookmark
-report, Copy as shown, the web view, the MCP server of a running window (`fasttail-tui --mcp` serves the files given),
+tabs, the scratchpad, the Log formats dialog, rule sets and next / previous rule match, the web
+view, the MCP server of a running window (`fasttail-tui --mcp` serves the files given),
 managing plugins (a plugin stream approved in the window runs here), remappable shortcuts
 (the terminal keys are fixed), and Open in FastTail from a source location (`Ctrl+O` opens
 the editor).

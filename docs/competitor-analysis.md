@@ -294,8 +294,9 @@ settings and the workspace with the window. Where it stands against the window:
   lock, themes, languages, `--print` with every output format, `--mcp` over stdio
 - ⬜ The Statistics, Query, Patterns, Explain, Operations and Compare tabs (their dock panels
   are named but empty)
-- ⬜ Scratchpad, search results pane, search in a range, export (text / CSV / HTML), Copy as
-  shown, bookmark report
+- ✅ Search results list, search in a range, export (text / CSV / HTML), Copy as shown,
+  bookmark report
+- ⬜ Scratchpad
 - ⬜ Rule sets import / export, next / previous match of a rule, clear all bookmarks
 - ⬜ Log formats dialog (formats load at start), editor presets, Open in FastTail from a
   source location
@@ -313,7 +314,7 @@ settings and the workspace with the window. Where it stands against the window:
 
 - ⬜ The terminal gaps of section 7, as OpenSpec changes in `openspec/changes/`:
   - ⬜ `tui-analysis-tabs` (L): Statistics, Query, Patterns, Explain, Operations tabs
-  - ⬜ `tui-output` (M): search results pane, search in a range, export, Copy as shown,
+  - ✅ `tui-output` (M): search results pane, search in a range, export, Copy as shown,
     bookmark report
   - ⬜ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
   - ⬜ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
