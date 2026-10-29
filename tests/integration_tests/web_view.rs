@@ -22,7 +22,8 @@ fn open(path: &Path) -> TailEngine {
 }
 
 fn ask(view: &mut WebView, engines: &[TailEngine], q: WebQuery) -> Option<Value> {
-    view.answer(&q, engines, &CyberTheme::Tron, true, Language::En)
+    let refs: Vec<&TailEngine> = engines.iter().collect();
+    view.answer(&q, &refs, &CyberTheme::Tron, true, Language::En)
 }
 
 fn lines(numbers: std::ops::Range<usize>) -> Vec<String> {
@@ -320,7 +321,8 @@ fn the_event_stream_sends_appended_lines() {
             appended = true;
         }
         engines[0].poll_updates();
-        view.serve(&engines, &CyberTheme::Tron, true, Language::En);
+        let refs: Vec<&TailEngine> = engines.iter().collect();
+        view.serve(&refs, &CyberTheme::Tron, true, Language::En);
         std::thread::sleep(Duration::from_millis(10));
     }
     let got = client.join().unwrap();

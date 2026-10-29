@@ -2955,7 +2955,8 @@ impl FastTailApp {
 
     /// Answers the MCP requests waiting and opens the files `open_file` asked for.
     pub fn serve_mcp(&mut self) {
-        let opens = self.mcp_view.serve(&mut self.engines, &self.config);
+        let mut refs: Vec<&mut TailEngine> = self.engines.iter_mut().collect();
+        let opens = self.mcp_view.serve(&mut refs, &self.config);
         let lang = self.config.language;
         for path in opens {
             self.open_log_file(path.clone());
@@ -3351,8 +3352,9 @@ impl FastTailApp {
         // The web view and the MCP server answer while the window shows nothing too.
         self.web_view
             .sync(&mut self.config, || Self::make_wake(ctx));
+        let refs: Vec<&TailEngine> = self.engines.iter().collect();
         self.web_view.serve(
-            &self.engines,
+            &refs,
             &self.config.theme,
             self.config.level_colors,
             self.config.language,
@@ -3443,8 +3445,9 @@ impl FastTailApp {
         // from the streams as they are now.
         self.web_view
             .sync(&mut self.config, || Self::make_wake(&ctx));
+        let refs: Vec<&TailEngine> = self.engines.iter().collect();
         self.web_view.serve(
-            &self.engines,
+            &refs,
             &self.config.theme,
             self.config.level_colors,
             self.config.language,

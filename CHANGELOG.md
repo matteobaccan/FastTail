@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `d` removes it, `r` / `R` bring the defaults back; saved in `[shortcuts]` as
   `tui.<action>=<keys>`, beside the window's own. The palette also switches the settings
   that apply to a terminal (level colours, line numbers in new streams, sound, ...).
+- **Web view, MCP server and plugins in the terminal.** The terminal starts the read-only
+  web view and the MCP server from its own streams when `[web]` / `[mcp]` are on (new rows
+  in Settings, the ports shown in the status bar), and a Plugins dialog enables, approves
+  (with the manifest's hash) and opens plugins. The web view and the MCP server's state
+  moved out of the window's module (`web_view`, `mcp_serve`).
 
 ## [0.29.0] - 2026-10-29
 
