@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Values with units.** Durations (`900ms`, `1.2s`, `1m30s`), sizes (`3KB`, `12KiB`) and
+  rates (`50/s`, `2MB/s`) are read in one base unit, so field statistics, plots, the Query
+  tab and field filter terms compare them as people read them (`latency>=500ms`,
+  `p95(latency)` shown as `1.4 s`); a query comparing a size with a duration is refused,
+  and a log format's `unit.<field>=` gives bare numbers their unit (`field-units`).
+  `KB` / `MB` now mean powers of 1000 (`KiB` / `MiB` for 1024).
 - **Product site.** A one-page site in `site/`, published to GitHub Pages by
   `.github/workflows/pages.yml` on merges to `main`.
 - **Rotated files as one stream.** A file with rotations next to it (`app.log.1`,

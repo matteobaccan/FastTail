@@ -8751,10 +8751,13 @@ impl TailEngine {
             return;
         };
         p.restart = false;
+        let parser = self.field_parser.clone();
         p.series = specs
             .iter()
-            .cloned()
-            .map(crate::plot::Series::new)
+            .map(|spec| {
+                let bare = crate::fields::field_unit(parser.as_deref(), &spec.key);
+                crate::plot::Series::new(spec.clone()).with_bare(bare)
+            })
             .collect();
         p.covered = lines;
         p.last_ts = NO_TIMESTAMP;
@@ -9059,7 +9062,8 @@ impl TailEngine {
         };
         s.restart = false;
         s.failed = false;
-        s.result = crate::field_stats::FieldStats::new(slices);
+        s.result = crate::field_stats::FieldStats::new(slices)
+            .with_bare(s.source.bare_unit(self.field_parser.as_deref()));
         s.covered = lines;
         s.last_ts = span.map_or(NO_TIMESTAMP, |(_, last)| last);
         s.progress = 0.0;
@@ -9134,7 +9138,8 @@ impl TailEngine {
         let window = self.level_window();
         let source = s.source.clone();
         let mut last_ts = s.last_ts;
-        let mut part = crate::field_stats::FieldStats::new(s.result.slices);
+        let mut part =
+            crate::field_stats::FieldStats::new(s.result.slices).with_bare(s.result.bare);
         let mut scratch = crate::field_stats::Scratch::default();
         let mut reslice = false;
         for idx in from..to {

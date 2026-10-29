@@ -25,6 +25,18 @@ are today. A format's `unit.<field>` overrides detection.
 The query language and field terms accept `500ms`, `1.5s`, `10MiB` as literals; comparing a
 literal of one family to a field of another is an error message, not a silent false.
 
+### Implementation notes (deviations)
+
+- D2: the numbers are kept per family (statistics, query aggregates) and the field's
+  family is the one most of all its values have, not only the first 1,000, so partial
+  scans merge without a decision to replay. The 90 % share for the numeric summary is of
+  that family. Plain numbers lose a tie with a unit family.
+- D3: a bare bound (`latency>100`) compares in the base unit instead of being an error.
+  The query refuses a `where` whose field holds another family once its first 1,000
+  values are read (or at the end); field filter terms just fail the other family's lines.
+- Plots keep their mixed-family rule (drawn as written) and take the format's unit.
+- The open question (the unit in the column view header) is left out of this change.
+
 ## Risks / Trade-offs
 
 - [`5m` as minutes or metres] → only in a duration-family field; elsewhere it is not a

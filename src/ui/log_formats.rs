@@ -38,6 +38,7 @@ pub struct Draft {
     pub level_field: String,
     pub level_map: String,
     pub message_field: String,
+    pub units: String,
     pub entry_start: String,
     pub files: String,
     pub columns: String,
@@ -55,6 +56,7 @@ impl Draft {
             level_field: spec.level_field.clone(),
             level_map: spec.level_map.clone(),
             message_field: spec.message_field.clone(),
+            units: spec.units.clone(),
             entry_start: spec.entry_start.clone(),
             files: spec.files.join("; "),
             columns: spec.columns.join(","),
@@ -88,6 +90,7 @@ impl Draft {
             level_field: self.level_field.trim().to_string(),
             level_map: self.level_map.trim().to_string(),
             message_field: self.message_field.trim().to_string(),
+            units: self.units.trim().to_string(),
             entry_start: self.entry_start.clone(),
             files: list(&self.files, &[';']),
             columns: list(&self.columns, &[',', ';']),
@@ -630,6 +633,7 @@ impl FormatsDialog {
                     "W=warn,E=error",
                 );
                 row(ui, "fmt_msg_field", &mut d.message_field, false, "msg");
+                row(ui, "fmt_units", &mut d.units, false, "took=ms,size=KiB");
                 row(
                     ui,
                     "fmt_entry_start",

@@ -75,7 +75,7 @@ fn a_latency_field_is_aggregated_per_time_and_follows_filters_and_appends() {
     assert!(!engine.add_plot("took"), "plotted once");
     wait_plot(&mut engine, 600);
     let s = &engine.plot.as_ref().unwrap().series[0];
-    assert_eq!(s.unit(), "ms");
+    assert_eq!(s.unit().family, fasttail::units::Family::Time);
     assert!(!s.mixed());
     assert_eq!(s.value_between(at(5, 0), at(6, 0)), Some(500.0));
     assert_eq!(s.value_between(at(0, 0), at(1, 0)), Some(10.0));
@@ -115,7 +115,7 @@ fn a_latency_field_is_aggregated_per_time_and_follows_filters_and_appends() {
     assert!(engine.add_plot("size"));
     wait_plot(&mut engine, 601);
     let p = engine.plot.as_ref().unwrap();
-    assert_eq!(p.series[1].unit(), "B");
+    assert_eq!(p.series[1].unit().family, fasttail::units::Family::Size);
     assert_eq!(
         PlotSpec::list_text(engine.plots()),
         "took:max,size:avg",

@@ -60,6 +60,15 @@ fn number(v: f64) -> String {
     }
 }
 
+/// A number of `r` in its unit (`1.2 s`, `3.4 MB`), or as `number` shows it.
+fn shown(r: &crate::field_stats::FieldStats, v: f64) -> String {
+    if r.scale().family == crate::units::Family::Plain {
+        number(v)
+    } else {
+        r.show(v)
+    }
+}
+
 /// The colours of the chart series, then the "other values" series.
 fn series_colors(theme: &CyberTheme) -> [Color32; CHART_SERIES + 1] {
     [
@@ -288,7 +297,8 @@ fn summary(ui: &mut Ui, engine: &TailEngine, theme: &CyberTheme, lang: Language)
         ui.label(RichText::new(t(lang, "stats_all_unique")).color(theme.warn_color()));
     }
     if r.is_numeric() {
-        let h = &r.hist;
+        let h = r.hist();
+        let number = |v: f64| shown(r, v);
         let p = |q: f64| h.percentile(q).map_or_else(|| "-".to_string(), number);
         ui.label(
             RichText::new(format!(
@@ -406,7 +416,11 @@ fn chart(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Languag
     painter.text(
         rect.left_top() + egui::vec2(4.0, 2.0),
         egui::Align2::LEFT_TOP,
-        number(max),
+        if r.is_numeric() {
+            shown(r, max)
+        } else {
+            number(max)
+        },
         egui::FontId::monospace(10.0),
         theme.text_dim().into(),
     );
@@ -427,12 +441,14 @@ fn chart(ui: &mut Ui, engine: &mut TailEngine, theme: &CyberTheme, lang: Languag
         let mut tip = crate::timestamp::format_millis(start);
         for (name, _, values) in &series {
             let v = values[k];
-            let shown = if v.is_finite() {
-                number(v)
-            } else {
+            let text = if !v.is_finite() {
                 "-".to_string()
+            } else if r.is_numeric() {
+                shown(r, v)
+            } else {
+                number(v)
             };
-            tip.push_str(&format!("\n{name}: {shown}"));
+            tip.push_str(&format!("\n{name}: {text}"));
         }
         resp.on_hover_text_at_pointer(tip);
     }

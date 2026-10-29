@@ -966,6 +966,8 @@ fn test_i18n_exhaustive_coverage() {
         "rot_ask",
         "rot_always",
         "rot_never",
+        "fmt_units",
+        "query_err_units",
         "ops_open",
         "ops_open_tip",
         "ops_by_field",

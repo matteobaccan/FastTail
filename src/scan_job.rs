@@ -193,8 +193,9 @@ impl LineFields<'_> {
         if !self.ready(line) {
             return false;
         }
+        let bare = crate::fields::field_unit(self.parser, &term.key);
         match self.spans.get(line, &term.key) {
-            Some(f) => term.eval(Some(&f.value())),
+            Some(f) => term.eval_as(Some(&f.value()), bare),
             None => term.eval(None),
         }
     }
@@ -951,7 +952,8 @@ impl StatsRun {
         if self.stats.lines == 0 {
             return None;
         }
-        let fresh = crate::field_stats::FieldStats::new(self.stats.slices);
+        let mut fresh = crate::field_stats::FieldStats::new(self.stats.slices);
+        fresh.bare = self.stats.bare;
         self.sent = std::time::Instant::now();
         Some(ScanBatch::Stats(Box::new(std::mem::replace(
             &mut self.stats,
@@ -1061,8 +1063,9 @@ fn run(
         _ => None,
     };
     let mut stats_run = match &spec {
-        JobSpec::FieldStats { slices, .. } => Some(StatsRun {
-            stats: crate::field_stats::FieldStats::new(*slices),
+        JobSpec::FieldStats { slices, source, .. } => Some(StatsRun {
+            stats: crate::field_stats::FieldStats::new(*slices)
+                .with_bare(source.bare_unit(range.parser.as_deref())),
             scratch: crate::field_stats::Scratch::default(),
             inherited: NO_TIMESTAMP,
             hint: FormatHint::default(),
@@ -1098,8 +1101,10 @@ fn run(
         JobSpec::Plot { specs, .. } => Some(PlotRun {
             series: specs
                 .iter()
-                .cloned()
-                .map(crate::plot::Series::new)
+                .map(|spec| {
+                    let bare = crate::fields::field_unit(range.parser.as_deref(), &spec.key);
+                    crate::plot::Series::new(spec.clone()).with_bare(bare)
+                })
                 .collect(),
             spans: crate::fields::FieldSpans::new(),
             inherited: NO_TIMESTAMP,
