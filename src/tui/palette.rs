@@ -50,6 +50,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::SystemReconnect => (Action::Reconnect, ""),
         ActionId::OpenSystemSource => (Action::OpenSystem, ""),
         ActionId::OpenRemote => (Action::OpenRemote, ""),
+        ActionId::PasteAsStream => (Action::PasteStream, ""),
         ActionId::OpenListener => (Action::OpenListen, ""),
         // OutputDebugString exists on Windows only.
         ActionId::OpenDebugOutput if cfg!(windows) => (Action::OpenDebugOutput, ""),

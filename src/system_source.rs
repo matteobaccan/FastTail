@@ -71,6 +71,7 @@ pub fn is_system_path(path: &Path) -> bool {
         || crate::eventlog::is_eventlog_path(path)
         || crate::plugins::is_plugin_path(path)
         || crate::rotation::is_rotated_path(path)
+        || crate::clipboard_source::is_clipboard_path(path)
 }
 
 /// A unit name journalctl accepts and cannot take for an option.
@@ -471,6 +472,7 @@ impl TailEngine {
                     format!("{name} (+{})", r.pieces)
                 })
             })
+            .or_else(|| self.clipboard.as_ref().map(|c| c.title.clone()))
     }
 
     /// Called from `poll_updates`: once the copier saw the end of the pipe, collects the

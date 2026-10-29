@@ -2011,6 +2011,9 @@ pub struct TailEngine {
     /// The producer, copier and spool of a file read with its rotations (see `rotation`);
     /// `path` is then `rotated:<file>` and `current_file` the spool.
     pub rotation: Option<crate::rotation::RotationStream>,
+    /// The copier of a clipboard stream (see `clipboard_source`); `path` is then
+    /// `<clipboard N>`.
+    pub clipboard: Option<crate::clipboard_source::ClipboardStream>,
     /// The rotations the stream bar offers to include: how many and their bytes.
     pub rotation_offer: Option<(usize, u64)>,
     /// The stream bar's Include rotations was clicked (applied by the front end).
@@ -2683,6 +2686,7 @@ impl TailEngine {
             debug_output: None,
             source_request: None,
             rotation: None,
+            clipboard: None,
             rotation_offer: None,
             rotation_request: false,
             plugin: None,

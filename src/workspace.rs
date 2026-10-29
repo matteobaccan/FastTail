@@ -523,6 +523,7 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
 /// `merged:` name and rebuilt from its sources (see `persisted_path`).
 pub fn is_persisted(engine: &TailEngine) -> bool {
     !engine.is_stdin()
+        && !engine.is_clipboard()
         && engine
             .merged
             .as_ref()
@@ -677,7 +678,7 @@ pub fn snapshot<'a>(
     let engines: Vec<&TailEngine> = engines.into_iter().collect();
     let mut open_files: Vec<PathBuf> = Vec::new();
     for path in order {
-        if crate::stdin_source::is_stdin_path(path) {
+        if crate::stdin_source::is_ephemeral_path(path) {
             continue;
         }
         // A derived stream's or a merged view's tab names its spool: it is saved under

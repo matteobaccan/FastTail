@@ -9,6 +9,7 @@ pub mod auto_highlight;
 pub mod baretail_bridge;
 pub mod bookmark_report;
 pub mod cli;
+pub mod clipboard_source;
 pub mod collapse;
 pub mod color;
 pub mod compare;

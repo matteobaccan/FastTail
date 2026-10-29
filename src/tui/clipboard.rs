@@ -42,6 +42,19 @@ impl Clipboard {
     }
 }
 
+impl Clipboard {
+    /// The text of the system clipboard; `None` without one (over SSH, a terminal can
+    /// only be asked to set the clipboard, not to read it) or when it holds no text.
+    pub fn paste(&mut self) -> Option<String> {
+        if !self.tried {
+            self.tried = true;
+            self.system = arboard::Clipboard::new().ok();
+        }
+        let text = self.system.as_mut()?.get_text().ok()?;
+        Some(text.replace("\r\n", "\n"))
+    }
+}
+
 /// The OSC 52 sequence that sets the clipboard to `text`.
 pub fn osc52(text: &str) -> String {
     format!("\x1b]52;c;{}\x07", base64(text.as_bytes()))
