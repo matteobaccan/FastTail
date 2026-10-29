@@ -19,6 +19,16 @@ both with the row heights of the wrapped message column, so rows stay aligned.
 With `pin_time_column=true` (default) the parser's timestamp column is pinned when a stream
 first shows its column view; the user's pins then win.
 
+### Implementation notes (deviations)
+
+- D1: no second area. The rows stay in one horizontal scroll area; the pinned cells are
+  painted last, moved right by how far the row has scrolled past them, over an opaque
+  background (sticky columns), so the rows cannot misalign. Pinned columns are always
+  drawn first.
+- D2: the default is resolved when drawn (`pinned_columns`), not stored: a stream keeps
+  `None` until the user pins or unpins, and Reset columns returns to it.
+- The terminal has no half-width cap on pins.
+
 ## Risks / Trade-offs
 
 - [Pinned columns wider than the pane] → pins stop at half the pane width; the rest scroll.

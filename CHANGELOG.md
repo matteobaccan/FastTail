@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Pinned columns.** In the column view, *Pin column* in a header's menu keeps that
+  column at the left while the others scroll sideways; the time column is pinned by
+  default (`pin_time_column`). Pins are saved per stream (`pinned=`) and the terminal's
+  column view keeps them (`f` in `[Fields...]`) (`column-pinning`).
 - **Values with units.** Durations (`900ms`, `1.2s`, `1m30s`), sizes (`3KB`, `12KiB`) and
   rates (`50/s`, `2MB/s`) are read in one base unit, so field statistics, plots, the Query
   tab and field filter terms compare them as people read them (`latency>=500ms`,

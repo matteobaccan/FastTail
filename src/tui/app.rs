@@ -2130,7 +2130,8 @@ impl App {
     /// The rows of the columns list: the columns shown, in order and ticked, then the
     /// other fields known for the stream (at most `fields::MAX_CATALOGUE`).
     fn column_menu_rows(engine: &TailEngine) -> Vec<(String, bool)> {
-        let shown = engine.field_columns();
+        // In the order drawn: the pinned columns first.
+        let (shown, _) = engine.drawn_field_columns();
         let mut rows: Vec<(String, bool)> = shown.iter().map(|k| (k.clone(), true)).collect();
         for key in engine.field_catalogue().keys() {
             if !shown.contains(key) && rows.len() < crate::fields::MAX_CATALOGUE {
@@ -2197,6 +2198,15 @@ impl App {
                     tab.engine.set_plots(plot_first(tab.engine.plots(), key));
                 }
             }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                // Pins or unpins a shown column; the row follows it.
+                if let Some((key, true)) = rows.get(selected).cloned() {
+                    let pinned = tab.engine.pinned_columns().contains(&key);
+                    tab.engine.pin_column(&key, !pinned);
+                    let rows = Self::column_menu_rows(&tab.engine);
+                    self.columns_menu = rows.iter().position(|r| r.0 == key).or(Some(0));
+                }
+            }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 let key = rows.get(selected).map(|r| r.0.as_str());
                 if let Some(spec) = tab
@@ -2249,12 +2259,13 @@ impl App {
         };
         let rows = Self::column_menu_rows(&tab.engine);
         let plots = tab.engine.plots().to_vec();
+        let pins = tab.engine.pinned_columns();
         let height = (rows.len() as u16 + 6).min(area.height);
-        let inner = self.dialog(frame, area, (66, height), tx(self.lang, "Columns"), false);
+        let inner = self.dialog(frame, area, (74, height), tx(self.lang, "Columns"), false);
         let mut out = vec![Line::styled(
             tx(
                 self.lang,
-                "Space show/hide, Shift+Up/Down move, r reset, p plot, a stat",
+                "Space show/hide, Shift+Up/Down move, r reset, p plot, a stat, f pin",
             ),
             dim,
         )];
@@ -2294,8 +2305,13 @@ impl App {
                     }
                 })
                 .unwrap_or_default();
+            let pin = match (pins.contains(key), ascii) {
+                (true, true) => "  ^",
+                (true, false) => "  📌",
+                _ => "",
+            };
             out.push(Line::styled(
-                head_chars(&format!(" {mark} {key}{plotted}"), width),
+                head_chars(&format!(" {mark} {key}{pin}{plotted}"), width),
                 style,
             ));
         }
@@ -8509,7 +8525,8 @@ fn column_rows(
     tab.top = view::clamp_top(tab.top, height, rows);
     let range = view::visible_range(tab.top, height, rows);
     let engine = &mut tab.engine;
-    let keys = engine.field_columns();
+    // The pinned columns first: they stay at the left while the others scroll sideways.
+    let (keys, pinned) = engine.drawn_field_columns();
     // The rows drawn, with their fields.
     let mut drawn: Vec<(
         usize,
@@ -8548,24 +8565,29 @@ fn column_rows(
         0
     };
     let message = tx(lang, "message");
+    let mut fixed_head = String::new();
     let mut head = String::new();
-    for (k, w) in keys.iter().zip(&widths) {
-        head.push_str(&pad_cell(k, *w));
-        head.push(' ');
+    for (i, (k, w)) in keys.iter().zip(&widths).enumerate() {
+        let out = if i < pinned {
+            &mut fixed_head
+        } else {
+            &mut head
+        };
+        out.push_str(&pad_cell(k, *w));
+        out.push(' ');
     }
     head.push_str(message);
     let head: String = view::skip_cells(vec![(head, Paint::Plain)], tab.hscroll)
         .into_iter()
         .map(|(s, _)| s)
         .collect();
+    let head_style = Style::default()
+        .fg(palette.accent())
+        .add_modifier(Modifier::BOLD);
     let header = Line::from(vec![
         Span::raw(" ".repeat(gutter + 1)),
-        Span::styled(
-            head,
-            Style::default()
-                .fg(palette.accent())
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(fixed_head, head_style),
+        Span::styled(head, head_style),
     ]);
     let query = engine.search_query.trim().to_string();
     let has_search = !query.is_empty() && engine.active_match_count() > 0;
@@ -8573,10 +8595,11 @@ fn column_rows(
     for (row, line_idx, fields) in &drawn {
         let line = match fields {
             Some(fields) => {
-                let mut text = String::new();
-                for (k, w) in keys.iter().zip(&widths) {
-                    text.push_str(&pad_cell(fields.get(k).unwrap_or(""), *w));
-                    text.push(' ');
+                let (mut fixed, mut text) = (String::new(), String::new());
+                for (i, (k, w)) in keys.iter().zip(&widths).enumerate() {
+                    let out = if i < pinned { &mut fixed } else { &mut text };
+                    out.push_str(&pad_cell(fields.get(k).unwrap_or(""), *w));
+                    out.push(' ');
                 }
                 text.push_str(&fields.message(&keys));
                 render_cells_row(
@@ -8588,7 +8611,7 @@ fn column_rows(
                     &query,
                     has_search,
                     tab.hscroll,
-                    &text,
+                    (&fixed, &text),
                 )
             }
             // A line without the parser's shape runs across the columns, dimmed.
@@ -8642,9 +8665,9 @@ fn pad_cell(text: &str, cells: usize) -> String {
     out
 }
 
-/// A row of the column view: the gutter as `render_row` draws it, then `text` (the
-/// padded cells and the message) in the level or rule colour of the line, search hits
-/// tinted.
+/// A row of the column view: the gutter as `render_row` draws it, then the pinned cells
+/// as they are and the other cells and the message scrolled by `hscroll`, in the level or
+/// rule colour of the line, search hits tinted.
 #[allow(clippy::too_many_arguments)]
 fn render_cells_row(
     engine: &TailEngine,
@@ -8655,7 +8678,7 @@ fn render_cells_row(
     query: &str,
     has_search: bool,
     hscroll: usize,
-    text: &str,
+    (fixed, text): (&str, &str),
 ) -> Line<'static> {
     let (hit, active, bookmarked) = engine.row_marks(row, line_idx, has_search);
     let gutter_style = if active {
@@ -8677,21 +8700,27 @@ fn render_cells_row(
         Some(rule) => palette.rule_style(&rule),
         None => palette.level_style(engine.level_of(line_idx)),
     };
-    let hits = if hit && !query.is_empty() {
-        view::hit_ranges(text, query)
-    } else {
-        Vec::new()
+    let segs_of = |text: &str| -> Vec<(String, Paint)> {
+        let hits = if hit && !query.is_empty() {
+            view::hit_ranges(text, query)
+        } else {
+            Vec::new()
+        };
+        view::segments(text, &hits, &[])
+            .into_iter()
+            .map(|(s, p)| (view::sanitize(s), p))
+            .collect()
     };
-    let segs: Vec<(String, Paint)> = view::segments(text, &hits, &[])
-        .into_iter()
-        .map(|(s, p)| (view::sanitize(s), p))
-        .collect();
     let hit_style = if active {
         palette.active_hit()
     } else {
         palette.hit()
     };
-    for (s, paint) in view::skip_cells(segs, hscroll) {
+    let fixed_segs = segs_of(fixed);
+    for (s, paint) in fixed_segs
+        .into_iter()
+        .chain(view::skip_cells(segs_of(text), hscroll))
+    {
         let style = match paint {
             Paint::Hit => hit_style,
             _ => base,
@@ -9818,10 +9847,45 @@ mod tests {
     }
 
     #[test]
+    fn the_time_column_is_pinned_and_stays_while_scrolling_sideways() {
+        use crossterm::event::KeyCode;
+        let csv = "level,proto,timestamp,message\nerror,tcp,10:00,boom\ninfo,udp,10:01,fine\n";
+        let (mut app, _dir) = app_with(&[("export.csv", csv)], true);
+        render(&mut app, 120, 20);
+        assert_eq!(app.tabs[0].engine.pinned_columns(), ["timestamp"]);
+        let screen = render(&mut app, 120, 20).join("\n");
+        assert!(
+            screen.lines().any(|l| l.contains("10:00     error tcp")),
+            "the pinned column first: {screen}"
+        );
+        // Scrolled sideways past level: the time stays, level is gone.
+        app.tabs[0].hscroll = 6;
+        let screen = render(&mut app, 120, 20).join("\n");
+        let row = screen
+            .lines()
+            .find(|l| l.contains("10:00"))
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert!(
+            row.contains("10:00     tcp") && !row.contains("error"),
+            "{row}"
+        );
+        // f in the columns list unpins it.
+        app.tabs[0].hscroll = 0;
+        app.columns_menu = Some(0);
+        render(&mut app, 120, 20);
+        keys(&mut app, "f");
+        assert_eq!(app.tabs[0].engine.chosen_pins(), Some(&[][..]));
+        assert!(app.tabs[0].engine.pinned_columns().is_empty());
+        press(&mut app, KeyCode::Esc);
+    }
+
+    #[test]
     fn c_shows_the_fields_as_columns_and_the_list_hides_them() {
         use crossterm::event::KeyCode;
         let csv = "level,proto,timestamp,message\nerror,tcp,10:00,boom\ninfo,udp,10:01,fine\n";
         let (mut app, _dir) = app_with(&[("export.csv", csv)], true);
+        // The columns in their own order here (pinning has its own test).
+        app.tabs[0].engine.pin_time_default = false;
         render(&mut app, 120, 20);
         assert!(app.tabs[0].engine.field_parser().is_some());
         // A CSV opens in the column view; C turns it off and on.
@@ -9868,8 +9932,9 @@ mod tests {
             ["level"],
             "the last column stays"
         );
-        // The header names level only (proto joins the message as `proto=tcp`).
-        let screen = render(&mut app, 120, 20).join("\n");
+        // The header names level only (proto joins the message as `proto=tcp`); wide
+        // enough for the list not to cover the rows.
+        let screen = render(&mut app, 160, 20).join("\n");
         assert!(
             screen.lines().any(|l| l.contains("level message")),
             "{screen}"

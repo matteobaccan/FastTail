@@ -131,6 +131,9 @@ pub struct StreamEntry {
     pub fields_view_set: bool,
     pub fields_columns: Vec<String>,
     pub fields_widths: BTreeMap<String, u16>,
+    /// The columns pinned at the left of the column view (`pinned=ts,level`; empty: none
+    /// pinned; absent: the default, the time column). Older builds ignore it.
+    pub pinned: Option<Vec<String>>,
     /// The frozen filter of a derived stream ("Open filter as new tab"), whose `path` is
     /// then its `filter:<n>:<source>` name (see `filter_tab::identity`): `frozen.*` keys,
     /// plus `source_rel` for the source's relative path. Older builds skip such a stream.
@@ -316,6 +319,14 @@ impl Session {
                 .collect();
             if !columns.is_empty() {
                 sec.set("fields_columns", ini_value(&columns.join(",")));
+            }
+            if let Some(pins) = &s.pinned {
+                let pins: Vec<&str> = pins
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|c| !c.is_empty() && !c.contains(','))
+                    .collect();
+                sec.set("pinned", ini_value(&pins.join(",")));
             }
             for (key, cells) in &s.fields_widths {
                 sec.set(
@@ -591,6 +602,12 @@ impl Session {
                             .collect()
                     })
                     .unwrap_or_default(),
+                pinned: sec.get("pinned").map(|c| {
+                    c.split(',')
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                }),
                 fields_widths: sec
                     .iter()
                     .filter_map(|(k, v)| {

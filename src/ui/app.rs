@@ -5717,6 +5717,19 @@ impl FastTailApp {
                             }
                         });
 
+                        // The time column pinned in the column view of streams whose
+                        // pins were not chosen.
+                        if ui
+                            .checkbox(&mut self.config.pin_time_column, t(lang, "pin_time_column"))
+                            .on_hover_text(t(lang, "pin_time_column_tip"))
+                            .changed()
+                        {
+                            for engine in &mut self.engines {
+                                engine.pin_time_default = self.config.pin_time_column;
+                            }
+                            let _ = self.config.save();
+                        }
+
                         // How far back a timestamp may go before its line is marked.
                         ui.horizontal(|ui| {
                             ui.label(

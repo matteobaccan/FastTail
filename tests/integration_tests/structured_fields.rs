@@ -765,6 +765,65 @@ fn a_forced_separator_and_header_are_saved_with_the_stream() {
 }
 
 #[test]
+fn the_time_column_is_pinned_by_default_and_pins_are_saved() {
+    use fasttail::session::{Session, StreamEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("app.log");
+    write_lines(
+        &file,
+        &[
+            r#"{"level":"info","ts":"2026-10-29T10:00:00Z","user":"ann","msg":"in"}"#,
+            r#"{"level":"warn","ts":"2026-10-29T10:00:01Z","user":"bob","msg":"out"}"#,
+        ],
+    );
+    let mut e = open(&file);
+    let wait = std::time::Instant::now();
+    while e.field_parser().is_none() && wait.elapsed() < std::time::Duration::from_secs(5) {
+        e.poll_updates();
+    }
+    assert!(e.field_columns().contains(&"ts".to_string()));
+    assert_eq!(e.pinned_columns(), ["ts"], "the time column by default");
+    assert_eq!(e.chosen_pins(), None);
+    let (drawn, pinned) = e.drawn_field_columns();
+    assert_eq!((drawn[0].as_str(), pinned), ("ts", 1));
+    e.pin_time_default = false;
+    assert!(e.pinned_columns().is_empty(), "the setting off");
+    e.pin_column("user", true);
+    assert_eq!(e.pinned_columns(), ["user"]);
+    assert_eq!(e.drawn_field_columns().0[0], "user");
+
+    // The pins go into the stream's entry and back.
+    let entry: StreamEntry = fasttail::workspace::stream_entry(&e);
+    assert_eq!(entry.pinned, Some(vec!["user".to_string()]));
+    let text = Session {
+        streams: vec![entry],
+        ..Default::default()
+    }
+    .serialized(None);
+    assert!(text.contains("pinned=user"), "{text}");
+    let conf = ini::Ini::load_from_str(&text).unwrap();
+    let back = Session::read_from(&conf, None).session.streams.remove(0);
+    assert_eq!(back.pinned, Some(vec!["user".to_string()]));
+    let mut cfg = FastTailConfig::default();
+    cfg.set_stream_state(back);
+    let mut reopened = open(&file);
+    fasttail::workspace::restore_stream(&mut reopened, &cfg, &file);
+    assert_eq!(reopened.chosen_pins(), Some(&["user".to_string()][..]));
+    // Unpinning everything is kept as such, not as the default.
+    reopened.pin_column("user", false);
+    let entry = fasttail::workspace::stream_entry(&reopened);
+    assert_eq!(entry.pinned, Some(Vec::new()));
+    reopened.reset_field_columns();
+    assert_eq!(reopened.chosen_pins(), None, "reset is back to the default");
+
+    // `pin_time_column` round-trips through the ini; older files leave it on.
+    let mut cfg = FastTailConfig::default();
+    assert!(cfg.pin_time_column);
+    cfg.pin_time_column = false;
+    assert!(!FastTailConfig::from_ini(&cfg.to_ini()).pin_time_column);
+}
+
+#[test]
 fn a_quoted_newline_keeps_its_record_on_one_row() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("notes.csv");
