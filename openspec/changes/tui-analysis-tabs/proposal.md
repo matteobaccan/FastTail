@@ -23,8 +23,8 @@ Section 7 of `docs/competitor-analysis.md` lists them as the largest gap.
 - **Operations** (palette, from a field of the `[Fields...]` list): one row per id with
   start, duration, lines, worst level and a text Gantt bar; sort, filter, Enter goes to
   the first line.
-- The tabs dock like the stream windows (split, tabs, floating) and are not saved in the
-  layout, as in the window.
+- The views open over the windows (`Alt+A`), one at a time, and are not saved in the layout,
+  as in the window.
 
 Target release: the next minor after 0.28.1 (terminal parity with the window, proposed on 2026-10-29 at the maintainer's request; planned when the maintainer agrees), per `docs/competitor-analysis.md` sections 7 and 8. Priority: **Medium**. Effort: **L**.
 

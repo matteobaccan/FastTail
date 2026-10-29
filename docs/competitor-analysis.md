@@ -293,8 +293,7 @@ settings and the workspace with the window. Where it stands against the window:
 - ✅ Source locations to the editor (`Ctrl+O`), external tools, notifications, sounds, PIN
   lock, themes, languages, `--print` with every output format, `--mcp` over stdio
 - ✅ Compare lines and regions
-- ⬜ The Statistics, Query, Patterns, Explain and Operations tabs (their dock panels are named
-  but empty)
+- ✅ Statistics, Query, Patterns, Explain and Operations (tables and text bars)
 - ✅ Search results list, search in a range, export (text / CSV / HTML), Copy as shown,
   bookmark report
 - ✅ Scratchpad
@@ -312,7 +311,7 @@ settings and the workspace with the window. Where it stands against the window:
 ## 8. To do
 
 - ⬜ The terminal gaps of section 7, as OpenSpec changes in `openspec/changes/`:
-  - ⬜ `tui-analysis-tabs` (L): Statistics, Query, Patterns, Explain, Operations tabs
+  - ✅ `tui-analysis-tabs` (L): Statistics, Query, Patterns, Explain, Operations tabs
   - ✅ `tui-output` (M): search results pane, search in a range, export, Copy as shown,
     bookmark report
   - ⬜ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
