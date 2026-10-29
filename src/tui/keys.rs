@@ -121,6 +121,10 @@ pub enum Action {
     CycleAnsi,
     /// `#`: the line numbers of the focused stream, on or off.
     ToggleLineNumbers,
+    /// ALT + D: the time delta column of the focused stream, on or off.
+    ToggleTimeDelta,
+    /// How the rows show their leading timestamp (palette, the bar's chip).
+    SetTimeDisplay(crate::timestamp::TimeDisplay),
     /// CTRL + SHIFT + 1..9: the search text as a quick label of colour N (or recoloured,
     /// or removed when it has that colour), as in the GUI.
     Label(u8),
@@ -216,6 +220,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('x') => Some(Action::ClosePane),
             KeyCode::Char('f') => Some(Action::ToggleFloat),
             KeyCode::Char('/') => Some(Action::FindAll),
+            KeyCode::Char('d') | KeyCode::Char('D') => Some(Action::ToggleTimeDelta),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -442,6 +447,7 @@ mod tests {
         assert_eq!(k(KeyCode::Char('w'), ctrl), Some(Action::CloseStream));
         assert_eq!(k(KeyCode::Char('x'), alt), Some(Action::ClosePane));
         assert_eq!(k(KeyCode::Char('f'), alt), Some(Action::ToggleFloat));
+        assert_eq!(k(KeyCode::Char('d'), alt), Some(Action::ToggleTimeDelta));
         assert_eq!(k(KeyCode::Char('e'), none), Some(Action::NextError));
         assert_eq!(k(KeyCode::Char('E'), shift), Some(Action::PrevError));
         assert_eq!(k(KeyCode::Char('w'), none), Some(Action::NextWarn));

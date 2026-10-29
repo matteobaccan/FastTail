@@ -17,7 +17,7 @@ use crate::collapse::CollapseMode;
 use crate::dock_layout::{Dir, Layout as DockLayout, Pane, Tab as DockTab};
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
-use crate::tail_engine::{QuickLabel, TailEngine, ViewMode};
+use crate::tail_engine::{QuickLabel, TailEngine, TimeDelta, ViewMode};
 use crate::time_range_text::{self, side_readable, Side};
 use crate::tui::browser::{self, FileBrowser, Kind};
 use crate::tui::calendar::{self, Calendar};
@@ -3964,6 +3964,11 @@ impl App {
             C::OutOfOrder => self.apply(Action::NextOutOfOrder),
             C::SourceEnded => self.apply(Action::Reconnect),
             C::Columns => self.apply(Action::ToggleColumns),
+            C::TimeDelta => self.apply(Action::ToggleTimeDelta),
+            C::TimeDisplay => {
+                let next = crate::tui::bars::next_time_display(e.time_display());
+                self.apply(Action::SetTimeDisplay(next));
+            }
             C::Fields => self.columns_menu = Some(0),
             C::Presets => self.apply(Action::Presets),
             C::Global => self.apply(Action::EditGlobal),
@@ -5290,6 +5295,26 @@ impl App {
                     .into(),
                 );
             }
+            Action::ToggleTimeDelta => {
+                let on = !tab.engine.show_time_delta;
+                tab.engine.set_show_time_delta(on);
+                self.message = Some(
+                    if on {
+                        tx(self.lang, "Time delta on")
+                    } else {
+                        tx(self.lang, "Time delta off")
+                    }
+                    .into(),
+                );
+            }
+            Action::SetTimeDisplay(display) => {
+                tab.engine.set_time_display(display);
+                self.message = Some(txf(
+                    self.lang,
+                    "Time shown: {0}",
+                    &[&crate::tui::bars::time_display_name(display, self.lang)],
+                ));
+            }
             Action::CycleAnsi => {
                 let next = match tab.engine.ansi_mode {
                     AnsiMode::Auto => AnsiMode::Render,
@@ -5826,6 +5851,12 @@ impl App {
                 place.clone(),
             ));
         }
+        let gap_ms = self
+            .settings
+            .as_ref()
+            .map_or(crate::config::DEFAULT_TIME_DELTA_GAP_MS, |s| {
+                s.config.time_delta_gap_ms
+            });
         let tab = &mut self.tabs[idx];
         let e = &tab.engine;
         let follow = if e.follow_tail {
@@ -5936,13 +5967,13 @@ impl App {
         } else if tab.engine.columns_shown() && inner.height > 1 {
             // The column view: a header row of the field names over the rows.
             let (header, lines, drawn) =
-                column_rows(tab, &palette, inner.height as usize - 1, self.lang);
+                column_rows(tab, &palette, inner.height as usize - 1, gap_ms, self.lang);
             frame.render_widget(Paragraph::new(header), Rect { height: 1, ..inner });
             inner.y += 1;
             inner.height -= 1;
             (lines, drawn)
         } else {
-            stream_rows(tab, &palette, inner.height as usize, self.lang)
+            stream_rows(tab, &palette, inner.height as usize, gap_ms, self.lang)
         };
         self.hits.windows.push(WindowHit {
             tab: idx,
@@ -6158,7 +6189,7 @@ impl App {
             ),
             PromptKind::Listen => tx(
                 self.lang,
-                "Listen on syslog://, tcp:// or udp://ADDRESS:PORT (127.0.0.1: this machine only)",
+                "Listen on syslog://, tcp://, udp:// or otlp://ADDRESS:PORT (127.0.0.1: this machine only)",
             ),
             PromptKind::DebugOutput => tx(
                 self.lang,
@@ -8639,10 +8670,13 @@ fn stream_rows(
     tab: &mut Tab,
     palette: &Palette,
     height: usize,
+    gap_ms: u64,
     lang: Language,
 ) -> (Vec<Line<'static>>, usize) {
     tab.height = height;
     tab.pin_cursor();
+    let delta = time_delta_column(&mut tab.engine, gap_ms);
+    tab.engine.refresh_time_zone_sample();
     let engine = &tab.engine;
     let rows = engine.visible_line_count();
     if engine.follow_tail {
@@ -8668,7 +8702,7 @@ fn stream_rows(
             palette,
             row,
             line_idx,
-            gutter,
+            (gutter, delta),
             &query,
             has_search,
             tab.hscroll,
@@ -8702,10 +8736,12 @@ fn column_rows(
     tab: &mut Tab,
     palette: &Palette,
     height: usize,
+    gap_ms: u64,
     lang: Language,
 ) -> (Line<'static>, Vec<Line<'static>>, usize) {
     tab.height = height;
     tab.pin_cursor();
+    let delta = time_delta_column(&mut tab.engine, gap_ms);
     let rows = tab.engine.visible_line_count();
     if tab.engine.follow_tail {
         tab.top = view::follow_top(rows, height);
@@ -8773,7 +8809,7 @@ fn column_rows(
         .fg(palette.accent())
         .add_modifier(Modifier::BOLD);
     let header = Line::from(vec![
-        Span::raw(" ".repeat(gutter + 1)),
+        Span::raw(" ".repeat(gutter + 1 + delta.map_or(0, |_| DELTA_CELLS + 1))),
         Span::styled(fixed_head, head_style),
         Span::styled(head, head_style),
     ]);
@@ -8795,7 +8831,7 @@ fn column_rows(
                     palette,
                     *row,
                     *line_idx,
-                    gutter,
+                    (gutter, delta),
                     &query,
                     has_search,
                     tab.hscroll,
@@ -8808,7 +8844,7 @@ fn column_rows(
                 palette,
                 *row,
                 *line_idx,
-                gutter,
+                (gutter, delta),
                 &query,
                 has_search,
                 tab.hscroll,
@@ -8862,7 +8898,7 @@ fn render_cells_row(
     palette: &Palette,
     row: usize,
     line_idx: usize,
-    gutter: usize,
+    (gutter, delta): (usize, Option<u64>),
     query: &str,
     has_search: bool,
     hscroll: usize,
@@ -8883,6 +8919,9 @@ fn render_cells_row(
         },
         gutter_style,
     )];
+    if let Some(gap_ms) = delta {
+        spans.push(time_delta_cell(engine, palette, row, gap_ms));
+    }
     let raw = engine.get_line(line_idx).unwrap_or_default();
     let base = match engine.match_highlight(&raw) {
         Some(rule) => palette.rule_style(&rule),
@@ -9096,6 +9135,69 @@ fn asm_rows(
     (lines, drawn)
 }
 
+/// Cells of the time delta column, the widest value (`+12:34.567`, `+1d 02:03`) included.
+const DELTA_CELLS: usize = 10;
+
+/// The time delta column for this frame: `Some(gap_ms)` when the stream shows it and its
+/// lines have times. Asks for the stream to be timed meanwhile (a background scan on a
+/// large file), as the window does.
+fn time_delta_column(engine: &mut TailEngine, gap_ms: u64) -> Option<u64> {
+    if !engine.show_time_delta {
+        return None;
+    }
+    engine.want_timestamps();
+    engine.timestamps_usable().then_some(gap_ms)
+}
+
+/// A row's time delta cell, right-aligned: blank on continuation lines and lines without
+/// a time, `...` until the row is timed, the anchor mark on the anchor, and the accent
+/// colour on a gap of at least `gap_ms` (in previous-row mode only, as in the window).
+fn time_delta_cell(
+    engine: &TailEngine,
+    palette: &Palette,
+    row: usize,
+    gap_ms: u64,
+) -> Span<'static> {
+    let dim = Style::default().fg(palette.dim());
+    let accent = Style::default().fg(palette.accent());
+    let (text, style) = match engine.row_time_delta(row) {
+        TimeDelta::Blank => (String::new(), dim),
+        TimeDelta::Pending => ("...".to_string(), dim),
+        TimeDelta::Anchor => ((if palette.ascii { "@" } else { "⚓" }).to_string(), accent),
+        TimeDelta::Millis(millis) => {
+            let gap = gap_ms > 0
+                && engine.time_anchor().is_none()
+                && millis >= i64::try_from(gap_ms).unwrap_or(i64::MAX);
+            (
+                crate::timestamp::format_delta(millis),
+                if gap { accent } else { dim },
+            )
+        }
+    };
+    let used = unicode_width::UnicodeWidthStr::width(text.as_str());
+    let pad = DELTA_CELLS.saturating_sub(used);
+    Span::styled(format!("{}{text} ", " ".repeat(pad)), style)
+}
+
+/// A byte range of a row after the bytes `start..end` were replaced by `with_len` bytes:
+/// before them it stays, after them it moves, across them it covers the new text.
+fn shift_range(
+    r: std::ops::Range<usize>,
+    (start, end): (usize, usize),
+    with_len: usize,
+) -> std::ops::Range<usize> {
+    let moved = |at: usize, inside: usize| {
+        if at <= start {
+            at
+        } else if at >= end {
+            at - end + start + with_len
+        } else {
+            inside
+        }
+    };
+    moved(r.start, start)..moved(r.end, start + with_len)
+}
+
 /// The mark after a row's number: `o` an automatic bookmark, `*` a bookmark, `>` a
 /// search hit, `<` a time earlier than the line above's (a clock jumping back).
 fn row_mark(engine: &TailEngine, line_idx: usize, hit: bool, bookmarked: bool) -> char {
@@ -9123,13 +9225,13 @@ pub fn render_row(
     palette: &Palette,
     row: usize,
     line_idx: usize,
-    gutter: usize,
+    (gutter, delta): (usize, Option<u64>),
     query: &str,
     has_search: bool,
     hscroll: usize,
 ) -> Line<'static> {
     let (hit, active, bookmarked) = engine.row_marks(row, line_idx, has_search);
-    let mut spans = Vec::with_capacity(6);
+    let mut spans = Vec::with_capacity(7);
     let gutter_style = if active {
         palette.active_hit()
     } else {
@@ -9144,6 +9246,9 @@ pub fn render_row(
         },
         gutter_style,
     ));
+    if let Some(gap_ms) = delta {
+        spans.push(time_delta_cell(engine, palette, row, gap_ms));
+    }
     if let Some(c) = engine.collapsed_row(row).filter(|c| c.count > 1) {
         let badge = if c.open {
             format!("[-{}] ", c.count)
@@ -9162,6 +9267,21 @@ pub fn render_row(
     let row = engine.get_row(line_idx);
     let text = row.as_ref().map_or("", |r| r.line.as_str());
     let text = text.trim_end_matches(['\r', '\n']);
+    // The leading timestamp in the stream's time display (UTC, local); the colour runs
+    // move with the text after it.
+    let timed = engine.display_time(text);
+    let shown;
+    let text = match &timed {
+        Some((start, end, with)) => {
+            shown = format!("{}{with}{}", &text[..*start], &text[*end..]);
+            shown.as_str()
+        }
+        None => text,
+    };
+    let moved = |r: std::ops::Range<usize>| match &timed {
+        Some((start, end, with)) => shift_range(r, (*start, *end), with.len()),
+        None => r,
+    };
     // With captures-only rules or quick labels the row is painted span by span, first
     // rule winning per byte, then the labels, then the ANSI colours (see
     // `TailEngine::match_row_spans`); a search hit still wins over all of them.
@@ -9174,8 +9294,11 @@ pub fn render_row(
             Some(rule) => palette.rule_style(rule),
             None => palette.level_style(engine.level_of(line_idx)),
         };
-        let spans_in: Vec<std::ops::Range<usize>> =
-            painted.spans.iter().map(|s| s.start..s.end).collect();
+        let spans_in: Vec<std::ops::Range<usize>> = painted
+            .spans
+            .iter()
+            .map(|s| moved(s.start..s.end))
+            .collect();
         let hits = if hit && !query.is_empty() {
             view::hit_ranges(text, query)
         } else {
@@ -9216,7 +9339,8 @@ pub fn render_row(
         (None, Some(r)) => &r.ansi,
         _ => &[],
     };
-    let run_ranges: Vec<std::ops::Range<usize>> = runs.iter().map(|r| r.start..r.end).collect();
+    let run_ranges: Vec<std::ops::Range<usize>> =
+        runs.iter().map(|r| moved(r.start..r.end)).collect();
     let hits = if hit && !query.is_empty() {
         view::hit_ranges(text, query)
     } else {
@@ -12706,6 +12830,62 @@ mod tests {
             .message
             .as_deref()
             .is_some_and(|m| m.contains("-00:06:00")));
+    }
+
+    #[test]
+    fn the_time_delta_column_and_the_time_display_draw_in_the_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(
+            &a,
+            "2026-09-28T14:00:00Z a\n2026-09-28T14:00:01.200Z b\n2026-09-28T14:00:03Z c\n",
+        )
+        .unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::ToggleTimeDelta);
+        assert!(app.tabs[0].engine.show_time_delta);
+        let e = &mut app.tabs[0].engine;
+        e.ensure_timestamps();
+        while !e.timestamps_complete() {
+            e.fill_timestamps();
+        }
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("+1.200 2026-09-28T14:00:01.200Z b")),
+            "{screen:#?}"
+        );
+        assert!(screen.iter().any(|l| l.contains("[x] Δt")), "{screen:#?}");
+        // The chip moves on to UTC, then local time; a UTC stamp shown in UTC keeps its text.
+        app.apply(Action::SetTimeDisplay(crate::timestamp::TimeDisplay::Utc));
+        assert_eq!(
+            app.tabs[0].engine.time_display(),
+            crate::timestamp::TimeDisplay::Utc
+        );
+        let screen = render(&mut app, 120, 30);
+        assert!(screen.iter().any(|l| l.contains("UTC")), "{screen:#?}");
+        assert!(screen.iter().any(|l| l.contains(" c")), "{screen:#?}");
+        app.apply(Action::ToggleTimeDelta);
+        let screen = render(&mut app, 120, 30);
+        assert!(!screen.iter().any(|l| l.contains("+1.200")), "{screen:#?}");
+    }
+
+    #[test]
+    fn a_range_after_a_replaced_timestamp_moves_with_it() {
+        // `2026-01-01 10:00` (16 bytes) shown as `2026-01-01T09:00:00Z` (20 bytes).
+        assert_eq!(shift_range(0..4, (0, 16), 20), 0..20);
+        assert_eq!(shift_range(17..20, (0, 16), 20), 21..24);
+        assert_eq!(shift_range(2..5, (6, 10), 2), 2..5);
+        assert_eq!(shift_range(7..12, (6, 10), 2), 6..10);
     }
 
     #[test]
