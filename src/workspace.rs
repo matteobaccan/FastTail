@@ -355,6 +355,7 @@ pub fn apply_settings(engine: &mut TailEngine, config: &FastTailConfig) {
     engine.size_unit = config.size_unit;
     engine.show_line_numbers = config.show_line_numbers;
     engine.show_time_delta = config.show_time_delta;
+    engine.pin_time_default = config.pin_time_column;
     engine.set_auto_tokens(config.auto_tokens());
 }
 
@@ -446,6 +447,7 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         engine.set_fields_view(entry.fields_view);
     }
     engine.set_field_columns(entry.fields_columns.clone());
+    engine.set_pinned_columns(entry.pinned.clone());
     for (key, cells) in &entry.fields_widths {
         engine.set_field_width(key, *cells);
     }
@@ -643,6 +645,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
         fields_view_set: engine.field_view_chosen,
         fields_columns: engine.chosen_field_columns().to_vec(),
         fields_widths: engine.field_widths().clone(),
+        pinned: engine.chosen_pins().map(<[String]>::to_vec),
         frozen: engine.derived.as_ref().map(|f| f.filter.clone()),
     }
 }

@@ -131,6 +131,10 @@ pub struct FastTailConfig {
     /// stream, see `StreamEntry::timeline`).
     #[serde(default = "default_true")]
     pub timeline_search_lane: bool,
+    /// The column view pins the time column of a stream until its pins are chosen
+    /// (`pin_time_column`, default on).
+    #[serde(default = "default_true")]
+    pub pin_time_column: bool,
     /// Bookmark report dialog: context lines around each bookmark (0..=20), automatic
     /// bookmarks included, order (`stream` or `time`), as last chosen.
     #[serde(default = "default_report_context")]
@@ -566,6 +570,7 @@ impl Default for FastTailConfig {
             search_pane_height: default_search_pane_height(),
             overview_strip: true,
             timeline_search_lane: true,
+            pin_time_column: true,
             report_context: default_report_context(),
             report_auto: false,
             report_order_time: false,
@@ -1038,6 +1043,7 @@ impl FastTailConfig {
                 "timeline_search_lane",
                 self.timeline_search_lane.to_string(),
             )
+            .set("pin_time_column", self.pin_time_column.to_string())
             .set("report_context", self.report_context.to_string())
             .set("report_auto", self.report_auto.to_string())
             .set(
@@ -1436,6 +1442,12 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.timeline_search_lane = v;
+            }
+            if let Some(v) = general
+                .get("pin_time_column")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.pin_time_column = v;
             }
             if let Some(v) = general
                 .get("report_context")

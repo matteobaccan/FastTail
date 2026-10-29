@@ -47,6 +47,7 @@ fn entry(path: PathBuf) -> StreamEntry {
         fields_widths: [("http.status".to_string(), 6), ("ts".to_string(), 24)]
             .into_iter()
             .collect(),
+        pinned: Some(vec!["ts".to_string()]),
         frozen: None,
     }
 }

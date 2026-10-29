@@ -5099,13 +5099,16 @@ struct ColumnLayout {
     keys: Vec<String>,
     widths: Vec<f32>,
     char_w: f32,
+    /// The first `pinned` keys are pinned: they stay at the left edge of the view while
+    /// the others scroll sideways under them.
+    pinned: usize,
 }
 
 impl ColumnLayout {
     fn of(ui: &Ui, engine: &TailEngine, font_size: f32) -> Self {
         let font_id = egui::FontId::monospace(font_size);
         let char_w = ui.ctx().fonts_mut(|f| f.glyph_width(&font_id, '0'));
-        let keys = engine.field_columns();
+        let (keys, pinned) = engine.drawn_field_columns();
         let widths = keys
             .iter()
             .map(|k| (f32::from(engine.field_width(k)) + 1.0) * char_w)
@@ -5114,8 +5117,30 @@ impl ColumnLayout {
             keys,
             widths,
             char_w,
+            pinned,
         }
     }
+
+    /// The width of the pinned columns, at most half of `view` (the columns past it
+    /// scroll with the others).
+    fn pinned_width(&self, view: f32) -> (usize, f32) {
+        let mut n = 0;
+        let mut w = 0.0;
+        for width in &self.widths[..self.pinned] {
+            if n > 0 && w + width > view / 2.0 {
+                break;
+            }
+            w += width;
+            n += 1;
+        }
+        (n, w)
+    }
+}
+
+/// How far the pinned columns move right to stay at `view_left` once the row's cells,
+/// starting at `cells_left`, have scrolled past it.
+fn pin_shift(cells_left: f32, view_left: f32) -> f32 {
+    (view_left - cells_left).max(0.0)
 }
 
 /// The cells of the column view side by side from `origin`, one per width: the header
@@ -5251,17 +5276,51 @@ fn draw_field_cells(
     let (all, _) =
         ui.allocate_exact_size(egui::vec2(total, style.row_height), egui::Sense::hover());
     let painter = ui.painter().clone();
+    let (pinned, pinned_w) = layout.pinned_width(ui.clip_rect().width());
     let mut cells = paint_field_cells(
         ui,
         &painter,
         all.left_top(),
         layout,
+        pinned..layout.keys.len(),
+        0.0,
         fields,
         style,
         theme,
         spans,
     );
     cells.push(label(ui, &fields.message(&layout.keys), style.text));
+    if pinned > 0 {
+        // Painted last, over the scrolled cells and the message.
+        let shift = pin_shift(all.left(), ui.clip_rect().left());
+        if shift > 0.0 {
+            let area = egui::Rect::from_min_size(
+                egui::pos2(all.left() + shift, all.top()),
+                egui::vec2(pinned_w, style.row_height),
+            );
+            painter.rect_filled(area, 0.0, style.bg.unwrap_or(theme.bg_color().into()));
+            painter.vline(
+                area.right() - 0.5,
+                area.y_range(),
+                Stroke::new(1.0, theme.border_color().gamma_multiply(0.6)),
+            );
+        }
+        let mut front = paint_field_cells(
+            ui,
+            &painter,
+            all.left_top(),
+            layout,
+            0..pinned,
+            shift,
+            fields,
+            style,
+            theme,
+            spans,
+        );
+        // The pinned cells first: a pointer over them picks them, not the cell under.
+        front.append(&mut cells);
+        cells = front;
+    }
     cells
 }
 
@@ -5287,14 +5346,16 @@ fn cell_for_selection(
         .map(|(g, pos, _)| (g.clone(), *pos))
 }
 
-/// Paints the field cells of a row from `origin`, each clipped to its column (the message
-/// is the caller's).
+/// Paints the field cells `range` of a row from `origin`, each clipped to its column and
+/// moved right by `shift` (pinned cells kept in view; the message is the caller's).
 #[allow(clippy::too_many_arguments)]
 fn paint_field_cells(
     ui: &Ui,
     painter: &egui::Painter,
     origin: egui::Pos2,
     layout: &ColumnLayout,
+    range: std::ops::Range<usize>,
+    shift: f32,
     fields: &crate::fields::RowFields,
     style: &CellStyle,
     theme: &CyberTheme,
@@ -5308,7 +5369,14 @@ fn paint_field_cells(
     };
     let mut out = Vec::new();
     let cells = cell_rects(origin, style.row_height, &layout.widths);
-    for (key, rect) in layout.keys.iter().zip(cells) {
+    for (key, rect) in layout
+        .keys
+        .iter()
+        .zip(cells)
+        .take(range.end)
+        .skip(range.start)
+    {
+        let rect = rect.translate(egui::vec2(shift, 0.0));
         if let Some(bg) = style.bg {
             painter.rect_filled(rect, 0.0, bg);
         }
@@ -5347,6 +5415,8 @@ enum HeaderAction {
     Operations(String),
     /// Plot this field over the timeline.
     Plot(String),
+    /// Pin (true) or unpin the column.
+    Pin(String, bool),
 }
 
 /// Header row of the column view: the field names over their columns (following the
@@ -5377,10 +5447,28 @@ fn render_field_header(
     let font_id = egui::FontId::monospace(font_size);
     let mut action: Option<HeaderAction> = None;
     let left = rect.left() + cells_x - engine.current_scroll_x;
-    let cells = cell_rects(egui::pos2(left, rect.top()), rect.height(), &layout.widths);
+    let mut cells = cell_rects(egui::pos2(left, rect.top()), rect.height(), &layout.widths);
     let x = cells.last().map_or(left, |c| c.right());
+    // Pinned names follow their cells: kept at the left edge once scrolled past it.
+    let (pinned, pinned_w) = layout.pinned_width(rect.width());
+    let shift = pin_shift(left, rect.left());
+    for c in cells.iter_mut().take(pinned) {
+        *c = c.translate(egui::vec2(shift, 0.0));
+    }
     let pointer = ui.input(|i| i.pointer.interact_pos());
-    for (i, (key, cell)) in layout.keys.iter().zip(&cells).enumerate() {
+    // The pinned names last, over the scrolled ones (and first for the pointer).
+    let order: Vec<usize> = (pinned..layout.keys.len()).chain(0..pinned).collect();
+    for i in order {
+        let (key, cell) = (&layout.keys[i], &cells[i]);
+        if i == 0 && pinned > 0 && shift > 0.0 {
+            let area = egui::Rect::from_min_size(cell.min, egui::vec2(pinned_w, rect.height()));
+            painter.rect_filled(area, 0.0, theme.panel_bg());
+            painter.vline(
+                area.right() - 0.5,
+                rect.y_range(),
+                Stroke::new(1.0, theme.border_color().gamma_multiply(0.6)),
+            );
+        }
         let visible = cell.intersect(rect);
         if visible.width() <= 0.0 {
             continue;
@@ -5481,6 +5569,7 @@ fn render_field_header(
         Some(HeaderAction::Columns(keys)) => engine.set_field_columns(keys),
         Some(HeaderAction::Width(key, cells)) => engine.set_field_width(&key, cells),
         Some(HeaderAction::Reset) => engine.reset_field_columns(),
+        Some(HeaderAction::Pin(key, on)) => engine.pin_column(&key, on),
         Some(HeaderAction::Stats(key)) => engine.stats_request = Some(Some(key)),
         Some(HeaderAction::Operations(key)) => engine.ops_request = Some(Some(key)),
         Some(HeaderAction::Plot(key)) => {
@@ -5506,6 +5595,20 @@ fn header_menu(
     let mut action = None;
     let keys = &layout.keys;
     if let Some(i) = column {
+        let pinned = i < layout.pinned;
+        let (label, tip) = if pinned {
+            ("fields_unpin", "fields_unpin_tip")
+        } else {
+            ("fields_pin", "fields_pin_tip")
+        };
+        if ui
+            .button(format!("📌 {}", t(lang, label)))
+            .on_hover_text(t(lang, tip))
+            .clicked()
+        {
+            action = Some(HeaderAction::Pin(keys[i].clone(), !pinned));
+            ui.close();
+        }
         // The last column stays: no columns at all would read as the defaults.
         if ui
             .add_enabled(keys.len() > 1, egui::Button::new(t(lang, "fields_hide")))
@@ -7512,6 +7615,8 @@ fn render_wrapped_rows(
                     &painter,
                     egui::pos2(text_x, text_top),
                     layout,
+                    0..layout.keys.len(),
+                    0.0,
                     fields,
                     &style,
                     theme,
@@ -10445,6 +10550,7 @@ mod column_tests {
             ],
             widths: vec![80.0, 48.0, 64.0, 56.0],
             char_w: 8.0,
+            pinned: 0,
         };
         let header: Vec<f32> = cell_rects(egui::pos2(0.0, 0.0), 18.0, &layout.widths)
             .iter()
@@ -10455,5 +10561,83 @@ mod column_tests {
         for (h, r) in header.iter().zip(&row) {
             assert!((h - r).abs() < 0.01, "header {header:?} row {row:?}");
         }
+    }
+
+    /// A pinned column stays at the left edge of the view once the row has scrolled
+    /// past it; the other cells keep their places, under it.
+    #[test]
+    fn pinned_cells_stay_at_the_left_edge() {
+        assert_eq!(pin_shift(10.0, 0.0), 0.0, "not scrolled yet");
+        assert_eq!(pin_shift(-150.0, 0.0), 150.0);
+        let layout = ColumnLayout {
+            keys: vec!["time".into(), "level".into(), "host".into()],
+            widths: vec![80.0, 48.0, 56.0],
+            char_w: 8.0,
+            pinned: 1,
+        };
+        assert_eq!(layout.pinned_width(1000.0), (1, 80.0));
+        assert_eq!(
+            layout.pinned_width(100.0),
+            (1, 80.0),
+            "the first pin always stays"
+        );
+        let fields = crate::fields::RowFields {
+            shaped: true,
+            partial: false,
+            fields: vec![
+                ("time".into(), "10:00".into()),
+                ("level".into(), "INFO".into()),
+                ("host".into(), "web1".into()),
+            ],
+            outside: String::new(),
+            message_key: None,
+        };
+        let font_id = egui::FontId::monospace(13.0);
+        let style = CellStyle {
+            font_id: &font_id,
+            row_height: 18.0,
+            text: Color32::WHITE,
+            bg: None,
+            level_colors: false,
+        };
+        let ctx = egui::Context::default();
+        let (mut start, mut view_left) = (0.0, 0.0);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| {
+                start = ui.cursor().left();
+                // As if scrolled 100 points right: the view starts past the first cell.
+                view_left = start + 100.0;
+                let clip = ui.clip_rect().with_min_x(view_left);
+                ui.set_clip_rect(clip);
+                draw_field_cells(
+                    ui,
+                    &layout,
+                    Some(&fields),
+                    "",
+                    &style,
+                    &CyberTheme::Tron,
+                    &|_| Vec::new(),
+                );
+            });
+        });
+        output.textures_delta.clear();
+        let x_of = |v: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == v => Some(t.pos.x),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert!(
+            (x_of("10:00") - view_left).abs() < 0.01,
+            "pinned at the edge"
+        );
+        assert!(
+            (x_of("INFO") - (start + 80.0)).abs() < 0.01,
+            "the others in place"
+        );
     }
 }

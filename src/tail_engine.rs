@@ -1813,6 +1813,11 @@ pub struct TailEngine {
     /// leaves it as it is instead of turning it on.
     pub field_view_chosen: bool,
     field_columns: Vec<String>,
+    /// The columns pinned at the left of the column view; `None`: the default (the time
+    /// column when `pin_time_default`).
+    pinned_columns: Option<Vec<String>>,
+    /// `pin_time_column` of the settings: the time column is pinned until the user pins.
+    pub pin_time_default: bool,
     field_widths: BTreeMap<String, u16>,
     /// Keys seen in the lines (sampled when the parser changes, then from the rows
     /// drawn), whether the sample is still to take, and the parsed rows drawn last.
@@ -2622,6 +2627,8 @@ impl TailEngine {
             field_view: false,
             field_view_chosen: false,
             field_columns: Vec::new(),
+            pinned_columns: None,
+            pin_time_default: true,
             field_widths: BTreeMap::new(),
             field_catalogue: FieldCatalogue::default(),
             field_catalogue_due: false,
@@ -4202,6 +4209,65 @@ impl TailEngine {
         }
     }
 
+    /// The pinned columns in the order shown: the user's pins, else the time column (a
+    /// log format's time field, else the first of `fields::TIME_KEYS` shown) when
+    /// `pin_time_default`.
+    pub fn pinned_columns(&self) -> Vec<String> {
+        let shown = self.field_columns();
+        match &self.pinned_columns {
+            Some(pins) => shown.into_iter().filter(|k| pins.contains(k)).collect(),
+            None if self.pin_time_default => {
+                let format_time = match self.field_parser.as_deref() {
+                    Some(FieldParser::Format(f)) => Some(f.spec.timestamp_field.as_str()),
+                    _ => None,
+                };
+                format_time
+                    .into_iter()
+                    .chain(crate::fields::TIME_KEYS)
+                    .find(|k| shown.iter().any(|s| s == k))
+                    .map(|k| vec![k.to_string()])
+                    .unwrap_or_default()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The pins the user chose; `None` while they are the default.
+    pub fn chosen_pins(&self) -> Option<&[String]> {
+        self.pinned_columns.as_deref()
+    }
+
+    /// Sets the pins (`None`: back to the default).
+    pub fn set_pinned_columns(&mut self, pins: Option<Vec<String>>) {
+        if self.pinned_columns != pins {
+            self.pinned_columns = pins;
+            self.fields_dirty = true;
+        }
+    }
+
+    /// Pins or unpins the column `key`.
+    pub fn pin_column(&mut self, key: &str, on: bool) {
+        let mut pins = self.pinned_columns();
+        pins.retain(|k| k != key);
+        if on {
+            pins.push(key.to_string());
+        }
+        self.set_pinned_columns(Some(pins));
+    }
+
+    /// The columns in the order the column view draws them, the pinned ones first, and
+    /// how many are pinned.
+    pub fn drawn_field_columns(&self) -> (Vec<String>, usize) {
+        let pins = self.pinned_columns();
+        let mut keys = pins.clone();
+        keys.extend(
+            self.field_columns()
+                .into_iter()
+                .filter(|k| !pins.contains(k)),
+        );
+        (keys, pins.len())
+    }
+
     /// Width of the column `key` in character cells: the user's, else the suggested one.
     pub fn field_width(&self, key: &str) -> u16 {
         self.field_widths
@@ -4225,9 +4291,13 @@ impl TailEngine {
 
     /// Back to the default columns and widths.
     pub fn reset_field_columns(&mut self) {
-        if !self.field_columns.is_empty() || !self.field_widths.is_empty() {
+        if !self.field_columns.is_empty()
+            || !self.field_widths.is_empty()
+            || self.pinned_columns.is_some()
+        {
             self.field_columns.clear();
             self.field_widths.clear();
+            self.pinned_columns = None;
             self.fields_dirty = true;
         }
     }
