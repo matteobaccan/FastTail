@@ -535,3 +535,36 @@ The terminal interface SHALL compare two lines or two regions side by side with 
 #### Scenario: Send to scratchpad
 - **WHEN** the user sends a row with `Ctrl+N`
 - **THEN** the pad gets a `── app.log:N ──` reference and the line, and the window shows the same text.
+
+### Requirement: Terminal Analysis Tabs
+The terminal interface SHALL offer the Statistics, Query, Patterns, Explain and Operations tabs over the same engine jobs as the window, as dockable panels with sortable, scrollable lists, and an Enter on a row SHALL filter on its value or go to its line as the window's click does.
+
+#### Scenario: Statistics of a field
+- **WHEN** a logfmt stream is open in the terminal and the user opens the Statistics of `status`
+- **THEN** the panel lists `200`, `404` and `500` with their counts and shares, and Enter on `500` adds the include term `status=500`.
+
+#### Scenario: Query
+- **WHEN** the user runs `where status>=500 | stats count() by path` in the Query tab
+- **THEN** the result is a table of paths and counts, sortable with `s`.
+
+### Requirement: Terminal Remappable Keys
+The terminal interface SHALL read key overrides for its actions from `[shortcuts]` under a `tui.` prefix, SHALL offer a Keys dialog to record, reset and check them for conflicts, and SHALL offer the window's applicable setting toggles in its palette.
+
+#### Scenario: A remapped key
+- **WHEN** `[shortcuts] tui.stream.follow.toggle=f` is set
+- **THEN** `f` toggles follow in the terminal and Space no longer does.
+
+#### Scenario: Conflict
+- **WHEN** the user records `b` for Follow in the Keys dialog
+- **THEN** the dialog says `b` is taken by Toggle bookmark and asks before moving it.
+
+### Requirement: Terminal Web View, MCP Server and Plugins
+The terminal interface SHALL start the web view and the MCP server from its own streams when they are enabled in `fasttail.ini`, and SHALL offer a Plugins dialog to enable, disable and approve plugins and set a source plugin's parameters.
+
+#### Scenario: Web view on a server
+- **WHEN** `[web] enabled=true` and the terminal interface is running with two streams
+- **THEN** a browser on the configured address lists the two streams and shows their lines.
+
+#### Scenario: Approve a plugin
+- **WHEN** a new plugin is installed and the user opens the Plugins dialog in the terminal
+- **THEN** its hash is shown and `y` approves it, after which its streams open.
