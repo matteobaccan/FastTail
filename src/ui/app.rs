@@ -7645,6 +7645,15 @@ impl FastTailApp {
             A::OpenFile => self.pick_and_open_files(),
             A::OpenPattern => self.open_pattern_prompt(),
             A::PasteAsStream => self.request_paste(ctx, PasteTarget::New),
+            A::PasteAppend => {
+                if let Some(path) = target.filter(|p| {
+                    self.engines
+                        .iter()
+                        .any(|e| e.path == *p && e.is_clipboard())
+                }) {
+                    self.request_paste(ctx, PasteTarget::Append(path));
+                }
+            }
             A::OpenRemote => self.remote_dialog = Some(Default::default()),
             A::OpenListener => self.listen_dialog = Some(Default::default()),
             A::OpenDebugOutput => self.debug_dialog = Some(Default::default()),

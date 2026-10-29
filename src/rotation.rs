@@ -223,6 +223,15 @@ pub struct RotationStream {
 }
 
 impl RotationStream {
+    /// Whether a piece after the first starts at byte `offset` of the spool.
+    pub fn starts_at(&self, offset: u64) -> bool {
+        offset > 0
+            && self
+                .starts
+                .lock()
+                .is_ok_and(|s| s.iter().any(|(o, _)| *o == offset))
+    }
+
     /// Where each piece starts in the spool (the live file last), as known so far.
     pub fn starts(&self) -> Vec<(u64, String)> {
         self.starts.lock().map(|s| s.clone()).unwrap_or_default()
@@ -436,6 +445,14 @@ pub fn open_engine(
 impl TailEngine {
     /// The first line of each piece of a stream with rotations (those indexed so far),
     /// with its file name.
+    /// Whether line `line` starts a piece after the first (where a dashed line is drawn).
+    pub fn is_piece_start(&self, line: usize) -> bool {
+        match (self.rotation.as_ref(), self.line_offsets.get(line)) {
+            (Some(r), Some(&offset)) => r.starts_at(offset),
+            _ => false,
+        }
+    }
+
     pub fn rotation_pieces(&self) -> Vec<(usize, String)> {
         let Some(r) = self.rotation.as_ref() else {
             return Vec::new();

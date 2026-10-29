@@ -359,7 +359,10 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
         second.push(text(txf(lang, "R: include {0} rotations", &[&count]), warn));
     }
     if let Some(r) = e.rotation.as_ref() {
-        second.push(text(txf(lang, "+{0} rotations", &[&r.pieces]), dim));
+        second.push(text(
+            txf(lang, "+{0} rotations (R: pieces)", &[&r.pieces]),
+            dim,
+        ));
     }
     if let Some(p) = e.plugin.as_ref() {
         use crate::plugin_source::{Block, Status};

@@ -52,6 +52,7 @@ pub enum ActionId {
     PauseAll,
     OpenFile,
     PasteAsStream,
+    PasteAppend,
     OpenPattern,
     MergedView,
     LogFormats,
@@ -198,6 +199,8 @@ pub enum Need {
     TimeAnchor,
     /// The stream is a system source whose command ended.
     SourceEnded,
+    /// The stream is a clipboard stream (`clipboard_source`).
+    Clipboard,
     /// A PIN is set (window lock).
     Pin,
     /// A named session is current.
@@ -233,6 +236,8 @@ pub struct StreamState {
     pub has_anchor: bool,
     /// A system source whose command ended.
     pub source_ended: bool,
+    /// A clipboard stream.
+    pub clipboard: bool,
 }
 
 impl StreamState {
@@ -256,6 +261,7 @@ impl StreamState {
             has_anchor: engine.time_anchor().is_some(),
             source_ended: engine.system.as_ref().is_some_and(|s| !s.is_running())
                 || engine.ssh.as_ref().is_some_and(|s| s.is_stopped()),
+            clipboard: engine.is_clipboard(),
         }
     }
 }
@@ -285,6 +291,7 @@ impl Need {
             Need::TimeDeltaShown => stream.time_delta,
             Need::TimeAnchor => stream.has_anchor,
             Need::SourceEnded => stream.source_ended,
+            Need::Clipboard => stream.clipboard,
         };
         if met {
             return None;
@@ -303,6 +310,7 @@ impl Need {
             Need::InContext => "palette_not_in_context",
             Need::TimeDeltaShown => "palette_no_time_delta",
             Need::SourceEnded => "palette_no_ended_source",
+            Need::Clipboard => "palette_not_clipboard",
             _ => "palette_no_anchor",
         })
     }
@@ -428,6 +436,7 @@ pub const ACTIONS: &[Action] = &[
     // Window
     action(A::OpenFile, "window.open_file", "open_file", C::Window, S::Window, None, &[]),
     action(A::PasteAsStream, "stream.paste", "clip_paste", C::Window, S::Window, Some("CTRL + SHIFT + V"), &[]),
+    action(A::PasteAppend, "stream.paste.append", "clip_append_act", C::Window, S::Window, None, &[N::Clipboard]),
     action(A::OpenPattern, "window.open_pattern", "act_open_pattern", C::Window, S::Window, None, &[]),
     action(A::OpenSystemSource, "window.open_system_source", "act_open_system", C::Window, S::Window, None, &[]),
     action(A::OpenRemote, "window.open_remote", "act_open_remote", C::Window, S::Window, None, &[]),
