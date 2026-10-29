@@ -55,7 +55,9 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
   scrolled sideways the first column drawn, `Col 41`; a narrow window leaves out `Col`,
   then `Ln`. HEX and ASM show their byte counts instead.
   Inside, the window's two rows: the **stream bar** (the `[x] Follow` and
-  `[x] Auto-update` check boxes, TXT / HEX, line numbers, encoding, ANSI mode, collapse, context lines, the time span, which opens the
+  `[x] Auto-update` check boxes, TXT / HEX, line numbers, `[x] Δt` (the time delta column:
+  the gap to the row above, in the accent colour from the *Time delta gap* setting; `Alt+D`),
+  `🌐` the time display (as written, UTC, local time: a click moves to the next), encoding, ANSI mode, collapse, context lines, the time span, which opens the
   time range, and the line counts) and the **filter row** (include, exclude, `Aa`, `.*`,
   minimum level, `[≤96 B]`, where the level is looked for (a click sets the stream's own
   value, 16 to 4096 bytes; empty goes back to the setting), presets, and the global
@@ -102,6 +104,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `y` (`Ctrl+C`) | copy the selection or the cursor row |
 | `s` `\|` `_` | new window beside / below |
 | `<` `>`, `Ctrl+PgUp` `Ctrl+PgDn` | move the stream to another window, tabs of a window |
+| `Alt+D` | the time delta column on or off |
 | `Alt+F`, `Alt+X`, `Alt+arrows` | float / dock a window, close a window, move a divider or a floating window |
 | `Tab`, `Alt+1..9` | next window or stream, stream N |
 | `Ctrl+W` | close the stream |
@@ -180,8 +183,7 @@ shown.
 Only in the window for now: the Statistics, Query, Patterns, Explain, Operations and Compare
 tabs, the scratchpad, the search results pane and search in a range, Export (text, CSV,
 HTML), the Log formats dialog, rule sets and next / previous rule match, the bookmark
-report, Copy as shown, the time delta column and the time display (UTC / local), the web
-view, the MCP server of a running window (`fasttail-tui --mcp` serves the files given),
+report, Copy as shown, the web view, the MCP server of a running window (`fasttail-tui --mcp` serves the files given),
 managing plugins (a plugin stream approved in the window runs here), remappable shortcuts
 (the terminal keys are fixed), and Open in FastTail from a source location (`Ctrl+O` opens
 the editor).

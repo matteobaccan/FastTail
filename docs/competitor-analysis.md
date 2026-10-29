@@ -304,8 +304,8 @@ settings and the workspace with the window. Where it stands against the window:
 - ⬜ Remappable keys (the terminal keys are fixed), the palette's setting toggles
 - ⬜ Web view and the MCP server of a running interface; plugin management (enable,
   approve, parameters: today it says to use the window)
-- ⬜ Time delta column (the setting exists but the column is not drawn), time display
-  (UTC / local), the OTLP hint in the listener prompt
+- ✅ Time delta column, time display (as written / UTC / local), the OTLP hint in the
+  listener prompt
 - By design not in a terminal: Markdown view, line wrap, overview strip, timeline histogram,
   screensaver, tray icon, renderer / zoom / font settings
 
@@ -320,7 +320,7 @@ settings and the workspace with the window. Where it stands against the window:
   - ⬜ `tui-compare-scratchpad` (S): Compare tab and scratchpad
   - ⬜ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all
     bookmarks, Log formats dialog, editor presets, Open in FastTail, filter expressions
-  - ⬜ `tui-time-columns` (S): time delta column, UTC / local time display, OTLP hint
+  - ✅ `tui-time-columns` (S): time delta column, UTC / local time display, OTLP hint
 - ⬜ Hand checks by the maintainer: the clipboard in the window and the terminal, sideways
   scrolling with pinned columns, rotated files on Windows, an editor opened from a source
   location, an MCP client (Claude Desktop / Code), the Plugins windows and source plugins on

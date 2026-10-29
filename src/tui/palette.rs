@@ -11,6 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use crate::actions::{ActionId, ACTIONS};
 use crate::i18n::{t, Language};
+use crate::timestamp::TimeDisplay;
 use crate::tui::form::{FieldKey, TextField};
 use crate::tui::keys::Action;
 
@@ -34,6 +35,10 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::ViewAsm => (Action::ToggleAsm, "d"),
         ActionId::AsmArch => (Action::CycleArch, "D"),
         ActionId::Collapse => (Action::CycleCollapse, "c"),
+        ActionId::TimeDelta => (Action::ToggleTimeDelta, "Alt+D"),
+        ActionId::TimeDisplayWritten => (Action::SetTimeDisplay(TimeDisplay::Written), ""),
+        ActionId::TimeDisplayUtc => (Action::SetTimeDisplay(TimeDisplay::Utc), ""),
+        ActionId::TimeDisplayLocal => (Action::SetTimeDisplay(TimeDisplay::Local), ""),
         ActionId::SearchFocus => (Action::StartSearch, "/"),
         ActionId::SearchNext => (Action::SearchNext, "n"),
         ActionId::SearchPrev => (Action::SearchPrev, "N"),

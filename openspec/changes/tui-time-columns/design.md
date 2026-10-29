@@ -12,7 +12,7 @@
 ## Decisions
 
 ### D1. Same cells
-The Δt cell uses the window's text (`+1.2 s`) and threshold, right-aligned in 8 cells.
+The Δt cell uses the window's text (`+1.2 s`) and threshold, right-aligned in 10 cells (the widest value, `+12:34.567`).
 
 ## Risks / Trade-offs
 

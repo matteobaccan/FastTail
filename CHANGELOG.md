@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Time delta and time display in the terminal.** `[x] Δt` in the stream bar (or `Alt+D`)
+  draws the gap to the row above before each line, in the accent colour past the *Time
+  delta gap* setting; the `🌐` chip shows the times as written, in UTC or in local time, as
+  the window does (also in the palette). The listener prompt mentions `otlp://`.
+
 ## [0.28.1] - 2026-10-29
 
 ### Added
