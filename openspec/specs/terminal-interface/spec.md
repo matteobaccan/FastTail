@@ -491,3 +491,47 @@ The terminal interface SHALL offer Search all streams with `Ctrl+Shift+F` where 
 #### Scenario: Stale results
 - **WHEN** a searched stream is truncated after the search
 - **THEN** its group is marked stale and `Enter` on its results does not jump to a wrong line.
+
+### Requirement: Terminal Time Delta and Time Display
+The terminal interface SHALL draw the time delta column when it is on for the stream, SHALL show timestamps as written, in UTC or in local time as chosen, and its listener prompt SHALL mention every listener scheme it accepts.
+
+#### Scenario: Time delta
+- **WHEN** Δt is on and two lines are 1.2 s apart
+- **THEN** the second row shows `+1.2 s` before its text.
+
+#### Scenario: UTC display
+- **WHEN** a stream's lines are written in local time and the user chooses UTC
+- **THEN** the rows show the timestamps converted to UTC.
+
+### Requirement: Terminal Search Pane, Scope and Export
+The terminal interface SHALL offer the search results pane, search in a range, Export of visible lines, selected lines or matches as text, CSV or HTML through the window's writers, Copy as shown, and the bookmark report.
+
+#### Scenario: CSV export over SSH
+- **WHEN** the user exports the matches of `ERROR` as CSV to `errors.csv` in the terminal
+- **THEN** the file holds the same rows and columns as the window's export of the same stream and search.
+
+#### Scenario: Search in a range
+- **WHEN** the user limits the search to lines `100-200`
+- **THEN** the counter shows only the hits in that range and `n` wraps inside it.
+
+### Requirement: Terminal Rule Sets, Formats and Filter Expressions
+The terminal interface SHALL import and export rule sets, walk the lines of a rule, clear all bookmarks, edit log formats in a dialog, offer the editor presets and Open in FastTail for a source location, and toggle a stream's include side between terms and an expression.
+
+#### Scenario: Rule set import
+- **WHEN** the user imports `team.fasttail-rules.ini` in the terminal rule editor
+- **THEN** its rules are added and colour the rows, as the window's import does.
+
+#### Scenario: Expression toggle
+- **WHEN** the user toggles ƒx on a stream with include terms `a` and `b`
+- **THEN** the include side becomes the expression `a AND b`, editable in the prompt.
+
+### Requirement: Terminal Compare and Scratchpad
+The terminal interface SHALL compare two lines or two regions side by side with the window's alignment and ignore options, and SHALL offer the session's scratchpad as an editable panel that the window shares.
+
+#### Scenario: Compare two lines
+- **WHEN** the user selects two rows and presses `=`
+- **THEN** a Compare panel shows them side by side with the differing tokens highlighted.
+
+#### Scenario: Send to scratchpad
+- **WHEN** the user sends a row with `Ctrl+N`
+- **THEN** the pad gets a `── app.log:N ──` reference and the line, and the window shows the same text.
