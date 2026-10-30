@@ -271,7 +271,7 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 30 | **Kubernetes source** (`k8s://`), not only through standard input | gonzo, lazyjournal, lnav | Medium | S–M | ⬜ `kubernetes-source` |
 | 31 | **Copy as excerpt** for tickets (Markdown, Jira, Slack) | gonzo, logana | Medium | S | ✅ |
 | 32 | **Stream information**: indexing time, memory, encoding, parser | lnav 0.15 | Low–Med | S | ✅ |
-| 33 | **Pinned and recent presets** | Chipmunk 4.3 | Low–Med | S | ⬜ `preset-pinning` |
+| 33 | **Pinned and recent presets** | Chipmunk 4.3 | Low–Med | S | ✅ |
 | 34 | **Message linked to its logging statement** (`log2src`) | lnav | Low–Med | L | ⬜ `log2src-links` |
 | 35 | **Remote Windows Event Log** | LogFusion | Low–Med | M | ⬜ `remote-event-log` |
 | 36 | **Notepad++ filter import** (AnalysePlugin, UDL) | logana 0.7.7 | Low | S | ⬜ `npp-filter-import` |
@@ -341,8 +341,8 @@ window and the terminal together.
 
 **0.32.0, search and navigation** (gaps 28 to 33):
 
-- ✅ `named-searches` (M), `operation-jump` (S), `stream-info` (S), `copy-excerpt` (S); ⬜
-  `preset-pinning` (S), `kubernetes-source` (S–M)
+- ✅ `named-searches` (M), `operation-jump` (S), `stream-info` (S), `copy-excerpt` (S),
+  `preset-pinning` (S); ⬜ `kubernetes-source` (S–M)
 
 **0.33.0, the long tail** (gaps 34 to 37):
 

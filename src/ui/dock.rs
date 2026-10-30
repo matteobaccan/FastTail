@@ -8819,8 +8819,10 @@ fn render_presets_menu(
     };
     let mut apply: Option<usize> = None;
     let mut apply_all: Option<usize> = None;
+    let mut pin: Option<usize> = None;
     let mut save = false;
     let mut update = false;
+    let order = crate::filter_preset::display_order(presets);
     ui.menu_button(text, |ui| {
         ui.set_min_width(240.0);
         if presets.is_empty() {
@@ -8831,8 +8833,23 @@ fn render_presets_menu(
                     .color(theme.text_dim()),
             );
         }
-        for (i, preset) in presets.iter().enumerate() {
+        for &i in &order {
+            let preset = &presets[i];
             ui.horizontal(|ui| {
+                // Pinned presets come first; the pin toggles it.
+                let pin_text = RichText::new("📌").monospace().size(11.0);
+                let pin_text = if preset.pinned {
+                    pin_text.color(theme.accent_color())
+                } else {
+                    pin_text.color(theme.text_dim())
+                };
+                if ui
+                    .small_button(pin_text)
+                    .on_hover_text(t(lang, "preset_pin_tip"))
+                    .clicked()
+                {
+                    pin = Some(i);
+                }
                 let selected = current.as_deref() == Some(preset.name.as_str());
                 if ui
                     .selectable_label(selected, RichText::new(&preset.name).monospace())
@@ -8886,10 +8903,18 @@ fn render_presets_menu(
     .response
     .on_hover_text(t(lang, "presets_tip"));
 
+    if let Some(i) = pin {
+        presets[i].pinned = !presets[i].pinned;
+        events.changed = true;
+    }
     if let Some(i) = apply {
         presets[i].apply_to(engine);
+        crate::filter_preset::mark_used(presets, i);
+        events.changed = true;
     }
     if let Some(i) = apply_all {
+        crate::filter_preset::mark_used(presets, i);
+        events.changed = true;
         events.apply_to_all = Some(presets[i].clone());
     }
     if save {
@@ -9004,6 +9029,8 @@ fn render_preset_save_dialog(
                 || (enter && !name.is_empty() && !taken)
             {
                 let preset = FilterPreset {
+                    pinned: false,
+                    last_used: 0,
                     name: name.clone(),
                     state: FilterState::of_engine(engine, draft.with_time),
                 };

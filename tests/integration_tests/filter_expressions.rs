@@ -251,6 +251,8 @@ fn a_preset_carries_the_mode_and_the_expression() {
     assert_eq!(state.expr.as_deref(), Some("refund AND NOT refused"));
     assert!(state.matches_engine(&a));
     let preset = FilterPreset {
+        pinned: false,
+        last_used: 0,
         name: "refunds".into(),
         state,
     };

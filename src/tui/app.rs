@@ -3402,8 +3402,13 @@ impl App {
     }
 
     /// `p`: the filter presets of `fasttail.ini`.
+    /// `p`: the presets, pinned first, then the recently applied, then by name.
     fn open_presets(&mut self) {
-        let list = self.settings_mut().config.filter_presets.clone();
+        let all = self.settings_mut().config.filter_presets.clone();
+        let list: Vec<_> = crate::filter_preset::display_order(&all)
+            .into_iter()
+            .map(|i| all[i].clone())
+            .collect();
         self.presets = Some(PresetsDialog::new(&list));
     }
 
@@ -3422,6 +3427,7 @@ impl App {
                 let preset = crate::filter_preset::FilterPreset {
                     state: crate::filter_preset::FilterState::of_engine(&tab.engine, with_time),
                     name,
+                    ..Default::default()
                 };
                 self.message = Some(txf(self.lang, "Preset {0} saved", &[&preset.name]));
                 if let Some(d) = self.presets.as_mut() {
@@ -3461,6 +3467,15 @@ impl App {
         if self.tabs.is_empty() {
             self.message = Some(tx(self.lang, NO_FILE).into());
             return;
+        }
+        // Applied now: among the recent ones next time.
+        if let Some(d) = self.presets.as_mut() {
+            crate::filter_preset::mark_used(&mut d.list.items, index);
+        }
+        if let Some(s) = self.settings.as_mut() {
+            if let Some(i) = crate::filter_preset::find(&s.config.filter_presets, &p.name) {
+                crate::filter_preset::mark_used(&mut s.config.filter_presets, i);
+            }
         }
         if all {
             for tab in &mut self.tabs {
@@ -10308,7 +10323,7 @@ impl App {
                 let mut out = vec![Line::styled(
                     tx(
                         self.lang,
-                        "Enter apply  A to all  s save  r rename  d delete  Alt+Up/Down move  Esc",
+                        "Enter apply  A to all  s save  r rename  d delete  * pin  Alt+Up/Down move  Esc",
                     ),
                     dim,
                 )];
@@ -10332,8 +10347,9 @@ impl App {
                         Style::default()
                     };
                     let name: String = view::sanitize(&p.name).chars().take(24).collect();
+                    let pin = if p.pinned { "*" } else { " " };
                     out.push(Line::from(vec![
-                        Span::styled(format!("{} ", marks[i]), accent),
+                        Span::styled(format!("{}{pin}", marks[i]), accent),
                         Span::styled(format!("{name:<24} "), row),
                         Span::styled(view::sanitize(&presets::summary(&p.state, self.lang)), dim),
                     ]));
