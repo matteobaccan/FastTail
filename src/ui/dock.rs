@@ -9878,6 +9878,7 @@ fn render_rule_set_controls(
             if let Some(source) = rfd::FileDialog::new()
                 .set_title(t(lang, "rules_import"))
                 .add_filter("FastTail rules (*.ini)", &["ini"])
+                .add_filter("Notepad++ (*.xml)", &["xml"])
                 .pick_file()
             {
                 let file = source

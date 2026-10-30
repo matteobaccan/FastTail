@@ -50,6 +50,7 @@ pub mod multiline_search;
 pub mod named_search;
 pub mod net_listener;
 pub mod notifications;
+pub mod npp_import;
 pub mod operation_jump;
 pub mod operations;
 pub mod otlp;

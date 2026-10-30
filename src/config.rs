@@ -2431,6 +2431,15 @@ pub fn read_rule_set(path: &Path) -> Result<Vec<HighlightRule>, RuleSetError> {
         return Err(RuleSetError::NotARuleSet);
     }
     let text = String::from_utf8_lossy(&bytes);
+    // A Notepad++ AnalysePlugin or UDL file: its searches and keyword lists as rules.
+    if crate::npp_import::is_npp_xml(&text) {
+        let rules = crate::npp_import::parse(&text);
+        return if rules.is_empty() {
+            Err(RuleSetError::NotARuleSet)
+        } else {
+            Ok(rules)
+        };
+    }
     parse_rule_set(text.trim_start_matches('\u{feff}'))
 }
 

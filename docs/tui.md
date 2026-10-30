@@ -185,7 +185,7 @@ background alerts, the PIN lock, telemetry): choosing one switches it and saves 
   saves, `Esc` brings back the values Settings opened with.
 - **Highlight rules** (`r`): every field of the window's rules (the *Desktop notification*
   box included: a stream not on screen notifies a matching appended line), order, colours,
-  quick labels; `i` imports a `*.fasttail-rules.ini` rule set (the rules already there are
+  quick labels; `i` imports a `*.fasttail-rules.ini` rule set (or a Notepad++ AnalysePlugin / UDL `.xml`) (the rules already there are
   skipped; a trailing `!` replaces every rule) and `x` exports the rules. `F4` / `Shift+F4`
   go to the next / previous line of the rule matching the cursor row (wrapping round, in
   the background on a large file). **Presets** (`p`), **global filter** (`F`: its

@@ -274,7 +274,7 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 33 | **Pinned and recent presets** | Chipmunk 4.3 | Low–Med | S | ✅ |
 | 34 | **Message linked to its logging statement** (`log2src`) | lnav | Low–Med | L | ⬜ `log2src-links` |
 | 35 | **Remote Windows Event Log** | LogFusion | Low–Med | M | ⬜ `remote-event-log` |
-| 36 | **Notepad++ filter import** (AnalysePlugin, UDL) | logana 0.7.7 | Low | S | ⬜ `npp-filter-import` |
+| 36 | **Notepad++ filter import** (AnalysePlugin, UDL) | logana 0.7.7 | Low | S | ✅ |
 | 37 | **DLT automotive files** | Chipmunk, logana | Low | L | ⬜ `dlt-format` (optional) |
 
 Seen in the competitors and not planned (⬜, to weigh when the maintainer asks):
