@@ -286,3 +286,17 @@ The application SHALL open the plain text of the clipboard as a new stream (`Ctr
 #### Scenario: Two pastes
 - **WHEN** the user pastes 20 lines as a stream and then appends 5 more lines with Append
 - **THEN** one stream shows the 25 lines in order, and the next start does not reopen it.
+
+### Requirement: Stream Information
+Both interfaces SHALL show a stream's path, size, lines, indexing time, index and cache memory, encoding, parser or format, timestamp format and source kind.
+
+#### Scenario: A big file
+- **WHEN** a 2 GB file was indexed
+- **THEN** the information says how many lines, how long the index took and how much memory it uses.
+
+### Requirement: Kubernetes Source
+FastTail SHALL open `k8s://` URIs as streams of a pod's or deployment's log through the configured kubectl command, and SHALL offer reconnecting when the command ends.
+
+#### Scenario: A pod
+- **WHEN** the user opens `k8s://prod/api-7f9c`
+- **THEN** the stream shows the pod's log lines with their timestamps and follows them.

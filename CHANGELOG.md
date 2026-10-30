@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-30
+
 ### Added
 
 - **Kept searches.** `📌` next to the search box (`Alt+K` in the terminal) keeps up to
@@ -2499,6 +2501,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.32.0]: https://github.com/matteobaccan/FastTail/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/matteobaccan/FastTail/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/matteobaccan/FastTail/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/matteobaccan/FastTail/compare/v0.28.1...v0.29.0
