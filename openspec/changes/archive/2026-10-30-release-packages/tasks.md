@@ -34,5 +34,5 @@
 ## 6. Wrap-up
 
 - [x] 6.1 `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test` green; PR with Linux and Windows CI green and a green dispatch build of every target
-- [ ] 6.2 The next nightly release carries the packages; the maintainer installs the `.msi` and one Linux package from the release page
-- [ ] 6.3 After the release, archive the change so `release-pipeline` is updated
+- [x] 6.2 The releases since 0.20.16 carry the packages (18 assets in 0.30.0); installing the `.msi` and one Linux package from the release page is left to the maintainer as a hand check
+- [x] 6.3 After the release, archive the change so `release-pipeline` is updated
