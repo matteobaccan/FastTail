@@ -150,6 +150,9 @@ pub enum Action {
     Scratchpad,
     /// ALT + A: the analysis views (Statistics, Query, Patterns, Explain, Operations).
     Analysis,
+    /// ALT + M: the merged view dialog (streams to merge by time, or the focused merged
+    /// view's sources on and off).
+    MergedView,
     /// The Patterns view of the focused stream (palette).
     Patterns,
     /// The Keys dialog: the remappable terminal keys (palette).
@@ -267,6 +270,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('o') | KeyCode::Char('O') => Some(Action::OpenSourceHere),
             KeyCode::Char('n') | KeyCode::Char('N') => Some(Action::Scratchpad),
             KeyCode::Char('a') | KeyCode::Char('A') => Some(Action::Analysis),
+            KeyCode::Char('m') | KeyCode::Char('M') => Some(Action::MergedView),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -552,6 +556,7 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("scratchpad", Action::Scratchpad, "Alt+N"),
     ("scratchpad.send", Action::SendToScratchpad, "Ctrl+N"),
     ("analysis", Action::Analysis, "Alt+A"),
+    ("merged_view", Action::MergedView, "Alt+M"),
     ("split.right", Action::SplitRight, "s |"),
     ("split.down", Action::SplitDown, "_"),
     ("window.close", Action::ClosePane, "Alt+X"),

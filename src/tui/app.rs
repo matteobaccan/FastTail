@@ -73,6 +73,8 @@ pub struct Tab {
     /// Bytes per row of the HEX view, from the window width at the last draw. In the HEX
     /// view `top` and `cursor` count these rows.
     pub hex_width: usize,
+    /// Cells of its window's rows at the last draw.
+    pub cells: usize,
     /// Waiting for the first hit of a search that runs in the background.
     pending_first_hit: bool,
     /// Lines already seen while this stream was on screen, for the "new lines" mark.
@@ -98,6 +100,7 @@ impl Tab {
             cursor: 0,
             height: 20,
             hex_width: 16,
+            cells: 100,
             pending_first_hit: false,
             seen_lines: 0,
         }
@@ -265,6 +268,9 @@ fn stream_title(engine: &TailEngine) -> String {
     }
     if let Some(title) = engine.source_title() {
         return title;
+    }
+    if let Some(m) = &engine.merged {
+        return m.title();
     }
     match &engine.compressed {
         Some(c) => c.title().replace(" \u{203a} ", "/"),
@@ -610,6 +616,10 @@ pub struct App {
     pub analysis: Option<crate::tui::analysis::AnalysisView>,
     /// The list of the analysis views (`Alt+A`): the row selected.
     pub analysis_menu: Option<usize>,
+    /// The merged view dialog (`Alt+M`).
+    pub merge: Option<crate::tui::merge::MergeDialog>,
+    /// A merged view has lines left to merge: the loop polls faster.
+    views_busy: bool,
     /// The terminal keys in force: the defaults with `[shortcuts]`'s `tui.` entries.
     pub keymap: keys::KeyMap,
     /// The Keys dialog (palette): the remappable keys.
@@ -779,6 +789,8 @@ impl App {
             pad_editor: None,
             analysis: None,
             analysis_menu: None,
+            merge: None,
+            views_busy: false,
             keymap: keys::KeyMap::default(),
             keys_dialog: None,
             web_view: Default::default(),
@@ -946,6 +958,15 @@ impl App {
     pub fn restore_dock(&mut self, layout: Option<&str>) {
         let open = self.open_paths();
         self.dock_layout = layout.and_then(DockLayout::parse);
+        // The merged views are saved under their `merged:` name: their tabs show the spool.
+        let tabs = &self.tabs;
+        if let Some(l) = self.dock_layout.as_mut() {
+            l.rename_streams(&|p| {
+                tabs.iter()
+                    .find(|t| crate::workspace::saved_identity(&t.engine).as_deref() == Some(p))
+                    .map(|t| t.engine.path.clone())
+            });
+        }
         // The floating windows keep the open streams they hold (nothing is added).
         self.floats = Vec::new();
         let windows = self
@@ -1012,7 +1033,10 @@ impl App {
         let stdin: Vec<PathBuf> = self
             .tabs
             .iter()
-            .filter(|t| t.engine.is_stdin())
+            .filter(|t| {
+                t.engine.is_stdin()
+                    || (t.engine.merged.is_some() && !crate::workspace::is_persisted(&t.engine))
+            })
             .map(|t| t.engine.path.clone())
             .collect();
         let without_stdin =
@@ -1039,6 +1063,13 @@ impl App {
         };
         layout.set_main_pane(&pane);
         layout.set_windows(&windows);
+        // A merged view is saved under its `merged:` name, as in the GUI.
+        layout.rename_streams(&|p| {
+            self.tabs
+                .iter()
+                .find(|t| t.engine.path == p)
+                .and_then(|t| crate::workspace::saved_identity(&t.engine))
+        });
         layout.to_ron()
     }
 
@@ -1161,6 +1192,10 @@ impl App {
             pad.save_if_due();
         }
         self.serve_integrations();
+        // The merged views take their sources' new lines in time order.
+        let mut engines: Vec<&mut TailEngine> =
+            self.tabs.iter_mut().map(|t| &mut t.engine).collect();
+        self.views_busy = crate::merged_stream::feed_views(&mut engines, MERGE_BUDGET);
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1312,6 +1347,7 @@ impl App {
             || self.split_waiting.is_some()
             || self.export.is_some()
             || self.analysis.is_some()
+            || self.views_busy
             || self.mcp_view.busy()
             || self
                 .tabs
@@ -1411,6 +1447,9 @@ impl App {
         }
         if self.analysis_menu.is_some() {
             return self.on_analysis_menu_key(key);
+        }
+        if self.merge.is_some() {
+            return self.on_merge_key(key);
         }
         if self.keys_dialog.is_some() {
             return self.on_keys_dialog_key(key);
@@ -3917,6 +3956,183 @@ impl App {
         self.analysis = Some(AnalysisView::new(kind, tab.engine.path.clone()));
     }
 
+    /// `Alt+M`: on a merged view, its sources on and off; elsewhere the open streams with
+    /// timestamps to merge, the focused one checked.
+    fn open_merge(&mut self) {
+        use crate::tui::merge::MergeDialog;
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if let Some(m) = &tab.engine.merged {
+            let sources = m
+                .sources
+                .iter()
+                .map(|s| (s.path.clone(), s.name.clone(), s.enabled))
+                .collect();
+            self.merge = Some(MergeDialog::sources(tab.engine.path.clone(), sources));
+            return;
+        }
+        let streams: Vec<(PathBuf, String)> = self
+            .tabs
+            .iter()
+            .filter(|t| {
+                t.engine.merged.is_none() && crate::merged_stream::has_timestamps(&t.engine)
+            })
+            .take(crate::merged_stream::MAX_SOURCES)
+            .map(|t| (t.engine.path.clone(), t.title.clone()))
+            .collect();
+        if streams.len() < 2 {
+            self.message =
+                Some(tx(self.lang, "Merging needs two open streams with timestamps").into());
+            return;
+        }
+        let focused = tab.engine.path.clone();
+        self.merge = Some(MergeDialog::new(streams, &[focused]));
+    }
+
+    fn on_merge_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::merge::MergeKey;
+        let Some(d) = self.merge.as_mut() else {
+            return false;
+        };
+        match d.on_key(key) {
+            MergeKey::Close => self.merge = None,
+            MergeKey::Merge(paths) if paths.len() < 2 => {
+                self.message = Some(tx(self.lang, "Check two streams or more (Space)").into());
+            }
+            MergeKey::Merge(paths) => {
+                self.merge = None;
+                self.open_merged_view(&paths);
+            }
+            MergeKey::Source(i, on) => {
+                let view = d.view.clone();
+                if let Some(t) = view.and_then(|v| self.tab_index(&v)) {
+                    if let Some(m) = self.tabs[t].engine.merged.as_mut() {
+                        m.set_enabled(i, on);
+                    }
+                }
+            }
+            MergeKey::Moved => {}
+            MergeKey::Other => return false,
+        }
+        true
+    }
+
+    /// A merged view of the open streams `sources` in a new tab of the focused window.
+    fn open_merged_view(&mut self, sources: &[PathBuf]) {
+        let n = crate::merged_stream::next_number(self.tabs.iter().map(|t| &t.engine));
+        match self.merged_engine(n, sources) {
+            Ok(engine) => self.add_engine_tab(engine),
+            Err(e) => self.message = Some(e),
+        }
+    }
+
+    /// The engine of merged view `n` of the open streams `sources`, with the global
+    /// filter and the quick labels.
+    fn merged_engine(&self, n: usize, sources: &[PathBuf]) -> Result<TailEngine, String> {
+        let found: Vec<&TailEngine> = sources
+            .iter()
+            .filter_map(|p| self.tab_index(p).map(|i| &self.tabs[i].engine))
+            .collect();
+        if found.len() < 2 {
+            return Err(tx(self.lang, "Check two streams or more (Space)").into());
+        }
+        let default_config;
+        let config = match &self.settings {
+            Some(s) => &s.config,
+            None => {
+                default_config = crate::config::FastTailConfig::default();
+                &default_config
+            }
+        };
+        let mut engine = crate::merged_stream::open_view(n, &found, config)
+            .map_err(|e| txf(self.lang, "Cannot merge: {0}", &[&e]))?;
+        if let Some(s) = &self.settings {
+            if s.global.is_some() {
+                engine.set_global_filter(s.global.clone());
+            }
+        }
+        engine.set_quick_labels(&self.quick_labels);
+        Ok(engine)
+    }
+
+    /// Rebuilds the merged views saved as `views` (`merged:<n>:<sources>`, from the
+    /// workspace or a session) from their open sources, with the state saved for them;
+    /// a view with fewer than two of its sources open is skipped. The tabs are not placed:
+    /// `restore_dock` follows.
+    pub fn restore_views(&mut self, views: &[PathBuf]) {
+        for identity in views {
+            let Some((n, saved)) = crate::merged_stream::parse_identity(identity) else {
+                continue;
+            };
+            let sources: Vec<PathBuf> = saved
+                .iter()
+                .filter_map(|s| {
+                    self.tabs
+                        .iter()
+                        .find(|t| {
+                            crate::paths::paths_equal(
+                                &crate::workspace::persisted_path(&t.engine),
+                                s,
+                            )
+                        })
+                        .map(|t| t.engine.path.clone())
+                })
+                .collect();
+            let Ok(mut engine) = self.merged_engine(n, &sources) else {
+                continue;
+            };
+            if let Some(s) = &self.settings {
+                crate::workspace::restore_stream(&mut engine, &s.config, identity);
+            }
+            self.tabs.push(Tab::new(engine));
+        }
+    }
+
+    fn draw_merge(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(d) = self.merge.clone() else {
+            return;
+        };
+        let (title, help) = if d.view.is_some() {
+            (
+                tx(self.lang, "Merged view sources"),
+                tx(self.lang, "Space turns a source on or off, Esc closes"),
+            )
+        } else {
+            (
+                tx(self.lang, "Merged view of streams"),
+                tx(self.lang, "Space checks, Enter merges by time, Esc closes"),
+            )
+        };
+        let width = d
+            .items
+            .iter()
+            .map(|i| unicode_width::UnicodeWidthStr::width(i.name.as_str()) as u16 + 8)
+            .chain(std::iter::once(
+                unicode_width::UnicodeWidthStr::width(help) as u16 + 4,
+            ))
+            .max()
+            .unwrap_or(40)
+            .clamp(40, 100);
+        let inner = self.dialog(frame, area, (width, d.items.len() as u16 + 4), title, false);
+        let mut out = vec![Line::styled(help, dim)];
+        for (i, item) in d.items.iter().enumerate() {
+            let y = inner.y + 1 + i as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == d.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().fg(source_color(i))
+            };
+            let mark = if item.checked { "[x]" } else { "[ ]" };
+            out.push(Line::styled(format!(" {mark} {}", item.name), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
     fn on_analysis_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         use crate::tui::analysis::Kind;
         use crossterm::event::{KeyCode, KeyEventKind};
@@ -5271,6 +5487,7 @@ impl App {
         self.tabs.extend(stdin);
         self.sync_labels();
         self.active = 0;
+        self.restore_views(&plan.views);
         self.restore_dock(plan.dock_layout.as_deref());
         // The session's layout becomes the configuration's, as in the GUI.
         self.dock_dirty = true;
@@ -5568,12 +5785,16 @@ impl App {
     /// stream defaults (recorded in the recent files unless it is ephemeral).
     fn add_engine_tab(&mut self, mut engine: TailEngine) {
         if let Some(s) = self.settings.as_mut() {
-            s.prepare(&mut engine);
-            if !engine.is_stdin() && !engine.is_clipboard() {
+            let spool_view = engine.merged.is_some() || engine.derived.is_some();
+            if !spool_view {
+                s.prepare(&mut engine);
+            }
+            if !engine.is_stdin() && !engine.is_clipboard() && !spool_view {
                 s.config.add_recent_file(&engine.path);
             }
             // A plain file with rotations next to it: the stream bar offers them.
-            if s.config.rotations == crate::rotation::Policy::Ask
+            if !spool_view
+                && s.config.rotations == crate::rotation::Policy::Ask
                 && engine.rotation.is_none()
                 && engine.compressed.is_none()
                 && engine.piped().is_none()
@@ -6793,6 +7014,7 @@ impl App {
                     || self.pad_editor.is_some()
                     || self.analysis.is_some()
                     || self.analysis_menu.is_some()
+                    || self.merge.is_some()
                     || self.keys_dialog.is_some()
                     || self.plugins.is_some()
                     || self.presets.is_some()
@@ -7130,6 +7352,16 @@ impl App {
             Target::ListItem(i) if self.piece_menu.is_some() => self.go_to_piece(i),
             Target::ListItem(i) if self.results_menu.is_some() => self.go_to_result(i),
             Target::ListItem(i) if self.export_menu.is_some() => self.choose_export(i),
+            Target::ListItem(i) if self.merge.is_some() => {
+                if let Some(d) = self.merge.as_mut() {
+                    d.selected = i;
+                }
+                let space = crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(' '),
+                    crossterm::event::KeyModifiers::NONE,
+                );
+                self.on_merge_key(space);
+            }
             Target::ListItem(i) if self.analysis_menu.is_some() => {
                 self.analysis_menu = None;
                 if let Some(&kind) = crate::tui::analysis::Kind::ALL.get(i) {
@@ -7229,6 +7461,7 @@ impl App {
                     || self.results_menu.take().is_some()
                     || self.export_menu.take().is_some()
                     || self.analysis_menu.take().is_some()
+                    || self.merge.take().is_some()
                     || self.columns_menu.take().is_some()
                 {
                 } else if let Some(m) = self.tool_menu.take() {
@@ -7670,6 +7903,7 @@ impl App {
             Action::Scratchpad => self.open_pad(),
             Action::SendToScratchpad => self.send_to_pad(),
             Action::Analysis => self.analysis_menu = Some(0),
+            Action::MergedView => self.open_merge(),
             Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
             Action::ToggleSetting(s) => self.toggle_setting(s),
             Action::Plugins => self.open_plugins(),
@@ -7879,6 +8113,9 @@ impl App {
         }
         if self.analysis_menu.is_some() {
             self.draw_analysis_menu(frame, main_area);
+        }
+        if self.merge.is_some() {
+            self.draw_merge(frame, main_area);
         }
         if self.keys_dialog.is_some() {
             self.draw_keys_dialog(frame, main_area);
@@ -8396,6 +8633,7 @@ impl App {
             frame.render_widget(Paragraph::new(line), row);
             inner.height -= 1;
         }
+        tab.cells = inner.width as usize;
         let (lines, row_count) = if tab.is_asm() {
             asm_rows(
                 tab,
@@ -11288,6 +11526,7 @@ fn stream_rows(
     } else {
         0
     };
+    let tag = source_tag_width(engine, tab.cells);
     let query = engine.search_query.trim().to_string();
     let has_search = !query.is_empty() && engine.active_match_count() > 0;
     let mut lines = Vec::with_capacity(range.len());
@@ -11300,7 +11539,7 @@ fn stream_rows(
             palette,
             row,
             line_idx,
-            (gutter, delta),
+            (gutter, delta, tag),
             &query,
             has_search,
             tab.hscroll,
@@ -11386,6 +11625,7 @@ fn column_rows(
     } else {
         0
     };
+    let tag = source_tag_width(engine, tab.cells);
     let message = tx(lang, "message");
     let mut fixed_head = String::new();
     let mut head = String::new();
@@ -11407,7 +11647,9 @@ fn column_rows(
         .fg(palette.accent())
         .add_modifier(Modifier::BOLD);
     let header = Line::from(vec![
-        Span::raw(" ".repeat(gutter + 1 + delta.map_or(0, |_| DELTA_CELLS + 1))),
+        Span::raw(" ".repeat(
+            gutter + 1 + delta.map_or(0, |_| DELTA_CELLS + 1) + if tag > 0 { tag + 1 } else { 0 },
+        )),
         Span::styled(fixed_head, head_style),
         Span::styled(head, head_style),
     ]);
@@ -11429,7 +11671,7 @@ fn column_rows(
                     palette,
                     *row,
                     *line_idx,
-                    (gutter, delta),
+                    (gutter, delta, tag),
                     &query,
                     has_search,
                     tab.hscroll,
@@ -11442,7 +11684,7 @@ fn column_rows(
                 palette,
                 *row,
                 *line_idx,
-                (gutter, delta),
+                (gutter, delta, tag),
                 &query,
                 has_search,
                 tab.hscroll,
@@ -11496,7 +11738,7 @@ fn render_cells_row(
     palette: &Palette,
     row: usize,
     line_idx: usize,
-    (gutter, delta): (usize, Option<u64>),
+    (gutter, delta, tag): (usize, Option<u64>, usize),
     query: &str,
     has_search: bool,
     hscroll: usize,
@@ -11513,13 +11755,14 @@ fn render_cells_row(
         if gutter == 0 {
             mark.to_string()
         } else {
-            format!("{:>gutter$}{mark}", line_idx + 1)
+            format!("{:>gutter$}{mark}", row_number(engine, line_idx))
         },
         gutter_style,
     )];
     if let Some(gap_ms) = delta {
         spans.push(time_delta_cell(engine, palette, row, gap_ms));
     }
+    spans.extend(source_tag_cell(engine, line_idx, tag, palette.ascii));
     let raw = engine.get_line(line_idx).unwrap_or_default();
     let base = match engine.match_highlight(&raw) {
         Some(rule) => palette.rule_style(&rule),
@@ -11823,7 +12066,7 @@ pub fn render_row(
     palette: &Palette,
     row: usize,
     line_idx: usize,
-    (gutter, delta): (usize, Option<u64>),
+    (gutter, delta, tag): (usize, Option<u64>, usize),
     query: &str,
     has_search: bool,
     hscroll: usize,
@@ -11840,13 +12083,14 @@ pub fn render_row(
         if gutter == 0 {
             mark.to_string()
         } else {
-            format!("{:>gutter$}{mark}", line_idx + 1)
+            format!("{:>gutter$}{mark}", row_number(engine, line_idx))
         },
         gutter_style,
     ));
     if let Some(gap_ms) = delta {
         spans.push(time_delta_cell(engine, palette, row, gap_ms));
     }
+    spans.extend(source_tag_cell(engine, line_idx, tag, palette.ascii));
     if let Some(c) = engine.collapsed_row(row).filter(|c| c.count > 1) {
         let badge = if c.open {
             format!("[-{}] ", c.count)
@@ -12051,6 +12295,90 @@ pub fn absolute(p: &str) -> PathBuf {
             .map(|d| d.join(&path))
             .unwrap_or(path)
     }
+}
+
+/// The number a row shows: its line, in a merged view the line in its source, as in the
+/// GUI.
+fn row_number(engine: &TailEngine, line_idx: usize) -> usize {
+    engine
+        .merged
+        .as_ref()
+        .and_then(|m| m.source_of(line_idx))
+        .map_or(line_idx, |(_, l)| l)
+        + 1
+}
+
+/// Time a tick gives the merged views to take their sources' lines.
+const MERGE_BUDGET: Duration = Duration::from_millis(8);
+
+/// Most cells the source tag of a merged view's rows takes (`[app.log]`).
+const SOURCE_TAG_CELLS: usize = 10;
+
+/// The colour of source `i` of a merged view (its tag, its row in the dialog).
+fn source_color(i: usize) -> Color {
+    const COLORS: [Color; 8] = [
+        Color::Cyan,
+        Color::Magenta,
+        Color::Yellow,
+        Color::Green,
+        Color::Blue,
+        Color::LightRed,
+        Color::LightCyan,
+        Color::LightMagenta,
+    ];
+    COLORS[i % COLORS.len()]
+}
+
+/// The source tag of merged line `line_idx`, `width` cells plus a space (`[app]`), in its
+/// source's colour; `width` 1 draws only a coloured mark. `None` outside a merged view.
+fn source_tag_cell(
+    engine: &TailEngine,
+    line_idx: usize,
+    width: usize,
+    ascii: bool,
+) -> Option<Span<'static>> {
+    let m = engine.merged.as_ref()?;
+    let (source, _) = m.source_of(line_idx).unwrap_or((usize::MAX, 0));
+    let Some(src) = m.sources.get(source) else {
+        return Some(Span::raw(" ".repeat(width + 1)));
+    };
+    let style = Style::default().fg(source_color(source));
+    if width <= 1 {
+        return Some(Span::styled(if ascii { "| " } else { "▌ " }, style));
+    }
+    let name: String = {
+        let mut out = String::new();
+        let mut used = 0;
+        for c in src.name.chars() {
+            let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + w + 2 > width {
+                break;
+            }
+            out.push(c);
+            used += w;
+        }
+        out
+    };
+    let text = format!("[{name}]");
+    let pad = width.saturating_sub(unicode_width::UnicodeWidthStr::width(text.as_str()));
+    Some(Span::styled(format!("{text}{} ", " ".repeat(pad)), style))
+}
+
+/// Cells of the source tags of a merged view drawn `cells` wide: the longest name, at
+/// most `SOURCE_TAG_CELLS`; a narrow window (under 60 cells) keeps a coloured mark only.
+fn source_tag_width(engine: &TailEngine, cells: usize) -> usize {
+    let Some(m) = &engine.merged else {
+        return 0;
+    };
+    if cells < 60 {
+        return 1;
+    }
+    m.sources
+        .iter()
+        .map(|s| unicode_width::UnicodeWidthStr::width(s.name.as_str()) + 2)
+        .max()
+        .unwrap_or(3)
+        .min(SOURCE_TAG_CELLS)
 }
 
 /// Longest wait of the event loop for input when nothing runs.
@@ -14850,6 +15178,68 @@ mod tests {
         // Every stream is still drawn somewhere.
         let screen = render(&mut app, 80, 14);
         assert!(screen[2].contains("[#3] c.log"), "{screen:#?}");
+    }
+
+    #[test]
+    fn alt_m_merges_two_streams_by_time_with_source_tags_and_the_layout_keeps_it() {
+        use crossterm::event::KeyCode;
+        let a_log = "2026-09-28 10:00:00 INFO a1\n2026-09-28 10:00:02 INFO a2\n";
+        let b_log = "2026-09-28 10:00:01 INFO b1\n2026-09-28 10:00:03 INFO b2\n";
+        let files = [("a.log", a_log), ("b.log", b_log)];
+        let (mut app, _dir) = app_with(&files, false);
+        render(&mut app, 100, 20);
+        app.apply(Action::MergedView);
+        assert_eq!(
+            app.merge.as_ref().unwrap().checked(),
+            vec![path_of(&app, 0)]
+        );
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.merge.is_none());
+        assert_eq!(app.tabs.len(), 3);
+        assert!(app.tabs[2].engine.merged.is_some());
+        assert_eq!(app.tabs[2].title, "a.log + b.log");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[2].engine.total_lines() < 4 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(30));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 100, 20);
+        let rows: Vec<&String> = screen.iter().filter(|l| l.contains("INFO")).collect();
+        let order: Vec<&str> = rows
+            .iter()
+            .filter_map(|l| ["a1", "b1", "a2", "b2"].into_iter().find(|w| l.contains(w)))
+            .collect();
+        assert_eq!(order, ["a1", "b1", "a2", "b2"], "{screen:#?}");
+        assert!(
+            rows[0].contains("[a.log]") && rows[1].contains("[b.log]"),
+            "{screen:#?}"
+        );
+        // Line numbers are the source lines: b1 is line 1 of b.log.
+        assert!(
+            rows[1].trim_start().starts_with("│1") || rows[1].contains(" 1 "),
+            "{screen:#?}"
+        );
+        // Saved under its `merged:` name, rebuilt from the sources in a new run.
+        let ron = app.dock_ron();
+        assert!(ron.contains("merged:1:"), "{ron}");
+        let identity = crate::workspace::saved_identity(&app.tabs[2].engine).unwrap();
+        let tabs = (0..2)
+            .map(|i| Tab::new(TailEngine::open(path_of(&app, i)).unwrap()))
+            .collect();
+        let mut again = App::new(tabs, app.palette);
+        again.restore_views(&[identity]);
+        again.restore_dock(Some(&ron));
+        assert_eq!(again.tabs.len(), 3);
+        let spool = again.tabs[2].engine.path.clone();
+        assert!(again.dock.find_stream(&spool).is_some());
+        // Alt+M on the merged view lists its sources: one turned off.
+        again.focus_tab(2);
+        again.apply(Action::MergedView);
+        assert!(again.merge.as_ref().unwrap().view.is_some());
+        press(&mut again, KeyCode::Char(' '));
+        assert!(!again.tabs[2].engine.merged.as_ref().unwrap().sources[0].enabled);
     }
 
     #[test]

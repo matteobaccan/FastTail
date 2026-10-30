@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Merged views in the terminal.** `Alt+M` (or *New merged view…* in the palette) lists
+  the open streams with timestamps as check boxes and opens one window of their lines
+  interleaved by time, each row tagged `[app.log]` in its source's colour and numbered by
+  its source line. `Alt+M` on the view turns sources off and on. The merged views of the
+  window open in the terminal and the other way round (workspace and sessions).
+
 ## [0.30.0] - 2026-10-29
 
 ### Added

@@ -23,6 +23,7 @@ mod global;
 mod hex;
 mod json;
 mod keys;
+mod merge;
 mod mouse;
 mod pad;
 mod palette;
@@ -337,6 +338,7 @@ fn run_args(args: Vec<String>) -> i32 {
         .settings
         .as_ref()
         .and_then(|s| s.config.dock_layout.clone());
+    app.restore_views(&plan.views);
     app.restore_dock(layout.as_deref());
     if cli.split {
         app.split_first_two();
