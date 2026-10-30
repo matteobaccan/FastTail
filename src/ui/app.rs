@@ -5939,6 +5939,11 @@ impl FastTailApp {
                                 &mut self.config.journalctl_command,
                                 crate::system_source::DEFAULT_JOURNALCTL_COMMAND,
                             ),
+                            (
+                                "system_kubectl_command",
+                                &mut self.config.kubectl_command,
+                                crate::system_source::DEFAULT_KUBECTL_COMMAND,
+                            ),
                         ] {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(format!("{}:", t(lang, key))).monospace());

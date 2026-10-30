@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 //! System sources: the systemd journal (`journald://`, `journald://<unit>`,
-//! `journald://user/<unit>`) and Docker containers (`docker://<container>`) as streams.
+//! `journald://user/<unit>`), Docker containers (`docker://<container>`) and Kubernetes
+//! pods (`k8s://<namespace>/<pod>[/<container>]`, `k8s://<namespace>/deploy/<name>`,
+//! `k8s://<context>@<namespace>/...`, through `kubectl logs`) as streams.
 //!
 //! A source runs the platform's own command (`journalctl --follow …`, `docker logs
 //! --follow …`) with its standard output and error on one pipe, like `2>&1`, and copies it
@@ -27,9 +29,11 @@ pub const DEFAULT_BACKLOG_LINES: u32 = 10_000;
 pub const MAX_BACKLOG_LINES: u32 = 1_000_000;
 pub const DEFAULT_DOCKER_COMMAND: &str = "docker";
 pub const DEFAULT_JOURNALCTL_COMMAND: &str = "journalctl";
+pub const DEFAULT_KUBECTL_COMMAND: &str = "kubectl";
 
 const JOURNALD: &str = "journald://";
 const DOCKER: &str = "docker://";
+const K8S: &str = "k8s://";
 
 /// A system source, as its URI names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +42,22 @@ pub enum SystemUri {
     Journald { user: bool, unit: Option<String> },
     /// A container, by name or id.
     Docker { container: String },
+    /// A pod (one of its containers), or a deployment, in a namespace; in a kubectl
+    /// context other than the current one.
+    Kubernetes {
+        context: Option<String>,
+        namespace: String,
+        /// `pod` or `deployment/<name>`, as kubectl takes it.
+        target: K8sTarget,
+        container: Option<String>,
+    },
+}
+
+/// What a `k8s://` URI follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum K8sTarget {
+    Pod(String),
+    Deployment(String),
 }
 
 /// Why a URI is refused: an i18n key.
@@ -48,6 +68,7 @@ pub type UriError = &'static str;
 pub struct Commands {
     pub docker: String,
     pub journalctl: String,
+    pub kubectl: String,
     pub backlog: u32,
 }
 
@@ -56,6 +77,7 @@ impl Default for Commands {
         Self {
             docker: DEFAULT_DOCKER_COMMAND.to_string(),
             journalctl: DEFAULT_JOURNALCTL_COMMAND.to_string(),
+            kubectl: DEFAULT_KUBECTL_COMMAND.to_string(),
             backlog: DEFAULT_BACKLOG_LINES,
         }
     }
@@ -65,7 +87,10 @@ impl Default for Commands {
 /// source, or a remote file (`ssh://`).
 pub fn is_system_path(path: &Path) -> bool {
     path.to_str().is_some_and(|s| {
-        s.starts_with(JOURNALD) || s.starts_with(DOCKER) || s.starts_with("ssh://")
+        s.starts_with(JOURNALD)
+            || s.starts_with(DOCKER)
+            || s.starts_with(K8S)
+            || s.starts_with("ssh://")
     }) || crate::net_listener::is_listen_path(path)
         || crate::debug_output::is_dbwin_path(path)
         || crate::eventlog::is_eventlog_path(path)
@@ -95,6 +120,53 @@ fn valid_container(name: &str) -> bool {
     is_name || is_id
 }
 
+/// A Kubernetes object name (RFC 1123: lower-case letters, digits, `-` and `.`, starting
+/// and ending with a letter or digit, at most 253).
+fn valid_k8s_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    (1..=253).contains(&b.len())
+        && b[0].is_ascii_alphanumeric()
+        && b[b.len() - 1].is_ascii_alphanumeric()
+        && b.iter()
+            .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'.')
+}
+
+/// A kubectl context name kubectl cannot take for an option.
+fn valid_k8s_context(name: &str) -> bool {
+    (1..=253).contains(&name.len())
+        && !name.starts_with('-')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.:@/-".contains(&b))
+}
+
+/// `[<context>@]<namespace>/<pod>[/<container>]` or `[<context>@]<namespace>/deploy/<name>`.
+fn parse_k8s(rest: &str) -> Result<SystemUri, UriError> {
+    let (context, rest) = match rest.rsplit_once('@') {
+        Some((ctx, rest)) if valid_k8s_context(ctx) => (Some(ctx.to_string()), rest),
+        Some(_) => return Err("system_bad_k8s"),
+        None => (None, rest),
+    };
+    let parts: Vec<&str> = rest.split('/').collect();
+    let ok = |s: &str| valid_k8s_name(s);
+    let (namespace, target, container) = match parts.as_slice() {
+        [ns, kind, name] if matches!(*kind, "deploy" | "deployment") && ok(ns) && ok(name) => {
+            (ns, K8sTarget::Deployment(name.to_string()), None)
+        }
+        [ns, pod] if ok(ns) && ok(pod) => (ns, K8sTarget::Pod(pod.to_string()), None),
+        [ns, pod, c] if ok(ns) && ok(pod) && ok(c) => {
+            (ns, K8sTarget::Pod(pod.to_string()), Some(c.to_string()))
+        }
+        _ => return Err("system_bad_k8s"),
+    };
+    Ok(SystemUri::Kubernetes {
+        context,
+        namespace: namespace.to_string(),
+        target,
+        container,
+    })
+}
+
 impl SystemUri {
     /// The source `path` names: `None` when it is no system URI, `Some(Err)` with the
     /// reason when it is one that cannot be used.
@@ -121,6 +193,9 @@ impl SystemUri {
                 Err("system_bad_unit")
             });
         }
+        if let Some(rest) = text.strip_prefix(K8S) {
+            return Some(parse_k8s(rest));
+        }
         let rest = text.strip_prefix(DOCKER)?;
         Some(if valid_container(rest) {
             Ok(Self::Docker {
@@ -139,6 +214,24 @@ impl SystemUri {
                 unit.as_deref().unwrap_or("")
             ),
             Self::Docker { container } => format!("{DOCKER}{container}"),
+            Self::Kubernetes {
+                context,
+                namespace,
+                target,
+                container,
+            } => {
+                let ctx = context
+                    .as_deref()
+                    .map(|c| format!("{c}@"))
+                    .unwrap_or_default();
+                match target {
+                    K8sTarget::Deployment(d) => format!("{K8S}{ctx}{namespace}/deploy/{d}"),
+                    K8sTarget::Pod(p) => match container {
+                        Some(c) => format!("{K8S}{ctx}{namespace}/{p}/{c}"),
+                        None => format!("{K8S}{ctx}{namespace}/{p}"),
+                    },
+                }
+            }
         }
     }
 
@@ -152,6 +245,16 @@ impl SystemUri {
                 (true, Some(u)) => format!("journal: user/{u}"),
             },
             Self::Docker { container } => format!("docker: {container}"),
+            Self::Kubernetes {
+                namespace,
+                target,
+                container,
+                ..
+            } => match (target, container) {
+                (K8sTarget::Deployment(d), _) => format!("k8s: {namespace}/deploy/{d}"),
+                (K8sTarget::Pod(p), Some(c)) => format!("k8s: {namespace}/{p}/{c}"),
+                (K8sTarget::Pod(p), None) => format!("k8s: {namespace}/{p}"),
+            },
         }
     }
 
@@ -190,6 +293,35 @@ impl SystemUri {
                 }
                 args.extend(["--".to_string(), container.clone()]);
                 (commands.docker.clone(), args)
+            }
+            Self::Kubernetes {
+                context,
+                namespace,
+                target,
+                container,
+            } => {
+                let mut args = Vec::new();
+                if let Some(ctx) = context {
+                    args.push(format!("--context={ctx}"));
+                }
+                args.extend([
+                    "logs".to_string(),
+                    "--follow".to_string(),
+                    "--timestamps".to_string(),
+                    format!("--namespace={namespace}"),
+                ]);
+                match since {
+                    Some(ms) => args.push(format!("--since-time={}", rfc3339(ms))),
+                    None => args.push(format!("--tail={backlog}")),
+                }
+                if let Some(c) = container {
+                    args.push(format!("--container={c}"));
+                }
+                args.push(match target {
+                    K8sTarget::Pod(p) => p.clone(),
+                    K8sTarget::Deployment(d) => format!("deployment/{d}"),
+                });
+                (commands.kubectl.clone(), args)
             }
         }
     }
@@ -376,6 +508,7 @@ impl SystemStream {
         let label = match &uri {
             SystemUri::Journald { .. } => "journald",
             SystemUri::Docker { .. } => "docker",
+            SystemUri::Kubernetes { .. } => "k8s",
         };
         let copier = match StdinStream::start_named(reader, settings, wake.clone(), label) {
             Ok(c) => c,
@@ -608,6 +741,8 @@ pub enum ListKind {
     Docker,
     /// systemd services, the user's with `user` (`systemctl list-units`).
     Units { user: bool },
+    /// Kubernetes pods of every namespace (`kubectl get pods -A`), as `namespace/pod`.
+    Pods,
 }
 
 /// One entry of a listing: the name a URI takes, and what to show next to it.
@@ -631,6 +766,19 @@ pub fn list_command(kind: ListKind, commands: &Commands) -> (String, Vec<String>
             .map(String::from)
             .to_vec(),
         ),
+        ListKind::Pods => (
+            commands.kubectl.clone(),
+            [
+                "get",
+                "pods",
+                "--all-namespaces",
+                "--no-headers",
+                "-o",
+                "custom-columns=NS:.metadata.namespace,NAME:.metadata.name,STATUS:.status.phase",
+            ]
+            .map(String::from)
+            .to_vec(),
+        ),
         ListKind::Units { user } => {
             let mut args = ["list-units", "--type=service", "--no-legend", "--plain"]
                 .map(String::from)
@@ -649,7 +797,18 @@ pub fn parse_listing(kind: ListKind, output: &str) -> Vec<Listed> {
         .lines()
         .filter_map(|line| {
             let line = line.trim();
+            let pod_name;
             let (name, detail) = match kind {
+                // `prod   api-7f9c   Running`
+                ListKind::Pods => {
+                    let mut parts = line.split_whitespace();
+                    let (ns, pod) = (parts.next()?, parts.next()?);
+                    if !valid_k8s_name(ns) || !valid_k8s_name(pod) {
+                        return None;
+                    }
+                    pod_name = format!("{ns}/{pod}");
+                    (pod_name.as_str(), parts.collect::<Vec<_>>().join(" "))
+                }
                 ListKind::Docker => {
                     let mut parts = line.split('\t');
                     let name = parts.next()?.trim();
@@ -669,6 +828,7 @@ pub fn parse_listing(kind: ListKind, output: &str) -> Vec<Listed> {
                 }
             };
             let valid = match kind {
+                ListKind::Pods => true,
                 ListKind::Docker => valid_container(name),
                 ListKind::Units { .. } => valid_unit(name),
             };
@@ -864,10 +1024,52 @@ mod tests {
     }
 
     #[test]
+    fn kubernetes_uris_parse_and_run_kubectl_logs() {
+        let parse = |s: &str| SystemUri::parse(Path::new(s)).unwrap();
+        let pod = parse("k8s://prod/api-7f9c").unwrap();
+        assert_eq!(pod.title(), "k8s: prod/api-7f9c");
+        assert_eq!(pod.to_uri(), "k8s://prod/api-7f9c");
+        let (program, args) = pod.command_line(&Commands::default(), None);
+        assert_eq!(program, "kubectl");
+        assert_eq!(
+            args,
+            [
+                "logs",
+                "--follow",
+                "--timestamps",
+                "--namespace=prod",
+                "--tail=10000",
+                "api-7f9c"
+            ]
+        );
+        let deploy = parse("k8s://staging@prod/deploy/web").unwrap();
+        assert_eq!(deploy.to_uri(), "k8s://staging@prod/deploy/web");
+        let (_, args) = deploy.command_line(&Commands::default(), Some(0));
+        assert_eq!(args[0], "--context=staging");
+        assert!(args.contains(&"--since-time=1970-01-01T00:00:00.000Z".to_string()));
+        assert_eq!(args.last().unwrap(), "deployment/web");
+        let container = parse("k8s://prod/api-7f9c/sidecar").unwrap();
+        let (_, args) = container.command_line(&Commands::default(), None);
+        assert!(args.contains(&"--container=sidecar".to_string()));
+        // Names kubectl could read as options, or that Kubernetes refuses, are refused.
+        for bad in [
+            "k8s://prod",
+            "k8s://Prod/api",
+            "k8s://prod/-x",
+            "k8s://-c@prod/api",
+            "k8s://a/b/c/d",
+        ] {
+            assert_eq!(parse(bad), Err("system_bad_k8s"), "{bad}");
+        }
+        assert!(is_system_path(Path::new("k8s://prod/api")));
+    }
+
+    #[test]
     fn command_lines() {
         let commands = Commands {
             docker: "podman".into(),
             journalctl: "journalctl".into(),
+            kubectl: "kubectl".into(),
             backlog: 500,
         };
         let docker = SystemUri::Docker {
