@@ -41,3 +41,10 @@ The imported or created configuration SHALL be saved in a portable INI file (`fa
 #### Scenario: Settings saved on exit
 - **WHEN** the application closes
 - **THEN** open tabs, highlight rules, and layout states are written to the local configuration file.
+
+### Requirement: Notepad++ Filter Import
+Rule import SHALL read Notepad++ AnalysePlugin filter files and UDL keyword lists into highlight rules.
+
+#### Scenario: AnalysePlugin file
+- **WHEN** the user imports an AnalysePlugin XML with three searches
+- **THEN** three highlight rules with their colours are added.
