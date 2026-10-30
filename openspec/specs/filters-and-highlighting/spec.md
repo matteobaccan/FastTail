@@ -447,3 +447,10 @@ The global filter SHALL offer the same expression mode for its include side, wit
 #### Scenario: Global expression survives a restart
 - **WHEN** the user sets the global expression `NOT healthcheck` and restarts FastTail
 - **THEN** the global filter bar is in expression mode with `NOT healthcheck`, and no stream shows a line containing `healthcheck`.
+
+### Requirement: Pinned and Recent Presets
+Filter presets SHALL be listed pinned first, then the five most recently used, then the others by name, and pinning SHALL be saved.
+
+#### Scenario: Pinned first
+- **WHEN** the preset `errors` is pinned
+- **THEN** it is listed first in both interfaces.

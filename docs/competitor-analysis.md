@@ -339,7 +339,7 @@ window and the terminal together.
 - ✅ `tui-page-acceleration` (S): held PgUp / PgDn accelerate
 - ✅ `release-packages` group 5: the packaging docs and the release check (archived)
 
-**0.32.0, search and navigation** (gaps 28 to 33):
+**0.32.0, search and navigation** (gaps 28 to 33), shipped 2026-10-30:
 
 - ✅ `named-searches` (M), `operation-jump` (S), `stream-info` (S), `copy-excerpt` (S),
   `preset-pinning` (S), `kubernetes-source` (S–M)

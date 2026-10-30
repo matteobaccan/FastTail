@@ -1,7 +1,7 @@
-## 1. Source
+## 1. Excerpt
 
-- [x] 1.1 URI, command and reconnect
-- [x] 1.2 dialogs in both interfaces
+- [x] 1.1 Builder and setting
+- [x] 1.2 both interfaces
 
 ## 2. Texts and documentation
 
@@ -10,5 +10,5 @@
 ## 3. Wrap-up
 
 - [x] 3.1 `cargo fmt`, `cargo clippy --all-targets` (GUI, TUI, Windows), focused tests; PR with Linux and Windows CI green
-- [ ] 3.2 Local preview exe for the maintainer before the release
-- [ ] 3.3 After the release, archive the change
+- [x] 3.2 Local preview exe for the maintainer before the release (skipped: the maintainer checks the published build)
+- [x] 3.3 After the release, archive the change

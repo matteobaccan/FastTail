@@ -200,3 +200,10 @@ The HTML format SHALL write one standalone file with no script and no external r
 #### Scenario: Too many lines for HTML
 - **WHEN** the visible lines number 350,000 and the user chooses HTML
 - **THEN** the dialog says that only the first 200,000 lines will be exported, and the file holds lines up to the 200,000th visible one.
+
+### Requirement: Copy as Excerpt
+Both interfaces SHALL copy the selected rows as a fenced block headed by the stream name, the line range and the time span, in Markdown, Jira or Slack flavour.
+
+#### Scenario: To a ticket
+- **WHEN** rows 1204 to 1210 are selected and the user copies them as an excerpt
+- **THEN** the clipboard holds a header naming the file and lines, then the rows in a code block.
