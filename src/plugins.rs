@@ -629,11 +629,14 @@ pub type FormatError = (String, PathBuf, String);
 /// A format file of the plugin `plugin`: compiled under the name `<plugin>/<name>`,
 /// read-only, and refused when a sample line does not match its patterns.
 fn read_bundled(path: &Path, plugin: &str) -> Result<LogFormat, String> {
-    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    use std::io::Read;
+    let mut file = crate::file_source::open_file_shared(path).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() || meta.len() > 256 * 1024 {
         return Err("not a format file".to_string());
     }
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut text = String::with_capacity(meta.len() as usize);
+    file.read_to_string(&mut text).map_err(|e| e.to_string())?;
     let mut spec = crate::log_format::FormatSpec::from_ini(&text)?;
     spec.name = format!("{plugin}/{}", spec.name.trim());
     let mut format = LogFormat::compile(spec)?;
@@ -823,5 +826,13 @@ type = "secret"
             ..p
         };
         assert!(check_value(&t, "a\nb").is_some());
+    }
+
+    #[test]
+    fn test_read_bundled_rejects_non_regular_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let err =
+            read_bundled(temp_dir.path(), "test_plugin").expect_err("should fail for directory");
+        assert!(!err.is_empty());
     }
 }

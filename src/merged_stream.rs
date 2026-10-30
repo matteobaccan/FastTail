@@ -607,11 +607,11 @@ mod tests {
         fill(&mut f, &[Some(&a), Some(&b)]);
         assert_eq!(spool_text(&f).lines().count(), 2, "b off");
         f.set_enabled(1, true);
-        std::fs::write(&a_path, "2026-01-01T09:00:00Z new a\n").unwrap();
+        std::fs::write(&a_path, "2026-01-01T09:00:00Z new a line\n").unwrap();
         a.poll_updates();
         fill(&mut f, &[Some(&a), Some(&b)]);
         let text = spool_text(&f);
-        assert!(text.starts_with("2026-01-01T09:00:00Z new a\n"), "{text}");
+        assert!(text.starts_with("2026-01-01T09:00:00Z new a line\n"), "{text}");
         assert_eq!(text.lines().count(), 2);
         // Every source closed: the view stops following.
         f.step(&[None, None], Duration::from_secs(1));
@@ -710,11 +710,11 @@ mod tests {
         f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
         f.sources[1].seen_at = Instant::now();
         f.step(&[Some(&a), Some(&b)], Duration::from_secs(1));
-        std::fs::write(&a_path, "2026-01-01T09:00:00Z new a\n").unwrap();
+        std::fs::write(&a_path, "2026-01-01T09:00:00Z new a line\n").unwrap();
         a.poll_updates();
         fill(&mut f, &[Some(&a), Some(&b)]);
         let text = spool_text(&f);
-        assert!(text.starts_with("2026-01-01T09:00:00Z new a\n"), "{text}");
+        assert!(text.starts_with("2026-01-01T09:00:00Z new a line\n"), "{text}");
         assert!(!text.contains("old a"));
     }
 
