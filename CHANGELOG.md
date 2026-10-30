@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Notepad++ filters.** *Import rules…* (both interfaces) also reads Notepad++
+  AnalysePlugin files and User Defined Language keyword lists as highlight rules.
+
 ## [0.32.0] - 2026-10-30
 
 ### Added
