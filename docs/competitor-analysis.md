@@ -197,7 +197,7 @@ live tail with a volume histogram, alerts, and in 2026 MCP servers for AI assist
   FastTail has one ✅.
 - **From the log to the code**: lnav links stack-trace locations to the editor and messages
   to their logging statements (`log2src`); IDE consoles have done the first for years.
-  FastTail opens source locations in the editor ✅; `log2src` ⬜ (planned for 0.33.0).
+  FastTail opens source locations in the editor ✅ and messages at their logging statements ✅.
 - **One viewer, two faces**: logana 0.8.0 added a native GUI beside its TUI from one Rust
   code base, the shape FastTail has ✅.
 - **Basics still win**: tailspin's growth shows zero-configuration highlighting sells; the
@@ -272,7 +272,7 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 31 | **Copy as excerpt** for tickets (Markdown, Jira, Slack) | gonzo, logana | Medium | S | ✅ |
 | 32 | **Stream information**: indexing time, memory, encoding, parser | lnav 0.15 | Low–Med | S | ✅ |
 | 33 | **Pinned and recent presets** | Chipmunk 4.3 | Low–Med | S | ✅ |
-| 34 | **Message linked to its logging statement** (`log2src`) | lnav | Low–Med | L | ⬜ `log2src-links` |
+| 34 | **Message linked to its logging statement** (`log2src`) | lnav | Low–Med | L | ✅ |
 | 35 | **Remote Windows Event Log** | LogFusion | Low–Med | M | ✅ (current credentials) |
 | 36 | **Notepad++ filter import** (AnalysePlugin, UDL) | logana 0.7.7 | Low | S | ✅ |
 | 37 | **DLT automotive files** | Chipmunk, logana | Low | L | ⬜ `dlt-format` (optional) |

@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **From a message to its logging statement.** *Go to the logging statement* (row menu,
+  palette, `Ctrl + Shift + O`; `Alt+L` in the terminal) opens the editor at the logging call
+  of the source folders whose format string printed the row (Rust, Java / Kotlin, Python,
+  Go, C#, JavaScript / TypeScript).
 - **Remote Event Log.** `eventlog://<host>/<channel>` (the Event Log dialog's *Computer*
   field) follows a channel of another Windows machine with the current credentials.
 - **Notepad++ filters.** *Import rules…* (both interfaces) also reads Notepad++

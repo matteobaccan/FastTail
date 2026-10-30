@@ -10,7 +10,7 @@ source locations that are written in the line, not the place a plain message com
   background, their format strings as patterns.
 - *Go to the logging statement* (row menu, palette, `Ctrl+Shift+O` / `Alt+L`) opens the
   editor at the statement whose pattern matches the row's message; several matches are
-  listed. Both interfaces: the window and the terminal (`fasttail-tui`) get it in the same change.
+  listed in the notice (the best one opens). Both interfaces: the window and the terminal (`fasttail-tui`) get it in the same change.
 
 Target release: **0.33.0** (plan of 2026-10-30, after the competitor scan against 0.30.0; see `docs/competitor-analysis.md` section 8). Priority: **Low–Med**. Effort: **L**.
 

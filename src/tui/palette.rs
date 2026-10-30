@@ -50,6 +50,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::OperationNext => (Action::OperationNext, "Alt+."),
         ActionId::StreamInfo => (Action::StreamInfo, "Alt+I"),
         ActionId::CopyExcerpt => (Action::CopyExcerpt, "Alt+Y"),
+        ActionId::LogStatement => (Action::LogStatement, "Alt+L"),
         ActionId::OperationPrev => (Action::OperationPrev, "Alt+,"),
         // The window's timeline strip is the volume row in a terminal.
         ActionId::Timeline => (Action::VolumeRow, "Alt+V"),

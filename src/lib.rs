@@ -40,6 +40,7 @@ pub mod i18n_tui;
 pub mod json_tree;
 pub mod keymap;
 pub mod lock;
+pub mod log2src;
 pub mod log_format;
 pub mod log_format_edit;
 pub mod log_level;
