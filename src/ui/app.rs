@@ -1195,12 +1195,7 @@ impl FastTailApp {
     /// Opens a merged view of the streams `sources` (two or more, by path) in a new tab and
     /// returns its path; `None` when its spool cannot be created (the notice says why).
     pub fn open_merged_view(&mut self, sources: &[PathBuf]) -> Option<PathBuf> {
-        let n = 1 + self
-            .engines
-            .iter()
-            .filter_map(|e| e.merged.as_ref().map(|m| m.n))
-            .max()
-            .unwrap_or(0);
+        let n = crate::merged_stream::next_number(self.engines.iter());
         let engine = self.merged_engine(n, sources)?;
         let path = engine.path.clone();
         self.engines.push(engine);
@@ -1220,39 +1215,15 @@ impl FastTailApp {
         if found.len() < 2 {
             return None;
         }
-        let named: Vec<(PathBuf, String)> = found
-            .iter()
-            .map(|e| (e.path.clone(), crate::find_all::stream_name(e)))
-            .collect();
-        // Saved by the names its sources are saved under; with standard input it is not.
-        let saved: Vec<PathBuf> = if found.iter().all(|e| crate::workspace::is_persisted(e)) {
-            found
-                .iter()
-                .map(|e| crate::workspace::persisted_path(e))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let spool_dir = self.config.compressed_settings().spool_dir;
-        let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
-        let opened = crate::merged_stream::MergedFeeder::create(n, named, &spool_dir, max_bytes)
-            .and_then(|mut feeder| {
-                feeder.saved_sources = saved;
-                let mut engine = TailEngine::open(feeder.spool_path())?;
-                engine.merged = Some(Box::new(feeder));
-                Ok(engine)
-            });
-        let mut engine = match opened {
+        let mut engine = match crate::merged_stream::open_view(n, &found, &self.config) {
             Ok(engine) => engine,
             Err(e) => {
                 self.open_notice = Some(e.to_string());
                 return None;
             }
         };
-        crate::workspace::apply_settings(&mut engine, &self.config);
         engine.set_quick_labels(&self.quick_labels);
         engine.set_global_filter(self.global_spec.clone());
-        engine.follow_tail = true;
         Some(engine)
     }
 
@@ -1461,24 +1432,9 @@ impl FastTailApp {
             )));
             changed = true;
         }
-        for m in 0..self.engines.len() {
-            let Some(mut feeder) = self.engines[m].merged.take() else {
-                continue;
-            };
-            let engines: Vec<Option<&TailEngine>> = feeder
-                .sources
-                .iter()
-                .map(|s| {
-                    self.engines
-                        .iter()
-                        .find(|e| e.merged.is_none() && paths_equal(&e.path, &s.path))
-                })
-                .collect();
-            if feeder.step(&engines, std::time::Duration::from_millis(4)) {
-                changed = true;
-            }
-            self.engines[m].merged = Some(feeder);
-        }
+        let mut engines: Vec<&mut TailEngine> = self.engines.iter_mut().collect();
+        changed |=
+            crate::merged_stream::feed_views(&mut engines, std::time::Duration::from_millis(4));
         changed
     }
 
