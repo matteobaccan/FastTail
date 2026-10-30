@@ -48,6 +48,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::TimeAnchorClear => (Action::TimeAnchorClear, ""),
         ActionId::SelectAll => (Action::SelectAll, "Ctrl+A"),
         ActionId::OperationNext => (Action::OperationNext, "Alt+."),
+        ActionId::StreamInfo => (Action::StreamInfo, "Alt+I"),
         ActionId::OperationPrev => (Action::OperationPrev, "Alt+,"),
         // The window's timeline strip is the volume row in a terminal.
         ActionId::Timeline => (Action::VolumeRow, "Alt+V"),

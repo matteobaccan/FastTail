@@ -62,6 +62,7 @@ pub enum ActionId {
     RecentFiles,
     OperationNext,
     OperationPrev,
+    StreamInfo,
     ClearRecentFiles,
     // Session
     SessionSaveAs,
@@ -455,6 +456,7 @@ pub const ACTIONS: &[Action] = &[
     action(A::MergedView, "window.merged_view", "act_merge", C::Window, S::Window, None, &[]),
     action(A::LogFormats, "window.log_formats", "act_log_formats", C::Window, S::Window, None, &[]),
     action(A::KeyboardShortcuts, "window.shortcuts", "keys_open", C::Window, S::Window, None, &[]),
+    action(A::StreamInfo, "window.stream_info", "info_title", C::Window, S::Window, None, &[N::Stream]),
     action(A::RecentFiles, "window.recent_files", "recent_files", C::Window, S::Window, None, &[]),
     action(A::SplitFile, "window.split", "act_split", C::Window, S::Window, None, &[]),
     action(A::SystemReconnect, "stream.reconnect", "system_reconnect", C::Stream, S::Stream, None, &[N::SourceEnded]),

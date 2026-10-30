@@ -98,6 +98,8 @@ pub struct FastTailApp {
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
     /// The Recent files window (the palette's "Recent files"), while it is shown.
     pub recent_files_window: bool,
+    /// The stream whose information window is shown (the palette's "Stream information").
+    pub stream_info: Option<PathBuf>,
     /// The Open system source dialog (`📦`, the palette).
     pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
     /// The Remote file (SSH) dialog (`🌐`, the palette).
@@ -649,6 +651,7 @@ impl FastTailApp {
             folder_prompt: None,
             merge_prompt: None,
             recent_files_window: false,
+            stream_info: None,
             system_dialog: None,
             remote_dialog: None,
             paste_request: None,
@@ -6864,6 +6867,48 @@ impl FastTailApp {
             }
         }
 
+        // 11a''''. Stream information (palette): closed when its stream goes.
+        if let Some(path) = self.stream_info.clone() {
+            let lang = self.config.language;
+            let mut open = true;
+            match self.engines.iter().find(|e| e.path == path) {
+                Some(engine) => {
+                    let rows = crate::stream_info::rows(engine);
+                    egui::Window::new(format!(
+                        "{} · {}",
+                        t(lang, "info_title"),
+                        crate::find_all::stream_name(engine)
+                    ))
+                    .id(egui::Id::new("fasttail_stream_info"))
+                    .open(&mut open)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(&ctx, |ui| {
+                        egui::Grid::new("fasttail_stream_info_grid")
+                            .num_columns(2)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (item, value) in rows {
+                                    ui.label(t(lang, item.key()));
+                                    let text = match value {
+                                        crate::stream_info::Value::Text(s) => s,
+                                        crate::stream_info::Value::Key(k) => t(lang, k).to_string(),
+                                    };
+                                    ui.label(RichText::new(text).monospace());
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                }
+                None => open = false,
+            }
+            let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if !open || escape {
+                self.stream_info = None;
+            }
+        }
+
         // 11a'''. Export dialog: closed when its stream goes.
         if let Some(dialog) = self.export_dialog.as_mut() {
             match self.engines.iter().find(|e| e.path == dialog.source) {
@@ -7627,6 +7672,7 @@ impl FastTailApp {
             }
             A::ClearRecentFiles => self.config.recent_files.clear(),
             A::RecentFiles => self.recent_files_window = true,
+            A::StreamInfo => self.stream_info = self.focused_stream_path(),
             A::SessionSaveAs => self.run_session_action(SessionAction::SaveAs),
             A::SessionSave => self.run_session_action(SessionAction::Save),
             A::BookmarkReportAll => {
