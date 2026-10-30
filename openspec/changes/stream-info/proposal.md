@@ -6,7 +6,7 @@ format, rotation pieces).
 
 ## What Changes
 
-- *Stream information* (stream menu, palette, `Alt+I` in the terminal): path and size,
+- *Stream information* (palette, `Alt+I` in the terminal): path and size,
   lines, indexing time, index and cache memory, encoding (and how it was chosen), field
   parser or log format, timestamp format and zone, rotation pieces, source kind. Both interfaces: the window and the terminal (`fasttail-tui`) get it in the same change.
 

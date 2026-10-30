@@ -1665,6 +1665,10 @@ pub struct TailEngine {
     pending_search: bool,
     /// True while the line index is being built in the background.
     pub index_pending: bool,
+    /// When the current index started, and how long the last full index took (the
+    /// stream information).
+    pub index_started: Instant,
+    pub index_ms: Option<u64>,
     /// Files larger than these run filters/search, or the initial index, on a worker thread.
     pub job_threshold_bytes: u64,
     pub index_job_threshold_bytes: u64,
@@ -2570,6 +2574,8 @@ impl TailEngine {
             pending_filter: false,
             pending_search: false,
             index_pending: false,
+            index_started: Instant::now(),
+            index_ms: None,
             job_threshold_bytes,
             index_job_threshold_bytes,
             filtered_lines: Vec::new(),
@@ -3588,6 +3594,8 @@ impl TailEngine {
         self.collapse_after_job = None;
         self.collapse_dirty = self.collapse.mode.is_on().then_some(0);
         self.index_pending = false;
+        self.index_ms
+            .get_or_insert(self.index_started.elapsed().as_millis() as u64);
         self.pending_refresh_from = None;
         self.clear_selection();
         self.reset_bookmarks();
@@ -3680,6 +3688,7 @@ impl TailEngine {
             self.buffer_generation = self.buffer_generation.wrapping_add(1);
             self.scroll_to_line = None;
             self.index_pending = true;
+            self.index_started = Instant::now();
             self.pending_filter = self.filter.is_active();
             self.pending_search = !self.last_searched_query.is_empty();
             self.start_job(JobSpec::Index, 0);
@@ -9678,6 +9687,7 @@ impl TailEngine {
             | ScanKind::Operations => {}
             ScanKind::Index => {
                 self.index_pending = false;
+                self.index_ms = Some(self.index_started.elapsed().as_millis() as u64);
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);
                 if self.source.len() > end_offset {
                     // The file grew while indexing: index the rest incrementally.

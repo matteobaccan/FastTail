@@ -620,6 +620,8 @@ pub struct App {
     pub merge: Option<crate::tui::merge::MergeDialog>,
     /// The recent files list (palette): the row selected.
     pub recent_menu: Option<usize>,
+    /// The stream whose information is shown (`Alt+I`).
+    pub info_view: Option<PathBuf>,
     /// PgUp / PgDn held down, for their acceleration.
     page_hold: keys::PageHold,
     /// A merged view has lines left to merge: the loop polls faster.
@@ -795,6 +797,7 @@ impl App {
             analysis_menu: None,
             merge: None,
             recent_menu: None,
+            info_view: None,
             page_hold: keys::PageHold::default(),
             views_busy: false,
             keymap: keys::KeyMap::default(),
@@ -1461,6 +1464,16 @@ impl App {
         }
         if self.recent_menu.is_some() {
             return self.on_recent_key(key);
+        }
+        if self.info_view.is_some() {
+            use crossterm::event::{KeyCode, KeyEventKind};
+            if key.kind != KeyEventKind::Release
+                && matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q'))
+            {
+                self.info_view = None;
+                return true;
+            }
+            return false;
         }
         if self.keys_dialog.is_some() {
             return self.on_keys_dialog_key(key);
@@ -4070,6 +4083,49 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// The stream information (`Alt+I`), labels in the window's words.
+    fn draw_info(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::stream_info::Value;
+        let Some(path) = self.info_view.clone() else {
+            return;
+        };
+        let Some(i) = self.tab_index(&path) else {
+            self.info_view = None;
+            return;
+        };
+        let lang = self.lang;
+        let rows: Vec<(String, String)> = crate::stream_info::rows(&self.tabs[i].engine)
+            .into_iter()
+            .map(|(item, value)| {
+                let text = match value {
+                    Value::Text(s) => s,
+                    Value::Key(k) => crate::i18n::t(lang, k).to_string(),
+                };
+                (crate::i18n::t(lang, item.key()).to_string(), text)
+            })
+            .collect();
+        let label_w = rows.iter().map(|(l, _)| width(l)).max().unwrap_or(10);
+        let value_w = rows.iter().map(|(_, v)| width(v)).max().unwrap_or(10);
+        let w = (label_w + value_w + 6).clamp(40, area.width.saturating_sub(4) as usize) as u16;
+        let title = format!(
+            "{} · {}",
+            crate::i18n::t(lang, "info_title"),
+            self.tabs[i].title
+        );
+        let inner = self.dialog(frame, area, (w, rows.len() as u16 + 3), &title, false);
+        let dim = Style::default().fg(self.palette.dim());
+        let out: Vec<Line> = rows
+            .into_iter()
+            .map(|(l, v)| {
+                Line::from(vec![
+                    Span::styled(format!(" {l:<label_w$}  "), dim),
+                    Span::raw(v),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     fn draw_recent(&mut self, frame: &mut Frame, area: Rect) {
@@ -7306,6 +7362,7 @@ impl App {
                     || self.analysis_menu.is_some()
                     || self.merge.is_some()
                     || self.recent_menu.is_some()
+                    || self.info_view.is_some()
                     || self.keys_dialog.is_some()
                     || self.plugins.is_some()
                     || self.presets.is_some()
@@ -7771,6 +7828,7 @@ impl App {
                     || self.analysis_menu.take().is_some()
                     || self.merge.take().is_some()
                     || self.recent_menu.take().is_some()
+                    || self.info_view.take().is_some()
                     || self.columns_menu.take().is_some()
                 {
                 } else if let Some(m) = self.tool_menu.take() {
@@ -8238,6 +8296,7 @@ impl App {
             Action::MergedView => self.open_merge(),
             Action::FilterTab => self.open_filter_tab(),
             Action::SelectAll => tab.engine.select_all_visible(),
+            Action::StreamInfo => self.info_view = Some(tab.engine.path.clone()),
             Action::OperationNext | Action::OperationPrev => {
                 use crate::operation_jump::OpJump;
                 let Some(from) = tab.cursor_line() else {
@@ -8541,6 +8600,9 @@ impl App {
         }
         if self.recent_menu.is_some() {
             self.draw_recent(frame, main_area);
+        }
+        if self.info_view.is_some() {
+            self.draw_info(frame, main_area);
         }
         if self.keys_dialog.is_some() {
             self.draw_keys_dialog(frame, main_area);
@@ -15619,6 +15681,32 @@ mod tests {
             app.tabs[0].engine.named.saved(),
             vec![(2, "refused".to_string())]
         );
+    }
+
+    #[test]
+    fn alt_i_shows_the_stream_information() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        render(&mut app, 100, 30);
+        app.apply(Action::StreamInfo);
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("Stream information · a.log")),
+            "{screen:#?}"
+        );
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("Lines") && l.contains(" 3")),
+            "{screen:#?}"
+        );
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("Encoding") && l.contains("UTF-8")));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.info_view.is_none());
     }
 
     #[test]

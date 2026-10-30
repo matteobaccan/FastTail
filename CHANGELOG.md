@@ -14,6 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   eight searches per stream, each highlighted in its own colour with a count chip; with
   the search box empty `F3` / `n` walk them all, or only the one whose chip was clicked.
   Saved per stream in the workspace and sessions.
+- **Stream information.** *Stream information* in the palette (`Alt+I` in the terminal):
+  path, source kind, size, lines, the time the index took, the memory of the index and the
+  block cache, encoding, field parser and timestamps.
 - **Follow an operation.** `Alt + ]` / `Alt + [` (`Alt+.` / `Alt+,` in the terminal) go to
   the next or previous line with the cursor row's `trace_id`, `request_id`, `req_id`,
   `opid`, `correlation_id` or `thread` (or the Operations view's source).

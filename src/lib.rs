@@ -75,6 +75,7 @@ pub mod split;
 pub mod spool;
 pub mod ssh_source;
 pub mod stdin_source;
+pub mod stream_info;
 pub mod syslog;
 pub mod system_source;
 pub mod tail_engine;
