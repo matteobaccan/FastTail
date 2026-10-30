@@ -96,6 +96,8 @@ pub struct FastTailApp {
     pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
     /// The New merged view dialog while it is shown.
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
+    /// The Recent files window (the palette's "Recent files"), while it is shown.
+    pub recent_files_window: bool,
     /// The Open system source dialog (`📦`, the palette).
     pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
     /// The Remote file (SSH) dialog (`🌐`, the palette).
@@ -646,6 +648,7 @@ impl FastTailApp {
             quick_labels: Vec::new(),
             folder_prompt: None,
             merge_prompt: None,
+            recent_files_window: false,
             system_dialog: None,
             remote_dialog: None,
             paste_request: None,
@@ -6818,6 +6821,49 @@ impl FastTailApp {
             }
         }
 
+        // 11a''. Recent files (palette): a click opens one, as the toolbar's 🕒 menu does.
+        if self.recent_files_window {
+            let lang = self.config.language;
+            let mut open = true;
+            let mut pick = None;
+            let mut clear = false;
+            egui::Window::new(t(lang, "recent_files"))
+                .id(egui::Id::new("fasttail_recent_files"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(&ctx, |ui| {
+                    if self.config.recent_files.is_empty() {
+                        ui.label(RichText::new(t(lang, "no_recent_files")).italics());
+                        return;
+                    }
+                    for path in &self.config.recent_files {
+                        if ui
+                            .button(RichText::new(format!("📄 {}", path.display())).monospace())
+                            .clicked()
+                        {
+                            pick = Some(path.clone());
+                        }
+                    }
+                    ui.separator();
+                    clear = ui
+                        .button(format!("🗑 {}", t(lang, "clear_recent")))
+                        .clicked();
+                });
+            if clear {
+                self.config.recent_files.clear();
+                let _ = self.config.save();
+            }
+            let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if !open || pick.is_some() || escape {
+                self.recent_files_window = false;
+            }
+            if let Some(path) = pick {
+                self.open_log_file(path);
+            }
+        }
+
         // 11a'''. Export dialog: closed when its stream goes.
         if let Some(dialog) = self.export_dialog.as_mut() {
             match self.engines.iter().find(|e| e.path == dialog.source) {
@@ -7580,6 +7626,7 @@ impl FastTailApp {
                     Some(crate::ui::merge_dialog::MergePrompt::starting_with(first));
             }
             A::ClearRecentFiles => self.config.recent_files.clear(),
+            A::RecentFiles => self.recent_files_window = true,
             A::SessionSaveAs => self.run_session_action(SessionAction::SaveAs),
             A::SessionSave => self.run_session_action(SessionAction::Save),
             A::BookmarkReportAll => {

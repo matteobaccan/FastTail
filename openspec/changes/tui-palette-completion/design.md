@@ -11,7 +11,7 @@
 ## Decisions
 
 ### D1. A window-only list
-The registry gets a `window_only` flag; the test walks `actions::all()` and fails on a missing terminal mapping, so a new command cannot be forgotten.
+The terminal palette keeps a `window_only` list next to its mapping (the registry stays as it is); the test walks `actions::all()` and fails on a command that is neither mapped nor listed, so a new command cannot be forgotten.
 
 ## Risks / Trade-offs
 
