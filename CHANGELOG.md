@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the selected rows under a header (`app.log, lines 1204-1210, 2026-10-29 14:02:05 ->
   14:02:07`) in a Markdown, Jira or Slack code block (Settings: *Copy as excerpt for*,
   `excerpt_format=`).
+- **Kubernetes source.** `k8s://<namespace>/<pod>` (a container with `/<container>`, a
+  deployment with `deploy/<name>`, another context with `<context>@`) follows a pod through
+  `kubectl logs -f`; the 📦 dialog lists the pods, Reconnect resumes with `--since-time`,
+  `kubectl_command` sets the program.
 - **Pinned and recent presets.** Filter presets are listed pinned first (`📌` in the
   presets menu, `*` in the terminal), then the five applied last, then by name.
 - **Stream information.** *Stream information* in the palette (`Alt+I` in the terminal):

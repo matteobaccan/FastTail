@@ -234,6 +234,9 @@ pub struct FastTailConfig {
     /// The program run for `journald://` sources.
     #[serde(default = "default_journalctl_command")]
     pub journalctl_command: String,
+    /// The program `k8s://` sources run (`kubectl_command`, default `kubectl`).
+    #[serde(default = "default_kubectl_command")]
+    pub kubectl_command: String,
     /// The OpenSSH client run for `ssh://` streams.
     #[serde(default = "default_ssh_program")]
     pub ssh_program: String,
@@ -521,6 +524,10 @@ fn default_docker_command() -> String {
     crate::system_source::DEFAULT_DOCKER_COMMAND.to_string()
 }
 
+fn default_kubectl_command() -> String {
+    crate::system_source::DEFAULT_KUBECTL_COMMAND.to_string()
+}
+
 fn default_journalctl_command() -> String {
     crate::system_source::DEFAULT_JOURNALCTL_COMMAND.to_string()
 }
@@ -611,6 +618,7 @@ impl Default for FastTailConfig {
             event_log_initial_events: default_event_log_initial_events(),
             docker_command: default_docker_command(),
             journalctl_command: default_journalctl_command(),
+            kubectl_command: default_kubectl_command(),
             ssh_program: default_ssh_program(),
             rotations: crate::rotation::Policy::Ask,
             editor_command: String::new(),
@@ -957,6 +965,7 @@ impl FastTailConfig {
         crate::system_source::Commands {
             docker: self.docker_command.clone(),
             journalctl: self.journalctl_command.clone(),
+            kubectl: self.kubectl_command.clone(),
             backlog: self.system_source_backlog_lines,
         }
     }
@@ -1119,6 +1128,7 @@ impl FastTailConfig {
             )
             .set("docker_command", self.docker_command.clone())
             .set("journalctl_command", self.journalctl_command.clone())
+            .set("kubectl_command", self.kubectl_command.clone())
             .set("ssh_program", self.ssh_program.clone())
             .set("rotations", self.rotations.name())
             .set("editor_command", self.editor_command.clone())
@@ -1707,6 +1717,7 @@ impl FastTailConfig {
             for (key, value) in [
                 ("docker_command", &mut cfg.docker_command),
                 ("journalctl_command", &mut cfg.journalctl_command),
+                ("kubectl_command", &mut cfg.kubectl_command),
                 ("ssh_program", &mut cfg.ssh_program),
             ] {
                 if let Some(s) = general.get(key).map(str::trim).filter(|s| !s.is_empty()) {
@@ -2763,9 +2774,12 @@ mod tests {
             system_source_backlog_lines: 500,
             docker_command: "podman".into(),
             journalctl_command: "/usr/bin/journalctl".into(),
+            kubectl_command: "/opt/k/kubectl".into(),
             ..Default::default()
         };
         let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.kubectl_command, "/opt/k/kubectl");
+        assert_eq!(FastTailConfig::default().kubectl_command, "kubectl");
         assert_eq!(loaded.system_source_backlog_lines, 500);
         assert_eq!(loaded.docker_command, "podman");
         assert_eq!(loaded.journalctl_command, "/usr/bin/journalctl");

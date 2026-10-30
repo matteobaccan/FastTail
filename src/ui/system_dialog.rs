@@ -18,6 +18,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Docker,
+    Kubernetes,
     Journal,
     UserJournal,
 }
@@ -26,15 +27,21 @@ impl Kind {
     /// The kinds this platform can open.
     pub fn offered() -> &'static [Kind] {
         if cfg!(target_os = "linux") {
-            &[Kind::Docker, Kind::Journal, Kind::UserJournal]
+            &[
+                Kind::Docker,
+                Kind::Kubernetes,
+                Kind::Journal,
+                Kind::UserJournal,
+            ]
         } else {
-            &[Kind::Docker]
+            &[Kind::Docker, Kind::Kubernetes]
         }
     }
 
     fn label(self, lang: Language) -> &'static str {
         match self {
             Kind::Docker => t(lang, "system_kind_docker"),
+            Kind::Kubernetes => t(lang, "system_kind_k8s"),
             Kind::Journal => t(lang, "system_kind_journal"),
             Kind::UserJournal => t(lang, "system_kind_user"),
         }
@@ -43,6 +50,7 @@ impl Kind {
     fn list_kind(self) -> ListKind {
         match self {
             Kind::Docker => ListKind::Docker,
+            Kind::Kubernetes => ListKind::Pods,
             Kind::Journal => ListKind::Units { user: false },
             Kind::UserJournal => ListKind::Units { user: true },
         }
@@ -88,6 +96,7 @@ impl SystemDialog {
         let name = self.name.trim();
         let text = match self.kind {
             Kind::Docker => format!("docker://{name}"),
+            Kind::Kubernetes => format!("k8s://{name}"),
             Kind::Journal => format!("journald://{name}"),
             Kind::UserJournal if name.is_empty() => "journald://user".to_string(),
             Kind::UserJournal => format!("journald://user/{name}"),

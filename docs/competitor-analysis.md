@@ -243,7 +243,7 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 2 | **Merged timeline** of several files by timestamp | lnav, Tailviewer, hl, LogViewPlus, Chipmunk | High | L | ✅ |
 | 3 | **Context lines** (±N) around filter matches | LogFusion, lnav 0.15 | High | S–M | ✅ |
 | 4 | **Field-scoped and boolean filters** (`status>=500`, OR / NOT) | klogg, hl, Seq, Loki, LogViewPlus | High | M | ✅ |
-| 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | ✅ (Kubernetes through `kubectl logs -f` on standard input) |
+| 5 | **Remote and system sources**: journald, Docker / Kubernetes, SSH / SFTP | lnav, LogExpert, LogViewPlus, nerdlog, lazyjournal, gonzo | Med–High | M–L | ✅ (Kubernetes as `k8s://`) |
 | 6 | **Pattern grouping** of similar lines (Drain) | gonzo, Loki, Kibana; requested in LogExpert (#654) | Medium | M | ✅ |
 | 7 | **Headless mode**: `fasttail --print` | hl, tailspin, lnav, Chipmunk CLI | Medium | S | ✅ |
 | 8 | **Time zones** and epoch dates | hl, LogViewPlus | Medium | S–M | ✅ |
@@ -268,7 +268,7 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 27 | **Machine output of `--print`** (JSON, logfmt, CSV, template) | requested in hl (#611, #1481) | Low–Med | S | ✅ |
 | 28 | **Named searches**: several searches highlighted and walked at once | lnav 0.15 | High | M | ✅ (timeline lanes ⬜) |
 | 29 | **Next line of the same operation id** | lnav (master, `o` / `O`) | Medium | S | ✅ |
-| 30 | **Kubernetes source** (`k8s://`), not only through standard input | gonzo, lazyjournal, lnav | Medium | S–M | ⬜ `kubernetes-source` |
+| 30 | **Kubernetes source** (`k8s://`), not only through standard input | gonzo, lazyjournal, lnav | Medium | S–M | ✅ |
 | 31 | **Copy as excerpt** for tickets (Markdown, Jira, Slack) | gonzo, logana | Medium | S | ✅ |
 | 32 | **Stream information**: indexing time, memory, encoding, parser | lnav 0.15 | Low–Med | S | ✅ |
 | 33 | **Pinned and recent presets** | Chipmunk 4.3 | Low–Med | S | ✅ |
@@ -342,7 +342,7 @@ window and the terminal together.
 **0.32.0, search and navigation** (gaps 28 to 33):
 
 - ✅ `named-searches` (M), `operation-jump` (S), `stream-info` (S), `copy-excerpt` (S),
-  `preset-pinning` (S); ⬜ `kubernetes-source` (S–M)
+  `preset-pinning` (S), `kubernetes-source` (S–M)
 
 **0.33.0, the long tail** (gaps 34 to 37):
 

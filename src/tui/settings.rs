@@ -60,6 +60,7 @@ pub enum Key {
     SystemBacklog,
     DockerCommand,
     JournalctlCommand,
+    KubectlCommand,
     SshProgram,
     RemoteInitialMb,
     RemoteSpoolMaxMb,
@@ -346,6 +347,11 @@ impl SettingsForm {
                 Key::JournalctlCommand,
                 en("journalctl command"),
                 Widget::Text(TextField::new(&c.journalctl_command)),
+            ),
+            Field::new(
+                Key::KubectlCommand,
+                en("kubectl command"),
+                Widget::Text(TextField::new(&c.kubectl_command)),
             ),
             Field::new(
                 Key::SshProgram,
@@ -760,7 +766,10 @@ impl SettingsForm {
                 Key::ListenerSpoolMaxMb => c.listener_spool_max_mb = num() as u32,
                 Key::ListenerLinesPerSec => c.listener_max_lines_per_sec = num() as u32,
                 Key::ListenerMbPerSec => c.listener_max_mb_per_sec = num() as u32,
-                Key::DockerCommand | Key::JournalctlCommand | Key::SshProgram => {
+                Key::DockerCommand
+                | Key::JournalctlCommand
+                | Key::KubectlCommand
+                | Key::SshProgram => {
                     let text = match &f.widget {
                         Widget::Text(t) => t.text().trim().to_string(),
                         _ => String::new(),
@@ -773,6 +782,10 @@ impl SettingsForm {
                         Key::SshProgram => {
                             (&mut c.ssh_program, crate::ssh_source::DEFAULT_SSH_PROGRAM)
                         }
+                        Key::KubectlCommand => (
+                            &mut c.kubectl_command,
+                            crate::system_source::DEFAULT_KUBECTL_COMMAND,
+                        ),
                         _ => (
                             &mut c.journalctl_command,
                             crate::system_source::DEFAULT_JOURNALCTL_COMMAND,

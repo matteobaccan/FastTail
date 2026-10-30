@@ -9436,7 +9436,7 @@ impl App {
             ),
             PromptKind::System => tx(
                 self.lang,
-                "Open docker://<container>, journald://<unit> or journald://user/<unit>",
+                "Open docker://<container>, k8s://<namespace>/<pod>, journald://<unit> or journald://user/<unit>",
             ),
             PromptKind::Remote => tx(
                 self.lang,
