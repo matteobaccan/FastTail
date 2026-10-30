@@ -164,6 +164,8 @@ pub enum Action {
     SelectAll,
     /// ALT + V: the volume row (lines per time slice) above the focused stream's rows.
     VolumeRow,
+    /// ALT + L: the logging statement that wrote the cursor row, in the editor.
+    LogStatement,
     /// ALT + Y: the selected rows (or the cursor row) as an excerpt for a ticket.
     CopyExcerpt,
     /// ALT + I: the focused stream's information (lines, index time and memory, encoding...).
@@ -342,6 +344,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('.') => Some(Action::OperationNext),
             KeyCode::Char('i') | KeyCode::Char('I') => Some(Action::StreamInfo),
             KeyCode::Char('y') | KeyCode::Char('Y') => Some(Action::CopyExcerpt),
+            KeyCode::Char('l') | KeyCode::Char('L') => Some(Action::LogStatement),
             KeyCode::Char(',') => Some(Action::OperationPrev),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
@@ -637,6 +640,7 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("operation.next", Action::OperationNext, "Alt+."),
     ("stream.info", Action::StreamInfo, "Alt+I"),
     ("copy.excerpt", Action::CopyExcerpt, "Alt+Y"),
+    ("log_statement", Action::LogStatement, "Alt+L"),
     ("operation.prev", Action::OperationPrev, "Alt+,"),
     ("split.right", Action::SplitRight, "s |"),
     ("split.down", Action::SplitDown, "_"),

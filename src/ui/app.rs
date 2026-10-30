@@ -100,6 +100,10 @@ pub struct FastTailApp {
     pub recent_files_window: bool,
     /// The stream whose information window is shown (the palette's "Stream information").
     pub stream_info: Option<PathBuf>,
+    /// The logging statements of the source folders, and a row waiting for them
+    /// (`log_statement_request`: stream and line text).
+    pub log2src: Option<crate::log2src::Index>,
+    pub log2src_pending: Option<(PathBuf, String)>,
     /// The Open system source dialog (`📦`, the palette).
     pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
     /// The Remote file (SSH) dialog (`🌐`, the palette).
@@ -652,6 +656,8 @@ impl FastTailApp {
             merge_prompt: None,
             recent_files_window: false,
             stream_info: None,
+            log2src: None,
+            log2src_pending: None,
             system_dialog: None,
             remote_dialog: None,
             paste_request: None,
@@ -1401,6 +1407,67 @@ impl FastTailApp {
             .filter_map(|i| engine.get_line(i).map(|l| l.into_owned()))
             .collect();
         self.open_log_formats(Some(lines), Some(idx));
+    }
+
+    /// "Go to the logging statement": indexes the source folders when needed, then opens
+    /// the statement that best matches the row in the editor. Returns whether to repaint.
+    pub fn apply_log_statement_requests(&mut self) -> bool {
+        let lang = self.config.language;
+        if let Some(idx) = self
+            .engines
+            .iter()
+            .position(|e| e.log_statement_request.is_some())
+        {
+            let engine = &mut self.engines[idx];
+            let line = engine.log_statement_request.take().unwrap_or(0);
+            let text = engine
+                .get_line(line)
+                .map(|l| l.into_owned())
+                .unwrap_or_default();
+            let roots = self.config.source_roots.clone();
+            if roots.is_empty() {
+                engine.view_notice = Some(t(lang, "log2src_no_roots").to_string());
+                return true;
+            }
+            if !self.log2src.as_ref().is_some_and(|i| i.covers(&roots)) {
+                self.log2src = Some(crate::log2src::Index::start(roots));
+            }
+            self.log2src_pending = Some((engine.path.clone(), text));
+        }
+        let Some((path, text)) = self.log2src_pending.clone() else {
+            return false;
+        };
+        let Some(statements) = self.log2src.as_mut().and_then(|i| i.ready()) else {
+            if let Some(e) = self.engines.iter_mut().find(|e| e.path == path) {
+                e.view_notice = Some(t(lang, "log2src_indexing").to_string());
+            }
+            return true;
+        };
+        self.log2src_pending = None;
+        let found = crate::log2src::matches(statements, &text);
+        let notice = match found.first() {
+            None => t(lang, "log2src_none").to_string(),
+            Some(best) => {
+                let opened = crate::source_links::open_in_editor(
+                    &self.config.editor_command,
+                    &best.file,
+                    best.line,
+                    None,
+                );
+                match opened {
+                    Err(e) => e,
+                    Ok(()) if found.len() > 1 => t(lang, "log2src_opened_more")
+                        .replace("{0}", &format!("{}:{}", best.file.display(), best.line))
+                        .replace("{1}", &(found.len() - 1).to_string()),
+                    Ok(()) => t(lang, "log2src_opened")
+                        .replace("{0}", &format!("{}:{}", best.file.display(), best.line)),
+                }
+            }
+        };
+        if let Some(e) = self.engines.iter_mut().find(|e| e.path == path) {
+            e.view_notice = Some(notice);
+        }
+        true
     }
 
     /// Feeds the merged views from their sources (a few milliseconds each per frame) and
@@ -5035,6 +5102,9 @@ impl FastTailApp {
             ctx.request_repaint();
         }
         if self.apply_merged_views() {
+            ctx.request_repaint();
+        }
+        if self.apply_log_statement_requests() {
             ctx.request_repaint();
         }
         if self.apply_compare_requests() {

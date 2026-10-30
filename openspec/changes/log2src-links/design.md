@@ -14,12 +14,12 @@
 Each language has a few regexes for its logging calls; the format string becomes a pattern (`{}` / `%s` / `{0}` as wildcards).
 
 ### D2. Matched by template
-A row is matched through its Drain template's fixed words first, then the full pattern.
+A row is matched by the statements whose longest literal part it contains, then by their full pattern; the statement with the most literal text wins.
 
 ## Risks / Trade-offs
 
-- [Large source trees] → the index is built once in the background and cached beside the source folder list.
+- [Large source trees] → the index is built once per run in the background (at most 50,000 files of 2 MB, build folders skipped); it is not cached on disk.
 
 ## Open Questions
 
-- Languages first? Proposed: Rust, Java, Python, then Go, C#, JavaScript.
+- Languages first? Decided: all six in the first version (Rust, Java / Kotlin, Python, Go, C#, JavaScript / TypeScript).

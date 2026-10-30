@@ -1897,6 +1897,8 @@ pub struct TailEngine {
     /// The stream bar's "search all streams" button was pressed: the app opens the Find
     /// results tab with this stream's query after the dock is drawn.
     pub find_all_request: bool,
+    /// "Go to the logging statement" asked for this line (the app looks it up).
+    pub log_statement_request: Option<usize>,
     /// The stream menu asked for a bookmark report of this stream: the app opens the
     /// report dialog after the dock is drawn.
     pub report_request: bool,
@@ -2631,6 +2633,7 @@ impl TailEngine {
             format_zone: None,
             time_zone_sample: None,
             find_all_request: false,
+            log_statement_request: None,
             report_request: false,
             sound_alerts: 0,
             field_choice: ParserChoice::Auto,

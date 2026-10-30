@@ -622,6 +622,9 @@ pub struct App {
     pub recent_menu: Option<usize>,
     /// The stream whose information is shown (`Alt+I`).
     pub info_view: Option<PathBuf>,
+    /// The logging statements of the source folders, and the row text waiting for them.
+    log2src: Option<crate::log2src::Index>,
+    log2src_pending: Option<String>,
     /// PgUp / PgDn held down, for their acceleration.
     page_hold: keys::PageHold,
     /// A merged view has lines left to merge: the loop polls faster.
@@ -798,6 +801,8 @@ impl App {
             merge: None,
             recent_menu: None,
             info_view: None,
+            log2src: None,
+            log2src_pending: None,
             page_hold: keys::PageHold::default(),
             views_busy: false,
             keymap: keys::KeyMap::default(),
@@ -1207,6 +1212,9 @@ impl App {
         self.views_busy = crate::filter_tab::feed_tabs(&mut engines, MERGE_BUDGET)
             | crate::merged_stream::feed_views(&mut engines, MERGE_BUDGET);
         self.apply_source_context();
+        if self.log2src_pending.is_some() {
+            self.find_log_statement(None);
+        }
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1359,6 +1367,7 @@ impl App {
             || self.export.is_some()
             || self.analysis.is_some()
             || self.views_busy
+            || self.log2src_pending.is_some()
             || self.mcp_view.busy()
             || self
                 .tabs
@@ -2711,6 +2720,71 @@ impl App {
             Some(text) => self.copy_text(&text),
             None => self.message = Some(tx(self.lang, "Nothing to copy").into()),
         }
+    }
+
+    /// `Alt+L`: the logging statement that best matches `row` (or the row waiting for the
+    /// index) opened in the editor of Settings; the source folders are indexed first.
+    fn find_log_statement(&mut self, row: Option<String>) {
+        let (roots, editor) = self
+            .settings
+            .as_ref()
+            .map(|s| {
+                (
+                    s.config.source_roots.clone(),
+                    s.config.editor_command.clone(),
+                )
+            })
+            .unwrap_or_default();
+        if let Some(row) = row {
+            if roots.is_empty() {
+                self.message = Some(
+                    tx(
+                        self.lang,
+                        "Set the source folders in Settings (External tools) first",
+                    )
+                    .into(),
+                );
+                return;
+            }
+            if !self.log2src.as_ref().is_some_and(|i| i.covers(&roots)) {
+                self.log2src = Some(crate::log2src::Index::start(roots));
+            }
+            self.log2src_pending = Some(row);
+        }
+        let Some(row) = self.log2src_pending.clone() else {
+            return;
+        };
+        let Some(statements) = self.log2src.as_mut().and_then(|i| i.ready()) else {
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "Indexing the logging statements of the source folders...",
+                )
+                .into(),
+            );
+            return;
+        };
+        self.log2src_pending = None;
+        let found = crate::log2src::matches(statements, &row);
+        self.message = Some(match found.first() {
+            None => tx(
+                self.lang,
+                "No logging statement of the source folders matches this row",
+            )
+            .into(),
+            Some(best) => {
+                let at = format!("{}:{}", best.file.display(), best.line);
+                match crate::source_links::open_in_editor(&editor, &best.file, best.line, None) {
+                    Err(e) => e,
+                    Ok(()) if found.len() > 1 => txf(
+                        self.lang,
+                        "Opened {0} ({1} more statements match)",
+                        &[&at, &(found.len() - 1)],
+                    ),
+                    Ok(()) => txf(self.lang, "Opened {0}", &[&at]),
+                }
+            }
+        });
     }
 
     /// Puts `text` on the clipboard and says how many lines went.
@@ -8462,6 +8536,16 @@ impl App {
             Action::Export => self.export_menu = Some(0),
             Action::CopyAsShown => self.copy_as_shown(),
             Action::CopyExcerpt => self.copy_excerpt(),
+            Action::LogStatement => {
+                let text = tab
+                    .cursor_line()
+                    .and_then(|l| tab.engine.get_line(l))
+                    .map(|l| l.into_owned());
+                match text {
+                    Some(text) => self.find_log_statement(Some(text)),
+                    None => self.message = Some(tx(self.lang, "Nothing to copy").into()),
+                }
+            }
             Action::BookmarkReport => self.open_prompt(PromptKind::Report(false)),
             Action::BookmarkReportAll => self.open_prompt(PromptKind::Report(true)),
             Action::ToggleTimeDelta => {

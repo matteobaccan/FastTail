@@ -3571,6 +3571,19 @@ fn render_log_stream(
                 }
                 ui.ctx().request_repaint();
             }
+            // CTRL + SHIFT + O: the logging statement that wrote the row (the app looks it up).
+            let log_src_key = egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::O,
+            );
+            if act(ActionId::LogStatement)
+                || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&log_src_key)))
+            {
+                engine.log_statement_request = engine
+                    .selection_anchor
+                    .or_else(|| engine.selection.iter().next().copied())
+                    .or_else(|| engine.get_actual_line_idx(top_row(engine)));
+            }
             // ALT + ] / ALT + [: the next / previous line of the row's operation id.
             let op_next_key =
                 egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::CloseBracket);
@@ -5886,6 +5899,8 @@ struct RowMenuPicks {
     copy: Option<(usize, bool)>,
     /// Line whose row asked for Copy as excerpt.
     excerpt: Option<usize>,
+    /// Line whose logging statement to look up.
+    log_statement: Option<usize>,
     /// Token to outline (or to clear when it is the outlined one).
     token: Option<String>,
     /// Rule picked in "Next line of rule" and the row it was picked on.
@@ -5975,6 +5990,9 @@ impl RowMenuPicks {
         }
         apply_copy_pick(ui, engine, self.copy);
         apply_excerpt_pick(ui, engine, self.excerpt);
+        if let Some(line) = self.log_statement {
+            engine.log_statement_request = Some(line);
+        }
     }
 }
 
@@ -6806,6 +6824,14 @@ fn row_context_menu(
             ui.close();
         }
         source_link_menu(ui, engine, line, lang, picks);
+        if ui
+            .button(RichText::new(t(lang, "log2src_go")).monospace())
+            .on_hover_text(t(lang, "log2src_tip"))
+            .clicked()
+        {
+            picks.log_statement = Some(line);
+            ui.close();
+        }
         if let Some(text) = engine
             .char_selection
             .as_ref()
