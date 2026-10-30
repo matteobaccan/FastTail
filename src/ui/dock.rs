@@ -5884,6 +5884,8 @@ struct RowMenuPicks {
     remove_bookmark: Option<usize>,
     /// Line whose row asked for a copy, and whether as shown.
     copy: Option<(usize, bool)>,
+    /// Line whose row asked for Copy as excerpt.
+    excerpt: Option<usize>,
     /// Token to outline (or to clear when it is the outlined one).
     token: Option<String>,
     /// Rule picked in "Next line of rule" and the row it was picked on.
@@ -5972,6 +5974,7 @@ impl RowMenuPicks {
             engine.scratch_request = Some(with_reference);
         }
         apply_copy_pick(ui, engine, self.copy);
+        apply_excerpt_pick(ui, engine, self.excerpt);
     }
 }
 
@@ -6031,6 +6034,7 @@ fn apply_row_action(
     let row = engine.current_row();
     match action {
         ActionId::CopyAsShown => apply_copy_pick(ui, engine, row.map(|r| (r, true))),
+        ActionId::CopyExcerpt => apply_excerpt_pick(ui, engine, row),
         ActionId::BookmarkNote => {
             if let Some(row) = row {
                 engine.open_note_editor(row);
@@ -6094,6 +6098,21 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
         engine.copy_selection_text()
     };
     if let Some(text) = text {
+        ui.ctx().copy_text(text);
+    }
+}
+
+/// Copy as excerpt from the row menu or the palette: the selection when the row is part of
+/// it, else the row alone, in the settings' flavour.
+fn apply_excerpt_pick(ui: &Ui, engine: &mut TailEngine, line: Option<usize>) {
+    let Some(line) = line else {
+        return;
+    };
+    if !engine.is_selected(line) {
+        engine.select_row(line);
+    }
+    let lines = engine.selected_lines();
+    if let Some(text) = crate::export::excerpt(engine, &lines, engine.excerpt_flavour) {
         ui.ctx().copy_text(text);
     }
 }
@@ -6776,6 +6795,14 @@ fn row_context_menu(
             .clicked()
         {
             picks.copy = Some((line, true));
+            ui.close();
+        }
+        if ui
+            .button(RichText::new(t(lang, "copy_excerpt")).monospace())
+            .on_hover_text(t(lang, "copy_excerpt_tip"))
+            .clicked()
+        {
+            picks.excerpt = Some(line);
             ui.close();
         }
         source_link_menu(ui, engine, line, lang, picks);

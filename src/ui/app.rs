@@ -5760,6 +5760,29 @@ impl FastTailApp {
                             let _ = self.config.save();
                         }
 
+                        // Copy as excerpt: the flavour of the block.
+                        ui.horizontal(|ui| {
+                            ui.label(t(lang, "excerpt_format"))
+                                .on_hover_text(t(lang, "excerpt_format_tip"));
+                            let mut changed = false;
+                            for f in crate::export::ExcerptFlavour::ALL {
+                                let name = match f {
+                                    crate::export::ExcerptFlavour::Markdown => "Markdown",
+                                    crate::export::ExcerptFlavour::Jira => "Jira",
+                                    crate::export::ExcerptFlavour::Slack => "Slack",
+                                };
+                                changed |= ui
+                                    .radio_value(&mut self.config.excerpt_format, f, name)
+                                    .changed();
+                            }
+                            if changed {
+                                for engine in &mut self.engines {
+                                    engine.excerpt_flavour = self.config.excerpt_format;
+                                }
+                                let _ = self.config.save();
+                            }
+                        });
+
                         // How far back a timestamp may go before its line is marked.
                         ui.horizontal(|ui| {
                             ui.label(

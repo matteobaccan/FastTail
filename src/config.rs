@@ -193,6 +193,9 @@ pub struct FastTailConfig {
     /// (`export_csv_separator=comma|semicolon|tab`, `export_csv_bom`, `export_csv_protect`).
     #[serde(default = "default_export_format")]
     pub export_format: String,
+    /// Copy as excerpt's flavour (`excerpt_format=markdown|jira|slack`, default markdown).
+    #[serde(default)]
+    pub excerpt_format: crate::export::ExcerptFlavour,
     #[serde(default = "default_export_csv_separator")]
     pub export_csv_separator: String,
     #[serde(default = "default_true")]
@@ -594,6 +597,7 @@ impl Default for FastTailConfig {
             level_detect_bytes: default_level_detect_bytes(),
             out_of_order_tolerance_ms: default_out_of_order_tolerance_ms(),
             export_format: default_export_format(),
+            excerpt_format: crate::export::ExcerptFlavour::default(),
             export_csv_separator: default_export_csv_separator(),
             export_csv_bom: true,
             export_csv_protect: true,
@@ -1090,6 +1094,7 @@ impl FastTailConfig {
                 self.out_of_order_tolerance_ms.to_string(),
             )
             .set("export_format", self.export_format.clone())
+            .set("excerpt_format", self.excerpt_format.name())
             .set("export_csv_separator", self.export_csv_separator.clone())
             .set("export_csv_bom", self.export_csv_bom.to_string())
             .set("export_csv_protect", self.export_csv_protect.to_string())
@@ -1582,6 +1587,12 @@ impl FastTailConfig {
                 .and_then(crate::export::Format::from_name)
             {
                 cfg.export_format = f.name().to_string();
+            }
+            if let Some(f) = general
+                .get("excerpt_format")
+                .and_then(crate::export::ExcerptFlavour::from_name)
+            {
+                cfg.excerpt_format = f;
             }
             if let Some(sep) = general
                 .get("export_csv_separator")
