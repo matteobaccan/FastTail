@@ -1,3 +1,7 @@
+## 2026-10-25 - Archive Picker Dialog Keyboard Navigation
+**Learning:** In egui modal archive pickers (such as zip, 7z, and tar file pickers), keyboard-only users expect `Enter` to confirm opening selected entries when `!chosen.is_empty()` and `Escape` to cancel. Consuming `Key::Enter` and `Key::Escape` at the bottom of the modal panel ensures complete keyboard accessibility alongside mouse clicks.
+**Action:** Always consume `Key::Enter` for primary confirmation and `Key::Escape` for cancellation in modal dialog panels.
+
 ## 2026-10-24 - Double-click Activation Pattern in List Picker Dialogs
 **Learning:** In modal selection dialogs with scrollable lists (such as containers or event log channels), users expect double-clicking a list item to both select and immediately trigger the primary action (e.g., Open). Handling `resp.double_clicked()` alongside `resp.clicked()` creates a seamless desktop interaction pattern.
 **Action:** When adding selectable list items in modal pickers, always attach `resp.double_clicked()` to immediately confirm/open the selection.
