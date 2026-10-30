@@ -315,7 +315,7 @@ settings and the workspace with the window. Where it stands against the window:
 - ✅ Time delta column, time display (as written / UTC / local), the OTLP hint in the
   listener prompt
 - ✅ Merged timeline view of several streams (`Alt+M`)
-- ⬜ Filter as a new tab (`tui-filter-tabs`, S)
+- ✅ Filter as a new tab (`Alt+T`)
 - ⬜ Time anchor of the Δt column and the elapsed time of a selection (`tui-time-anchor`, S)
 - ⬜ Palette entries: select all, play / pause all, line numbers, auto-update, save session,
   remove bookmark, open folder pattern, recent files (`tui-palette-completion`, S)
@@ -333,7 +333,7 @@ window and the terminal together.
 **0.31.0, terminal completion** (section 7):
 
 - ✅ `tui-merged-view` (M): merged timeline of several streams in the terminal
-- ⬜ `tui-filter-tabs` (S): filter as a new tab, saved filter tabs restored
+- ✅ `tui-filter-tabs` (S): filter as a new tab, saved filter tabs restored
 - ⬜ `tui-time-anchor` (S): time anchor, elapsed time of a selection
 - ⬜ `tui-palette-completion` (S): the missing palette entries, recent files, a coverage test
 - ⬜ `tui-charts` (M): volume row, Statistics and Patterns sparklines

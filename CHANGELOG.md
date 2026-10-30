@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   interleaved by time, each row tagged `[app.log]` in its source's colour and numbered by
   its source line. `Alt+M` on the view turns sources off and on. The merged views of the
   window open in the terminal and the other way round (workspace and sessions).
+- **Filter as a new tab in the terminal.** `Alt+T` freezes the focused stream's filter into
+  a tab of the same file that follows it, numbered by the source's lines; `Ctrl+K` on a
+  row shows it in the source. Filter tabs open in both interfaces, and *Open filter as new
+  tab* is in the window's palette too.
 
 ## [0.30.0] - 2026-10-29
 

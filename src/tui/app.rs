@@ -269,8 +269,8 @@ fn stream_title(engine: &TailEngine) -> String {
     if let Some(title) = engine.source_title() {
         return title;
     }
-    if let Some(m) = &engine.merged {
-        return m.title();
+    if engine.merged.is_some() || engine.derived.is_some() {
+        return crate::find_all::stream_name(engine);
     }
     match &engine.compressed {
         Some(c) => c.title().replace(" \u{203a} ", "/"),
@@ -1195,7 +1195,9 @@ impl App {
         // The merged views take their sources' new lines in time order.
         let mut engines: Vec<&mut TailEngine> =
             self.tabs.iter_mut().map(|t| &mut t.engine).collect();
-        self.views_busy = crate::merged_stream::feed_views(&mut engines, MERGE_BUDGET);
+        self.views_busy = crate::filter_tab::feed_tabs(&mut engines, MERGE_BUDGET)
+            | crate::merged_stream::feed_views(&mut engines, MERGE_BUDGET);
+        self.apply_source_context();
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -4018,6 +4020,99 @@ impl App {
         true
     }
 
+    /// `Alt+T`: the focused stream's filter (include / exclude, level, time range, hidden
+    /// lines) frozen into a new tab of the same file that follows it, as the window's
+    /// "Open filter as new tab"; the source keeps its filter.
+    fn open_filter_tab(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if tab.engine.time_range_pending() {
+            self.message = Some(tx(self.lang, "The time range is not applied yet").into());
+            return;
+        }
+        let filter = crate::filter_tab::FrozenFilter::of(&tab.engine);
+        if !filter.is_active() {
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "No filter to open as a tab: set an include, exclude, level or time filter first",
+                )
+                .into(),
+            );
+            return;
+        }
+        let n =
+            crate::filter_tab::next_number(self.tabs.iter().map(|t| &t.engine), &tab.engine.path);
+        match self.filter_tab_engine(self.active, n, filter) {
+            Ok(engine) => self.add_engine_tab(engine),
+            Err(e) => self.message = Some(e),
+        }
+    }
+
+    /// The engine of filter tab `n` of the stream at `idx`, with the global filter and the
+    /// quick labels.
+    fn filter_tab_engine(
+        &self,
+        idx: usize,
+        n: usize,
+        filter: crate::filter_tab::FrozenFilter,
+    ) -> Result<TailEngine, String> {
+        let default_config;
+        let config = match &self.settings {
+            Some(s) => &s.config,
+            None => {
+                default_config = crate::config::FastTailConfig::default();
+                &default_config
+            }
+        };
+        let mut engine = crate::filter_tab::open_tab(&self.tabs[idx].engine, n, filter, config)?;
+        if let Some(s) = &self.settings {
+            if s.global.is_some() {
+                engine.set_global_filter(s.global.clone());
+            }
+        }
+        engine.set_quick_labels(&self.quick_labels);
+        Ok(engine)
+    }
+
+    /// A filter tab asked to show a line in its source (`Ctrl+K`): the source, opened
+    /// again when it was closed, shows it in context.
+    fn apply_source_context(&mut self) {
+        let Some(d) = self
+            .tabs
+            .iter()
+            .position(|t| t.engine.source_context_request.is_some())
+        else {
+            return;
+        };
+        let line = self.tabs[d]
+            .engine
+            .source_context_request
+            .take()
+            .unwrap_or(0);
+        let Some(source) = self.tabs[d]
+            .engine
+            .derived
+            .as_ref()
+            .map(|f| f.source.clone())
+        else {
+            return;
+        };
+        if self.tab_index(&source).is_none() {
+            self.open_file(&source);
+        }
+        let Some(s) = self.tab_index(&source) else {
+            return;
+        };
+        self.focus_tab(s);
+        let tab = &mut self.tabs[s];
+        if !tab.engine.enter_context(line) {
+            tab.engine.scroll_to_line = Some(line);
+        }
+        tab.engine.follow_tail = false;
+    }
+
     /// A merged view of the open streams `sources` in a new tab of the focused window.
     fn open_merged_view(&mut self, sources: &[PathBuf]) {
         let n = crate::merged_stream::next_number(self.tabs.iter().map(|t| &t.engine));
@@ -4061,6 +4156,36 @@ impl App {
     /// a view with fewer than two of its sources open is skipped. The tabs are not placed:
     /// `restore_dock` follows.
     pub fn restore_views(&mut self, views: &[PathBuf]) {
+        // The filter tabs first: a merged view may read one.
+        for identity in views {
+            let Some((n, source)) = crate::filter_tab::parse_identity(identity) else {
+                continue;
+            };
+            let Some(filter) = self
+                .settings
+                .as_ref()
+                .and_then(|s| s.config.stream_state_for(identity))
+                .and_then(|state| state.frozen.clone())
+            else {
+                continue;
+            };
+            let Some(idx) = self.tabs.iter().position(|t| {
+                t.engine.derived.is_none()
+                    && crate::paths::paths_equal(
+                        &crate::workspace::persisted_path(&t.engine),
+                        &source,
+                    )
+            }) else {
+                continue;
+            };
+            let Ok(mut engine) = self.filter_tab_engine(idx, n, filter) else {
+                continue;
+            };
+            if let Some(s) = &self.settings {
+                crate::workspace::restore_stream(&mut engine, &s.config, identity);
+            }
+            self.tabs.push(Tab::new(engine));
+        }
         for identity in views {
             let Some((n, saved)) = crate::merged_stream::parse_identity(identity) else {
                 continue;
@@ -7904,6 +8029,7 @@ impl App {
             Action::SendToScratchpad => self.send_to_pad(),
             Action::Analysis => self.analysis_menu = Some(0),
             Action::MergedView => self.open_merge(),
+            Action::FilterTab => self.open_filter_tab(),
             Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
             Action::ToggleSetting(s) => self.toggle_setting(s),
             Action::Plugins => self.open_plugins(),
@@ -11495,6 +11621,16 @@ fn toggle_context(tab: &mut Tab, message: &mut Option<String>, lang: Language) {
     let Some(line) = tab.cursor_line() else {
         return;
     };
+    // A filter tab shows the line in its source.
+    if let Some(source_line) = tab
+        .engine
+        .derived
+        .as_ref()
+        .and_then(|d| d.source_line(line))
+    {
+        tab.engine.source_context_request = Some(source_line);
+        return;
+    }
     if !tab.engine.enter_context(line) {
         *message = Some(tx(lang, "Show in context needs an active filter").into());
     }
@@ -12300,12 +12436,12 @@ pub fn absolute(p: &str) -> PathBuf {
 /// The number a row shows: its line, in a merged view the line in its source, as in the
 /// GUI.
 fn row_number(engine: &TailEngine, line_idx: usize) -> usize {
-    engine
-        .merged
-        .as_ref()
-        .and_then(|m| m.source_of(line_idx))
-        .map_or(line_idx, |(_, l)| l)
-        + 1
+    let source_line = match (&engine.merged, &engine.derived) {
+        (Some(m), _) => m.source_of(line_idx).map(|(_, l)| l),
+        (None, Some(d)) => d.source_line(line_idx),
+        (None, None) => None,
+    };
+    source_line.unwrap_or(line_idx) + 1
 }
 
 /// Time a tick gives the merged views to take their sources' lines.
@@ -15240,6 +15376,44 @@ mod tests {
         assert!(again.merge.as_ref().unwrap().view.is_some());
         press(&mut again, KeyCode::Char(' '));
         assert!(!again.tabs[2].engine.merged.as_ref().unwrap().sources[0].enabled);
+    }
+
+    #[test]
+    fn alt_t_opens_the_filter_as_a_tab_with_source_line_numbers_and_ctrl_k_goes_back() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        render(&mut app, 100, 20);
+        app.apply(Action::FilterTab);
+        assert_eq!(
+            app.message.as_deref(),
+            Some("No filter to open as a tab: set an include, exclude, level or time filter first")
+        );
+        app.tabs[0].engine.set_include_filter("ERROR");
+        app.apply(Action::FilterTab);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.tabs[1].title, "a.log ▸ ERROR");
+        assert_eq!(app.active, 1);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[1].engine.total_lines() < 1 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(30));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 100, 20);
+        let row = screen
+            .iter()
+            .find(|l| l.contains("ERROR failed"))
+            .expect("the row");
+        // The source's line number: the ERROR line is line 3 of a.log.
+        assert!(
+            row.contains("3 2026-09-28") || row.contains("3▶") || row.contains("3 "),
+            "{row}"
+        );
+        assert!(app.dock_ron().contains("filter:1:"));
+        // Ctrl+K shows the line in the source.
+        app.tabs[1].set_cursor(0);
+        app.apply(Action::ToggleContext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.active, 0);
+        assert_eq!(app.tabs[0].engine.context_line(), Some(2));
     }
 
     #[test]

@@ -2983,6 +2983,11 @@ fn render_log_stream(
             ui.ctx().request_repaint();
         }
 
+        // Open filter as new tab (palette): handled by the app, as the menu entry is.
+        if act(ActionId::FilterTab) {
+            engine.filter_tab_request = true;
+        }
+
         // Hide lines (CTRL + H): the selected rows, else the anchor row, leave the view.
         let ctrl_h = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::H);
         if (act(ActionId::HideLines)
