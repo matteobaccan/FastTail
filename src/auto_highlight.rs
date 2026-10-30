@@ -152,14 +152,55 @@ pub fn tokens(line: &str, kinds: TokenKinds) -> Vec<(usize, usize, TokenKind)> {
     out
 }
 
+/// O(1) branchless lookup table for word continuation bytes in the auto-highlight scanner.
+static IS_CONTINUES_WORD_BYTE: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let b = i as u8;
+        table[i] = (b >= b'a' && b <= b'z')
+            || (b >= b'A' && b <= b'Z')
+            || (b >= b'0' && b <= b'9')
+            || b == b'_'
+            || b == b'.'
+            || b == b'-'
+            || b == b'/'
+            || b == b'\\'
+            || b >= 0x80;
+        i += 1;
+    }
+    table
+};
+
 /// A byte that belongs to the word before it: a token cannot start right after it.
+#[inline(always)]
 fn continues_word(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'-' | b'/' | b'\\') || c >= 0x80
+    IS_CONTINUES_WORD_BYTE[c as usize]
 }
 
+/// O(1) branchless lookup table for token start candidate bytes in auto-highlight scanning.
+static IS_MAY_START_BYTE: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let b = i as u8;
+        table[i] = (b >= b'a' && b <= b'z')
+            || (b >= b'A' && b <= b'Z')
+            || (b >= b'0' && b <= b'9')
+            || b == b'/'
+            || b == b'~'
+            || b == b'\\'
+            || b == b'['
+            || b == b':';
+        i += 1;
+    }
+    table
+};
+
 /// A byte some token can start with.
+#[inline(always)]
 fn may_start(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, b'/' | b'~' | b'\\' | b'[' | b':')
+    IS_MAY_START_BYTE[c as usize]
 }
 
 /// What the matchers found at a token start.
@@ -453,14 +494,37 @@ fn unit_len(b: &[u8], at: usize) -> Option<usize> {
     }
 }
 
+/// O(1) branchless lookup table for path byte classification in the auto-highlight scanner.
+static IS_PATH_BYTE: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let b = i as u8;
+        table[i] = (b >= b'a' && b <= b'z')
+            || (b >= b'A' && b <= b'Z')
+            || (b >= b'0' && b <= b'9')
+            || b == b'_'
+            || b == b'.'
+            || b == b'-'
+            || b == b'/'
+            || b == b'\\'
+            || b == b'~'
+            || b == b'+'
+            || b == b'@'
+            || b == b'%'
+            || b == b'$'
+            || b == b'='
+            || b == b','
+            || b >= 0x80;
+        i += 1;
+    }
+    table
+};
+
 /// A byte a path can hold.
+#[inline(always)]
 fn path_byte(c: u8) -> bool {
-    c.is_ascii_alphanumeric()
-        || matches!(
-            c,
-            b'_' | b'.' | b'-' | b'/' | b'\\' | b'~' | b'+' | b'@' | b'%' | b'$' | b'=' | b','
-        )
-        || c >= 0x80
+    IS_PATH_BYTE[c as usize]
 }
 
 /// `/a/b`, `/a.log`, `~/x`, `C:\x`, `\\server\share`, at the start of the line or after a
