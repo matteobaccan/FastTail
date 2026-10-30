@@ -4,11 +4,10 @@ How FastTail compares with the log viewers people actually use, and where FastTa
 ✅ done, ⬜ to do. It is refreshed after every release (the post-release scan); each refresh
 replaces the tables, so the file says what is true now, not how it got there.
 
-**Last scan:** 2026-10-28, against FastTail **0.27.0**. Release dates and star counts come
+**Last scan:** 2026-10-30, against FastTail **0.30.0**. Release dates and star counts come
 from the GitHub release and repository pages on that day (stars rounded as GitHub shows
-them), Seq's from Docker Hub; every other claim links its source. The sites of LogViewPlus,
-LogFusion and Seq's blog could not be reached that day, so their rows rest on the earlier
-scans.
+them), Seq's from Docker Hub; every other claim links its source. LogViewPlus, LogFusion and
+Seq rest on the earlier scans (no new release seen).
 
 ## Contents
 
@@ -34,7 +33,7 @@ scans.
 | SnakeTail | GUI | GPLv3 | Windows (.NET 2.0) | 1.9.8, 2024-02-29 | quiet |
 | LogViewPlus | GUI | $45 / $95 per user | Windows | 3.2.9, 2026-05 | active |
 | LogFusion | GUI | free personal / Pro $19–$899 | Windows | 7.2, 2026-07-21 | active |
-| lnav | TUI | BSD-2 | Linux, macOS, BSD | 0.14.1, 2026-09-05; 0.15.0-beta1, 2026-09-28 (no later release; master active) | very active (10.8k ★) |
+| lnav | TUI | BSD-2 | Linux, macOS, BSD | 0.14.1, 2026-09-05; 0.15.0-beta1, 2026-09-28 (no later release; master active to 2026-10-28) | very active (10.8k ★) |
 | tailspin | CLI highlighter | MIT (Rust) | all | 7.0.0, 2026-07-14 | active (8k ★) |
 | hl | CLI formatter | MIT (Rust) | all | 0.36.5, 2026-10-21 | active (3.3k ★; bug-fix releases) |
 | gonzo | TUI dashboard | MIT (Go) | all | 0.4.3, 2026-07-15 | active (2.8k ★) |
@@ -50,7 +49,10 @@ otel-tui, logana (a young Rust viewer now closest to FastTail's shape: **0.8.0**
 MCP server, an OTel collector and remappable keys; **0.8.2** (2026-10-26) adds `n` / `N` to
 the next line of the selected filter, a file picker with name search, nested archives in
 the archive picker, **numbered rotations opened as one stream** (`app.log.1`, `.2`, …), a
-time-only timestamp filter and an editor for several field conditions; 0.7.7 imported
+time-only timestamp filter and an editor for several field conditions; **0.8.3** (2026-10-28)
+edits and removes annotations, edits and reorders filters with the right button, matches
+exact field values (`--exact`), keeps five recent files and expands / collapses multi-line
+messages; 0.7.7 imported
 Notepad++ AnalysePlugin / UDL filters; 46 ★,
 [releases](https://github.com/pauloremoli/logana/releases),
 [changelog](https://raw.githubusercontent.com/pauloremoli/logana/main/CHANGELOG.md)). LogoRRR moved to a freemium
@@ -132,7 +134,8 @@ error jumps, Kitty keyboard protocol. **0.15.0-beta1** (2026-09-28,
 Since the beta, lnav's master (2026-10-24 to 2026-10-28,
 [commits](https://github.com/tstack/lnav/commits/master)) made **source locations in stack
 traces clickable**, opening the user's editor at that line, and cached thread and operation
-ids. Its most-reacted open requests include forcing a format or switching between several
+ids, then (to 2026-10-28) kept working on `log2src` and bound `o` / `O` to the next /
+previous message of the cursor row's operation id. Its most-reacted open requests include forcing a format or switching between several
 JSON formats per file (#454, #1274, #634), which FastTail's per-stream parser choice covers,
 and keeping the time column visible while scrolling sideways (#674).
 
@@ -194,7 +197,7 @@ live tail with a volume histogram, alerts, and in 2026 MCP servers for AI assist
   FastTail has one ✅.
 - **From the log to the code**: lnav links stack-trace locations to the editor and messages
   to their logging statements (`log2src`); IDE consoles have done the first for years.
-  FastTail opens source locations in the editor ✅; `log2src` ⬜ (not planned).
+  FastTail opens source locations in the editor ✅; `log2src` ⬜ (planned for 0.33.0).
 - **One viewer, two faces**: logana 0.8.0 added a native GUI beside its TUI from one Rust
   code base, the shape FastTail has ✅.
 - **Basics still win**: tailspin's growth shows zero-configuration highlighting sells; the
@@ -249,14 +252,14 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 11 | **Rule sets** import / export | LogFusion, LogViewPlus | Medium | S | ✅ |
 | 12 | **Windows Event Log** source | SnakeTail, LogFusion, LogViewPlus | Medium | M | ✅ |
 | 13 | **TCP / UDP / syslog listener** | LogViewPlus, Chipmunk | Medium | M | ✅ (with an OTLP/HTTP receiver) |
-| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | ✅ window · ⬜ terminal |
-| 15 | **Top-N and statistics** of a field | angle-grinder, goaccess, lnav, LogViewPlus | Medium | M | ✅ window · ⬜ terminal |
-| 16 | **Markdown report** of bookmarks and notes | logana, lnav | Medium | S | ✅ window · ⬜ terminal |
+| 14 | **Remappable shortcuts** | klogg, LogViewPlus, lnav | Medium | M | ✅ |
+| 15 | **Top-N and statistics** of a field | angle-grinder, goaccess, lnav, LogViewPlus | Medium | M | ✅ |
+| 16 | **Markdown report** of bookmarks and notes | logana, lnav | Medium | S | ✅ |
 | 17 | MCP server / AI assistance | Seq, gonzo, logana, LogViewPlus | Medium | M | ✅ |
-| 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | ✅ window · ⬜ terminal |
+| 18 | CSV / HTML export | LogFusion, LogViewPlus | Low | S | ✅ |
 | 19 | Partial-line selection | requested (SnakeTail #60, Tailviewer #231) | Low–Med | M | ✅ |
 | 20 | 7z archives, cross-line regex, plugin API, tray icon, OutputDebugString | various | Low | S–L | ✅ (Linux tray icon: hand check on KDE / GNOME ⬜) |
-| 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | ✅ (gaps in section 7) |
+| 21 | **Terminal interface** for servers and SSH sessions | lnav, gonzo, nerdlog, toolong | High | L | ✅ (remaining gaps in section 7) |
 | 22 | **Rotated files as one stream** | logana 0.8.2; lnav and hl through globs | Med–High | M | ✅ |
 | 23 | **Source locations clickable**, opening the editor at the line | lnav (master), IDE consoles | High | M | ✅ |
 | 24 | **Units on field values** (`900ms` < `1.2s`, sizes) | lnav 0.15 | Medium | M | ✅ |
@@ -264,17 +267,23 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 26 | **Clipboard as a stream** | requested in Chipmunk (#495); editors | Low–Med | S | ✅ |
 | 27 | **Machine output of `--print`** (JSON, logfmt, CSV, template) | requested in hl (#611, #1481) | Low–Med | S | ✅ |
 
+| 28 | **Named searches**: several searches highlighted and walked at once | lnav 0.15 | High | M | ⬜ `named-searches` |
+| 29 | **Next line of the same operation id** | lnav (master, `o` / `O`) | Medium | S | ⬜ `operation-jump` |
+| 30 | **Kubernetes source** (`k8s://`), not only through standard input | gonzo, lazyjournal, lnav | Medium | S–M | ⬜ `kubernetes-source` |
+| 31 | **Copy as excerpt** for tickets (Markdown, Jira, Slack) | gonzo, logana | Medium | S | ⬜ `copy-excerpt` |
+| 32 | **Stream information**: indexing time, memory, encoding, parser | lnav 0.15 | Low–Med | S | ⬜ `stream-info` |
+| 33 | **Pinned and recent presets** | Chipmunk 4.3 | Low–Med | S | ⬜ `preset-pinning` |
+| 34 | **Message linked to its logging statement** (`log2src`) | lnav | Low–Med | L | ⬜ `log2src-links` |
+| 35 | **Remote Windows Event Log** | LogFusion | Low–Med | M | ⬜ `remote-event-log` |
+| 36 | **Notepad++ filter import** (AnalysePlugin, UDL) | logana 0.7.7 | Low | S | ⬜ `npp-filter-import` |
+| 37 | **DLT automotive files** | Chipmunk, logana | Low | L | ⬜ `dlt-format` (optional) |
+
 Seen in the competitors and not planned (⬜, to weigh when the maintainer asks):
 
-- ⬜ lnav's `log2src`, a log message linked to its logging statement (needs source trees and
-  language parsing; heavy for its value)
-- ⬜ DLT / BLF automotive formats (Chipmunk, logana; a niche a plugin can serve)
-- ⬜ Notepad++ AnalysePlugin filter import (logana; small, low value next to the BareTail
-  bridge and rule-set import)
-- ⬜ Sharing excerpts to Slack or Jira (gonzo, logana; the bookmark report's Markdown covers
-  most of it)
+- ⬜ BLF and PCAP files (Chipmunk; a source plugin can serve them)
 - ⬜ Tab groups and a tab strip on the left (LogExpert #53, #142; docking covers it)
-- ⬜ Per-file indexing time and memory shown (lnav 0.15)
+- ⬜ AI analysis inside the viewer (gonzo, LogViewPlus; the MCP server lets the user's own
+  assistant do it)
 
 ## 7. The terminal interface against the window
 
@@ -305,27 +314,48 @@ settings and the workspace with the window. Where it stands against the window:
   approve, parameters)
 - ✅ Time delta column, time display (as written / UTC / local), the OTLP hint in the
   listener prompt
+- ⬜ Merged timeline view of several streams (`tui-merged-view`, M)
+- ⬜ Filter as a new tab (`tui-filter-tabs`, S)
+- ⬜ Time anchor of the Δt column and the elapsed time of a selection (`tui-time-anchor`, S)
+- ⬜ Palette entries: select all, play / pause all, line numbers, auto-update, save session,
+  remove bookmark, open folder pattern, recent files (`tui-palette-completion`, S)
+- ⬜ Charts: a volume row, sparklines in Statistics and Patterns (`tui-charts`, M)
+- ⬜ PgUp / PgDn acceleration while the key is held (`tui-page-acceleration`, S)
 - By design not in a terminal: Markdown view, line wrap, overview strip, timeline histogram,
   screensaver, tray icon, renderer / zoom / font settings
 
 ## 8. To do
 
-- ⬜ The terminal gaps of section 7, as OpenSpec changes in `openspec/changes/`:
-  - ✅ `tui-analysis-tabs` (L): Statistics, Query, Patterns, Explain, Operations tabs
-  - ✅ `tui-output` (M): search results pane, search in a range, export, Copy as shown,
-    bookmark report
-  - ✅ `tui-integrations` (M): web view and MCP server of a running interface, Plugins dialog
-  - ✅ `tui-remappable-keys` (M): `[shortcuts]` for the terminal, Keys dialog, palette toggles
-  - ✅ `tui-compare-scratchpad` (S): Compare tab and scratchpad
-  - ✅ `tui-rules-and-formats` (M): rule sets import / export, rule matches, clear all
-    bookmarks, Log formats dialog, editor presets, Open in FastTail, filter expressions
-  - ✅ `tui-time-columns` (S): time delta column, UTC / local time display, OTLP hint
-- ⬜ Hand checks by the maintainer: the clipboard in the window and the terminal, sideways
-  scrolling with pinned columns, rotated files on Windows, an editor opened from a source
-  location, an MCP client (Claude Desktop / Code), the Plugins windows and source plugins on
-  Windows, the web view in a browser, the Linux tray icon on KDE and GNOME, the Event Log on
-  Windows, real journald / Docker / SSH / rsyslog / OTel sources
+The plan of 2026-10-30: three minors, then the list is empty. Each change is an OpenSpec
+change in `openspec/changes/`, one PR each; the changes of 0.32.0 and 0.33.0 land in the
+window and the terminal together.
+
+**0.31.0, terminal completion** (section 7):
+
+- ⬜ `tui-merged-view` (M): merged timeline of several streams in the terminal
+- ⬜ `tui-filter-tabs` (S): filter as a new tab, saved filter tabs restored
+- ⬜ `tui-time-anchor` (S): time anchor, elapsed time of a selection
+- ⬜ `tui-palette-completion` (S): the missing palette entries, recent files, a coverage test
+- ⬜ `tui-charts` (M): volume row, Statistics and Patterns sparklines
+- ⬜ `tui-page-acceleration` (S): held PgUp / PgDn accelerate
 - ⬜ `release-packages` group 5: the packaging docs and the release check
+
+**0.32.0, search and navigation** (gaps 28 to 33):
+
+- ⬜ `named-searches` (M), `operation-jump` (S), `stream-info` (S), `copy-excerpt` (S),
+  `preset-pinning` (S), `kubernetes-source` (S–M)
+
+**0.33.0, the long tail** (gaps 34 to 37):
+
+- ⬜ `log2src-links` (L), `remote-event-log` (M), `npp-filter-import` (S), `dlt-format`
+  (L, optional: the maintainer may drop it)
+
+Outside the plan:
+
+- ⬜ Hand checks by the maintainer: the 0.29.0 and 0.30.0 terminal features in a real
+  terminal, the clipboard, pinned columns, rotated files on Windows, an editor opened from a
+  source location, an MCP client, the Plugins windows and source plugins on Windows, the web
+  view in a browser, the Linux tray icon on KDE and GNOME (`linux-tray-icon` task 2.1), the
+  Event Log on Windows, real journald / Docker / SSH / rsyslog / OTel sources
 - ⬜ egui 0.37 (Renovate #330, #335): waits for an `egui_dock` release on it
-- ⬜ Open question: PgUp / PgDn acceleration while the key is held in the terminal
-- ⬜ The next competitor scan (section 1 to 4), after the next release
+- ⬜ The next competitor scan (sections 1 to 4), after the next release

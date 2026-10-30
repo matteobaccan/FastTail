@@ -116,8 +116,12 @@ Update this section in each release PR.
   review (the duplicates and the changes without a measurable gain were closed). 0.20.1
   brought the ASM view (`disassembly-view`, `src/disasm.rs`, dependency `iced-x86`) and the
   fix of issue #161; 0.20.0 made the terminal interface complete.
-- Next: nothing is planned after 0.30.0; the open items are the to-do list of
-  `docs/competitor-analysis.md` section 8. Hand checks left to the maintainer: the 0.29.0
+- Next (plan of 2026-10-30, `docs/competitor-analysis.md` section 8): **0.31.0** terminal
+  completion (`tui-merged-view`, `tui-filter-tabs`, `tui-time-anchor`, `tui-palette-completion`,
+  `tui-charts`, `tui-page-acceleration`, `release-packages` group 5), **0.32.0** search and
+  navigation (`named-searches`, `operation-jump`, `stream-info`, `copy-excerpt`,
+  `preset-pinning`, `kubernetes-source`), **0.33.0** the long tail (`log2src-links`,
+  `remote-event-log`, `npp-filter-import`, `dlt-format` optional); then the list is empty. Hand checks left to the maintainer: the 0.29.0
   and 0.30.0 terminal features in a real terminal (export, the formats dialog, compare, the
   scratchpad shared with the window, the analysis views, remapped keys, the web view, an
   MCP client and plugins from the terminal), the 0.28.0 features in a real session
