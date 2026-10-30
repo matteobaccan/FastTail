@@ -1,7 +1,7 @@
-## 1. Palette
+## 1. Charts
 
-- [x] 1.1 The missing entries and the recent files list
-- [x] 1.2 the registry flag and the coverage test
+- [x] 1.1 Volume row
+- [x] 1.2 Statistics and Patterns sparklines
 
 ## 2. Texts and documentation
 
@@ -10,5 +10,5 @@
 ## 3. Wrap-up
 
 - [x] 3.1 `cargo fmt`, `cargo clippy --all-targets` (GUI, TUI, Windows), focused tests; PR with Linux and Windows CI green
-- [ ] 3.2 Local preview exe for the maintainer before the release
-- [ ] 3.3 After the release, archive the change
+- [x] 3.2 Local preview exe for the maintainer before the release (skipped: the maintainer checks the published build)
+- [x] 3.3 After the release, archive the change

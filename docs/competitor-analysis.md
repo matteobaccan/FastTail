@@ -330,7 +330,7 @@ The plan of 2026-10-30: three minors, then the list is empty. Each change is an 
 change in `openspec/changes/`, one PR each; the changes of 0.32.0 and 0.33.0 land in the
 window and the terminal together.
 
-**0.31.0, terminal completion** (section 7):
+**0.31.0, terminal completion** (section 7), shipped 2026-10-30:
 
 - ✅ `tui-merged-view` (M): merged timeline of several streams in the terminal
 - ✅ `tui-filter-tabs` (S): filter as a new tab, saved filter tabs restored
@@ -338,7 +338,7 @@ window and the terminal together.
 - ✅ `tui-palette-completion` (S): the missing palette entries, recent files, a coverage test
 - ✅ `tui-charts` (M): volume row, Statistics and Patterns sparklines
 - ✅ `tui-page-acceleration` (S): held PgUp / PgDn accelerate
-- ⬜ `release-packages` group 5: the packaging docs and the release check
+- ✅ `release-packages` group 5: the packaging docs and the release check (archived)
 
 **0.32.0, search and navigation** (gaps 28 to 33):
 

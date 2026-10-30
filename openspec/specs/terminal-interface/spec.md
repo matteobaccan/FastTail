@@ -568,3 +568,49 @@ The terminal interface SHALL start the web view and the MCP server from its own 
 #### Scenario: Approve a plugin
 - **WHEN** a new plugin is installed and the user opens the Plugins dialog in the terminal
 - **THEN** its hash is shown and `y` approves it, after which its streams open.
+
+### Requirement: Terminal Merged Timeline
+The terminal interface SHALL open a merged view of several streams interleaved by timestamp, with a source tag per row, and SHALL restore the merged views saved by the window.
+
+#### Scenario: Merged at 14:02
+- **WHEN** `app.log` and `db.log` are open and the user merges them
+- **THEN** the rows alternate by time and each starts with `[app]` or `[db]`.
+
+### Requirement: Terminal Filter Tabs
+The terminal interface SHALL open the focused stream's filters as a new tab of the same file and SHALL restore the filter tabs saved by the window.
+
+#### Scenario: Errors as a tab
+- **WHEN** the include filter is `ERROR` and the user presses `Alt+T`
+- **THEN** a new tab shows only the ERROR lines, numbered by their lines in the source, and the original stream keeps its filter.
+
+#### Scenario: Back to the source
+- **WHEN** the cursor is on a row of a filter tab and the user presses `Ctrl+K`
+- **THEN** the source stream is focused and shows that line in context.
+
+### Requirement: Terminal Time Anchor
+The terminal interface SHALL set and clear the time anchor of the time delta column on the cursor row, and SHALL show the elapsed time of a multi-row selection.
+
+#### Scenario: From the anchor
+- **WHEN** the anchor is on line 10 and line 12 is 1.25 s later
+- **THEN** line 12's Δt cell reads `+1.250`.
+
+### Requirement: Terminal Palette Coverage
+The terminal palette SHALL list every registry command that is not marked window-only, including select all, play and pause all, line numbers, auto-update, save session, save as default session, remove bookmark, open folder pattern and the recent files.
+
+#### Scenario: Recent files
+- **WHEN** the user opens *Recent files…* from the palette
+- **THEN** the files of `[recent_files]` are listed and `Enter` opens the selected one.
+
+### Requirement: Terminal Charts
+The terminal interface SHALL draw a one-row volume sparkline of the stream over time and SHALL show a sparkline per value in the Statistics view and per pattern in the Patterns view when the stream is timed.
+
+#### Scenario: Volume row
+- **WHEN** a timed stream is open and the user presses `Alt+V`
+- **THEN** a row of blocks above the lines shows how many lines each time slice has.
+
+### Requirement: Terminal Page Acceleration
+The terminal interface SHALL move further per press while `PgUp` or `PgDn` is held, doubling each second up to 8 pages, unless `page_acceleration` is off.
+
+#### Scenario: Held for 2 s
+- **WHEN** the user holds `PgDn` for two seconds
+- **THEN** each press then moves four pages.
