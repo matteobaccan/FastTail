@@ -1605,6 +1605,11 @@ fn test_i18n_exhaustive_coverage() {
         "find_all_stale",
         "find_all_empty",
         "tip_find_all",
+        "eventlog_bad_host",
+        "eventlog_remote_failed",
+        "eventlog_host",
+        "eventlog_host_hint",
+        "eventlog_host_tip",
         "system_kind_k8s",
         "system_bad_k8s",
         "system_kubectl_command",
@@ -1986,6 +1991,8 @@ fn test_i18n_exhaustive_coverage() {
         "info_kind_plugin",
         "info_kind_file",
         "info_source",
+        // "Computer:" is the word in German, Italian, Dutch and Friulian.
+        "eventlog_host",
     ];
     let fallbacks: Vec<String> = Language::ALL
         .iter()

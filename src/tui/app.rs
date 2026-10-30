@@ -9452,7 +9452,7 @@ impl App {
             ),
             PromptKind::EventLog => tx(
                 self.lang,
-                "Follow an Event Log channel: eventlog://Application (?levels=1,2&ids=7031,7034-7040)",
+                "Follow an Event Log channel: eventlog://[host/]Application (?levels=1,2&ids=7031,7034-7040)",
             ),
             PromptKind::SearchScope => tx(
                 self.lang,

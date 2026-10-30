@@ -273,7 +273,7 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 32 | **Stream information**: indexing time, memory, encoding, parser | lnav 0.15 | Low–Med | S | ✅ |
 | 33 | **Pinned and recent presets** | Chipmunk 4.3 | Low–Med | S | ✅ |
 | 34 | **Message linked to its logging statement** (`log2src`) | lnav | Low–Med | L | ⬜ `log2src-links` |
-| 35 | **Remote Windows Event Log** | LogFusion | Low–Med | M | ⬜ `remote-event-log` |
+| 35 | **Remote Windows Event Log** | LogFusion | Low–Med | M | ✅ (current credentials) |
 | 36 | **Notepad++ filter import** (AnalysePlugin, UDL) | logana 0.7.7 | Low | S | ✅ |
 | 37 | **DLT automotive files** | Chipmunk, logana | Low | L | ⬜ `dlt-format` (optional) |
 

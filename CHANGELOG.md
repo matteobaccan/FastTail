@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Remote Event Log.** `eventlog://<host>/<channel>` (the Event Log dialog's *Computer*
+  field) follows a channel of another Windows machine with the current credentials.
 - **Notepad++ filters.** *Import rules…* (both interfaces) also reads Notepad++
   AnalysePlugin files and User Defined Language keyword lists as highlight rules.
 
