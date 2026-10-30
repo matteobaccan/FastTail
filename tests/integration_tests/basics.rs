@@ -1605,6 +1605,7 @@ fn test_i18n_exhaustive_coverage() {
         "find_all_stale",
         "find_all_empty",
         "tip_find_all",
+        "preset_pin_tip",
         "copy_excerpt",
         "copy_excerpt_tip",
         "excerpt_format",

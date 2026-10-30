@@ -132,7 +132,7 @@ and `c` clears the list (also *Clear recent files*).
 | `Tab`, `Alt+1..9` | next window or stream, stream N |
 | `Ctrl+W` | close the stream |
 | `o`, `O`, `S` | open a file (folder browser), load / save a session |
-| `,`, `r`, `p`, `F` `f`, `!` | Settings, highlight rules, presets, global filter (edit / on-off), external tools |
+| `,`, `r`, `p`, `F` `f`, `!` | Settings, highlight rules, presets (pinned first, `*` pins, then the five applied last, then by name), global filter (edit / on-off), external tools |
 | `Ctrl+Shift+1..9` (or `L` and a digit) | the search text as a quick label |
 | `Shift+T` | next theme |
 | `Ctrl+L` | lock with the PIN |

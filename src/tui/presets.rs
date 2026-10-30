@@ -261,6 +261,15 @@ impl PresetsDialog {
                 self.start_rename();
                 PresetsKey::Moved
             }
+            // `*`: pinned presets are listed first in both interfaces.
+            KeyCode::Char('*') => match selected {
+                Some(i) => {
+                    let p = &mut self.list.items[i];
+                    p.pinned = !p.pinned;
+                    PresetsKey::Changed
+                }
+                None => PresetsKey::Other,
+            },
             KeyCode::Char('d') | KeyCode::Delete if plain => match selected {
                 Some(i) => {
                     self.mode = Mode::ConfirmDelete(i);
@@ -298,8 +307,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn star_pins_the_selected_preset() {
+        let mut d = PresetsDialog::new(&[preset("errors", "ERROR"), preset("db", "sql")]);
+        assert_eq!(d.on_key(key(KeyCode::Char('*'))), PresetsKey::Changed);
+        assert!(d.list.items[0].pinned);
+        assert_eq!(d.on_key(key(KeyCode::Char('*'))), PresetsKey::Changed);
+        assert!(!d.presets()[0].pinned);
+    }
+
     fn preset(name: &str, include: &str) -> FilterPreset {
         FilterPreset {
+            pinned: false,
+            last_used: 0,
             name: name.into(),
             state: FilterState {
                 include: vec![include.into()],
