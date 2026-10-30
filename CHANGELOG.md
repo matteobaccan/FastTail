@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Kept searches.** `📌` next to the search box (`Alt+K` in the terminal) keeps up to
+  eight searches per stream, each highlighted in its own colour with a count chip; with
+  the search box empty `F3` / `n` walk them all, or only the one whose chip was clicked.
+  Saved per stream in the workspace and sessions.
+
 ## [0.31.0] - 2026-10-30
 
 ### Added

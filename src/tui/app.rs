@@ -6825,6 +6825,7 @@ impl App {
             C::Fields => self.columns_menu = Some(0),
             C::Presets => self.apply(Action::Presets),
             C::Global => self.apply(Action::EditGlobal),
+            C::Named(i) => e.named.toggle_focus(i),
         }
     }
 
@@ -8172,6 +8173,18 @@ impl App {
                     None => self.message = Some(tx(self.lang, "No bookmark visible").into()),
                 }
             }
+            // With no search typed, `n` / `N` walk the kept searches.
+            Action::SearchNext | Action::SearchPrev
+                if tab.engine.search_query.trim().is_empty() && !tab.engine.named.is_empty() =>
+            {
+                let from = tab.cursor_line().unwrap_or(0);
+                match tab.engine.next_named(from, action == Action::SearchNext) {
+                    Some((_, i)) => {
+                        self.message = Some(tab.engine.named.list[i].query.clone());
+                    }
+                    None => self.message = Some(tx(self.lang, "No search hits").into()),
+                }
+            }
             Action::SearchNext if tab.engine.search_next(false).is_none() => {
                 self.message = Some(tx(self.lang, "No search hits").into());
             }
@@ -8225,6 +8238,46 @@ impl App {
             Action::MergedView => self.open_merge(),
             Action::FilterTab => self.open_filter_tab(),
             Action::SelectAll => tab.engine.select_all_visible(),
+            Action::KeepSearch => {
+                let query = tab.engine.search_query.trim().to_string();
+                if query.is_empty() {
+                    let at = tab
+                        .engine
+                        .named
+                        .focus
+                        .or_else(|| tab.engine.named.list.len().checked_sub(1));
+                    match at {
+                        Some(i) => {
+                            let q = tab.engine.named.list[i].query.clone();
+                            tab.engine.remove_named(i);
+                            self.message =
+                                Some(txf(self.lang, "Forgot the kept search {0}", &[&q]));
+                        }
+                        None => {
+                            self.message = Some(
+                                tx(self.lang, "Type a search (/) first, then Alt+K keeps it")
+                                    .into(),
+                            )
+                        }
+                    }
+                } else {
+                    use crate::named_search::KeepError;
+                    self.message = Some(match tab.engine.keep_search(&query) {
+                        Ok(_) => {
+                            tab.pending_first_hit = false;
+                            tab.engine.search_query.clear();
+                            tab.engine.update_search("");
+                            txf(self.lang, "Kept {0}: n walks the kept searches", &[&query])
+                        }
+                        Err(KeepError::Full) => tx(
+                            self.lang,
+                            "Eight searches are kept already: Alt+K with no search forgets one",
+                        )
+                        .into(),
+                        Err(_) => txf(self.lang, "{0} is kept already", &[&query]),
+                    });
+                }
+            }
             Action::VolumeRow => {
                 tab.engine.timeline_open = !tab.engine.timeline_open;
                 tab.engine.timeline_dirty = true;
@@ -15488,6 +15541,65 @@ mod tests {
         assert_eq!(app.tabs[0].cursor_line(), Some(0));
         app.apply(Action::VolumeRow);
         assert!(!app.tabs[0].engine.timeline_open);
+    }
+
+    #[test]
+    fn alt_k_keeps_searches_and_n_walks_them_when_no_search_is_typed() {
+        let body = "ok\ntimeout a\nok\nrefused b\ntimeout c\nok\n";
+        let (mut app, _dir) = app_with(&[("a.log", body)], false);
+        render(&mut app, 100, 20);
+        app.apply(Action::KeepSearch);
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Type a search (/) first, then Alt+K keeps it")
+        );
+        for q in ["timeout", "refused"] {
+            app.search(q);
+            app.apply(Action::KeepSearch);
+        }
+        assert!(app.tabs[0].engine.search_query.is_empty());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[0]
+            .engine
+            .named
+            .list
+            .iter()
+            .any(|n| n.running() || n.total() == 0)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 200, 20);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("timeout 2") && l.contains("refused 1")),
+            "{screen:#?}"
+        );
+        assert!(
+            !screen.iter().any(|l| l.contains("Not found")),
+            "{screen:#?}"
+        );
+        // From the top: refused on line 4 comes after timeout on line 2.
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::SearchNext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(1));
+        app.apply(Action::SearchNext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(3));
+        // Focused on timeout (its chip), refused is skipped.
+        app.tabs[0].engine.named.toggle_focus(0);
+        app.apply(Action::SearchNext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(4));
+        // Alt+K with nothing typed forgets the focused one.
+        app.apply(Action::KeepSearch);
+        assert_eq!(
+            app.tabs[0].engine.named.saved(),
+            vec![(2, "refused".to_string())]
+        );
     }
 
     #[test]

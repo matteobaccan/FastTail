@@ -164,6 +164,9 @@ pub enum Action {
     SelectAll,
     /// ALT + V: the volume row (lines per time slice) above the focused stream's rows.
     VolumeRow,
+    /// ALT + K: the search typed is kept (highlighted with the others, walked by `n`
+    /// once the search is cleared); with none typed, the focused kept search is forgotten.
+    KeepSearch,
     /// The cursor row's bookmark removed (palette).
     RemoveBookmark,
     /// Auto-update of the focused stream on or off (palette, the bar's check box).
@@ -328,6 +331,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('m') | KeyCode::Char('M') => Some(Action::MergedView),
             KeyCode::Char('t') | KeyCode::Char('T') => Some(Action::FilterTab),
             KeyCode::Char('v') | KeyCode::Char('V') => Some(Action::VolumeRow),
+            KeyCode::Char('k') | KeyCode::Char('K') => Some(Action::KeepSearch),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -618,6 +622,7 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("filter_tab", Action::FilterTab, "Alt+T"),
     ("time_anchor", Action::TimeAnchor, "@"),
     ("volume_row", Action::VolumeRow, "Alt+V"),
+    ("search.keep", Action::KeepSearch, "Alt+K"),
     ("split.right", Action::SplitRight, "s |"),
     ("split.down", Action::SplitDown, "_"),
     ("window.close", Action::ClosePane, "Alt+X"),

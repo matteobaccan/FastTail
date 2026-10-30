@@ -1930,6 +1930,11 @@ pub struct TailEngine {
     /// Quick labels (see `QuickLabel`) with their lower-cased text, evaluated after the
     /// user rules by `match_highlight_spans`.
     quick_labels: Vec<(QuickLabel, String)>,
+    /// The quick labels the app set (`set_quick_labels`): `quick_labels` adds the kept
+    /// searches to them.
+    global_labels: Vec<QuickLabel>,
+    /// The stream's kept searches (see `crate::named_search`).
+    pub named: crate::named_search::NamedSearches,
     /// Kinds of the automatic highlighting, `NONE` while it is off (`set_auto_tokens`).
     auto_tokens: TokenKinds,
     pub expanded_json_lines: HashSet<usize>,
@@ -2654,6 +2659,8 @@ impl TailEngine {
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
             quick_labels: Vec::new(),
+            global_labels: Vec::new(),
+            named: crate::named_search::NamedSearches::default(),
             auto_tokens: TokenKinds::NONE,
             expanded_json_lines: HashSet::new(),
             json_open: HashMap::new(),
@@ -4403,6 +4410,11 @@ impl TailEngine {
 
     pub fn poll_updates(&mut self) {
         self.poll_context_rebuild();
+        if !self.named.is_empty() {
+            let mut named = std::mem::take(&mut self.named);
+            named.poll(self);
+            self.named = named;
+        }
         self.drain_job();
         self.poll_stats();
         self.poll_operations();
@@ -4960,14 +4972,60 @@ impl TailEngine {
     }
 
     pub fn set_quick_labels(&mut self, labels: &[QuickLabel]) {
-        self.quick_labels = labels
+        self.global_labels = labels.to_vec();
+        self.refresh_labels();
+    }
+
+    /// The quick labels the app set (the kept searches are not among them).
+    pub fn quick_labels(&self) -> Vec<QuickLabel> {
+        self.global_labels.clone()
+    }
+
+    /// The labels highlighted: the app's, then the kept searches in their colours.
+    fn refresh_labels(&mut self) {
+        let named = self.named.list.iter().map(|n| QuickLabel {
+            text: n.query.clone(),
+            color: n.color,
+        });
+        self.quick_labels = self
+            .global_labels
             .iter()
-            .map(|l| (l.clone(), l.text.to_lowercase()))
+            .cloned()
+            .chain(named)
+            .map(|l| {
+                let lower = l.text.to_lowercase();
+                (l, lower)
+            })
             .collect();
     }
 
-    pub fn quick_labels(&self) -> Vec<QuickLabel> {
-        self.quick_labels.iter().map(|(l, _)| l.clone()).collect()
+    /// Keeps `query` as a named search of this stream (highlighted in the colour returned,
+    /// walked with `next_named`).
+    pub fn keep_search(&mut self, query: &str) -> Result<u8, crate::named_search::KeepError> {
+        let color = self.named.keep(query)?;
+        self.refresh_labels();
+        Ok(color)
+    }
+
+    pub fn remove_named(&mut self, i: usize) {
+        self.named.remove(i);
+        self.refresh_labels();
+    }
+
+    /// Puts back the kept searches saved for the stream.
+    pub fn restore_named(&mut self, saved: &[(u8, String)]) {
+        self.named.restore(saved);
+        self.refresh_labels();
+    }
+
+    /// The next (`forward`) or previous hit of the kept searches (the focused one, else
+    /// all) from line `from`, scrolled to; the line and the search, `None` without hits.
+    pub fn next_named(&mut self, from: usize, forward: bool) -> Option<(usize, usize)> {
+        let (line, i) = self.named.next_hit(from, forward)?;
+        self.follow_tail = false;
+        self.reveal_line(line);
+        self.scroll_to_line = Some(line);
+        Some((line, i))
     }
 
     /// Token kinds of the automatic highlighting (`TokenKinds::NONE` while it is off),

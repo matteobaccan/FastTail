@@ -2046,7 +2046,24 @@ fn render_log_stream(
     let shift_f3 = (f3_pressed && ui.input(|i| i.modifiers.shift)) || act(ActionId::SearchPrev);
     let next_f3 = (f3_pressed && !ui.input(|i| i.modifiers.shift)) || act(ActionId::SearchNext);
 
-    if next_f3 {
+    // With the box empty, F3 walks the kept searches (the focused one, else all).
+    let walk_named = search_query.trim().is_empty() && !engine.named.is_empty();
+    if walk_named && (next_f3 || shift_f3) {
+        let from = engine
+            .selection_anchor
+            .or_else(|| {
+                engine
+                    .current_row()
+                    .and_then(|r| engine.get_actual_line_idx(r))
+            })
+            .unwrap_or(0);
+        if engine.next_named(from, next_f3).is_some() {
+            if let Some(line) = engine.scroll_to_line {
+                engine.select_row(line);
+            }
+            ui.ctx().request_repaint();
+        }
+    } else if next_f3 {
         if let Some(target) = engine.search_next(sound_enabled) {
             scroll_to_target(engine, target);
             push_search_history(search_history, search_query);
@@ -2715,6 +2732,24 @@ fn render_log_stream(
             .clicked()
         {
             engine.find_all_request = true;
+        }
+        // Keep this search: highlighted with the others in its colour, walked by F3 once
+        // the box is empty.
+        if ui
+            .small_button(RichText::new("📌").monospace())
+            .on_hover_text(t(lang, "named_keep_tip"))
+            .clicked()
+        {
+            match engine.keep_search(search_query) {
+                Ok(_) => {
+                    search_query.clear();
+                    engine.update_search("");
+                }
+                Err(crate::named_search::KeepError::Full) => {
+                    engine.view_notice = Some(t(lang, "named_full").to_string());
+                }
+                Err(_) => {}
+            }
         }
 
         // Ctrl+F in the focused stream: requests focus on its search input and selects all text
@@ -3899,6 +3934,62 @@ fn render_log_stream(
     render_preset_save_dialog(ui.ctx(), engine, filter_presets, preset_events, theme, lang);
 
     ui.separator();
+
+    // Kept searches: a chip per search with its count; a click walks only that one (again:
+    // all of them), ✕ forgets it.
+    if !engine.named.is_empty() {
+        let mut remove = None;
+        let mut focus = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(format!("📌 {}:", t(lang, "named_searches")))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.text_dim()),
+            )
+            .on_hover_text(t(lang, "named_searches_tip"));
+            for (i, n) in engine.named.list.iter().enumerate() {
+                let (fg, bg) = theme.label_style(n.color);
+                let count = if n.running() {
+                    format!("{}…", n.total())
+                } else {
+                    n.total().to_string()
+                };
+                let mark = if engine.named.focus == Some(i) {
+                    "◉"
+                } else {
+                    ""
+                };
+                let chip = ui.add(
+                    egui::Button::new(
+                        RichText::new(format!(" {mark}{} ({count}) ", n.query))
+                            .monospace()
+                            .size(11.0)
+                            .color(fg),
+                    )
+                    .fill(bg),
+                );
+                if chip.on_hover_text(t(lang, "named_chip_tip")).clicked() {
+                    focus = Some(i);
+                }
+                if ui
+                    .small_button("✕")
+                    .on_hover_text(t(lang, "named_remove_tip"))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            }
+        });
+        if let Some(i) = focus {
+            engine.named.toggle_focus(i);
+        }
+        if let Some(i) = remove {
+            engine.remove_named(i);
+            ui.ctx().request_repaint();
+        }
+        ui.separator();
+    }
 
     // Quick colour labels strip: one chip per label with a remove button.
     if !quick_labels.is_empty() {

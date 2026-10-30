@@ -58,6 +58,8 @@ pub enum BarChip {
     Fields,
     Presets,
     Global,
+    /// A kept search (`timeout 12`): walks only it, or all of them again.
+    Named(usize),
 }
 
 /// A piece of a bar: a clickable chip drawn `[text]`, or plain text.
@@ -461,6 +463,16 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             if ascii { text } else { format!("🙈 {text}") },
             warn,
             BarChip::Hidden,
+        ));
+    }
+    // The kept searches, each in its colour with its count; the focused one marked.
+    for (i, n) in e.named.list.iter().enumerate() {
+        let mark = if e.named.focus == Some(i) { "*" } else { "" };
+        let more = if n.running() { "..." } else { "" };
+        second.push(chip(
+            format!("{mark}{} {}{more}", n.query, n.total()),
+            palette.label_style(n.color),
+            BarChip::Named(i),
         ));
     }
     second.push(chip(tx(lang, "Presets").into(), dim, BarChip::Presets));
