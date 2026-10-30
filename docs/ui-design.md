@@ -411,6 +411,7 @@ While a stream is in the *show in context* view, the filters are suspended and t
 
 Below the filter row, in this order:
 
+1. **Kept searches strip** (only when the stream keeps searches): `📌 Kept searches:` (tooltip `named_searches_tip`) and one chip per kept search, ` query (count) ` (`count…` while its job runs, `◉` before the focused one) filled with its quick-label colour (1 to 8); a click walks only that search (again: all), `✕` forgets it. The `📌` button after the search box's `🔎` keeps the typed query (tooltip `named_keep_tip`; a ninth shows `named_full` in the notice row). With the search box empty, `F3` / `Shift+F3` go to the next or previous line holding a kept search. Source: `src/named_search.rs`, `TailEngine::keep_search` / `next_named`.
 1. **Quick labels strip** (only when labels exist): `🏷 Labels:` and one chip per label, ` n text `, in the label's preset colours, each with a small `✕`.
 2. **Context banner**, only while a line is shown in context: `◆ Filters suspended: line N shown in the full log` in warn, and a `[Back to filtered view]` button (tooltip: *Back to the filtered view as it was (Esc or CTRL + K)*). `Esc` (on the focused stream, when no widget has focus) or `CTRL + K` leave the context view as well. The return restores the selection, the follow state and the scroll position of the moment the view was entered.
 3. **Timeline strip** (§5.6) when `📊` is on.

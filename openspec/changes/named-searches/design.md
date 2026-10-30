@@ -10,8 +10,8 @@ The search job finds the hits of one matcher; quick labels highlight text but ke
 
 ## Decisions
 
-### D1. One job, several matchers
-The search job takes a list of matchers and tags each hit with its search, so the cost stays one pass.
+### D1. One job per kept search
+Each kept search runs a one-stream `FindAllSession` (the Find all job, `MAX_HITS` listed, the total counted), so it never cancels the stream's own search and matches as it does; a reloaded stream searches again at once, a grown one at most every 3 s. Eight searches are eight passes, fine for the file sizes the jobs already handle.
 
 ### D2. Labels unchanged
 Quick labels stay what they are (highlight only); a label can be made a kept search from its menu.
@@ -22,4 +22,4 @@ Quick labels stay what they are (highlight only); a label can be made a kept sea
 
 ## Open Questions
 
-- Share colours with the quick labels? Proposed: the same eight colours, a kept search taking a free one.
+- Share colours with the quick labels? Decided: the same colours 1 to 8, highlighted through the quick label path (`TailEngine::quick_labels` keeps returning only the app's labels).

@@ -39,6 +39,7 @@ mod line_wrap;
 mod log_formats;
 mod log_levels;
 mod merged_views;
+mod named_searches;
 mod net_listener;
 mod open_at_line;
 mod out_of_order_lines;
