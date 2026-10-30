@@ -4213,7 +4213,9 @@ fn page_acceleration_round_trips_and_defaults_on() {
     };
     let general = off.to_ini();
     assert_eq!(
-        general.section(Some("general")).and_then(|g| g.get("page_acceleration")),
+        general
+            .section(Some("general"))
+            .and_then(|g| g.get("page_acceleration")),
         Some("false")
     );
     assert!(!FastTailConfig::from_ini(&off.to_ini()).page_acceleration);
