@@ -5,8 +5,9 @@ the local one.
 
 ## What Changes
 
-- `eventlog://host/Channel` (with `?user=`; the password asked and never saved) follows a
-  remote machine's channel through the Windows Event Log API's remote session.
+- `eventlog://host/Channel` follows a remote machine's channel through the Windows Event Log
+  API's remote session, with the current user's Windows credentials (no password is asked
+  or stored; other credentials are left for later).
 - The open dialogs take a host; errors (access denied, RPC unavailable) are shown in the
   stream bar.
 

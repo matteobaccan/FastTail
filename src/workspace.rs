@@ -164,6 +164,7 @@ pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -
         let spec = crate::eventlog::EventLogSpec {
             source: crate::eventlog::Source::File(path.to_path_buf()),
             filter: Default::default(),
+            host: None,
         };
         return open_event_log(Ok(spec), config, wake);
     }
