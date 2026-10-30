@@ -344,10 +344,10 @@ window and the terminal together.
 - ✅ `named-searches` (M), `operation-jump` (S), `stream-info` (S), `copy-excerpt` (S),
   `preset-pinning` (S), `kubernetes-source` (S–M)
 
-**0.33.0, the long tail** (gaps 34 to 37):
+**0.33.0, the long tail** (gaps 34 to 37), shipped 2026-10-30:
 
-- ⬜ `log2src-links` (L), `remote-event-log` (M), `npp-filter-import` (S), `dlt-format`
-  (L, optional: the maintainer may drop it)
+- ✅ `log2src-links` (L), `remote-event-log` (M), `npp-filter-import` (S)
+- ⬜ `dlt-format` (L, optional): not started; feature work stopped after 0.33.0 (only user issues)
 
 Outside the plan:
 
