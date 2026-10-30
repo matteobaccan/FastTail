@@ -3571,6 +3571,36 @@ fn render_log_stream(
                 }
                 ui.ctx().request_repaint();
             }
+            // ALT + ] / ALT + [: the next / previous line of the row's operation id.
+            let op_next_key =
+                egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::CloseBracket);
+            let op_prev_key =
+                egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::OpenBracket);
+            let op_prev = act(ActionId::OperationPrev)
+                || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&op_prev_key)));
+            let op_next = !op_prev
+                && (act(ActionId::OperationNext)
+                    || (keys_ok
+                        && line_view
+                        && ui.input_mut(|i| i.consume_shortcut(&op_next_key))));
+            if op_prev || op_next {
+                let from = engine
+                    .selection_anchor
+                    .or_else(|| engine.selection.iter().next().copied())
+                    .or_else(|| engine.get_actual_line_idx(top_row(engine)))
+                    .unwrap_or(0);
+                use crate::operation_jump::OpJump;
+                match engine.next_same_operation(from, op_next) {
+                    OpJump::Found(line, _) => engine.select_row(line),
+                    OpJump::NoId => {
+                        engine.view_notice = Some(t(lang, "op_jump_no_id").to_string());
+                    }
+                    OpJump::NotFound(id) => {
+                        engine.view_notice = Some(t(lang, "op_jump_not_found").replace("{0}", &id));
+                    }
+                }
+                ui.ctx().request_repaint();
+            }
             // Esc on the rows: clears a character selection first (a bare caret goes
             // without using the key, so Esc still does what it did before).
             if keys_ok && engine.char_selection.is_some() {

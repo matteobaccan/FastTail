@@ -8238,6 +8238,25 @@ impl App {
             Action::MergedView => self.open_merge(),
             Action::FilterTab => self.open_filter_tab(),
             Action::SelectAll => tab.engine.select_all_visible(),
+            Action::OperationNext | Action::OperationPrev => {
+                use crate::operation_jump::OpJump;
+                let Some(from) = tab.cursor_line() else {
+                    return;
+                };
+                self.message = Some(
+                    match tab.engine.next_same_operation(from, action == Action::OperationNext) {
+                        OpJump::Found(_, id) => id,
+                        OpJump::NoId => tx(
+                            self.lang,
+                            "This row has no operation id (trace_id, request_id, req_id, opid, correlation_id, thread)",
+                        )
+                        .into(),
+                        OpJump::NotFound(id) => {
+                            txf(self.lang, "No other line of {0} that way", &[&id])
+                        }
+                    },
+                );
+            }
             Action::KeepSearch => {
                 let query = tab.engine.search_query.trim().to_string();
                 if query.is_empty() {

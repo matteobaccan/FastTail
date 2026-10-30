@@ -164,6 +164,9 @@ pub enum Action {
     SelectAll,
     /// ALT + V: the volume row (lines per time slice) above the focused stream's rows.
     VolumeRow,
+    /// ALT + . / ALT + ,: the next / previous line of the cursor row's operation id.
+    OperationNext,
+    OperationPrev,
     /// ALT + K: the search typed is kept (highlighted with the others, walked by `n`
     /// once the search is cleared); with none typed, the focused kept search is forgotten.
     KeepSearch,
@@ -332,6 +335,8 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('t') | KeyCode::Char('T') => Some(Action::FilterTab),
             KeyCode::Char('v') | KeyCode::Char('V') => Some(Action::VolumeRow),
             KeyCode::Char('k') | KeyCode::Char('K') => Some(Action::KeepSearch),
+            KeyCode::Char('.') => Some(Action::OperationNext),
+            KeyCode::Char(',') => Some(Action::OperationPrev),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -623,6 +628,8 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("time_anchor", Action::TimeAnchor, "@"),
     ("volume_row", Action::VolumeRow, "Alt+V"),
     ("search.keep", Action::KeepSearch, "Alt+K"),
+    ("operation.next", Action::OperationNext, "Alt+."),
+    ("operation.prev", Action::OperationPrev, "Alt+,"),
     ("split.right", Action::SplitRight, "s |"),
     ("split.down", Action::SplitDown, "_"),
     ("window.close", Action::ClosePane, "Alt+X"),
