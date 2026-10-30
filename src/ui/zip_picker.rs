@@ -371,17 +371,19 @@ impl ArchivePicker {
                     }
                 });
             ui.separator();
+            let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             ui.horizontal(|ui| {
                 let chosen = self.chosen();
                 let label = format!("📂 {} ({})", t(lang, "zip_picker_open"), chosen.len());
-                if ui
+                let open_clicked = ui
                     .add_enabled(!chosen.is_empty(), egui::Button::new(label))
                     .on_disabled_hover_text(t(lang, "zip_picker_no_selection"))
-                    .clicked()
-                {
+                    .clicked();
+                if (open_clicked || enter) && !chosen.is_empty() {
                     outcome = Some(self.open_chosen());
                 }
-                if ui.button(t(lang, "session_cancel")).clicked() {
+                if ui.button(t(lang, "session_cancel")).clicked() || esc {
                     outcome = Some(PickerOutcome::Cancel);
                 }
             });
