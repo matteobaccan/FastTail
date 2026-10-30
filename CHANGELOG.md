@@ -19,6 +19,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a tab of the same file that follows it, numbered by the source's lines; `Ctrl+K` on a
   row shows it in the source. Filter tabs open in both interfaces, and *Open filter as new
   tab* is in the window's palette too.
+- **Time anchor in the terminal.** `@` sets the Δt column's anchor on the cursor row (and
+  shows the column); a selection shows its elapsed time in the status bar
+  (`Δ +2.357 · 14 rows`).
+- **The whole palette in the terminal.** Select all (`Ctrl+A`), Play / Pause all, Line
+  numbers, Auto-update, Remove bookmark, Save session, Save as default session, Clear
+  recent sessions, Open folder pattern and **Recent files…** (open, remove, clear) are in
+  the terminal palette; a test fails when a window command has no terminal entry and is
+  not marked window-only. *Recent files…* is in the window's palette too.
 
 ## [0.30.0] - 2026-10-29
 

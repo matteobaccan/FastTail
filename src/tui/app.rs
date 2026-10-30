@@ -618,6 +618,8 @@ pub struct App {
     pub analysis_menu: Option<usize>,
     /// The merged view dialog (`Alt+M`).
     pub merge: Option<crate::tui::merge::MergeDialog>,
+    /// The recent files list (palette): the row selected.
+    pub recent_menu: Option<usize>,
     /// A merged view has lines left to merge: the loop polls faster.
     views_busy: bool,
     /// The terminal keys in force: the defaults with `[shortcuts]`'s `tui.` entries.
@@ -790,6 +792,7 @@ impl App {
             analysis: None,
             analysis_menu: None,
             merge: None,
+            recent_menu: None,
             views_busy: false,
             keymap: keys::KeyMap::default(),
             keys_dialog: None,
@@ -1452,6 +1455,9 @@ impl App {
         }
         if self.merge.is_some() {
             return self.on_merge_key(key);
+        }
+        if self.recent_menu.is_some() {
+            return self.on_recent_key(key);
         }
         if self.keys_dialog.is_some() {
             return self.on_keys_dialog_key(key);
@@ -3956,6 +3962,158 @@ impl App {
             Kind::Operations
         };
         self.analysis = Some(AnalysisView::new(kind, tab.engine.path.clone()));
+    }
+
+    /// The palette's workspace commands, with or without a stream open: the recent files
+    /// and sessions, saving the session or the default one. Returns whether `action` was
+    /// one of them.
+    fn apply_workspace_action(&mut self, action: Action) -> bool {
+        match action {
+            Action::RecentFiles => {
+                let empty = self
+                    .settings
+                    .as_ref()
+                    .is_none_or(|s| s.config.recent_files.is_empty());
+                if empty {
+                    self.message = Some(tx(self.lang, "No recent files").into());
+                } else {
+                    self.recent_menu = Some(0);
+                }
+            }
+            Action::ClearRecentFiles => {
+                if let Some(s) = self.settings.as_mut() {
+                    s.config.recent_files.clear();
+                }
+                self.message = Some(tx(self.lang, "Recent files cleared").into());
+                self.save_config();
+            }
+            Action::ClearRecentSessions => {
+                if let Some(s) = self.settings.as_mut() {
+                    s.config.recent_sessions.clear();
+                }
+                self.message = Some(tx(self.lang, "Recent sessions cleared").into());
+                self.save_config();
+            }
+            Action::SaveCurrentSession => {
+                match self
+                    .settings
+                    .as_ref()
+                    .and_then(|s| s.config.current_session.clone())
+                {
+                    Some(file) => self.save_session(&file),
+                    None => self.open_prompt(PromptKind::SaveSession),
+                }
+            }
+            Action::SaveDefaultSession => {
+                // The workspace becomes the default session: the named one is left.
+                if let Some(s) = self.settings.as_mut() {
+                    s.config.current_session = None;
+                }
+                self.dock_dirty = true;
+                self.save_config();
+                if self.save_error.is_none() {
+                    self.message = Some(tx(self.lang, "Saved as the default session").into());
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn on_recent_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let files: Vec<PathBuf> = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.recent_files.clone())
+            .unwrap_or_default();
+        let Some(selected) = self.recent_menu.as_mut() else {
+            return false;
+        };
+        let last = files.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => self.recent_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(last),
+            KeyCode::Enter => {
+                let at = *selected;
+                self.recent_menu = None;
+                if let Some(path) = files.get(at) {
+                    self.open_file(path);
+                }
+            }
+            KeyCode::Delete | KeyCode::Char('d') => {
+                let at = *selected;
+                if let Some(s) = self.settings.as_mut() {
+                    if at < s.config.recent_files.len() {
+                        s.config.recent_files.remove(at);
+                    }
+                    let left = s.config.recent_files.len();
+                    if left == 0 {
+                        self.recent_menu = None;
+                    } else if let Some(sel) = self.recent_menu.as_mut() {
+                        *sel = (*sel).min(left - 1);
+                    }
+                }
+                self.save_config();
+            }
+            KeyCode::Char('c') => {
+                self.recent_menu = None;
+                self.apply_workspace_action(Action::ClearRecentFiles);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn draw_recent(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.recent_menu else {
+            return;
+        };
+        let files: Vec<PathBuf> = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.recent_files.clone())
+            .unwrap_or_default();
+        let help = tx(
+            self.lang,
+            "Enter opens, Delete removes, c clears the list, Esc closes",
+        );
+        let width = files
+            .iter()
+            .map(|p| p.display().to_string().chars().count() as u16 + 4)
+            .chain(std::iter::once(help.chars().count() as u16 + 4))
+            .max()
+            .unwrap_or(40)
+            .clamp(40, area.width.saturating_sub(4).max(40));
+        let room = area.height.saturating_sub(6).max(1) as usize;
+        let shown = files.len().min(room);
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, shown as u16 + 4),
+            tx(self.lang, "Recent files"),
+            false,
+        );
+        let top = selected.saturating_sub(shown.saturating_sub(1));
+        let mut out = vec![Line::styled(help, dim)];
+        for (i, path) in files.iter().enumerate().skip(top).take(shown) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            out.push(Line::styled(format!(" {}", path.display()), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
     }
 
     /// `Alt+M`: on a merged view, its sources on and off; elsewhere the open streams with
@@ -6918,6 +7076,9 @@ impl App {
     }
 
     pub fn apply(&mut self, action: Action) {
+        if self.apply_workspace_action(action) {
+            return;
+        }
         let n_tabs = self.tabs.len();
         // With no file open only what opens one (or leaves) acts.
         if n_tabs == 0 {
@@ -7140,6 +7301,7 @@ impl App {
                     || self.analysis.is_some()
                     || self.analysis_menu.is_some()
                     || self.merge.is_some()
+                    || self.recent_menu.is_some()
                     || self.keys_dialog.is_some()
                     || self.plugins.is_some()
                     || self.presets.is_some()
@@ -7477,6 +7639,14 @@ impl App {
             Target::ListItem(i) if self.piece_menu.is_some() => self.go_to_piece(i),
             Target::ListItem(i) if self.results_menu.is_some() => self.go_to_result(i),
             Target::ListItem(i) if self.export_menu.is_some() => self.choose_export(i),
+            Target::ListItem(i) if self.recent_menu.is_some() => {
+                self.recent_menu = Some(i);
+                let enter = crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Enter,
+                    crossterm::event::KeyModifiers::NONE,
+                );
+                self.on_recent_key(enter);
+            }
             Target::ListItem(i) if self.merge.is_some() => {
                 if let Some(d) = self.merge.as_mut() {
                     d.selected = i;
@@ -7587,6 +7757,7 @@ impl App {
                     || self.export_menu.take().is_some()
                     || self.analysis_menu.take().is_some()
                     || self.merge.take().is_some()
+                    || self.recent_menu.take().is_some()
                     || self.columns_menu.take().is_some()
                 {
                 } else if let Some(m) = self.tool_menu.take() {
@@ -8030,6 +8201,29 @@ impl App {
             Action::Analysis => self.analysis_menu = Some(0),
             Action::MergedView => self.open_merge(),
             Action::FilterTab => self.open_filter_tab(),
+            Action::SelectAll => tab.engine.select_all_visible(),
+            Action::RemoveBookmark => match tab.cursor_line() {
+                Some(line) if tab.engine.is_bookmarked(line) => tab.engine.remove_bookmark(line),
+                _ => self.message = Some(tx(self.lang, "No bookmark on this row").into()),
+            },
+            Action::ToggleMonitor => self.run_chip(crate::tui::bars::BarChip::Monitor),
+            Action::TimeAnchor => {
+                let Some(line) = tab.cursor_line() else {
+                    return;
+                };
+                tab.engine.toggle_time_anchor(line);
+                // The anchor is read in the Δt column: it is shown with it.
+                if tab.engine.time_anchor().is_some() {
+                    tab.engine.show_time_delta = true;
+                    self.message = Some(txf(self.lang, "Time anchor on line {0}", &[&(line + 1)]));
+                } else {
+                    self.message = Some(tx(self.lang, "Time anchor off").into());
+                }
+            }
+            Action::TimeAnchorClear => {
+                tab.engine.clear_time_anchor();
+                self.message = Some(tx(self.lang, "Time anchor off").into());
+            }
             Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
             Action::ToggleSetting(s) => self.toggle_setting(s),
             Action::Plugins => self.open_plugins(),
@@ -8242,6 +8436,9 @@ impl App {
         }
         if self.merge.is_some() {
             self.draw_merge(frame, main_area);
+        }
+        if self.recent_menu.is_some() {
+            self.draw_recent(frame, main_area);
         }
         if self.keys_dialog.is_some() {
             self.draw_keys_dialog(frame, main_area);
@@ -8822,6 +9019,22 @@ impl App {
         if let Some(port) = self.mcp_view.port() {
             serving.push(format!("MCP :{port}"));
         }
+        // The elapsed time of a selection of timed rows, as the window's stream bar shows it.
+        let elapsed = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.engine.selection_elapsed());
+        let block = match elapsed {
+            Some((millis, rows)) => block.title_bottom(
+                Line::from(txf(
+                    self.lang,
+                    " Δ {0} · {1} rows ",
+                    &[&crate::timestamp::format_delta(millis), &rows],
+                ))
+                .style(Style::default().fg(self.palette.accent())),
+            ),
+            None => block,
+        };
         let block = if serving.is_empty() {
             block
         } else {
@@ -15414,6 +15627,76 @@ mod tests {
         render(&mut app, 100, 20);
         assert_eq!(app.active, 0);
         assert_eq!(app.tabs[0].engine.context_line(), Some(2));
+    }
+
+    #[test]
+    fn at_sets_the_time_anchor_and_a_selection_shows_its_elapsed_time() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        render(&mut app, 100, 20);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('@'));
+        assert_eq!(app.tabs[0].engine.time_anchor(), Some(0));
+        assert!(app.tabs[0].engine.show_time_delta);
+        assert_eq!(app.message.as_deref(), Some("Time anchor on line 1"));
+        let screen = render(&mut app, 100, 20);
+        let row = screen.iter().find(|l| l.contains("ERROR failed")).unwrap();
+        assert!(row.contains("+2.000"), "{row}");
+        // Shift+Down twice: three rows, two seconds.
+        app.message = None;
+        for _ in 0..2 {
+            app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        }
+        let screen = render(&mut app, 100, 20);
+        assert!(
+            screen.iter().any(|l| l.contains("Δ +2.000 · 3 rows")),
+            "{screen:#?}"
+        );
+        app.apply(Action::TimeAnchorClear);
+        assert_eq!(app.tabs[0].engine.time_anchor(), None);
+    }
+
+    #[test]
+    fn the_palette_workspace_commands_recent_files_select_all_and_default_session() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        app.apply(Action::RecentFiles);
+        assert_eq!(app.message.as_deref(), Some("No recent files"));
+        let mut settings = crate::tui::workspace::Settings::default();
+        let gone = dir.path().join("gone.log");
+        settings.config.recent_files = vec![path_of(&app, 0), gone.clone()];
+        settings.config.current_session = Some(dir.path().join("s.fasttail-session.ini"));
+        settings.config.recent_sessions = vec![dir.path().join("s.fasttail-session.ini")];
+        app.settings = Some(settings);
+        app.apply(Action::RecentFiles);
+        assert_eq!(app.recent_menu, Some(0));
+        render(&mut app, 100, 20);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Delete);
+        let config = &app.settings.as_ref().unwrap().config;
+        assert_eq!(config.recent_files, vec![path_of(&app, 0)]);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.recent_menu.is_none());
+        app.apply(Action::SelectAll);
+        assert!(app.tabs[0].engine.has_selection());
+        app.apply(Action::SaveDefaultSession);
+        assert!(app
+            .settings
+            .as_ref()
+            .unwrap()
+            .config
+            .current_session
+            .is_none());
+        app.apply(Action::ClearRecentSessions);
+        assert!(app
+            .settings
+            .as_ref()
+            .unwrap()
+            .config
+            .recent_sessions
+            .is_empty());
+        app.apply(Action::RemoveBookmark);
+        assert_eq!(app.message.as_deref(), Some("No bookmark on this row"));
     }
 
     #[test]

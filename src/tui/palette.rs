@@ -44,6 +44,21 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::Patterns => (Action::Patterns, "Alt+A"),
         ActionId::MergedView => (Action::MergedView, "Alt+M"),
         ActionId::FilterTab => (Action::FilterTab, "Alt+T"),
+        ActionId::TimeAnchorSet => (Action::TimeAnchor, "@"),
+        ActionId::TimeAnchorClear => (Action::TimeAnchorClear, ""),
+        ActionId::SelectAll => (Action::SelectAll, "Ctrl+A"),
+        ActionId::LineNumbers => (Action::ToggleLineNumbers, "#"),
+        ActionId::Monitor => (Action::ToggleMonitor, ""),
+        ActionId::BookmarkRemove => (Action::RemoveBookmark, ""),
+        // The Open dialog takes a pattern (`logs/*.log`) in its name field.
+        ActionId::OpenPattern => (Action::OpenFile, "o"),
+        ActionId::RecentFiles => (Action::RecentFiles, ""),
+        ActionId::ClearRecentFiles => (Action::ClearRecentFiles, ""),
+        ActionId::PlayAll => (Action::PlayAll, ""),
+        ActionId::PauseAll => (Action::PauseAll, ""),
+        ActionId::SessionSave => (Action::SaveCurrentSession, ""),
+        ActionId::SessionSaveDefault => (Action::SaveDefaultSession, ""),
+        ActionId::SessionClearRecent => (Action::ClearRecentSessions, ""),
         ActionId::KeyboardShortcuts => (Action::KeysDialog, ""),
         ActionId::Toggle(setting) if terminal_setting(setting) => {
             (Action::ToggleSetting(setting), "")
@@ -95,6 +110,26 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::SessionLoad => (Action::OpenSession, "O"),
         _ => return None,
     })
+}
+
+/// The registry commands only the window has: a view, a strip or a window setting a
+/// terminal cannot show, and the settings of `terminal_setting` that are not for it.
+#[cfg(test)]
+fn window_only(id: ActionId) -> bool {
+    match id {
+        ActionId::ViewMarkdown
+        | ActionId::Wrap
+        | ActionId::Timeline
+        | ActionId::AlwaysOnTop
+        | ActionId::ZoomIn
+        | ActionId::ZoomOut
+        | ActionId::ZoomReset => true,
+        ActionId::Toggle(setting) => !terminal_setting(setting),
+        ActionId::Choose(_) => true,
+        // Outside Windows: the Windows sources.
+        ActionId::OpenDebugOutput | ActionId::OpenEventLog => !cfg!(windows),
+        _ => false,
+    }
 }
 
 /// The boolean settings that apply to a terminal (not the window's screensaver, tray,
@@ -278,6 +313,19 @@ mod tests {
         assert!(is_goto("+50") && is_goto("-3") && is_goto("14:02"));
         assert!(!is_goto("go") && !is_goto("-x"));
         assert_eq!(p.on_key(key(KeyCode::Esc)), PaletteKey::Close);
+    }
+
+    #[test]
+    fn every_registry_command_is_in_the_terminal_palette_or_window_only() {
+        let missing: Vec<&str> = crate::actions::all()
+            .iter()
+            .filter(|a| terminal_action(a.id).is_none() && !window_only(a.id))
+            .map(|a| a.key)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "add them to terminal_action or window_only: {missing:?}"
+        );
     }
 
     #[test]

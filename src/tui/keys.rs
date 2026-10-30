@@ -156,6 +156,24 @@ pub enum Action {
     /// ALT + T: the focused stream's filter as a new tab of the same file (the window's
     /// "Open filter as new tab").
     FilterTab,
+    /// `@`: the time anchor of the Δt column on the cursor row, or off when it is there.
+    TimeAnchor,
+    /// The time anchor off (palette).
+    TimeAnchorClear,
+    /// CTRL + A: every visible line selected.
+    SelectAll,
+    /// The cursor row's bookmark removed (palette).
+    RemoveBookmark,
+    /// Auto-update of the focused stream on or off (palette, the bar's check box).
+    ToggleMonitor,
+    /// Save the current session, save the workspace as the default session, clear the
+    /// recent sessions (palette).
+    SaveCurrentSession,
+    SaveDefaultSession,
+    ClearRecentSessions,
+    /// The recent files: a list to open or remove one; clear the list (palette).
+    RecentFiles,
+    ClearRecentFiles,
     /// The Patterns view of the focused stream (palette).
     Patterns,
     /// The Keys dialog: the remappable terminal keys (palette).
@@ -244,6 +262,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         }
         return match key.code {
             KeyCode::Char('c') | KeyCode::Char('C') => Some(Action::CopyOrQuit),
+            KeyCode::Char('a') => Some(Action::SelectAll),
             KeyCode::Char('b') => Some(Action::PageUp),
             KeyCode::Char('f') => Some(Action::PageDown),
             KeyCode::F(2) => Some(Action::ToggleBookmark),
@@ -332,6 +351,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
         KeyCode::Char('m') => Action::EditNote,
         KeyCode::Char('J') => Action::JsonTree,
         KeyCode::Char(':') => Action::Palette,
+        KeyCode::Char('@') => Action::TimeAnchor,
         KeyCode::Char('h') => Action::ToggleHex,
         KeyCode::Char('d') => Action::ToggleAsm,
         KeyCode::Char('D') => Action::CycleArch,
@@ -562,6 +582,7 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("analysis", Action::Analysis, "Alt+A"),
     ("merged_view", Action::MergedView, "Alt+M"),
     ("filter_tab", Action::FilterTab, "Alt+T"),
+    ("time_anchor", Action::TimeAnchor, "@"),
     ("split.right", Action::SplitRight, "s |"),
     ("split.down", Action::SplitDown, "_"),
     ("window.close", Action::ClosePane, "Alt+X"),

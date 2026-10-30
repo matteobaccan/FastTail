@@ -70,7 +70,14 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 ## Keys
 
 `?` or `F1` lists every key as a menu (`Enter` runs one); `:` opens the command palette
-(the window's commands by name, with their keys; a number goes to that line).
+(the window's commands by name, with their keys; a number goes to that line). Every
+command of the window is there except the ones a terminal cannot show (zoom, always on
+top, wrap, the Markdown view, the timeline strip): among them *Select all* (`Ctrl+A`),
+*Play all* / *Pause all*, *Line numbers*, *Auto-update*, *Remove bookmark*, *Save
+session* (the current one; without one it asks for a file), *Save as default session*,
+*Clear recent sessions*, *Open folder pattern…* (the Open dialog, which takes
+`logs/*.log`) and *Recent files…*: a list where `Enter` opens a file, `Delete` removes it
+and `c` clears the list (also *Clear recent files*).
 
 | Keys | Action |
 |---|---|
@@ -115,6 +122,7 @@ At least 40 columns by 10 rows are needed; below that a line asks for a larger t
 | `s` `\|` `_` | new window beside / below |
 | `<` `>`, `Ctrl+PgUp` `Ctrl+PgDn` | move the stream to another window, tabs of a window |
 | `Alt+D` | the time delta column on or off |
+| `@` | the time anchor on the cursor row (again on the same row: off; also *Clear time anchor* in the palette): the Δt column, shown with it, measures every row from that line (`-0.500`, `+1.250`) and marks it `@`. A selection of timed rows (`Shift+Up` / `Down`) shows its elapsed time at the bottom of the status bar, `Δ +2.357 · 14 rows` |
 | `Alt+F`, `Alt+X`, `Alt+arrows` | float / dock a window, close a window, move a divider or a floating window |
 | `Tab`, `Alt+1..9` | next window or stream, stream N |
 | `Ctrl+W` | close the stream |

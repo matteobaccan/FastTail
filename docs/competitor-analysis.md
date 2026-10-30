@@ -316,9 +316,9 @@ settings and the workspace with the window. Where it stands against the window:
   listener prompt
 - ✅ Merged timeline view of several streams (`Alt+M`)
 - ✅ Filter as a new tab (`Alt+T`)
-- ⬜ Time anchor of the Δt column and the elapsed time of a selection (`tui-time-anchor`, S)
-- ⬜ Palette entries: select all, play / pause all, line numbers, auto-update, save session,
-  remove bookmark, open folder pattern, recent files (`tui-palette-completion`, S)
+- ✅ Time anchor of the Δt column and the elapsed time of a selection (`@`)
+- ✅ Palette entries: select all, play / pause all, line numbers, auto-update, save session,
+  remove bookmark, open folder pattern, recent files
 - ⬜ Charts: a volume row, sparklines in Statistics and Patterns (`tui-charts`, M)
 - ⬜ PgUp / PgDn acceleration while the key is held (`tui-page-acceleration`, S)
 - By design not in a terminal: Markdown view, line wrap, overview strip, timeline histogram,
@@ -334,8 +334,8 @@ window and the terminal together.
 
 - ✅ `tui-merged-view` (M): merged timeline of several streams in the terminal
 - ✅ `tui-filter-tabs` (S): filter as a new tab, saved filter tabs restored
-- ⬜ `tui-time-anchor` (S): time anchor, elapsed time of a selection
-- ⬜ `tui-palette-completion` (S): the missing palette entries, recent files, a coverage test
+- ✅ `tui-time-anchor` (S): time anchor, elapsed time of a selection
+- ✅ `tui-palette-completion` (S): the missing palette entries, recent files, a coverage test
 - ⬜ `tui-charts` (M): volume row, Statistics and Patterns sparklines
 - ⬜ `tui-page-acceleration` (S): held PgUp / PgDn accelerate
 - ⬜ `release-packages` group 5: the packaging docs and the release check
