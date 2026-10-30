@@ -4205,6 +4205,23 @@ fn tray_options_round_trip_and_default_off() {
 }
 
 #[test]
+fn page_acceleration_round_trips_and_defaults_on() {
+    assert!(FastTailConfig::default().page_acceleration);
+    let off = FastTailConfig {
+        page_acceleration: false,
+        ..FastTailConfig::default()
+    };
+    let general = off.to_ini();
+    assert_eq!(
+        general
+            .section(Some("general"))
+            .and_then(|g| g.get("page_acceleration")),
+        Some("false")
+    );
+    assert!(!FastTailConfig::from_ini(&off.to_ini()).page_acceleration);
+}
+
+#[test]
 fn the_engine_queues_its_sounds_for_the_front_end() {
     use fasttail::audio::SoundAlertPreset;
     let mut tmp = NamedTempFile::new().unwrap();

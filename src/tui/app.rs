@@ -620,6 +620,8 @@ pub struct App {
     pub merge: Option<crate::tui::merge::MergeDialog>,
     /// The recent files list (palette): the row selected.
     pub recent_menu: Option<usize>,
+    /// PgUp / PgDn held down, for their acceleration.
+    page_hold: keys::PageHold,
     /// A merged view has lines left to merge: the loop polls faster.
     views_busy: bool,
     /// The terminal keys in force: the defaults with `[shortcuts]`'s `tui.` entries.
@@ -793,6 +795,7 @@ impl App {
             analysis_menu: None,
             merge: None,
             recent_menu: None,
+            page_hold: keys::PageHold::default(),
             views_busy: false,
             keymap: keys::KeyMap::default(),
             keys_dialog: None,
@@ -3954,7 +3957,7 @@ impl App {
         };
         let kind = if stats {
             tab.engine
-                .open_stats(source, crate::field_stats::SliceChoice::Off);
+                .open_stats(source, crate::field_stats::SliceChoice::Auto);
             Kind::Stats
         } else {
             tab.engine
@@ -7562,6 +7565,15 @@ impl App {
                 self.focus_tab(tab);
                 self.apply(Action::GoTo);
             }
+            Target::VolumeCell(tab, ms) => {
+                self.focus_tab(tab);
+                let t = &mut self.tabs[tab];
+                if let Some(line) = t.engine.goto_time(ms) {
+                    t.engine.follow_tail = false;
+                    t.engine.reveal_line(line);
+                    t.engine.scroll_to_line = Some(line);
+                }
+            }
             Target::ListItem(i) if self.time_range.is_some() => {
                 if let Some(d) = self.time_range.as_mut() {
                     if i >= RANGE_DAY {
@@ -7950,6 +7962,17 @@ impl App {
     }
 
     fn apply_to_tab(&mut self, action: Action) {
+        // A held PgUp / PgDn moves further (`page_acceleration`).
+        let accelerate = self
+            .settings
+            .as_ref()
+            .is_none_or(|s| s.config.page_acceleration);
+        let pages = match action {
+            Action::PageUp | Action::PageDown if accelerate => self
+                .page_hold
+                .press(action == Action::PageDown, Instant::now()),
+            _ => 1,
+        };
         let tab = &mut self.tabs[self.active];
         let page = tab.height.max(1);
         let rows = tab.row_count();
@@ -7963,8 +7986,8 @@ impl App {
             let step = match action {
                 Action::LineUp | Action::SelectUp => Some(-1),
                 Action::LineDown | Action::SelectDown => Some(1),
-                Action::PageUp => Some(-(page as isize)),
-                Action::PageDown => Some(page as isize),
+                Action::PageUp => Some(-((page * pages) as isize)),
+                Action::PageDown => Some((page * pages) as isize),
                 _ => None,
             };
             if let Some(n) = step {
@@ -7994,8 +8017,8 @@ impl App {
             Action::Top => tab.set_cursor(0),
             Action::LineUp => tab.set_cursor(cursor.saturating_sub(1)),
             Action::LineDown => tab.set_cursor(cursor + 1),
-            Action::PageUp => tab.set_cursor(cursor.saturating_sub(page)),
-            Action::PageDown => tab.set_cursor(cursor + page),
+            Action::PageUp => tab.set_cursor(cursor.saturating_sub(page * pages)),
+            Action::PageDown => tab.set_cursor(cursor + page * pages),
             Action::SelectUp | Action::SelectDown => {
                 if tab.engine.selection_anchor.is_none() {
                     if let Some(line) = tab.cursor_line() {
@@ -8202,6 +8225,13 @@ impl App {
             Action::MergedView => self.open_merge(),
             Action::FilterTab => self.open_filter_tab(),
             Action::SelectAll => tab.engine.select_all_visible(),
+            Action::VolumeRow => {
+                tab.engine.timeline_open = !tab.engine.timeline_open;
+                tab.engine.timeline_dirty = true;
+                if tab.engine.timeline_open {
+                    tab.engine.request_timeline();
+                }
+            }
             Action::RemoveBookmark => match tab.cursor_line() {
                 Some(line) if tab.engine.is_bookmarked(line) => tab.engine.remove_bookmark(line),
                 _ => self.message = Some(tx(self.lang, "No bookmark on this row").into()),
@@ -8949,6 +8979,19 @@ impl App {
             inner.y += 1;
             inner.height -= 1;
         }
+        // The volume row: lines per time slice above the rows (the window's timeline strip).
+        let mut volume_hits = Vec::new();
+        if tab.engine.timeline_open && !tab.is_hex() && !tab.is_asm() && inner.height > 4 {
+            let row = Rect::new(inner.x, inner.y, inner.width, 1);
+            let (line, cells) = volume_row(&tab.engine, &palette, row.width as usize, self.lang);
+            frame.render_widget(Paragraph::new(line), row);
+            volume_hits = cells
+                .into_iter()
+                .map(|(x, ms)| (Rect::new(row.x + x as u16, row.y, 1, 1), idx, ms))
+                .collect();
+            inner.y += 1;
+            inner.height -= 1;
+        }
         // The first plotted field as a sparkline on the last row, under the log rows.
         if !tab.is_hex() && !tab.is_asm() && !tab.engine.plots().is_empty() && inner.height > 3 {
             let row = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
@@ -8984,6 +9027,7 @@ impl App {
         } else {
             stream_rows(tab, &palette, inner.height as usize, gap_ms, self.lang)
         };
+        self.hits.volume_cells.extend(volume_hits);
         self.hits.windows.push(WindowHit {
             tab: idx,
             outer: area,
@@ -11012,6 +11056,57 @@ fn plot_first(plots: &[crate::plot::PlotSpec], key: &str) -> Vec<crate::plot::Pl
 
 /// The sparkline row of a stream: `📈 key avg`, the line over the time the values cover,
 /// then the lowest and highest value; the label goes first when the row is narrow.
+/// The volume row of `engine` `columns` cells wide: a label, then one block per column of
+/// the timeline histogram (its height the column's lines against the busiest, in the
+/// ERROR or WARN colour when it holds such lines), and the cell offsets with the time each
+/// starts at, for the clicks.
+fn volume_row(
+    engine: &TailEngine,
+    palette: &Palette,
+    columns: usize,
+    lang: crate::i18n::Language,
+) -> (Line<'static>, Vec<(usize, i64)>) {
+    let dim = Style::default().fg(palette.dim());
+    let label = if palette.ascii { " # " } else { " ▤ " };
+    let hist = engine.time_histogram();
+    let room = columns.saturating_sub(width(label) + 1);
+    let cols = hist.columns(room);
+    if cols.is_empty() || room == 0 {
+        let text = if engine.histogram_lines() == 0 && engine.total_lines() > 0 {
+            tx(lang, "volume: no timestamps yet")
+        } else {
+            tx(lang, "volume: no lines")
+        };
+        return (
+            Line::from(vec![Span::styled(label, dim), Span::styled(text, dim)]),
+            Vec::new(),
+        );
+    }
+    let totals: Vec<u64> = cols.iter().map(|c| c.total()).collect();
+    // Few buckets are spread over the room, as the window's strip stretches them.
+    let per = (room / cols.len()).max(1);
+    let blocks = crate::tui::spark::counts(&totals, cols.len(), palette.ascii);
+    let mut spans = vec![Span::styled(label, dim)];
+    let mut cells = Vec::with_capacity(room);
+    let mut x = width(label);
+    for (c, ch) in cols.iter().zip(blocks.chars()) {
+        let worst = |l: LogLevel| c.counts[l as usize] > 0;
+        let style = if worst(LogLevel::Error) || worst(LogLevel::Fatal) {
+            Style::default().fg(palette.level_color(LogLevel::Error))
+        } else if worst(LogLevel::Warn) {
+            Style::default().fg(palette.level_color(LogLevel::Warn))
+        } else {
+            Style::default().fg(palette.accent())
+        };
+        spans.push(Span::styled(ch.to_string().repeat(per), style));
+        for k in 0..per {
+            cells.push((x + k, c.start_ms));
+        }
+        x += per;
+    }
+    (Line::from(spans), cells)
+}
+
 fn sparkline_row(
     engine: &TailEngine,
     palette: &Palette,
@@ -15358,6 +15453,41 @@ mod tests {
 
     fn click(column: u16, row: u16) -> MouseEvent {
         mouse(MouseEventKind::Down(MouseButton::Left), column, row, false)
+    }
+
+    #[test]
+    fn alt_v_draws_the_volume_row_and_a_click_goes_to_that_time() {
+        let body: String = (0..120)
+            .map(|i| {
+                let level = if i == 100 { "ERROR" } else { "INFO" };
+                format!(
+                    "2026-09-28 10:{:02}:{:02} {level} line {i}\n",
+                    i / 60,
+                    i % 60
+                )
+            })
+            .collect();
+        let (mut app, _dir) = app_with(&[("a.log", &body)], false);
+        render(&mut app, 100, 20);
+        app.apply(Action::VolumeRow);
+        assert!(app.tabs[0].engine.timeline_open);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[0].engine.histogram_lines() < 120 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 100, 20);
+        assert!(screen.iter().any(|l| l.contains("▤")), "{screen:#?}");
+        assert!(!app.hits.volume_cells.is_empty());
+        // The first cell is the first second: line 1.
+        app.tabs[0].engine.follow_tail = true;
+        let (r, _, _) = app.hits.volume_cells[0];
+        assert!(app.on_mouse(click(r.x, r.y)));
+        render(&mut app, 100, 20);
+        assert!(!app.tabs[0].engine.follow_tail);
+        assert_eq!(app.tabs[0].cursor_line(), Some(0));
+        app.apply(Action::VolumeRow);
+        assert!(!app.tabs[0].engine.timeline_open);
     }
 
     #[test]

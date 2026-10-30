@@ -319,8 +319,8 @@ settings and the workspace with the window. Where it stands against the window:
 - ✅ Time anchor of the Δt column and the elapsed time of a selection (`@`)
 - ✅ Palette entries: select all, play / pause all, line numbers, auto-update, save session,
   remove bookmark, open folder pattern, recent files
-- ⬜ Charts: a volume row, sparklines in Statistics and Patterns (`tui-charts`, M)
-- ⬜ PgUp / PgDn acceleration while the key is held (`tui-page-acceleration`, S)
+- ✅ Charts: a volume row (`Alt+V`), sparklines in Statistics and Patterns
+- ✅ PgUp / PgDn acceleration while the key is held
 - By design not in a terminal: Markdown view, line wrap, overview strip, timeline histogram,
   screensaver, tray icon, renderer / zoom / font settings
 
@@ -336,8 +336,8 @@ window and the terminal together.
 - ✅ `tui-filter-tabs` (S): filter as a new tab, saved filter tabs restored
 - ✅ `tui-time-anchor` (S): time anchor, elapsed time of a selection
 - ✅ `tui-palette-completion` (S): the missing palette entries, recent files, a coverage test
-- ⬜ `tui-charts` (M): volume row, Statistics and Patterns sparklines
-- ⬜ `tui-page-acceleration` (S): held PgUp / PgDn accelerate
+- ✅ `tui-charts` (M): volume row, Statistics and Patterns sparklines
+- ✅ `tui-page-acceleration` (S): held PgUp / PgDn accelerate
 - ⬜ `release-packages` group 5: the packaging docs and the release check
 
 **0.32.0, search and navigation** (gaps 28 to 33):

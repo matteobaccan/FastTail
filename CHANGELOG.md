@@ -27,6 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   recent sessions, Open folder pattern and **Recent files…** (open, remove, clear) are in
   the terminal palette; a test fails when a window command has no terminal entry and is
   not marked window-only. *Recent files…* is in the window's palette too.
+- **Charts in the terminal.** `Alt+V` draws the volume row (lines per time slice, ERROR /
+  WARN slices coloured, a click goes to that time) above the rows, shared with the
+  window's timeline strip; the Statistics view has a sparkline per value over time and the
+  Patterns view one per pattern.
+- **Faster paging in the terminal.** `PgUp` / `PgDn` held down move 2, 4, then 8 pages a
+  press after each second (`page_acceleration=false` in `[general]` turns it off).
 
 ## [0.30.0] - 2026-10-29
 

@@ -72,6 +72,8 @@ pub struct HitMap {
     pub close_buttons: Vec<(Rect, Place)>,
     /// The `Ln N` of each stream window's bottom border, and the stream: opens Go to.
     pub goto_links: Vec<(Rect, usize)>,
+    /// The cells of each volume row: the stream and the time the cell starts at.
+    pub volume_cells: Vec<(Rect, usize, i64)>,
     /// The whole screen of the last frame, where a dialog may be moved.
     pub screen: Rect,
 }
@@ -99,6 +101,8 @@ pub enum Target {
     BarChip(usize, crate::tui::bars::BarChip),
     /// The `Ln N` of a window's bottom border: Go to for that stream.
     GotoLine(usize),
+    /// A cell of a window's volume row: the stream goes to that time.
+    VolumeCell(usize, i64),
     /// Anywhere else while a dialog is open: closes it, like Esc.
     OutsideDialog,
     /// A title in the stream strip at the top.
@@ -212,6 +216,17 @@ pub fn hit_test(map: &HitMap, col: u16, row: u16) -> Target {
         let top = map.windows.iter().rev().find(|w| w.outer.contains(p));
         if top.is_some_and(|w| w.tab == *tab) {
             return Target::BarChip(*tab, *chip);
+        }
+    }
+    if let Some((_, tab, ms)) = map
+        .volume_cells
+        .iter()
+        .rev()
+        .find(|(r, _, _)| r.contains(p))
+    {
+        let top = map.windows.iter().rev().find(|w| w.outer.contains(p));
+        if top.is_some_and(|w| w.tab == *tab) {
+            return Target::VolumeCell(*tab, *ms);
         }
     }
     if let Some((_, tab)) = map.goto_links.iter().rev().find(|(r, _)| r.contains(p)) {
