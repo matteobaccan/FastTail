@@ -1088,14 +1088,7 @@ impl FastTailApp {
             return None;
         }
         // The next free number among the derived streams of this source.
-        let n = 1 + self
-            .engines
-            .iter()
-            .filter_map(|e| e.derived.as_ref())
-            .filter(|f| f.source == source.path)
-            .map(|f| f.n)
-            .max()
-            .unwrap_or(0);
+        let n = crate::filter_tab::next_number(self.engines.iter(), &source.path);
         let engine = match self.derived_engine(idx, n, filter) {
             Ok(engine) => engine,
             Err(e) => {
@@ -1118,24 +1111,9 @@ impl FastTailApp {
         n: usize,
         filter: crate::filter_tab::FrozenFilter,
     ) -> Result<TailEngine, String> {
-        let source = &self.engines[idx];
-        let name = crate::find_all::stream_name(source);
-        let spool_dir = self.config.compressed_settings().spool_dir;
-        let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
-        // The tab's levels are found as its source found them when it was made.
-        let level_window = filter.level_window;
-        let feeder = crate::filter_tab::DerivedFeeder::create(
-            source, name, n, filter, &spool_dir, max_bytes,
-        )
-        .map_err(|e| e.to_string())?;
-        let mut engine = TailEngine::open(feeder.spool_path()).map_err(|e| e.to_string())?;
-        engine.derived = Some(Box::new(feeder));
-        crate::workspace::apply_settings(&mut engine, &self.config);
-        engine.set_level_override(Some(level_window));
-        engine.level_bytes_dirty = false;
+        let mut engine = crate::filter_tab::open_tab(&self.engines[idx], n, filter, &self.config)?;
         engine.set_quick_labels(&self.quick_labels);
         engine.set_global_filter(self.global_spec.clone());
-        engine.follow_tail = true;
         Ok(engine)
     }
 
@@ -1574,58 +1552,9 @@ impl FastTailApp {
                 self.scratch_jump = Some((source_path.clone(), line));
                 changed = true;
             }
-            let Some(s) = self.engines.iter().position(|e| e.path == source_path) else {
-                if let Some(f) = self.engines[d].derived.as_mut() {
-                    if f.stopped.is_none() {
-                        f.stopped = Some(crate::filter_tab::Stopped::SourceClosed);
-                        changed = true;
-                    }
-                }
-                continue;
-            };
-            if self.engines[d]
-                .derived
-                .as_ref()
-                .is_some_and(|f| f.stopped.is_some())
-            {
-                continue;
-            }
-            if self.engines[d]
-                .derived
-                .as_ref()
-                .is_some_and(|f| f.filter.time_from.is_some() || f.filter.time_to.is_some())
-            {
-                self.engines[s].request_timing();
-            }
-            let (source, derived) = if s < d {
-                let (a, b) = self.engines.split_at_mut(d);
-                (&a[s], &mut b[0])
-            } else {
-                let (a, b) = self.engines.split_at_mut(s);
-                (&b[0], &mut a[d])
-            };
-            let mut feeder = derived.derived.take().expect("a derived stream");
-            if feeder.step(source, std::time::Duration::from_millis(4)) {
-                changed = true;
-            }
-            // Restored bookmarks, as the fill reaches their lines.
-            if !feeder.pending_bookmarks.is_empty() {
-                let reached = feeder.take_reached_bookmarks(derived.total_lines());
-                if !reached.is_empty() {
-                    let mut lines: Vec<usize> = derived.bookmarks.iter().copied().collect();
-                    let mut notes = derived.bookmark_notes.clone();
-                    for (line, note) in reached {
-                        lines.push(line);
-                        if let Some(note) = note {
-                            notes.insert(line, note);
-                        }
-                    }
-                    derived.set_bookmarks_with_notes(lines, notes);
-                    changed = true;
-                }
-            }
-            derived.derived = Some(feeder);
         }
+        let mut engines: Vec<&mut TailEngine> = self.engines.iter_mut().collect();
+        changed |= crate::filter_tab::feed_tabs(&mut engines, std::time::Duration::from_millis(4));
         changed
     }
 

@@ -43,6 +43,7 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::ScratchpadOpen => (Action::Scratchpad, "Alt+N"),
         ActionId::Patterns => (Action::Patterns, "Alt+A"),
         ActionId::MergedView => (Action::MergedView, "Alt+M"),
+        ActionId::FilterTab => (Action::FilterTab, "Alt+T"),
         ActionId::KeyboardShortcuts => (Action::KeysDialog, ""),
         ActionId::Toggle(setting) if terminal_setting(setting) => {
             (Action::ToggleSetting(setting), "")

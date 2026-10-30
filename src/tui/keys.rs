@@ -153,6 +153,9 @@ pub enum Action {
     /// ALT + M: the merged view dialog (streams to merge by time, or the focused merged
     /// view's sources on and off).
     MergedView,
+    /// ALT + T: the focused stream's filter as a new tab of the same file (the window's
+    /// "Open filter as new tab").
+    FilterTab,
     /// The Patterns view of the focused stream (palette).
     Patterns,
     /// The Keys dialog: the remappable terminal keys (palette).
@@ -271,6 +274,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('n') | KeyCode::Char('N') => Some(Action::Scratchpad),
             KeyCode::Char('a') | KeyCode::Char('A') => Some(Action::Analysis),
             KeyCode::Char('m') | KeyCode::Char('M') => Some(Action::MergedView),
+            KeyCode::Char('t') | KeyCode::Char('T') => Some(Action::FilterTab),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -557,6 +561,7 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("scratchpad.send", Action::SendToScratchpad, "Ctrl+N"),
     ("analysis", Action::Analysis, "Alt+A"),
     ("merged_view", Action::MergedView, "Alt+M"),
+    ("filter_tab", Action::FilterTab, "Alt+T"),
     ("split.right", Action::SplitRight, "s |"),
     ("split.down", Action::SplitDown, "_"),
     ("window.close", Action::ClosePane, "Alt+X"),

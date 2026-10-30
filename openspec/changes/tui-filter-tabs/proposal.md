@@ -7,7 +7,9 @@ and cannot make one.
 ## What Changes
 
 - `Alt+T` (and the palette's *Open filter as new tab*): the focused stream's filters become a
-  new tab of the same file, the filters of the original stream cleared.
+  new tab of the same file that follows it (the filter frozen, as in the window; the
+  original stream keeps its filter). `Ctrl+K` on a row of the tab shows that line in the
+  source; the tab's line numbers are the source's.
 - Filter tabs saved by the window open as tabs in the terminal.
 
 Target release: **0.31.0** (plan of 2026-10-30, after the competitor scan against 0.30.0; see `docs/competitor-analysis.md` section 8). Priority: **Medium**. Effort: **S**.
