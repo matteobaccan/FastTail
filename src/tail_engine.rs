@@ -1939,6 +1939,8 @@ pub struct TailEngine {
     global_labels: Vec<QuickLabel>,
     /// The stream's kept searches (see `crate::named_search`).
     pub named: crate::named_search::NamedSearches,
+    /// Copy as excerpt's flavour, from the settings (`excerpt_format`).
+    pub excerpt_flavour: crate::export::ExcerptFlavour,
     /// Kinds of the automatic highlighting, `NONE` while it is off (`set_auto_tokens`).
     auto_tokens: TokenKinds,
     pub expanded_json_lines: HashSet<usize>,
@@ -2667,6 +2669,7 @@ impl TailEngine {
             quick_labels: Vec::new(),
             global_labels: Vec::new(),
             named: crate::named_search::NamedSearches::default(),
+            excerpt_flavour: crate::export::ExcerptFlavour::default(),
             auto_tokens: TokenKinds::NONE,
             expanded_json_lines: HashSet::new(),
             json_open: HashMap::new(),

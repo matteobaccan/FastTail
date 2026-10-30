@@ -1605,6 +1605,10 @@ fn test_i18n_exhaustive_coverage() {
         "find_all_stale",
         "find_all_empty",
         "tip_find_all",
+        "copy_excerpt",
+        "copy_excerpt_tip",
+        "excerpt_format",
+        "excerpt_format_tip",
         "info_title",
         "info_path",
         "info_source",
@@ -4247,6 +4251,23 @@ fn tray_options_round_trip_and_default_off() {
     };
     let back = FastTailConfig::from_ini(&on.to_ini());
     assert!(back.tray_icon && back.minimize_to_tray && back.close_to_tray);
+}
+
+#[test]
+fn excerpt_format_round_trips_and_defaults_to_markdown() {
+    use fasttail::export::ExcerptFlavour;
+    assert_eq!(
+        FastTailConfig::default().excerpt_format,
+        ExcerptFlavour::Markdown
+    );
+    let jira = FastTailConfig {
+        excerpt_format: ExcerptFlavour::Jira,
+        ..FastTailConfig::default()
+    };
+    assert_eq!(
+        FastTailConfig::from_ini(&jira.to_ini()).excerpt_format,
+        ExcerptFlavour::Jira
+    );
 }
 
 #[test]

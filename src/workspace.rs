@@ -356,6 +356,7 @@ pub fn apply_settings(engine: &mut TailEngine, config: &FastTailConfig) {
     engine.show_line_numbers = config.show_line_numbers;
     engine.show_time_delta = config.show_time_delta;
     engine.pin_time_default = config.pin_time_column;
+    engine.excerpt_flavour = config.excerpt_format;
     engine.set_auto_tokens(config.auto_tokens());
 }
 

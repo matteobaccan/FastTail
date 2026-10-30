@@ -2693,6 +2693,26 @@ impl App {
         }
     }
 
+    /// `Alt+Y`: the selected rows (or the cursor row) as an excerpt in the settings'
+    /// flavour (Markdown, Jira, Slack).
+    fn copy_excerpt(&mut self) {
+        let flavour = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.excerpt_format)
+            .unwrap_or_default();
+        let tab = &mut self.tabs[self.active];
+        let lines = if tab.engine.has_selection() {
+            tab.engine.selected_lines()
+        } else {
+            tab.cursor_line().into_iter().collect()
+        };
+        match crate::export::excerpt(&tab.engine, &lines, flavour) {
+            Some(text) => self.copy_text(&text),
+            None => self.message = Some(tx(self.lang, "Nothing to copy").into()),
+        }
+    }
+
     /// Puts `text` on the clipboard and says how many lines went.
     fn copy_text(&mut self, text: &str) {
         let lines = text.lines().count();
@@ -8426,6 +8446,7 @@ impl App {
             Action::OpenSourceHere => self.open_source_here(),
             Action::Export => self.export_menu = Some(0),
             Action::CopyAsShown => self.copy_as_shown(),
+            Action::CopyExcerpt => self.copy_excerpt(),
             Action::BookmarkReport => self.open_prompt(PromptKind::Report(false)),
             Action::BookmarkReportAll => self.open_prompt(PromptKind::Report(true)),
             Action::ToggleTimeDelta => {

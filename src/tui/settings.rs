@@ -46,6 +46,8 @@ pub enum Key {
     PinTimeColumn,
     /// `rotations`: a file with rotations next to it offers them, opens with them, or not.
     Rotations,
+    /// `excerpt_format`: Copy as excerpt's flavour.
+    ExcerptFormat,
     /// `level_detect_bytes`: where the level is looked for in streams without their own.
     LevelBytes,
     SizeUnit,
@@ -411,6 +413,17 @@ impl SettingsForm {
                 )),
             ),
             Field::new(
+                Key::ExcerptFormat,
+                en("Copy as excerpt for"),
+                Widget::Radio(RadioList::new(
+                    &["Markdown", "Jira", "Slack"],
+                    crate::export::ExcerptFlavour::ALL
+                        .iter()
+                        .position(|f| *f == c.excerpt_format)
+                        .unwrap_or(0),
+                )),
+            ),
+            Field::new(
                 Key::LevelBytes,
                 en("Level searched in the first N bytes"),
                 Widget::Number(level_bytes),
@@ -719,6 +732,12 @@ impl SettingsForm {
                         2 => crate::rotation::Policy::Never,
                         _ => crate::rotation::Policy::Ask,
                     }
+                }
+                Key::ExcerptFormat => {
+                    c.excerpt_format = crate::export::ExcerptFlavour::ALL
+                        .get(choice)
+                        .copied()
+                        .unwrap_or_default()
                 }
                 Key::TimeDeltaGap => c.time_delta_gap_ms = num(),
                 Key::LevelBytes => c.level_detect_bytes = num() as usize,

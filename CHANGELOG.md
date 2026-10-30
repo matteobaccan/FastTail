@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   eight searches per stream, each highlighted in its own colour with a count chip; with
   the search box empty `F3` / `n` walk them all, or only the one whose chip was clicked.
   Saved per stream in the workspace and sessions.
+- **Copy as excerpt.** The row menu's *Copy as excerpt* (`Alt+Y` in the terminal) copies
+  the selected rows under a header (`app.log, lines 1204-1210, 2026-10-29 14:02:05 ->
+  14:02:07`) in a Markdown, Jira or Slack code block (Settings: *Copy as excerpt for*,
+  `excerpt_format=`).
 - **Stream information.** *Stream information* in the palette (`Alt+I` in the terminal):
   path, source kind, size, lines, the time the index took, the memory of the index and the
   block cache, encoding, field parser and timestamps.
