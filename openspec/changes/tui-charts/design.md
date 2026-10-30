@@ -19,4 +19,4 @@ The `spark` module of the plotted field row draws every series (eight levels `â–
 
 ## Open Questions
 
-- Turn the volume row on by default? Proposed: off, saved per stream as `volume_row=true`.
+- Turn the volume row on by default? Decided: off, and it is the window's timeline strip flag (`timeline=` per stream), so both interfaces show or hide it together.

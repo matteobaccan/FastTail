@@ -1,6 +1,6 @@
 ## Context
 
-The terminal sees key repeats as presses; a press within 60 ms of the previous one is a repeat.
+The terminal sees key repeats as presses; a press within 120 ms of the previous one is a repeat (key repeats come every 30 to 50 ms locally, later over SSH).
 
 ## Goals / Non-Goals
 

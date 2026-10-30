@@ -162,6 +162,8 @@ pub enum Action {
     TimeAnchorClear,
     /// CTRL + A: every visible line selected.
     SelectAll,
+    /// ALT + V: the volume row (lines per time slice) above the focused stream's rows.
+    VolumeRow,
     /// The cursor row's bookmark removed (palette).
     RemoveBookmark,
     /// Auto-update of the focused stream on or off (palette, the bar's check box).
@@ -231,6 +233,37 @@ pub enum Action {
     About,
 }
 
+/// Presses of `PgUp` / `PgDn` closer than this are the key held down (its repeats).
+pub const PAGE_REPEAT_GAP: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// `PgUp` / `PgDn` held down: since when, in which direction, and the last press.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PageHold {
+    held: Option<(bool, std::time::Instant, std::time::Instant)>,
+}
+
+impl PageHold {
+    /// A page key pressed at `now` (`forward` for `PgDn`): the pages it moves, 1 at
+    /// first, then 2, 4 and 8 after each second the key has been held.
+    pub fn press(&mut self, forward: bool, now: std::time::Instant) -> usize {
+        let start = match self.held {
+            Some((dir, start, last))
+                if dir == forward && now.saturating_duration_since(last) <= PAGE_REPEAT_GAP =>
+            {
+                start
+            }
+            _ => now,
+        };
+        self.held = Some((forward, start, now));
+        match now.saturating_duration_since(start).as_secs() {
+            0 => 1,
+            1 => 2,
+            2 => 4,
+            _ => 8,
+        }
+    }
+}
+
 /// Maps a key of the log view. Only presses count: the Windows console also reports
 /// releases (and repeats as presses), which would otherwise act twice.
 pub fn map_key(mut key: KeyEvent) -> Option<Action> {
@@ -294,6 +327,7 @@ pub fn map_key(mut key: KeyEvent) -> Option<Action> {
             KeyCode::Char('a') | KeyCode::Char('A') => Some(Action::Analysis),
             KeyCode::Char('m') | KeyCode::Char('M') => Some(Action::MergedView),
             KeyCode::Char('t') | KeyCode::Char('T') => Some(Action::FilterTab),
+            KeyCode::Char('v') | KeyCode::Char('V') => Some(Action::VolumeRow),
             KeyCode::Left => Some(Action::ResizeLeft),
             KeyCode::Right => Some(Action::ResizeRight),
             KeyCode::Up => Some(Action::ResizeUp),
@@ -583,6 +617,7 @@ pub const REMAPPABLE: &[(&str, Action, &str)] = &[
     ("merged_view", Action::MergedView, "Alt+M"),
     ("filter_tab", Action::FilterTab, "Alt+T"),
     ("time_anchor", Action::TimeAnchor, "@"),
+    ("volume_row", Action::VolumeRow, "Alt+V"),
     ("split.right", Action::SplitRight, "s |"),
     ("split.down", Action::SplitDown, "_"),
     ("window.close", Action::ClosePane, "Alt+X"),
@@ -712,6 +747,34 @@ fn to_event(key: TuiKey) -> Option<KeyEvent> {
         mods |= KeyModifiers::SHIFT;
     }
     Some(KeyEvent::new(key.code, mods))
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_held_page_key_doubles_each_second_up_to_eight_pages() {
+        let mut hold = PageHold::default();
+        let t0 = Instant::now();
+        assert_eq!(hold.press(true, t0), 1);
+        // Repeats every 40 ms for 3.5 s.
+        let mut last = 1;
+        let mut seen = Vec::new();
+        for i in 1..=88 {
+            last = hold.press(true, t0 + Duration::from_millis(40 * i));
+            if seen.last() != Some(&last) {
+                seen.push(last);
+            }
+        }
+        assert_eq!(seen, vec![1, 2, 4, 8]);
+        assert_eq!(last, 8);
+        // Released (a pause), or the other way: one page again.
+        let later = t0 + Duration::from_secs(10);
+        assert_eq!(hold.press(true, later), 1);
+        assert_eq!(hold.press(false, later + Duration::from_millis(40)), 1);
+    }
 }
 
 #[cfg(test)]

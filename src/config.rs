@@ -135,6 +135,10 @@ pub struct FastTailConfig {
     /// (`pin_time_column`, default on).
     #[serde(default = "default_true")]
     pub pin_time_column: bool,
+    /// The terminal interface's PgUp / PgDn move further while held (`page_acceleration`,
+    /// default on).
+    #[serde(default = "default_true")]
+    pub page_acceleration: bool,
     /// Bookmark report dialog: context lines around each bookmark (0..=20), automatic
     /// bookmarks included, order (`stream` or `time`), as last chosen.
     #[serde(default = "default_report_context")]
@@ -571,6 +575,7 @@ impl Default for FastTailConfig {
             overview_strip: true,
             timeline_search_lane: true,
             pin_time_column: true,
+            page_acceleration: true,
             report_context: default_report_context(),
             report_auto: false,
             report_order_time: false,
@@ -1044,6 +1049,7 @@ impl FastTailConfig {
                 self.timeline_search_lane.to_string(),
             )
             .set("pin_time_column", self.pin_time_column.to_string())
+            .set("page_acceleration", self.page_acceleration.to_string())
             .set("report_context", self.report_context.to_string())
             .set("report_auto", self.report_auto.to_string())
             .set(
@@ -1448,6 +1454,12 @@ impl FastTailConfig {
                 .and_then(|s| s.parse::<bool>().ok())
             {
                 cfg.pin_time_column = v;
+            }
+            if let Some(v) = general
+                .get("page_acceleration")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.page_acceleration = v;
             }
             if let Some(v) = general
                 .get("report_context")

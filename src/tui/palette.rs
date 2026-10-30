@@ -47,6 +47,8 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::TimeAnchorSet => (Action::TimeAnchor, "@"),
         ActionId::TimeAnchorClear => (Action::TimeAnchorClear, ""),
         ActionId::SelectAll => (Action::SelectAll, "Ctrl+A"),
+        // The window's timeline strip is the volume row in a terminal.
+        ActionId::Timeline => (Action::VolumeRow, "Alt+V"),
         ActionId::LineNumbers => (Action::ToggleLineNumbers, "#"),
         ActionId::Monitor => (Action::ToggleMonitor, ""),
         ActionId::BookmarkRemove => (Action::RemoveBookmark, ""),
@@ -112,14 +114,13 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
     })
 }
 
-/// The registry commands only the window has: a view, a strip or a window setting a
-/// terminal cannot show, and the settings of `terminal_setting` that are not for it.
+/// The registry commands only the window has: a view or a window setting a terminal
+/// cannot show, and the settings of `terminal_setting` that are not for it.
 #[cfg(test)]
 fn window_only(id: ActionId) -> bool {
     match id {
         ActionId::ViewMarkdown
         | ActionId::Wrap
-        | ActionId::Timeline
         | ActionId::AlwaysOnTop
         | ActionId::ZoomIn
         | ActionId::ZoomOut

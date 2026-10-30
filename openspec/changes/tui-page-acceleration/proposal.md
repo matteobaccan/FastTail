@@ -5,7 +5,7 @@ on a 10-million-line file that is slow. Queued presses are already drawn once.
 
 ## What Changes
 
-- Held `PgUp` / `PgDn` (presses closer than 60 ms) accelerate: after 1 s each press moves
+- Held `PgUp` / `PgDn` (presses closer than 120 ms, so key repeats over SSH count too) accelerate: after 1 s each press moves
   2 pages, after 2 s 4, after 3 s 8, back to 1 when released.
 - `[general] page_acceleration=false` turns it off.
 

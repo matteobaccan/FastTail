@@ -270,6 +270,9 @@ pub fn bar(part: u64, whole: u64, cells: usize, ascii: bool) -> String {
     block.repeat(filled.min(cells))
 }
 
+/// Cells of the sparkline of a value's or a pattern's count over time.
+const SPARK_CELLS: usize = 16;
+
 fn progress(lang: Language, p: f32, running: bool) -> Option<String> {
     running.then(|| txf(lang, "counting... {0}%", &[&format!("{:.0}", p * 100.0)]))
 }
@@ -334,46 +337,63 @@ fn stats(engine: &mut TailEngine, lang: Language, ascii: bool) -> Table {
     }
     let whole = r.with_value.max(1);
     let lvl = |v: &crate::field_stats::ValueStats, l: LogLevel| v.levels[l as usize];
+    // On a timed stream each value's count per time slice, as the window's chart.
+    let slices = r.slices.map(|s| s.count).filter(|&n| n > 1);
+    let over_time = |v: &crate::field_stats::ValueStats| {
+        slices.map(|n| crate::tui::spark::counts(&v.series(n), SPARK_CELLS, ascii))
+    };
     let mut rows: Vec<Row> = top
         .iter()
-        .map(|(value, v)| Row {
-            cells: vec![
+        .map(|(value, v)| {
+            let mut cells = vec![
                 value.to_string(),
                 count(v.count),
                 share(v.count, whole),
                 bar(v.count, whole, 16, ascii),
                 count(lvl(v, LogLevel::Error) + lvl(v, LogLevel::Fatal)),
                 count(lvl(v, LogLevel::Warn)),
-            ],
-            level: None,
-            action: RowAction::Value(value.to_string()),
+            ];
+            cells.extend(over_time(v));
+            Row {
+                cells,
+                level: None,
+                action: RowAction::Value(value.to_string()),
+            }
         })
         .collect();
     if r.other.count > 0 {
+        let mut cells = vec![
+            tx(lang, "(other values)").into(),
+            count(r.other.count),
+            share(r.other.count, whole),
+            bar(r.other.count, whole, 16, ascii),
+            String::new(),
+            String::new(),
+        ];
+        cells.extend(over_time(&r.other));
         rows.push(Row {
-            cells: vec![
-                tx(lang, "(other values)").into(),
-                count(r.other.count),
-                share(r.other.count, whole),
-                bar(r.other.count, whole, 16, ascii),
-                String::new(),
-                String::new(),
-            ],
+            cells,
             level: None,
             action: RowAction::None,
         });
     }
+    let mut header = vec![
+        tx(lang, "value").into(),
+        tx(lang, "count").into(),
+        "%".into(),
+        String::new(),
+        "ERROR".into(),
+        "WARN".into(),
+    ];
+    let mut right = vec![false, true, true, false, true, true];
+    if slices.is_some() {
+        header.push(tx(lang, "over time").into());
+        right.push(false);
+    }
     Table {
         summary,
-        header: vec![
-            tx(lang, "value").into(),
-            tx(lang, "count").into(),
-            "%".into(),
-            String::new(),
-            "ERROR".into(),
-            "WARN".into(),
-        ],
-        right: vec![false, true, true, false, true, true],
+        header,
+        right,
         rows,
         error: None,
     }
@@ -482,11 +502,13 @@ fn patterns(engine: &mut TailEngine, lang: Language, ascii: bool) -> Table {
         .into_iter()
         .map(|id| {
             let s = &p.counts.per[id as usize];
+            let volume: Vec<u64> = s.buckets.iter().map(|&b| u64::from(b)).collect();
             Row {
                 cells: vec![
                     count(s.count),
                     share(s.count, whole),
                     bar(s.count, whole, 10, ascii),
+                    crate::tui::spark::counts(&volume, SPARK_CELLS, ascii),
                     count(s.first_line as u64 + 1),
                     tree.template(id).map(|t| t.text()).unwrap_or_default(),
                 ],
@@ -501,10 +523,11 @@ fn patterns(engine: &mut TailEngine, lang: Language, ascii: bool) -> Table {
             tx(lang, "count").into(),
             "%".into(),
             String::new(),
+            tx(lang, "over time").into(),
             tx(lang, "first").into(),
             tx(lang, "pattern").into(),
         ],
-        right: vec![true, true, false, true, false],
+        right: vec![true, true, false, false, true, false],
         rows,
         error: None,
     }
