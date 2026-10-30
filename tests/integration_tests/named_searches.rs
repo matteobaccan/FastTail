@@ -45,3 +45,42 @@ fn kept_searches_are_highlighted_walked_and_saved_with_the_stream() {
     settle(&mut again);
     assert_eq!(again.named.list[0].hits(), &[1, 4]);
 }
+
+#[test]
+fn the_next_line_of_the_rows_operation_follows_its_request_id() {
+    use fasttail::operation_jump::OpJump;
+    let mut f = NamedTempFile::new().unwrap();
+    write!(
+        f,
+        "level=info request_id=a msg=start\n\
+         level=info request_id=b msg=start\n\
+         plain line\n\
+         level=warn request_id=a msg=slow\n\
+         level=info request_id=b msg=end\n\
+         level=info request_id=a msg=end\n"
+    )
+    .unwrap();
+    f.flush().unwrap();
+    let mut engine = TailEngine::open(f.path()).unwrap();
+    let start = std::time::Instant::now();
+    while engine.field_parser().is_none() && start.elapsed() < Duration::from_secs(5) {
+        engine.poll_updates();
+    }
+    assert_eq!(
+        engine.next_same_operation(0, true),
+        OpJump::Found(3, "request_id=a".into())
+    );
+    assert_eq!(
+        engine.next_same_operation(3, true),
+        OpJump::Found(5, "request_id=a".into())
+    );
+    assert_eq!(
+        engine.next_same_operation(5, true),
+        OpJump::NotFound("request_id=a".into())
+    );
+    assert_eq!(
+        engine.next_same_operation(4, false),
+        OpJump::Found(1, "request_id=b".into())
+    );
+    assert_eq!(engine.next_same_operation(2, true), OpJump::NoId);
+}

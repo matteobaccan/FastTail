@@ -60,6 +60,8 @@ pub enum ActionId {
     SplitFile,
     FilterTab,
     RecentFiles,
+    OperationNext,
+    OperationPrev,
     ClearRecentFiles,
     // Session
     SessionSaveAs,
@@ -424,6 +426,8 @@ pub const ACTIONS: &[Action] = &[
     action(A::Patterns, "stream.patterns", "act_patterns", C::Stream, S::Stream, Some("CTRL + SHIFT + G"), &[N::LineView]),
     action(A::LeaveContext, "search.context.back", "context_back", C::Search, S::Stream, None, &[N::InContext]),
     action(A::RuleNext, "search.rule.next", "act_rule_next", C::Search, S::Stream, Some("F4"), &[N::LineView, N::Row]),
+    action(A::OperationNext, "search.operation.next", "op_jump_next", C::Search, S::Stream, Some("ALT + ]"), &[N::LineView, N::Row]),
+    action(A::OperationPrev, "search.operation.prev", "op_jump_prev", C::Search, S::Stream, Some("ALT + ["), &[N::LineView, N::Row]),
     action(A::RulePrev, "search.rule.prev", "act_rule_prev", C::Search, S::Stream, Some("SHIFT + F4"), &[N::LineView, N::Row]),
     // Bookmarks
     action(A::BookmarkToggle, "bookmark.toggle", "act_bookmark_toggle", C::Bookmarks, S::Stream, Some("CTRL + F2"), &[]),

@@ -6,8 +6,8 @@ a log still searches its id by hand.
 
 ## What Changes
 
-- *Next / previous line of this operation* (`Alt+]` / `Alt+[` in the window, `o` / `O` in the
-  terminal moved to `Alt+.` / `Alt+,` if taken): the next line whose id field (or the
+- *Next / previous line of this operation* (`Alt+]` / `Alt+[` in the window, `Alt+.` / `Alt+,`
+  in the terminal, where `o` / `O` open files and sessions): the next line whose id field (or the
   operations source) equals the cursor row's.
 - Without an operations source, the fields `trace_id`, `request_id`, `req_id`, `opid`,
   `correlation_id` and `thread` are tried in that order. Both interfaces: the window and the terminal (`fasttail-tui`) get it in the same change.
