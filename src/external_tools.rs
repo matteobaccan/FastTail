@@ -289,7 +289,9 @@ pub fn build_command(tool: &ExternalTool, ctx: &ToolContext) -> Command {
         #[cfg(not(windows))]
         let quote_arg = quote_sh_arg;
 
-        let mut line = tool.program.clone();
+        // Security: quote both program and arguments to prevent shell command injection
+        // or misinterpretation of paths containing spaces or shell metacharacters.
+        let mut line = quote_arg(&tool.program);
         for a in &args {
             line.push(' ');
             line.push_str(&quote_arg(a));
@@ -755,12 +757,38 @@ mod tests {
         #[cfg(not(windows))]
         {
             assert_eq!(args[0], "-c");
-            assert_eq!(args[1], "echo 'hello; rm -rf /'");
+            assert_eq!(args[1], "'echo' 'hello; rm -rf /'");
         }
         #[cfg(windows)]
         {
             assert_eq!(args[0], "/c");
-            assert_eq!(args[1], "echo \"hello; rm -rf /\"");
+            assert_eq!(args[1], "\"echo\" \"hello; rm -rf /\"");
+        }
+    }
+
+    #[test]
+    fn test_build_command_shell_mode_quotes_program_path_with_spaces() {
+        let mut tool = ExternalTool::new("custom tool", "/opt/my tools/bin/run", "-f {file}");
+        tool.use_shell = true;
+        let ctx = ToolContext {
+            file: "app log.txt".to_string(),
+            ..Default::default()
+        };
+        let cmd = build_command(&tool, &ctx);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args.len(), 2);
+        #[cfg(not(windows))]
+        {
+            assert_eq!(args[0], "-c");
+            assert_eq!(args[1], "'/opt/my tools/bin/run' '-f' 'app log.txt'");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(args[0], "/c");
+            assert_eq!(args[1], "\"/opt/my tools/bin/run\" \"-f\" \"app log.txt\"");
         }
     }
 }
