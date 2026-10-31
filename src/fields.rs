@@ -705,8 +705,24 @@ pub fn unescape(raw: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// O(1) branchless lookup table for whitespace bytes (` `, `\t`, `\r`, `\n`).
+static IS_WS_BYTE: [bool; 256] = {
+    let mut table = [false; 256];
+    table[b' ' as usize] = true;
+    table[b'\t' as usize] = true;
+    table[b'\r' as usize] = true;
+    table[b'\n' as usize] = true;
+    table
+};
+
+#[inline(always)]
+fn is_ws_byte(b: u8) -> bool {
+    IS_WS_BYTE[b as usize]
+}
+
+#[inline(always)]
 fn skip_ws(b: &[u8], mut pos: usize) -> usize {
-    while pos < b.len() && matches!(b[pos], b' ' | b'\t' | b'\r' | b'\n') {
+    while pos < b.len() && is_ws_byte(b[pos]) {
         pos += 1;
     }
     pos
@@ -838,9 +854,7 @@ fn json_object(
             }
             Some(_) => {
                 let from = *pos;
-                while *pos < b.len()
-                    && !matches!(b[*pos], b',' | b'}' | b' ' | b'\t' | b'\r' | b'\n')
-                {
+                while *pos < b.len() && !is_json_bare_val_end(b[*pos]) {
                     *pos += 1;
                 }
                 if *pos == from {
@@ -864,8 +878,38 @@ fn json_object(
     }
 }
 
+/// O(1) branchless lookup table for terminating bytes of unquoted JSON values (numbers, booleans, null).
+static IS_JSON_BARE_VAL_END: [bool; 256] = {
+    let mut table = [false; 256];
+    table[b',' as usize] = true;
+    table[b'}' as usize] = true;
+    table[b' ' as usize] = true;
+    table[b'\t' as usize] = true;
+    table[b'\r' as usize] = true;
+    table[b'\n' as usize] = true;
+    table
+};
+
+#[inline(always)]
+fn is_json_bare_val_end(b: u8) -> bool {
+    IS_JSON_BARE_VAL_END[b as usize]
+}
+
+/// O(1) branchless lookup table for logfmt key bytes (everything except ws, `=` and `"`).
+static IS_KEY_BYTE: [bool; 256] = {
+    let mut table = [true; 256];
+    table[b' ' as usize] = false;
+    table[b'\t' as usize] = false;
+    table[b'\r' as usize] = false;
+    table[b'\n' as usize] = false;
+    table[b'=' as usize] = false;
+    table[b'"' as usize] = false;
+    table
+};
+
+#[inline(always)]
 fn is_key_byte(c: u8) -> bool {
-    !matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'=' | b'"')
+    IS_KEY_BYTE[c as usize]
 }
 
 /// Length of the `key=` at `pos`, or `None` when the word there is not a pair.
@@ -940,7 +984,7 @@ fn scan_logfmt(line: &str, out: &mut FieldSpans) -> bool {
                 }
             } else {
                 let from = pos;
-                while pos < b.len() && !matches!(b[pos], b' ' | b'\t' | b'\r' | b'\n') {
+                while pos < b.len() && !is_ws_byte(b[pos]) {
                     pos += 1;
                 }
                 if !out.push(key, (from, pos), false) {
