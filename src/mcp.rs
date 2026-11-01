@@ -1196,14 +1196,33 @@ pub fn runtime_path() -> PathBuf {
 
 /// Writes the runtime file (`port=`, `token=`), readable by this user only.
 pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()> {
+    if path.exists() && !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime path is not a regular file",
+        ));
+    }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime path is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Enforce 0o600 even if the file pre-existed with permissive permissions.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.set_len(0)?;
     write!(
         file,
         "port={port}\ntoken={token}\npid={}\n",
@@ -1213,7 +1232,12 @@ pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()>
 
 /// The port and token of a runtime file.
 pub fn read_runtime(path: &Path) -> Option<(u16, String)> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    file.take(4096).read_to_string(&mut text).ok()?;
     let value = |key: &str| {
         text.lines()
             .find_map(|l| l.strip_prefix(key))
@@ -1464,6 +1488,31 @@ mod tests {
         assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
         std::fs::write(&path, "port=x\n").unwrap();
         assert_eq!(read_runtime(&path), None);
+    }
+
+    #[test]
+    fn runtime_file_rejects_non_regular_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        assert!(write_runtime(&dir_path, 47821, "abc123").is_err());
+        assert_eq!(read_runtime(&dir_path), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_file_enforces_restricted_permissions_on_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.runtime");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let initial_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(initial_mode, 0o666);
+
+        write_runtime(&path, 47821, "abc123").unwrap();
+        let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(final_mode, 0o600);
+        assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
     }
 
     #[test]
