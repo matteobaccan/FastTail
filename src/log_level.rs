@@ -204,6 +204,21 @@ static IS_WORD_BYTE: [bool; 256] = {
     table
 };
 
+/// O(1) branchless lookup table for candidate initial bytes of all recognised log level tokens
+/// (WARN, INFO, ERROR, DEBUG, TRACE, FATAL, NOTICE, SEVERE, WARNING, VERBOSE, CRITICAL).
+/// Tokens starting with any other character (digits, timestamps, symbols, non-level words)
+/// are rejected immediately without entering `token_level`.
+static IS_LEVEL_INITIAL: [bool; 256] = {
+    let mut table = [false; 256];
+    let candidates = b"wiedtfnsvcWIEDTFNSVC";
+    let mut i = 0usize;
+    while i < candidates.len() {
+        table[candidates[i] as usize] = true;
+        i += 1;
+    }
+    table
+};
+
 #[inline(always)]
 fn is_word_byte(b: u8) -> bool {
     IS_WORD_BYTE[b as usize]
@@ -266,8 +281,13 @@ pub fn detect_level_in(line: &str, window: usize) -> LogLevel {
         if i == window.len() && bytes.len() > window.len() && is_word_byte(bytes[i]) {
             break;
         }
-        if let Some(level) = token_level(&window[start..i]) {
-            return level;
+        // Only evaluate tokens starting with candidate initial bytes (w, i, e, d, t, f, n, s, v, c).
+        // Discarding non-candidate starting bytes (digits, timestamps, symbols, non-level words)
+        // avoids unnecessary slice slicing, length branching, and lowercase checks.
+        if IS_LEVEL_INITIAL[window[start] as usize] {
+            if let Some(level) = token_level(&window[start..i]) {
+                return level;
+            }
         }
     }
     LogLevel::Unknown
