@@ -1196,6 +1196,12 @@ pub fn runtime_path() -> PathBuf {
 
 /// Writes the runtime file (`port=`, `token=`), readable by this user only.
 pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()> {
+    if path.exists() && !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Target path is not a regular file",
+        ));
+    }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -1204,6 +1210,19 @@ pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()>
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Target path is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // OpenOptions::mode() only sets permissions when creating a new file;
+        // explicitly restrict pre-existing files to 0o600 to prevent token leakage.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     write!(
         file,
         "port={port}\ntoken={token}\npid={}\n",
@@ -1464,6 +1483,32 @@ mod tests {
         assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
         std::fs::write(&path, "port=x\n").unwrap();
         assert_eq!(read_runtime(&path), None);
+    }
+
+    #[test]
+    fn runtime_file_refuses_non_regular_files_and_restricts_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory target must be rejected.
+        assert!(write_runtime(dir.path(), 47821, "abc").is_err());
+
+        // A pre-existing file with permissive mode must be clamped to 0o600 on Unix.
+        let file = dir.path().join("existing.runtime");
+        std::fs::write(&file, "placeholder").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).unwrap();
+        }
+        write_runtime(&file, 47821, "secure_token").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "pre-existing runtime file permissions must be clamped to 0600"
+            );
+        }
     }
 
     #[test]
