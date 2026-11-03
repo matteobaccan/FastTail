@@ -1204,6 +1204,19 @@ pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()>
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target runtime path is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // OpenOptions::mode() only applies when creating new files.
+        // Explicitly enforce 0o600 permissions so existing files do not retain permissive access.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     write!(
         file,
         "port={port}\ntoken={token}\npid={}\n",
@@ -1464,6 +1477,28 @@ mod tests {
         assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
         std::fs::write(&path, "port=x\n").unwrap();
         assert_eq!(read_runtime(&path), None);
+
+        // Pre-existing file with permissive permissions is locked down to 0o600 on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissive_path = dir.path().join("permissive.runtime");
+            std::fs::write(&permissive_path, "old\n").unwrap();
+            std::fs::set_permissions(&permissive_path, std::fs::Permissions::from_mode(0o666))
+                .unwrap();
+            write_runtime(&permissive_path, 47821, "token456").unwrap();
+            let mode = std::fs::metadata(&permissive_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        // Target path that is not a regular file (e.g. directory) is rejected
+        let dir_target = dir.path().join("dir_target");
+        std::fs::create_dir(&dir_target).unwrap();
+        assert!(write_runtime(&dir_target, 47821, "token").is_err());
     }
 
     #[test]

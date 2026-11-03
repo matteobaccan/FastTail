@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-11-03 - OpenOptionsExt::mode only applies when creating new files
+**Vulnerability:** Relying solely on `OpenOptionsExt::mode(0o600)` when writing sensitive credentials (such as bearer tokens in `mcp.runtime`) leaves existing files with permissive permissions intact if the file was pre-created or already existed with permissive modes (e.g. 0644 or 0666).
+**Learning:** On Unix, the file mode passed to `open()` (via `OpenOptionsExt::mode`) is only used as the mode argument when `O_CREAT` actually creates a new file. If the file already exists, `open()` ignores the mode argument.
+**Prevention:** When overwriting or updating files containing sensitive credentials or tokens, explicitly call `file.set_permissions(Permissions::from_mode(0o600))` on the opened file handle to enforce restricted permissions regardless of prior file state.
