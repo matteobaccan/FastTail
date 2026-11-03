@@ -78,7 +78,11 @@ pub fn render(
         }
         ui.separator();
         if ui
-            .button(format!("💾 {}", t(lang, "scratch_save_as")))
+            .add_enabled(
+                !pad.text.is_empty(),
+                egui::Button::new(format!("💾 {}", t(lang, "scratch_save_as"))),
+            )
+            .on_disabled_hover_text(t(lang, "scratch_empty_tip"))
             .clicked()
         {
             let target = rfd::FileDialog::new()
