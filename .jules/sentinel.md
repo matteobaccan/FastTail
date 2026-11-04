@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-11-04 - Enforce 0o600 permissions and regular file check on sensitive runtime credentials
+**Vulnerability:** `OpenOptions::mode(0o600)` only sets file permissions upon initial creation; if the runtime file pre-existed with permissive permissions (e.g. 0o644 or 0o666), sensitive bearer tokens in `mcp.runtime` were left readable by other local users. In addition, opening with `truncate(true)` before verifying that the target handle is a regular file risks blocking or truncating non-regular files.
+**Learning:** `std::fs::OpenOptions::mode` has no effect on files that already exist on disk. Enforcing `file.set_permissions(std::fs::Permissions::from_mode(0o600))` explicitly on the opened handle and verifying `file.metadata()?.is_file()` before calling `set_len(0)` guarantees restrictive access and safe truncation.
+**Prevention:** Whenever writing runtime tokens, credentials, or secrets to disk, always call `file.set_permissions` explicitly on Unix and verify `metadata.is_file()` prior to truncation.

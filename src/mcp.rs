@@ -1197,13 +1197,27 @@ pub fn runtime_path() -> PathBuf {
 /// Writes the runtime file (`port=`, `token=`), readable by this user only.
 pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Target path is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        // Enforce 0o600 explicitly so pre-existing files cannot remain readable by other users.
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.set_len(0)?;
     write!(
         file,
         "port={port}\ntoken={token}\npid={}\n",
@@ -1464,6 +1478,25 @@ mod tests {
         assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
         std::fs::write(&path, "port=x\n").unwrap();
         assert_eq!(read_runtime(&path), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn runtime_file_restricts_permissions_on_pre_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.runtime");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        write_runtime(&path, 47821, "abc123").unwrap();
+        let perms = std::fs::metadata(&path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn runtime_file_refuses_non_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(write_runtime(dir.path(), 47821, "abc123").is_err());
     }
 
     #[test]
