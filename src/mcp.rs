@@ -1204,6 +1204,13 @@ pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()>
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        // OpenOptions::mode only applies when creating a new file. If the file already existed
+        // with more permissive permissions (e.g. 0644), enforce 0600 explicitly to protect tokens.
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     write!(
         file,
         "port={port}\ntoken={token}\npid={}\n",
@@ -1464,6 +1471,30 @@ mod tests {
         assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
         std::fs::write(&path, "port=x\n").unwrap();
         assert_eq!(read_runtime(&path), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn runtime_file_enforces_restricted_permissions_on_preexisting_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.runtime");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o666
+        );
+
+        write_runtime(&path, 47821, "secret_token").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            read_runtime(&path),
+            Some((47821, "secret_token".to_string()))
+        );
     }
 
     #[test]

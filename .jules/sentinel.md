@@ -22,3 +22,8 @@
 **Vulnerability:** Adding `.truncate(false)` to `OpenOptions::new()` is redundant because Rust's `OpenOptions::new()` defaults `truncate` to `false` (unlike `File::create` which sets `truncate(true)`).
 **Learning:** `OpenOptions::new()` initializes all options (read, write, append, truncate, create, create_new) to `false`. Explicitly chaining `.truncate(false)` on `OpenOptions::new()` provides no functional difference.
 **Prevention:** Distinguish between `File::create` (which sets `truncate(true)`) and `OpenOptions::new()` (which defaults `truncate` to `false`).
+
+## 2026-11-05 - Enforce restricted file permissions on sensitive runtime token files
+**Vulnerability:** In `write_runtime`, `OpenOptions::mode(0o600)` only configures permissions if creating a new file. If the runtime token file already existed with permissive permissions (such as 0644 or 0666), opening with truncate overwrote the file while leaving the permissive file permissions intact, allowing other local users to read sensitive bearer tokens.
+**Learning:** `OpenOptions::mode` maps to `open(..., O_CREAT, mode)` on POSIX, which only applies when creating new files and does not modify permissions of pre-existing files.
+**Prevention:** Always explicitly invoke `file.set_permissions(Permissions::from_mode(0o600))` on the opened file handle when writing sensitive credentials or authentication tokens.
