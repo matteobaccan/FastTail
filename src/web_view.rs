@@ -21,17 +21,13 @@ const SEARCH_ROWS: usize = 200_000;
 /// Time a search request takes on the window's thread, at most.
 const SEARCH_BUDGET: std::time::Duration = std::time::Duration::from_millis(30);
 
-/// Whether `hay` contains `needle_lower` (lower case) without case: ASCII byte by byte
-/// without allocating, else through `to_lowercase`.
+/// Whether `hay` contains `needle_lower` (lower case) without case: delegates to
+/// `crate::tail_engine::contains_case_insensitive` to leverage SIMD vector instructions
+/// (via `memchr` / `memchr2`) on ASCII candidate bytes instead of naive sliding-window
+/// iteration, accelerating the web search scan across thousands of lines.
+#[inline]
 fn contains_ignore_case(hay: &str, needle_lower: &str) -> bool {
-    if !needle_lower.is_ascii() {
-        return hay.to_lowercase().contains(needle_lower);
-    }
-    let (h, n) = (hay.as_bytes(), needle_lower.as_bytes());
-    n.is_empty()
-        || n.len() <= h.len()
-            && h.windows(n.len())
-                .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
+    crate::tail_engine::contains_case_insensitive(hay, needle_lower)
 }
 /// Bytes of a row sent at most.
 const MAX_ROW_BYTES: usize = 64 * 1024;
