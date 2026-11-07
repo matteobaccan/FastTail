@@ -80,7 +80,7 @@ sha2 = "0.11"
 # only, pure Rust.
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "intel"] }
 smallvec = "1.13"
-rfd = { version = "0.17", optional = true }
+rfd = { version = "0.18", optional = true }
 
 # Telemetry
 sysinfo = "0.40"
