@@ -21,17 +21,12 @@ const SEARCH_ROWS: usize = 200_000;
 /// Time a search request takes on the window's thread, at most.
 const SEARCH_BUDGET: std::time::Duration = std::time::Duration::from_millis(30);
 
-/// Whether `hay` contains `needle_lower` (lower case) without case: ASCII byte by byte
-/// without allocating, else through `to_lowercase`.
+/// Whether `hay` contains `needle_lower` (lower case) without case.
+/// Uses `tail_engine::contains_case_insensitive` to leverage SIMD-accelerated
+/// candidate scanning via `memchr`/`memchr2` on ASCII needles, avoiding naive
+/// `windows(n)` byte-by-byte sliding loops.
 fn contains_ignore_case(hay: &str, needle_lower: &str) -> bool {
-    if !needle_lower.is_ascii() {
-        return hay.to_lowercase().contains(needle_lower);
-    }
-    let (h, n) = (hay.as_bytes(), needle_lower.as_bytes());
-    n.is_empty()
-        || n.len() <= h.len()
-            && h.windows(n.len())
-                .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
+    crate::tail_engine::contains_case_insensitive(hay, needle_lower)
 }
 /// Bytes of a row sent at most.
 const MAX_ROW_BYTES: usize = 64 * 1024;
@@ -361,5 +356,55 @@ mod tests {
         assert!(!contains_ignore_case("GET /", "get /x"));
         assert!(contains_ignore_case("Größe ÄNDERN", "änd"));
         assert!(contains_ignore_case("abc", ""));
+    }
+
+    #[test]
+    fn test_contains_ignore_case_speedup() {
+        // Micro-benchmark and correctness verification on realistic log lines.
+        let line = "2026-10-31 12:00:00.123 [INFO] gateway-01 req=00004242 /api/v1/checkout/orders status=200 took=45ms user=customer_987654";
+        assert!(contains_ignore_case(line, "orders"));
+        assert!(contains_ignore_case(line, "ORDERS"));
+        assert!(contains_ignore_case(line, "gateway"));
+        assert!(!contains_ignore_case(line, "notfound"));
+
+        // Compare SIMD search against naive windows loop over 50,000 iterations
+        let naive_search = |h: &[u8], n: &[u8]| -> bool {
+            n.is_empty()
+                || (n.len() <= h.len()
+                    && h.windows(n.len())
+                        .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b)))
+        };
+
+        let needle_lower = "orders";
+        let needle_bytes = needle_lower.as_bytes();
+        let hay_bytes = line.as_bytes();
+
+        let iters = 50_000;
+        let t0 = std::time::Instant::now();
+        let mut naive_count = 0;
+        for _ in 0..iters {
+            if naive_search(hay_bytes, needle_bytes) {
+                naive_count += 1;
+            }
+        }
+        let naive_duration = t0.elapsed();
+
+        let t1 = std::time::Instant::now();
+        let mut opt_count = 0;
+        for _ in 0..iters {
+            if contains_ignore_case(line, needle_lower) {
+                opt_count += 1;
+            }
+        }
+        let opt_duration = t1.elapsed();
+
+        assert_eq!(naive_count, opt_count);
+        // Informational timing output when running tests with --nocapture
+        println!(
+            "contains_ignore_case 50k iters: naive={:?}, simd={:?}, speedup={:.1}x",
+            naive_duration,
+            opt_duration,
+            naive_duration.as_secs_f64() / opt_duration.as_secs_f64()
+        );
     }
 }
