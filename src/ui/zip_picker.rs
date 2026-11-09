@@ -270,6 +270,8 @@ impl ArchivePicker {
         .default_width(520.0)
         .open(&mut open)
         .show(ctx, |ui| {
+            let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             self.scan_status(ui, lang, theme);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("🔍").monospace());
@@ -372,16 +374,27 @@ impl ArchivePicker {
                 });
             ui.separator();
             ui.horizontal(|ui| {
-                let chosen = self.chosen();
+                let mut chosen = self.chosen();
+                if enter && chosen.is_empty() {
+                    let openable: Vec<usize> = self
+                        .visible()
+                        .into_iter()
+                        .filter(|&i| self.entries[i].refusal.is_none())
+                        .collect();
+                    if openable.len() == 1 {
+                        self.selected.insert(openable[0]);
+                        chosen = self.chosen();
+                    }
+                }
                 let label = format!("📂 {} ({})", t(lang, "zip_picker_open"), chosen.len());
-                if ui
+                let open = ui
                     .add_enabled(!chosen.is_empty(), egui::Button::new(label))
                     .on_disabled_hover_text(t(lang, "zip_picker_no_selection"))
-                    .clicked()
-                {
+                    .clicked();
+                if (open || enter) && !chosen.is_empty() {
                     outcome = Some(self.open_chosen());
                 }
-                if ui.button(t(lang, "session_cancel")).clicked() {
+                if ui.button(t(lang, "session_cancel")).clicked() || esc {
                     outcome = Some(PickerOutcome::Cancel);
                 }
             });
@@ -485,5 +498,60 @@ mod tests {
         assert_eq!(human_size(512), "512 B");
         assert_eq!(human_size(1536), "1.5 KB");
         assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    #[test]
+    fn keyboard_shortcuts_enter_and_escape() {
+        let ctx = egui::Context::default();
+
+        // Enter with single visible openable entry auto-selects and opens it.
+        let mut picker = ArchivePicker::new(
+            PathBuf::from("bundle.zip"),
+            vec![
+                entry("worker.log", 300, None),
+                entry("secret.log", 50, Some(EntryRefusal::Encrypted)),
+            ],
+        );
+        picker.filter = "worker".to_string();
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut outcome = None;
+        let mut out = ctx.run_ui(input, |ui| {
+            outcome = picker.show(ui.ctx(), Language::En, CyberTheme::Tron);
+        });
+        out.textures_delta.clear();
+        assert_eq!(
+            outcome,
+            Some(PickerOutcome::Open {
+                names: vec!["worker.log".to_string()],
+                close: true,
+            })
+        );
+
+        // Escape cancels the picker.
+        let mut picker = ArchivePicker::new(
+            PathBuf::from("bundle.zip"),
+            vec![entry("worker.log", 300, None)],
+        );
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut outcome = None;
+        let mut out = ctx.run_ui(input, |ui| {
+            outcome = picker.show(ui.ctx(), Language::En, CyberTheme::Tron);
+        });
+        out.textures_delta.clear();
+        assert_eq!(outcome, Some(PickerOutcome::Cancel));
     }
 }
