@@ -22,16 +22,10 @@ const SEARCH_ROWS: usize = 200_000;
 const SEARCH_BUDGET: std::time::Duration = std::time::Duration::from_millis(30);
 
 /// Whether `hay` contains `needle_lower` (lower case) without case: ASCII byte by byte
-/// without allocating, else through `to_lowercase`.
+/// via SIMD candidate scanning (`crate::tail_engine::contains_case_insensitive`), else through `to_lowercase`.
 fn contains_ignore_case(hay: &str, needle_lower: &str) -> bool {
-    if !needle_lower.is_ascii() {
-        return hay.to_lowercase().contains(needle_lower);
-    }
-    let (h, n) = (hay.as_bytes(), needle_lower.as_bytes());
-    n.is_empty()
-        || n.len() <= h.len()
-            && h.windows(n.len())
-                .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
+    // Bolt: reuse the SIMD-accelerated memchr/memchr2 search instead of sliding windows(n).any(...)
+    crate::tail_engine::contains_case_insensitive(hay, needle_lower)
 }
 /// Bytes of a row sent at most.
 const MAX_ROW_BYTES: usize = 64 * 1024;
