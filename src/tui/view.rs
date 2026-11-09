@@ -63,20 +63,53 @@ pub fn hit_ranges(line: &str, query: &str) -> Vec<Range<usize>> {
     let q = query.trim().as_bytes();
     let hay = line.as_bytes();
     let mut out = Vec::new();
-    if q.is_empty() || q.len() > hay.len() {
+    let q_len = q.len();
+    if q_len == 0 || q_len > hay.len() {
         return out;
     }
+
+    // Bolt: Accelerate candidate scanning via SIMD memchr / memchr2 on the first byte variants.
+    // Skips non-candidate byte positions at memory-bus speeds without stepping byte-by-byte.
+    let first_lower = q[0].to_ascii_lowercase();
+    let first_upper = first_lower.to_ascii_uppercase();
+    let max_pos = hay.len() - q_len;
     let mut i = 0;
-    while i + q.len() <= hay.len() {
-        if hay[i..i + q.len()].eq_ignore_ascii_case(q) {
-            out.push(i..i + q.len());
-            i += q.len();
-        } else {
-            i += 1;
+
+    if first_lower == first_upper {
+        while i <= max_pos {
+            match memchr::memchr(first_lower, &hay[i..=max_pos]) {
+                Some(rel) => {
+                    i += rel;
+                    if hay[i..i + q_len].eq_ignore_ascii_case(q) {
+                        out.push(i..i + q_len);
+                        if out.len() >= 256 {
+                            break;
+                        }
+                        i += q_len;
+                    } else {
+                        i += 1;
+                    }
+                }
+                None => break,
+            }
         }
-        // Cap the work on a pathological line.
-        if out.len() >= 256 {
-            break;
+    } else {
+        while i <= max_pos {
+            match memchr::memchr2(first_lower, first_upper, &hay[i..=max_pos]) {
+                Some(rel) => {
+                    i += rel;
+                    if hay[i..i + q_len].eq_ignore_ascii_case(q) {
+                        out.push(i..i + q_len);
+                        if out.len() >= 256 {
+                            break;
+                        }
+                        i += q_len;
+                    } else {
+                        i += 1;
+                    }
+                }
+                None => break,
+            }
         }
     }
     out
