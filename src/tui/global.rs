@@ -20,6 +20,9 @@ pub enum Row {
     Enabled,
     MatchCase,
     Regex,
+    /// The include side is an expression (`a AND (b OR c)`) instead of terms.
+    ExprMode,
+    Expression,
     Include(usize),
     Exclude(usize),
 }
@@ -29,6 +32,8 @@ pub struct GlobalDialog {
     pub enabled: CheckBox,
     pub case_sensitive: CheckBox,
     pub is_regex: CheckBox,
+    pub expr_mode: CheckBox,
+    pub expression: TextField,
     pub include: Vec<TextField>,
     pub exclude: Vec<TextField>,
     /// The row with the keyboard, an index into `rows()`.
@@ -68,26 +73,32 @@ impl GlobalDialog {
                 on: gf.case_sensitive,
             },
             is_regex: CheckBox { on: gf.is_regex },
+            expr_mode: CheckBox { on: gf.expr_mode },
+            expression: TextField::new(&gf.expression),
             include: fields(&gf.include),
             exclude: fields(&gf.exclude),
             focus: 0,
             dirty: false,
             invalid: Vec::new(),
         };
-        // With no term yet, the first include row has the keyboard.
+        // With no term yet, the first include row (or the expression) has the keyboard.
         if !gf.has_terms() {
-            d.focus = 3;
+            d.focus = 4;
         }
         d.check();
         d
     }
 
-    /// The rows shown: the toggles, the filled include rows plus an empty one (up to 8),
-    /// then the same for the exclude rows.
+    /// The rows shown: the toggles, the expression or the filled include rows plus an
+    /// empty one (up to 8), then the exclude rows the same way.
     pub fn rows(&self) -> Vec<Row> {
-        let mut out = vec![Row::Enabled, Row::MatchCase, Row::Regex];
+        let mut out = vec![Row::Enabled, Row::MatchCase, Row::Regex, Row::ExprMode];
         let shown = |terms: &[TextField]| (terms.len() + 1).min(MAX_FILTER_TERMS);
-        out.extend((0..shown(&self.include)).map(Row::Include));
+        if self.expr_mode.on {
+            out.push(Row::Expression);
+        } else {
+            out.extend((0..shown(&self.include)).map(Row::Include));
+        }
         out.extend((0..shown(&self.exclude)).map(Row::Exclude));
         out
     }
@@ -109,14 +120,25 @@ impl GlobalDialog {
                 .filter(|t| !t.is_empty())
                 .collect()
         };
-        GlobalFilter {
+        let mut gf = GlobalFilter {
             enabled: self.enabled.on,
             case_sensitive: self.case_sensitive.on,
             is_regex: self.is_regex.on,
             include: terms(&self.include),
             exclude: terms(&self.exclude),
+            expression: self.expression.text().to_string(),
             ..base.clone()
-        }
+        };
+        gf.set_expr_mode(self.expr_mode.on);
+        gf.note_expression();
+        gf
+    }
+
+    /// Why the expression does not compile, in expression mode, in `lang`.
+    pub fn expr_error(&self, base: &GlobalFilter, lang: crate::i18n::Language) -> Option<String> {
+        let gf = self.filter(base);
+        gf.expr_error()
+            .map(|e| crate::filter_expr::error_text(lang, &gf.expression, &e))
     }
 
     /// Marks the regex terms that do not compile.
@@ -168,6 +190,21 @@ impl GlobalDialog {
             Row::Enabled => self.enabled.on_key(key),
             Row::MatchCase => self.case_sensitive.on_key(key),
             Row::Regex => self.is_regex.on_key(key),
+            Row::ExprMode => {
+                let done = self.expr_mode.on_key(key);
+                // The first switch to an empty expression builds it from the terms.
+                if done == FieldKey::Edited
+                    && self.expr_mode.on
+                    && self.expression.text().trim().is_empty()
+                {
+                    let terms: Vec<String> =
+                        self.include.iter().map(|f| f.text().to_string()).collect();
+                    self.expression =
+                        TextField::new(&crate::filter_expr::from_terms(&terms, false));
+                }
+                done
+            }
+            Row::Expression => self.expression.on_key(key),
             Row::Include(i) => edit_term(&mut self.include, i, key),
             Row::Exclude(i) => edit_term(&mut self.exclude, i, key),
         };
@@ -225,7 +262,7 @@ mod tests {
         assert_eq!(d.rows()[d.focus], Row::Include(0));
         typed(&mut d, "payment");
         assert!(d.dirty);
-        assert_eq!(d.rows().len(), 3 + 2 + 1, "a spare include row appears");
+        assert_eq!(d.rows().len(), 4 + 2 + 1, "a spare include row appears");
         // Down to the exclude row, then a term there.
         d.on_key(key(KeyCode::Down));
         d.on_key(key(KeyCode::Down));
@@ -240,7 +277,7 @@ mod tests {
         assert_eq!(gf.exclude, ["healthcheck"]);
         assert!(gf.is_applied());
         // An emptied term goes.
-        d.focus = 3;
+        d.focus = 4;
         for _ in 0..7 {
             d.on_key(key(KeyCode::Backspace));
         }
@@ -270,5 +307,26 @@ mod tests {
         d.focus = 2;
         d.on_key(key(KeyCode::Char(' ')));
         assert!(d.invalid.is_empty(), "plain text is never invalid");
+    }
+
+    #[test]
+    fn the_expression_row_replaces_the_include_rows() {
+        let gf = GlobalFilter {
+            include: vec!["payment".into(), "refund".into()],
+            ..GlobalFilter::default()
+        };
+        let mut d = GlobalDialog::new(&gf);
+        d.focus = 3;
+        d.on_key(key(KeyCode::Char(' ')));
+        assert!(d.rows().contains(&Row::Expression));
+        assert!(!d.rows().iter().any(|r| matches!(r, Row::Include(_))));
+        assert_eq!(d.expression.text(), "payment AND refund");
+        let out = d.filter(&GlobalFilter::default());
+        assert!(out.expr_mode);
+        assert_eq!(out.effective_expression(), "payment AND refund");
+        d.focus = 4;
+        typed(&mut d, " AND (");
+        let lang = crate::i18n::Language::En;
+        assert!(d.expr_error(&GlobalFilter::default(), lang).is_some());
     }
 }

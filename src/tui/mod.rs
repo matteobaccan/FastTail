@@ -7,20 +7,25 @@
 //! feasibility prototype of `docs/tui-feasibility.md`; openspec/changes/tui-interface
 //! brings it to parity with the GUI.
 
+mod analysis;
 mod app;
 pub mod bars;
 mod browser;
 mod calendar;
 mod clipboard;
 mod colors;
+mod compare;
 mod dock;
 mod find;
 mod form;
+mod formats;
 mod global;
 mod hex;
 mod json;
 mod keys;
+mod merge;
 mod mouse;
+mod pad;
 mod palette;
 mod picker;
 mod presets;
@@ -324,6 +329,7 @@ fn run_args(args: Vec<String>) -> i32 {
     app.idle_poll = settings.poll_interval();
     app.lang = settings.config.language;
     // Streams opened later (`o`, the entry picker) get the same setup.
+    app.keymap = keys::KeyMap::build(&settings.config.shortcuts);
     app.settings = Some(settings);
     if !notices.is_empty() {
         app.message = Some(notices.join("  |  "));
@@ -332,6 +338,7 @@ fn run_args(args: Vec<String>) -> i32 {
         .settings
         .as_ref()
         .and_then(|s| s.config.dock_layout.clone());
+    app.restore_views(&plan.views);
     app.restore_dock(layout.as_deref());
     if cli.split {
         app.split_first_two();
@@ -568,6 +575,7 @@ where
             }
         }
     }
+    app.save_scratchpad();
     Ok(())
 }
 

@@ -304,6 +304,91 @@ pub fn is_derived_path(path: &Path) -> bool {
             .is_some_and(|rest| rest.starts_with("filter-"))
 }
 
+/// The engine of derived stream `n` of `source` through `filter`, following, with the
+/// configuration's stream settings and the levels its source found when it was made.
+pub fn open_tab(
+    source: &TailEngine,
+    n: usize,
+    filter: FrozenFilter,
+    config: &crate::config::FastTailConfig,
+) -> Result<TailEngine, String> {
+    let name = crate::find_all::stream_name(source);
+    let spool_dir = config.compressed_settings().spool_dir;
+    let max_bytes = u64::from(config.stdin_spool_max_mb) * 1024 * 1024;
+    let level_window = filter.level_window;
+    let feeder = DerivedFeeder::create(source, name, n, filter, &spool_dir, max_bytes)
+        .map_err(|e| e.to_string())?;
+    let mut engine = TailEngine::open(feeder.spool_path()).map_err(|e| e.to_string())?;
+    engine.derived = Some(Box::new(feeder));
+    crate::workspace::apply_settings(&mut engine, config);
+    engine.set_level_override(Some(level_window));
+    engine.level_bytes_dirty = false;
+    engine.follow_tail = true;
+    Ok(engine)
+}
+
+/// The number for a new derived stream of `source` among `engines`: one past the
+/// highest its derived streams use.
+pub fn next_number<'a>(engines: impl Iterator<Item = &'a TailEngine>, source: &Path) -> usize {
+    1 + engines
+        .filter_map(|e| e.derived.as_ref())
+        .filter(|f| f.source == source)
+        .map(|f| f.n)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Feeds every derived stream among `engines` from its source (another of them, by
+/// path), `budget` each; a stream whose source is closed stops. Restored bookmarks are
+/// set as the fill reaches them. Returns whether anything changed or work is left.
+pub fn feed_tabs(engines: &mut [&mut TailEngine], budget: Duration) -> bool {
+    let mut changed = false;
+    for d in 0..engines.len() {
+        let Some(source_path) = engines[d].derived.as_ref().map(|f| f.source.clone()) else {
+            continue;
+        };
+        let Some(s) = engines.iter().position(|e| e.path == source_path) else {
+            if let Some(f) = engines[d].derived.as_mut() {
+                if f.stopped.is_none() {
+                    f.stopped = Some(Stopped::SourceClosed);
+                    changed = true;
+                }
+            }
+            continue;
+        };
+        let Some(mut feeder) = engines[d].derived.take() else {
+            continue;
+        };
+        if feeder.stopped.is_some() {
+            engines[d].derived = Some(feeder);
+            continue;
+        }
+        if feeder.filter.time_from.is_some() || feeder.filter.time_to.is_some() {
+            engines[s].request_timing();
+        }
+        changed |= feeder.step(engines[s], budget);
+        let derived = &mut *engines[d];
+        // Restored bookmarks, as the fill reaches their lines.
+        if !feeder.pending_bookmarks.is_empty() {
+            let reached = feeder.take_reached_bookmarks(derived.total_lines());
+            if !reached.is_empty() {
+                let mut lines: Vec<usize> = derived.bookmarks.iter().copied().collect();
+                let mut notes = derived.bookmark_notes.clone();
+                for (line, note) in reached {
+                    lines.push(line);
+                    if let Some(note) = note {
+                        notes.insert(line, note);
+                    }
+                }
+                derived.set_bookmarks_with_notes(lines, notes);
+                changed = true;
+            }
+        }
+        derived.derived = Some(feeder);
+    }
+    changed
+}
+
 /// Why a derived stream stopped following its source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stopped {

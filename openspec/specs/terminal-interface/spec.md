@@ -491,3 +491,126 @@ The terminal interface SHALL offer Search all streams with `Ctrl+Shift+F` where 
 #### Scenario: Stale results
 - **WHEN** a searched stream is truncated after the search
 - **THEN** its group is marked stale and `Enter` on its results does not jump to a wrong line.
+
+### Requirement: Terminal Time Delta and Time Display
+The terminal interface SHALL draw the time delta column when it is on for the stream, SHALL show timestamps as written, in UTC or in local time as chosen, and its listener prompt SHALL mention every listener scheme it accepts.
+
+#### Scenario: Time delta
+- **WHEN** Δt is on and two lines are 1.2 s apart
+- **THEN** the second row shows `+1.2 s` before its text.
+
+#### Scenario: UTC display
+- **WHEN** a stream's lines are written in local time and the user chooses UTC
+- **THEN** the rows show the timestamps converted to UTC.
+
+### Requirement: Terminal Search Pane, Scope and Export
+The terminal interface SHALL offer the search results pane, search in a range, Export of visible lines, selected lines or matches as text, CSV or HTML through the window's writers, Copy as shown, and the bookmark report.
+
+#### Scenario: CSV export over SSH
+- **WHEN** the user exports the matches of `ERROR` as CSV to `errors.csv` in the terminal
+- **THEN** the file holds the same rows and columns as the window's export of the same stream and search.
+
+#### Scenario: Search in a range
+- **WHEN** the user limits the search to lines `100-200`
+- **THEN** the counter shows only the hits in that range and `n` wraps inside it.
+
+### Requirement: Terminal Rule Sets, Formats and Filter Expressions
+The terminal interface SHALL import and export rule sets, walk the lines of a rule, clear all bookmarks, edit log formats in a dialog, offer the editor presets and Open in FastTail for a source location, and toggle a stream's include side between terms and an expression.
+
+#### Scenario: Rule set import
+- **WHEN** the user imports `team.fasttail-rules.ini` in the terminal rule editor
+- **THEN** its rules are added and colour the rows, as the window's import does.
+
+#### Scenario: Expression toggle
+- **WHEN** the user toggles ƒx on a stream with include terms `a` and `b`
+- **THEN** the include side becomes the expression `a AND b`, editable in the prompt.
+
+### Requirement: Terminal Compare and Scratchpad
+The terminal interface SHALL compare two lines or two regions side by side with the window's alignment and ignore options, and SHALL offer the session's scratchpad as an editable panel that the window shares.
+
+#### Scenario: Compare two lines
+- **WHEN** the user selects two rows and presses `=`
+- **THEN** a Compare panel shows them side by side with the differing tokens highlighted.
+
+#### Scenario: Send to scratchpad
+- **WHEN** the user sends a row with `Ctrl+N`
+- **THEN** the pad gets a `── app.log:N ──` reference and the line, and the window shows the same text.
+
+### Requirement: Terminal Analysis Tabs
+The terminal interface SHALL offer the Statistics, Query, Patterns, Explain and Operations tabs over the same engine jobs as the window, as dockable panels with sortable, scrollable lists, and an Enter on a row SHALL filter on its value or go to its line as the window's click does.
+
+#### Scenario: Statistics of a field
+- **WHEN** a logfmt stream is open in the terminal and the user opens the Statistics of `status`
+- **THEN** the panel lists `200`, `404` and `500` with their counts and shares, and Enter on `500` adds the include term `status=500`.
+
+#### Scenario: Query
+- **WHEN** the user runs `where status>=500 | stats count() by path` in the Query tab
+- **THEN** the result is a table of paths and counts, sortable with `s`.
+
+### Requirement: Terminal Remappable Keys
+The terminal interface SHALL read key overrides for its actions from `[shortcuts]` under a `tui.` prefix, SHALL offer a Keys dialog to record, reset and check them for conflicts, and SHALL offer the window's applicable setting toggles in its palette.
+
+#### Scenario: A remapped key
+- **WHEN** `[shortcuts] tui.stream.follow.toggle=f` is set
+- **THEN** `f` toggles follow in the terminal and Space no longer does.
+
+#### Scenario: Conflict
+- **WHEN** the user records `b` for Follow in the Keys dialog
+- **THEN** the dialog says `b` is taken by Toggle bookmark and asks before moving it.
+
+### Requirement: Terminal Web View, MCP Server and Plugins
+The terminal interface SHALL start the web view and the MCP server from its own streams when they are enabled in `fasttail.ini`, and SHALL offer a Plugins dialog to enable, disable and approve plugins and set a source plugin's parameters.
+
+#### Scenario: Web view on a server
+- **WHEN** `[web] enabled=true` and the terminal interface is running with two streams
+- **THEN** a browser on the configured address lists the two streams and shows their lines.
+
+#### Scenario: Approve a plugin
+- **WHEN** a new plugin is installed and the user opens the Plugins dialog in the terminal
+- **THEN** its hash is shown and `y` approves it, after which its streams open.
+
+### Requirement: Terminal Merged Timeline
+The terminal interface SHALL open a merged view of several streams interleaved by timestamp, with a source tag per row, and SHALL restore the merged views saved by the window.
+
+#### Scenario: Merged at 14:02
+- **WHEN** `app.log` and `db.log` are open and the user merges them
+- **THEN** the rows alternate by time and each starts with `[app]` or `[db]`.
+
+### Requirement: Terminal Filter Tabs
+The terminal interface SHALL open the focused stream's filters as a new tab of the same file and SHALL restore the filter tabs saved by the window.
+
+#### Scenario: Errors as a tab
+- **WHEN** the include filter is `ERROR` and the user presses `Alt+T`
+- **THEN** a new tab shows only the ERROR lines, numbered by their lines in the source, and the original stream keeps its filter.
+
+#### Scenario: Back to the source
+- **WHEN** the cursor is on a row of a filter tab and the user presses `Ctrl+K`
+- **THEN** the source stream is focused and shows that line in context.
+
+### Requirement: Terminal Time Anchor
+The terminal interface SHALL set and clear the time anchor of the time delta column on the cursor row, and SHALL show the elapsed time of a multi-row selection.
+
+#### Scenario: From the anchor
+- **WHEN** the anchor is on line 10 and line 12 is 1.25 s later
+- **THEN** line 12's Δt cell reads `+1.250`.
+
+### Requirement: Terminal Palette Coverage
+The terminal palette SHALL list every registry command that is not marked window-only, including select all, play and pause all, line numbers, auto-update, save session, save as default session, remove bookmark, open folder pattern and the recent files.
+
+#### Scenario: Recent files
+- **WHEN** the user opens *Recent files…* from the palette
+- **THEN** the files of `[recent_files]` are listed and `Enter` opens the selected one.
+
+### Requirement: Terminal Charts
+The terminal interface SHALL draw a one-row volume sparkline of the stream over time and SHALL show a sparkline per value in the Statistics view and per pattern in the Patterns view when the stream is timed.
+
+#### Scenario: Volume row
+- **WHEN** a timed stream is open and the user presses `Alt+V`
+- **THEN** a row of blocks above the lines shows how many lines each time slice has.
+
+### Requirement: Terminal Page Acceleration
+The terminal interface SHALL move further per press while `PgUp` or `PgDn` is held, doubling each second up to 8 pages, unless `page_acceleration` is off.
+
+#### Scenario: Held for 2 s
+- **WHEN** the user holds `PgDn` for two seconds
+- **THEN** each press then moves four pages.

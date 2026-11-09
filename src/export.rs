@@ -475,3 +475,138 @@ mod tests {
         }
     }
 }
+
+/// How Copy as excerpt wraps the rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ExcerptFlavour {
+    /// A Markdown fenced block under a bold header.
+    #[default]
+    Markdown,
+    /// A Jira `{code}` block under a `*bold*` header.
+    Jira,
+    /// A Slack code block under a `*bold*` header.
+    Slack,
+}
+
+impl ExcerptFlavour {
+    pub const ALL: [ExcerptFlavour; 3] = [Self::Markdown, Self::Jira, Self::Slack];
+
+    /// The name saved in `excerpt_format=`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Jira => "jira",
+            Self::Slack => "slack",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|f| f.name().eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// The next one (the settings' cycle).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Markdown => Self::Jira,
+            Self::Jira => Self::Slack,
+            Self::Slack => Self::Markdown,
+        }
+    }
+}
+
+/// Most bytes an excerpt holds (the clipboard's limit for the bookmark report too).
+pub const EXCERPT_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// The rows `lines` (0-based, in order) of `engine` as an excerpt for a ticket: a header
+/// with the stream name, the line range and the time span of the first and last timed
+/// rows, then the rows in a code block of `flavour`. Rows past `EXCERPT_MAX_BYTES` are
+/// left out and the header says so.
+pub fn excerpt(engine: &TailEngine, lines: &[usize], flavour: ExcerptFlavour) -> Option<String> {
+    let (&first, &last) = (lines.first()?, lines.last()?);
+    let parser = engine.field_parser().map(|p| p.as_ref());
+    let time_of = |line: usize| {
+        let text = engine.get_line(line)?;
+        crate::fields::line_timestamp(parser, &text, crate::timestamp::FormatHint::default())
+            .map(|(ms, _)| ms)
+    };
+    let first_ts = lines.iter().take(50).find_map(|&l| time_of(l));
+    let last_ts = lines.iter().rev().take(50).find_map(|&l| time_of(l));
+    let mut body = String::new();
+    let mut cut = 0usize;
+    for &line in lines {
+        let Some(text) = engine.get_line(line) else {
+            continue;
+        };
+        let text = crate::ansi::strip(&text);
+        if body.len() + text.len() + 1 > EXCERPT_MAX_BYTES {
+            cut += 1;
+            continue;
+        }
+        body.push_str(&text);
+        body.push('\n');
+    }
+    let name = crate::find_all::stream_name(engine);
+    let range = if first == last {
+        format!("line {}", first + 1)
+    } else {
+        format!("lines {}-{}", first + 1, last + 1)
+    };
+    let mut header = format!("{name}, {range}");
+    match (first_ts, last_ts) {
+        (Some(a), Some(b)) if a != b => header.push_str(&format!(
+            ", {} -> {}",
+            crate::timestamp::format_millis(a),
+            crate::timestamp::format_millis(b)
+        )),
+        (Some(a), _) => header.push_str(&format!(", {}", crate::timestamp::format_millis(a))),
+        _ => {}
+    }
+    if cut > 0 {
+        header.push_str(&format!(" ({cut} rows left out)"));
+    }
+    Some(match flavour {
+        ExcerptFlavour::Markdown => format!("**{header}**\n\n```\n{body}```\n"),
+        ExcerptFlavour::Jira => format!("*{header}*\n{{code}}\n{body}{{code}}\n"),
+        ExcerptFlavour::Slack => format!("*{header}*\n```\n{body}```\n"),
+    })
+}
+
+#[cfg(test)]
+mod excerpt_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn an_excerpt_names_the_stream_the_lines_and_the_time_span() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            f,
+            "2026-10-29 14:02:05 INFO a\n2026-10-29 14:02:06 WARN b\n2026-10-29 14:02:07 ERROR c\n"
+        )
+        .unwrap();
+        f.flush().unwrap();
+        let e = TailEngine::open(f.path()).unwrap();
+        let name = crate::find_all::stream_name(&e);
+        let md = excerpt(&e, &[0, 1, 2], ExcerptFlavour::Markdown).unwrap();
+        assert_eq!(
+            md,
+            format!(
+                "**{name}, lines 1-3, 2026-10-29 14:02:05 -> 2026-10-29 14:02:07**\n\n```\n\
+                 2026-10-29 14:02:05 INFO a\n2026-10-29 14:02:06 WARN b\n\
+                 2026-10-29 14:02:07 ERROR c\n```\n"
+            )
+        );
+        let jira = excerpt(&e, &[2], ExcerptFlavour::Jira).unwrap();
+        assert!(jira.starts_with(&format!(
+            "*{name}, line 3, 2026-10-29 14:02:07*\n{{code}}\n"
+        )));
+        assert!(jira.ends_with("{code}\n"));
+        assert_eq!(
+            ExcerptFlavour::from_name("Slack"),
+            Some(ExcerptFlavour::Slack)
+        );
+        assert!(excerpt(&e, &[], ExcerptFlavour::Slack).is_none());
+    }
+}

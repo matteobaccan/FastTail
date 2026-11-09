@@ -365,6 +365,19 @@ impl FilterExpr {
     }
 }
 
+/// Why `text` does not compile, in `lang`, with the column of the error (1-based).
+pub fn error_text(lang: crate::i18n::Language, text: &str, e: &ExprError) -> String {
+    use crate::i18n::t;
+    let column = text.char_indices().take_while(|(i, _)| *i < e.pos).count() + 1;
+    let mut out = t(lang, "expr_error_at")
+        .replace("{0}", t(lang, e.key))
+        .replace("{1}", &column.to_string());
+    if let Some(detail) = &e.detail {
+        out.push_str(&format!(" ({detail})"));
+    }
+    out
+}
+
 /// An expression equal to the include `terms` (all of them, ANDed): words as they are,
 /// anything else quoted. With `fields` (the stream has a parser), a quoted term is the
 /// text inside its quotes and a field term stays bare, as the term mode reads them (a

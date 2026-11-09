@@ -2,8 +2,9 @@
 // Copyright (c) Matteo Baccan -- https://github.com/matteobaccan/FastTail
 // SPDX-License-Identifier: MIT
 
-//! The sparkline row of a stream window: the first plotted field (`plot`) over the time
-//! its values cover, one block character per column, on the field's own scale.
+//! Sparklines: the row of a stream window plotting its first field (`plot`) over the time
+//! its values cover, one block character per column, on the field's own scale; and the
+//! counts per time slice of the volume row and the analysis views (`counts`).
 
 use crate::plot::Series;
 
@@ -56,6 +57,34 @@ pub fn spark(series: &Series, width: usize, ascii: bool) -> Option<Spark> {
     Some(Spark { text, min, max })
 }
 
+/// Counts per time slice as `width` block characters (slices summed in groups when there
+/// are more than `width`), scaled to the largest: a space where a group counts nothing.
+pub fn counts(values: &[u64], width: usize, ascii: bool) -> String {
+    let groups = group_counts(values, width);
+    let max = groups.iter().copied().max().unwrap_or(0);
+    let levels = if ascii { &ASCII } else { &BLOCKS };
+    groups
+        .iter()
+        .map(|&v| match v {
+            0 => ' ',
+            v => {
+                let at = ((v as f64 / max.max(1) as f64) * 8.0).ceil() as usize;
+                levels[at.clamp(1, 8) - 1]
+            }
+        })
+        .collect()
+}
+
+/// `values` summed into at most `width` groups of adjacent slices (group `g` of `k` holds
+/// slices `g * n / k .. (g + 1) * n / k`).
+pub fn group_counts(values: &[u64], width: usize) -> Vec<u64> {
+    let n = values.len();
+    let k = n.min(width);
+    (0..k)
+        .map(|g| values[g * n / k..(g + 1) * n / k].iter().sum())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +99,15 @@ mod tests {
             s.add(ts, v);
         }
         s
+    }
+
+    #[test]
+    fn counts_scale_to_the_largest_group_and_leave_empty_slices_blank() {
+        assert_eq!(counts(&[0, 1, 4, 8], 4, false), " ▁▄█");
+        // Eight slices in four columns: pairs are summed.
+        assert_eq!(group_counts(&[1, 1, 0, 0, 2, 2, 4, 4], 4), vec![2, 0, 4, 8]);
+        assert_eq!(counts(&[1, 1, 0, 0, 2, 2, 4, 4], 4, true), ". ~#");
+        assert_eq!(counts(&[], 10, false), "");
     }
 
     #[test]

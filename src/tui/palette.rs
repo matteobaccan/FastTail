@@ -9,8 +9,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
-use crate::actions::{ActionId, ACTIONS};
+use crate::actions::ActionId;
 use crate::i18n::{t, Language};
+use crate::timestamp::TimeDisplay;
 use crate::tui::form::{FieldKey, TextField};
 use crate::tui::keys::Action;
 
@@ -30,10 +31,57 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
         ActionId::GoToLine => (Action::GoTo, "Ctrl+G"),
         ActionId::FindAll => (Action::FindAll, "Alt+/"),
         ActionId::Copy => (Action::Copy, "y"),
+        ActionId::CopyAsShown => (Action::CopyAsShown, "Y"),
+        ActionId::SearchPane => (Action::SearchResults, "Alt+R"),
+        ActionId::SearchScope => (Action::SearchScope, "Alt+S"),
+        ActionId::ExportVisible | ActionId::ExportMatches => (Action::Export, "Alt+E"),
+        ActionId::BookmarkReport => (Action::BookmarkReport, ""),
+        ActionId::BookmarkClear => (Action::ClearBookmarks, ""),
+        ActionId::RuleNext => (Action::RuleNext, "F4"),
+        ActionId::RulePrev => (Action::RulePrev, "Shift+F4"),
+        ActionId::LogFormats => (Action::LogFormats, ""),
+        ActionId::ScratchpadOpen => (Action::Scratchpad, "Alt+N"),
+        ActionId::Patterns => (Action::Patterns, "Alt+A"),
+        ActionId::MergedView => (Action::MergedView, "Alt+M"),
+        ActionId::FilterTab => (Action::FilterTab, "Alt+T"),
+        ActionId::TimeAnchorSet => (Action::TimeAnchor, "@"),
+        ActionId::TimeAnchorClear => (Action::TimeAnchorClear, ""),
+        ActionId::SelectAll => (Action::SelectAll, "Ctrl+A"),
+        ActionId::OperationNext => (Action::OperationNext, "Alt+."),
+        ActionId::StreamInfo => (Action::StreamInfo, "Alt+I"),
+        ActionId::CopyExcerpt => (Action::CopyExcerpt, "Alt+Y"),
+        ActionId::LogStatement => (Action::LogStatement, "Alt+L"),
+        ActionId::OperationPrev => (Action::OperationPrev, "Alt+,"),
+        // The window's timeline strip is the volume row in a terminal.
+        ActionId::Timeline => (Action::VolumeRow, "Alt+V"),
+        ActionId::LineNumbers => (Action::ToggleLineNumbers, "#"),
+        ActionId::Monitor => (Action::ToggleMonitor, ""),
+        ActionId::BookmarkRemove => (Action::RemoveBookmark, ""),
+        // The Open dialog takes a pattern (`logs/*.log`) in its name field.
+        ActionId::OpenPattern => (Action::OpenFile, "o"),
+        ActionId::RecentFiles => (Action::RecentFiles, ""),
+        ActionId::ClearRecentFiles => (Action::ClearRecentFiles, ""),
+        ActionId::PlayAll => (Action::PlayAll, ""),
+        ActionId::PauseAll => (Action::PauseAll, ""),
+        ActionId::SessionSave => (Action::SaveCurrentSession, ""),
+        ActionId::SessionSaveDefault => (Action::SaveDefaultSession, ""),
+        ActionId::SessionClearRecent => (Action::ClearRecentSessions, ""),
+        ActionId::KeyboardShortcuts => (Action::KeysDialog, ""),
+        ActionId::Toggle(setting) if terminal_setting(setting) => {
+            (Action::ToggleSetting(setting), "")
+        }
+        ActionId::Choose(crate::actions::EnumSetting::Theme) => (Action::CycleTheme, "T"),
+        ActionId::Choose(crate::actions::EnumSetting::Language) => (Action::Settings, ","),
+        ActionId::ScratchpadSend => (Action::SendToScratchpad, "Ctrl+N"),
+        ActionId::BookmarkReportAll => (Action::BookmarkReportAll, ""),
         ActionId::ViewText | ActionId::ViewHex => (Action::ToggleHex, "h"),
         ActionId::ViewAsm => (Action::ToggleAsm, "d"),
         ActionId::AsmArch => (Action::CycleArch, "D"),
         ActionId::Collapse => (Action::CycleCollapse, "c"),
+        ActionId::TimeDelta => (Action::ToggleTimeDelta, "Alt+D"),
+        ActionId::TimeDisplayWritten => (Action::SetTimeDisplay(TimeDisplay::Written), ""),
+        ActionId::TimeDisplayUtc => (Action::SetTimeDisplay(TimeDisplay::Utc), ""),
+        ActionId::TimeDisplayLocal => (Action::SetTimeDisplay(TimeDisplay::Local), ""),
         ActionId::SearchFocus => (Action::StartSearch, "/"),
         ActionId::SearchNext => (Action::SearchNext, "n"),
         ActionId::SearchPrev => (Action::SearchPrev, "N"),
@@ -71,9 +119,45 @@ fn terminal_action(id: ActionId) -> Option<(Action, &'static str)> {
     })
 }
 
-/// The palette's entries in the registry's order, named in `lang`.
+/// The registry commands only the window has: a view or a window setting a terminal
+/// cannot show, and the settings of `terminal_setting` that are not for it.
+#[cfg(test)]
+fn window_only(id: ActionId) -> bool {
+    match id {
+        ActionId::ViewMarkdown
+        | ActionId::Wrap
+        | ActionId::AlwaysOnTop
+        | ActionId::ZoomIn
+        | ActionId::ZoomOut
+        | ActionId::ZoomReset => true,
+        ActionId::Toggle(setting) => !terminal_setting(setting),
+        ActionId::Choose(_) => true,
+        // Outside Windows: the Windows sources.
+        ActionId::OpenDebugOutput | ActionId::OpenEventLog => !cfg!(windows),
+        _ => false,
+    }
+}
+
+/// The boolean settings that apply to a terminal (not the window's screensaver, tray,
+/// borders or timeline strip).
+fn terminal_setting(setting: crate::actions::BoolSetting) -> bool {
+    use crate::actions::BoolSetting as B;
+    matches!(
+        setting,
+        B::LockEnabled
+            | B::Telemetry
+            | B::Sound
+            | B::LineNumbers
+            | B::TimeDelta
+            | B::LevelColors
+            | B::AutoHighlight
+            | B::FlashOnAlert
+    )
+}
+
+/// The palette's entries in the registry's order (the settings last), named in `lang`.
 pub fn entries(lang: Language) -> Vec<Entry> {
-    ACTIONS
+    crate::actions::all()
         .iter()
         .filter_map(|a| {
             let (action, key) = terminal_action(a.id)?;
@@ -235,6 +319,19 @@ mod tests {
         assert!(is_goto("+50") && is_goto("-3") && is_goto("14:02"));
         assert!(!is_goto("go") && !is_goto("-x"));
         assert_eq!(p.on_key(key(KeyCode::Esc)), PaletteKey::Close);
+    }
+
+    #[test]
+    fn every_registry_command_is_in_the_terminal_palette_or_window_only() {
+        let missing: Vec<&str> = crate::actions::all()
+            .iter()
+            .filter(|a| terminal_action(a.id).is_none() && !window_only(a.id))
+            .map(|a| a.key)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "add them to terminal_action or window_only: {missing:?}"
+        );
     }
 
     #[test]

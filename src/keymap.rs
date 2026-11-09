@@ -207,6 +207,10 @@ impl KeyMap {
         let all = actions::all();
         let by_key: HashMap<&str, &actions::Action> = all.iter().map(|a| (a.key, a)).collect();
         for (key, value) in overrides {
+            // The terminal's own keys (`tui.follow`) are read by `fasttail-tui`.
+            if key.starts_with("tui.") {
+                continue;
+            }
             if !by_key.contains_key(key.as_str()) {
                 map.notices
                     .push(format!("[shortcuts] {key}: unknown action"));

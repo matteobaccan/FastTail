@@ -164,6 +164,7 @@ pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -
         let spec = crate::eventlog::EventLogSpec {
             source: crate::eventlog::Source::File(path.to_path_buf()),
             filter: Default::default(),
+            host: None,
         };
         return open_event_log(Ok(spec), config, wake);
     }
@@ -356,6 +357,7 @@ pub fn apply_settings(engine: &mut TailEngine, config: &FastTailConfig) {
     engine.show_line_numbers = config.show_line_numbers;
     engine.show_time_delta = config.show_time_delta;
     engine.pin_time_default = config.pin_time_column;
+    engine.excerpt_flavour = config.excerpt_format;
     engine.set_auto_tokens(config.auto_tokens());
 }
 
@@ -501,6 +503,9 @@ fn apply_stream_state(engine: &mut TailEngine, cfg: &FastTailConfig, path: &Path
         engine.set_hidden_ranges(entry.hidden.clone());
         engine.hidden_dirty = false;
     }
+    if !entry.kept.is_empty() {
+        engine.restore_named(&entry.kept);
+    }
     // Context lines come from the matches: after the filters, before the groups.
     if entry.context_lines > 0 {
         engine.set_context_lines(entry.context_lines);
@@ -617,6 +622,7 @@ pub fn stream_entry(engine: &TailEngine) -> StreamEntry {
             .then(|| engine.asm.arch.name().to_string()),
         level_bytes: engine.level_override(),
         hidden: engine.hidden_ranges().to_vec(),
+        kept: engine.named.saved(),
         line_numbers: Some(engine.show_line_numbers),
         time_delta: Some(engine.show_time_delta),
         time_display: (engine.time_display() != crate::timestamp::TimeDisplay::Written)
@@ -794,6 +800,7 @@ pub fn save_changes(
         engine.asm_dirty = false;
         engine.level_bytes_dirty = false;
         engine.hidden_dirty = false;
+        engine.named.dirty = false;
         return false;
     }
     let mut changed = false;
@@ -817,8 +824,10 @@ pub fn save_changes(
         || engine.asm_dirty
         || engine.level_bytes_dirty
         || engine.hidden_dirty
+        || engine.named.dirty
         || (engine.fields_dirty && !defer_fields)
     {
+        engine.named.dirty = false;
         engine.asm_dirty = false;
         engine.level_bytes_dirty = false;
         engine.hidden_dirty = false;

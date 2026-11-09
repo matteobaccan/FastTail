@@ -401,3 +401,10 @@ A relative location SHALL be resolved against the source roots in order, the fir
 #### Scenario: File not found
 - **WHEN** the user Ctrl + clicks `src/missing.rs:3` and no source root holds it
 - **THEN** a notice says the file was not found under the source roots and no program runs.
+
+### Requirement: Named Searches
+A stream SHALL keep up to eight named searches highlighted at once, each in its own colour, SHALL navigate across all of them or a focused one, and SHALL save them in the workspace and sessions.
+
+#### Scenario: Two kept searches
+- **WHEN** `timeout` and `refused` are kept searches
+- **THEN** both are highlighted in their colours and `F3` goes to the next line holding either.

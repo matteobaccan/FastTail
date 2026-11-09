@@ -1605,6 +1605,65 @@ fn test_i18n_exhaustive_coverage() {
         "find_all_stale",
         "find_all_empty",
         "tip_find_all",
+        "log2src_go",
+        "log2src_tip",
+        "log2src_no_roots",
+        "log2src_indexing",
+        "log2src_none",
+        "log2src_opened",
+        "log2src_opened_more",
+        "eventlog_bad_host",
+        "eventlog_remote_failed",
+        "eventlog_host",
+        "eventlog_host_hint",
+        "eventlog_host_tip",
+        "system_kind_k8s",
+        "system_bad_k8s",
+        "system_kubectl_command",
+        "preset_pin_tip",
+        "copy_excerpt",
+        "copy_excerpt_tip",
+        "excerpt_format",
+        "excerpt_format_tip",
+        "info_title",
+        "info_path",
+        "info_source",
+        "info_size",
+        "info_lines",
+        "info_visible",
+        "info_index_time",
+        "info_index_memory",
+        "info_cache_memory",
+        "info_encoding",
+        "info_parser",
+        "info_timestamps",
+        "info_indexing",
+        "info_none",
+        "info_yes",
+        "info_no",
+        "info_kind_merged",
+        "info_kind_filter_tab",
+        "info_kind_stdin",
+        "info_kind_clipboard",
+        "info_kind_compressed",
+        "info_kind_ssh",
+        "info_kind_system",
+        "info_kind_listener",
+        "info_kind_debug",
+        "info_kind_plugin",
+        "info_kind_rotation",
+        "info_kind_pattern",
+        "info_kind_file",
+        "op_jump_next",
+        "op_jump_prev",
+        "op_jump_no_id",
+        "op_jump_not_found",
+        "named_keep_tip",
+        "named_full",
+        "named_searches",
+        "named_searches_tip",
+        "named_chip_tip",
+        "named_remove_tip",
         "tip_find_all_refresh",
         "help_desc_find_all",
         "filter_terms_all_of",
@@ -1734,6 +1793,7 @@ fn test_i18n_exhaustive_coverage() {
         "act_collapse",
         "act_timeline",
         "act_search_pane",
+        "act_search_scope",
         "act_search",
         "act_search_next",
         "act_search_prev",
@@ -1932,6 +1992,14 @@ fn test_i18n_exhaustive_coverage() {
         "query_open",
         "query_syntax",
         "scan_query",
+        // "no" (Spanish, Italian, Friulian), "plugin", "file" (Italian, Friulian) and
+        // "Source" (French) are the local words.
+        "info_no",
+        "info_kind_plugin",
+        "info_kind_file",
+        "info_source",
+        // "Computer:" is the word in German, Italian, Dutch and Friulian.
+        "eventlog_host",
     ];
     let fallbacks: Vec<String> = Language::ALL
         .iter()
@@ -4201,6 +4269,40 @@ fn tray_options_round_trip_and_default_off() {
     };
     let back = FastTailConfig::from_ini(&on.to_ini());
     assert!(back.tray_icon && back.minimize_to_tray && back.close_to_tray);
+}
+
+#[test]
+fn excerpt_format_round_trips_and_defaults_to_markdown() {
+    use fasttail::export::ExcerptFlavour;
+    assert_eq!(
+        FastTailConfig::default().excerpt_format,
+        ExcerptFlavour::Markdown
+    );
+    let jira = FastTailConfig {
+        excerpt_format: ExcerptFlavour::Jira,
+        ..FastTailConfig::default()
+    };
+    assert_eq!(
+        FastTailConfig::from_ini(&jira.to_ini()).excerpt_format,
+        ExcerptFlavour::Jira
+    );
+}
+
+#[test]
+fn page_acceleration_round_trips_and_defaults_on() {
+    assert!(FastTailConfig::default().page_acceleration);
+    let off = FastTailConfig {
+        page_acceleration: false,
+        ..FastTailConfig::default()
+    };
+    let general = off.to_ini();
+    assert_eq!(
+        general
+            .section(Some("general"))
+            .and_then(|g| g.get("page_acceleration")),
+        Some("false")
+    );
+    assert!(!FastTailConfig::from_ini(&off.to_ini()).page_acceleration);
 }
 
 #[test]

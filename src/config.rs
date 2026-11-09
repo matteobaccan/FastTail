@@ -135,6 +135,10 @@ pub struct FastTailConfig {
     /// (`pin_time_column`, default on).
     #[serde(default = "default_true")]
     pub pin_time_column: bool,
+    /// The terminal interface's PgUp / PgDn move further while held (`page_acceleration`,
+    /// default on).
+    #[serde(default = "default_true")]
+    pub page_acceleration: bool,
     /// Bookmark report dialog: context lines around each bookmark (0..=20), automatic
     /// bookmarks included, order (`stream` or `time`), as last chosen.
     #[serde(default = "default_report_context")]
@@ -189,6 +193,9 @@ pub struct FastTailConfig {
     /// (`export_csv_separator=comma|semicolon|tab`, `export_csv_bom`, `export_csv_protect`).
     #[serde(default = "default_export_format")]
     pub export_format: String,
+    /// Copy as excerpt's flavour (`excerpt_format=markdown|jira|slack`, default markdown).
+    #[serde(default)]
+    pub excerpt_format: crate::export::ExcerptFlavour,
     #[serde(default = "default_export_csv_separator")]
     pub export_csv_separator: String,
     #[serde(default = "default_true")]
@@ -227,6 +234,9 @@ pub struct FastTailConfig {
     /// The program run for `journald://` sources.
     #[serde(default = "default_journalctl_command")]
     pub journalctl_command: String,
+    /// The program `k8s://` sources run (`kubectl_command`, default `kubectl`).
+    #[serde(default = "default_kubectl_command")]
+    pub kubectl_command: String,
     /// The OpenSSH client run for `ssh://` streams.
     #[serde(default = "default_ssh_program")]
     pub ssh_program: String,
@@ -514,6 +524,10 @@ fn default_docker_command() -> String {
     crate::system_source::DEFAULT_DOCKER_COMMAND.to_string()
 }
 
+fn default_kubectl_command() -> String {
+    crate::system_source::DEFAULT_KUBECTL_COMMAND.to_string()
+}
+
 fn default_journalctl_command() -> String {
     crate::system_source::DEFAULT_JOURNALCTL_COMMAND.to_string()
 }
@@ -571,6 +585,7 @@ impl Default for FastTailConfig {
             overview_strip: true,
             timeline_search_lane: true,
             pin_time_column: true,
+            page_acceleration: true,
             report_context: default_report_context(),
             report_auto: false,
             report_order_time: false,
@@ -589,6 +604,7 @@ impl Default for FastTailConfig {
             level_detect_bytes: default_level_detect_bytes(),
             out_of_order_tolerance_ms: default_out_of_order_tolerance_ms(),
             export_format: default_export_format(),
+            excerpt_format: crate::export::ExcerptFlavour::default(),
             export_csv_separator: default_export_csv_separator(),
             export_csv_bom: true,
             export_csv_protect: true,
@@ -602,6 +618,7 @@ impl Default for FastTailConfig {
             event_log_initial_events: default_event_log_initial_events(),
             docker_command: default_docker_command(),
             journalctl_command: default_journalctl_command(),
+            kubectl_command: default_kubectl_command(),
             ssh_program: default_ssh_program(),
             rotations: crate::rotation::Policy::Ask,
             editor_command: String::new(),
@@ -948,6 +965,7 @@ impl FastTailConfig {
         crate::system_source::Commands {
             docker: self.docker_command.clone(),
             journalctl: self.journalctl_command.clone(),
+            kubectl: self.kubectl_command.clone(),
             backlog: self.system_source_backlog_lines,
         }
     }
@@ -1044,6 +1062,7 @@ impl FastTailConfig {
                 self.timeline_search_lane.to_string(),
             )
             .set("pin_time_column", self.pin_time_column.to_string())
+            .set("page_acceleration", self.page_acceleration.to_string())
             .set("report_context", self.report_context.to_string())
             .set("report_auto", self.report_auto.to_string())
             .set(
@@ -1084,6 +1103,7 @@ impl FastTailConfig {
                 self.out_of_order_tolerance_ms.to_string(),
             )
             .set("export_format", self.export_format.clone())
+            .set("excerpt_format", self.excerpt_format.name())
             .set("export_csv_separator", self.export_csv_separator.clone())
             .set("export_csv_bom", self.export_csv_bom.to_string())
             .set("export_csv_protect", self.export_csv_protect.to_string())
@@ -1108,6 +1128,7 @@ impl FastTailConfig {
             )
             .set("docker_command", self.docker_command.clone())
             .set("journalctl_command", self.journalctl_command.clone())
+            .set("kubectl_command", self.kubectl_command.clone())
             .set("ssh_program", self.ssh_program.clone())
             .set("rotations", self.rotations.name())
             .set("editor_command", self.editor_command.clone())
@@ -1450,6 +1471,12 @@ impl FastTailConfig {
                 cfg.pin_time_column = v;
             }
             if let Some(v) = general
+                .get("page_acceleration")
+                .and_then(|s| s.parse::<bool>().ok())
+            {
+                cfg.page_acceleration = v;
+            }
+            if let Some(v) = general
                 .get("report_context")
                 .and_then(|s| s.trim().parse::<u8>().ok())
             {
@@ -1571,6 +1598,12 @@ impl FastTailConfig {
             {
                 cfg.export_format = f.name().to_string();
             }
+            if let Some(f) = general
+                .get("excerpt_format")
+                .and_then(crate::export::ExcerptFlavour::from_name)
+            {
+                cfg.excerpt_format = f;
+            }
             if let Some(sep) = general
                 .get("export_csv_separator")
                 .and_then(crate::export::separator_from_name)
@@ -1684,6 +1717,7 @@ impl FastTailConfig {
             for (key, value) in [
                 ("docker_command", &mut cfg.docker_command),
                 ("journalctl_command", &mut cfg.journalctl_command),
+                ("kubectl_command", &mut cfg.kubectl_command),
                 ("ssh_program", &mut cfg.ssh_program),
             ] {
                 if let Some(s) = general.get(key).map(str::trim).filter(|s| !s.is_empty()) {
@@ -2397,6 +2431,15 @@ pub fn read_rule_set(path: &Path) -> Result<Vec<HighlightRule>, RuleSetError> {
         return Err(RuleSetError::NotARuleSet);
     }
     let text = String::from_utf8_lossy(&bytes);
+    // A Notepad++ AnalysePlugin or UDL file: its searches and keyword lists as rules.
+    if crate::npp_import::is_npp_xml(&text) {
+        let rules = crate::npp_import::parse(&text);
+        return if rules.is_empty() {
+            Err(RuleSetError::NotARuleSet)
+        } else {
+            Ok(rules)
+        };
+    }
     parse_rule_set(text.trim_start_matches('\u{feff}'))
 }
 
@@ -2740,9 +2783,12 @@ mod tests {
             system_source_backlog_lines: 500,
             docker_command: "podman".into(),
             journalctl_command: "/usr/bin/journalctl".into(),
+            kubectl_command: "/opt/k/kubectl".into(),
             ..Default::default()
         };
         let loaded = FastTailConfig::from_ini(&cfg.to_ini());
+        assert_eq!(loaded.kubectl_command, "/opt/k/kubectl");
+        assert_eq!(FastTailConfig::default().kubectl_command, "kubectl");
         assert_eq!(loaded.system_source_backlog_lines, 500);
         assert_eq!(loaded.docker_command, "podman");
         assert_eq!(loaded.journalctl_command, "/usr/bin/journalctl");

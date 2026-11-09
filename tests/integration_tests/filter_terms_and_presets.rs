@@ -222,6 +222,8 @@ fn background_scans_agree_with_ansi_strip_level_and_time_window() {
 
 fn payment_errors() -> FilterPreset {
     FilterPreset {
+        pinned: false,
+        last_used: 0,
         name: "payment errors".to_string(),
         state: FilterState {
             include: terms(&["payment"]),

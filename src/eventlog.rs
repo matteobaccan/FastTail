@@ -155,6 +155,19 @@ pub enum Source {
 pub struct EventLogSpec {
     pub source: Source,
     pub filter: PreFilter,
+    /// Another machine whose channel is read (`eventlog://host/Channel`), through a
+    /// remote session with the current user's credentials; `None`: this machine.
+    pub host: Option<String>,
+}
+
+/// A host name or address a remote session takes (`srv01`, `srv01.corp.example`,
+/// `10.0.0.5`, `[fe80::1]`).
+fn valid_host(host: &str) -> bool {
+    (1..=255).contains(&host.len())
+        && !host.starts_with('-')
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._:[]".contains(&b))
 }
 
 fn pct_encode(s: &str) -> String {
@@ -194,6 +207,12 @@ impl EventLogSpec {
         let s = path.to_str()?;
         let rest = s.strip_prefix(SCHEME)?;
         let (name, query) = rest.split_once('?').unwrap_or((rest, ""));
+        // A literal `/` (a channel's own is written `%2F`) separates a remote host.
+        let (host, name) = match name.split_once('/') {
+            Some((h, n)) if valid_host(h) => (Some(h.to_string()), n),
+            Some(_) => return Some(Err("eventlog_bad_host")),
+            None => (None, name),
+        };
         let name = pct_decode(name);
         if name.trim().is_empty() {
             return Some(Err("eventlog_no_channel"));
@@ -222,6 +241,7 @@ impl EventLogSpec {
         Some(Ok(Self {
             source: Source::Channel(name),
             filter,
+            host,
         }))
     }
 
@@ -230,7 +250,12 @@ impl EventLogSpec {
         match &self.source {
             Source::File(p) => p.clone(),
             Source::Channel(name) => {
-                let mut uri = format!("{SCHEME}{}", pct_encode(name));
+                let host = self
+                    .host
+                    .as_deref()
+                    .map(|h| format!("{h}/"))
+                    .unwrap_or_default();
+                let mut uri = format!("{SCHEME}{host}{}", pct_encode(name));
                 let mut q = Vec::new();
                 if !self.filter.levels.is_empty() {
                     let l: Vec<String> = self.filter.levels.iter().map(u8::to_string).collect();
@@ -482,6 +507,20 @@ mod platform {
 
     type Handle = isize;
 
+    /// `EVT_RPC_LOGIN`: the machine of a remote session; null user, domain and password
+    /// mean the current user's credentials.
+    #[repr(C)]
+    struct RpcLogin {
+        server: *mut u16,
+        user: *mut u16,
+        domain: *mut u16,
+        password: *mut u16,
+        flags: u32,
+    }
+
+    const EVT_RPC_LOGIN_CLASS: u32 = 1;
+    const RPC_S_SERVER_UNAVAILABLE: u32 = 1722;
+
     const ERROR_ACCESS_DENIED: u32 = 5;
     const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
     const ERROR_NO_MORE_ITEMS: u32 = 259;
@@ -538,6 +577,12 @@ mod platform {
             returned: *mut u32,
         ) -> i32;
         fn EvtClose(object: Handle) -> i32;
+        fn EvtOpenSession(
+            login_class: u32,
+            login: *const RpcLogin,
+            timeout: u32,
+            flags: u32,
+        ) -> Handle;
         fn EvtCreateRenderContext(count: u32, paths: *const *const u16, flags: u32) -> Handle;
         fn EvtRender(
             context: Handle,
@@ -619,13 +664,33 @@ mod platform {
     /// The query of a stream, opened by `open` so a failure is reported before any thread.
     pub struct Reader {
         spec: EventLogSpec,
+        /// The remote session of `spec.host` (0: this machine), closed with the reader.
+        session: Evt,
+    }
+
+    /// A session on `host` with the current user's credentials.
+    fn open_session(host: &str) -> Result<Evt, u32> {
+        let mut server = wide(host);
+        let login = RpcLogin {
+            server: server.as_mut_ptr(),
+            user: std::ptr::null_mut(),
+            domain: std::ptr::null_mut(),
+            password: std::ptr::null_mut(),
+            flags: 0,
+        };
+        let h = unsafe { EvtOpenSession(EVT_RPC_LOGIN_CLASS, &login, 0, 0) };
+        if h == 0 {
+            Err(last_error())
+        } else {
+            Ok(Evt(h))
+        }
     }
 
     fn last_error() -> u32 {
         unsafe { GetLastError() }
     }
 
-    fn query(spec: &EventLogSpec, reverse: bool) -> Result<Evt, u32> {
+    fn query(spec: &EventLogSpec, session: Handle, reverse: bool) -> Result<Evt, u32> {
         let (path, flags) = match &spec.source {
             Source::Channel(c) => (c.clone(), EVT_QUERY_CHANNEL_PATH),
             Source::File(p) => (p.display().to_string(), EVT_QUERY_FILE_PATH),
@@ -637,7 +702,7 @@ mod platform {
                 0
             };
         let (p, q) = (wide(&path), wide(&spec.filter.xpath()));
-        let h = unsafe { EvtQuery(0, p.as_ptr(), q.as_ptr(), flags) };
+        let h = unsafe { EvtQuery(session, p.as_ptr(), q.as_ptr(), flags) };
         if h == 0 {
             Err(last_error())
         } else {
@@ -647,8 +712,30 @@ mod platform {
 
     impl Reader {
         pub fn open(spec: &EventLogSpec) -> Result<Self, StartError> {
-            match query(spec, true) {
-                Ok(_) => Ok(Self { spec: spec.clone() }),
+            let session = match spec.host.as_deref() {
+                Some(host) => match open_session(host) {
+                    Ok(s) => s,
+                    Err(code) => {
+                        return Err(StartError {
+                            key: "eventlog_remote_failed",
+                            detail: format!("{host}: error {code}"),
+                        })
+                    }
+                },
+                None => Evt(0),
+            };
+            match query(spec, session.0, true) {
+                Ok(_) => Ok(Self {
+                    spec: spec.clone(),
+                    session,
+                }),
+                Err(RPC_S_SERVER_UNAVAILABLE) => Err(StartError {
+                    key: "eventlog_remote_failed",
+                    detail: format!(
+                        "{}: RPC server unavailable (open Remote Event Log Management in its firewall)",
+                        spec.host.as_deref().unwrap_or("")
+                    ),
+                }),
                 Err(ERROR_ACCESS_DENIED) => Err(StartError {
                     key: "eventlog_denied",
                     detail: String::new(),
@@ -665,7 +752,7 @@ mod platform {
         }
 
         pub fn run(self, initial: u32, tx: &SyncSender<Vec<u8>>, shared: &Shared) {
-            let mut r = Renderer::new();
+            let mut r = Renderer::new(self.session.0);
             let closed = || shared.closed.load(Ordering::Acquire);
             let set = |s: State| shared.state.store(s as u8, Ordering::Relaxed);
             let fail = |msg: String| {
@@ -680,7 +767,7 @@ mod platform {
             };
             if let Source::File(_) = self.spec.source {
                 // A file: every event, oldest first, then done.
-                let q = match query(&self.spec, false) {
+                let q = match query(&self.spec, self.session.0, false) {
                     Ok(q) => q,
                     Err(code) => return fail(format!("error {code}")),
                 };
@@ -715,7 +802,7 @@ mod platform {
             let bookmark = Evt(unsafe { EvtCreateBookmark(std::ptr::null()) });
             let mut have_bookmark = false;
             if initial > 0 {
-                let q = match query(&self.spec, true) {
+                let q = match query(&self.spec, self.session.0, true) {
                     Ok(q) => q,
                     Err(code) => return fail(format!("error {code}")),
                 };
@@ -764,7 +851,7 @@ mod platform {
                 };
                 let sub = Evt(unsafe {
                     EvtSubscribe(
-                        0,
+                        self.session.0,
                         signal as Handle,
                         channel.as_ptr(),
                         xpath.as_ptr(),
@@ -998,6 +1085,8 @@ mod platform {
     /// Renders events to lines: the system values, the formatted message (publisher
     /// metadata cached), else the event data.
     struct Renderer {
+        /// The session the publishers' messages are read in (0: this machine).
+        session: Handle,
         system: Evt,
         user: Evt,
         buf: Vec<u8>,
@@ -1007,8 +1096,9 @@ mod platform {
     }
 
     impl Renderer {
-        fn new() -> Self {
+        fn new(session: Handle) -> Self {
             Self {
+                session,
                 system: Evt(unsafe {
                     EvtCreateRenderContext(0, std::ptr::null(), EVT_RENDER_CONTEXT_SYSTEM)
                 }),
@@ -1123,7 +1213,9 @@ mod platform {
                 self.publishers.remove(&old);
             }
             let w = wide(name);
-            let h = unsafe { EvtOpenPublisherMetadata(0, w.as_ptr(), std::ptr::null(), 0, 0) };
+            let h = unsafe {
+                EvtOpenPublisherMetadata(self.session, w.as_ptr(), std::ptr::null(), 0, 0)
+            };
             self.publishers.insert(name.to_string(), Evt(h));
             self.order.push(name.to_string());
             h
@@ -1290,7 +1382,8 @@ mod tests {
             EventLogSpec::parse(Path::new("eventlog://Application")).unwrap(),
             Ok(EventLogSpec {
                 source: Source::Channel("Application".into()),
-                filter: PreFilter::default()
+                filter: PreFilter::default(),
+                host: None,
             })
         );
         assert!(EventLogSpec::parse(Path::new("eventlog://"))
@@ -1305,7 +1398,27 @@ mod tests {
         let spec = EventLogSpec {
             source: Source::Channel("Applicazioni è/Operativo".into()),
             filter: PreFilter::default(),
+            host: None,
         };
+        // A remote machine: `host/Channel`, the channel's own `/` still encoded.
+        let remote = EventLogSpec::parse(Path::new(
+            "eventlog://srv01/Microsoft-Windows-PowerShell%2FOperational",
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(remote.host.as_deref(), Some("srv01"));
+        assert_eq!(
+            remote.source,
+            Source::Channel("Microsoft-Windows-PowerShell/Operational".into())
+        );
+        assert_eq!(
+            EventLogSpec::parse(&remote.to_path()).unwrap().unwrap(),
+            remote
+        );
+        assert_eq!(
+            EventLogSpec::parse(Path::new("eventlog://-x/System")).unwrap(),
+            Err("eventlog_bad_host")
+        );
         assert_eq!(EventLogSpec::parse(&spec.to_path()).unwrap().unwrap(), spec);
         let odd = EventLogSpec::parse(Path::new("eventlog://%aé%4"))
             .unwrap()

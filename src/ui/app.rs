@@ -96,6 +96,14 @@ pub struct FastTailApp {
     pub folder_prompt: Option<crate::ui::folder_dialog::FolderPrompt>,
     /// The New merged view dialog while it is shown.
     pub merge_prompt: Option<crate::ui::merge_dialog::MergePrompt>,
+    /// The Recent files window (the palette's "Recent files"), while it is shown.
+    pub recent_files_window: bool,
+    /// The stream whose information window is shown (the palette's "Stream information").
+    pub stream_info: Option<PathBuf>,
+    /// The logging statements of the source folders, and a row waiting for them
+    /// (`log_statement_request`: stream and line text).
+    pub log2src: Option<crate::log2src::Index>,
+    pub log2src_pending: Option<(PathBuf, String)>,
     /// The Open system source dialog (`📦`, the palette).
     pub system_dialog: Option<crate::ui::system_dialog::SystemDialog>,
     /// The Remote file (SSH) dialog (`🌐`, the palette).
@@ -646,6 +654,10 @@ impl FastTailApp {
             quick_labels: Vec::new(),
             folder_prompt: None,
             merge_prompt: None,
+            recent_files_window: false,
+            stream_info: None,
+            log2src: None,
+            log2src_pending: None,
             system_dialog: None,
             remote_dialog: None,
             paste_request: None,
@@ -1088,14 +1100,7 @@ impl FastTailApp {
             return None;
         }
         // The next free number among the derived streams of this source.
-        let n = 1 + self
-            .engines
-            .iter()
-            .filter_map(|e| e.derived.as_ref())
-            .filter(|f| f.source == source.path)
-            .map(|f| f.n)
-            .max()
-            .unwrap_or(0);
+        let n = crate::filter_tab::next_number(self.engines.iter(), &source.path);
         let engine = match self.derived_engine(idx, n, filter) {
             Ok(engine) => engine,
             Err(e) => {
@@ -1118,24 +1123,9 @@ impl FastTailApp {
         n: usize,
         filter: crate::filter_tab::FrozenFilter,
     ) -> Result<TailEngine, String> {
-        let source = &self.engines[idx];
-        let name = crate::find_all::stream_name(source);
-        let spool_dir = self.config.compressed_settings().spool_dir;
-        let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
-        // The tab's levels are found as its source found them when it was made.
-        let level_window = filter.level_window;
-        let feeder = crate::filter_tab::DerivedFeeder::create(
-            source, name, n, filter, &spool_dir, max_bytes,
-        )
-        .map_err(|e| e.to_string())?;
-        let mut engine = TailEngine::open(feeder.spool_path()).map_err(|e| e.to_string())?;
-        engine.derived = Some(Box::new(feeder));
-        crate::workspace::apply_settings(&mut engine, &self.config);
-        engine.set_level_override(Some(level_window));
-        engine.level_bytes_dirty = false;
+        let mut engine = crate::filter_tab::open_tab(&self.engines[idx], n, filter, &self.config)?;
         engine.set_quick_labels(&self.quick_labels);
         engine.set_global_filter(self.global_spec.clone());
-        engine.follow_tail = true;
         Ok(engine)
     }
 
@@ -1195,12 +1185,7 @@ impl FastTailApp {
     /// Opens a merged view of the streams `sources` (two or more, by path) in a new tab and
     /// returns its path; `None` when its spool cannot be created (the notice says why).
     pub fn open_merged_view(&mut self, sources: &[PathBuf]) -> Option<PathBuf> {
-        let n = 1 + self
-            .engines
-            .iter()
-            .filter_map(|e| e.merged.as_ref().map(|m| m.n))
-            .max()
-            .unwrap_or(0);
+        let n = crate::merged_stream::next_number(self.engines.iter());
         let engine = self.merged_engine(n, sources)?;
         let path = engine.path.clone();
         self.engines.push(engine);
@@ -1220,39 +1205,15 @@ impl FastTailApp {
         if found.len() < 2 {
             return None;
         }
-        let named: Vec<(PathBuf, String)> = found
-            .iter()
-            .map(|e| (e.path.clone(), crate::find_all::stream_name(e)))
-            .collect();
-        // Saved by the names its sources are saved under; with standard input it is not.
-        let saved: Vec<PathBuf> = if found.iter().all(|e| crate::workspace::is_persisted(e)) {
-            found
-                .iter()
-                .map(|e| crate::workspace::persisted_path(e))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let spool_dir = self.config.compressed_settings().spool_dir;
-        let max_bytes = u64::from(self.config.stdin_spool_max_mb) * 1024 * 1024;
-        let opened = crate::merged_stream::MergedFeeder::create(n, named, &spool_dir, max_bytes)
-            .and_then(|mut feeder| {
-                feeder.saved_sources = saved;
-                let mut engine = TailEngine::open(feeder.spool_path())?;
-                engine.merged = Some(Box::new(feeder));
-                Ok(engine)
-            });
-        let mut engine = match opened {
+        let mut engine = match crate::merged_stream::open_view(n, &found, &self.config) {
             Ok(engine) => engine,
             Err(e) => {
                 self.open_notice = Some(e.to_string());
                 return None;
             }
         };
-        crate::workspace::apply_settings(&mut engine, &self.config);
         engine.set_quick_labels(&self.quick_labels);
         engine.set_global_filter(self.global_spec.clone());
-        engine.follow_tail = true;
         Some(engine)
     }
 
@@ -1448,6 +1409,67 @@ impl FastTailApp {
         self.open_log_formats(Some(lines), Some(idx));
     }
 
+    /// "Go to the logging statement": indexes the source folders when needed, then opens
+    /// the statement that best matches the row in the editor. Returns whether to repaint.
+    pub fn apply_log_statement_requests(&mut self) -> bool {
+        let lang = self.config.language;
+        if let Some(idx) = self
+            .engines
+            .iter()
+            .position(|e| e.log_statement_request.is_some())
+        {
+            let engine = &mut self.engines[idx];
+            let line = engine.log_statement_request.take().unwrap_or(0);
+            let text = engine
+                .get_line(line)
+                .map(|l| l.into_owned())
+                .unwrap_or_default();
+            let roots = self.config.source_roots.clone();
+            if roots.is_empty() {
+                engine.view_notice = Some(t(lang, "log2src_no_roots").to_string());
+                return true;
+            }
+            if !self.log2src.as_ref().is_some_and(|i| i.covers(&roots)) {
+                self.log2src = Some(crate::log2src::Index::start(roots));
+            }
+            self.log2src_pending = Some((engine.path.clone(), text));
+        }
+        let Some((path, text)) = self.log2src_pending.clone() else {
+            return false;
+        };
+        let Some(statements) = self.log2src.as_mut().and_then(|i| i.ready()) else {
+            if let Some(e) = self.engines.iter_mut().find(|e| e.path == path) {
+                e.view_notice = Some(t(lang, "log2src_indexing").to_string());
+            }
+            return true;
+        };
+        self.log2src_pending = None;
+        let found = crate::log2src::matches(statements, &text);
+        let notice = match found.first() {
+            None => t(lang, "log2src_none").to_string(),
+            Some(best) => {
+                let opened = crate::source_links::open_in_editor(
+                    &self.config.editor_command,
+                    &best.file,
+                    best.line,
+                    None,
+                );
+                match opened {
+                    Err(e) => e,
+                    Ok(()) if found.len() > 1 => t(lang, "log2src_opened_more")
+                        .replace("{0}", &format!("{}:{}", best.file.display(), best.line))
+                        .replace("{1}", &(found.len() - 1).to_string()),
+                    Ok(()) => t(lang, "log2src_opened")
+                        .replace("{0}", &format!("{}:{}", best.file.display(), best.line)),
+                }
+            }
+        };
+        if let Some(e) = self.engines.iter_mut().find(|e| e.path == path) {
+            e.view_notice = Some(notice);
+        }
+        true
+    }
+
     /// Feeds the merged views from their sources (a few milliseconds each per frame) and
     /// opens the dialog a stream menu asked for. Returns whether anything changed.
     pub fn apply_merged_views(&mut self) -> bool {
@@ -1461,24 +1483,9 @@ impl FastTailApp {
             )));
             changed = true;
         }
-        for m in 0..self.engines.len() {
-            let Some(mut feeder) = self.engines[m].merged.take() else {
-                continue;
-            };
-            let engines: Vec<Option<&TailEngine>> = feeder
-                .sources
-                .iter()
-                .map(|s| {
-                    self.engines
-                        .iter()
-                        .find(|e| e.merged.is_none() && paths_equal(&e.path, &s.path))
-                })
-                .collect();
-            if feeder.step(&engines, std::time::Duration::from_millis(4)) {
-                changed = true;
-            }
-            self.engines[m].merged = Some(feeder);
-        }
+        let mut engines: Vec<&mut TailEngine> = self.engines.iter_mut().collect();
+        changed |=
+            crate::merged_stream::feed_views(&mut engines, std::time::Duration::from_millis(4));
         changed
     }
 
@@ -1618,58 +1625,9 @@ impl FastTailApp {
                 self.scratch_jump = Some((source_path.clone(), line));
                 changed = true;
             }
-            let Some(s) = self.engines.iter().position(|e| e.path == source_path) else {
-                if let Some(f) = self.engines[d].derived.as_mut() {
-                    if f.stopped.is_none() {
-                        f.stopped = Some(crate::filter_tab::Stopped::SourceClosed);
-                        changed = true;
-                    }
-                }
-                continue;
-            };
-            if self.engines[d]
-                .derived
-                .as_ref()
-                .is_some_and(|f| f.stopped.is_some())
-            {
-                continue;
-            }
-            if self.engines[d]
-                .derived
-                .as_ref()
-                .is_some_and(|f| f.filter.time_from.is_some() || f.filter.time_to.is_some())
-            {
-                self.engines[s].request_timing();
-            }
-            let (source, derived) = if s < d {
-                let (a, b) = self.engines.split_at_mut(d);
-                (&a[s], &mut b[0])
-            } else {
-                let (a, b) = self.engines.split_at_mut(s);
-                (&b[0], &mut a[d])
-            };
-            let mut feeder = derived.derived.take().expect("a derived stream");
-            if feeder.step(source, std::time::Duration::from_millis(4)) {
-                changed = true;
-            }
-            // Restored bookmarks, as the fill reaches their lines.
-            if !feeder.pending_bookmarks.is_empty() {
-                let reached = feeder.take_reached_bookmarks(derived.total_lines());
-                if !reached.is_empty() {
-                    let mut lines: Vec<usize> = derived.bookmarks.iter().copied().collect();
-                    let mut notes = derived.bookmark_notes.clone();
-                    for (line, note) in reached {
-                        lines.push(line);
-                        if let Some(note) = note {
-                            notes.insert(line, note);
-                        }
-                    }
-                    derived.set_bookmarks_with_notes(lines, notes);
-                    changed = true;
-                }
-            }
-            derived.derived = Some(feeder);
         }
+        let mut engines: Vec<&mut TailEngine> = self.engines.iter_mut().collect();
+        changed |= crate::filter_tab::feed_tabs(&mut engines, std::time::Duration::from_millis(4));
         changed
     }
 
@@ -2955,7 +2913,8 @@ impl FastTailApp {
 
     /// Answers the MCP requests waiting and opens the files `open_file` asked for.
     pub fn serve_mcp(&mut self) {
-        let opens = self.mcp_view.serve(&mut self.engines, &self.config);
+        let mut refs: Vec<&mut TailEngine> = self.engines.iter_mut().collect();
+        let opens = self.mcp_view.serve(&mut refs, &self.config);
         let lang = self.config.language;
         for path in opens {
             self.open_log_file(path.clone());
@@ -3351,8 +3310,9 @@ impl FastTailApp {
         // The web view and the MCP server answer while the window shows nothing too.
         self.web_view
             .sync(&mut self.config, || Self::make_wake(ctx));
+        let refs: Vec<&TailEngine> = self.engines.iter().collect();
         self.web_view.serve(
-            &self.engines,
+            &refs,
             &self.config.theme,
             self.config.level_colors,
             self.config.language,
@@ -3443,8 +3403,9 @@ impl FastTailApp {
         // from the streams as they are now.
         self.web_view
             .sync(&mut self.config, || Self::make_wake(&ctx));
+        let refs: Vec<&TailEngine> = self.engines.iter().collect();
         self.web_view.serve(
-            &self.engines,
+            &refs,
             &self.config.theme,
             self.config.level_colors,
             self.config.language,
@@ -5143,6 +5104,9 @@ impl FastTailApp {
         if self.apply_merged_views() {
             ctx.request_repaint();
         }
+        if self.apply_log_statement_requests() {
+            ctx.request_repaint();
+        }
         if self.apply_compare_requests() {
             ctx.request_repaint();
         }
@@ -5866,6 +5830,29 @@ impl FastTailApp {
                             let _ = self.config.save();
                         }
 
+                        // Copy as excerpt: the flavour of the block.
+                        ui.horizontal(|ui| {
+                            ui.label(t(lang, "excerpt_format"))
+                                .on_hover_text(t(lang, "excerpt_format_tip"));
+                            let mut changed = false;
+                            for f in crate::export::ExcerptFlavour::ALL {
+                                let name = match f {
+                                    crate::export::ExcerptFlavour::Markdown => "Markdown",
+                                    crate::export::ExcerptFlavour::Jira => "Jira",
+                                    crate::export::ExcerptFlavour::Slack => "Slack",
+                                };
+                                changed |= ui
+                                    .radio_value(&mut self.config.excerpt_format, f, name)
+                                    .changed();
+                            }
+                            if changed {
+                                for engine in &mut self.engines {
+                                    engine.excerpt_flavour = self.config.excerpt_format;
+                                }
+                                let _ = self.config.save();
+                            }
+                        });
+
                         // How far back a timestamp may go before its line is marked.
                         ui.horizontal(|ui| {
                             ui.label(
@@ -6021,6 +6008,11 @@ impl FastTailApp {
                                 "system_journalctl_command",
                                 &mut self.config.journalctl_command,
                                 crate::system_source::DEFAULT_JOURNALCTL_COMMAND,
+                            ),
+                            (
+                                "system_kubectl_command",
+                                &mut self.config.kubectl_command,
+                                crate::system_source::DEFAULT_KUBECTL_COMMAND,
                             ),
                         ] {
                             ui.horizontal(|ui| {
@@ -6930,6 +6922,91 @@ impl FastTailApp {
             }
         }
 
+        // 11a''. Recent files (palette): a click opens one, as the toolbar's 🕒 menu does.
+        if self.recent_files_window {
+            let lang = self.config.language;
+            let mut open = true;
+            let mut pick = None;
+            let mut clear = false;
+            egui::Window::new(t(lang, "recent_files"))
+                .id(egui::Id::new("fasttail_recent_files"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(&ctx, |ui| {
+                    if self.config.recent_files.is_empty() {
+                        ui.label(RichText::new(t(lang, "no_recent_files")).italics());
+                        return;
+                    }
+                    for path in &self.config.recent_files {
+                        if ui
+                            .button(RichText::new(format!("📄 {}", path.display())).monospace())
+                            .clicked()
+                        {
+                            pick = Some(path.clone());
+                        }
+                    }
+                    ui.separator();
+                    clear = ui
+                        .button(format!("🗑 {}", t(lang, "clear_recent")))
+                        .clicked();
+                });
+            if clear {
+                self.config.recent_files.clear();
+                let _ = self.config.save();
+            }
+            let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if !open || pick.is_some() || escape {
+                self.recent_files_window = false;
+            }
+            if let Some(path) = pick {
+                self.open_log_file(path);
+            }
+        }
+
+        // 11a''''. Stream information (palette): closed when its stream goes.
+        if let Some(path) = self.stream_info.clone() {
+            let lang = self.config.language;
+            let mut open = true;
+            match self.engines.iter().find(|e| e.path == path) {
+                Some(engine) => {
+                    let rows = crate::stream_info::rows(engine);
+                    egui::Window::new(format!(
+                        "{} · {}",
+                        t(lang, "info_title"),
+                        crate::find_all::stream_name(engine)
+                    ))
+                    .id(egui::Id::new("fasttail_stream_info"))
+                    .open(&mut open)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(&ctx, |ui| {
+                        egui::Grid::new("fasttail_stream_info_grid")
+                            .num_columns(2)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (item, value) in rows {
+                                    ui.label(t(lang, item.key()));
+                                    let text = match value {
+                                        crate::stream_info::Value::Text(s) => s,
+                                        crate::stream_info::Value::Key(k) => t(lang, k).to_string(),
+                                    };
+                                    ui.label(RichText::new(text).monospace());
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                }
+                None => open = false,
+            }
+            let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if !open || escape {
+                self.stream_info = None;
+            }
+        }
+
         // 11a'''. Export dialog: closed when its stream goes.
         if let Some(dialog) = self.export_dialog.as_mut() {
             match self.engines.iter().find(|e| e.path == dialog.source) {
@@ -7692,6 +7769,8 @@ impl FastTailApp {
                     Some(crate::ui::merge_dialog::MergePrompt::starting_with(first));
             }
             A::ClearRecentFiles => self.config.recent_files.clear(),
+            A::RecentFiles => self.recent_files_window = true,
+            A::StreamInfo => self.stream_info = self.focused_stream_path(),
             A::SessionSaveAs => self.run_session_action(SessionAction::SaveAs),
             A::SessionSave => self.run_session_action(SessionAction::Save),
             A::BookmarkReportAll => {
@@ -7702,6 +7781,8 @@ impl FastTailApp {
             A::SessionClearRecent => self.run_session_action(SessionAction::ClearRecent),
             A::SessionSaveDefault => self.run_session_action(SessionAction::SaveDefault),
             A::SearchPane => self.config.search_pane = !self.config.search_pane,
+            // The scope is chosen in the results pane's header.
+            A::SearchScope => self.config.search_pane = true,
             A::Toggle(setting) => {
                 let meta = crate::actions::bool_setting(setting);
                 let value = !(meta.get)(&self.config);

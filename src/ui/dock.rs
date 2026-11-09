@@ -703,6 +703,10 @@ impl<'a> TabViewer for FastTailTabViewer<'a> {
 const SEARCH_ACTIVE_BG: Color32 = Color32::from_rgb(0, 255, 230);
 /// Background of the text of the other search hits.
 const SEARCH_MATCH_BG: Color32 = Color32::from_rgb(255, 230, 0);
+
+#[cfg(test)]
+use crate::export_html::cell_spans;
+pub(crate) use crate::export_html::{cell_spans_with, level_fallback};
 /// Background of the text of the rows a multi-line hit continues on.
 const SEARCH_CONT_BG: Color32 = Color32::from_rgb(255, 242, 150);
 
@@ -2042,7 +2046,24 @@ fn render_log_stream(
     let shift_f3 = (f3_pressed && ui.input(|i| i.modifiers.shift)) || act(ActionId::SearchPrev);
     let next_f3 = (f3_pressed && !ui.input(|i| i.modifiers.shift)) || act(ActionId::SearchNext);
 
-    if next_f3 {
+    // With the box empty, F3 walks the kept searches (the focused one, else all).
+    let walk_named = search_query.trim().is_empty() && !engine.named.is_empty();
+    if walk_named && (next_f3 || shift_f3) {
+        let from = engine
+            .selection_anchor
+            .or_else(|| {
+                engine
+                    .current_row()
+                    .and_then(|r| engine.get_actual_line_idx(r))
+            })
+            .unwrap_or(0);
+        if engine.next_named(from, next_f3).is_some() {
+            if let Some(line) = engine.scroll_to_line {
+                engine.select_row(line);
+            }
+            ui.ctx().request_repaint();
+        }
+    } else if next_f3 {
         if let Some(target) = engine.search_next(sound_enabled) {
             scroll_to_target(engine, target);
             push_search_history(search_history, search_query);
@@ -2712,6 +2733,24 @@ fn render_log_stream(
         {
             engine.find_all_request = true;
         }
+        // Keep this search: highlighted with the others in its colour, walked by F3 once
+        // the box is empty.
+        if ui
+            .small_button(RichText::new("📌").monospace())
+            .on_hover_text(t(lang, "named_keep_tip"))
+            .clicked()
+        {
+            match engine.keep_search(search_query) {
+                Ok(_) => {
+                    search_query.clear();
+                    engine.update_search("");
+                }
+                Err(crate::named_search::KeepError::Full) => {
+                    engine.view_notice = Some(t(lang, "named_full").to_string());
+                }
+                Err(_) => {}
+            }
+        }
 
         // Ctrl+F in the focused stream: requests focus on its search input and selects all text
         let ctrl_f = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F);
@@ -2977,6 +3016,11 @@ fn render_log_stream(
             engine.update_search(search_query);
             ui.ctx().memory_mut(|m| m.request_focus(search_id));
             ui.ctx().request_repaint();
+        }
+
+        // Open filter as new tab (palette): handled by the app, as the menu entry is.
+        if act(ActionId::FilterTab) {
+            engine.filter_tab_request = true;
         }
 
         // Hide lines (CTRL + H): the selected rows, else the anchor row, leave the view.
@@ -3527,6 +3571,49 @@ fn render_log_stream(
                 }
                 ui.ctx().request_repaint();
             }
+            // CTRL + SHIFT + O: the logging statement that wrote the row (the app looks it up).
+            let log_src_key = egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::O,
+            );
+            if act(ActionId::LogStatement)
+                || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&log_src_key)))
+            {
+                engine.log_statement_request = engine
+                    .selection_anchor
+                    .or_else(|| engine.selection.iter().next().copied())
+                    .or_else(|| engine.get_actual_line_idx(top_row(engine)));
+            }
+            // ALT + ] / ALT + [: the next / previous line of the row's operation id.
+            let op_next_key =
+                egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::CloseBracket);
+            let op_prev_key =
+                egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::OpenBracket);
+            let op_prev = act(ActionId::OperationPrev)
+                || (keys_ok && line_view && ui.input_mut(|i| i.consume_shortcut(&op_prev_key)));
+            let op_next = !op_prev
+                && (act(ActionId::OperationNext)
+                    || (keys_ok
+                        && line_view
+                        && ui.input_mut(|i| i.consume_shortcut(&op_next_key))));
+            if op_prev || op_next {
+                let from = engine
+                    .selection_anchor
+                    .or_else(|| engine.selection.iter().next().copied())
+                    .or_else(|| engine.get_actual_line_idx(top_row(engine)))
+                    .unwrap_or(0);
+                use crate::operation_jump::OpJump;
+                match engine.next_same_operation(from, op_next) {
+                    OpJump::Found(line, _) => engine.select_row(line),
+                    OpJump::NoId => {
+                        engine.view_notice = Some(t(lang, "op_jump_no_id").to_string());
+                    }
+                    OpJump::NotFound(id) => {
+                        engine.view_notice = Some(t(lang, "op_jump_not_found").replace("{0}", &id));
+                    }
+                }
+                ui.ctx().request_repaint();
+            }
             // Esc on the rows: clears a character selection first (a bare caret goes
             // without using the key, so Esc still does what it did before).
             if keys_ok && engine.char_selection.is_some() {
@@ -3890,6 +3977,62 @@ fn render_log_stream(
     render_preset_save_dialog(ui.ctx(), engine, filter_presets, preset_events, theme, lang);
 
     ui.separator();
+
+    // Kept searches: a chip per search with its count; a click walks only that one (again:
+    // all of them), ✕ forgets it.
+    if !engine.named.is_empty() {
+        let mut remove = None;
+        let mut focus = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(format!("📌 {}:", t(lang, "named_searches")))
+                    .monospace()
+                    .size(11.0)
+                    .color(theme.text_dim()),
+            )
+            .on_hover_text(t(lang, "named_searches_tip"));
+            for (i, n) in engine.named.list.iter().enumerate() {
+                let (fg, bg) = theme.label_style(n.color);
+                let count = if n.running() {
+                    format!("{}…", n.total())
+                } else {
+                    n.total().to_string()
+                };
+                let mark = if engine.named.focus == Some(i) {
+                    "◉"
+                } else {
+                    ""
+                };
+                let chip = ui.add(
+                    egui::Button::new(
+                        RichText::new(format!(" {mark}{} ({count}) ", n.query))
+                            .monospace()
+                            .size(11.0)
+                            .color(fg),
+                    )
+                    .fill(bg),
+                );
+                if chip.on_hover_text(t(lang, "named_chip_tip")).clicked() {
+                    focus = Some(i);
+                }
+                if ui
+                    .small_button("✕")
+                    .on_hover_text(t(lang, "named_remove_tip"))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            }
+        });
+        if let Some(i) = focus {
+            engine.named.toggle_focus(i);
+        }
+        if let Some(i) = remove {
+            engine.remove_named(i);
+            ui.ctx().request_repaint();
+        }
+        ui.separator();
+    }
 
     // Quick colour labels strip: one chip per label with a remove button.
     if !quick_labels.is_empty() {
@@ -5201,67 +5344,6 @@ fn field_header_id(engine: &TailEngine) -> egui::Id {
     egui::Id::new("fields_header").with(&engine.path)
 }
 
-/// The spans of a cell's text: the rules' and labels' spans of that text, with the search
-/// query's occurrences (`query_lower`, case-insensitive) drawn over them as hits. At most
-/// `MAX_ROW_SPANS`, sorted and non-overlapping.
-pub(crate) fn cell_spans(
-    rule_spans: Vec<HighlightSpan>,
-    text: &str,
-    query_lower: &str,
-) -> Vec<HighlightSpan> {
-    let matcher = crate::tail_engine::SearchMatcher::Text(query_lower.to_string());
-    cell_spans_with(rule_spans, text, Some(&matcher))
-}
-
-/// `cell_spans` with the stream's search as it reads its query (text or regex).
-pub(crate) fn cell_spans_with(
-    mut rule_spans: Vec<HighlightSpan>,
-    text: &str,
-    matcher: Option<&crate::tail_engine::SearchMatcher>,
-) -> Vec<HighlightSpan> {
-    let hits: Vec<(usize, usize)> = matcher.map_or_else(Vec::new, |m| {
-        m.ranges(text, crate::tail_engine::MAX_ROW_SPANS)
-    });
-    if hits.is_empty() {
-        return rule_spans;
-    }
-    let hit_style = SpanStyle::Rule(HighlightStyle {
-        fg: Color32::BLACK.into(),
-        bg: SEARCH_MATCH_BG.into(),
-        bold: false,
-        italic: false,
-    });
-    let mut out: Vec<HighlightSpan> = Vec::new();
-    // A rule span keeps the parts no hit covers.
-    for sp in rule_spans.drain(..) {
-        let mut start = sp.start;
-        for &(h0, h1) in hits
-            .iter()
-            .filter(|(h0, h1)| *h1 > sp.start && *h0 < sp.end)
-        {
-            if h0 > start {
-                out.push(HighlightSpan {
-                    start,
-                    end: h0,
-                    ..sp
-                });
-            }
-            start = start.max(h1);
-        }
-        if start < sp.end {
-            out.push(HighlightSpan { start, ..sp });
-        }
-    }
-    out.extend(hits.iter().map(|&(start, end)| HighlightSpan {
-        start,
-        end,
-        style: hit_style,
-    }));
-    out.sort_by_key(|sp| sp.start);
-    out.truncate(crate::tail_engine::MAX_ROW_SPANS);
-    out
-}
-
 /// The cells of one row: each shown field clipped to its column, then the message.
 /// A line without the parser's shape (or a continuation line) runs across the columns,
 /// dimmed when it is not a continuation. `spans` gives a cell text its rule, label and
@@ -5815,6 +5897,10 @@ struct RowMenuPicks {
     remove_bookmark: Option<usize>,
     /// Line whose row asked for a copy, and whether as shown.
     copy: Option<(usize, bool)>,
+    /// Line whose row asked for Copy as excerpt.
+    excerpt: Option<usize>,
+    /// Line whose logging statement to look up.
+    log_statement: Option<usize>,
     /// Token to outline (or to clear when it is the outlined one).
     token: Option<String>,
     /// Rule picked in "Next line of rule" and the row it was picked on.
@@ -5903,6 +5989,10 @@ impl RowMenuPicks {
             engine.scratch_request = Some(with_reference);
         }
         apply_copy_pick(ui, engine, self.copy);
+        apply_excerpt_pick(ui, engine, self.excerpt);
+        if let Some(line) = self.log_statement {
+            engine.log_statement_request = Some(line);
+        }
     }
 }
 
@@ -5962,6 +6052,7 @@ fn apply_row_action(
     let row = engine.current_row();
     match action {
         ActionId::CopyAsShown => apply_copy_pick(ui, engine, row.map(|r| (r, true))),
+        ActionId::CopyExcerpt => apply_excerpt_pick(ui, engine, row),
         ActionId::BookmarkNote => {
             if let Some(row) = row {
                 engine.open_note_editor(row);
@@ -6025,6 +6116,21 @@ fn apply_copy_pick(ui: &Ui, engine: &mut TailEngine, pick: Option<(usize, bool)>
         engine.copy_selection_text()
     };
     if let Some(text) = text {
+        ui.ctx().copy_text(text);
+    }
+}
+
+/// Copy as excerpt from the row menu or the palette: the selection when the row is part of
+/// it, else the row alone, in the settings' flavour.
+fn apply_excerpt_pick(ui: &Ui, engine: &mut TailEngine, line: Option<usize>) {
+    let Some(line) = line else {
+        return;
+    };
+    if !engine.is_selected(line) {
+        engine.select_row(line);
+    }
+    let lines = engine.selected_lines();
+    if let Some(text) = crate::export::excerpt(engine, &lines, engine.excerpt_flavour) {
         ui.ctx().copy_text(text);
     }
 }
@@ -6709,7 +6815,23 @@ fn row_context_menu(
             picks.copy = Some((line, true));
             ui.close();
         }
+        if ui
+            .button(RichText::new(t(lang, "copy_excerpt")).monospace())
+            .on_hover_text(t(lang, "copy_excerpt_tip"))
+            .clicked()
+        {
+            picks.excerpt = Some(line);
+            ui.close();
+        }
         source_link_menu(ui, engine, line, lang, picks);
+        if ui
+            .button(RichText::new(t(lang, "log2src_go")).monospace())
+            .on_hover_text(t(lang, "log2src_tip"))
+            .clicked()
+        {
+            picks.log_statement = Some(line);
+            ui.close();
+        }
         if let Some(text) = engine
             .char_selection
             .as_ref()
@@ -7060,26 +7182,6 @@ fn row_highlight(
     engine
         .match_highlight(raw_line)
         .or_else(|| level_fallback(engine, theme, level_colors, line_idx))
-}
-
-/// The level palette entry of a row, when level colouring is on.
-pub(crate) fn level_fallback(
-    engine: &TailEngine,
-    theme: &CyberTheme,
-    level_colors: bool,
-    line_idx: usize,
-) -> Option<HighlightStyle> {
-    if !level_colors {
-        return None;
-    }
-    theme
-        .level_style(engine.level_of(line_idx))
-        .map(|s| HighlightStyle {
-            fg: s.fg,
-            bg: s.bg,
-            bold: s.bold,
-            italic: false,
-        })
 }
 
 /// Lays out `text` as sections: `base` for the bytes no span claimed, and per span the
@@ -8743,8 +8845,10 @@ fn render_presets_menu(
     };
     let mut apply: Option<usize> = None;
     let mut apply_all: Option<usize> = None;
+    let mut pin: Option<usize> = None;
     let mut save = false;
     let mut update = false;
+    let order = crate::filter_preset::display_order(presets);
     ui.menu_button(text, |ui| {
         ui.set_min_width(240.0);
         if presets.is_empty() {
@@ -8755,8 +8859,23 @@ fn render_presets_menu(
                     .color(theme.text_dim()),
             );
         }
-        for (i, preset) in presets.iter().enumerate() {
+        for &i in &order {
+            let preset = &presets[i];
             ui.horizontal(|ui| {
+                // Pinned presets come first; the pin toggles it.
+                let pin_text = RichText::new("📌").monospace().size(11.0);
+                let pin_text = if preset.pinned {
+                    pin_text.color(theme.accent_color())
+                } else {
+                    pin_text.color(theme.text_dim())
+                };
+                if ui
+                    .small_button(pin_text)
+                    .on_hover_text(t(lang, "preset_pin_tip"))
+                    .clicked()
+                {
+                    pin = Some(i);
+                }
                 let selected = current.as_deref() == Some(preset.name.as_str());
                 if ui
                     .selectable_label(selected, RichText::new(&preset.name).monospace())
@@ -8810,10 +8929,18 @@ fn render_presets_menu(
     .response
     .on_hover_text(t(lang, "presets_tip"));
 
+    if let Some(i) = pin {
+        presets[i].pinned = !presets[i].pinned;
+        events.changed = true;
+    }
     if let Some(i) = apply {
         presets[i].apply_to(engine);
+        crate::filter_preset::mark_used(presets, i);
+        events.changed = true;
     }
     if let Some(i) = apply_all {
+        crate::filter_preset::mark_used(presets, i);
+        events.changed = true;
         events.apply_to_all = Some(presets[i].clone());
     }
     if save {
@@ -8928,6 +9055,8 @@ fn render_preset_save_dialog(
                 || (enter && !name.is_empty() && !taken)
             {
                 let preset = FilterPreset {
+                    pinned: false,
+                    last_used: 0,
                     name: name.clone(),
                     state: FilterState::of_engine(engine, draft.with_time),
                 };
@@ -9206,14 +9335,7 @@ fn render_expr_field(
 
 /// `message at character N (detail)` for an expression error.
 pub fn expr_error_text(lang: Language, text: &str, e: &crate::filter_expr::ExprError) -> String {
-    let column = text.char_indices().take_while(|(i, _)| *i < e.pos).count() + 1;
-    let mut out = t(lang, "expr_error_at")
-        .replace("{0}", t(lang, e.key))
-        .replace("{1}", &column.to_string());
-    if let Some(detail) = &e.detail {
-        out.push_str(&format!(" ({detail})"));
-    }
-    out
+    crate::filter_expr::error_text(lang, text, e)
 }
 
 /// The term rows of one side of a stream: each row a field, its remove button and its
@@ -9782,6 +9904,7 @@ fn render_rule_set_controls(
             if let Some(source) = rfd::FileDialog::new()
                 .set_title(t(lang, "rules_import"))
                 .add_filter("FastTail rules (*.ini)", &["ini"])
+                .add_filter("Notepad++ (*.xml)", &["xml"])
                 .pick_file()
             {
                 let file = source

@@ -74,8 +74,8 @@ const INVALID_PARAMS: i64 = -32602;
 const SERVER_ERROR: i64 = -32000;
 
 /// What the server answers from: the open streams and what the window allows.
-pub struct Host<'a> {
-    pub engines: &'a mut [TailEngine],
+pub struct Host<'a, 'e> {
+    pub engines: &'a mut [&'e mut TailEngine],
     /// `[mcp] allow_write`.
     pub allow_write: bool,
     /// `[mcp] open_roots`.
@@ -123,7 +123,7 @@ impl Pending {
 
     /// Looks at more lines for `budget`; the finished response once done (after
     /// `SEARCH_TIME`, with what was found so far).
-    pub fn step(&mut self, engines: &[TailEngine], budget: Duration) -> Option<Value> {
+    pub fn step(&mut self, engines: &[&mut TailEngine], budget: Duration) -> Option<Value> {
         let started = Instant::now();
         let mut looked = 0usize;
         let out_of_time = self.started.elapsed() >= SEARCH_TIME;
@@ -291,7 +291,7 @@ pub fn describe(msg: &Value) -> Option<(String, String)> {
 }
 
 /// Answers one JSON-RPC message.
-pub fn handle(msg: &Value, host: &mut Host<'_>) -> Outcome {
+pub fn handle(msg: &Value, host: &mut Host<'_, '_>) -> Outcome {
     let Some(obj) = msg.as_object() else {
         return Outcome::Reply(Some(error(
             &Value::Null,
@@ -388,7 +388,7 @@ pub fn handle(msg: &Value, host: &mut Host<'_>) -> Outcome {
 }
 
 /// Answers `msg` to the end, running a search through in one go (no window to keep).
-pub fn handle_now(msg: &Value, host: &mut Host<'_>) -> Option<Value> {
+pub fn handle_now(msg: &Value, host: &mut Host<'_, '_>) -> Option<Value> {
     match handle(msg, host) {
         Outcome::Reply(v) => v,
         Outcome::Pending(mut p) => loop {
@@ -522,7 +522,7 @@ fn scope_all(args: &Value) -> Result<bool, String> {
 
 /// The stream `args.stream` names: its id (path), or a file name that only one stream
 /// has; left out, the only stream open.
-fn resolve(engines: &[TailEngine], args: &Value) -> Result<usize, String> {
+fn resolve(engines: &[&mut TailEngine], args: &Value) -> Result<usize, String> {
     match arg_str(args, "stream") {
         None if engines.len() == 1 => Ok(0),
         None if engines.is_empty() => Err("No stream is open in FastTail.".into()),
@@ -627,7 +627,7 @@ fn read_rows(
     out
 }
 
-fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
+fn call(name: &str, args: &Value, host: &mut Host<'_, '_>) -> Result<Call, String> {
     let engines = &mut *host.engines;
     let done = |v: Value| Ok(Call::Done(v));
     match name {
@@ -643,7 +643,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             })).collect::<Vec<_>>()
         })),
         "read_lines" => {
-            let engine = &engines[resolve(engines, args)?];
+            let engine: &TailEngine = engines[resolve(engines, args)?];
             let all = scope_all(args)?;
             let from = arg_usize(args, "from")?.map(|l| l.saturating_sub(1));
             let last = arg_usize(args, "last")?;
@@ -689,7 +689,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             }))
         }
         "get_context" => {
-            let engine = &engines[resolve(engines, args)?];
+            let engine: &TailEngine = engines[resolve(engines, args)?];
             let idx = line_arg(engine, args)?;
             let before = arg_usize(args, "before")?.unwrap_or(5).min(MAX_CONTEXT);
             let after = arg_usize(args, "after")?.unwrap_or(5).min(MAX_CONTEXT);
@@ -729,7 +729,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             let mut bytes = 0;
             let mut truncated = false;
             'streams: for i in chosen {
-                let engine = &engines[i];
+                let engine: &TailEngine = engines[i];
                 for &idx in &engine.bookmarks {
                     let text = engine.get_line(idx).unwrap_or_default();
                     if out.len() >= MAX_LINES || bytes + json_len(&text) > MAX_BYTES {
@@ -748,7 +748,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             done(json!({ "bookmarks": out, "truncated": truncated }))
         }
         "get_filters" => {
-            let engine = &engines[resolve(engines, args)?];
+            let engine: &TailEngine = engines[resolve(engines, args)?];
             let text = |s: &str| (!s.is_empty()).then(|| s.to_string());
             let min_level =
                 (engine.min_level != LogLevel::Unknown).then(|| engine.min_level.name());
@@ -766,7 +766,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
             }))
         }
         "level_summary" => {
-            let engine = &engines[resolve(engines, args)?];
+            let engine: &TailEngine = engines[resolve(engines, args)?];
             let mut levels = Map::new();
             for level in LogLevel::ALL {
                 levels.insert(
@@ -788,7 +788,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
         }
         "add_bookmark" => {
             let i = resolve(engines, args)?;
-            let engine = &mut engines[i];
+            let engine: &mut TailEngine = engines[i];
             let idx = line_arg(engine, args)?;
             engine.add_bookmark(idx);
             if let Some(note) = arg_str(args, "note") {
@@ -800,7 +800,7 @@ fn call(name: &str, args: &Value, host: &mut Host<'_>) -> Result<Call, String> {
         }
         "set_search" => {
             let i = resolve(engines, args)?;
-            let engine = &mut engines[i];
+            let engine: &mut TailEngine = engines[i];
             let query = arg_str(args, "query").unwrap_or("").to_string();
             let regex = arg_bool(args, "regex");
             if regex {
@@ -1196,14 +1196,33 @@ pub fn runtime_path() -> PathBuf {
 
 /// Writes the runtime file (`port=`, `token=`), readable by this user only.
 pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()> {
+    if path.exists() && !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime path is not a regular file",
+        ));
+    }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime path is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Enforce 0o600 even if the file pre-existed with permissive permissions.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.set_len(0)?;
     write!(
         file,
         "port={port}\ntoken={token}\npid={}\n",
@@ -1213,7 +1232,12 @@ pub fn write_runtime(path: &Path, port: u16, token: &str) -> std::io::Result<()>
 
 /// The port and token of a runtime file.
 pub fn read_runtime(path: &Path) -> Option<(u16, String)> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    file.take(4096).read_to_string(&mut text).ok()?;
     let value = |key: &str| {
         text.lines()
             .find_map(|l| l.strip_prefix(key))
@@ -1349,8 +1373,9 @@ pub fn serve_headless(
                 continue;
             }
         };
+        let mut refs: Vec<&mut TailEngine> = engines.iter_mut().collect();
         let mut host = Host {
-            engines,
+            engines: &mut refs,
             allow_write: false,
             open_roots: &[],
             lang: Language::En,
@@ -1463,6 +1488,31 @@ mod tests {
         assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
         std::fs::write(&path, "port=x\n").unwrap();
         assert_eq!(read_runtime(&path), None);
+    }
+
+    #[test]
+    fn runtime_file_rejects_non_regular_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        assert!(write_runtime(&dir_path, 47821, "abc123").is_err());
+        assert_eq!(read_runtime(&dir_path), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_file_enforces_restricted_permissions_on_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.runtime");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let initial_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(initial_mode, 0o666);
+
+        write_runtime(&path, 47821, "abc123").unwrap();
+        let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(final_mode, 0o600);
+        assert_eq!(read_runtime(&path), Some((47821, "abc123".to_string())));
     }
 
     #[test]

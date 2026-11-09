@@ -8,6 +8,119 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-30
+
+### Added
+
+- **From a message to its logging statement.** *Go to the logging statement* (row menu,
+  palette, `Ctrl + Shift + O`; `Alt+L` in the terminal) opens the editor at the logging call
+  of the source folders whose format string printed the row (Rust, Java / Kotlin, Python,
+  Go, C#, JavaScript / TypeScript).
+- **Remote Event Log.** `eventlog://<host>/<channel>` (the Event Log dialog's *Computer*
+  field) follows a channel of another Windows machine with the current credentials.
+- **Notepad++ filters.** *Import rules…* (both interfaces) also reads Notepad++
+  AnalysePlugin files and User Defined Language keyword lists as highlight rules.
+
+## [0.32.0] - 2026-10-30
+
+### Added
+
+- **Kept searches.** `📌` next to the search box (`Alt+K` in the terminal) keeps up to
+  eight searches per stream, each highlighted in its own colour with a count chip; with
+  the search box empty `F3` / `n` walk them all, or only the one whose chip was clicked.
+  Saved per stream in the workspace and sessions.
+- **Copy as excerpt.** The row menu's *Copy as excerpt* (`Alt+Y` in the terminal) copies
+  the selected rows under a header (`app.log, lines 1204-1210, 2026-10-29 14:02:05 ->
+  14:02:07`) in a Markdown, Jira or Slack code block (Settings: *Copy as excerpt for*,
+  `excerpt_format=`).
+- **Kubernetes source.** `k8s://<namespace>/<pod>` (a container with `/<container>`, a
+  deployment with `deploy/<name>`, another context with `<context>@`) follows a pod through
+  `kubectl logs -f`; the 📦 dialog lists the pods, Reconnect resumes with `--since-time`,
+  `kubectl_command` sets the program.
+- **Pinned and recent presets.** Filter presets are listed pinned first (`📌` in the
+  presets menu, `*` in the terminal), then the five applied last, then by name.
+- **Stream information.** *Stream information* in the palette (`Alt+I` in the terminal):
+  path, source kind, size, lines, the time the index took, the memory of the index and the
+  block cache, encoding, field parser and timestamps.
+- **Follow an operation.** `Alt + ]` / `Alt + [` (`Alt+.` / `Alt+,` in the terminal) go to
+  the next or previous line with the cursor row's `trace_id`, `request_id`, `req_id`,
+  `opid`, `correlation_id` or `thread` (or the Operations view's source).
+
+## [0.31.0] - 2026-10-30
+
+### Added
+
+- **Merged views in the terminal.** `Alt+M` (or *New merged view…* in the palette) lists
+  the open streams with timestamps as check boxes and opens one window of their lines
+  interleaved by time, each row tagged `[app.log]` in its source's colour and numbered by
+  its source line. `Alt+M` on the view turns sources off and on. The merged views of the
+  window open in the terminal and the other way round (workspace and sessions).
+- **Filter as a new tab in the terminal.** `Alt+T` freezes the focused stream's filter into
+  a tab of the same file that follows it, numbered by the source's lines; `Ctrl+K` on a
+  row shows it in the source. Filter tabs open in both interfaces, and *Open filter as new
+  tab* is in the window's palette too.
+- **Time anchor in the terminal.** `@` sets the Δt column's anchor on the cursor row (and
+  shows the column); a selection shows its elapsed time in the status bar
+  (`Δ +2.357 · 14 rows`).
+- **The whole palette in the terminal.** Select all (`Ctrl+A`), Play / Pause all, Line
+  numbers, Auto-update, Remove bookmark, Save session, Save as default session, Clear
+  recent sessions, Open folder pattern and **Recent files…** (open, remove, clear) are in
+  the terminal palette; a test fails when a window command has no terminal entry and is
+  not marked window-only. *Recent files…* is in the window's palette too.
+- **Charts in the terminal.** `Alt+V` draws the volume row (lines per time slice, ERROR /
+  WARN slices coloured, a click goes to that time) above the rows, shared with the
+  window's timeline strip; the Statistics view has a sparkline per value over time and the
+  Patterns view one per pattern.
+- **Faster paging in the terminal.** `PgUp` / `PgDn` held down move 2, 4, then 8 pages a
+  press after each second (`page_acceleration=false` in `[general]` turns it off).
+
+## [0.30.0] - 2026-10-29
+
+### Added
+
+- **Analysis views in the terminal.** `Alt+A` opens Statistics of a field, Query, Patterns,
+  Explain a span and Operations over the windows, as tables read from the window's own
+  background jobs: sort by a column (`s`), narrow (`/`), and `Enter` (or `x`) filters on a
+  value, a pattern or a `field=value` pair, or goes to a line. `S` and `O` in `[Fields...]`
+  open the Statistics and Operations of the selected field.
+- **Remappable keys in the terminal.** *Keyboard shortcuts* in the palette opens a Keys
+  dialog: `Enter` records a new key for an action (taken from the action that had it),
+  `d` removes it, `r` / `R` bring the defaults back; saved in `[shortcuts]` as
+  `tui.<action>=<keys>`, beside the window's own. The palette also switches the settings
+  that apply to a terminal (level colours, line numbers in new streams, sound, ...).
+- **Web view, MCP server and plugins in the terminal.** The terminal starts the read-only
+  web view and the MCP server from its own streams when `[web]` / `[mcp]` are on (new rows
+  in Settings, the ports shown in the status bar), and a Plugins dialog enables, approves
+  (with the manifest's hash) and opens plugins. The web view and the MCP server's state
+  moved out of the window's module (`web_view`, `mcp_serve`).
+
+## [0.29.0] - 2026-10-29
+
+### Added
+
+- **Time delta and time display in the terminal.** `[x] Δt` in the stream bar (or `Alt+D`)
+  draws the gap to the row above before each line, in the accent colour past the *Time
+  delta gap* setting; the `🌐` chip shows the times as written, in UTC or in local time, as
+  the window does (also in the palette). The listener prompt mentions `otlp://`.
+- **Search results, search in a range, export and reports in the terminal.** `Alt+R` lists
+  the search results (`Enter` goes to one); `Alt+S` limits the search to lines
+  (`1200-5000`) or times (`14:00..15:30`); `Alt+E` exports the visible lines, the selection
+  or the matches as text, CSV or HTML with the window's writers; `Y` copies as shown; the
+  palette writes the bookmark report of a stream or of all of them to a file or the
+  clipboard. *Search in a range…* is in the window's palette too (it opens the results
+  pane, where the range is chosen).
+- **Rules, formats and filter expressions in the terminal.** The rule editor imports
+  (`i`) and exports (`x`) rule sets and `F4` / `Shift+F4` walk the lines of a rule; *Clear
+  bookmarks* is in the palette; the palette's *Log formats* opens a formats dialog (list,
+  form with a live share of entries read, new, copy, delete, import, export); Settings
+  offers the editor presets and `Alt+O` opens a source location in FastTail; `I` (or `ƒx`
+  in the filter row) switches a stream's include side to an expression, and the global
+  filter's expression is edited in its dialog.
+- **Compare and scratchpad in the terminal.** `=` compares two selected rows side by side
+  (or marks a region and compares it with the next one), with the window's ignore toggles,
+  the next / previous change and the diff copied; `Ctrl+N` sends rows to the session's
+  scratchpad and `Alt+N` edits it, the same file the window uses.
+
 ## [0.28.1] - 2026-10-29
 
 ### Added
@@ -2401,6 +2514,11 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.33.0]: https://github.com/matteobaccan/FastTail/compare/v0.32.0...v0.33.0
+[0.32.0]: https://github.com/matteobaccan/FastTail/compare/v0.31.0...v0.32.0
+[0.31.0]: https://github.com/matteobaccan/FastTail/compare/v0.30.0...v0.31.0
+[0.30.0]: https://github.com/matteobaccan/FastTail/compare/v0.29.0...v0.30.0
+[0.29.0]: https://github.com/matteobaccan/FastTail/compare/v0.28.1...v0.29.0
 [0.28.1]: https://github.com/matteobaccan/FastTail/compare/v0.28.0...v0.28.1
 [0.28.0]: https://github.com/matteobaccan/FastTail/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/matteobaccan/FastTail/compare/v0.26.1...v0.27.0

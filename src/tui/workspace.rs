@@ -140,11 +140,14 @@ pub struct Plan {
     /// The session's `[dock] layout` (none for the default workspace, whose layout is
     /// the configuration's).
     pub dock_layout: Option<String>,
+    /// The streams rebuilt from the others once they are open: the filter tabs
+    /// (`filter:`) and merged views (`merged:`), in tab order.
+    pub views: Vec<PathBuf>,
 }
 
-/// Whether `path` is the saved name of a stream only the GUI rebuilds: a derived stream
+/// Whether `path` is the saved name of a stream rebuilt from other streams: a filter tab
 /// (`filter:`) or a merged view (`merged:`).
-fn is_gui_only(path: &Path) -> bool {
+fn is_view(path: &Path) -> bool {
     crate::filter_tab::parse_identity(path).is_some()
         || crate::merged_stream::parse_identity(path).is_some()
 }
@@ -157,9 +160,9 @@ pub fn workspace_plan(settings: &Settings) -> Plan {
         ..Plan::default()
     };
     for entry in Session::from_config(&settings.config).streams {
-        // The GUI's derived streams ("Open filter as new tab") and merged views are not
-        // opened here; the saved workspace keeps them (see `WorkspaceState::keep_derived`).
-        if is_gui_only(&entry.path) {
+        // The filter tabs and merged views follow their sources.
+        if is_view(&entry.path) {
+            plan.views.push(entry.path);
             continue;
         }
         if exists(&entry.path) {
@@ -178,14 +181,10 @@ pub fn session_plan(settings: &mut Settings, file: &Path) -> Result<Plan, String
         crate::i18n_tui::txf(lang, "cannot load {0}: {1}", &[&file.display(), &e])
     })?;
     settings.adopt_session(&loaded.session.streams);
+    let paths: Vec<PathBuf> = loaded.session.streams.into_iter().map(|s| s.path).collect();
     Ok(Plan {
-        paths: loaded
-            .session
-            .streams
-            .into_iter()
-            .map(|s| s.path)
-            .filter(|p| !is_gui_only(p))
-            .collect(),
+        views: paths.iter().filter(|p| is_view(p)).cloned().collect(),
+        paths: paths.into_iter().filter(|p| !is_view(p)).collect(),
         missing: loaded.missing,
         dock_layout: loaded.session.dock_layout,
     })

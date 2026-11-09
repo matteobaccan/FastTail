@@ -17,7 +17,7 @@ use crate::collapse::CollapseMode;
 use crate::dock_layout::{Dir, Layout as DockLayout, Pane, Tab as DockTab};
 use crate::log_level::LogLevel;
 use crate::scan_job::ScanKind;
-use crate::tail_engine::{QuickLabel, TailEngine, ViewMode};
+use crate::tail_engine::{QuickLabel, TailEngine, TimeDelta, ViewMode};
 use crate::time_range_text::{self, side_readable, Side};
 use crate::tui::browser::{self, FileBrowser, Kind};
 use crate::tui::calendar::{self, Calendar};
@@ -35,6 +35,7 @@ use crate::tui::colors::{Chrome, Palette};
 use crate::tui::dock::{self, Place, Zone};
 use crate::tui::find::{FindWindow, Row as FindRow};
 use crate::tui::form::{FieldKey, TextField};
+use crate::tui::formats::{FormatsKey, FormatsView};
 use crate::tui::global::{self, GlobalDialog, GlobalKey};
 use crate::tui::hex;
 use crate::tui::json::{JsonDialog, JsonKey};
@@ -72,6 +73,8 @@ pub struct Tab {
     /// Bytes per row of the HEX view, from the window width at the last draw. In the HEX
     /// view `top` and `cursor` count these rows.
     pub hex_width: usize,
+    /// Cells of its window's rows at the last draw.
+    pub cells: usize,
     /// Waiting for the first hit of a search that runs in the background.
     pending_first_hit: bool,
     /// Lines already seen while this stream was on screen, for the "new lines" mark.
@@ -97,6 +100,7 @@ impl Tab {
             cursor: 0,
             height: 20,
             hex_width: 16,
+            cells: 100,
             pending_first_hit: false,
             seen_lines: 0,
         }
@@ -265,6 +269,9 @@ fn stream_title(engine: &TailEngine) -> String {
     if let Some(title) = engine.source_title() {
         return title;
     }
+    if engine.merged.is_some() || engine.derived.is_some() {
+        return crate::find_all::stream_name(engine);
+    }
     match &engine.compressed {
         Some(c) => c.title().replace(" \u{203a} ", "/"),
         None => engine
@@ -300,11 +307,67 @@ pub enum PromptKind {
     DebugOutput,
     /// Open Event Log (palette, Windows): an `eventlog://` URI.
     EventLog,
+    /// The part of the view the search covers: `1200-5000` or `14:00..15:00`.
+    SearchScope,
+    /// The file an export of these lines, in this format, is written to.
+    Export(crate::export::Scope, crate::export::Format),
+    /// The file the bookmark report is saved to (empty: the clipboard); `true` for every
+    /// stream.
+    Report(bool),
+    /// A rule set file to add to the rules (a trailing `!` replaces them).
+    RulesImport,
+    /// The file the rules are written to (a trailing `!` replaces it).
+    RulesExport,
+    /// A format file to copy into the formats folder.
+    FormatImport,
+    /// The file the format being edited is written to.
+    FormatExport,
+    /// The field (or `/regex/`) the Statistics count.
+    StatsField,
+    /// The field (or `/regex/`) whose values group the Operations.
+    OpsField,
+    /// The span Explain compares with the rest: `14:00..14:05`.
+    ExplainSpan,
+    /// A source plugin to open, with its values: `plugin://name?key=value`.
+    OpenPlugin,
+}
+
+impl PromptKind {
+    /// A prompt opened from a dialog (the rules, the formats): drawn over it and given
+    /// the keys before it.
+    fn over_dialogs(&self) -> bool {
+        matches!(
+            self,
+            PromptKind::RulesImport
+                | PromptKind::RulesExport
+                | PromptKind::FormatImport
+                | PromptKind::FormatExport
+                | PromptKind::OpenPlugin
+        )
+    }
 }
 
 pub struct Prompt {
     pub kind: PromptKind,
     pub field: TextField,
+}
+
+/// The Plugins dialog: the plugins found, the row selected (the plugins, then the folders
+/// that did not load), and the source plugin whose approval waits for `y`.
+pub struct PluginsDialog {
+    pub catalog: crate::plugins::Catalog,
+    pub selected: usize,
+    pub confirm: Option<String>,
+}
+
+/// The Keys dialog: the row of `keys::REMAPPABLE` selected, and whether the next key
+/// pressed is recorded for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeysDialog {
+    pub selected: usize,
+    pub top: usize,
+    pub capturing: bool,
+    pub notice: Option<String>,
 }
 
 /// The dialog after the graphical interface was picked in Settings.
@@ -539,6 +602,43 @@ pub struct App {
     settings_before: Option<crate::config::FastTailConfig>,
     /// The highlight-rule editor (`r`).
     pub rules: Option<RulesDialog>,
+    /// The Log formats dialog (palette).
+    pub formats: Option<FormatsView>,
+    /// Two lines or regions side by side (`=`).
+    pub compare: Option<crate::tui::compare::CompareView>,
+    /// The lines marked to be compared with the next selection.
+    pub compare_mark: Option<crate::tui::compare::Side>,
+    /// The session's scratchpad, loaded when first used.
+    pub scratchpad: Option<crate::scratchpad::Scratchpad>,
+    /// The scratchpad's editor, while it is shown (`Alt+N`).
+    pub pad_editor: Option<crate::tui::pad::PadEditor>,
+    /// An analysis view over the windows (`Alt+A`).
+    pub analysis: Option<crate::tui::analysis::AnalysisView>,
+    /// The list of the analysis views (`Alt+A`): the row selected.
+    pub analysis_menu: Option<usize>,
+    /// The merged view dialog (`Alt+M`).
+    pub merge: Option<crate::tui::merge::MergeDialog>,
+    /// The recent files list (palette): the row selected.
+    pub recent_menu: Option<usize>,
+    /// The stream whose information is shown (`Alt+I`).
+    pub info_view: Option<PathBuf>,
+    /// The logging statements of the source folders, and the row text waiting for them.
+    log2src: Option<crate::log2src::Index>,
+    log2src_pending: Option<String>,
+    /// PgUp / PgDn held down, for their acceleration.
+    page_hold: keys::PageHold,
+    /// A merged view has lines left to merge: the loop polls faster.
+    views_busy: bool,
+    /// The terminal keys in force: the defaults with `[shortcuts]`'s `tui.` entries.
+    pub keymap: keys::KeyMap,
+    /// The Keys dialog (palette): the remappable keys.
+    pub keys_dialog: Option<KeysDialog>,
+    /// The read-only web view of the open streams, when `[web]` is on.
+    pub web_view: crate::web_view::WebView,
+    /// The MCP server for AI assistants, when `[mcp]` is on.
+    pub mcp_view: crate::mcp_serve::McpView,
+    /// The Plugins dialog (palette).
+    pub plugins: Option<PluginsDialog>,
     /// The filter presets (`p`).
     pub presets: Option<PresetsDialog>,
     /// The global filter editor (`F`), and when its pending edit is applied.
@@ -552,6 +652,12 @@ pub struct App {
     pub piece_menu: Option<usize>,
     /// The list of the active stream's fields for the column view: the row selected.
     pub columns_menu: Option<usize>,
+    /// The search results of the active stream as a list (`Alt+R`): the hit selected.
+    pub results_menu: Option<usize>,
+    /// What to export (`Alt+E`): the entry selected of `EXPORT_CHOICES`.
+    pub export_menu: Option<usize>,
+    /// An export being written: the stream's path and the job, stepped by `tick`.
+    pub export: Option<(PathBuf, crate::export::ExportJob)>,
     /// The external tools editor (from Settings, or `e` in the menu).
     pub tools_editor: Option<ToolsDialog>,
     /// The command palette (`:`).
@@ -685,6 +791,25 @@ impl App {
             settings_form: None,
             settings_before: None,
             rules: None,
+            formats: None,
+            compare: None,
+            compare_mark: None,
+            scratchpad: None,
+            pad_editor: None,
+            analysis: None,
+            analysis_menu: None,
+            merge: None,
+            recent_menu: None,
+            info_view: None,
+            log2src: None,
+            log2src_pending: None,
+            page_hold: keys::PageHold::default(),
+            views_busy: false,
+            keymap: keys::KeyMap::default(),
+            keys_dialog: None,
+            web_view: Default::default(),
+            mcp_view: Default::default(),
+            plugins: None,
             presets: None,
             global: None,
             global_due: None,
@@ -692,6 +817,9 @@ impl App {
             hidden_menu: None,
             piece_menu: None,
             columns_menu: None,
+            results_menu: None,
+            export_menu: None,
+            export: None,
             tools_editor: None,
             palette_dialog: None,
             locked: None,
@@ -844,6 +972,15 @@ impl App {
     pub fn restore_dock(&mut self, layout: Option<&str>) {
         let open = self.open_paths();
         self.dock_layout = layout.and_then(DockLayout::parse);
+        // The merged views are saved under their `merged:` name: their tabs show the spool.
+        let tabs = &self.tabs;
+        if let Some(l) = self.dock_layout.as_mut() {
+            l.rename_streams(&|p| {
+                tabs.iter()
+                    .find(|t| crate::workspace::saved_identity(&t.engine).as_deref() == Some(p))
+                    .map(|t| t.engine.path.clone())
+            });
+        }
         // The floating windows keep the open streams they hold (nothing is added).
         self.floats = Vec::new();
         let windows = self
@@ -910,7 +1047,10 @@ impl App {
         let stdin: Vec<PathBuf> = self
             .tabs
             .iter()
-            .filter(|t| t.engine.is_stdin())
+            .filter(|t| {
+                t.engine.is_stdin()
+                    || (t.engine.merged.is_some() && !crate::workspace::is_persisted(&t.engine))
+            })
             .map(|t| t.engine.path.clone())
             .collect();
         let without_stdin =
@@ -937,6 +1077,13 @@ impl App {
         };
         layout.set_main_pane(&pane);
         layout.set_windows(&windows);
+        // A merged view is saved under its `merged:` name, as in the GUI.
+        layout.rename_streams(&|p| {
+            self.tabs
+                .iter()
+                .find(|t| t.engine.path == p)
+                .and_then(|t| crate::workspace::saved_identity(&t.engine))
+        });
         layout.to_ron()
     }
 
@@ -1053,6 +1200,21 @@ impl App {
 
     pub fn tick(&mut self) -> bool {
         self.step_split();
+        self.step_export();
+        self.step_rule_seeks();
+        if let Some(pad) = self.scratchpad.as_mut() {
+            pad.save_if_due();
+        }
+        self.serve_integrations();
+        // The merged views take their sources' new lines in time order.
+        let mut engines: Vec<&mut TailEngine> =
+            self.tabs.iter_mut().map(|t| &mut t.engine).collect();
+        self.views_busy = crate::filter_tab::feed_tabs(&mut engines, MERGE_BUDGET)
+            | crate::merged_stream::feed_views(&mut engines, MERGE_BUDGET);
+        self.apply_source_context();
+        if self.log2src_pending.is_some() {
+            self.find_log_statement(None);
+        }
         // The files are read every `idle_poll` (the ini's `poll_interval_ms`), and at
         // every tick while background work runs, whose results arrive through the poll.
         let due = self.busy()
@@ -1202,6 +1364,15 @@ impl App {
             || self.picker.as_ref().is_some_and(|p| p.scan.is_some())
             || self.split.is_some()
             || self.split_waiting.is_some()
+            || self.export.is_some()
+            || self.analysis.is_some()
+            || self.views_busy
+            || self.log2src_pending.is_some()
+            || self.mcp_view.busy()
+            || self
+                .tabs
+                .iter()
+                .any(|t| t.engine.rule_seek_pattern().is_some())
             || self
                 .find_window
                 .as_ref()
@@ -1275,7 +1446,7 @@ impl App {
             return self.on_lock_key(key);
         }
         // Ctrl+L locks over any dialog, which is there again after the unlock.
-        if keys::map_key(key) == Some(Action::Lock) {
+        if self.keymap.map(key) == Some(Action::Lock) {
             self.lock();
             return true;
         }
@@ -1284,6 +1455,43 @@ impl App {
         }
         if self.interface_switch.is_some() {
             return self.on_interface_switch_key(key);
+        }
+        if self.prompt.as_ref().is_some_and(|p| p.kind.over_dialogs()) {
+            return self.on_prompt_key(key);
+        }
+        if self.compare.is_some() {
+            return self.on_compare_key(key);
+        }
+        if self.pad_editor.is_some() {
+            return self.on_pad_key(key);
+        }
+        if self.analysis_menu.is_some() {
+            return self.on_analysis_menu_key(key);
+        }
+        if self.merge.is_some() {
+            return self.on_merge_key(key);
+        }
+        if self.recent_menu.is_some() {
+            return self.on_recent_key(key);
+        }
+        if self.info_view.is_some() {
+            use crossterm::event::{KeyCode, KeyEventKind};
+            if key.kind != KeyEventKind::Release
+                && matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q'))
+            {
+                self.info_view = None;
+                return true;
+            }
+            return false;
+        }
+        if self.keys_dialog.is_some() {
+            return self.on_keys_dialog_key(key);
+        }
+        if self.plugins.is_some() {
+            return self.on_plugins_key(key);
+        }
+        if self.analysis.is_some() && self.prompt.is_none() {
+            return self.on_analysis_key(key);
         }
         // The tools editor opens over Settings, so it has the keys first.
         if self.tools_editor.is_some() {
@@ -1294,6 +1502,9 @@ impl App {
         }
         if self.rules.is_some() {
             return self.on_rules_key(key);
+        }
+        if self.formats.is_some() {
+            return self.on_formats_key(key);
         }
         if self.presets.is_some() {
             return self.on_presets_key(key);
@@ -1309,6 +1520,12 @@ impl App {
         }
         if self.piece_menu.is_some() {
             return self.on_piece_menu_key(key);
+        }
+        if self.results_menu.is_some() {
+            return self.on_results_menu_key(key);
+        }
+        if self.export_menu.is_some() {
+            return self.on_export_menu_key(key);
         }
         if self.columns_menu.is_some() {
             return self.on_columns_menu_key(key);
@@ -1378,7 +1595,7 @@ impl App {
             self.message = None;
             return true;
         }
-        let Some(action) = keys::map_key(key) else {
+        let Some(action) = self.keymap.map(key) else {
             if count.is_some() {
                 self.message = None;
                 return true;
@@ -1573,6 +1790,13 @@ impl App {
         if self.locked.is_some() {
             return false;
         }
+        if self.pad_editor.is_some() && self.prompt.is_none() {
+            if let Some(e) = self.pad_editor.as_mut() {
+                e.insert(text);
+            }
+            self.pad_edited();
+            return true;
+        }
         if let Some(form) = self.tools_editor.as_mut().and_then(|d| d.form.as_mut()) {
             if let Some(ToolWidget::Text(t)) =
                 form.fields.get_mut(form.focus).map(|f| &mut f.widget)
@@ -1732,6 +1956,7 @@ impl App {
         self.palette.theme = config.theme;
         self.palette.level_colors = config.level_colors;
         self.idle_poll = Duration::from_millis(config.poll_interval_ms as u64);
+        self.keymap = keys::KeyMap::build(&config.shortcuts);
         for tab in &mut self.tabs {
             let columns = (tab.engine.show_line_numbers, tab.engine.show_time_delta);
             crate::workspace::apply_settings(&mut tab.engine, config);
@@ -1943,7 +2168,7 @@ impl App {
             return false;
         };
         // The key that opened the window also takes it back to the query box.
-        if keys::map_key(key) == Some(Action::FindAll) {
+        if self.keymap.map(key) == Some(Action::FindAll) {
             w.editing = true;
             return true;
         }
@@ -2132,6 +2357,523 @@ impl App {
         true
     }
 
+    /// Keys of the search results list: arrows, `PgUp` `PgDn`, `Home` `End` choose,
+    /// Enter goes to the hit.
+    fn on_results_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let count = self
+            .tabs
+            .get(self.active)
+            .map_or(0, |t| t.engine.search_matches.len());
+        let page = self
+            .tabs
+            .get(self.active)
+            .map_or(10, |t| t.height.max(2) - 1);
+        let Some(selected) = self.results_menu.as_mut() else {
+            return false;
+        };
+        let last = count.saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => self.results_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(last),
+            KeyCode::PageUp => *selected = selected.saturating_sub(page),
+            KeyCode::PageDown => *selected = (*selected + page).min(last),
+            KeyCode::Home => *selected = 0,
+            KeyCode::End => *selected = last,
+            KeyCode::Enter => {
+                let i = *selected;
+                self.go_to_result(i);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Makes hit `i` of the search results current, moves the cursor to its line and
+    /// closes the list.
+    fn go_to_result(&mut self, i: usize) {
+        self.results_menu = None;
+        let lang = self.lang;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let Some(&line) = tab.engine.search_matches.get(i) else {
+            return;
+        };
+        tab.engine.follow_tail = false;
+        tab.engine.current_match_idx = Some(i);
+        let current = tab.cursor_line().unwrap_or(0);
+        let target = tab.engine.resolve_goto(&(line + 1).to_string(), current);
+        self.message = goto_target(tab, target, &(line + 1).to_string(), lang);
+    }
+
+    fn draw_results_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.results_menu else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let count = tab.engine.search_matches.len();
+        let height = (count as u16 + 6).min(area.height.saturating_sub(2));
+        let width = area.width.saturating_sub(4).min(120);
+        let scoped = !tab.engine.search_scope().is_all();
+        let title = if scoped {
+            txf(
+                self.lang,
+                "{0} search results in range",
+                &[&group_digits(count)],
+            )
+        } else {
+            txf(self.lang, "{0} search results", &[&group_digits(count)])
+        };
+        let inner = self.dialog(frame, area, (width, height), &title, false);
+        let tab = &self.tabs[self.active];
+        let hits = &tab.engine.search_matches;
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Enter goes to the line, Up/Down PgUp/PgDn choose, Esc closes",
+            ),
+            dim,
+        )];
+        let room = inner.height.saturating_sub(3) as usize;
+        let top = selected.saturating_sub(room.saturating_sub(1));
+        let cells = inner.width as usize;
+        let digits = group_digits(tab.engine.total_lines()).len();
+        let engine = &tab.engine;
+        for (i, &line) in hits.iter().enumerate().skip(top).take(room) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                palette_level(&self.palette, engine, line)
+            };
+            let text = engine.get_line(line).unwrap_or_default();
+            let text = view::sanitize(text.trim_end_matches(['\r', '\n']));
+            let row = format!(" {:>digits$}  {text}", group_digits(line + 1));
+            out.push(Line::styled(head_chars(&row, cells), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// Keys of the export menu: arrows choose, Enter asks for the file.
+    fn on_export_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let Some(selected) = self.export_menu.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => self.export_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                *selected = (*selected + 1).min(EXPORT_CHOICES.len() - 1)
+            }
+            KeyCode::Enter => {
+                let i = *selected;
+                self.choose_export(i);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Export choice `i`: asks for the file when the scope holds lines.
+    fn choose_export(&mut self, i: usize) {
+        self.export_menu = None;
+        let Some(&(scope, format)) = EXPORT_CHOICES.get(i) else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if crate::export::scope_len(&tab.engine, scope) == 0 {
+            self.message = Some(tx(self.lang, "Nothing to export").into());
+            return;
+        }
+        if self.export.is_some() {
+            self.message = Some(tx(self.lang, "An export is still being written").into());
+            return;
+        }
+        self.open_prompt(PromptKind::Export(scope, format));
+    }
+
+    fn draw_export_menu(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.export_menu else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let counts: Vec<usize> = EXPORT_CHOICES
+            .iter()
+            .map(|&(scope, _)| crate::export::scope_len(&tab.engine, scope))
+            .collect();
+        let height = (EXPORT_CHOICES.len() as u16 + 4).min(area.height);
+        let inner = self.dialog(frame, area, (60, height), tx(self.lang, "Export"), false);
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Enter asks for the file, Up/Down choose, Esc closes",
+            ),
+            dim,
+        )];
+        let width = inner.width as usize;
+        for (i, &(scope, format)) in EXPORT_CHOICES.iter().enumerate() {
+            let y = inner.y + 1 + i as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let n = counts[i];
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else if n == 0 {
+                dim
+            } else {
+                Style::default()
+            };
+            let what = match scope {
+                crate::export::Scope::Visible => tx(self.lang, "Visible lines"),
+                crate::export::Scope::Selected => tx(self.lang, "Selected lines"),
+                crate::export::Scope::Matches => tx(self.lang, "Search matches"),
+            };
+            let text = format!(
+                " {:<16} {:<5} {:>12}",
+                what,
+                export_format_name(format),
+                group_digits(n)
+            );
+            out.push(Line::styled(head_chars(&text, width), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// Starts writing `scope` of the active stream as `format` to `text` (a trailing `!`
+    /// replaces an existing file).
+    fn start_export(
+        &mut self,
+        scope: crate::export::Scope,
+        format: crate::export::Format,
+        text: &str,
+    ) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let path = PathBuf::from(text);
+        if path.exists() && !replace {
+            self.message = Some(txf(
+                self.lang,
+                "{0} exists: add ! to replace it",
+                &[&path.display()],
+            ));
+            return;
+        }
+        let config = self.settings.as_ref().map(|s| &s.config);
+        let csv = crate::export::CsvOptions {
+            sep: config
+                .and_then(|c| crate::export::separator_from_name(&c.export_csv_separator))
+                .unwrap_or(b','),
+            bom: config.is_none_or(|c| c.export_csv_bom),
+            protect: config.is_none_or(|c| c.export_csv_protect),
+        };
+        let theme = self.palette.theme;
+        let level_colors = self.palette.level_colors;
+        let tab = &self.tabs[self.active];
+        let engine = &tab.engine;
+        let (writer, max): (Box<dyn crate::export::RowWriter>, Option<usize>) = match format {
+            crate::export::Format::Text => (Box::new(crate::export::TextWriter), None),
+            crate::export::Format::Csv => (Box::new(crate::export::CsvWriter::new(csv)), None),
+            crate::export::Format::Html => (
+                Box::new(crate::export_html::HtmlWriter::new(
+                    engine,
+                    theme,
+                    level_colors,
+                    &stream_title(engine),
+                )),
+                Some(crate::export::HTML_MAX_LINES),
+            ),
+        };
+        match crate::export::ExportJob::start(engine, scope, path, writer, max) {
+            Ok(job) => {
+                self.export = Some((engine.path.clone(), job));
+                self.step_export();
+            }
+            Err(e) => self.message = Some(txf(self.lang, "Export failed: {0}", &[&e])),
+        }
+    }
+
+    /// Writes the running export for a few milliseconds; says how far it got, and where
+    /// it went once done. Closing its stream cancels it.
+    fn step_export(&mut self) {
+        let Some((path, mut job)) = self.export.take() else {
+            return;
+        };
+        let Some(tab) = self.tabs.iter().find(|t| t.engine.path == path) else {
+            job.cancel();
+            return;
+        };
+        if job.step(&tab.engine, Duration::from_millis(20)) {
+            self.message = Some(match &job.error {
+                Some(e) => txf(self.lang, "Export failed: {0}", &[e]),
+                None if job.capped => txf(
+                    self.lang,
+                    "Exported {0} lines to {1} (an HTML page holds at most 200,000)",
+                    &[&group_digits(job.lines), &job.path.display()],
+                ),
+                None => txf(
+                    self.lang,
+                    "Exported {0} lines to {1}",
+                    &[&group_digits(job.lines), &job.path.display()],
+                ),
+            });
+        } else {
+            self.message = Some(txf(
+                self.lang,
+                "Export: {0}%",
+                &[&format!("{:.0}", job.progress() * 100.0)],
+            ));
+            self.export = Some((path, job));
+        }
+    }
+
+    /// The search scope typed in the prompt: a line range (`1200-5000`, `1200-`, `-5000`,
+    /// `1200`), a time range (`14:00..15:30`, an open side allowed), or empty for every
+    /// line.
+    fn submit_search_scope(&mut self, text: &str) {
+        use crate::tail_engine::SearchScope;
+        let scope = if text.is_empty() {
+            Some(SearchScope::All)
+        } else if let Some((from, to)) = text.split_once("..") {
+            Some(SearchScope::Time {
+                from: from.trim().to_string(),
+                to: to.trim().to_string(),
+            })
+        } else {
+            SearchScope::parse_lines(text)
+        };
+        let Some(scope) = scope else {
+            self.message = Some(txf(self.lang, "Cannot read \"{0}\" as a range", &[&text]));
+            return;
+        };
+        let tab = &mut self.tabs[self.active];
+        let (from_ok, to_ok) = tab.engine.set_search_scope(scope);
+        self.message = Some(if !(from_ok && to_ok) {
+            txf(self.lang, "Cannot read \"{0}\" as a range", &[&text])
+        } else if tab.engine.search_scope().is_all() {
+            tx(self.lang, "Search everywhere").into()
+        } else {
+            txf(self.lang, "Search in {0}", &[&text])
+        });
+    }
+
+    /// Copies the selected rows, or the cursor row, as the view shows them: the column
+    /// view's cells separated by tabs, a closed group with its badge.
+    fn copy_as_shown(&mut self) {
+        let tab = &mut self.tabs[self.active];
+        let text = if tab.engine.has_selection() {
+            tab.engine.copy_selection_as_shown()
+        } else {
+            tab.cursor_line().and_then(|line| {
+                tab.engine.select_row(line);
+                let text = tab.engine.copy_selection_as_shown();
+                tab.engine.clear_selection();
+                text
+            })
+        };
+        match text {
+            Some(text) => self.copy_text(&text),
+            None => self.message = Some(tx(self.lang, "Nothing to copy").into()),
+        }
+    }
+
+    /// `Alt+Y`: the selected rows (or the cursor row) as an excerpt in the settings'
+    /// flavour (Markdown, Jira, Slack).
+    fn copy_excerpt(&mut self) {
+        let flavour = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.excerpt_format)
+            .unwrap_or_default();
+        let tab = &mut self.tabs[self.active];
+        let lines = if tab.engine.has_selection() {
+            tab.engine.selected_lines()
+        } else {
+            tab.cursor_line().into_iter().collect()
+        };
+        match crate::export::excerpt(&tab.engine, &lines, flavour) {
+            Some(text) => self.copy_text(&text),
+            None => self.message = Some(tx(self.lang, "Nothing to copy").into()),
+        }
+    }
+
+    /// `Alt+L`: the logging statement that best matches `row` (or the row waiting for the
+    /// index) opened in the editor of Settings; the source folders are indexed first.
+    fn find_log_statement(&mut self, row: Option<String>) {
+        let (roots, editor) = self
+            .settings
+            .as_ref()
+            .map(|s| {
+                (
+                    s.config.source_roots.clone(),
+                    s.config.editor_command.clone(),
+                )
+            })
+            .unwrap_or_default();
+        if let Some(row) = row {
+            if roots.is_empty() {
+                self.message = Some(
+                    tx(
+                        self.lang,
+                        "Set the source folders in Settings (External tools) first",
+                    )
+                    .into(),
+                );
+                return;
+            }
+            if !self.log2src.as_ref().is_some_and(|i| i.covers(&roots)) {
+                self.log2src = Some(crate::log2src::Index::start(roots));
+            }
+            self.log2src_pending = Some(row);
+        }
+        let Some(row) = self.log2src_pending.clone() else {
+            return;
+        };
+        let Some(statements) = self.log2src.as_mut().and_then(|i| i.ready()) else {
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "Indexing the logging statements of the source folders...",
+                )
+                .into(),
+            );
+            return;
+        };
+        self.log2src_pending = None;
+        let found = crate::log2src::matches(statements, &row);
+        self.message = Some(match found.first() {
+            None => tx(
+                self.lang,
+                "No logging statement of the source folders matches this row",
+            )
+            .into(),
+            Some(best) => {
+                let at = format!("{}:{}", best.file.display(), best.line);
+                match crate::source_links::open_in_editor(&editor, &best.file, best.line, None) {
+                    Err(e) => e,
+                    Ok(()) if found.len() > 1 => txf(
+                        self.lang,
+                        "Opened {0} ({1} more statements match)",
+                        &[&at, &(found.len() - 1)],
+                    ),
+                    Ok(()) => txf(self.lang, "Opened {0}", &[&at]),
+                }
+            }
+        });
+    }
+
+    /// Puts `text` on the clipboard and says how many lines went.
+    fn copy_text(&mut self, text: &str) {
+        let lines = text.lines().count();
+        self.message = Some(match self.clipboard.copy(text) {
+            Ok(Copied::System) => txf(self.lang, "Copied {0} lines to the clipboard", &[&lines]),
+            Ok(Copied::Osc52) => txf(
+                self.lang,
+                "Sent {0} lines to the terminal clipboard (OSC 52)",
+                &[&lines],
+            ),
+            Err(e) => txf(self.lang, "Copy failed: {0}", &[&e]),
+        });
+    }
+
+    /// The bookmark report of the active stream (or of every stream) as Markdown, with
+    /// the context and order of the window's last report: saved to `text`, or copied
+    /// when it is empty.
+    fn write_report(&mut self, all: bool, text: &str) {
+        use crate::bookmark_report::{ReportJob, ReportOptions, ReportOrder};
+        let options = match self.settings.as_ref().map(|s| &s.config) {
+            Some(c) => ReportOptions {
+                context: (c.report_context as usize)
+                    .min(crate::bookmark_report::MAX_REPORT_CONTEXT),
+                include_auto: c.report_auto,
+                tags: Vec::new(),
+                order: if c.report_order_time {
+                    ReportOrder::Time
+                } else {
+                    ReportOrder::Stream
+                },
+            },
+            None => ReportOptions::default(),
+        };
+        let engines: Vec<&TailEngine> = if all {
+            self.tabs.iter().map(|t| &t.engine).collect()
+        } else {
+            self.tabs
+                .get(self.active)
+                .map(|t| &t.engine)
+                .into_iter()
+                .collect()
+        };
+        let streams: Vec<_> = engines
+            .iter()
+            .map(|e| e.bookmark_report_stream(stream_title(e), &options))
+            .filter(|s| !s.bookmarks.is_empty())
+            .collect();
+        if streams.is_empty() {
+            self.message = Some(tx(self.lang, "No bookmarks to report").into());
+            return;
+        }
+        let with: Vec<&TailEngine> = engines
+            .into_iter()
+            .filter(|e| e.bookmark_report_count(&options) > 0)
+            .collect();
+        let mut job = ReportJob::new(streams, options);
+        job.step(Duration::MAX, |s, line| {
+            with.get(s)
+                .and_then(|e| e.get_line(line))
+                .map(|t| t.trim_end_matches(['\r', '\n']).to_string())
+        });
+        let now = crate::timestamp::format_millis(crate::timestamp::local_now_millis());
+        let markdown = job.markdown(&now, env!("CARGO_PKG_VERSION"));
+        if text.is_empty() {
+            if markdown.len() > crate::bookmark_report::MAX_CLIPBOARD_BYTES {
+                self.message = Some(
+                    tx(
+                        self.lang,
+                        "The report is too large for the clipboard: save it",
+                    )
+                    .into(),
+                );
+            } else {
+                self.copy_text(&markdown);
+            }
+            return;
+        }
+        use std::io::Write;
+        let path = PathBuf::from(text);
+        let result = crate::paths::create_export_file(&path)
+            .and_then(|mut f| f.write_all(markdown.as_bytes()));
+        self.message = Some(match result {
+            Ok(()) => txf(self.lang, "Report saved to {0}", &[&path.display()]),
+            Err(e) => txf(self.lang, "Could not save the report: {0}", &[&e]),
+        });
+    }
+
     /// Moves the cursor to the first line of piece `i` (the next visible one when the
     /// filters hide it) and closes the list.
     fn go_to_piece(&mut self, i: usize) {
@@ -2290,6 +3032,13 @@ impl App {
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 if let Some((key, _)) = rows.get(selected) {
                     tab.engine.set_plots(plot_first(tab.engine.plots(), key));
+                }
+            }
+            KeyCode::Char('S') | KeyCode::Char('O') => {
+                let stats = key.code == KeyCode::Char('S');
+                if let Some((field, _)) = rows.get(selected).cloned() {
+                    self.columns_menu = None;
+                    self.open_source_view(crate::field_stats::StatsSource::Field(field), stats);
                 }
             }
             KeyCode::Char('f') | KeyCode::Char('F') => {
@@ -2727,8 +3476,13 @@ impl App {
     }
 
     /// `p`: the filter presets of `fasttail.ini`.
+    /// `p`: the presets, pinned first, then the recently applied, then by name.
     fn open_presets(&mut self) {
-        let list = self.settings_mut().config.filter_presets.clone();
+        let all = self.settings_mut().config.filter_presets.clone();
+        let list: Vec<_> = crate::filter_preset::display_order(&all)
+            .into_iter()
+            .map(|i| all[i].clone())
+            .collect();
         self.presets = Some(PresetsDialog::new(&list));
     }
 
@@ -2747,6 +3501,7 @@ impl App {
                 let preset = crate::filter_preset::FilterPreset {
                     state: crate::filter_preset::FilterState::of_engine(&tab.engine, with_time),
                     name,
+                    ..Default::default()
                 };
                 self.message = Some(txf(self.lang, "Preset {0} saved", &[&preset.name]));
                 if let Some(d) = self.presets.as_mut() {
@@ -2786,6 +3541,15 @@ impl App {
         if self.tabs.is_empty() {
             self.message = Some(tx(self.lang, NO_FILE).into());
             return;
+        }
+        // Applied now: among the recent ones next time.
+        if let Some(d) = self.presets.as_mut() {
+            crate::filter_preset::mark_used(&mut d.list.items, index);
+        }
+        if let Some(s) = self.settings.as_mut() {
+            if let Some(i) = crate::filter_preset::find(&s.config.filter_presets, &p.name) {
+                crate::filter_preset::mark_used(&mut s.config.filter_presets, i);
+            }
         }
         if all {
             for tab in &mut self.tabs {
@@ -2827,10 +3591,2128 @@ impl App {
                 self.sync_labels();
             }
             RulesKey::Close => self.rules = None,
+            RulesKey::Import => self.open_prompt(PromptKind::RulesImport),
+            RulesKey::Export => self.open_prompt(PromptKind::RulesExport),
             RulesKey::Moved => {}
             RulesKey::Other => return false,
         }
         true
+    }
+
+    /// Starts or stops the web view and the MCP server as `fasttail.ini` says, and
+    /// answers their requests from the open streams; files the MCP server asked to open
+    /// are opened.
+    fn serve_integrations(&mut self) {
+        let Some(settings) = self.settings.as_mut() else {
+            return;
+        };
+        let config = &mut settings.config;
+        let wake = || -> crate::tail_engine::WakeFn { std::sync::Arc::new(|| {}) };
+        self.web_view.sync(config, wake);
+        self.mcp_view.sync(config, wake);
+        if let Some(e) = self.web_view.error.take() {
+            self.message = Some(txf(self.lang, "Web view: {0}", &[&e]));
+        }
+        if let Some(e) = self.mcp_view.error.take() {
+            self.message = Some(txf(self.lang, "MCP server: {0}", &[&e]));
+        }
+        let refs: Vec<&TailEngine> = self.tabs.iter().map(|t| &t.engine).collect();
+        self.web_view.serve(
+            &refs,
+            &self.palette.theme,
+            self.palette.level_colors,
+            self.lang,
+        );
+        let config = config.clone();
+        let mut refs: Vec<&mut TailEngine> = self.tabs.iter_mut().map(|t| &mut t.engine).collect();
+        let opens = self.mcp_view.serve(&mut refs, &config);
+        for path in opens {
+            self.open_file(&path);
+        }
+    }
+
+    fn open_plugins(&mut self) {
+        self.plugins = Some(PluginsDialog {
+            catalog: crate::plugins::discover(&crate::plugins::default_dir()),
+            selected: 0,
+            confirm: None,
+        });
+    }
+
+    fn on_plugins_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::plugins::{Kind, State};
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let lang = self.lang;
+        let Some(d) = self.plugins.as_mut() else {
+            return false;
+        };
+        if let Some(name) = d.confirm.take() {
+            if key.code == KeyCode::Char('y') {
+                if let Some(p) = d.catalog.find(&name).cloned() {
+                    self.settings_mut().config.plugins.set_enabled(&p, true);
+                    self.plugins_changed();
+                    self.message = Some(txf(lang, "{0} enabled", &[&name]));
+                }
+            }
+            return true;
+        }
+        let rows = d.catalog.plugins.len() + d.catalog.broken.len();
+        match key.code {
+            KeyCode::Esc => self.plugins = None,
+            KeyCode::Up | KeyCode::Char('k') => d.selected = d.selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                d.selected = (d.selected + 1).min(rows.saturating_sub(1))
+            }
+            KeyCode::Char('r') => {
+                d.catalog = crate::plugins::discover(&crate::plugins::default_dir());
+                d.selected = d.selected.min(rows.saturating_sub(1));
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                let Some(p) = d.catalog.plugins.get(d.selected).cloned() else {
+                    return true;
+                };
+                let state = self.settings_mut().config.plugins.state(&p);
+                if state == State::Enabled {
+                    self.settings_mut().config.plugins.set_enabled(&p, false);
+                    self.plugins_changed();
+                    self.message = Some(txf(lang, "{0} disabled", &[&p.name]));
+                } else if p.kind == Kind::Source {
+                    // A program the plugin runs: approved only after its hash is seen.
+                    if let Some(d) = self.plugins.as_mut() {
+                        d.confirm = Some(p.name.clone());
+                    }
+                } else {
+                    self.settings_mut().config.plugins.set_enabled(&p, true);
+                    self.plugins_changed();
+                    self.message = Some(txf(lang, "{0} enabled", &[&p.name]));
+                }
+            }
+            KeyCode::Char('o') => {
+                let source = d
+                    .catalog
+                    .plugins
+                    .get(d.selected)
+                    .filter(|p| p.kind == Kind::Source)
+                    .cloned();
+                match source {
+                    Some(p) if self.settings_mut().config.plugins.state(&p) == State::Enabled => {
+                        self.open_prompt(PromptKind::OpenPlugin)
+                    }
+                    Some(_) => {
+                        self.message = Some(tx(lang, "Enable the plugin first (Space)").into())
+                    }
+                    None => {}
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// After a change of the approvals: saved, the formats of the plugins loaded again,
+    /// and the plugin streams no longer enabled stopped.
+    fn plugins_changed(&mut self) {
+        use crate::plugin_source::{Block, Status};
+        self.save_config();
+        let approvals = self.settings_mut().config.plugins.clone();
+        crate::log_format::load_with_plugins(&approvals);
+        for tab in &mut self.tabs {
+            tab.engine.reload_field_parser();
+        }
+        let Some(catalog) = self.plugins.as_ref().map(|d| d.catalog.clone()) else {
+            return;
+        };
+        for s in self
+            .tabs
+            .iter_mut()
+            .filter_map(|t| t.engine.plugin.as_mut())
+        {
+            if !matches!(s.status(), Status::Running | Status::Restarting { .. }) {
+                continue;
+            }
+            let block = match catalog.find(&s.uri.name).map(|p| approvals.state(p)) {
+                Some(crate::plugins::State::Enabled) => continue,
+                Some(crate::plugins::State::Changed) => Block::Changed,
+                Some(crate::plugins::State::Disabled) => Block::NotEnabled,
+                None => Block::Missing,
+            };
+            s.block(block);
+        }
+    }
+
+    /// Opens the source plugin of `text` (`plugin://name?key=value`) as a stream, its
+    /// values given to the program (secrets included, which the stream's name leaves out).
+    fn open_plugin(&mut self, text: &str) {
+        let Some(uri) = crate::plugins::PluginUri::parse(Path::new(text.trim())) else {
+            self.message = Some(txf(self.lang, "Not a plugin URI: {0}", &[&text]));
+            return;
+        };
+        let catalog = crate::plugins::discover(&crate::plugins::default_dir());
+        let plugin = catalog.find(&uri.name).cloned();
+        let path = PathBuf::from(uri.to_uri(plugin.as_ref()));
+        self.open_file(&path);
+        let config_dir = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        let approvals = self.settings_mut().config.plugins.clone();
+        let lang = self.lang;
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.engine.path == path) {
+            if let Some(s) = tab.engine.plugin.as_mut() {
+                if s.status() != crate::plugin_source::Status::Running
+                    && s.start(plugin.as_ref(), &approvals, Some(uri.values), &config_dir)
+                        .is_err()
+                {
+                    self.message = Some(tx(lang, "The plugin needs other values").into());
+                }
+            }
+        }
+        self.plugins = None;
+    }
+
+    /// The plugins found: name, kind, version and whether it runs; the folders that did
+    /// not load in the error colour; a source plugin's hash before it is approved.
+    fn draw_plugins(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::plugins::{Kind, State};
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let approvals = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.plugins.clone())
+            .unwrap_or_default();
+        let Some(d) = self.plugins.as_ref() else {
+            return;
+        };
+        let rows = d.catalog.plugins.len() + d.catalog.broken.len();
+        let height = (rows as u16 + 7).min(area.height);
+        let inner = self.dialog(frame, area, (84, height), tx(self.lang, "Plugins"), false);
+        let Some(d) = self.plugins.as_ref() else {
+            return;
+        };
+        let cells = inner.width as usize;
+        let mut out = vec![Line::styled(
+            tx(
+                self.lang,
+                "Space enables or disables, o opens a source plugin, r reads the folder again, Esc closes",
+            ),
+            dim,
+        )];
+        out.push(Line::styled(
+            head_chars(&d.catalog.dir.display().to_string(), cells),
+            dim,
+        ));
+        if let Some(name) = &d.confirm {
+            let hash = d
+                .catalog
+                .find(name)
+                .map(|p| p.hash.clone())
+                .unwrap_or_default();
+            out.push(Line::styled(
+                head_chars(
+                    &txf(
+                        self.lang,
+                        "y runs the programs of {0}, any other key does not (manifest {1})",
+                        &[name, &hash],
+                    ),
+                    cells,
+                ),
+                error,
+            ));
+        }
+        if rows == 0 {
+            out.push(Line::styled(tx(self.lang, "(no plugin installed)"), dim));
+        }
+        for (i, p) in d.catalog.plugins.iter().enumerate() {
+            let state = match approvals.state(p) {
+                State::Enabled => tx(self.lang, "enabled"),
+                State::Disabled => tx(self.lang, "disabled"),
+                State::Changed => tx(self.lang, "changed since approved"),
+            };
+            let kind = match p.kind {
+                Kind::Source => tx(self.lang, "source"),
+                Kind::Formats => tx(self.lang, "formats"),
+            };
+            let style = if i == d.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let text = format!(
+                " {:<24} {:<8} {:<10} {:<22} {}",
+                head_chars(&p.name, 24),
+                kind,
+                head_chars(&p.version, 10),
+                state,
+                p.description
+            );
+            out.push(Line::styled(head_chars(&text, cells), style));
+        }
+        for (j, b) in d.catalog.broken.iter().enumerate() {
+            let i = d.catalog.plugins.len() + j;
+            let style = if i == d.selected {
+                error.add_modifier(Modifier::REVERSED)
+            } else {
+                error
+            };
+            let name = b
+                .dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            out.push(Line::styled(
+                head_chars(&format!(" {name}: {}", b.error), cells),
+                style,
+            ));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// A boolean setting of the palette flipped, applied and saved.
+    fn toggle_setting(&mut self, setting: crate::actions::BoolSetting) {
+        let meta = crate::actions::bool_setting(setting);
+        let config = &mut self.settings_mut().config;
+        let on = !(meta.get)(config);
+        (meta.set)(config, on);
+        self.apply_running_config();
+        self.save_config();
+        let name = crate::i18n::t(self.lang, meta.name);
+        self.message = Some(if on {
+            txf(self.lang, "{0}: on", &[&name])
+        } else {
+            txf(self.lang, "{0}: off", &[&name])
+        });
+    }
+
+    /// Sets the `[shortcuts]` entry of the terminal action `name` (`None`: its default
+    /// keys again), then rebuilds the keys and saves.
+    fn set_shortcut(&mut self, name: &str, keys: Option<String>) {
+        let key = format!("{}{name}", keys::TUI_PREFIX);
+        let config = &mut self.settings_mut().config;
+        match keys {
+            Some(k) => {
+                config.shortcuts.insert(key, k);
+            }
+            None => {
+                config.shortcuts.remove(&key);
+            }
+        }
+        self.keymap = keys::KeyMap::build(&self.settings_mut().config.shortcuts);
+        self.save_config();
+    }
+
+    fn on_keys_dialog_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let Some(d) = self.keys_dialog.as_mut() else {
+            return false;
+        };
+        let last = keys::REMAPPABLE.len() - 1;
+        let name = keys::REMAPPABLE[d.selected.min(last)].0;
+        if d.capturing {
+            d.capturing = false;
+            if key.code == KeyCode::Esc {
+                d.notice = None;
+                return true;
+            }
+            let k = keys::TuiKey::from_event(key);
+            let holder = self.keymap.holder(k).filter(|h| *h != name);
+            // The action that had the key keeps its other keys.
+            if let Some(other) = holder {
+                let rest: Vec<String> = self
+                    .keymap
+                    .keys_text(other)
+                    .0
+                    .split_whitespace()
+                    .filter(|t| keys::TuiKey::parse(t) != Some(k))
+                    .map(str::to_string)
+                    .collect();
+                self.set_shortcut(other, Some(rest.join(", ")));
+            }
+            self.set_shortcut(name, Some(k.text()));
+            let lang = self.lang;
+            if let Some(d) = self.keys_dialog.as_mut() {
+                d.notice = Some(match holder {
+                    Some(other) => txf(
+                        lang,
+                        "{0}: {1} (taken from {2})",
+                        &[&name, &k.text(), &other],
+                    ),
+                    None => format!("{name}: {}", k.text()),
+                });
+            }
+            return true;
+        }
+        match key.code {
+            KeyCode::Esc => self.keys_dialog = None,
+            KeyCode::Up | KeyCode::Char('k') => d.selected = d.selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => d.selected = (d.selected + 1).min(last),
+            KeyCode::PageUp => d.selected = d.selected.saturating_sub(10),
+            KeyCode::PageDown => d.selected = (d.selected + 10).min(last),
+            KeyCode::Home => d.selected = 0,
+            KeyCode::End => d.selected = last,
+            KeyCode::Enter => {
+                d.capturing = true;
+                d.notice = Some(txf(
+                    self.lang,
+                    "Press the new key for {0} (Esc cancels)",
+                    &[&name],
+                ));
+            }
+            KeyCode::Delete | KeyCode::Char('d') => {
+                d.notice = Some(txf(self.lang, "{0}: no key", &[&name]));
+                self.set_shortcut(name, Some(String::new()));
+            }
+            KeyCode::Char('r') => {
+                d.notice = Some(txf(self.lang, "{0}: default keys", &[&name]));
+                self.set_shortcut(name, None);
+            }
+            KeyCode::Char('R') => {
+                self.settings_mut()
+                    .config
+                    .shortcuts
+                    .retain(|k, _| !k.starts_with(keys::TUI_PREFIX));
+                self.keymap = keys::KeyMap::build(&self.settings_mut().config.shortcuts);
+                self.save_config();
+                if let Some(d) = self.keys_dialog.as_mut() {
+                    d.notice = Some(tx(self.lang, "Every key is back to its default").into());
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The remappable keys: the action's name, its keys (`*` when set in `[shortcuts]`).
+    fn draw_keys_dialog(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let accent = Style::default().fg(self.palette.accent());
+        let height = area.height.saturating_sub(2).clamp(8, 40);
+        let inner = self.dialog(frame, area, (64, height), tx(self.lang, "Keys"), false);
+        let lang = self.lang;
+        let notices = self.keymap.notices.clone();
+        let rows: Vec<(String, bool)> = keys::REMAPPABLE
+            .iter()
+            .map(|(n, _, _)| self.keymap.keys_text(n))
+            .collect();
+        let Some(d) = self.keys_dialog.as_mut() else {
+            return;
+        };
+        let mut out = vec![Line::styled(
+            tx(
+                lang,
+                "Enter records a key, d no key, r default, R all defaults, Esc closes",
+            ),
+            dim,
+        )];
+        let info = d.notice.clone().or_else(|| notices.first().cloned());
+        out.push(Line::styled(
+            head_chars(info.as_deref().unwrap_or(""), inner.width as usize),
+            accent,
+        ));
+        let room = (inner.height as usize).saturating_sub(out.len());
+        if d.selected < d.top {
+            d.top = d.selected;
+        } else if room > 0 && d.selected >= d.top + room {
+            d.top = d.selected + 1 - room;
+        }
+        for (i, ((name, _, _), (text, set))) in keys::REMAPPABLE
+            .iter()
+            .zip(&rows)
+            .enumerate()
+            .skip(d.top)
+            .take(room)
+        {
+            let style = if i == d.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else if *set {
+                accent
+            } else {
+                Style::default()
+            };
+            let mark = if *set { '*' } else { ' ' };
+            let shown = if text.is_empty() { "-" } else { text.as_str() };
+            out.push(Line::styled(format!(" {name:<22}{mark} {shown}"), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// Opens the analysis view `kind` on the focused stream: Statistics and Operations ask
+    /// for their field, Explain for its span, Patterns start learning at once.
+    fn open_analysis(&mut self, kind: crate::tui::analysis::Kind) {
+        use crate::tui::analysis::{AnalysisView, Kind};
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        match kind {
+            Kind::Stats => self.open_prompt(PromptKind::StatsField),
+            Kind::Operations => self.open_prompt(PromptKind::OpsField),
+            Kind::Explain => self.open_prompt(PromptKind::ExplainSpan),
+            Kind::Patterns => {
+                if tab.engine.patterns.is_none() {
+                    tab.engine.open_patterns();
+                }
+                self.analysis = Some(AnalysisView::new(kind, tab.engine.path.clone()));
+            }
+            Kind::Query => {
+                let mut v = AnalysisView::new(kind, tab.engine.path.clone());
+                if let Some(q) = &tab.engine.query {
+                    v.query = TextField::new(&q.text);
+                }
+                self.analysis = Some(v);
+            }
+        }
+    }
+
+    /// The Statistics (`stats`) or the Operations of the focused stream over `source`.
+    fn open_source_view(&mut self, source: crate::field_stats::StatsSource, stats: bool) {
+        use crate::tui::analysis::{AnalysisView, Kind};
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let kind = if stats {
+            tab.engine
+                .open_stats(source, crate::field_stats::SliceChoice::Auto);
+            Kind::Stats
+        } else {
+            tab.engine
+                .open_operations(source, crate::operations::NameSource::Message);
+            Kind::Operations
+        };
+        self.analysis = Some(AnalysisView::new(kind, tab.engine.path.clone()));
+    }
+
+    /// The palette's workspace commands, with or without a stream open: the recent files
+    /// and sessions, saving the session or the default one. Returns whether `action` was
+    /// one of them.
+    fn apply_workspace_action(&mut self, action: Action) -> bool {
+        match action {
+            Action::RecentFiles => {
+                let empty = self
+                    .settings
+                    .as_ref()
+                    .is_none_or(|s| s.config.recent_files.is_empty());
+                if empty {
+                    self.message = Some(tx(self.lang, "No recent files").into());
+                } else {
+                    self.recent_menu = Some(0);
+                }
+            }
+            Action::ClearRecentFiles => {
+                if let Some(s) = self.settings.as_mut() {
+                    s.config.recent_files.clear();
+                }
+                self.message = Some(tx(self.lang, "Recent files cleared").into());
+                self.save_config();
+            }
+            Action::ClearRecentSessions => {
+                if let Some(s) = self.settings.as_mut() {
+                    s.config.recent_sessions.clear();
+                }
+                self.message = Some(tx(self.lang, "Recent sessions cleared").into());
+                self.save_config();
+            }
+            Action::SaveCurrentSession => {
+                match self
+                    .settings
+                    .as_ref()
+                    .and_then(|s| s.config.current_session.clone())
+                {
+                    Some(file) => self.save_session(&file),
+                    None => self.open_prompt(PromptKind::SaveSession),
+                }
+            }
+            Action::SaveDefaultSession => {
+                // The workspace becomes the default session: the named one is left.
+                if let Some(s) = self.settings.as_mut() {
+                    s.config.current_session = None;
+                }
+                self.dock_dirty = true;
+                self.save_config();
+                if self.save_error.is_none() {
+                    self.message = Some(tx(self.lang, "Saved as the default session").into());
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn on_recent_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let files: Vec<PathBuf> = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.recent_files.clone())
+            .unwrap_or_default();
+        let Some(selected) = self.recent_menu.as_mut() else {
+            return false;
+        };
+        let last = files.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => self.recent_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(last),
+            KeyCode::Enter => {
+                let at = *selected;
+                self.recent_menu = None;
+                if let Some(path) = files.get(at) {
+                    self.open_file(path);
+                }
+            }
+            KeyCode::Delete | KeyCode::Char('d') => {
+                let at = *selected;
+                if let Some(s) = self.settings.as_mut() {
+                    if at < s.config.recent_files.len() {
+                        s.config.recent_files.remove(at);
+                    }
+                    let left = s.config.recent_files.len();
+                    if left == 0 {
+                        self.recent_menu = None;
+                    } else if let Some(sel) = self.recent_menu.as_mut() {
+                        *sel = (*sel).min(left - 1);
+                    }
+                }
+                self.save_config();
+            }
+            KeyCode::Char('c') => {
+                self.recent_menu = None;
+                self.apply_workspace_action(Action::ClearRecentFiles);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The stream information (`Alt+I`), labels in the window's words.
+    fn draw_info(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::stream_info::Value;
+        let Some(path) = self.info_view.clone() else {
+            return;
+        };
+        let Some(i) = self.tab_index(&path) else {
+            self.info_view = None;
+            return;
+        };
+        let lang = self.lang;
+        let rows: Vec<(String, String)> = crate::stream_info::rows(&self.tabs[i].engine)
+            .into_iter()
+            .map(|(item, value)| {
+                let text = match value {
+                    Value::Text(s) => s,
+                    Value::Key(k) => crate::i18n::t(lang, k).to_string(),
+                };
+                (crate::i18n::t(lang, item.key()).to_string(), text)
+            })
+            .collect();
+        let label_w = rows.iter().map(|(l, _)| width(l)).max().unwrap_or(10);
+        let value_w = rows.iter().map(|(_, v)| width(v)).max().unwrap_or(10);
+        let w = (label_w + value_w + 6).clamp(40, area.width.saturating_sub(4) as usize) as u16;
+        let title = format!(
+            "{} · {}",
+            crate::i18n::t(lang, "info_title"),
+            self.tabs[i].title
+        );
+        let inner = self.dialog(frame, area, (w, rows.len() as u16 + 3), &title, false);
+        let dim = Style::default().fg(self.palette.dim());
+        let out: Vec<Line> = rows
+            .into_iter()
+            .map(|(l, v)| {
+                Line::from(vec![
+                    Span::styled(format!(" {l:<label_w$}  "), dim),
+                    Span::raw(v),
+                ])
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    fn draw_recent(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.recent_menu else {
+            return;
+        };
+        let files: Vec<PathBuf> = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.recent_files.clone())
+            .unwrap_or_default();
+        let help = tx(
+            self.lang,
+            "Enter opens, Delete removes, c clears the list, Esc closes",
+        );
+        let width = files
+            .iter()
+            .map(|p| p.display().to_string().chars().count() as u16 + 4)
+            .chain(std::iter::once(help.chars().count() as u16 + 4))
+            .max()
+            .unwrap_or(40)
+            .clamp(40, area.width.saturating_sub(4).max(40));
+        let room = area.height.saturating_sub(6).max(1) as usize;
+        let shown = files.len().min(room);
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, shown as u16 + 4),
+            tx(self.lang, "Recent files"),
+            false,
+        );
+        let top = selected.saturating_sub(shown.saturating_sub(1));
+        let mut out = vec![Line::styled(help, dim)];
+        for (i, path) in files.iter().enumerate().skip(top).take(shown) {
+            let y = inner.y + 1 + (i - top) as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            out.push(Line::styled(format!(" {}", path.display()), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// `Alt+M`: on a merged view, its sources on and off; elsewhere the open streams with
+    /// timestamps to merge, the focused one checked.
+    fn open_merge(&mut self) {
+        use crate::tui::merge::MergeDialog;
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if let Some(m) = &tab.engine.merged {
+            let sources = m
+                .sources
+                .iter()
+                .map(|s| (s.path.clone(), s.name.clone(), s.enabled))
+                .collect();
+            self.merge = Some(MergeDialog::sources(tab.engine.path.clone(), sources));
+            return;
+        }
+        let streams: Vec<(PathBuf, String)> = self
+            .tabs
+            .iter()
+            .filter(|t| {
+                t.engine.merged.is_none() && crate::merged_stream::has_timestamps(&t.engine)
+            })
+            .take(crate::merged_stream::MAX_SOURCES)
+            .map(|t| (t.engine.path.clone(), t.title.clone()))
+            .collect();
+        if streams.len() < 2 {
+            self.message =
+                Some(tx(self.lang, "Merging needs two open streams with timestamps").into());
+            return;
+        }
+        let focused = tab.engine.path.clone();
+        self.merge = Some(MergeDialog::new(streams, &[focused]));
+    }
+
+    fn on_merge_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::merge::MergeKey;
+        let Some(d) = self.merge.as_mut() else {
+            return false;
+        };
+        match d.on_key(key) {
+            MergeKey::Close => self.merge = None,
+            MergeKey::Merge(paths) if paths.len() < 2 => {
+                self.message = Some(tx(self.lang, "Check two streams or more (Space)").into());
+            }
+            MergeKey::Merge(paths) => {
+                self.merge = None;
+                self.open_merged_view(&paths);
+            }
+            MergeKey::Source(i, on) => {
+                let view = d.view.clone();
+                if let Some(t) = view.and_then(|v| self.tab_index(&v)) {
+                    if let Some(m) = self.tabs[t].engine.merged.as_mut() {
+                        m.set_enabled(i, on);
+                    }
+                }
+            }
+            MergeKey::Moved => {}
+            MergeKey::Other => return false,
+        }
+        true
+    }
+
+    /// `Alt+T`: the focused stream's filter (include / exclude, level, time range, hidden
+    /// lines) frozen into a new tab of the same file that follows it, as the window's
+    /// "Open filter as new tab"; the source keeps its filter.
+    fn open_filter_tab(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        if tab.engine.time_range_pending() {
+            self.message = Some(tx(self.lang, "The time range is not applied yet").into());
+            return;
+        }
+        let filter = crate::filter_tab::FrozenFilter::of(&tab.engine);
+        if !filter.is_active() {
+            self.message = Some(
+                tx(
+                    self.lang,
+                    "No filter to open as a tab: set an include, exclude, level or time filter first",
+                )
+                .into(),
+            );
+            return;
+        }
+        let n =
+            crate::filter_tab::next_number(self.tabs.iter().map(|t| &t.engine), &tab.engine.path);
+        match self.filter_tab_engine(self.active, n, filter) {
+            Ok(engine) => self.add_engine_tab(engine),
+            Err(e) => self.message = Some(e),
+        }
+    }
+
+    /// The engine of filter tab `n` of the stream at `idx`, with the global filter and the
+    /// quick labels.
+    fn filter_tab_engine(
+        &self,
+        idx: usize,
+        n: usize,
+        filter: crate::filter_tab::FrozenFilter,
+    ) -> Result<TailEngine, String> {
+        let default_config;
+        let config = match &self.settings {
+            Some(s) => &s.config,
+            None => {
+                default_config = crate::config::FastTailConfig::default();
+                &default_config
+            }
+        };
+        let mut engine = crate::filter_tab::open_tab(&self.tabs[idx].engine, n, filter, config)?;
+        if let Some(s) = &self.settings {
+            if s.global.is_some() {
+                engine.set_global_filter(s.global.clone());
+            }
+        }
+        engine.set_quick_labels(&self.quick_labels);
+        Ok(engine)
+    }
+
+    /// A filter tab asked to show a line in its source (`Ctrl+K`): the source, opened
+    /// again when it was closed, shows it in context.
+    fn apply_source_context(&mut self) {
+        let Some(d) = self
+            .tabs
+            .iter()
+            .position(|t| t.engine.source_context_request.is_some())
+        else {
+            return;
+        };
+        let line = self.tabs[d]
+            .engine
+            .source_context_request
+            .take()
+            .unwrap_or(0);
+        let Some(source) = self.tabs[d]
+            .engine
+            .derived
+            .as_ref()
+            .map(|f| f.source.clone())
+        else {
+            return;
+        };
+        if self.tab_index(&source).is_none() {
+            self.open_file(&source);
+        }
+        let Some(s) = self.tab_index(&source) else {
+            return;
+        };
+        self.focus_tab(s);
+        let tab = &mut self.tabs[s];
+        if !tab.engine.enter_context(line) {
+            tab.engine.scroll_to_line = Some(line);
+        }
+        tab.engine.follow_tail = false;
+    }
+
+    /// A merged view of the open streams `sources` in a new tab of the focused window.
+    fn open_merged_view(&mut self, sources: &[PathBuf]) {
+        let n = crate::merged_stream::next_number(self.tabs.iter().map(|t| &t.engine));
+        match self.merged_engine(n, sources) {
+            Ok(engine) => self.add_engine_tab(engine),
+            Err(e) => self.message = Some(e),
+        }
+    }
+
+    /// The engine of merged view `n` of the open streams `sources`, with the global
+    /// filter and the quick labels.
+    fn merged_engine(&self, n: usize, sources: &[PathBuf]) -> Result<TailEngine, String> {
+        let found: Vec<&TailEngine> = sources
+            .iter()
+            .filter_map(|p| self.tab_index(p).map(|i| &self.tabs[i].engine))
+            .collect();
+        if found.len() < 2 {
+            return Err(tx(self.lang, "Check two streams or more (Space)").into());
+        }
+        let default_config;
+        let config = match &self.settings {
+            Some(s) => &s.config,
+            None => {
+                default_config = crate::config::FastTailConfig::default();
+                &default_config
+            }
+        };
+        let mut engine = crate::merged_stream::open_view(n, &found, config)
+            .map_err(|e| txf(self.lang, "Cannot merge: {0}", &[&e]))?;
+        if let Some(s) = &self.settings {
+            if s.global.is_some() {
+                engine.set_global_filter(s.global.clone());
+            }
+        }
+        engine.set_quick_labels(&self.quick_labels);
+        Ok(engine)
+    }
+
+    /// Rebuilds the merged views saved as `views` (`merged:<n>:<sources>`, from the
+    /// workspace or a session) from their open sources, with the state saved for them;
+    /// a view with fewer than two of its sources open is skipped. The tabs are not placed:
+    /// `restore_dock` follows.
+    pub fn restore_views(&mut self, views: &[PathBuf]) {
+        // The filter tabs first: a merged view may read one.
+        for identity in views {
+            let Some((n, source)) = crate::filter_tab::parse_identity(identity) else {
+                continue;
+            };
+            let Some(filter) = self
+                .settings
+                .as_ref()
+                .and_then(|s| s.config.stream_state_for(identity))
+                .and_then(|state| state.frozen.clone())
+            else {
+                continue;
+            };
+            let Some(idx) = self.tabs.iter().position(|t| {
+                t.engine.derived.is_none()
+                    && crate::paths::paths_equal(
+                        &crate::workspace::persisted_path(&t.engine),
+                        &source,
+                    )
+            }) else {
+                continue;
+            };
+            let Ok(mut engine) = self.filter_tab_engine(idx, n, filter) else {
+                continue;
+            };
+            if let Some(s) = &self.settings {
+                crate::workspace::restore_stream(&mut engine, &s.config, identity);
+            }
+            self.tabs.push(Tab::new(engine));
+        }
+        for identity in views {
+            let Some((n, saved)) = crate::merged_stream::parse_identity(identity) else {
+                continue;
+            };
+            let sources: Vec<PathBuf> = saved
+                .iter()
+                .filter_map(|s| {
+                    self.tabs
+                        .iter()
+                        .find(|t| {
+                            crate::paths::paths_equal(
+                                &crate::workspace::persisted_path(&t.engine),
+                                s,
+                            )
+                        })
+                        .map(|t| t.engine.path.clone())
+                })
+                .collect();
+            let Ok(mut engine) = self.merged_engine(n, &sources) else {
+                continue;
+            };
+            if let Some(s) = &self.settings {
+                crate::workspace::restore_stream(&mut engine, &s.config, identity);
+            }
+            self.tabs.push(Tab::new(engine));
+        }
+    }
+
+    fn draw_merge(&mut self, frame: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(d) = self.merge.clone() else {
+            return;
+        };
+        let (title, help) = if d.view.is_some() {
+            (
+                tx(self.lang, "Merged view sources"),
+                tx(self.lang, "Space turns a source on or off, Esc closes"),
+            )
+        } else {
+            (
+                tx(self.lang, "Merged view of streams"),
+                tx(self.lang, "Space checks, Enter merges by time, Esc closes"),
+            )
+        };
+        let width = d
+            .items
+            .iter()
+            .map(|i| unicode_width::UnicodeWidthStr::width(i.name.as_str()) as u16 + 8)
+            .chain(std::iter::once(
+                unicode_width::UnicodeWidthStr::width(help) as u16 + 4,
+            ))
+            .max()
+            .unwrap_or(40)
+            .clamp(40, 100);
+        let inner = self.dialog(frame, area, (width, d.items.len() as u16 + 4), title, false);
+        let mut out = vec![Line::styled(help, dim)];
+        for (i, item) in d.items.iter().enumerate() {
+            let y = inner.y + 1 + i as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == d.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().fg(source_color(i))
+            };
+            let mark = if item.checked { "[x]" } else { "[ ]" };
+            out.push(Line::styled(format!(" {mark} {}", item.name), style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    fn on_analysis_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::analysis::Kind;
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return false;
+        }
+        let Some(selected) = self.analysis_menu.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => self.analysis_menu = None,
+            KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                *selected = (*selected + 1).min(Kind::ALL.len() - 1)
+            }
+            KeyCode::Enter => {
+                let kind = Kind::ALL[*selected];
+                self.analysis_menu = None;
+                self.open_analysis(kind);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn draw_analysis_menu(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::tui::analysis::Kind;
+        let dim = Style::default().fg(self.palette.dim());
+        let Some(selected) = self.analysis_menu else {
+            return;
+        };
+        let inner = self.dialog(
+            frame,
+            area,
+            (48, Kind::ALL.len() as u16 + 4),
+            tx(self.lang, "Analysis"),
+            false,
+        );
+        let mut out = vec![Line::styled(
+            tx(self.lang, "Enter opens, Up/Down choose, Esc closes"),
+            dim,
+        )];
+        for (i, kind) in Kind::ALL.iter().enumerate() {
+            let y = inner.y + 1 + i as u16;
+            self.hits
+                .list_items
+                .push((Rect::new(inner.x, y, inner.width, 1), i));
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            out.push(Line::styled(
+                format!(" {}", tx(self.lang, kind.title())),
+                style,
+            ));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// The tab the analysis view reads, when it is still open.
+    fn analysis_tab(&self) -> Option<usize> {
+        let path = &self.analysis.as_ref()?.path;
+        self.tabs.iter().position(|t| &t.engine.path == path)
+    }
+
+    fn on_analysis_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::analysis::{build, AnalysisKey, Kind, RowAction};
+        let Some(i) = self.analysis_tab() else {
+            self.analysis = None;
+            return true;
+        };
+        let (lang, ascii) = (self.lang, self.palette.ascii);
+        let Some(kind) = self.analysis.as_ref().map(|v| v.kind) else {
+            return false;
+        };
+        let table = build(kind, &mut self.tabs[i].engine, lang, ascii);
+        let Some(v) = self.analysis.as_mut() else {
+            return false;
+        };
+        match v.on_key(key, &table) {
+            AnalysisKey::Moved => {}
+            AnalysisKey::Other => return false,
+            AnalysisKey::Close => {
+                // Patterns and Explain keep counting only while shown, as in the window.
+                let e = &mut self.tabs[i].engine;
+                match kind {
+                    Kind::Stats => e.close_stats(),
+                    Kind::Operations => e.close_operations(),
+                    Kind::Explain => e.close_explain(),
+                    Kind::Patterns if e.pattern_filter().is_none() => e.close_patterns(),
+                    _ => {}
+                }
+                self.analysis = None;
+            }
+            AnalysisKey::RunQuery(text) => {
+                if !text.is_empty() {
+                    self.tabs[i].engine.run_query(&text);
+                    if let Some(v) = self.analysis.as_mut() {
+                        v.editing = false;
+                        v.selected = 0;
+                    }
+                }
+            }
+            AnalysisKey::Activate(action, exclude) => {
+                let e = &mut self.tabs[i].engine;
+                match action {
+                    RowAction::None => {}
+                    RowAction::Value(value) => {
+                        if let Some(source) = e.stats.as_ref().map(|s| s.source.clone()) {
+                            let term =
+                                crate::field_stats::filter_term(&source, &value, e.filter_is_regex);
+                            e.add_filter_term(&term, !exclude);
+                            self.message = Some(if exclude {
+                                txf(lang, "Excluded {0}", &[&term])
+                            } else {
+                                txf(lang, "Included {0}", &[&term])
+                            });
+                        }
+                    }
+                    RowAction::Pair(key, value) => {
+                        let source = crate::field_stats::StatsSource::Field(key);
+                        let term =
+                            crate::field_stats::filter_term(&source, &value, e.filter_is_regex);
+                        e.add_filter_term(&term, !exclude);
+                        self.message = Some(if exclude {
+                            txf(lang, "Excluded {0}", &[&term])
+                        } else {
+                            txf(lang, "Included {0}", &[&term])
+                        });
+                    }
+                    RowAction::Pattern(id) => {
+                        let (mut inc, mut exc) = e
+                            .pattern_filter()
+                            .map(|f| (f.include.clone(), f.exclude.clone()))
+                            .unwrap_or_default();
+                        if exclude {
+                            inc.retain(|&x| x != id);
+                            if !exc.contains(&id) {
+                                exc.push(id);
+                            }
+                        } else {
+                            inc = vec![id];
+                            exc.clear();
+                        }
+                        e.set_pattern_filter(inc, exc);
+                        self.analysis = None;
+                        self.tabs[i].top = 0;
+                    }
+                    RowAction::Line(line) => {
+                        self.analysis = None;
+                        self.focus_tab(i);
+                        let tab = &mut self.tabs[i];
+                        tab.engine.follow_tail = false;
+                        let current = tab.cursor_line().unwrap_or(0);
+                        let target = tab.engine.resolve_goto(&(line + 1).to_string(), current);
+                        self.message = goto_target(tab, target, &(line + 1).to_string(), lang);
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// The analysis view over the windows: its summary, then the table with its header,
+    /// the selected row reversed, numbers to the right.
+    fn draw_analysis(&mut self, frame: &mut Frame, area: Rect) {
+        use crate::tui::analysis::{build, Kind};
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let Some(i) = self.analysis_tab() else {
+            self.analysis = None;
+            return;
+        };
+        let Some(kind) = self.analysis.as_ref().map(|v| v.kind) else {
+            return;
+        };
+        let (lang, ascii) = (self.lang, palette.ascii);
+        let table = build(kind, &mut self.tabs[i].engine, lang, ascii);
+        let title = format!(
+            "{} - {}",
+            tx(lang, kind.title()),
+            stream_title(&self.tabs[i].engine)
+        );
+        let inner = self.dialog(frame, area, (area.width, area.height), &title, false);
+        let Some(v) = self.analysis.as_mut() else {
+            return;
+        };
+        let width = inner.width as usize;
+        let mut out = Vec::new();
+        let mut cursor = None;
+        if kind == Kind::Query {
+            let (shown, x) = v.query.view(width.saturating_sub(2));
+            let style = if v.editing {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            if v.editing {
+                cursor = Some((inner.x + 2 + x as u16, inner.y));
+            }
+            out.push(Line::from(vec![
+                Span::styled("> ", dim),
+                Span::styled(
+                    format!(
+                        "{:<w$}",
+                        view::sanitize(&shown),
+                        w = width.saturating_sub(2)
+                    ),
+                    style,
+                ),
+            ]));
+        }
+        let hint = if v.narrowing || !v.narrow.text().is_empty() {
+            format!("/{}", v.narrow.text())
+        } else if kind == Kind::Query && v.editing {
+            tx(
+                lang,
+                "Enter runs the query, Tab goes to the rows, Esc closes",
+            )
+            .to_string()
+        } else {
+            tx(
+                lang,
+                "Enter filters or goes to the line, x excludes, s/S sort, / narrows, Esc closes",
+            )
+            .to_string()
+        };
+        out.push(Line::styled(head_chars(&hint, width), dim));
+        for line in &table.summary {
+            out.push(Line::styled(head_chars(line, width), dim));
+        }
+        if let Some(e) = &table.error {
+            out.push(Line::styled(head_chars(e, width), error));
+        }
+        let shown = v.shown(&table);
+        // Column widths: as wide as the widest cell on screen, the last takes the rest.
+        let n = table.header.len();
+        if n > 0 {
+            let room = (inner.height as usize).saturating_sub(out.len() + 1);
+            v.page = room.max(1);
+            v.selected = v.selected.min(shown.len().saturating_sub(1));
+            if v.selected < v.top {
+                v.top = v.selected;
+            } else if v.selected >= v.top + v.page {
+                v.top = v.selected + 1 - v.page;
+            }
+            let rows: Vec<usize> = shown.iter().skip(v.top).take(room).copied().collect();
+            let cell_w = |s: &str| unicode_width::UnicodeWidthStr::width(s);
+            let mut widths: Vec<usize> = (0..n)
+                .map(|c| {
+                    rows.iter()
+                        .filter_map(|&r| table.rows[r].cells.get(c))
+                        .map(|s| cell_w(s))
+                        .chain(std::iter::once(cell_w(&table.header[c])))
+                        .max()
+                        .unwrap_or(1)
+                        .min(48)
+                })
+                .collect();
+            let fixed: usize = widths[..n - 1].iter().map(|w| w + 2).sum();
+            widths[n - 1] = width.saturating_sub(fixed).max(4);
+            let line_of = |cells: &[String], style: Style| -> Line<'static> {
+                let mut spans = Vec::new();
+                for (c, w) in widths.iter().enumerate() {
+                    let text = cells.get(c).map(String::as_str).unwrap_or("");
+                    let text = view::sanitize(text);
+                    let cut = head_chars(&text, *w);
+                    let pad = w.saturating_sub(cell_w(&cut));
+                    let cell = if table.right.get(c).copied().unwrap_or(false) {
+                        format!("{}{cut}", " ".repeat(pad))
+                    } else {
+                        format!("{cut}{}", " ".repeat(pad))
+                    };
+                    spans.push(Span::styled(cell, style));
+                    if c + 1 < n {
+                        spans.push(Span::styled("  ", style));
+                    }
+                }
+                Line::from(spans)
+            };
+            let mut head = table.header.clone();
+            if let Some((c, reverse)) = v.sort {
+                if let Some(h) = head.get_mut(c) {
+                    h.push(if reverse { '^' } else { 'v' });
+                }
+            }
+            out.push(line_of(
+                &head,
+                Style::default()
+                    .fg(palette.accent())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            for (k, &r) in rows.iter().enumerate() {
+                let row = &table.rows[r];
+                let base = row
+                    .level
+                    .map_or(Style::default(), |l| palette.level_style(l));
+                let style = if v.top + k == v.selected {
+                    base.add_modifier(Modifier::REVERSED)
+                } else {
+                    base
+                };
+                out.push(line_of(&row.cells, style));
+            }
+            if rows.is_empty() && table.error.is_none() {
+                out.push(Line::styled(tx(lang, "(nothing yet)"), dim));
+            }
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        if let Some(at) = cursor {
+            frame.set_cursor_position(at);
+        }
+    }
+
+    /// `=`: the two selected rows against each other; else the selection (or the cursor
+    /// row) against the marked lines, or marked to be compared with the next one.
+    fn compare_selection(&mut self) {
+        use crate::tui::compare::{CompareView, Side};
+        let tab = &self.tabs[self.active];
+        let e = &tab.engine;
+        let mut lines = e.selected_lines();
+        if lines.is_empty() {
+            lines.extend(tab.cursor_line());
+        }
+        lines.truncate(crate::compare::MAX_REGION_LINES);
+        let Some(&first) = lines.first() else {
+            return;
+        };
+        let text = |l: usize| {
+            e.get_line(l)
+                .map(|t| t.trim_end_matches(['\r', '\n']).to_string())
+                .unwrap_or_default()
+        };
+        let name = stream_title(e);
+        let side = |ls: &[usize]| Side {
+            name: name.clone(),
+            first: ls[0],
+            lines: ls.iter().map(|&l| text(l)).collect(),
+        };
+        let pair = match self.compare_mark.take() {
+            Some(mark) => Some((mark, side(&lines))),
+            None if lines.len() == 2 => Some((side(&lines[..1]), side(&lines[1..]))),
+            None => None,
+        };
+        match pair {
+            Some((left, right)) => {
+                self.compare = Some(CompareView::new(left, right, Default::default()));
+            }
+            None => {
+                let n = lines.len();
+                self.compare_mark = Some(side(&lines));
+                self.message = Some(txf(
+                    self.lang,
+                    "Marked {0} lines from line {1}: select others and press = to compare",
+                    &[&n, &(first + 1)],
+                ));
+            }
+        }
+    }
+
+    fn on_compare_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::compare::CompareKey;
+        let Some(v) = self.compare.as_mut() else {
+            return false;
+        };
+        match v.on_key(key) {
+            CompareKey::Copy(text) => self.copy_text(&text),
+            CompareKey::Close => self.compare = None,
+            CompareKey::Moved => {}
+            CompareKey::Other => return false,
+        }
+        true
+    }
+
+    /// The two sides side by side: a header with the toggles, then one row per aligned
+    /// pair, the changed tokens marked, removed lines in the error colour and added ones
+    /// in the info colour.
+    fn draw_compare(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let removed = Style::default().fg(palette.level_color(LogLevel::Error));
+        let added = Style::default().fg(palette.level_color(LogLevel::Info));
+        let marked = Style::default()
+            .fg(palette.level_color(LogLevel::Warn))
+            .add_modifier(Modifier::REVERSED);
+        let inner = self.dialog(
+            frame,
+            area,
+            (area.width, area.height),
+            tx(self.lang, "Compare"),
+            false,
+        );
+        let lang = self.lang;
+        let Some(v) = self.compare.as_mut() else {
+            return;
+        };
+        let width = inner.width as usize;
+        let half = width.saturating_sub(3) / 2;
+        let mut out = Vec::new();
+        let toggles: String = v
+            .toggles()
+            .iter()
+            .map(|(k, name, on)| {
+                format!(
+                    "[{}] {} ({k})  ",
+                    if *on { 'x' } else { ' ' },
+                    tx(lang, name)
+                )
+            })
+            .collect();
+        out.push(Line::styled(head_chars(&toggles, width), dim));
+        let state = if v.is_equal() {
+            tx(lang, "Equal (with the options above)").to_string()
+        } else {
+            txf(
+                lang,
+                "{0} changes: ] / [ go to the next / previous, y copies the diff, Esc closes",
+                &[&v.diff.changes.len()],
+            )
+        };
+        out.push(Line::styled(head_chars(&state, width), dim));
+        let head = |s: &crate::tui::compare::Side| format!("{}:{}", s.name, s.first + 1);
+        out.push(Line::from(vec![
+            Span::styled(
+                pad_cell(&head(&v.left), half),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" | ", dim),
+            Span::styled(
+                pad_cell(&head(&v.right), half),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        let room = (inner.height as usize).saturating_sub(out.len());
+        v.page = room.max(1);
+        let cell =
+            |text: &str, ranges: &[std::ops::Range<usize>], base: Style| -> Vec<Span<'static>> {
+                let mut spans = Vec::new();
+                let mut pos = 0;
+                for r in ranges {
+                    let (a, b) = (r.start.min(text.len()), r.end.min(text.len()));
+                    if a < pos || !text.is_char_boundary(a) || !text.is_char_boundary(b) {
+                        continue;
+                    }
+                    spans.push((text[pos..a].to_string(), base));
+                    spans.push((text[a..b].to_string(), marked));
+                    pos = b;
+                }
+                spans.push((text[pos..].to_string(), base));
+                // Cut or pad to `half` cells.
+                let mut used = 0;
+                let mut out = Vec::new();
+                for (s, style) in spans {
+                    let s = view::sanitize(&s);
+                    let mut piece = String::new();
+                    for c in s.chars() {
+                        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                        if used + w > half {
+                            break;
+                        }
+                        piece.push(c);
+                        used += w;
+                    }
+                    if !piece.is_empty() {
+                        out.push(Span::styled(piece, style));
+                    }
+                }
+                out.push(Span::raw(" ".repeat(half.saturating_sub(used))));
+                out
+            };
+        for row in v.diff.rows.iter().skip(v.top).take(room) {
+            use crate::compare::RowKind;
+            let left = row
+                .left
+                .and_then(|i| v.shown.0.get(i))
+                .map_or("", |s| s.as_str());
+            let right = row
+                .right
+                .and_then(|i| v.shown.1.get(i))
+                .map_or("", |s| s.as_str());
+            let (lw, rw): (&[std::ops::Range<usize>], &[std::ops::Range<usize>]) = match &row.words
+            {
+                Some(w) => (&w.left, &w.right),
+                None => (&[], &[]),
+            };
+            let (lb, rb) = match row.kind {
+                RowKind::Equal => (Style::default(), Style::default()),
+                RowKind::Changed => (Style::default(), Style::default()),
+                RowKind::Removed => (removed, Style::default()),
+                RowKind::Added => (Style::default(), added),
+            };
+            let mut spans = cell(left, lw, lb);
+            spans.push(Span::styled(" | ", dim));
+            spans.extend(cell(right, rw, rb));
+            out.push(Line::from(spans));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+    }
+
+    /// The file the session's pad is kept in: beside the named session, else
+    /// `scratchpad.txt` beside `fasttail.ini` (as the window keeps it).
+    fn pad_file(&self) -> PathBuf {
+        let settings = self.settings.as_ref();
+        match settings.and_then(|s| s.config.current_session.as_deref()) {
+            Some(session) => crate::scratchpad::sidecar_of(session),
+            None => crate::scratchpad::default_pad_of(
+                &settings.map_or_else(crate::config::FastTailConfig::config_path, |s| {
+                    s.path.clone()
+                }),
+            ),
+        }
+    }
+
+    /// The session's pad, loaded on first use.
+    fn pad(&mut self) -> &mut crate::scratchpad::Scratchpad {
+        if self.scratchpad.is_none() {
+            self.scratchpad = Some(crate::scratchpad::Scratchpad::load(self.pad_file()));
+        }
+        self.scratchpad.as_mut().expect("loaded above")
+    }
+
+    fn open_pad(&mut self) {
+        let text = self.pad().text.clone();
+        self.pad_editor = Some(crate::tui::pad::PadEditor::new(&text));
+    }
+
+    /// The editor's text written back to the pad, saved a second later.
+    fn pad_edited(&mut self) {
+        let Some(text) = self.pad_editor.as_ref().map(|e| e.text()) else {
+            return;
+        };
+        let pad = self.pad();
+        pad.text = text;
+        pad.touch();
+    }
+
+    /// Saves the pad now when it changed (on exit).
+    pub fn save_scratchpad(&mut self) {
+        if let Some(pad) = self.scratchpad.as_mut() {
+            pad.save_on_exit();
+        }
+    }
+
+    fn on_pad_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crate::tui::pad::PadKey;
+        let Some(e) = self.pad_editor.as_mut() else {
+            return false;
+        };
+        match e.on_key(key) {
+            PadKey::Edited => self.pad_edited(),
+            PadKey::Moved => {}
+            PadKey::Close => {
+                self.pad_editor = None;
+                if let Some(pad) = self.scratchpad.as_mut() {
+                    if pad.is_dirty() {
+                        if let Err(err) = pad.save() {
+                            self.message = Some(err.to_string());
+                        }
+                    }
+                }
+            }
+            PadKey::Jump(name, line) => self.pad_jump(&name, line),
+            PadKey::Other => return false,
+        }
+        true
+    }
+
+    /// A reference of the pad: its stream focused at that line (opened when needed).
+    fn pad_jump(&mut self, name: &str, line: usize) {
+        let open: Vec<(String, PathBuf)> = self
+            .tabs
+            .iter()
+            .map(|t| (stream_title(&t.engine), t.engine.path.clone()))
+            .collect();
+        let Some(path) = self.pad().resolve(name, &open) else {
+            self.message = Some(txf(self.lang, "{0}: not found", &[&name]));
+            return;
+        };
+        self.open_file(&path);
+        if let Some(i) = self
+            .tabs
+            .iter()
+            .position(|t| crate::paths::paths_equal(&t.engine.path, &path))
+        {
+            self.pad_editor = None;
+            self.focus_tab(i);
+            self.tabs[i].engine.open_at_line(line + 1, self.lang);
+        }
+    }
+
+    /// `Ctrl+N`: the selected rows (or the cursor row) at the end of the pad, under a
+    /// reference line naming their stream and first line.
+    fn send_to_pad(&mut self) {
+        let tab = &mut self.tabs[self.active];
+        let lines = tab.engine.selected_lines();
+        let first = lines.first().copied().or_else(|| tab.cursor_line());
+        let text = if tab.engine.has_selection() {
+            tab.engine.copy_selection_text()
+        } else {
+            tab.cursor_line().and_then(|l| {
+                tab.engine
+                    .get_line(l)
+                    .map(|t| t.trim_end_matches(['\r', '\n']).to_string())
+            })
+        };
+        let (Some(first), Some(text)) = (first, text) else {
+            self.message = Some(tx(self.lang, "Nothing to send").into());
+            return;
+        };
+        let name = stream_title(&tab.engine);
+        let path = tab.engine.path.clone();
+        let n = text.lines().count();
+        let lang = self.lang;
+        let sent = self.pad().send(&name, &path, first, &text, true);
+        self.message = Some(match sent {
+            Ok(()) => txf(
+                lang,
+                "{0} lines sent to the scratchpad (Alt+N shows it)",
+                &[&n],
+            ),
+            Err(crate::scratchpad::SendRefused::TooLarge) => {
+                tx(lang, "The scratchpad is full (4 MB)").into()
+            }
+            Err(crate::scratchpad::SendRefused::Empty) => tx(lang, "Nothing to send").into(),
+        });
+        if let Some(e) = self.pad_editor.as_mut() {
+            let text = self
+                .scratchpad
+                .as_ref()
+                .map(|p| p.text.clone())
+                .unwrap_or_default();
+            *e = crate::tui::pad::PadEditor::new(&text);
+        }
+    }
+
+    /// The scratchpad's editor over the windows: its lines, the cursor, the reference
+    /// lines in the accent colour.
+    fn draw_pad(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let accent = Style::default().fg(palette.accent());
+        let width = area.width.saturating_sub(4).max(20);
+        let height = area.height.saturating_sub(2).max(6);
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, height),
+            tx(self.lang, "Scratchpad"),
+            false,
+        );
+        let hint = tx(
+            self.lang,
+            "Type to write, Ctrl+G goes to the reference line above, Ctrl+Z undoes, Esc closes",
+        );
+        let notice = self
+            .scratchpad
+            .as_ref()
+            .and_then(|p| p.notice.as_ref().map(|(t, _)| t.clone()));
+        let Some(e) = self.pad_editor.as_mut() else {
+            return;
+        };
+        let rows = inner.height.saturating_sub(1) as usize;
+        e.scroll(rows);
+        let cells = inner.width as usize;
+        let mut out = vec![Line::styled(
+            head_chars(notice.as_deref().unwrap_or(hint), cells),
+            dim,
+        )];
+        let mut cursor = None;
+        for (i, line) in e.lines.iter().enumerate().skip(e.top).take(rows) {
+            let shown = view::sanitize(line);
+            let style = if crate::scratchpad::parse_reference(line).is_some() {
+                accent
+            } else {
+                Style::default()
+            };
+            // The line scrolls sideways so the cursor stays inside.
+            let (text, x) = if i == e.row {
+                let field = TextField::new(line);
+                let mut field = field;
+                for _ in 0..line.chars().count().saturating_sub(e.col) {
+                    field.on_key(crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Left,
+                        crossterm::event::KeyModifiers::NONE,
+                    ));
+                }
+                let (t, x) = field.view(cells);
+                (view::sanitize(&t), Some(x))
+            } else {
+                (head_chars(&shown, cells), None)
+            };
+            if let Some(x) = x {
+                cursor = Some((inner.x + x as u16, inner.y + 1 + (i - e.top) as u16));
+            }
+            out.push(Line::styled(text, style));
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        if let Some(at) = cursor {
+            frame.set_cursor_position(at);
+        }
+    }
+
+    /// Adds the rules of a rule set file to the rules (skipping those already there), or
+    /// with a trailing `!` replaces every rule with them.
+    fn import_rules(&mut self, text: &str) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let path = PathBuf::from(text);
+        let incoming = match crate::config::read_rule_set(&path) {
+            Ok(rules) => rules,
+            Err(e) => {
+                use crate::config::RuleSetError;
+                let why = match e {
+                    RuleSetError::NotARuleSet => tx(self.lang, "not a rule set file").to_string(),
+                    RuleSetError::NewerVersion(v) => txf(
+                        self.lang,
+                        "written by a newer FastTail (version {0})",
+                        &[&v],
+                    ),
+                    RuleSetError::Io(e) => e,
+                };
+                self.message = Some(txf(self.lang, "Cannot import {0}: {1}", &[&text, &why]));
+                return;
+            }
+        };
+        let config = &mut self.settings_mut().config;
+        let mut rules = if replace {
+            Vec::new()
+        } else {
+            config.highlight_rules.clone()
+        };
+        let n = incoming.len();
+        let added = crate::config::append_rules(&mut rules, incoming);
+        let tools = config.external_tools.clone();
+        let labels = self.quick_labels.clone();
+        let mut d = RulesDialog::new(&rules, &tools);
+        d.labels = labels;
+        if let Some(old) = self.rules.as_ref() {
+            d.list.selected = old.list.selected.min(rules.len().saturating_sub(1));
+        }
+        self.rules = Some(d);
+        self.apply_rules();
+        self.message = Some(if replace {
+            txf(self.lang, "{0} rules imported, replacing the rules", &[&n])
+        } else {
+            txf(
+                self.lang,
+                "{0} of {1} rules added (the others were there already)",
+                &[&added, &n],
+            )
+        });
+    }
+
+    /// Writes every rule to a rule set file (a trailing `!` replaces an existing one).
+    fn export_rules(&mut self, text: &str) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let path = PathBuf::from(text);
+        if path.exists() && !replace {
+            self.message = Some(txf(
+                self.lang,
+                "{0} exists: add ! to replace it",
+                &[&path.display()],
+            ));
+            return;
+        }
+        let rules = self.settings_mut().config.highlight_rules.clone();
+        self.message = Some(match crate::config::write_rule_set(&path, &rules) {
+            Ok(()) => txf(
+                self.lang,
+                "{0} rules exported to {1}",
+                &[&rules.len(), &path.display()],
+            ),
+            Err(e) => txf(self.lang, "Export failed: {0}", &[&e]),
+        });
+    }
+
+    /// Walks the rule seeks of the streams on screen for a few milliseconds; a line found
+    /// is reached through the engine's jump (see `tick`), a walk that found nothing says
+    /// so.
+    fn step_rule_seeks(&mut self) {
+        let lang = self.lang;
+        for i in self.visible_tabs() {
+            let tab = &mut self.tabs[i];
+            let sought = tab.engine.rule_seek_pattern().map(str::to_owned);
+            match tab
+                .engine
+                .step_rule_seek(crate::tail_engine::RULE_SEEK_BUDGET, lang)
+            {
+                Some(crate::tail_engine::RuleSeekStep::Found { line, wrapped }) => {
+                    tab.engine.pending_jump = None;
+                    tab.engine.reveal_line(line);
+                    if let Some(row) = tab.engine.get_visible_row_of_line(line) {
+                        tab.set_cursor(row);
+                    }
+                    tab.engine.follow_tail = false;
+                    if wrapped {
+                        self.message = Some(tx(lang, "Search wrapped around").into());
+                    }
+                }
+                Some(crate::tail_engine::RuleSeekStep::NotFound) => {
+                    self.message = Some(txf(
+                        lang,
+                        "No line matches the rule {0}",
+                        &[&sought.unwrap_or_default()],
+                    ));
+                }
+                Some(crate::tail_engine::RuleSeekStep::Pending) | None => {}
+            }
+        }
+    }
+
+    /// The Log formats dialog, previewing over the focused stream's first lines.
+    fn open_formats(&mut self) {
+        let lines = self
+            .tabs
+            .get(self.active)
+            .map(|t| {
+                let e = &t.engine;
+                (0..e.total_lines().min(crate::log_format_edit::PREVIEW_LINES))
+                    .filter_map(|i| e.get_line(i).map(|l| l.into_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.formats = Some(FormatsView::new(crate::log_format::default_dir(), lines));
+    }
+
+    fn on_formats_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let lib = crate::log_format::library();
+        let lang = self.lang;
+        let Some(v) = self.formats.as_mut() else {
+            return false;
+        };
+        match v.on_key(key, &lib, lang) {
+            FormatsKey::Changed => self.reload_formats(),
+            FormatsKey::Import => self.open_prompt(PromptKind::FormatImport),
+            FormatsKey::Export => self.open_prompt(PromptKind::FormatExport),
+            FormatsKey::Close => self.formats = None,
+            FormatsKey::Moved => {}
+            FormatsKey::Other => return false,
+        }
+        true
+    }
+
+    /// Loads the formats folder again and gives every stream the new formats.
+    fn reload_formats(&mut self) {
+        let dir = self
+            .formats
+            .as_ref()
+            .map_or_else(crate::log_format::default_dir, |f| f.state.dir.clone());
+        crate::log_format::set_library(crate::log_format::Library::load(&dir));
+        for tab in &mut self.tabs {
+            tab.engine.reload_field_parser();
+        }
+    }
+
+    fn import_format(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let lib = crate::log_format::library();
+        let lang = self.lang;
+        let Some(v) = self.formats.as_mut() else {
+            return;
+        };
+        match v.state.import(&lib, Path::new(text)) {
+            Ok(path) => {
+                v.notice = Some((txf(lang, "Imported {0}", &[&path.display()]), false));
+                self.reload_formats();
+            }
+            Err(e) => {
+                let name = Path::new(text).display().to_string();
+                v.notice = Some((crate::tui::formats::save_error(lang, &e, &name), true));
+            }
+        }
+    }
+
+    fn export_format(&mut self, text: &str) {
+        let (text, replace) = match text.strip_suffix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        let lang = self.lang;
+        let Some(v) = self.formats.as_mut() else {
+            return;
+        };
+        let path = PathBuf::from(text);
+        v.notice = Some(if path.exists() && !replace {
+            (
+                txf(lang, "{0} exists: add ! to replace it", &[&path.display()]),
+                true,
+            )
+        } else {
+            match v.state.export(&path) {
+                Ok(()) => (txf(lang, "Exported to {0}", &[&path.display()]), false),
+                Err(e) => (txf(lang, "Export failed: {0}", &[&e]), true),
+            }
+        });
+    }
+
+    /// The cursor row's source location opened in FastTail at its line (the next one
+    /// when pressed again on the same row, as `Ctrl+O`).
+    fn open_source_here(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let Some(line) = tab.cursor_line() else {
+            return;
+        };
+        let text = tab.engine.get_line(line).unwrap_or_default();
+        let locations = crate::source_links::find(&text);
+        if locations.is_empty() {
+            self.message = Some(tx(self.lang, "No source location on this row").into());
+            return;
+        }
+        let next = match self.source_cycle {
+            Some((l, i)) if l == line => (i + 1) % locations.len(),
+            _ => 0,
+        };
+        self.source_cycle = Some((line, next));
+        let loc = locations[next].clone();
+        let roots = self
+            .settings
+            .as_ref()
+            .map(|s| s.config.source_roots.clone())
+            .unwrap_or_default();
+        let Some(file) = crate::source_links::resolve(&loc, &roots) else {
+            self.message = Some(txf(
+                self.lang,
+                "{0} not found under the source roots",
+                &[&loc.path],
+            ));
+            return;
+        };
+        let before = self.tabs.len();
+        self.open_file(&file);
+        let opened = self
+            .tabs
+            .iter()
+            .position(|t| crate::paths::paths_equal(&t.engine.path, &file));
+        if let Some(i) = opened {
+            self.focus_tab(i);
+            self.tabs[i]
+                .engine
+                .open_at_line(loc.line as usize, self.lang);
+            if self.tabs.len() > before || self.message.is_none() {
+                self.message = Some(txf(
+                    self.lang,
+                    "Opened {0}:{1} ({2} of {3})",
+                    &[&loc.path, &loc.line, &(next + 1), &locations.len()],
+                ));
+            }
+        }
+    }
+
+    /// The Log formats dialog: the list of formats, or the form of the one being edited
+    /// with what it reads.
+    fn draw_formats(&mut self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let dim = Style::default().fg(palette.dim());
+        let error = Style::default().fg(palette.level_color(LogLevel::Error));
+        let lib = crate::log_format::library();
+        let Some(v) = self.formats.as_ref() else {
+            return;
+        };
+        let rows = if v.editing {
+            v.fields.len() + 10
+        } else {
+            lib.formats.len() + lib.errors.len() + 4
+        };
+        let height = (rows as u16 + 4).min(area.height);
+        let width = area.width.saturating_sub(4).clamp(40, 100);
+        let inner = self.dialog(
+            frame,
+            area,
+            (width, height),
+            tx(self.lang, "Log formats"),
+            false,
+        );
+        let Some(v) = self.formats.as_ref() else {
+            return;
+        };
+        let cells = inner.width as usize;
+        let mut out = Vec::new();
+        let mut cursor = None;
+        if v.confirm_delete {
+            out.push(Line::styled(
+                txf(
+                    self.lang,
+                    "Delete the format {0}? y deletes, any other key keeps it",
+                    &[&v.state.draft.name],
+                ),
+                error,
+            ));
+        } else if v.editing {
+            let hint = if v.read_only() {
+                tx(self.lang, "Built-in: c makes a copy to change. Esc back")
+            } else {
+                tx(
+                    self.lang,
+                    "Tab/Up/Down move, type to edit, Enter saves, Ctrl+D deletes, Esc back",
+                )
+            };
+            out.push(Line::styled(hint, dim));
+        } else {
+            out.push(Line::styled(
+                tx(
+                    self.lang,
+                    "Enter edit  n new  c copy  d delete  i import  x export  Esc close",
+                ),
+                dim,
+            ));
+        }
+        if let Some((text, bad)) = &v.notice {
+            out.push(Line::styled(
+                head_chars(text, cells),
+                if *bad { error } else { dim },
+            ));
+        }
+        if v.editing {
+            let label_w = 16usize;
+            let field_w = cells.saturating_sub(label_w + 1).max(10);
+            for (i, (part, field)) in v.fields.iter().enumerate() {
+                let label = match part {
+                    crate::tui::formats::Part::Pattern(n) => {
+                        format!("{} {}", tx(self.lang, part.label()), n + 1)
+                    }
+                    _ => tx(self.lang, part.label()).to_string(),
+                };
+                let (shown, x) = field.view(field_w);
+                let style = if i == v.focus {
+                    let y = inner.y + out.len() as u16;
+                    if y < inner.bottom() {
+                        cursor = Some((inner.x + label_w as u16 + 1 + x as u16, y));
+                    }
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                out.push(Line::from(vec![
+                    Span::styled(format!("{:<label_w$} ", head_chars(&label, label_w)), dim),
+                    Span::styled(format!("{:<field_w$}", view::sanitize(&shown)), style),
+                ]));
+            }
+            let (summary, bad) = v.summary(self.lang);
+            out.push(Line::raw(""));
+            out.push(Line::styled(
+                head_chars(&summary, cells),
+                if bad { error } else { Style::default() },
+            ));
+            let room = (inner.height as usize).saturating_sub(out.len());
+            for row in v.state.preview.rows.iter().take(room) {
+                let style = if !row.starts_entry {
+                    dim
+                } else if row.matched {
+                    palette.level_style(row.level)
+                } else {
+                    error
+                };
+                let mark = if !row.starts_entry {
+                    ' '
+                } else if row.matched {
+                    '+'
+                } else {
+                    '-'
+                };
+                let text = format!("{mark} {}", view::sanitize(&row.text));
+                out.push(Line::styled(head_chars(&text, cells), style));
+            }
+        } else {
+            let start = out.len() as u16;
+            for (i, f) in lib.formats.iter().enumerate() {
+                let y = inner.y + start + i as u16;
+                self.hits
+                    .list_items
+                    .push((Rect::new(inner.x, y, inner.width, 1), i));
+                let kind = if f.builtin {
+                    tx(self.lang, "built-in").to_string()
+                } else if let Some(p) = &f.plugin {
+                    p.clone()
+                } else {
+                    f.file
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                };
+                let style = if i == v.selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                let text = format!(" {:<28} {kind}", head_chars(f.name(), 28));
+                out.push(Line::styled(head_chars(&text, cells), style));
+            }
+            for (j, (path, why)) in lib.errors.iter().enumerate() {
+                let i = lib.formats.len() + j;
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let style = if i == v.selected {
+                    error.add_modifier(Modifier::REVERSED)
+                } else {
+                    error
+                };
+                let text = format!(" {name}: {why}");
+                out.push(Line::styled(head_chars(&text, cells), style));
+            }
+        }
+        frame.render_widget(Paragraph::new(out), inner);
+        if let Some(at) = cursor {
+            frame.set_cursor_position(at);
+        }
     }
 
     /// The editor's rules reach every stream and `fasttail.ini` at once, as in the GUI;
@@ -2863,6 +5745,17 @@ impl App {
             && key.kind != crossterm::event::KeyEventKind::Release
         {
             self.open_tools_editor();
+            return true;
+        }
+        let on_plugins = form
+            .fields
+            .get(form.focus)
+            .is_some_and(|f| f.key == crate::tui::settings::Key::Plugins);
+        if on_plugins
+            && key.code == crossterm::event::KeyCode::Enter
+            && key.kind != crossterm::event::KeyEventKind::Release
+        {
+            self.open_plugins();
             return true;
         }
         match form.on_key(key) {
@@ -3045,6 +5938,7 @@ impl App {
         self.tabs.extend(stdin);
         self.sync_labels();
         self.active = 0;
+        self.restore_views(&plan.views);
         self.restore_dock(plan.dock_layout.as_deref());
         // The session's layout becomes the configuration's, as in the GUI.
         self.dock_dirty = true;
@@ -3342,12 +6236,16 @@ impl App {
     /// stream defaults (recorded in the recent files unless it is ephemeral).
     fn add_engine_tab(&mut self, mut engine: TailEngine) {
         if let Some(s) = self.settings.as_mut() {
-            s.prepare(&mut engine);
-            if !engine.is_stdin() && !engine.is_clipboard() {
+            let spool_view = engine.merged.is_some() || engine.derived.is_some();
+            if !spool_view {
+                s.prepare(&mut engine);
+            }
+            if !engine.is_stdin() && !engine.is_clipboard() && !spool_view {
                 s.config.add_recent_file(&engine.path);
             }
             // A plain file with rotations next to it: the stream bar offers them.
-            if s.config.rotations == crate::rotation::Policy::Ask
+            if !spool_view
+                && s.config.rotations == crate::rotation::Policy::Ask
                 && engine.rotation.is_none()
                 && engine.compressed.is_none()
                 && engine.piped().is_none()
@@ -3563,8 +6461,17 @@ impl App {
             self.open_file(Path::new(&text));
             return;
         }
-        let tab = &mut self.tabs[self.active];
         let text = prompt.field.text().trim().to_string();
+        match prompt.kind {
+            PromptKind::RulesImport => return self.import_rules(&text),
+            PromptKind::RulesExport => return self.export_rules(&text),
+            PromptKind::FormatImport => return self.import_format(&text),
+            PromptKind::FormatExport => return self.export_format(&text),
+            PromptKind::Report(true) => return self.write_report(true, &text),
+            PromptKind::OpenPlugin => return self.open_plugin(&text),
+            _ => {}
+        }
+        let tab = &mut self.tabs[self.active];
         match prompt.kind {
             PromptKind::Search => {
                 // `re:` makes the query a regex (`re:(?-i)` for case), as the window's
@@ -3589,6 +6496,13 @@ impl App {
                 }
                 tab.pending_first_hit = !query.is_empty();
             }
+            PromptKind::Include if tab.engine.filter_expr_mode() => {
+                tab.engine.set_filter_expr(&text);
+                tab.top = 0;
+                if let Some(e) = tab.engine.expr_error() {
+                    self.message = Some(crate::filter_expr::error_text(self.lang, &text, e));
+                }
+            }
             PromptKind::Include => {
                 tab.engine.set_include_filter(&text);
                 tab.top = 0;
@@ -3601,6 +6515,43 @@ impl App {
             PromptKind::Note(line) => tab.engine.set_bookmark_note(line, &text),
             PromptKind::SaveSession => self.submit_save_session(&text),
             PromptKind::Split => self.submit_split(&text),
+            PromptKind::SearchScope => self.submit_search_scope(&text),
+            PromptKind::Export(scope, format) => self.start_export(scope, format, &text),
+            PromptKind::Report(all) => self.write_report(all, &text),
+            PromptKind::RulesImport
+            | PromptKind::RulesExport
+            | PromptKind::FormatImport
+            | PromptKind::FormatExport => {}
+            PromptKind::OpenPlugin => {}
+            PromptKind::StatsField | PromptKind::OpsField => {
+                let stats = prompt.kind == PromptKind::StatsField;
+                match crate::tui::analysis::parse_source(&text) {
+                    Some(source) => self.open_source_view(source, stats),
+                    None => {
+                        self.message = Some(txf(
+                            self.lang,
+                            "Cannot read \"{0}\" as a field or /regex/",
+                            &[&text],
+                        ))
+                    }
+                }
+            }
+            PromptKind::ExplainSpan => {
+                let (from, to) = text.split_once("..").unwrap_or((text.as_str(), ""));
+                if tab.engine.explain_texts(from.trim(), to.trim()) {
+                    if let Some(span) = tab.engine.explain_request.take() {
+                        tab.engine
+                            .explain_span(span, crate::spike::Baseline::Rest, false);
+                    }
+                    let path = tab.engine.path.clone();
+                    self.analysis = Some(crate::tui::analysis::AnalysisView::new(
+                        crate::tui::analysis::Kind::Explain,
+                        path,
+                    ));
+                } else {
+                    self.message = Some(txf(self.lang, "Cannot read \"{0}\" as a range", &[&text]));
+                }
+            }
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -3676,6 +6627,40 @@ impl App {
             });
             return;
         }
+        if kind == PromptKind::OpenPlugin {
+            let text = self
+                .plugins
+                .as_ref()
+                .and_then(|d| d.catalog.plugins.get(d.selected))
+                .map(plugin_uri_with_defaults)
+                .unwrap_or_default();
+            self.prompt = Some(Prompt {
+                kind,
+                field: TextField::new(&text),
+            });
+            return;
+        }
+        if kind.over_dialogs() || kind == PromptKind::Report(true) {
+            let text = match kind {
+                PromptKind::RulesExport => format!("highlights{}", crate::config::RULE_SET_SUFFIX),
+                PromptKind::FormatExport => self
+                    .formats
+                    .as_ref()
+                    .map(|f| f.state.draft.to_spec().file_name())
+                    .unwrap_or_default(),
+                PromptKind::Report(_) => {
+                    let date =
+                        crate::timestamp::format_millis(crate::timestamp::local_now_millis());
+                    crate::bookmark_report::report_file_name(&date[..10.min(date.len())])
+                }
+                _ => String::new(),
+            };
+            self.prompt = Some(Prompt {
+                kind,
+                field: TextField::new(&text),
+            });
+            return;
+        }
         let e = &self.tabs[self.active].engine;
         let text = match kind {
             // A regex search opens with its `re:` prefix.
@@ -3686,11 +6671,43 @@ impl App {
                 format!("mre:{}", e.search_query)
             }
             PromptKind::Search => e.search_query.clone(),
+            PromptKind::Include if e.filter_expr_mode() => e.filter_expr().to_string(),
             PromptKind::Include => e.include_filter().to_string(),
             PromptKind::Exclude => e.exclude_filter().to_string(),
             PromptKind::Note(line) => e.bookmark_note(line).unwrap_or_default().to_string(),
             PromptKind::Goto => String::new(),
             PromptKind::Split => "100000".to_string(),
+            PromptKind::SearchScope => match e.search_scope() {
+                crate::tail_engine::SearchScope::All => String::new(),
+                crate::tail_engine::SearchScope::Lines { first, last } => format!(
+                    "{}-{}",
+                    first + 1,
+                    last.map(|l| (l + 1).to_string()).unwrap_or_default()
+                ),
+                crate::tail_engine::SearchScope::Time { from, to } => format!("{from}..{to}"),
+            },
+            PromptKind::Export(scope, format) => export_path(e, scope, format),
+            PromptKind::Report(_) => {
+                let date = crate::timestamp::format_millis(crate::timestamp::local_now_millis());
+                crate::bookmark_report::report_file_name(&date[..10.min(date.len())])
+            }
+            PromptKind::RulesImport
+            | PromptKind::RulesExport
+            | PromptKind::FormatImport
+            | PromptKind::FormatExport => unreachable!("opened above"),
+            PromptKind::StatsField | PromptKind::OpsField => {
+                let cols = e.drawn_field_columns().0;
+                cols.first().cloned().unwrap_or_default()
+            }
+            PromptKind::OpenPlugin => unreachable!("opened above"),
+            PromptKind::ExplainSpan => {
+                let (f, t) = (e.time_from_text.trim(), e.time_to_text.trim());
+                if f.is_empty() && t.is_empty() {
+                    String::new()
+                } else {
+                    format!("{f}..{t}")
+                }
+            }
             PromptKind::System
             | PromptKind::Remote
             | PromptKind::Listen
@@ -3964,9 +6981,16 @@ impl App {
             C::OutOfOrder => self.apply(Action::NextOutOfOrder),
             C::SourceEnded => self.apply(Action::Reconnect),
             C::Columns => self.apply(Action::ToggleColumns),
+            C::TimeDelta => self.apply(Action::ToggleTimeDelta),
+            C::FilterExpr => self.apply(Action::ToggleFilterExpr),
+            C::TimeDisplay => {
+                let next = crate::tui::bars::next_time_display(e.time_display());
+                self.apply(Action::SetTimeDisplay(next));
+            }
             C::Fields => self.columns_menu = Some(0),
             C::Presets => self.apply(Action::Presets),
             C::Global => self.apply(Action::EditGlobal),
+            C::Named(i) => e.named.toggle_focus(i),
         }
     }
 
@@ -4221,6 +7245,9 @@ impl App {
     }
 
     pub fn apply(&mut self, action: Action) {
+        if self.apply_workspace_action(action) {
+            return;
+        }
         let n_tabs = self.tabs.len();
         // With no file open only what opens one (or leaves) acts.
         if n_tabs == 0 {
@@ -4247,6 +7274,11 @@ impl App {
                 Action::CycleTheme => self.cycle_theme(),
                 Action::PlayAll | Action::PauseAll => {}
                 Action::About => self.show_about = !self.show_about,
+                Action::LogFormats => self.open_formats(),
+                Action::Scratchpad => self.open_pad(),
+                Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
+                Action::ToggleSetting(s) => self.toggle_setting(s),
+                Action::Plugins => self.open_plugins(),
                 _ => self.message = Some(tx(self.lang, NO_FILE).into()),
             }
             return;
@@ -4397,16 +7429,7 @@ impl App {
             self.message = Some(tx(self.lang, "Nothing to copy").into());
             return;
         };
-        let lines = text.lines().count();
-        self.message = Some(match self.clipboard.copy(&text) {
-            Ok(Copied::System) => txf(self.lang, "Copied {0} lines to the clipboard", &[&lines]),
-            Ok(Copied::Osc52) => txf(
-                self.lang,
-                "Sent {0} lines to the terminal clipboard (OSC 52)",
-                &[&lines],
-            ),
-            Err(e) => txf(self.lang, "Copy failed: {0}", &[&e]),
-        });
+        self.copy_text(&text);
     }
 
     // ----- Mouse -----
@@ -4441,11 +7464,23 @@ impl App {
                     || self.sessions.is_some()
                     || self.settings_form.is_some()
                     || self.rules.is_some()
+                    || self.formats.is_some()
+                    || self.compare.is_some()
+                    || self.pad_editor.is_some()
+                    || self.analysis.is_some()
+                    || self.analysis_menu.is_some()
+                    || self.merge.is_some()
+                    || self.recent_menu.is_some()
+                    || self.info_view.is_some()
+                    || self.keys_dialog.is_some()
+                    || self.plugins.is_some()
                     || self.presets.is_some()
                     || self.global.is_some()
                     || self.tool_menu.is_some()
                     || self.hidden_menu.is_some()
                     || self.piece_menu.is_some()
+                    || self.results_menu.is_some()
+                    || self.export_menu.is_some()
                     || self.columns_menu.is_some()
                     || self.palette_dialog.is_some()
                     || self.json_dialog.is_some()
@@ -4697,6 +7732,15 @@ impl App {
                 self.focus_tab(tab);
                 self.apply(Action::GoTo);
             }
+            Target::VolumeCell(tab, ms) => {
+                self.focus_tab(tab);
+                let t = &mut self.tabs[tab];
+                if let Some(line) = t.engine.goto_time(ms) {
+                    t.engine.follow_tail = false;
+                    t.engine.reveal_line(line);
+                    t.engine.scroll_to_line = Some(line);
+                }
+            }
             Target::ListItem(i) if self.time_range.is_some() => {
                 if let Some(d) = self.time_range.as_mut() {
                     if i >= RANGE_DAY {
@@ -4772,6 +7816,32 @@ impl App {
             }
             // A click goes to that piece.
             Target::ListItem(i) if self.piece_menu.is_some() => self.go_to_piece(i),
+            Target::ListItem(i) if self.results_menu.is_some() => self.go_to_result(i),
+            Target::ListItem(i) if self.export_menu.is_some() => self.choose_export(i),
+            Target::ListItem(i) if self.recent_menu.is_some() => {
+                self.recent_menu = Some(i);
+                let enter = crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Enter,
+                    crossterm::event::KeyModifiers::NONE,
+                );
+                self.on_recent_key(enter);
+            }
+            Target::ListItem(i) if self.merge.is_some() => {
+                if let Some(d) = self.merge.as_mut() {
+                    d.selected = i;
+                }
+                let space = crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(' '),
+                    crossterm::event::KeyModifiers::NONE,
+                );
+                self.on_merge_key(space);
+            }
+            Target::ListItem(i) if self.analysis_menu.is_some() => {
+                self.analysis_menu = None;
+                if let Some(&kind) = crate::tui::analysis::Kind::ALL.get(i) {
+                    self.open_analysis(kind);
+                }
+            }
             // A click shows or hides that column.
             Target::ListItem(i) if self.columns_menu.is_some() => {
                 self.columns_menu = Some(i);
@@ -4862,6 +7932,12 @@ impl App {
                     }
                 } else if self.hidden_menu.take().is_some()
                     || self.piece_menu.take().is_some()
+                    || self.results_menu.take().is_some()
+                    || self.export_menu.take().is_some()
+                    || self.analysis_menu.take().is_some()
+                    || self.merge.take().is_some()
+                    || self.recent_menu.take().is_some()
+                    || self.info_view.take().is_some()
                     || self.columns_menu.take().is_some()
                 {
                 } else if let Some(m) = self.tool_menu.take() {
@@ -5054,6 +8130,17 @@ impl App {
     }
 
     fn apply_to_tab(&mut self, action: Action) {
+        // A held PgUp / PgDn moves further (`page_acceleration`).
+        let accelerate = self
+            .settings
+            .as_ref()
+            .is_none_or(|s| s.config.page_acceleration);
+        let pages = match action {
+            Action::PageUp | Action::PageDown if accelerate => self
+                .page_hold
+                .press(action == Action::PageDown, Instant::now()),
+            _ => 1,
+        };
         let tab = &mut self.tabs[self.active];
         let page = tab.height.max(1);
         let rows = tab.row_count();
@@ -5067,8 +8154,8 @@ impl App {
             let step = match action {
                 Action::LineUp | Action::SelectUp => Some(-1),
                 Action::LineDown | Action::SelectDown => Some(1),
-                Action::PageUp => Some(-(page as isize)),
-                Action::PageDown => Some(page as isize),
+                Action::PageUp => Some(-((page * pages) as isize)),
+                Action::PageDown => Some((page * pages) as isize),
                 _ => None,
             };
             if let Some(n) = step {
@@ -5098,8 +8185,8 @@ impl App {
             Action::Top => tab.set_cursor(0),
             Action::LineUp => tab.set_cursor(cursor.saturating_sub(1)),
             Action::LineDown => tab.set_cursor(cursor + 1),
-            Action::PageUp => tab.set_cursor(cursor.saturating_sub(page)),
-            Action::PageDown => tab.set_cursor(cursor + page),
+            Action::PageUp => tab.set_cursor(cursor.saturating_sub(page * pages)),
+            Action::PageDown => tab.set_cursor(cursor + page * pages),
             Action::SelectUp | Action::SelectDown => {
                 if tab.engine.selection_anchor.is_none() {
                     if let Some(line) = tab.cursor_line() {
@@ -5253,6 +8340,18 @@ impl App {
                     None => self.message = Some(tx(self.lang, "No bookmark visible").into()),
                 }
             }
+            // With no search typed, `n` / `N` walk the kept searches.
+            Action::SearchNext | Action::SearchPrev
+                if tab.engine.search_query.trim().is_empty() && !tab.engine.named.is_empty() =>
+            {
+                let from = tab.cursor_line().unwrap_or(0);
+                match tab.engine.next_named(from, action == Action::SearchNext) {
+                    Some((_, i)) => {
+                        self.message = Some(tab.engine.named.list[i].query.clone());
+                    }
+                    None => self.message = Some(tx(self.lang, "No search hits").into()),
+                }
+            }
             Action::SearchNext if tab.engine.search_next(false).is_none() => {
                 self.message = Some(tx(self.lang, "No search hits").into());
             }
@@ -5289,6 +8388,185 @@ impl App {
                     }
                     .into(),
                 );
+            }
+            Action::SearchResults => {
+                if tab.engine.search_matches.is_empty() {
+                    self.message = Some(tx(self.lang, "No search results: / searches").into());
+                } else {
+                    let at = tab.engine.current_match_idx.unwrap_or(0);
+                    self.results_menu = Some(at.min(tab.engine.search_matches.len() - 1));
+                }
+            }
+            Action::SearchScope => self.open_prompt(PromptKind::SearchScope),
+            Action::LogFormats => self.open_formats(),
+            Action::Scratchpad => self.open_pad(),
+            Action::SendToScratchpad => self.send_to_pad(),
+            Action::Analysis => self.analysis_menu = Some(0),
+            Action::MergedView => self.open_merge(),
+            Action::FilterTab => self.open_filter_tab(),
+            Action::SelectAll => tab.engine.select_all_visible(),
+            Action::StreamInfo => self.info_view = Some(tab.engine.path.clone()),
+            Action::OperationNext | Action::OperationPrev => {
+                use crate::operation_jump::OpJump;
+                let Some(from) = tab.cursor_line() else {
+                    return;
+                };
+                self.message = Some(
+                    match tab.engine.next_same_operation(from, action == Action::OperationNext) {
+                        OpJump::Found(_, id) => id,
+                        OpJump::NoId => tx(
+                            self.lang,
+                            "This row has no operation id (trace_id, request_id, req_id, opid, correlation_id, thread)",
+                        )
+                        .into(),
+                        OpJump::NotFound(id) => {
+                            txf(self.lang, "No other line of {0} that way", &[&id])
+                        }
+                    },
+                );
+            }
+            Action::KeepSearch => {
+                let query = tab.engine.search_query.trim().to_string();
+                if query.is_empty() {
+                    let at = tab
+                        .engine
+                        .named
+                        .focus
+                        .or_else(|| tab.engine.named.list.len().checked_sub(1));
+                    match at {
+                        Some(i) => {
+                            let q = tab.engine.named.list[i].query.clone();
+                            tab.engine.remove_named(i);
+                            self.message =
+                                Some(txf(self.lang, "Forgot the kept search {0}", &[&q]));
+                        }
+                        None => {
+                            self.message = Some(
+                                tx(self.lang, "Type a search (/) first, then Alt+K keeps it")
+                                    .into(),
+                            )
+                        }
+                    }
+                } else {
+                    use crate::named_search::KeepError;
+                    self.message = Some(match tab.engine.keep_search(&query) {
+                        Ok(_) => {
+                            tab.pending_first_hit = false;
+                            tab.engine.search_query.clear();
+                            tab.engine.update_search("");
+                            txf(self.lang, "Kept {0}: n walks the kept searches", &[&query])
+                        }
+                        Err(KeepError::Full) => tx(
+                            self.lang,
+                            "Eight searches are kept already: Alt+K with no search forgets one",
+                        )
+                        .into(),
+                        Err(_) => txf(self.lang, "{0} is kept already", &[&query]),
+                    });
+                }
+            }
+            Action::VolumeRow => {
+                tab.engine.timeline_open = !tab.engine.timeline_open;
+                tab.engine.timeline_dirty = true;
+                if tab.engine.timeline_open {
+                    tab.engine.request_timeline();
+                }
+            }
+            Action::RemoveBookmark => match tab.cursor_line() {
+                Some(line) if tab.engine.is_bookmarked(line) => tab.engine.remove_bookmark(line),
+                _ => self.message = Some(tx(self.lang, "No bookmark on this row").into()),
+            },
+            Action::ToggleMonitor => self.run_chip(crate::tui::bars::BarChip::Monitor),
+            Action::TimeAnchor => {
+                let Some(line) = tab.cursor_line() else {
+                    return;
+                };
+                tab.engine.toggle_time_anchor(line);
+                // The anchor is read in the Δt column: it is shown with it.
+                if tab.engine.time_anchor().is_some() {
+                    tab.engine.show_time_delta = true;
+                    self.message = Some(txf(self.lang, "Time anchor on line {0}", &[&(line + 1)]));
+                } else {
+                    self.message = Some(tx(self.lang, "Time anchor off").into());
+                }
+            }
+            Action::TimeAnchorClear => {
+                tab.engine.clear_time_anchor();
+                self.message = Some(tx(self.lang, "Time anchor off").into());
+            }
+            Action::KeysDialog => self.keys_dialog = Some(KeysDialog::default()),
+            Action::ToggleSetting(s) => self.toggle_setting(s),
+            Action::Plugins => self.open_plugins(),
+            Action::Patterns => self.open_analysis(crate::tui::analysis::Kind::Patterns),
+            Action::Compare => self.compare_selection(),
+            Action::ToggleFilterExpr => {
+                let on = !tab.engine.filter_expr_mode();
+                tab.engine.set_filter_expr_mode(on);
+                tab.top = 0;
+                self.message = Some(if on {
+                    txf(
+                        self.lang,
+                        "Include as an expression: {0} (i edits it)",
+                        &[&tab.engine.filter_expr()],
+                    )
+                } else {
+                    tx(self.lang, "Include as terms").into()
+                });
+            }
+            Action::RuleNext | Action::RulePrev => {
+                let Some(from) = tab.cursor_line() else {
+                    return;
+                };
+                let forward = action == Action::RuleNext;
+                match tab.engine.start_rule_seek(None, forward, from) {
+                    Ok(()) => self.step_rule_seeks(),
+                    Err(crate::tail_engine::RuleNavError::NoRuleOnRow) => {
+                        self.message =
+                            Some(tx(self.lang, "No highlight rule matches this row").into())
+                    }
+                    Err(crate::tail_engine::RuleNavError::Empty) => {}
+                }
+            }
+            Action::ClearBookmarks => {
+                let n = tab.engine.bookmarks.len();
+                tab.engine.clear_bookmarks();
+                self.message = Some(txf(self.lang, "{0} bookmarks removed", &[&n]));
+            }
+            Action::OpenSourceHere => self.open_source_here(),
+            Action::Export => self.export_menu = Some(0),
+            Action::CopyAsShown => self.copy_as_shown(),
+            Action::CopyExcerpt => self.copy_excerpt(),
+            Action::LogStatement => {
+                let text = tab
+                    .cursor_line()
+                    .and_then(|l| tab.engine.get_line(l))
+                    .map(|l| l.into_owned());
+                match text {
+                    Some(text) => self.find_log_statement(Some(text)),
+                    None => self.message = Some(tx(self.lang, "Nothing to copy").into()),
+                }
+            }
+            Action::BookmarkReport => self.open_prompt(PromptKind::Report(false)),
+            Action::BookmarkReportAll => self.open_prompt(PromptKind::Report(true)),
+            Action::ToggleTimeDelta => {
+                let on = !tab.engine.show_time_delta;
+                tab.engine.set_show_time_delta(on);
+                self.message = Some(
+                    if on {
+                        tx(self.lang, "Time delta on")
+                    } else {
+                        tx(self.lang, "Time delta off")
+                    }
+                    .into(),
+                );
+            }
+            Action::SetTimeDisplay(display) => {
+                tab.engine.set_time_display(display);
+                self.message = Some(txf(
+                    self.lang,
+                    "Time shown: {0}",
+                    &[&crate::tui::bars::time_display_name(display, self.lang)],
+                ));
             }
             Action::CycleAnsi => {
                 let next = match tab.engine.ansi_mode {
@@ -5380,7 +8658,7 @@ impl App {
             // The whole screen: the keys need the room more than the windows do.
             self.draw_help(frame, frame.area());
         }
-        if self.prompt.is_some() {
+        if self.prompt.as_ref().is_some_and(|p| !p.kind.over_dialogs()) {
             self.draw_prompt(frame, main_area);
         }
         if self.time_range.is_some() {
@@ -5401,6 +8679,9 @@ impl App {
         if self.rules.is_some() {
             self.draw_rules(frame, main_area);
         }
+        if self.formats.is_some() {
+            self.draw_formats(frame, main_area);
+        }
         if self.presets.is_some() {
             self.draw_presets(frame, main_area);
         }
@@ -5418,6 +8699,42 @@ impl App {
         }
         if self.piece_menu.is_some() {
             self.draw_piece_menu(frame, main_area);
+        }
+        if self.results_menu.is_some() {
+            self.draw_results_menu(frame, main_area);
+        }
+        if self.export_menu.is_some() {
+            self.draw_export_menu(frame, main_area);
+        }
+        if self.pad_editor.is_some() {
+            self.draw_pad(frame, main_area);
+        }
+        if self.analysis.is_some() {
+            self.draw_analysis(frame, main_area);
+        }
+        if self.analysis_menu.is_some() {
+            self.draw_analysis_menu(frame, main_area);
+        }
+        if self.merge.is_some() {
+            self.draw_merge(frame, main_area);
+        }
+        if self.recent_menu.is_some() {
+            self.draw_recent(frame, main_area);
+        }
+        if self.info_view.is_some() {
+            self.draw_info(frame, main_area);
+        }
+        if self.keys_dialog.is_some() {
+            self.draw_keys_dialog(frame, main_area);
+        }
+        if self.plugins.is_some() {
+            self.draw_plugins(frame, main_area);
+        }
+        if self.compare.is_some() {
+            self.draw_compare(frame, main_area);
+        }
+        if self.prompt.as_ref().is_some_and(|p| p.kind.over_dialogs()) {
+            self.draw_prompt(frame, main_area);
         }
         if self.palette_dialog.is_some() {
             self.draw_palette(frame, main_area);
@@ -5826,6 +9143,12 @@ impl App {
                 place.clone(),
             ));
         }
+        let gap_ms = self
+            .settings
+            .as_ref()
+            .map_or(crate::config::DEFAULT_TIME_DELTA_GAP_MS, |s| {
+                s.config.time_delta_gap_ms
+            });
         let tab = &mut self.tabs[idx];
         let e = &tab.engine;
         let follow = if e.follow_tail {
@@ -5910,6 +9233,19 @@ impl App {
             inner.y += 1;
             inner.height -= 1;
         }
+        // The volume row: lines per time slice above the rows (the window's timeline strip).
+        let mut volume_hits = Vec::new();
+        if tab.engine.timeline_open && !tab.is_hex() && !tab.is_asm() && inner.height > 4 {
+            let row = Rect::new(inner.x, inner.y, inner.width, 1);
+            let (line, cells) = volume_row(&tab.engine, &palette, row.width as usize, self.lang);
+            frame.render_widget(Paragraph::new(line), row);
+            volume_hits = cells
+                .into_iter()
+                .map(|(x, ms)| (Rect::new(row.x + x as u16, row.y, 1, 1), idx, ms))
+                .collect();
+            inner.y += 1;
+            inner.height -= 1;
+        }
         // The first plotted field as a sparkline on the last row, under the log rows.
         if !tab.is_hex() && !tab.is_asm() && !tab.engine.plots().is_empty() && inner.height > 3 {
             let row = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
@@ -5917,6 +9253,7 @@ impl App {
             frame.render_widget(Paragraph::new(line), row);
             inner.height -= 1;
         }
+        tab.cells = inner.width as usize;
         let (lines, row_count) = if tab.is_asm() {
             asm_rows(
                 tab,
@@ -5936,14 +9273,15 @@ impl App {
         } else if tab.engine.columns_shown() && inner.height > 1 {
             // The column view: a header row of the field names over the rows.
             let (header, lines, drawn) =
-                column_rows(tab, &palette, inner.height as usize - 1, self.lang);
+                column_rows(tab, &palette, inner.height as usize - 1, gap_ms, self.lang);
             frame.render_widget(Paragraph::new(header), Rect { height: 1, ..inner });
             inner.y += 1;
             inner.height -= 1;
             (lines, drawn)
         } else {
-            stream_rows(tab, &palette, inner.height as usize, self.lang)
+            stream_rows(tab, &palette, inner.height as usize, gap_ms, self.lang)
         };
+        self.hits.volume_cells.extend(volume_hits);
         self.hits.windows.push(WindowHit {
             tab: idx,
             outer: area,
@@ -5968,6 +9306,38 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
             );
+        // The web view and the MCP server, while they listen.
+        let mut serving = Vec::new();
+        if let (Some(c), true) = (
+            self.settings.as_ref().map(|s| &s.config),
+            self.web_view.connections().is_some(),
+        ) {
+            serving.push(format!("web :{}", c.web_port));
+        }
+        if let Some(port) = self.mcp_view.port() {
+            serving.push(format!("MCP :{port}"));
+        }
+        // The elapsed time of a selection of timed rows, as the window's stream bar shows it.
+        let elapsed = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.engine.selection_elapsed());
+        let block = match elapsed {
+            Some((millis, rows)) => block.title_bottom(
+                Line::from(txf(
+                    self.lang,
+                    " Δ {0} · {1} rows ",
+                    &[&crate::timestamp::format_delta(millis), &rows],
+                ))
+                .style(Style::default().fg(self.palette.accent())),
+            ),
+            None => block,
+        };
+        let block = if serving.is_empty() {
+            block
+        } else {
+            block.title_bottom(Line::from(format!(" {} ", serving.join(" · "))).right_aligned())
+        };
         let note = self.tabs.get(self.active).and_then(|tab| {
             tab.cursor_line()
                 .and_then(|l| tab.engine.bookmark_note(l))
@@ -6150,7 +9520,7 @@ impl App {
             ),
             PromptKind::System => tx(
                 self.lang,
-                "Open docker://<container>, journald://<unit> or journald://user/<unit>",
+                "Open docker://<container>, k8s://<namespace>/<pod>, journald://<unit> or journald://user/<unit>",
             ),
             PromptKind::Remote => tx(
                 self.lang,
@@ -6158,7 +9528,7 @@ impl App {
             ),
             PromptKind::Listen => tx(
                 self.lang,
-                "Listen on syslog://, tcp:// or udp://ADDRESS:PORT (127.0.0.1: this machine only)",
+                "Listen on syslog://, tcp://, udp:// or otlp://ADDRESS:PORT (127.0.0.1: this machine only)",
             ),
             PromptKind::DebugOutput => tx(
                 self.lang,
@@ -6166,7 +9536,48 @@ impl App {
             ),
             PromptKind::EventLog => tx(
                 self.lang,
-                "Follow an Event Log channel: eventlog://Application (?levels=1,2&ids=7031,7034-7040)",
+                "Follow an Event Log channel: eventlog://[host/]Application (?levels=1,2&ids=7031,7034-7040)",
+            ),
+            PromptKind::SearchScope => tx(
+                self.lang,
+                "Search in lines 1200-5000 or times 14:00..15:30 (empty: everywhere)",
+            ),
+            PromptKind::Export(..) => tx(
+                self.lang,
+                "Export to this file (a trailing ! replaces it)",
+            ),
+            PromptKind::Report(_) => tx(
+                self.lang,
+                "Save the bookmark report to (empty: copy it to the clipboard)",
+            ),
+            PromptKind::RulesImport => tx(
+                self.lang,
+                "Import a rule set file (a trailing ! replaces every rule)",
+            ),
+            PromptKind::RulesExport => tx(
+                self.lang,
+                "Export the rules to this file (a trailing ! replaces it)",
+            ),
+            PromptKind::FormatImport => tx(self.lang, "Import a format file"),
+            PromptKind::StatsField => tx(
+                self.lang,
+                "Statistics of the field (or /regex/ for its first group)",
+            ),
+            PromptKind::OpsField => tx(
+                self.lang,
+                "Operations grouped by the field (or /regex/ for its first group)",
+            ),
+            PromptKind::ExplainSpan => tx(
+                self.lang,
+                "Explain the span 14:00..14:05 against the rest of the log",
+            ),
+            PromptKind::OpenPlugin => tx(
+                self.lang,
+                "Open the plugin source: plugin://name?key=value&other=value",
+            ),
+            PromptKind::FormatExport => tx(
+                self.lang,
+                "Export the format to this file (a trailing ! replaces it)",
             ),
         };
         let inner = self.dialog(frame, area, (64, 5), title, true);
@@ -6794,17 +10205,14 @@ impl App {
             ),
             false,
         );
-        // In expression mode (set in the window) the include rows do not apply: say so.
-        let expression = {
-            let gf = &self.settings_mut().config.global_filter;
-            gf.expr_mode.then(|| gf.expression.clone())
-        };
-        let hint = match &expression {
-            Some(expr) => txf(
-                self.lang,
-                "Expression mode (set in the window): {0}; the include rows do not apply",
-                &[expr],
-            ),
+        // An expression that does not compile says why (the last valid one filters).
+        let base = self.settings_mut().config.global_filter.clone();
+        let broken = self
+            .global
+            .as_ref()
+            .and_then(|d| d.expr_error(&base, self.lang));
+        let hint = match &broken {
+            Some(why) => why.clone(),
             None => tx(
                 self.lang,
                 "Tab/Up/Down move, Space ticks, type a term; applied as you type. Enter/Esc close",
@@ -6816,7 +10224,7 @@ impl App {
         };
         let mut out = vec![Line::styled(
             hint,
-            if expression.is_some() { error } else { dim },
+            if broken.is_some() { error } else { dim },
         )];
         let mut cursor = None;
         for (k, row) in rows.iter().enumerate() {
@@ -6831,6 +10239,11 @@ impl App {
                 global::Row::Enabled => (tx(self.lang, "On (f)"), d.enabled.text("")),
                 global::Row::MatchCase => (tx(self.lang, "Match case"), d.case_sensitive.text("")),
                 global::Row::Regex => (tx(self.lang, "Regular expressions"), d.is_regex.text("")),
+                global::Row::ExprMode => (tx(self.lang, "Expression"), d.expr_mode.text("")),
+                global::Row::Expression => (
+                    tx(self.lang, "Include (expression)"),
+                    d.expression.text().to_string(),
+                ),
                 global::Row::Include(i) => (
                     if *i == 0 {
                         tx(self.lang, "Include (all match)")
@@ -6848,7 +10261,10 @@ impl App {
                     d.term(*row).to_string(),
                 ),
             };
-            let term_row = matches!(row, global::Row::Include(_) | global::Row::Exclude(_));
+            let term_row = matches!(
+                row,
+                global::Row::Include(_) | global::Row::Exclude(_) | global::Row::Expression
+            );
             let mut style = Style::default();
             if k == d.focus {
                 style = style.add_modifier(Modifier::REVERSED);
@@ -6856,6 +10272,7 @@ impl App {
                     let field = match row {
                         global::Row::Include(i) => d.include.get(*i),
                         global::Row::Exclude(i) => d.exclude.get(*i),
+                        global::Row::Expression => Some(&d.expression),
                         _ => None,
                     };
                     let x = field.map_or(0, |f| f.view(40).1);
@@ -6990,7 +10407,7 @@ impl App {
                 let mut out = vec![Line::styled(
                     tx(
                         self.lang,
-                        "Enter apply  A to all  s save  r rename  d delete  Alt+Up/Down move  Esc",
+                        "Enter apply  A to all  s save  r rename  d delete  * pin  Alt+Up/Down move  Esc",
                     ),
                     dim,
                 )];
@@ -7014,8 +10431,9 @@ impl App {
                         Style::default()
                     };
                     let name: String = view::sanitize(&p.name).chars().take(24).collect();
+                    let pin = if p.pinned { "*" } else { " " };
                     out.push(Line::from(vec![
-                        Span::styled(format!("{} ", marks[i]), accent),
+                        Span::styled(format!("{}{pin}", marks[i]), accent),
                         Span::styled(format!("{name:<24} "), row),
                         Span::styled(view::sanitize(&presets::summary(&p.state, self.lang)), dim),
                     ]));
@@ -7127,7 +10545,7 @@ impl App {
         out.push(Line::styled(
             tx(
                 self.lang,
-                "Enter edit  a add  d delete  Space on/off  Alt+Up/Down K/J move  Esc close",
+                "Enter edit  a add  d delete  Space on/off  K/J move  i import  x export  Esc",
             ),
             dim,
         ));
@@ -7893,6 +11311,57 @@ fn plot_first(plots: &[crate::plot::PlotSpec], key: &str) -> Vec<crate::plot::Pl
 
 /// The sparkline row of a stream: `📈 key avg`, the line over the time the values cover,
 /// then the lowest and highest value; the label goes first when the row is narrow.
+/// The volume row of `engine` `columns` cells wide: a label, then one block per column of
+/// the timeline histogram (its height the column's lines against the busiest, in the
+/// ERROR or WARN colour when it holds such lines), and the cell offsets with the time each
+/// starts at, for the clicks.
+fn volume_row(
+    engine: &TailEngine,
+    palette: &Palette,
+    columns: usize,
+    lang: crate::i18n::Language,
+) -> (Line<'static>, Vec<(usize, i64)>) {
+    let dim = Style::default().fg(palette.dim());
+    let label = if palette.ascii { " # " } else { " ▤ " };
+    let hist = engine.time_histogram();
+    let room = columns.saturating_sub(width(label) + 1);
+    let cols = hist.columns(room);
+    if cols.is_empty() || room == 0 {
+        let text = if engine.histogram_lines() == 0 && engine.total_lines() > 0 {
+            tx(lang, "volume: no timestamps yet")
+        } else {
+            tx(lang, "volume: no lines")
+        };
+        return (
+            Line::from(vec![Span::styled(label, dim), Span::styled(text, dim)]),
+            Vec::new(),
+        );
+    }
+    let totals: Vec<u64> = cols.iter().map(|c| c.total()).collect();
+    // Few buckets are spread over the room, as the window's strip stretches them.
+    let per = (room / cols.len()).max(1);
+    let blocks = crate::tui::spark::counts(&totals, cols.len(), palette.ascii);
+    let mut spans = vec![Span::styled(label, dim)];
+    let mut cells = Vec::with_capacity(room);
+    let mut x = width(label);
+    for (c, ch) in cols.iter().zip(blocks.chars()) {
+        let worst = |l: LogLevel| c.counts[l as usize] > 0;
+        let style = if worst(LogLevel::Error) || worst(LogLevel::Fatal) {
+            Style::default().fg(palette.level_color(LogLevel::Error))
+        } else if worst(LogLevel::Warn) {
+            Style::default().fg(palette.level_color(LogLevel::Warn))
+        } else {
+            Style::default().fg(palette.accent())
+        };
+        spans.push(Span::styled(ch.to_string().repeat(per), style));
+        for k in 0..per {
+            cells.push((x + k, c.start_ms));
+        }
+        x += per;
+    }
+    (Line::from(spans), cells)
+}
+
 fn sparkline_row(
     engine: &TailEngine,
     palette: &Palette,
@@ -8576,8 +12045,13 @@ fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
             .current_search_line()
             .and_then(|l| e.search_matches.binary_search(&l).ok())
             .map_or("-".to_string(), |i| (i + 1).to_string());
+        let scope = if e.search_scope().is_all() {
+            String::new()
+        } else {
+            format!(" {}", tx(lang, "in range"))
+        };
         parts.push(format!(
-            "/{} {}/{}",
+            "/{} {}/{}{scope}",
             e.search_query.trim(),
             current,
             e.search_total()
@@ -8588,6 +12062,88 @@ fn view_state_text(e: &TailEngine, hex: bool, lang: Language) -> String {
     } else {
         parts.join("  ")
     }
+}
+
+/// `plugin://name?key=default&...` of a source plugin, for the prompt that opens it.
+fn plugin_uri_with_defaults(p: &crate::plugins::Plugin) -> String {
+    let values: std::collections::BTreeMap<String, String> = p
+        .source
+        .as_ref()
+        .map(|s| {
+            s.params
+                .iter()
+                .map(|q| (q.id.clone(), q.default.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let uri = crate::plugins::PluginUri {
+        name: p.name.clone(),
+        values: values.clone(),
+    };
+    // Every value written, secrets too (the user types them here).
+    let mut text = uri.to_uri(None);
+    if !values.is_empty() {
+        let query: Vec<String> = values.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        text = format!("{text}?{}", query.join("&"));
+    }
+    text
+}
+
+/// The export menu's entries: each scope in each format.
+const EXPORT_CHOICES: [(crate::export::Scope, crate::export::Format); 9] = {
+    use crate::export::{Format as F, Scope as S};
+    [
+        (S::Visible, F::Text),
+        (S::Visible, F::Csv),
+        (S::Visible, F::Html),
+        (S::Selected, F::Text),
+        (S::Selected, F::Csv),
+        (S::Selected, F::Html),
+        (S::Matches, F::Text),
+        (S::Matches, F::Csv),
+        (S::Matches, F::Html),
+    ]
+};
+
+fn export_format_name(format: crate::export::Format) -> &'static str {
+    match format {
+        crate::export::Format::Text => "TXT",
+        crate::export::Format::Csv => "CSV",
+        crate::export::Format::Html => "HTML",
+    }
+}
+
+/// Where an export goes by default: next to the stream's file (the working folder for a
+/// stream without one), named after it and the scope (`app-matches.csv`).
+fn export_path(
+    engine: &TailEngine,
+    scope: crate::export::Scope,
+    format: crate::export::Format,
+) -> String {
+    let what = match scope {
+        crate::export::Scope::Visible => "visible",
+        crate::export::Scope::Selected => "selected",
+        crate::export::Scope::Matches => "matches",
+    };
+    let file = engine.current_file.as_deref().unwrap_or(&engine.path);
+    let stem = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty() && file.is_file())
+        .unwrap_or_else(|| "fasttail".to_string());
+    let name = format!("{stem}-{what}.{}", format.extension());
+    match file
+        .parent()
+        .filter(|p| file.is_file() && !p.as_os_str().is_empty())
+    {
+        Some(dir) => dir.join(name).display().to_string(),
+        None => name,
+    }
+}
+
+/// The level colour of a line for a list, as the rows draw it.
+fn palette_level(palette: &Palette, engine: &TailEngine, line: usize) -> Style {
+    palette.level_style(engine.level_of(line))
 }
 
 /// Moves the cursor to a go-to target; the status message when there is one to show.
@@ -8628,6 +12184,16 @@ fn toggle_context(tab: &mut Tab, message: &mut Option<String>, lang: Language) {
     let Some(line) = tab.cursor_line() else {
         return;
     };
+    // A filter tab shows the line in its source.
+    if let Some(source_line) = tab
+        .engine
+        .derived
+        .as_ref()
+        .and_then(|d| d.source_line(line))
+    {
+        tab.engine.source_context_request = Some(source_line);
+        return;
+    }
     if !tab.engine.enter_context(line) {
         *message = Some(tx(lang, "Show in context needs an active filter").into());
     }
@@ -8639,10 +12205,13 @@ fn stream_rows(
     tab: &mut Tab,
     palette: &Palette,
     height: usize,
+    gap_ms: u64,
     lang: Language,
 ) -> (Vec<Line<'static>>, usize) {
     tab.height = height;
     tab.pin_cursor();
+    let delta = time_delta_column(&mut tab.engine, gap_ms);
+    tab.engine.refresh_time_zone_sample();
     let engine = &tab.engine;
     let rows = engine.visible_line_count();
     if engine.follow_tail {
@@ -8656,6 +12225,7 @@ fn stream_rows(
     } else {
         0
     };
+    let tag = source_tag_width(engine, tab.cells);
     let query = engine.search_query.trim().to_string();
     let has_search = !query.is_empty() && engine.active_match_count() > 0;
     let mut lines = Vec::with_capacity(range.len());
@@ -8668,7 +12238,7 @@ fn stream_rows(
             palette,
             row,
             line_idx,
-            gutter,
+            (gutter, delta, tag),
             &query,
             has_search,
             tab.hscroll,
@@ -8702,10 +12272,12 @@ fn column_rows(
     tab: &mut Tab,
     palette: &Palette,
     height: usize,
+    gap_ms: u64,
     lang: Language,
 ) -> (Line<'static>, Vec<Line<'static>>, usize) {
     tab.height = height;
     tab.pin_cursor();
+    let delta = time_delta_column(&mut tab.engine, gap_ms);
     let rows = tab.engine.visible_line_count();
     if tab.engine.follow_tail {
         tab.top = view::follow_top(rows, height);
@@ -8752,6 +12324,7 @@ fn column_rows(
     } else {
         0
     };
+    let tag = source_tag_width(engine, tab.cells);
     let message = tx(lang, "message");
     let mut fixed_head = String::new();
     let mut head = String::new();
@@ -8773,7 +12346,9 @@ fn column_rows(
         .fg(palette.accent())
         .add_modifier(Modifier::BOLD);
     let header = Line::from(vec![
-        Span::raw(" ".repeat(gutter + 1)),
+        Span::raw(" ".repeat(
+            gutter + 1 + delta.map_or(0, |_| DELTA_CELLS + 1) + if tag > 0 { tag + 1 } else { 0 },
+        )),
         Span::styled(fixed_head, head_style),
         Span::styled(head, head_style),
     ]);
@@ -8795,7 +12370,7 @@ fn column_rows(
                     palette,
                     *row,
                     *line_idx,
-                    gutter,
+                    (gutter, delta, tag),
                     &query,
                     has_search,
                     tab.hscroll,
@@ -8808,7 +12383,7 @@ fn column_rows(
                 palette,
                 *row,
                 *line_idx,
-                gutter,
+                (gutter, delta, tag),
                 &query,
                 has_search,
                 tab.hscroll,
@@ -8862,7 +12437,7 @@ fn render_cells_row(
     palette: &Palette,
     row: usize,
     line_idx: usize,
-    gutter: usize,
+    (gutter, delta, tag): (usize, Option<u64>, usize),
     query: &str,
     has_search: bool,
     hscroll: usize,
@@ -8879,10 +12454,14 @@ fn render_cells_row(
         if gutter == 0 {
             mark.to_string()
         } else {
-            format!("{:>gutter$}{mark}", line_idx + 1)
+            format!("{:>gutter$}{mark}", row_number(engine, line_idx))
         },
         gutter_style,
     )];
+    if let Some(gap_ms) = delta {
+        spans.push(time_delta_cell(engine, palette, row, gap_ms));
+    }
+    spans.extend(source_tag_cell(engine, line_idx, tag, palette.ascii));
     let raw = engine.get_line(line_idx).unwrap_or_default();
     let base = match engine.match_highlight(&raw) {
         Some(rule) => palette.rule_style(&rule),
@@ -9096,6 +12675,69 @@ fn asm_rows(
     (lines, drawn)
 }
 
+/// Cells of the time delta column, the widest value (`+12:34.567`, `+1d 02:03`) included.
+const DELTA_CELLS: usize = 10;
+
+/// The time delta column for this frame: `Some(gap_ms)` when the stream shows it and its
+/// lines have times. Asks for the stream to be timed meanwhile (a background scan on a
+/// large file), as the window does.
+fn time_delta_column(engine: &mut TailEngine, gap_ms: u64) -> Option<u64> {
+    if !engine.show_time_delta {
+        return None;
+    }
+    engine.want_timestamps();
+    engine.timestamps_usable().then_some(gap_ms)
+}
+
+/// A row's time delta cell, right-aligned: blank on continuation lines and lines without
+/// a time, `...` until the row is timed, the anchor mark on the anchor, and the accent
+/// colour on a gap of at least `gap_ms` (in previous-row mode only, as in the window).
+fn time_delta_cell(
+    engine: &TailEngine,
+    palette: &Palette,
+    row: usize,
+    gap_ms: u64,
+) -> Span<'static> {
+    let dim = Style::default().fg(palette.dim());
+    let accent = Style::default().fg(palette.accent());
+    let (text, style) = match engine.row_time_delta(row) {
+        TimeDelta::Blank => (String::new(), dim),
+        TimeDelta::Pending => ("...".to_string(), dim),
+        TimeDelta::Anchor => ((if palette.ascii { "@" } else { "⚓" }).to_string(), accent),
+        TimeDelta::Millis(millis) => {
+            let gap = gap_ms > 0
+                && engine.time_anchor().is_none()
+                && millis >= i64::try_from(gap_ms).unwrap_or(i64::MAX);
+            (
+                crate::timestamp::format_delta(millis),
+                if gap { accent } else { dim },
+            )
+        }
+    };
+    let used = unicode_width::UnicodeWidthStr::width(text.as_str());
+    let pad = DELTA_CELLS.saturating_sub(used);
+    Span::styled(format!("{}{text} ", " ".repeat(pad)), style)
+}
+
+/// A byte range of a row after the bytes `start..end` were replaced by `with_len` bytes:
+/// before them it stays, after them it moves, across them it covers the new text.
+fn shift_range(
+    r: std::ops::Range<usize>,
+    (start, end): (usize, usize),
+    with_len: usize,
+) -> std::ops::Range<usize> {
+    let moved = |at: usize, inside: usize| {
+        if at <= start {
+            at
+        } else if at >= end {
+            at - end + start + with_len
+        } else {
+            inside
+        }
+    };
+    moved(r.start, start)..moved(r.end, start + with_len)
+}
+
 /// The mark after a row's number: `o` an automatic bookmark, `*` a bookmark, `>` a
 /// search hit, `<` a time earlier than the line above's (a clock jumping back).
 fn row_mark(engine: &TailEngine, line_idx: usize, hit: bool, bookmarked: bool) -> char {
@@ -9123,13 +12765,13 @@ pub fn render_row(
     palette: &Palette,
     row: usize,
     line_idx: usize,
-    gutter: usize,
+    (gutter, delta, tag): (usize, Option<u64>, usize),
     query: &str,
     has_search: bool,
     hscroll: usize,
 ) -> Line<'static> {
     let (hit, active, bookmarked) = engine.row_marks(row, line_idx, has_search);
-    let mut spans = Vec::with_capacity(6);
+    let mut spans = Vec::with_capacity(7);
     let gutter_style = if active {
         palette.active_hit()
     } else {
@@ -9140,10 +12782,14 @@ pub fn render_row(
         if gutter == 0 {
             mark.to_string()
         } else {
-            format!("{:>gutter$}{mark}", line_idx + 1)
+            format!("{:>gutter$}{mark}", row_number(engine, line_idx))
         },
         gutter_style,
     ));
+    if let Some(gap_ms) = delta {
+        spans.push(time_delta_cell(engine, palette, row, gap_ms));
+    }
+    spans.extend(source_tag_cell(engine, line_idx, tag, palette.ascii));
     if let Some(c) = engine.collapsed_row(row).filter(|c| c.count > 1) {
         let badge = if c.open {
             format!("[-{}] ", c.count)
@@ -9162,6 +12808,21 @@ pub fn render_row(
     let row = engine.get_row(line_idx);
     let text = row.as_ref().map_or("", |r| r.line.as_str());
     let text = text.trim_end_matches(['\r', '\n']);
+    // The leading timestamp in the stream's time display (UTC, local); the colour runs
+    // move with the text after it.
+    let timed = engine.display_time(text);
+    let shown;
+    let text = match &timed {
+        Some((start, end, with)) => {
+            shown = format!("{}{with}{}", &text[..*start], &text[*end..]);
+            shown.as_str()
+        }
+        None => text,
+    };
+    let moved = |r: std::ops::Range<usize>| match &timed {
+        Some((start, end, with)) => shift_range(r, (*start, *end), with.len()),
+        None => r,
+    };
     // With captures-only rules or quick labels the row is painted span by span, first
     // rule winning per byte, then the labels, then the ANSI colours (see
     // `TailEngine::match_row_spans`); a search hit still wins over all of them.
@@ -9174,8 +12835,11 @@ pub fn render_row(
             Some(rule) => palette.rule_style(rule),
             None => palette.level_style(engine.level_of(line_idx)),
         };
-        let spans_in: Vec<std::ops::Range<usize>> =
-            painted.spans.iter().map(|s| s.start..s.end).collect();
+        let spans_in: Vec<std::ops::Range<usize>> = painted
+            .spans
+            .iter()
+            .map(|s| moved(s.start..s.end))
+            .collect();
         let hits = if hit && !query.is_empty() {
             view::hit_ranges(text, query)
         } else {
@@ -9216,7 +12880,8 @@ pub fn render_row(
         (None, Some(r)) => &r.ansi,
         _ => &[],
     };
-    let run_ranges: Vec<std::ops::Range<usize>> = runs.iter().map(|r| r.start..r.end).collect();
+    let run_ranges: Vec<std::ops::Range<usize>> =
+        runs.iter().map(|r| moved(r.start..r.end)).collect();
     let hits = if hit && !query.is_empty() {
         view::hit_ranges(text, query)
     } else {
@@ -9329,6 +12994,90 @@ pub fn absolute(p: &str) -> PathBuf {
             .map(|d| d.join(&path))
             .unwrap_or(path)
     }
+}
+
+/// The number a row shows: its line, in a merged view the line in its source, as in the
+/// GUI.
+fn row_number(engine: &TailEngine, line_idx: usize) -> usize {
+    let source_line = match (&engine.merged, &engine.derived) {
+        (Some(m), _) => m.source_of(line_idx).map(|(_, l)| l),
+        (None, Some(d)) => d.source_line(line_idx),
+        (None, None) => None,
+    };
+    source_line.unwrap_or(line_idx) + 1
+}
+
+/// Time a tick gives the merged views to take their sources' lines.
+const MERGE_BUDGET: Duration = Duration::from_millis(8);
+
+/// Most cells the source tag of a merged view's rows takes (`[app.log]`).
+const SOURCE_TAG_CELLS: usize = 10;
+
+/// The colour of source `i` of a merged view (its tag, its row in the dialog).
+fn source_color(i: usize) -> Color {
+    const COLORS: [Color; 8] = [
+        Color::Cyan,
+        Color::Magenta,
+        Color::Yellow,
+        Color::Green,
+        Color::Blue,
+        Color::LightRed,
+        Color::LightCyan,
+        Color::LightMagenta,
+    ];
+    COLORS[i % COLORS.len()]
+}
+
+/// The source tag of merged line `line_idx`, `width` cells plus a space (`[app]`), in its
+/// source's colour; `width` 1 draws only a coloured mark. `None` outside a merged view.
+fn source_tag_cell(
+    engine: &TailEngine,
+    line_idx: usize,
+    width: usize,
+    ascii: bool,
+) -> Option<Span<'static>> {
+    let m = engine.merged.as_ref()?;
+    let (source, _) = m.source_of(line_idx).unwrap_or((usize::MAX, 0));
+    let Some(src) = m.sources.get(source) else {
+        return Some(Span::raw(" ".repeat(width + 1)));
+    };
+    let style = Style::default().fg(source_color(source));
+    if width <= 1 {
+        return Some(Span::styled(if ascii { "| " } else { "▌ " }, style));
+    }
+    let name: String = {
+        let mut out = String::new();
+        let mut used = 0;
+        for c in src.name.chars() {
+            let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + w + 2 > width {
+                break;
+            }
+            out.push(c);
+            used += w;
+        }
+        out
+    };
+    let text = format!("[{name}]");
+    let pad = width.saturating_sub(unicode_width::UnicodeWidthStr::width(text.as_str()));
+    Some(Span::styled(format!("{text}{} ", " ".repeat(pad)), style))
+}
+
+/// Cells of the source tags of a merged view drawn `cells` wide: the longest name, at
+/// most `SOURCE_TAG_CELLS`; a narrow window (under 60 cells) keeps a coloured mark only.
+fn source_tag_width(engine: &TailEngine, cells: usize) -> usize {
+    let Some(m) = &engine.merged else {
+        return 0;
+    };
+    if cells < 60 {
+        return 1;
+    }
+    m.sources
+        .iter()
+        .map(|s| unicode_width::UnicodeWidthStr::width(s.name.as_str()) + 2)
+        .max()
+        .unwrap_or(3)
+        .min(SOURCE_TAG_CELLS)
 }
 
 /// Longest wait of the event loop for input when nothing runs.
@@ -10806,7 +14555,7 @@ mod tests {
         let saved = std::fs::read(&ini).unwrap();
         let mut app = app_over(&ini);
         app.apply(Action::Settings);
-        let screen = render(&mut app, 200, 80);
+        let screen = render(&mut app, 200, 110);
         let d = app.hits.dialog.unwrap();
         let start = d.outer;
         let x = d.close.expect("[x]");
@@ -10815,9 +14564,9 @@ mod tests {
         // The title row moves it; released outside, it stays open where it was left.
         app.on_mouse(click(start.x + 5, start.y));
         app.on_mouse(drag(start.x + 35, start.y + 5));
-        app.on_mouse(release(199, 79));
+        app.on_mouse(release(199, 109));
         assert!(app.settings_form.is_some(), "a drag never closes it");
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let moved = app.hits.dialog.unwrap().outer;
         assert_eq!(
             (moved.x, moved.y, moved.width, moved.height),
@@ -10831,7 +14580,7 @@ mod tests {
         app.on_mouse(click(moved.right() - 1, moved.bottom() - 1));
         app.on_mouse(drag(moved.x + 2, moved.y + 2));
         app.on_mouse(release(moved.x + 2, moved.y + 2));
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let small = app.hits.dialog.unwrap().outer;
         assert_eq!(
             (small.x, small.y, small.width, small.height),
@@ -10843,7 +14592,7 @@ mod tests {
         f.focus = f.fields.iter().position(|x| x.label == "Theme").unwrap();
         press(&mut app, KeyCode::Right);
         assert_ne!(app.palette.theme, theme);
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let x = app.hits.dialog.unwrap().close.unwrap();
         app.on_mouse(click(x.x + 1, x.y));
         assert!(app.settings_form.is_none());
@@ -10851,19 +14600,19 @@ mod tests {
         assert_eq!(std::fs::read(&ini).unwrap(), saved);
         // Reopened where it was left; kept inside a smaller terminal.
         app.apply(Action::Settings);
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         assert_eq!(app.hits.dialog.unwrap().outer, small);
         render(&mut app, 80, 24);
         let fit = app.hits.dialog.unwrap().outer;
         assert!(fit.right() <= 80 && fit.bottom() <= 24, "{fit:?}");
         // A double click on the title: centred at the default size again.
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         let t = app.hits.dialog.unwrap().outer;
         app.on_mouse(click(t.x + 5, t.y));
         app.on_mouse(release(t.x + 5, t.y));
         app.on_mouse(click(t.x + 5, t.y));
         app.on_mouse(release(t.x + 5, t.y));
-        render(&mut app, 200, 80);
+        render(&mut app, 200, 110);
         assert_eq!(app.hits.dialog.unwrap().outer, start);
     }
 
@@ -11962,6 +15711,126 @@ mod tests {
     }
 
     #[test]
+    fn alt_v_draws_the_volume_row_and_a_click_goes_to_that_time() {
+        let body: String = (0..120)
+            .map(|i| {
+                let level = if i == 100 { "ERROR" } else { "INFO" };
+                format!(
+                    "2026-09-28 10:{:02}:{:02} {level} line {i}\n",
+                    i / 60,
+                    i % 60
+                )
+            })
+            .collect();
+        let (mut app, _dir) = app_with(&[("a.log", &body)], false);
+        render(&mut app, 100, 20);
+        app.apply(Action::VolumeRow);
+        assert!(app.tabs[0].engine.timeline_open);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[0].engine.histogram_lines() < 120 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 100, 20);
+        assert!(screen.iter().any(|l| l.contains("▤")), "{screen:#?}");
+        assert!(!app.hits.volume_cells.is_empty());
+        // The first cell is the first second: line 1.
+        app.tabs[0].engine.follow_tail = true;
+        let (r, _, _) = app.hits.volume_cells[0];
+        assert!(app.on_mouse(click(r.x, r.y)));
+        render(&mut app, 100, 20);
+        assert!(!app.tabs[0].engine.follow_tail);
+        assert_eq!(app.tabs[0].cursor_line(), Some(0));
+        app.apply(Action::VolumeRow);
+        assert!(!app.tabs[0].engine.timeline_open);
+    }
+
+    #[test]
+    fn alt_k_keeps_searches_and_n_walks_them_when_no_search_is_typed() {
+        let body = "ok\ntimeout a\nok\nrefused b\ntimeout c\nok\n";
+        let (mut app, _dir) = app_with(&[("a.log", body)], false);
+        render(&mut app, 100, 20);
+        app.apply(Action::KeepSearch);
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Type a search (/) first, then Alt+K keeps it")
+        );
+        for q in ["timeout", "refused"] {
+            app.search(q);
+            app.apply(Action::KeepSearch);
+        }
+        assert!(app.tabs[0].engine.search_query.is_empty());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[0]
+            .engine
+            .named
+            .list
+            .iter()
+            .any(|n| n.running() || n.total() == 0)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 200, 20);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("timeout 2") && l.contains("refused 1")),
+            "{screen:#?}"
+        );
+        assert!(
+            !screen.iter().any(|l| l.contains("Not found")),
+            "{screen:#?}"
+        );
+        // From the top: refused on line 4 comes after timeout on line 2.
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::SearchNext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(1));
+        app.apply(Action::SearchNext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(3));
+        // Focused on timeout (its chip), refused is skipped.
+        app.tabs[0].engine.named.toggle_focus(0);
+        app.apply(Action::SearchNext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.tabs[0].cursor_line(), Some(4));
+        // Alt+K with nothing typed forgets the focused one.
+        app.apply(Action::KeepSearch);
+        assert_eq!(
+            app.tabs[0].engine.named.saved(),
+            vec![(2, "refused".to_string())]
+        );
+    }
+
+    #[test]
+    fn alt_i_shows_the_stream_information() {
+        use crossterm::event::KeyCode;
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        render(&mut app, 100, 30);
+        app.apply(Action::StreamInfo);
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("Stream information · a.log")),
+            "{screen:#?}"
+        );
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("Lines") && l.contains(" 3")),
+            "{screen:#?}"
+        );
+        assert!(screen
+            .iter()
+            .any(|l| l.contains("Encoding") && l.contains("UTF-8")));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.info_view.is_none());
+    }
+
+    #[test]
     fn clicking_the_second_window_of_a_split_focuses_it() {
         let (mut app, _dir) = app_with(&[("a.log", LOG), ("b.log", LOG)], false);
         app.apply(Action::SplitRight);
@@ -12128,6 +15997,176 @@ mod tests {
         // Every stream is still drawn somewhere.
         let screen = render(&mut app, 80, 14);
         assert!(screen[2].contains("[#3] c.log"), "{screen:#?}");
+    }
+
+    #[test]
+    fn alt_m_merges_two_streams_by_time_with_source_tags_and_the_layout_keeps_it() {
+        use crossterm::event::KeyCode;
+        let a_log = "2026-09-28 10:00:00 INFO a1\n2026-09-28 10:00:02 INFO a2\n";
+        let b_log = "2026-09-28 10:00:01 INFO b1\n2026-09-28 10:00:03 INFO b2\n";
+        let files = [("a.log", a_log), ("b.log", b_log)];
+        let (mut app, _dir) = app_with(&files, false);
+        render(&mut app, 100, 20);
+        app.apply(Action::MergedView);
+        assert_eq!(
+            app.merge.as_ref().unwrap().checked(),
+            vec![path_of(&app, 0)]
+        );
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.merge.is_none());
+        assert_eq!(app.tabs.len(), 3);
+        assert!(app.tabs[2].engine.merged.is_some());
+        assert_eq!(app.tabs[2].title, "a.log + b.log");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[2].engine.total_lines() < 4 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(30));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 100, 20);
+        let rows: Vec<&String> = screen.iter().filter(|l| l.contains("INFO")).collect();
+        let order: Vec<&str> = rows
+            .iter()
+            .filter_map(|l| ["a1", "b1", "a2", "b2"].into_iter().find(|w| l.contains(w)))
+            .collect();
+        assert_eq!(order, ["a1", "b1", "a2", "b2"], "{screen:#?}");
+        assert!(
+            rows[0].contains("[a.log]") && rows[1].contains("[b.log]"),
+            "{screen:#?}"
+        );
+        // Line numbers are the source lines: b1 is line 1 of b.log.
+        assert!(
+            rows[1].trim_start().starts_with("│1") || rows[1].contains(" 1 "),
+            "{screen:#?}"
+        );
+        // Saved under its `merged:` name, rebuilt from the sources in a new run.
+        let ron = app.dock_ron();
+        assert!(ron.contains("merged:1:"), "{ron}");
+        let identity = crate::workspace::saved_identity(&app.tabs[2].engine).unwrap();
+        let tabs = (0..2)
+            .map(|i| Tab::new(TailEngine::open(path_of(&app, i)).unwrap()))
+            .collect();
+        let mut again = App::new(tabs, app.palette);
+        again.restore_views(&[identity]);
+        again.restore_dock(Some(&ron));
+        assert_eq!(again.tabs.len(), 3);
+        let spool = again.tabs[2].engine.path.clone();
+        assert!(again.dock.find_stream(&spool).is_some());
+        // Alt+M on the merged view lists its sources: one turned off.
+        again.focus_tab(2);
+        again.apply(Action::MergedView);
+        assert!(again.merge.as_ref().unwrap().view.is_some());
+        press(&mut again, KeyCode::Char(' '));
+        assert!(!again.tabs[2].engine.merged.as_ref().unwrap().sources[0].enabled);
+    }
+
+    #[test]
+    fn alt_t_opens_the_filter_as_a_tab_with_source_line_numbers_and_ctrl_k_goes_back() {
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        render(&mut app, 100, 20);
+        app.apply(Action::FilterTab);
+        assert_eq!(
+            app.message.as_deref(),
+            Some("No filter to open as a tab: set an include, exclude, level or time filter first")
+        );
+        app.tabs[0].engine.set_include_filter("ERROR");
+        app.apply(Action::FilterTab);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.tabs[1].title, "a.log ▸ ERROR");
+        assert_eq!(app.active, 1);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.tabs[1].engine.total_lines() < 1 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(30));
+            render(&mut app, 100, 20);
+        }
+        let screen = render(&mut app, 100, 20);
+        let row = screen
+            .iter()
+            .find(|l| l.contains("ERROR failed"))
+            .expect("the row");
+        // The source's line number: the ERROR line is line 3 of a.log.
+        assert!(
+            row.contains("3 2026-09-28") || row.contains("3▶") || row.contains("3 "),
+            "{row}"
+        );
+        assert!(app.dock_ron().contains("filter:1:"));
+        // Ctrl+K shows the line in the source.
+        app.tabs[1].set_cursor(0);
+        app.apply(Action::ToggleContext);
+        render(&mut app, 100, 20);
+        assert_eq!(app.active, 0);
+        assert_eq!(app.tabs[0].engine.context_line(), Some(2));
+    }
+
+    #[test]
+    fn at_sets_the_time_anchor_and_a_selection_shows_its_elapsed_time() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let (mut app, _dir) = app_with(&[("a.log", LOG)], false);
+        render(&mut app, 100, 20);
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('@'));
+        assert_eq!(app.tabs[0].engine.time_anchor(), Some(0));
+        assert!(app.tabs[0].engine.show_time_delta);
+        assert_eq!(app.message.as_deref(), Some("Time anchor on line 1"));
+        let screen = render(&mut app, 100, 20);
+        let row = screen.iter().find(|l| l.contains("ERROR failed")).unwrap();
+        assert!(row.contains("+2.000"), "{row}");
+        // Shift+Down twice: three rows, two seconds.
+        app.message = None;
+        for _ in 0..2 {
+            app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        }
+        let screen = render(&mut app, 100, 20);
+        assert!(
+            screen.iter().any(|l| l.contains("Δ +2.000 · 3 rows")),
+            "{screen:#?}"
+        );
+        app.apply(Action::TimeAnchorClear);
+        assert_eq!(app.tabs[0].engine.time_anchor(), None);
+    }
+
+    #[test]
+    fn the_palette_workspace_commands_recent_files_select_all_and_default_session() {
+        use crossterm::event::KeyCode;
+        let (mut app, dir) = app_with(&[("a.log", LOG)], false);
+        app.apply(Action::RecentFiles);
+        assert_eq!(app.message.as_deref(), Some("No recent files"));
+        let mut settings = crate::tui::workspace::Settings::default();
+        let gone = dir.path().join("gone.log");
+        settings.config.recent_files = vec![path_of(&app, 0), gone.clone()];
+        settings.config.current_session = Some(dir.path().join("s.fasttail-session.ini"));
+        settings.config.recent_sessions = vec![dir.path().join("s.fasttail-session.ini")];
+        app.settings = Some(settings);
+        app.apply(Action::RecentFiles);
+        assert_eq!(app.recent_menu, Some(0));
+        render(&mut app, 100, 20);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Delete);
+        let config = &app.settings.as_ref().unwrap().config;
+        assert_eq!(config.recent_files, vec![path_of(&app, 0)]);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.recent_menu.is_none());
+        app.apply(Action::SelectAll);
+        assert!(app.tabs[0].engine.has_selection());
+        app.apply(Action::SaveDefaultSession);
+        assert!(app
+            .settings
+            .as_ref()
+            .unwrap()
+            .config
+            .current_session
+            .is_none());
+        app.apply(Action::ClearRecentSessions);
+        assert!(app
+            .settings
+            .as_ref()
+            .unwrap()
+            .config
+            .recent_sessions
+            .is_empty());
+        app.apply(Action::RemoveBookmark);
+        assert_eq!(app.message.as_deref(), Some("No bookmark on this row"));
     }
 
     #[test]
@@ -12709,7 +16748,132 @@ mod tests {
     }
 
     #[test]
-    fn the_global_dialog_says_when_the_window_set_an_expression() {
+    fn the_time_delta_column_and_the_time_display_draw_in_the_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(
+            &a,
+            "2026-09-28T14:00:00Z a\n2026-09-28T14:00:01.200Z b\n2026-09-28T14:00:03Z c\n",
+        )
+        .unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::ToggleTimeDelta);
+        assert!(app.tabs[0].engine.show_time_delta);
+        let e = &mut app.tabs[0].engine;
+        e.ensure_timestamps();
+        while !e.timestamps_complete() {
+            e.fill_timestamps();
+        }
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("+1.200 2026-09-28T14:00:01.200Z b")),
+            "{screen:#?}"
+        );
+        assert!(screen.iter().any(|l| l.contains("[x] Δt")), "{screen:#?}");
+        // The chip moves on to UTC, then local time; a UTC stamp shown in UTC keeps its text.
+        app.apply(Action::SetTimeDisplay(crate::timestamp::TimeDisplay::Utc));
+        assert_eq!(
+            app.tabs[0].engine.time_display(),
+            crate::timestamp::TimeDisplay::Utc
+        );
+        let screen = render(&mut app, 120, 30);
+        assert!(screen.iter().any(|l| l.contains("UTC")), "{screen:#?}");
+        assert!(screen.iter().any(|l| l.contains(" c")), "{screen:#?}");
+        app.apply(Action::ToggleTimeDelta);
+        let screen = render(&mut app, 120, 30);
+        assert!(!screen.iter().any(|l| l.contains("+1.200")), "{screen:#?}");
+    }
+
+    #[test]
+    fn search_results_scope_export_and_report_work_in_the_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let text: String = (1..=20)
+            .map(|i| {
+                if i % 5 == 0 {
+                    format!("ERROR line {i}\n")
+                } else {
+                    format!("INFO line {i}\n")
+                }
+            })
+            .collect();
+        std::fs::write(&a, text).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.search("ERROR");
+        assert_eq!(app.tabs[0].engine.search_matches, vec![4, 9, 14, 19]);
+        // The results list goes to the hit chosen.
+        app.apply(Action::SearchResults);
+        assert!(app.results_menu.is_some());
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("4 search results")),
+            "{screen:#?}"
+        );
+        app.go_to_result(2);
+        assert_eq!(app.tabs[0].cursor_line(), Some(14));
+        assert!(app.results_menu.is_none());
+        // A line range: only the hits inside it count.
+        app.submit_search_scope("6-15");
+        assert_eq!(app.tabs[0].engine.search_matches, vec![9, 14]);
+        let screen = render(&mut app, 100, 30);
+        assert!(screen.iter().any(|l| l.contains("in range")), "{screen:#?}");
+        // The matches as CSV, refused over an existing file until `!`.
+        let csv = dir.path().join("m.csv");
+        std::fs::write(&csv, "old").unwrap();
+        app.start_export(
+            crate::export::Scope::Matches,
+            crate::export::Format::Csv,
+            &csv.display().to_string(),
+        );
+        assert!(app.export.is_none());
+        app.start_export(
+            crate::export::Scope::Matches,
+            crate::export::Format::Csv,
+            &format!("{}!", csv.display()),
+        );
+        while app.export.is_some() {
+            app.step_export();
+        }
+        let written = std::fs::read_to_string(&csv).unwrap();
+        assert!(written.contains("ERROR line 10"), "{written}");
+        assert!(!written.contains("ERROR line 5\n"), "{written}");
+        // The bookmark report saved to a file.
+        app.tabs[0].engine.toggle_bookmark(9);
+        let md = dir.path().join("report.md");
+        app.write_report(false, &md.display().to_string());
+        let report = std::fs::read_to_string(&md).unwrap();
+        assert!(report.contains("ERROR line 10"), "{report}");
+    }
+
+    #[test]
+    fn a_range_after_a_replaced_timestamp_moves_with_it() {
+        // `2026-01-01 10:00` (16 bytes) shown as `2026-01-01T09:00:00Z` (20 bytes).
+        assert_eq!(shift_range(0..4, (0, 16), 20), 0..20);
+        assert_eq!(shift_range(17..20, (0, 16), 20), 21..24);
+        assert_eq!(shift_range(2..5, (6, 10), 2), 2..5);
+        assert_eq!(shift_range(7..12, (6, 10), 2), 6..10);
+    }
+
+    #[test]
+    fn the_global_expression_is_shown_and_a_stream_switches_to_an_expression() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.log");
         std::fs::write(&a, "payment\nrefund\nother\n").unwrap();
@@ -12729,13 +16893,456 @@ mod tests {
         assert!(
             screen
                 .iter()
-                .any(|l| l.contains("Expression mode (set in the window): payment OR refund")),
+                .any(|l| l.contains("Include (expression)") && l.contains("payment OR refund")),
             "{screen:#?}"
         );
-        // The bar shows a stream's own expression in place of its include term.
-        app.tabs[0].engine.set_filter_expr("refund");
-        app.tabs[0].engine.set_filter_expr_mode(true);
+        app.global = None;
+        // `I` switches the stream's include side to an expression built from its terms.
+        app.tabs[0].engine.set_include_filter("refund");
+        app.apply(Action::ToggleFilterExpr);
+        assert!(app.tabs[0].engine.filter_expr_mode());
         assert_eq!(app.tabs[0].engine.include_display(), "refund");
+        // `i` then edits the expression.
+        app.submit_prompt(Prompt {
+            kind: PromptKind::Include,
+            field: TextField::new("payment OR refund"),
+        });
+        assert_eq!(app.tabs[0].engine.filter_expr(), "payment OR refund");
+        let screen = render(&mut app, 120, 30);
+        assert!(screen.iter().any(|l| l.contains("[x] ƒx")), "{screen:#?}");
+    }
+
+    #[test]
+    fn rules_are_walked_imported_and_exported_and_bookmarks_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let text: String = (1..=12)
+            .map(|i| {
+                if i % 4 == 0 {
+                    format!("timeout {i}\n")
+                } else {
+                    format!("ok {i}\n")
+                }
+            })
+            .collect();
+        std::fs::write(&a, text).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            highlight_rules: vec![crate::tail_engine::HighlightRule::new(
+                "timeout",
+                [255, 255, 0],
+                [0, 0, 0],
+                false,
+            )],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.tabs[0].engine.follow_tail = false;
+        app.tabs[0].set_cursor(3);
+        // F4 from a matching row: the next line of that rule, then wrapping round.
+        app.apply(Action::RuleNext);
+        assert_eq!(app.tabs[0].cursor_line(), Some(7));
+        app.apply(Action::RulePrev);
+        assert_eq!(app.tabs[0].cursor_line(), Some(3));
+        // Export, then import adds nothing new; with `!` it replaces.
+        let set = dir.path().join("team.fasttail-rules.ini");
+        app.export_rules(&set.display().to_string());
+        assert!(set.exists());
+        app.import_rules(&set.display().to_string());
+        assert_eq!(app.settings_mut().config.highlight_rules.len(), 1);
+        app.import_rules(&format!("{}!", set.display()));
+        assert_eq!(app.settings_mut().config.highlight_rules.len(), 1);
+        assert!(app
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("replacing")));
+        // Clear all bookmarks.
+        app.tabs[0].engine.toggle_bookmark(1);
+        app.tabs[0].engine.toggle_bookmark(2);
+        app.apply(Action::ClearBookmarks);
+        assert!(app.tabs[0].engine.bookmarks.is_empty());
+    }
+
+    #[test]
+    fn lines_are_compared_and_sent_to_the_scratchpad() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(
+            &a,
+            "GET /api took=120\nGET /api took=480\nother\nGET /api took=120\n",
+        )
+        .unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        // Two rows selected: compared at once.
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::SelectDown);
+        app.apply(Action::Compare);
+        let v = app.compare.as_ref().expect("compare open");
+        assert!(!v.is_equal());
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("1 changes")),
+            "{screen:#?}"
+        );
+        app.on_compare_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(app.compare.is_none());
+        // One row: marked, then compared with another.
+        app.tabs[0].engine.clear_selection();
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::Compare);
+        assert!(app.compare_mark.is_some());
+        app.tabs[0].set_cursor(3);
+        app.apply(Action::Compare);
+        assert!(app.compare.as_ref().is_some_and(|v| v.is_equal()));
+        app.compare = None;
+        // Sent to the pad under a reference line, saved beside fasttail.ini.
+        app.tabs[0].set_cursor(1);
+        app.apply(Action::SendToScratchpad);
+        let pad = app.scratchpad.as_ref().unwrap();
+        assert_eq!(pad.text, "── a.log:2 ──\nGET /api took=480\n");
+        app.save_scratchpad();
+        let file = dir.path().join("scratchpad.txt");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), pad_text(&app));
+        // The editor: Ctrl+G on the line goes to its stream line.
+        app.apply(Action::Scratchpad);
+        let e = app.pad_editor.as_mut().unwrap();
+        e.row = 1;
+        app.on_pad_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('g'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(app.pad_editor.is_none());
+        render(&mut app, 120, 30);
+        assert_eq!(app.tabs[0].cursor_line(), Some(1));
+    }
+
+    fn pad_text(app: &App) -> String {
+        app.scratchpad
+            .as_ref()
+            .map(|p| p.text.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_analysis_views_count_filter_and_go_to_lines() {
+        use crate::tui::analysis::{build, AnalysisKey, Kind, RowAction};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        let mut text = String::new();
+        for i in 0..30 {
+            let status = if i % 3 == 0 { 500 } else { 200 };
+            text.push_str(&format!(
+                "ts=2026-10-29T10:00:{i:02}Z level=info status={status} id=op{} msg=\"done {i}\"\n",
+                i % 4
+            ));
+        }
+        std::fs::write(&a, text).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        let settle = |app: &mut App| {
+            for _ in 0..500 {
+                app.tabs[0].engine.poll_updates();
+                let e = &app.tabs[0].engine;
+                let busy = e.stats.as_ref().is_some_and(|s| !s.done())
+                    || e.operations.as_ref().is_some_and(|o| !o.done())
+                    || e.patterns.as_ref().is_some_and(|p| p.running())
+                    || e.query.as_ref().is_some_and(|q| q.running());
+                if !busy {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        // Statistics of `status`: 200 then 500, Enter includes the value.
+        app.open_source_view(
+            crate::field_stats::StatsSource::Field("status".into()),
+            true,
+        );
+        settle(&mut app);
+        let t = build(Kind::Stats, &mut app.tabs[0].engine, Language::En, false);
+        assert_eq!(t.rows[0].cells[0], "200", "{t:?}");
+        assert_eq!(t.rows[0].cells[1], "20");
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("status: 30 lines")),
+            "{screen:#?}"
+        );
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.on_analysis_key(enter);
+        app.on_analysis_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.tabs[0].engine.include_filter(), "status=500");
+        app.tabs[0].engine.set_include_filter("");
+        app.analysis = None;
+        // Query: a stats pipeline.
+        app.open_analysis(Kind::Query);
+        app.tabs[0].engine.run_query("stats count() by status");
+        settle(&mut app);
+        let t = build(Kind::Query, &mut app.tabs[0].engine, Language::En, false);
+        assert_eq!(t.rows.len(), 2, "{t:?}");
+        app.analysis = None;
+        // Operations by `id`: four of them, Enter goes to the first line of one.
+        app.open_source_view(crate::field_stats::StatsSource::Field("id".into()), false);
+        settle(&mut app);
+        let t = build(
+            Kind::Operations,
+            &mut app.tabs[0].engine,
+            Language::En,
+            false,
+        );
+        assert_eq!(t.rows.len(), 4, "{t:?}");
+        assert_eq!(t.rows[1].action, RowAction::Line(1));
+        let v = app.analysis.as_mut().unwrap();
+        v.selected = 0;
+        let shown = v.shown(&t);
+        let k = v.on_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &t,
+        );
+        assert!(
+            matches!(k, AnalysisKey::Activate(RowAction::Line(_), false)),
+            "{shown:?}"
+        );
+        // Patterns: learnt in the background, listed most frequent first.
+        app.analysis = None;
+        app.open_analysis(Kind::Patterns);
+        settle(&mut app);
+        let t = build(Kind::Patterns, &mut app.tabs[0].engine, Language::En, false);
+        assert!(!t.rows.is_empty(), "{t:?}");
+        // Explain the last ten seconds against the rest.
+        let e = &mut app.tabs[0].engine;
+        e.ensure_timestamps();
+        while !e.timestamps_complete() {
+            e.fill_timestamps();
+        }
+        let (a, b) = (e.line_timestamp(20).unwrap(), e.line_timestamp(29).unwrap());
+        e.explain_span((a, b), crate::spike::Baseline::Rest, false);
+        for _ in 0..500 {
+            app.tabs[0].engine.poll_updates();
+            if app.tabs[0]
+                .engine
+                .explain
+                .as_ref()
+                .is_some_and(|x| !x.running())
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let t = build(Kind::Explain, &mut app.tabs[0].engine, Language::En, false);
+        assert!(
+            t.summary
+                .iter()
+                .any(|l| l.contains("10 entries in the span")),
+            "{t:?}"
+        );
+    }
+
+    #[test]
+    fn keys_are_remapped_in_the_keys_dialog_and_settings_toggle_from_the_palette() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, "one\ntwo\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.apply(Action::KeysDialog);
+        let follow = keys::REMAPPABLE
+            .iter()
+            .position(|(n, _, _)| *n == "follow")
+            .unwrap();
+        app.keys_dialog.as_mut().unwrap().selected = follow;
+        let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('f'));
+        let saved = crate::tui::workspace::Settings::read(&ini).config;
+        assert_eq!(
+            saved.shortcuts.get("tui.follow").map(String::as_str),
+            Some("f")
+        );
+        assert_eq!(
+            saved.shortcuts.get("tui.global.toggle").map(String::as_str),
+            Some(""),
+            "f was taken from the global filter switch"
+        );
+        let screen = render(&mut app, 100, 40);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("taken from global.toggle")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert!(app.keys_dialog.is_none());
+        let before = app.tabs[0].engine.follow_tail;
+        press(&mut app, KeyCode::Char('f'));
+        assert_ne!(app.tabs[0].engine.follow_tail, before, "f follows now");
+        press(&mut app, KeyCode::Char(' '));
+        assert_ne!(
+            app.tabs[0].engine.follow_tail, before,
+            "Space no longer does"
+        );
+        // A setting toggled from the palette.
+        let colors = app.settings_mut().config.level_colors;
+        app.apply(Action::ToggleSetting(
+            crate::actions::BoolSetting::LevelColors,
+        ));
+        assert_eq!(app.settings_mut().config.level_colors, !colors);
+        assert_eq!(app.palette.level_colors, !colors);
+        assert!(crate::tui::palette::entries(Language::En)
+            .iter()
+            .any(|e| e.action == Action::ToggleSetting(crate::actions::BoolSetting::Sound)));
+    }
+
+    #[test]
+    fn the_web_view_mcp_server_and_plugins_run_from_the_terminal() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let free = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, "one\ntwo\n").unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            web_enabled: true,
+            web_port: free(),
+            mcp_enabled: true,
+            mcp_port: free(),
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.mcp_view.runtime_path = Some(dir.path().join("mcp.runtime"));
+        app.tick();
+        assert!(app.web_view.connections().is_some(), "{:?}", app.message);
+        assert!(app.mcp_view.port().is_some(), "{:?}", app.message);
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("web :") && l.contains("MCP :")),
+            "{screen:#?}"
+        );
+        // Off in Settings: both stop.
+        app.settings_mut().config.web_enabled = false;
+        app.settings_mut().config.mcp_enabled = false;
+        app.tick();
+        assert!(app.web_view.connections().is_none());
+        assert!(app.mcp_view.port().is_none());
+        // A source plugin is approved only after its hash is shown.
+        let plugins = dir.path().join("plugins");
+        let one = plugins.join("echo");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::write(
+            one.join("plugin.toml"),
+            "api = 1\nname = \"echo\"\nversion = \"1.0\"\nkind = \"source\"\n[source]\ncommand = \"echo\"\n",
+        )
+        .unwrap();
+        app.plugins = Some(PluginsDialog {
+            catalog: crate::plugins::discover(&plugins),
+            selected: 0,
+            confirm: None,
+        });
+        let press = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(
+            app.plugins.as_ref().unwrap().confirm.as_deref(),
+            Some("echo")
+        );
+        let screen = render(&mut app, 120, 30);
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("y runs the programs of echo")),
+            "{screen:#?}"
+        );
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app
+            .settings_mut()
+            .config
+            .plugins
+            .approved
+            .contains_key("echo"));
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!app
+            .settings_mut()
+            .config
+            .plugins
+            .approved
+            .contains_key("echo"));
+    }
+
+    #[test]
+    fn a_source_location_opens_in_fasttail_at_its_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("Orders.java");
+        let body: String = (1..=50).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&src, body).unwrap();
+        let a = dir.path().join("a.log");
+        std::fs::write(&a, format!("boom at {}:42\n", src.display())).unwrap();
+        let ini = dir.path().join("fasttail.ini");
+        crate::config::FastTailConfig {
+            open_files: vec![a.clone()],
+            ..Default::default()
+        }
+        .save_to(&ini)
+        .unwrap();
+        let mut app = app_over(&ini);
+        app.restore_dock(None);
+        app.tabs[0].set_cursor(0);
+        app.apply(Action::OpenSourceHere);
+        assert_eq!(app.tabs.len(), 2, "{:?}", app.message);
+        assert!(crate::paths::paths_equal(
+            &app.tabs[app.active].engine.path,
+            &src
+        ));
+        render(&mut app, 100, 30);
+        assert_eq!(app.tabs[app.active].cursor_line(), Some(41));
     }
 
     #[test]
@@ -12763,12 +17370,12 @@ mod tests {
             screen.iter().any(|l| l.contains("Exclude (none match)")),
             "{screen:#?}"
         );
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Char(' '));
-        // On, Match case, Regex, Include, then the exclude row.
         for _ in 0..4 {
+            press(&mut app, KeyCode::Up);
+        }
+        press(&mut app, KeyCode::Char(' '));
+        // On, Match case, Regex, Expression, Include, then the exclude row.
+        for _ in 0..5 {
             press(&mut app, KeyCode::Down);
         }
         keys(&mut app, "healthcheck");

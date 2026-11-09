@@ -14,6 +14,7 @@ use crate::i18n::Language;
 use crate::i18n_tui::{tx, txf};
 use crate::log_level::LogLevel;
 use crate::tail_engine::FileEncoding;
+use crate::timestamp::TimeDisplay;
 use crate::tui::app::Tab;
 use crate::tui::colors::Palette;
 use ratatui::buffer::Buffer;
@@ -47,10 +48,18 @@ pub enum BarChip {
     SourceEnded,
     /// The column view on or off (a stream with a field parser).
     Columns,
+    /// The time delta column on or off.
+    TimeDelta,
+    /// The include side as an expression (`a AND (b OR c)`) or as terms.
+    FilterExpr,
+    /// How the rows show their time (as written, UTC, local): the next one.
+    TimeDisplay,
     /// The columns shown: opens their list.
     Fields,
     Presets,
     Global,
+    /// A kept search (`timeout 12`): walks only it, or all of them again.
+    Named(usize),
 }
 
 /// A piece of a bar: a clickable chip drawn `[text]`, or plain text.
@@ -81,6 +90,26 @@ pub fn next_encoding(e: FileEncoding) -> FileEncoding {
         FileEncoding::Ansi => FileEncoding::UnicodeLe,
         FileEncoding::UnicodeLe => FileEncoding::UnicodeBe,
         FileEncoding::UnicodeBe => FileEncoding::Utf8,
+    }
+}
+
+/// The next time display a click gives: as written, UTC, local, back to as written (a
+/// fixed offset set in the window goes back to as written).
+pub fn next_time_display(d: TimeDisplay) -> TimeDisplay {
+    match d {
+        TimeDisplay::Written => TimeDisplay::Utc,
+        TimeDisplay::Utc => TimeDisplay::Local,
+        TimeDisplay::Local | TimeDisplay::Offset(_) => TimeDisplay::Written,
+    }
+}
+
+/// The name of a time display, as the bar's chip and the messages show it.
+pub fn time_display_name(d: TimeDisplay, lang: Language) -> String {
+    match d {
+        TimeDisplay::Written => tx(lang, "as written").to_string(),
+        TimeDisplay::Utc => "UTC".to_string(),
+        TimeDisplay::Local => tx(lang, "local time").to_string(),
+        TimeDisplay::Offset(m) => format!("UTC{}", crate::timestamp::format_offset(m)),
     }
 }
 
@@ -150,6 +179,25 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             .into(),
             if e.show_line_numbers { accent } else { dim },
             BarChip::LineNumbers,
+        ));
+        first.push(check(
+            if ascii { "dt" } else { "Δt" },
+            e.show_time_delta,
+            BarChip::TimeDelta,
+        ));
+        let display = e.time_display();
+        first.push(chip(
+            format!(
+                "{} {}",
+                if ascii { "TZ" } else { "🌐" },
+                time_display_name(display, lang)
+            ),
+            if display == TimeDisplay::Written {
+                dim
+            } else {
+                accent
+            },
+            BarChip::TimeDisplay,
         ));
         first.push(chip(
             e.encoding.name().into(),
@@ -237,9 +285,16 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
     };
     let include = e.include_display();
     let exclude = e.exclude_filter();
+    let expr = e.filter_expr_mode();
+    let broken = expr && e.expr_error().is_some();
     let mut second = vec![
         text(tx(lang, "Include").into(), accent),
-        chip(field(include), Style::default(), BarChip::Include),
+        check(if ascii { "fx" } else { "ƒx" }, expr, BarChip::FilterExpr),
+        chip(
+            field(include),
+            if broken { warn } else { Style::default() },
+            BarChip::Include,
+        ),
         text(tx(lang, "Exclude").into(), warn),
         chip(field(exclude), Style::default(), BarChip::Exclude),
         chip(
@@ -408,6 +463,16 @@ pub fn lines(tab: &Tab, palette: &Palette, global: bool, lang: Language) -> Vec<
             if ascii { text } else { format!("🙈 {text}") },
             warn,
             BarChip::Hidden,
+        ));
+    }
+    // The kept searches, each in its colour with its count; the focused one marked.
+    for (i, n) in e.named.list.iter().enumerate() {
+        let mark = if e.named.focus == Some(i) { "*" } else { "" };
+        let more = if n.running() { "..." } else { "" };
+        second.push(chip(
+            format!("{mark}{} {}{more}", n.query, n.total()),
+            palette.label_style(n.color),
+            BarChip::Named(i),
         ));
     }
     second.push(chip(tx(lang, "Presets").into(), dim, BarChip::Presets));

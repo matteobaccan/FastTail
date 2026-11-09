@@ -46,6 +46,8 @@ pub enum Key {
     PinTimeColumn,
     /// `rotations`: a file with rotations next to it offers them, opens with them, or not.
     Rotations,
+    /// `excerpt_format`: Copy as excerpt's flavour.
+    ExcerptFormat,
     /// `level_detect_bytes`: where the level is looked for in streams without their own.
     LevelBytes,
     SizeUnit,
@@ -58,6 +60,7 @@ pub enum Key {
     SystemBacklog,
     DockerCommand,
     JournalctlCommand,
+    KubectlCommand,
     SshProgram,
     RemoteInitialMb,
     RemoteSpoolMaxMb,
@@ -71,6 +74,17 @@ pub enum Key {
     NotifyAlways,
     /// Opens the external tools editor (`Enter`); the tools are not part of the form.
     Tools,
+    /// The Plugins dialog (a button).
+    Plugins,
+    /// `[web] enabled`, `port`: the read-only web view of the open streams.
+    WebEnabled,
+    WebPort,
+    /// `[mcp] enabled`, `port`, `allow_write`: the MCP server for AI assistants.
+    McpEnabled,
+    McpPort,
+    McpAllowWrite,
+    /// A preset of `source_links::PRESETS`: picking one fills `EditorCommand`.
+    EditorPreset,
     /// `editor_command`: the editor a source location opens in.
     EditorCommand,
     /// `source_roots`: folders separated by `;`.
@@ -141,6 +155,20 @@ pub struct SettingsForm {
     has_pin: bool,
     /// The language of the texts (the one being chosen, while Settings is open).
     pub lang: Language,
+}
+
+/// The choice of the editor preset row: "as typed", then each preset.
+fn preset_of(command: &str) -> usize {
+    crate::source_links::PRESETS
+        .iter()
+        .position(|(_, t)| *t == command.trim())
+        .map_or(0, |i| i + 1)
+}
+
+fn editor_presets(command: &str, lang: Language) -> RadioList {
+    let mut options = vec![tx(lang, "as typed")];
+    options.extend(crate::source_links::PRESETS.iter().map(|(name, _)| *name));
+    RadioList::new(&options, preset_of(command))
 }
 
 fn number<T: Copy + Into<u64>>(value: T, range: &std::ops::RangeInclusive<T>) -> Widget {
@@ -321,6 +349,11 @@ impl SettingsForm {
                 Widget::Text(TextField::new(&c.journalctl_command)),
             ),
             Field::new(
+                Key::KubectlCommand,
+                en("kubectl command"),
+                Widget::Text(TextField::new(&c.kubectl_command)),
+            ),
+            Field::new(
                 Key::SshProgram,
                 en("SSH client"),
                 Widget::Text(TextField::new(&c.ssh_program)),
@@ -386,6 +419,17 @@ impl SettingsForm {
                 )),
             ),
             Field::new(
+                Key::ExcerptFormat,
+                en("Copy as excerpt for"),
+                Widget::Radio(RadioList::new(
+                    &["Markdown", "Jira", "Slack"],
+                    crate::export::ExcerptFlavour::ALL
+                        .iter()
+                        .position(|f| *f == c.excerpt_format)
+                        .unwrap_or(0),
+                )),
+            ),
+            Field::new(
                 Key::LevelBytes,
                 en("Level searched in the first N bytes"),
                 Widget::Number(level_bytes),
@@ -422,6 +466,11 @@ impl SettingsForm {
             )
             .starts(en("External tools")),
             Field::new(
+                Key::EditorPreset,
+                en("Editor preset"),
+                Widget::Radio(editor_presets(&c.editor_command, c.language)),
+            ),
+            Field::new(
                 Key::EditorCommand,
                 en("Editor for source locations ({file} {line} {col})"),
                 Widget::Text(TextField::new(&c.editor_command)),
@@ -432,6 +481,37 @@ impl SettingsForm {
                 Widget::Text(TextField::new(&crate::source_links::roots_text(
                     &c.source_roots,
                 ))),
+            ),
+            Field::new(
+                Key::WebEnabled,
+                en("Web view of the streams (read-only)"),
+                check(c.web_enabled),
+            )
+            .starts(en("Web view and AI assistants")),
+            Field::new(
+                Key::WebPort,
+                en("Web view port"),
+                number(c.web_port, &(1024..=65535)),
+            ),
+            Field::new(
+                Key::McpEnabled,
+                en("MCP server for AI assistants"),
+                check(c.mcp_enabled),
+            ),
+            Field::new(
+                Key::McpPort,
+                en("MCP port"),
+                number(c.mcp_port, &(1024..=65535)),
+            ),
+            Field::new(
+                Key::Plugins,
+                en("Plugins"),
+                Widget::Button(tx(c.language, en("Enter lists them")).to_string()),
+            ),
+            Field::new(
+                Key::McpAllowWrite,
+                en("Assistants may change filters and bookmarks"),
+                check(c.mcp_allow_write),
             ),
             Field::new(
                 Key::LockEnabled,
@@ -507,6 +587,7 @@ impl SettingsForm {
         };
         if done == FieldKey::Edited {
             self.rejected = false;
+            self.follow_editor_preset();
             // Picking a language stops following the system's, as in the GUI.
             if self.fields[self.focus].key == Key::Language {
                 if let Some(Widget::Check(c)) = self
@@ -520,6 +601,43 @@ impl SettingsForm {
             }
         }
         done
+    }
+
+    /// A preset picked fills the editor command; a command typed picks its preset, or
+    /// "as typed".
+    fn follow_editor_preset(&mut self) {
+        let key = self.fields[self.focus].key;
+        let at = |fields: &[Field], k: Key| fields.iter().position(|f| f.key == k);
+        let (Some(p), Some(c)) = (
+            at(&self.fields, Key::EditorPreset),
+            at(&self.fields, Key::EditorCommand),
+        ) else {
+            return;
+        };
+        match key {
+            Key::EditorPreset => {
+                let choice = match &self.fields[p].widget {
+                    Widget::Radio(r) => r.selected,
+                    _ => 0,
+                };
+                if let Some((_, template)) = choice
+                    .checked_sub(1)
+                    .and_then(|i| crate::source_links::PRESETS.get(i))
+                {
+                    self.fields[c].widget = Widget::Text(TextField::new(template));
+                }
+            }
+            Key::EditorCommand => {
+                let text = match &self.fields[c].widget {
+                    Widget::Text(t) => t.text().trim().to_string(),
+                    _ => return,
+                };
+                if let Widget::Radio(r) = &mut self.fields[p].widget {
+                    r.selected = preset_of(&text);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn move_focus(&mut self, delta: isize) -> FieldKey {
@@ -621,6 +739,12 @@ impl SettingsForm {
                         _ => crate::rotation::Policy::Ask,
                     }
                 }
+                Key::ExcerptFormat => {
+                    c.excerpt_format = crate::export::ExcerptFlavour::ALL
+                        .get(choice)
+                        .copied()
+                        .unwrap_or_default()
+                }
                 Key::TimeDeltaGap => c.time_delta_gap_ms = num(),
                 Key::LevelBytes => c.level_detect_bytes = num() as usize,
                 Key::SizeUnit => c.size_unit = SIZE_UNITS[choice],
@@ -642,7 +766,10 @@ impl SettingsForm {
                 Key::ListenerSpoolMaxMb => c.listener_spool_max_mb = num() as u32,
                 Key::ListenerLinesPerSec => c.listener_max_lines_per_sec = num() as u32,
                 Key::ListenerMbPerSec => c.listener_max_mb_per_sec = num() as u32,
-                Key::DockerCommand | Key::JournalctlCommand | Key::SshProgram => {
+                Key::DockerCommand
+                | Key::JournalctlCommand
+                | Key::KubectlCommand
+                | Key::SshProgram => {
                     let text = match &f.widget {
                         Widget::Text(t) => t.text().trim().to_string(),
                         _ => String::new(),
@@ -655,6 +782,10 @@ impl SettingsForm {
                         Key::SshProgram => {
                             (&mut c.ssh_program, crate::ssh_source::DEFAULT_SSH_PROGRAM)
                         }
+                        Key::KubectlCommand => (
+                            &mut c.kubectl_command,
+                            crate::system_source::DEFAULT_KUBECTL_COMMAND,
+                        ),
                         _ => (
                             &mut c.journalctl_command,
                             crate::system_source::DEFAULT_JOURNALCTL_COMMAND,
@@ -667,6 +798,11 @@ impl SettingsForm {
                     };
                 }
                 Key::AutoBookmarkMax => c.auto_bookmark_max = num() as usize,
+                Key::WebEnabled => c.web_enabled = on,
+                Key::WebPort => c.web_port = num() as u16,
+                Key::McpEnabled => c.mcp_enabled = on,
+                Key::McpPort => c.mcp_port = num() as u16,
+                Key::McpAllowWrite => c.mcp_allow_write = on,
                 Key::Sound => c.sound_enabled = on,
                 Key::FlashOnAlert => c.flash_on_alert = on,
                 Key::Notifications => c.notifications_enabled = on,
@@ -682,7 +818,7 @@ impl SettingsForm {
                         c.source_roots = crate::source_links::parse_roots(&text);
                     }
                 }
-                Key::Tools | Key::PinConfirm => {}
+                Key::Tools | Key::PinConfirm | Key::EditorPreset | Key::Plugins => {}
                 Key::LockEnabled => c.lock_enabled = on,
                 Key::IdleMinutes => c.screensaver_timeout_mins = num() as u32,
                 Key::PinNew => {
@@ -810,6 +946,25 @@ mod tests {
         assert_eq!(c.poll_interval_ms, 900);
         assert_eq!(c.theme, CyberTheme::Matrix);
         assert_eq!(c.sound_enabled, !FastTailConfig::default().sound_enabled);
+    }
+
+    #[test]
+    fn an_editor_preset_fills_the_command_and_a_typed_one_picks_its_preset() {
+        let mut c = FastTailConfig::default();
+        let mut form = SettingsForm::from_config(&c);
+        focus_on(&mut form, Key::EditorPreset);
+        form.on_key(key(KeyCode::Right));
+        form.apply(&mut c).unwrap();
+        assert_eq!(c.editor_command, crate::source_links::PRESETS[0].1);
+        // Typing past the preset's text turns the row back to "as typed".
+        focus_on(&mut form, Key::EditorCommand);
+        form.on_key(key(KeyCode::Char('x')));
+        let preset = form
+            .fields
+            .iter()
+            .find(|f| f.key == Key::EditorPreset)
+            .unwrap();
+        assert!(matches!(&preset.widget, Widget::Radio(r) if r.selected == 0));
     }
 
     #[test]

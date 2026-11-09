@@ -253,3 +253,10 @@ A line whose timestamp is earlier than the timestamp of the previous timed line 
 #### Scenario: Stack traces in between
 - **WHEN** an untimed stack trace sits between two timed lines in order
 - **THEN** no line is marked.
+
+### Requirement: Logging Statement Links
+FastTail SHALL index the logging statements of the source folders and SHALL open the editor at the statement whose format string matches the cursor row's message.
+
+#### Scenario: From message to code
+- **WHEN** `src/pay.rs` holds `info!("payment {} declined", id)` and the row reads `payment 42 declined`
+- **THEN** going to the logging statement opens `src/pay.rs` at that line.

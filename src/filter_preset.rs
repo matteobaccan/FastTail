@@ -101,6 +101,11 @@ impl FilterState {
 pub struct FilterPreset {
     pub name: String,
     pub state: FilterState,
+    /// Listed first (`pinned=true`); older builds ignore it.
+    pub pinned: bool,
+    /// When it was last applied, in seconds since the epoch (`last_used=`, 0: never):
+    /// the five most recent are listed after the pinned ones.
+    pub last_used: u64,
 }
 
 impl FilterPreset {
@@ -158,11 +163,41 @@ pub fn name_taken(presets: &[FilterPreset], name: &str, except: Option<usize>) -
     find(presets, name).is_some_and(|i| Some(i) != except)
 }
 
+/// Recently used presets listed after the pinned ones.
+pub const RECENT_SHOWN: usize = 5;
+
+/// The order presets are listed in: the pinned ones (in list order), then the
+/// `RECENT_SHOWN` most recently applied, then the others by name. Indices into `presets`.
+pub fn display_order(presets: &[FilterPreset]) -> Vec<usize> {
+    let mut out: Vec<usize> = (0..presets.len()).filter(|&i| presets[i].pinned).collect();
+    let mut recent: Vec<usize> = (0..presets.len())
+        .filter(|&i| !presets[i].pinned && presets[i].last_used > 0)
+        .collect();
+    recent.sort_by_key(|&i| std::cmp::Reverse(presets[i].last_used));
+    recent.truncate(RECENT_SHOWN);
+    out.extend(&recent);
+    let mut rest: Vec<usize> = (0..presets.len()).filter(|i| !out.contains(i)).collect();
+    rest.sort_by_key(|&i| presets[i].name.to_lowercase());
+    out.extend(rest);
+    out
+}
+
+/// Records that preset `i` was applied now (its place among the recent ones).
+pub fn mark_used(presets: &mut [FilterPreset], i: usize) {
+    if let Some(p) = presets.get_mut(i) {
+        p.last_used = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.as_secs().max(1));
+    }
+}
+
 /// Stores `preset`, replacing the one with the same name (in place, so the order is
-/// kept) or appending it. Returns its index.
-pub fn upsert(presets: &mut Vec<FilterPreset>, preset: FilterPreset) -> usize {
+/// kept, and its pin and last use with it) or appending it. Returns its index.
+pub fn upsert(presets: &mut Vec<FilterPreset>, mut preset: FilterPreset) -> usize {
     match find(presets, &preset.name) {
         Some(i) => {
+            preset.pinned |= presets[i].pinned;
+            preset.last_used = preset.last_used.max(presets[i].last_used);
             presets[i] = preset;
             i
         }
@@ -224,6 +259,12 @@ pub fn write_presets(conf: &mut Ini, presets: &[FilterPreset]) {
             sec.set("mode", "expr");
             sec.set("expression", ini_value(expr));
         }
+        if preset.pinned {
+            sec.set("pinned", "true");
+        }
+        if preset.last_used > 0 {
+            sec.set("last_used", preset.last_used.to_string());
+        }
     }
 }
 
@@ -252,6 +293,11 @@ pub fn read_presets(conf: &Ini) -> Vec<FilterPreset> {
             (from, to) => Some((from.unwrap_or("").to_string(), to.unwrap_or("").to_string())),
         };
         out.push(FilterPreset {
+            pinned: flag("pinned"),
+            last_used: sec
+                .get("last_used")
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0),
             name,
             state: FilterState {
                 include: terms("include"),
@@ -269,4 +315,45 @@ pub fn read_presets(conf: &Ini) -> Vec<FilterPreset> {
         });
     }
     out
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    fn p(name: &str, pinned: bool, last_used: u64) -> FilterPreset {
+        FilterPreset {
+            name: name.into(),
+            pinned,
+            last_used,
+            ..FilterPreset::default()
+        }
+    }
+
+    #[test]
+    fn pinned_first_then_recent_then_by_name_and_saved() {
+        let presets = vec![
+            p("zeta", false, 0),
+            p("errors", true, 0),
+            p("alpha", false, 0),
+            p("old", false, 10),
+            p("new", false, 30),
+        ];
+        let names: Vec<&str> = display_order(&presets)
+            .into_iter()
+            .map(|i| presets[i].name.as_str())
+            .collect();
+        assert_eq!(names, ["errors", "new", "old", "alpha", "zeta"]);
+        let mut conf = Ini::new();
+        write_presets(&mut conf, &presets);
+        let back = read_presets(&conf);
+        assert!(back[1].pinned && !back[0].pinned);
+        assert_eq!(back[4].last_used, 30);
+        // Saving a preset again keeps its pin.
+        let mut list = back;
+        upsert(&mut list, p("errors", false, 0));
+        assert!(list[1].pinned);
+        mark_used(&mut list, 2);
+        assert!(list[2].last_used > 1_000_000);
+    }
 }

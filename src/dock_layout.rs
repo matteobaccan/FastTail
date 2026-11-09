@@ -295,6 +295,27 @@ impl Layout {
         out
     }
 
+    /// Renames the stream tabs of every surface: `f` gives a tab's new path, `None` keeps
+    /// it (a saved `merged:` / `filter:` name and the spool of the stream rebuilt from it).
+    pub fn rename_streams(&mut self, f: &dyn Fn(&Path) -> Option<PathBuf>) {
+        for s in &mut self.surfaces {
+            let (Surface::Main(tree) | Surface::Window(tree, _)) = s else {
+                continue;
+            };
+            for n in &mut tree.nodes {
+                if let Node::Leaf(l) = n {
+                    for t in &mut l.tabs {
+                        if let Tab::LogStream(p) = t {
+                            if let Some(to) = f(p) {
+                                *p = to;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Drops the streams that are not in `open` from the floating windows (the main
     /// surface is the pane's business, see `Pane::reconcile`).
     pub fn retain_window_streams(&mut self, open: &[PathBuf]) {

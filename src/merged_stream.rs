@@ -93,6 +93,69 @@ pub fn parse_identity(path: &Path) -> Option<(usize, Vec<PathBuf>)> {
         .then_some((n, sources))
 }
 
+/// The engine of merged view `n` of the open streams `found` (two or more), following,
+/// with the configuration's stream settings: saved by the names its sources are saved
+/// under, not saved when one of them is standard input or the clipboard.
+pub fn open_view(
+    n: usize,
+    found: &[&TailEngine],
+    config: &crate::config::FastTailConfig,
+) -> std::io::Result<TailEngine> {
+    let named: Vec<(PathBuf, String)> = found
+        .iter()
+        .map(|e| (e.path.clone(), crate::find_all::stream_name(e)))
+        .collect();
+    let saved: Vec<PathBuf> = if found.iter().all(|e| crate::workspace::is_persisted(e)) {
+        found
+            .iter()
+            .map(|e| crate::workspace::persisted_path(e))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let spool_dir = config.compressed_settings().spool_dir;
+    let max_bytes = u64::from(config.stdin_spool_max_mb) * 1024 * 1024;
+    let mut feeder = MergedFeeder::create(n, named, &spool_dir, max_bytes)?;
+    feeder.saved_sources = saved;
+    let mut engine = TailEngine::open(feeder.spool_path())?;
+    engine.merged = Some(Box::new(feeder));
+    crate::workspace::apply_settings(&mut engine, config);
+    engine.follow_tail = true;
+    Ok(engine)
+}
+
+/// The number for a new merged view among `engines`: one past the highest in use.
+pub fn next_number<'a>(engines: impl Iterator<Item = &'a TailEngine>) -> usize {
+    1 + engines
+        .filter_map(|e| e.merged.as_ref().map(|m| m.n))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Feeds every merged view among `engines` from its sources (the other engines, by
+/// path), `budget` each. Returns whether any spool changed or has work left.
+pub fn feed_views(engines: &mut [&mut TailEngine], budget: Duration) -> bool {
+    let mut changed = false;
+    for m in 0..engines.len() {
+        let Some(mut feeder) = engines[m].merged.take() else {
+            continue;
+        };
+        let sources: Vec<Option<&TailEngine>> = feeder
+            .sources
+            .iter()
+            .map(|s| {
+                engines
+                    .iter()
+                    .find(|e| e.merged.is_none() && crate::paths::paths_equal(&e.path, &s.path))
+                    .map(|e| &**e)
+            })
+            .collect();
+        changed |= feeder.step(&sources, budget);
+        engines[m].merged = Some(feeder);
+    }
+    changed
+}
+
 /// One stream of a merged view and how far it has been read.
 #[derive(Debug, Clone)]
 pub struct MergedSource {

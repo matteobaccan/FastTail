@@ -25,6 +25,8 @@ pub struct EventLogDialog {
     pub levels: [bool; 5],
     /// `7031, 7034-7040`.
     pub ids: String,
+    /// Another computer whose channel is read (empty: this one).
+    pub host: String,
 }
 
 impl Default for EventLogDialog {
@@ -35,6 +37,7 @@ impl Default for EventLogDialog {
             channel: "Application".to_string(),
             levels: [false; 5],
             ids: String::new(),
+            host: String::new(),
         }
     }
 }
@@ -70,6 +73,7 @@ impl EventLogDialog {
                 levels,
                 ids: PreFilter::parse_ids(&self.ids)?,
             },
+            host: Some(self.host.trim().to_string()).filter(|h| !h.is_empty()),
         })
     }
 
@@ -101,6 +105,15 @@ impl EventLogDialog {
                     .color(theme.text_dim()),
             );
             ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(t(lang, "eventlog_host"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.host)
+                        .desired_width(200.0)
+                        .hint_text(t(lang, "eventlog_host_hint")),
+                )
+                .on_hover_text(t(lang, "eventlog_host_tip"));
+            });
             ui.horizontal(|ui| {
                 ui.label(t(lang, "eventlog_channel"));
                 ui.add(

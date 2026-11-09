@@ -1665,6 +1665,10 @@ pub struct TailEngine {
     pending_search: bool,
     /// True while the line index is being built in the background.
     pub index_pending: bool,
+    /// When the current index started, and how long the last full index took (the
+    /// stream information).
+    pub index_started: Instant,
+    pub index_ms: Option<u64>,
     /// Files larger than these run filters/search, or the initial index, on a worker thread.
     pub job_threshold_bytes: u64,
     pub index_job_threshold_bytes: u64,
@@ -1893,6 +1897,8 @@ pub struct TailEngine {
     /// The stream bar's "search all streams" button was pressed: the app opens the Find
     /// results tab with this stream's query after the dock is drawn.
     pub find_all_request: bool,
+    /// "Go to the logging statement" asked for this line (the app looks it up).
+    pub log_statement_request: Option<usize>,
     /// The stream menu asked for a bookmark report of this stream: the app opens the
     /// report dialog after the dock is drawn.
     pub report_request: bool,
@@ -1930,6 +1936,13 @@ pub struct TailEngine {
     /// Quick labels (see `QuickLabel`) with their lower-cased text, evaluated after the
     /// user rules by `match_highlight_spans`.
     quick_labels: Vec<(QuickLabel, String)>,
+    /// The quick labels the app set (`set_quick_labels`): `quick_labels` adds the kept
+    /// searches to them.
+    global_labels: Vec<QuickLabel>,
+    /// The stream's kept searches (see `crate::named_search`).
+    pub named: crate::named_search::NamedSearches,
+    /// Copy as excerpt's flavour, from the settings (`excerpt_format`).
+    pub excerpt_flavour: crate::export::ExcerptFlavour,
     /// Kinds of the automatic highlighting, `NONE` while it is off (`set_auto_tokens`).
     auto_tokens: TokenKinds,
     pub expanded_json_lines: HashSet<usize>,
@@ -2565,6 +2578,8 @@ impl TailEngine {
             pending_filter: false,
             pending_search: false,
             index_pending: false,
+            index_started: Instant::now(),
+            index_ms: None,
             job_threshold_bytes,
             index_job_threshold_bytes,
             filtered_lines: Vec::new(),
@@ -2618,6 +2633,7 @@ impl TailEngine {
             format_zone: None,
             time_zone_sample: None,
             find_all_request: false,
+            log_statement_request: None,
             report_request: false,
             sound_alerts: 0,
             field_choice: ParserChoice::Auto,
@@ -2654,6 +2670,9 @@ impl TailEngine {
             highlight_rules: Vec::new(),
             compiled_highlights: Vec::new(),
             quick_labels: Vec::new(),
+            global_labels: Vec::new(),
+            named: crate::named_search::NamedSearches::default(),
+            excerpt_flavour: crate::export::ExcerptFlavour::default(),
             auto_tokens: TokenKinds::NONE,
             expanded_json_lines: HashSet::new(),
             json_open: HashMap::new(),
@@ -3581,6 +3600,8 @@ impl TailEngine {
         self.collapse_after_job = None;
         self.collapse_dirty = self.collapse.mode.is_on().then_some(0);
         self.index_pending = false;
+        self.index_ms
+            .get_or_insert(self.index_started.elapsed().as_millis() as u64);
         self.pending_refresh_from = None;
         self.clear_selection();
         self.reset_bookmarks();
@@ -3673,6 +3694,7 @@ impl TailEngine {
             self.buffer_generation = self.buffer_generation.wrapping_add(1);
             self.scroll_to_line = None;
             self.index_pending = true;
+            self.index_started = Instant::now();
             self.pending_filter = self.filter.is_active();
             self.pending_search = !self.last_searched_query.is_empty();
             self.start_job(JobSpec::Index, 0);
@@ -4403,6 +4425,11 @@ impl TailEngine {
 
     pub fn poll_updates(&mut self) {
         self.poll_context_rebuild();
+        if !self.named.is_empty() {
+            let mut named = std::mem::take(&mut self.named);
+            named.poll(self);
+            self.named = named;
+        }
         self.drain_job();
         self.poll_stats();
         self.poll_operations();
@@ -4960,14 +4987,60 @@ impl TailEngine {
     }
 
     pub fn set_quick_labels(&mut self, labels: &[QuickLabel]) {
-        self.quick_labels = labels
+        self.global_labels = labels.to_vec();
+        self.refresh_labels();
+    }
+
+    /// The quick labels the app set (the kept searches are not among them).
+    pub fn quick_labels(&self) -> Vec<QuickLabel> {
+        self.global_labels.clone()
+    }
+
+    /// The labels highlighted: the app's, then the kept searches in their colours.
+    fn refresh_labels(&mut self) {
+        let named = self.named.list.iter().map(|n| QuickLabel {
+            text: n.query.clone(),
+            color: n.color,
+        });
+        self.quick_labels = self
+            .global_labels
             .iter()
-            .map(|l| (l.clone(), l.text.to_lowercase()))
+            .cloned()
+            .chain(named)
+            .map(|l| {
+                let lower = l.text.to_lowercase();
+                (l, lower)
+            })
             .collect();
     }
 
-    pub fn quick_labels(&self) -> Vec<QuickLabel> {
-        self.quick_labels.iter().map(|(l, _)| l.clone()).collect()
+    /// Keeps `query` as a named search of this stream (highlighted in the colour returned,
+    /// walked with `next_named`).
+    pub fn keep_search(&mut self, query: &str) -> Result<u8, crate::named_search::KeepError> {
+        let color = self.named.keep(query)?;
+        self.refresh_labels();
+        Ok(color)
+    }
+
+    pub fn remove_named(&mut self, i: usize) {
+        self.named.remove(i);
+        self.refresh_labels();
+    }
+
+    /// Puts back the kept searches saved for the stream.
+    pub fn restore_named(&mut self, saved: &[(u8, String)]) {
+        self.named.restore(saved);
+        self.refresh_labels();
+    }
+
+    /// The next (`forward`) or previous hit of the kept searches (the focused one, else
+    /// all) from line `from`, scrolled to; the line and the search, `None` without hits.
+    pub fn next_named(&mut self, from: usize, forward: bool) -> Option<(usize, usize)> {
+        let (line, i) = self.named.next_hit(from, forward)?;
+        self.follow_tail = false;
+        self.reveal_line(line);
+        self.scroll_to_line = Some(line);
+        Some((line, i))
     }
 
     /// Token kinds of the automatic highlighting (`TokenKinds::NONE` while it is off),
@@ -9620,6 +9693,7 @@ impl TailEngine {
             | ScanKind::Operations => {}
             ScanKind::Index => {
                 self.index_pending = false;
+                self.index_ms = Some(self.index_started.elapsed().as_millis() as u64);
                 self.buffer_generation = self.buffer_generation.wrapping_add(1);
                 if self.source.len() > end_offset {
                     // The file grew while indexing: index the rest incrementally.

@@ -44,3 +44,10 @@ The operations SHALL be computed on a worker thread with progress and Cancel, ti
 #### Scenario: Too many ids
 - **WHEN** a log has 250,000 distinct ids
 - **THEN** the tab lists 100,000 operations and says that 150,000 more were not tracked.
+
+### Requirement: Operation Jump
+Both interfaces SHALL move to the next or previous line carrying the cursor row's operation id, using the Operations source or the first of the usual id fields.
+
+#### Scenario: Follow a request
+- **WHEN** the cursor row has `request_id=abc` and the user asks for the next line of this operation
+- **THEN** the cursor moves to the next line with `request_id=abc`.

@@ -93,6 +93,9 @@ pub struct StreamEntry {
     /// Lines hidden by hand, as inclusive 0-based ranges, written as `hidden=120-180,4096`
     /// (1-based, as the gutter shows them) only when some are; older builds ignore it.
     pub hidden: Vec<(usize, usize)>,
+    /// Kept (named) searches as `(colour, query)`, written as `kept.1=2:timeout`... only
+    /// when some are; older builds ignore them.
+    pub kept: Vec<(u8, String)>,
     /// The stream's line-number and time delta columns (`line_numbers=`, `time_delta=`).
     /// The app always records both; `None`, written as no key, is what a file from an
     /// older version reads as, and follows the `[general]` defaults.
@@ -281,6 +284,9 @@ impl Session {
             }
             if !s.hidden.is_empty() {
                 sec.set("hidden", hidden_to_ini(&s.hidden));
+            }
+            for (i, (color, query)) in s.kept.iter().enumerate() {
+                sec.set(format!("kept.{}", i + 1), format!("{color}:{query}"));
             }
             if let Some(show) = s.line_numbers {
                 sec.set("line_numbers", show.to_string());
@@ -552,6 +558,13 @@ impl Session {
                     .filter(|a| *a != crate::disasm::Arch::default())
                     .map(|a| a.name().to_string()),
                 hidden: sec.get("hidden").map(hidden_from_ini).unwrap_or_default(),
+                kept: (1..=crate::named_search::MAX_NAMED)
+                    .map_while(|i| sec.get(format!("kept.{i}")))
+                    .filter_map(|v| {
+                        let (color, query) = v.split_once(':')?;
+                        Some((color.trim().parse().ok()?, query.to_string()))
+                    })
+                    .collect(),
                 level_bytes: sec
                     .get("level_bytes")
                     .and_then(|v| v.trim().parse().ok())

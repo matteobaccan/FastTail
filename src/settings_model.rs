@@ -186,6 +186,8 @@ mod tests {
         use crate::external_tools::ExternalTool;
         use crate::filter_preset::FilterPreset;
         let presets = vec![FilterPreset {
+            pinned: false,
+            last_used: 0,
             name: "errors".to_string(),
             state: Default::default(),
         }];

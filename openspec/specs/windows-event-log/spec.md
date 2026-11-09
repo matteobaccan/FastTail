@@ -48,3 +48,10 @@ On Windows a file whose content starts with `ElfFile` followed by a zero byte SH
 #### Scenario: Session opened on Linux
 - **WHEN** a session saved on Windows with `eventlog://Application` and a file stream is loaded on Linux
 - **THEN** the file stream opens, the Event Log entry is listed as unavailable on this platform, and saving the session again keeps it.
+
+### Requirement: Remote Event Log
+On Windows, FastTail SHALL follow a channel of another machine's Event Log given as `eventlog://host/Channel`, with the current user's credentials.
+
+#### Scenario: A server's System log
+- **WHEN** the user opens `eventlog://srv01/System` as a user allowed to read it
+- **THEN** the stream shows srv01's System events as they arrive.
