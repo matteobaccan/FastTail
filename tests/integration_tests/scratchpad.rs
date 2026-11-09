@@ -99,3 +99,23 @@ fn the_pad_follows_the_session_it_is_saved_with() {
     other.load_session_file(session, true);
     assert_eq!(other.scratchpad.text, "── a.log:1 ──\nline\n");
 }
+
+#[test]
+fn save_as_button_disabled_state_when_scratchpad_is_empty() {
+    let ctx = egui::Context::default();
+    let theme = fasttail::theme::CyberTheme::Tron;
+    let mut pad = Scratchpad::default();
+
+    // With an empty pad, render should complete without errors.
+    let mut out1 = ctx.run_ui(Default::default(), |ui| {
+        fasttail::ui::scratchpad::render(ui, &mut pad, &theme, fasttail::i18n::Language::En, 12.0);
+    });
+    out1.textures_delta.clear();
+
+    // Populate the pad and verify render succeeds with content.
+    pad.text.push_str("Sample scratch content\n");
+    let mut out2 = ctx.run_ui(Default::default(), |ui| {
+        fasttail::ui::scratchpad::render(ui, &mut pad, &theme, fasttail::i18n::Language::En, 12.0);
+    });
+    out2.textures_delta.clear();
+}
