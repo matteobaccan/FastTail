@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-11-09
+
+### Changed
+
+- **Archive picker keys.** `Enter` opens the chosen entries (or the only openable entry left
+  by the filter) and `Escape` closes the picker.
+- **Disabled buttons explain themselves.** The Scratchpad's *Save as…* is disabled while the
+  pad is empty, and *Set as time window* in the Operations tab says why it is disabled.
+- **Faster search highlights.** The terminal's search highlights and the web view's search
+  skip to candidate bytes with `memchr` instead of testing every position.
+- **Dependencies.** `rfd` 0.18 (file dialogs), `zip` 9.5, `sevenz-rust2` 0.25 with
+  `lzma-rust2` 0.25, `flate2` 1.1.11, `toml` 1.2.1, `iced-x86` 1.22, `sysinfo` 0.40.1, `smallvec` 1.16.5.
+
+### Fixed
+
+- **MCP runtime file permissions.** The file that holds the MCP server's port and token is
+  set to `0600` even when it already existed with wider permissions, and a path that is not
+  a regular file is refused.
+
+### Security
+
+- `pulldown-cmark` 0.13.6 (RUSTSEC-2026-0414, RUSTSEC-2026-0433, in wikilink parsing, which
+  the Markdown view does not enable); `async-executor`, `clipboard-win` and `yoke-derive`
+  moved off yanked releases.
+
 ## [0.33.0] - 2026-10-30
 
 ### Added
@@ -2514,6 +2539,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.33.1]: https://github.com/matteobaccan/FastTail/compare/v0.33.0...v0.33.1
 [0.33.0]: https://github.com/matteobaccan/FastTail/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/matteobaccan/FastTail/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/matteobaccan/FastTail/compare/v0.30.0...v0.31.0
