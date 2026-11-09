@@ -548,6 +548,7 @@ fn table(
                     }
                     if ui
                         .add_enabled(op.timed(), egui::Button::new(t(lang, "explain_set_window")))
+                        .on_disabled_hover_text(t(lang, "time_range_unavailable_tip"))
                         .clicked()
                     {
                         action = Some(RowAction::Window(i));
