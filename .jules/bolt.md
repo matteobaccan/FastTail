@@ -29,3 +29,7 @@
 ## 2026-10-28 - Zero-allocation ASCII fast path for wildcard matching
 **Learning:** `pattern.chars().map(fold).collect::<Vec<char>>()` and `name.chars().map(fold).collect::<Vec<char>>()` in pattern matching routines (`wildcard_match` and `ends_with_fold`) allocated two heap vectors per file name evaluation during directory walks and pattern source updates. Adding an `pattern.is_ascii() && name.is_ascii()` guard to match directly on byte slices (`&[u8]`) eliminates 100% of heap allocations for standard ASCII file patterns and names.
 **Action:** In wildcard and pattern string matching functions, check ASCII compatibility upfront and operate directly on `&[u8]` byte slices before falling back to `Vec<char>` allocations for multi-byte Unicode strings.
+
+## 2026-11-10 - Micro-optimizing small multi-branch `matches!` in field parsing
+**Learning:** Replacing a compact 6-byte match (`!matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'=' | b'"')`) with a 256-element lookup table in `src/fields.rs` was rejected because modern rustc/LLVM already optimizes small byte matches into efficient bitmasks / jump-free compares, and adds memory table lookup overhead without sufficient real-world impact to justify overriding the compiler's native code generation.
+**Action:** Do not replace small fixed-delimiter `matches!` with lookup tables in `fields.rs` unless profiled under release LTO on realistic workloads with clear maintainer consensus.

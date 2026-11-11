@@ -864,22 +864,8 @@ fn json_object(
     }
 }
 
-/// O(1) branchless lookup table for logfmt key character identification.
-/// Replaces multi-branch matching in hot scanning loops (`logfmt_pair_key` and `scan_logfmt`).
-static IS_KEY_BYTE: [bool; 256] = {
-    let mut table = [true; 256];
-    table[b' ' as usize] = false;
-    table[b'\t' as usize] = false;
-    table[b'\r' as usize] = false;
-    table[b'\n' as usize] = false;
-    table[b'=' as usize] = false;
-    table[b'"' as usize] = false;
-    table
-};
-
-#[inline(always)]
 fn is_key_byte(c: u8) -> bool {
-    IS_KEY_BYTE[c as usize]
+    !matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'=' | b'"')
 }
 
 /// Length of the `key=` at `pos`, or `None` when the word there is not a pair.
