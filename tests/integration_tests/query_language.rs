@@ -207,3 +207,25 @@ fn the_query_tab_shows_the_result_table() {
         .iter_all_tabs()
         .any(|(_, t)| matches!(t, fasttail::ui::dock::FastTailTab::Query(_))));
 }
+
+#[test]
+fn the_query_tab_initial_state_and_buttons() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("access.log");
+    let lines = access(10);
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    write_lines(&path, &refs);
+    let mut app = fasttail::ui::FastTailApp::from_config(fasttail::config::FastTailConfig {
+        spool_dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    });
+    app.open_log_file(path);
+    app.engines[0].set_field_choice(ParserChoice::Logfmt);
+    app.engines[0].query_request = true;
+    let texts = app_frame(&mut app);
+    // Before running any query, "Type a query and Run it." (query_none) should be visible as the empty state.
+    assert!(
+        texts.iter().any(|t| t.contains("Type a query and Run")),
+        "initial state should show empty query message in {texts:?}"
+    );
+}
