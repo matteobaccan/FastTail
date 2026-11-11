@@ -864,8 +864,22 @@ fn json_object(
     }
 }
 
+/// O(1) branchless lookup table for logfmt key bytes.
+/// Key characters: a key ends at whitespace, `=` or `"`.
+const IS_KEY_BYTE: [bool; 256] = {
+    let mut table = [true; 256];
+    table[b' ' as usize] = false;
+    table[b'\t' as usize] = false;
+    table[b'\r' as usize] = false;
+    table[b'\n' as usize] = false;
+    table[b'=' as usize] = false;
+    table[b'"' as usize] = false;
+    table
+};
+
+#[inline(always)]
 fn is_key_byte(c: u8) -> bool {
-    !matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'=' | b'"')
+    IS_KEY_BYTE[c as usize]
 }
 
 /// Length of the `key=` at `pos`, or `None` when the word there is not a pair.
