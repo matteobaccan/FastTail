@@ -81,18 +81,26 @@ pub fn render(
     if edit.changed() {
         ui.data_mut(|d| d.insert_temp(id, text.clone()));
     }
+    let can_run = !running && !text.trim().is_empty();
     let ctrl_enter = edit.has_focus()
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
-    let mut run = ctrl_enter && !running;
+    let mut run = ctrl_enter && can_run;
     ui.horizontal_wrapped(|ui| {
-        if ui
+        let run_btn = ui
             .add_enabled(
-                !running,
+                can_run,
                 egui::Button::new(format!("▶ {}", t(lang, "query_run"))),
             )
-            .on_hover_text(t(lang, "query_run_tip"))
-            .clicked()
-        {
+            .on_hover_text(t(lang, "query_run_tip"));
+        let run_btn = if running {
+            let progress = engine.query.as_ref().map_or(0.0, |q| q.progress) * 100.0;
+            run_btn.on_disabled_hover_text(
+                t(lang, "query_running").replace("{0}", &format!("{progress:.0}")),
+            )
+        } else {
+            run_btn.on_disabled_hover_text(t(lang, "query_none"))
+        };
+        if run_btn.clicked() {
             run = true;
         }
         if ui
@@ -100,6 +108,7 @@ pub fn render(
                 running,
                 egui::Button::new(format!("■ {}", t(lang, "query_stop"))),
             )
+            .on_hover_text(t(lang, "query_stop"))
             .clicked()
         {
             engine.stop_query();
@@ -131,6 +140,7 @@ pub fn render(
                 table.is_some(),
                 egui::Button::new(t(lang, "query_copy_csv")),
             )
+            .on_hover_text(t(lang, "stats_copy_csv_tip"))
             .on_disabled_hover_text(t(lang, "query_none"))
             .clicked()
         {
