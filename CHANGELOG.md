@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **AUTOSAR DLT files.** `.dlt` storage files (automotive ECU logs) open as rows in both
+  interfaces: time, level, ECU, application and context ids and the decoded payload
+  (verbose arguments as text, non-verbose ones as message id and hex), as logfmt fields for
+  the column view, filters and statistics.
 - **Kept searches in the timeline.** The timeline strip draws a lane per kept search, in its
   colour, marked in the columns where it hits.
 

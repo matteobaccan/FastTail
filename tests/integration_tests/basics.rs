@@ -1654,6 +1654,7 @@ fn test_i18n_exhaustive_coverage() {
         "info_kind_rotation",
         "info_kind_pattern",
         "info_kind_file",
+        "info_kind_dlt",
         "op_jump_next",
         "op_jump_prev",
         "op_jump_no_id",

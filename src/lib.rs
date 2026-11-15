@@ -19,6 +19,7 @@ pub mod context_lines;
 pub mod crash_handler;
 pub mod debug_output;
 pub mod disasm;
+pub mod dlt;
 pub mod dock_layout;
 pub mod eventlog;
 pub mod export;

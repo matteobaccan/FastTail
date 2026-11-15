@@ -168,6 +168,23 @@ pub fn open_target(path: &Path, config: &FastTailConfig, wake: Option<WakeFn>) -
         };
         return open_event_log(Ok(spec), config, wake);
     }
+    // An AUTOSAR DLT storage file: its messages decoded into text rows.
+    if crate::dlt::is_dlt_file(path) {
+        return match crate::dlt::open_engine(
+            path,
+            &crate::stdin_source::Settings::from_config(
+                config.spool_dir.as_deref(),
+                config.compressed_max_gb.saturating_mul(1024),
+            ),
+            wake,
+        ) {
+            Ok(engine) => OpenOutcome::Opened(Box::new(engine)),
+            Err(e) => OpenOutcome::Failed {
+                error: OpenError::Io(e),
+                report: true,
+            },
+        };
+    }
     if let Some(parsed) = crate::net_listener::ListenSpec::parse(path) {
         let error = match parsed {
             Err(key) => OpenError::System {
