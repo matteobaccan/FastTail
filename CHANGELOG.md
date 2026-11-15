@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-15
+
 ### Added
 
 - **AUTOSAR DLT files.** `.dlt` storage files (automotive ECU logs) open as rows in both
@@ -16,6 +18,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the column view, filters and statistics.
 - **Kept searches in the timeline.** The timeline strip draws a lane per kept search, in its
   colour, marked in the columns where it hits.
+
+### Changed
+
+- **Query tab buttons.** *Run* is disabled while the query is empty and says why; while a
+  query runs, its tooltip shows the progress.
+- **Terminal-only build.** `--no-default-features --features tui` no longer compiles the
+  Linux tray crate (`ksni`).
+- **Dependencies.** `zip` 9.6, `notify` 9.0.0-rc.9, `sysinfo` 0.40.3; the code builds with
+  the lints of Rust 1.100.
 
 ## [0.33.1] - 2026-11-09
 
@@ -2548,6 +2559,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.34.0]: https://github.com/matteobaccan/FastTail/compare/v0.33.1...v0.34.0
 [0.33.1]: https://github.com/matteobaccan/FastTail/compare/v0.33.0...v0.33.1
 [0.33.0]: https://github.com/matteobaccan/FastTail/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/matteobaccan/FastTail/compare/v0.31.0...v0.32.0

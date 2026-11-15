@@ -347,7 +347,10 @@ window and the terminal together.
 **0.33.0, the long tail** (gaps 34 to 37), shipped 2026-10-30:
 
 - ✅ `log2src-links` (L), `remote-event-log` (M), `npp-filter-import` (S)
-- ⬜ `dlt-format` (L, optional): not started; feature work stopped after 0.33.0 (only user issues)
+- ✅ `dlt-format` (L): shipped in 0.34.0 (asked by the maintainer on 2026-11-15)
+
+**0.34.0** (2026-11-15): `dlt-format` and `kept-search-lanes`, the last open items; the
+list is empty again. egui 0.37 waits for an `egui_dock` release on it.
 
 Outside the plan:
 
