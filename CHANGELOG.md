@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Linux tray crate (`ksni`).
 - **Dependencies.** `zip` 9.6, `notify` 9.0.0-rc.9, `sysinfo` 0.40.3; the code builds with
   the lints of Rust 1.100.
+- **Rust 1.100 or newer to build.** The minimum toolchain (`rust-version`) goes from 1.93 to
+  1.100, the stable the CI and the releases build with.
 
 ## [0.33.1] - 2026-11-09
 

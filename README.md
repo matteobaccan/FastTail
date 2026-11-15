@@ -131,7 +131,8 @@ Whether you are monitoring multi-gigabyte production logs, inspecting raw binary
 | **Rule Priority Reordering**| **Yes (⬆ / ⬇ top-down)** | Limited | Yes | Yes | N/A |
 | **External Tools** | **Placeholders, shortcuts, rule-bound runs, no shell by default** | No | No | Yes | Pipes |
 | **Sound Alerts** | **Presets (Beep/Chime/Crit)** | No | Plugins | Limited | Bell (`\a`) |
-| **Windows Event Log** | **Live channels and `.evtx` files as text streams, level and ID pre-filter, no admin rights** | No | No | No | `wevtutil qe` |
+| **Windows Event Log** | **Live channels (this or another computer) and `.evtx` files as text streams, level and ID pre-filter, no admin rights** | No | No | No | `wevtutil qe` |
+| **AUTOSAR DLT files** | **`.dlt` storage files as rows with ECU, application and context fields** | No | No | No | No |
 | **Windows Debug Output** | **`dbwin://local` / `global`, process filter** | No | No | No | No |
 | **Desktop Notifications** | **Per rule, throttled, click to the line (Linux)** | No | No | No | No |
 | **Bookmarks** | **Notes, rules that bookmark matching lines, saved per file and in sessions** | No | Yes | Yes | No |
@@ -642,7 +643,7 @@ When the first backend fails, the error is printed to stderr together with `rend
 ## 🛠️ Building & Installation
 
 ### Prerequisites
-- [Rust](https://rustup.rs/) 1.93 or newer
+- [Rust](https://rustup.rs/) 1.100 or newer
 - On Linux: `libasound2-dev libudev-dev pkg-config libx11-dev libxcb1-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev`
 
 ### Build from Source
@@ -674,7 +675,7 @@ The standalone executable is written to `target/release/fasttail` (`target/relea
 `cargo bench --bench fields` times the field scanners (JSON, logfmt, the Apache regex) on ~100 MB of generated lines in memory, with one field lookup per line (`FASTTAIL_BENCH_BYTES` sets the size).
 
 ### Prebuilt binaries
-Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as archives and installers for each platform (a downloads grid at the top of each release links them). Each name carries the version (`<version>` below, for example `0.12.0`) and each archive holds the program with `LICENSE` and `README.md`:
+Tagged versions are published on the [Releases](https://github.com/matteobaccan/FastTail/releases) page as archives and installers for each platform (a downloads grid at the top of each release links them). Each name carries the version (`<version>` below, for example `0.34.0`) and each archive holds the program with `LICENSE` and `README.md`:
 
 | Platform | Asset | Contents |
 |---|---|---|
@@ -700,10 +701,10 @@ the distributions built on them (older ones, such as RHEL 9 with glibc 2.34, are
 
 ```bash
 # Linux / macOS
-tar -xzf fasttail-linux-x86_64-0.12.0.tar.gz && ./fasttail app.log
+tar -xzf fasttail-linux-x86_64-0.34.0.tar.gz && ./fasttail app.log
 
 # Windows (PowerShell)
-Expand-Archive fasttail-windows-x86_64-0.12.0.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
+Expand-Archive fasttail-windows-x86_64-0.34.0.zip -DestinationPath fasttail; .\fasttail\fasttail.exe app.log
 ```
 
 To read a crash report (`fasttail_crash.log`) with function names instead of addresses, unpack `fasttail-windows-x86_64-symbols-<version>.zip` (the same version as the program) and keep `fasttail.pdb` next to `fasttail.exe`.
@@ -730,7 +731,7 @@ The macOS build is **not signed with an Apple Developer ID**, so the first launc
 Clear the quarantine flag and run it:
 
 ```bash
-tar -xzf fasttail-macos-arm64-0.12.0.tar.gz
+tar -xzf fasttail-macos-arm64-0.34.0.tar.gz
 xattr -d com.apple.quarantine ./fasttail   # or: xattr -cr ./fasttail
 ./fasttail app.log
 ```
@@ -814,7 +815,7 @@ Yes. It is released under the MIT License, which allows use, modification and re
 
 ## 📐 Specifications
 
-Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting (time range included), log intelligence (levels, timestamps, JSON, stack traces), ANSI escape codes, compressed input in the stream engine, docking UI and named sessions, themes, localization, external tools, window lock, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend, the command line, selection and export, structured fields, folder sources, the terminal interface, the merged timeline, log formats, SSH sources, the network listener, the OTLP receiver, rule notifications, Windows debug output capture, field statistics, the query language, pattern grouping and spike explanation. Proposals not yet implemented live in [`openspec/changes`](openspec/changes).
+Behaviour is documented as [OpenSpec](https://github.com/Fission-AI/OpenSpec) specifications under [`openspec/specs`](openspec/specs): stream engine, search and navigation, filters and highlighting (time range included), log intelligence (levels, timestamps, JSON, stack traces), ANSI escape codes, compressed input in the stream engine, docking UI and named sessions, themes, localization, external tools, window lock, screensaver, telemetry, BareTail migration, crash reporting, the release pipeline, the rendering backend, the command line, selection and export, structured fields, folder sources, the terminal interface, the merged timeline, log formats, SSH sources, the network listener, the OTLP receiver, rule notifications, Windows debug output capture, field statistics, the query language, pattern grouping and spike explanation, field sparklines, the Windows Event Log, the operations timeline, the web view, the MCP server, the plugin API, the command palette, keyboard shortcuts, the scratchpad, 7z archives and the disassembly view. Proposals not yet implemented live in [`openspec/changes`](openspec/changes).
 
 ---
 
