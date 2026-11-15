@@ -275,7 +275,7 @@ L > 3 weeks). The numbers are stable: other documents and the OpenSpec changes r
 | 34 | **Message linked to its logging statement** (`log2src`) | lnav | Low–Med | L | ✅ |
 | 35 | **Remote Windows Event Log** | LogFusion | Low–Med | M | ✅ (current credentials) |
 | 36 | **Notepad++ filter import** (AnalysePlugin, UDL) | logana 0.7.7 | Low | S | ✅ |
-| 37 | **DLT automotive files** | Chipmunk, logana | Low | L | ⬜ `dlt-format` (optional) |
+| 37 | **DLT automotive files** | Chipmunk, logana | Low | L | ✅ |
 
 Seen in the competitors and not planned (⬜, to weigh when the maintainer asks):
 

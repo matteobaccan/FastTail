@@ -67,6 +67,8 @@ pub fn source_kind(engine: &TailEngine) -> &'static str {
         "info_kind_listener"
     } else if engine.debug_output.is_some() {
         "info_kind_debug"
+    } else if engine.dlt.is_some() {
+        "info_kind_dlt"
     } else if engine.plugin.is_some() {
         "info_kind_plugin"
     } else if engine.rotation.is_some() {

@@ -2039,6 +2039,9 @@ pub struct TailEngine {
     pub plugin: Option<crate::plugin_source::PluginStream>,
     /// The worker of a Windows Event Log stream (see `eventlog`).
     pub event_log: Option<crate::eventlog::EventLogStream>,
+    /// The copier of a DLT file read as text (see `dlt`); `path` is then the `.dlt` file
+    /// and `current_file` the spool.
+    pub dlt: Option<crate::dlt::DltStream>,
     /// The Statistics tab of the stream, while it is open (see `open_stats`).
     pub stats: Option<crate::field_stats::StatsState>,
     /// The Operations tab of the stream, while it is open (see `open_operations`).
@@ -2710,6 +2713,7 @@ impl TailEngine {
             rotation_request: false,
             plugin: None,
             event_log: None,
+            dlt: None,
             stats: None,
             operations: None,
             query: None,
