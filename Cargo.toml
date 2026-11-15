@@ -88,9 +88,10 @@ similar = "3"
 
 # Windows Specific
 # The Linux tray: StatusNotifierItem over D-Bus in pure Rust (zbus), no GTK or
-# libappindicator at run time; blocking API on its own async-io thread, no tokio.
+# libappindicator at run time; blocking API on its own async-io thread, no tokio. Only the
+# window has a tray, so it comes with the `gui` feature.
 [target.'cfg(target_os = "linux")'.dependencies]
-ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+ksni = { version = "0.3", optional = true, default-features = false, features = ["blocking", "async-io"] }
 # Asks the session bus whether a tray host is there (already built for ksni).
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
@@ -102,7 +103,7 @@ winreg = "0.56"
 # interface (`fasttail-tui`, openspec/changes/tui-interface). A terminal-only build is
 # `--no-default-features --features tui` and compiles no GUI crate.
 default = ["gui", "tui"]
-gui = ["dep:eframe", "dep:egui", "dep:egui_dock", "dep:egui_commonmark", "dep:rfd"]
+gui = ["dep:eframe", "dep:egui", "dep:egui_dock", "dep:egui_commonmark", "dep:rfd", "dep:ksni"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:arboard", "dep:unicode-width"]
 audio = ["dep:rodio"]
 
