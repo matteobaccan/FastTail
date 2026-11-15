@@ -108,7 +108,6 @@ pub fn render(
                 running,
                 egui::Button::new(format!("■ {}", t(lang, "query_stop"))),
             )
-            .on_hover_text(t(lang, "query_stop"))
             .clicked()
         {
             engine.stop_query();
@@ -140,7 +139,6 @@ pub fn render(
                 table.is_some(),
                 egui::Button::new(t(lang, "query_copy_csv")),
             )
-            .on_hover_text(t(lang, "stats_copy_csv_tip"))
             .on_disabled_hover_text(t(lang, "query_none"))
             .clicked()
         {
