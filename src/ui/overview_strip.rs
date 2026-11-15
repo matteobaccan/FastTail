@@ -153,8 +153,8 @@ pub fn compute_marks(height: usize, input: &MarkInputs) -> Marks {
                 .filter(|&&end| end > line)
                 .and_then(|&end| input.row_of(end))
                 .map_or(row, |r| r.max(row));
-            for p in px(row)..=px(last) {
-                marks.pixels[p] |= MARK_HIT;
+            for p in &mut marks.pixels[px(row)..=px(last)] {
+                *p |= MARK_HIT;
             }
         }
     }
