@@ -26,6 +26,8 @@ use egui::{Stroke, Ui};
 pub const STRIP_HEIGHT: f32 = 56.0;
 /// Height of the search lane above the bars.
 const LANE_HEIGHT: f32 = 5.0;
+/// Height of each kept search's lane, under the search lane.
+const KEPT_LANE_HEIGHT: f32 = 3.0;
 /// Minimum time between two rebuilds caused by the stream growing.
 const REBUILD_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -78,6 +80,34 @@ struct CacheKey {
     buffer_generation: u64,
     /// Out-of-order lines found so far.
     out_of_order: usize,
+    /// The kept searches: their colours and hit counts (`kept_key`).
+    kept: u64,
+}
+
+/// A value that changes when a kept search is added, removed or finds more hits.
+fn kept_key(engine: &TailEngine) -> u64 {
+    engine
+        .named
+        .list
+        .iter()
+        .fold(engine.named.list.len() as u64, |h, n| {
+            h.wrapping_mul(31)
+                .wrapping_add(n.color as u64)
+                .wrapping_mul(1_000_003)
+                .wrapping_add(n.total() as u64)
+        })
+}
+
+/// One lane per kept search, in its colour: the columns holding one of its hits.
+pub fn kept_lanes(
+    histogram: &TimeHistogram,
+    columns: usize,
+    kept: &[(u8, &[usize])],
+    timestamp: impl Fn(usize) -> Option<i64>,
+) -> Vec<(u8, Vec<bool>)> {
+    kept.iter()
+        .map(|&(color, hits)| (color, search_lane(histogram, columns, hits, &timestamp)))
+        .collect()
 }
 
 /// Per-stream cache kept in egui memory, plus the column a drag started from.
@@ -89,6 +119,8 @@ pub struct TimelineCache {
     pub lane: Vec<bool>,
     /// The columns that received out-of-order lines (marked under the search lane).
     pub out_of_order: Vec<bool>,
+    /// A lane per kept search: its colour and the columns holding its hits.
+    pub kept: Vec<(u8, Vec<bool>)>,
     /// Tallest column, the scale of the bars.
     pub peak: u64,
     drag_from: Option<usize>,
@@ -116,6 +148,7 @@ impl TimelineCache {
             search_generation: engine.search_generation,
             buffer_generation: engine.buffer_generation,
             out_of_order: engine.out_of_order_count(),
+            kept: kept_key(engine),
         };
         if self.key == Some(key) {
             return None;
@@ -153,6 +186,13 @@ impl TimelineCache {
                 .collect();
             search_lane(histogram, width, &lines, |line| engine.line_timestamp(line))
         };
+        let kept: Vec<(u8, &[usize])> = engine
+            .named
+            .list
+            .iter()
+            .map(|n| (n.color, n.hits()))
+            .collect();
+        self.kept = kept_lanes(histogram, width, &kept, |line| engine.line_timestamp(line));
         self.key = Some(key);
         self.built_at = Some(Instant::now());
         None
@@ -267,8 +307,10 @@ pub fn show(
         rect.left_top() + egui::vec2(0.0, 2.0),
         egui::pos2(rect.right(), rect.top() + 2.0 + LANE_HEIGHT),
     );
+    let kept_top = lane_rect.bottom() + 1.0;
+    let kept_bottom = kept_top + cache.kept.len() as f32 * (KEPT_LANE_HEIGHT + 1.0);
     let bars = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), lane_rect.bottom() + 2.0),
+        egui::pos2(rect.left(), kept_bottom + 1.0),
         rect.right_bottom() - egui::vec2(0.0, 1.0),
     );
     let col_w = if k > 0 { rect.width() / k as f32 } else { 0.0 };
@@ -328,7 +370,7 @@ pub fn show(
             }
         }
         painter.text(
-            rect.left_top() + egui::vec2(3.0, LANE_HEIGHT + 3.0),
+            egui::pos2(rect.left() + 3.0, bars.top() + 1.0),
             egui::Align2::LEFT_TOP,
             t(lang, "timeline_peak").replace("{n}", &cache.peak.to_string()),
             small.clone(),
@@ -400,6 +442,23 @@ pub fn show(
             0.0,
             theme.warn_color(),
         );
+    }
+
+    // Kept searches: a thin lane each, in the search's colour, under the search lane.
+    for (row, (color, lane)) in cache.kept.iter().enumerate() {
+        let top = kept_top + row as f32 * (KEPT_LANE_HEIGHT + 1.0);
+        let (_, bg) = theme.label_style(*color);
+        for (c, _) in lane.iter().enumerate().filter(|(_, &hit)| hit) {
+            let x0 = rect.left() + c as f32 * col_w;
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x0, top),
+                    egui::pos2(x0 + col_w.max(1.5), top + KEPT_LANE_HEIGHT),
+                ),
+                0.0,
+                bg,
+            );
+        }
     }
 
     // Out-of-order lines: a thin mark at the top of the bars of their columns.
@@ -578,6 +637,30 @@ mod tests {
         assert_eq!(lane.len(), 100);
         assert!(lane[42]);
         assert!(search_lane(&TimeHistogram::default(), 10, &[1], at).is_empty());
+    }
+
+    #[test]
+    fn each_kept_search_gets_its_own_lane() {
+        let mut h = TimeHistogram::default();
+        let stamps: Vec<i64> = (0..100).map(|s| s * 1_000).collect();
+        for &ts in &stamps {
+            h.add(ts, LogLevel::Info as u8);
+        }
+        let at = |line: usize| stamps.get(line).copied();
+        let first: &[usize] = &[5];
+        let second: &[usize] = &[50, 95];
+        let lanes = kept_lanes(&h, 10, &[(3, first), (7, second)], at);
+        let marked = |lane: &Vec<bool>| {
+            lane.iter()
+                .enumerate()
+                .filter(|(_, &m)| m)
+                .map(|(c, _)| c)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lanes.len(), 2);
+        assert_eq!((lanes[0].0, marked(&lanes[0].1)), (3, vec![0]));
+        assert_eq!((lanes[1].0, marked(&lanes[1].1)), (7, vec![5, 9]));
+        assert!(kept_lanes(&h, 10, &[], at).is_empty());
     }
 
     #[test]
