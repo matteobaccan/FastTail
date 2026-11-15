@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Kept searches in the timeline.** The timeline strip draws a lane per kept search, in its
+  colour, marked in the columns where it hits.
+
 ## [0.33.1] - 2026-11-09
 
 ### Changed
