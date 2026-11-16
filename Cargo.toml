@@ -38,7 +38,7 @@ exclude = [
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wgpu", "x11", "wayland", "links"], optional = true }
 egui = { version = "0.36", optional = true }
 egui_dock = { version = "0.21", features = ["serde"], optional = true }
-egui_commonmark = { version = "0.25", optional = true }
+egui_commonmark = { version = "0.26", optional = true }
 memchr = "2"
 
 # File I/O & Streaming
