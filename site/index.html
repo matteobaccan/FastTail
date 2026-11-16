@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FastTail · Ultra-fast log monitor and tail viewer</title>
-<meta name="description" content="FastTail is a free, open-source, ultra-fast multi-stream log monitor and tail viewer for Windows, Linux and macOS, written in Rust: multi-GB files, filters, highlight rules, structured logs, a terminal interface.">
+<meta name="description" content="FastTail is a free, open-source, ultra-fast multi-stream log monitor and tail viewer for Windows, Linux and macOS, written in Rust: multi-GB files, filters, highlight rules, structured logs, statistics and queries, in a window or in the terminal.">
 <meta property="og:title" content="FastTail">
-<meta property="og:description" content="Ultra-fast multi-stream log monitor and tail viewer for Windows, Linux and macOS.">
+<meta property="og:description" content="Ultra-fast multi-stream log monitor and tail viewer for Windows, Linux and macOS, in a window or in the terminal.">
 <meta property="og:image" content="https://matteobaccan.github.io/FastTail/assets/social-preview.png">
 <meta property="og:type" content="website">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
@@ -23,9 +23,13 @@ body {
 }
 a { color: var(--cyan); text-decoration: none; }
 a:hover { text-decoration: underline; }
-code, pre { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+code, pre, kbd { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
 code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 .3em; font-size: .9em; }
-.wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+kbd {
+  display: inline-block; background: var(--panel); border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; padding: 0 .4em; font-size: .85em; color: var(--yellow); white-space: nowrap;
+}
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 16px; }
 header.top {
   position: sticky; top: 0; z-index: 10; background: rgba(11, 14, 23, .92);
   backdrop-filter: blur(6px); border-bottom: 1px solid var(--line);
@@ -38,7 +42,7 @@ header.top nav a { color: var(--dim); font-size: .95em; }
 header.top nav a:hover { color: var(--cyan); text-decoration: none; }
 .hero { text-align: center; padding: 64px 0 32px; }
 .hero .logo { width: min(640px, 100%); height: auto; }
-.hero p.lead { font-size: 1.25em; color: var(--dim); max-width: 760px; margin: 16px auto 28px; }
+.hero p.lead { font-size: 1.25em; color: var(--dim); max-width: 780px; margin: 16px auto 28px; }
 .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 .btn {
   display: inline-block; padding: 12px 22px; border-radius: 6px; font-weight: 600;
@@ -46,15 +50,17 @@ header.top nav a:hover { color: var(--cyan); text-decoration: none; }
 }
 .btn.primary { background: var(--cyan); color: var(--bg); }
 .btn:hover { text-decoration: none; filter: brightness(1.15); }
-.shot { margin: 40px auto 0; max-width: 1000px; }
-.shot img {
-  width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line);
-  box-shadow: 0 0 40px rgba(45, 226, 230, .15), 0 0 80px rgba(255, 61, 139, .08);
+.shot { margin: 40px auto 0; max-width: 1100px; }
+.shot figcaption, figure.pic figcaption { color: var(--dim); font-size: .88em; margin-top: 10px; text-align: center; }
+img.screen {
+  display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line);
+  box-shadow: 0 0 40px rgba(45, 226, 230, .12), 0 0 80px rgba(255, 61, 139, .06);
 }
+a.zoom { display: block; cursor: zoom-in; }
 section { padding: 56px 0; border-top: 1px solid var(--line); }
-h2 { font-size: 1.8em; margin: 0 0 8px; }
-h2 .accent { color: var(--pink); }
-p.sub { color: var(--dim); margin: 0 0 32px; max-width: 760px; }
+h2 { font-size: 1.8em; margin: 0 0 8px; line-height: 1.25; }
+h2 .accent, h3 .accent { color: var(--pink); }
+p.sub { color: var(--dim); margin: 0 0 32px; max-width: 800px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; }
 .card h3 { margin: 0 0 6px; font-size: 1.1em; color: var(--cyan); }
@@ -65,7 +71,7 @@ p.sub { color: var(--dim); margin: 0 0 32px; max-width: 760px; }
 .stats span { color: var(--dim); font-size: .9em; }
 pre {
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-  padding: 16px; overflow-x: auto; font-size: .9em; line-height: 1.5;
+  padding: 16px; overflow-x: auto; font-size: .9em; line-height: 1.5; margin: 0;
 }
 pre .c { color: var(--dim); }
 table { width: 100%; border-collapse: collapse; font-size: .95em; }
@@ -74,8 +80,43 @@ th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--li
 th { color: var(--dim); font-weight: 600; }
 td.y { color: var(--green); font-weight: 600; }
 td.n { color: var(--dim); }
-.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-@media (max-width: 760px) { .two { grid-template-columns: 1fr; } header.top nav { display: none; } }
+/* feature rows: text beside a screenshot, alternating sides */
+.feature { display: grid; grid-template-columns: 5fr 7fr; gap: 36px; align-items: center; margin: 0 0 64px; }
+.feature:last-child { margin-bottom: 0; }
+.feature.flip .text { order: 2; }
+.feature .text h3 { font-size: 1.35em; margin: 0 0 10px; color: var(--cyan); }
+.feature .text p { color: var(--dim); margin: 0 0 12px; }
+.feature .text ul { color: var(--dim); margin: 0; padding-left: 1.2em; }
+.feature .text li { margin: 4px 0; }
+.feature .text li b { color: var(--text); font-weight: 600; }
+.tag { display: inline-block; font-size: .75em; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--pink); margin-bottom: 6px; }
+.pics { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+figure.pic { margin: 0; }
+.themes-switch { display: flex; gap: 8px; margin: 0 0 20px; }
+.themes-switch button {
+  background: var(--panel); color: var(--dim); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer;
+}
+.themes-switch button[aria-pressed="true"] { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+.themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+.themes figure { margin: 0; }
+.themes figcaption { margin-top: 8px; font-size: .92em; color: var(--dim); }
+.themes figcaption b { color: var(--text); }
+.themes [data-ui="tui"] { display: none; }
+.themes.tui [data-ui="gui"] { display: none; }
+.themes.tui [data-ui="tui"] { display: block; }
+.keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 20px; margin-top: 28px; }
+.keys div { color: var(--dim); font-size: .93em; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.chips span { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: .88em; color: var(--text); }
+.chips span code { background: none; border: 0; padding: 0; color: var(--yellow); }
+@media (max-width: 860px) {
+  .feature, .two, .pics { grid-template-columns: 1fr; }
+  .feature.flip .text { order: 0; }
+  header.top nav { display: none; }
+}
 footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); font-size: .9em; text-align: center; }
 </style>
 </head>
@@ -84,8 +125,11 @@ footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); 
   <div class="wrap">
     <a class="brand" href="#"><img src="assets/icon.svg" alt="">FastTail</a>
     <nav>
-      <a href="#features">Features</a>
+      <a href="#tour">Tour</a>
       <a href="#terminal">Terminal</a>
+      <a href="#themes">Themes</a>
+      <a href="#sources">Sources</a>
+      <a href="#cli">Command line</a>
       <a href="#compare">Compare</a>
       <a href="#download">Download</a>
       <a href="https://github.com/matteobaccan/FastTail">GitHub</a>
@@ -96,52 +140,232 @@ footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); 
 <main>
 <div class="wrap hero">
   <img class="logo" src="assets/logo.svg" alt="FastTail">
-  <p class="lead">An ultra-fast, multi-stream log monitor and tail viewer for Windows, Linux and macOS.
-    Open multi-gigabyte logs instantly, follow dozens of them at once and find what matters.
+  <p class="lead">An ultra-fast, multi-stream log monitor and tail viewer for Windows, Linux and macOS,
+    in a window or in the terminal. Open multi-gigabyte logs instantly, follow dozens of them at once,
+    and go from "something is wrong" to the line that explains it.
     Free and open source, written in Rust.</p>
   <div class="btns">
     <a class="btn primary" href="https://github.com/matteobaccan/FastTail/releases/latest">Download the latest release</a>
+    <a class="btn" href="#tour">Take the tour</a>
     <a class="btn" href="https://github.com/matteobaccan/FastTail">View on GitHub</a>
   </div>
-  <div class="shot"><img src="assets/screenshots/fasttail_main_view.png" alt="FastTail main window with several log streams" loading="lazy"></div>
+  <figure class="shot">
+    <a class="zoom" href="assets/screenshots/gui-timeline-kept.png"><img class="screen" src="assets/screenshots/gui-timeline-kept.png" alt="FastTail window: an application log with three kept searches, each with its own lane over the timeline, at a spike of payment gateway timeouts" width="1600" height="960"></a>
+    <figcaption>A burst of gateway timeouts: three kept searches, each with its own colour and lane on the timeline, and the overview strip at the right.</figcaption>
+  </figure>
 </div>
 
 <section>
   <div class="wrap stats">
     <div><b>&gt; 50 GB</b><span>files open instantly, never loaded into memory</span></div>
     <div><b>~60 MB</b><span>RAM for ten 50 MB logs that keep growing</span></div>
-    <div><b>1 binary</b><span>no runtime, no installer needed</span></div>
+    <div><b>2 interfaces</b><span>a GPU window and a full terminal interface</span></div>
     <div><b>16</b><span>interface languages</span></div>
   </div>
 </section>
 
-<section id="features">
+<section id="tour">
   <div class="wrap">
-    <h2>Everything you need to <span class="accent">read logs</span></h2>
-    <p class="sub">FastTail began as a successor to BareTail and has grown into a full log workbench. Every feature works on files that are still being written.</p>
-    <div class="grid">
-      <div class="card"><h3>Zero-lag streaming engine</h3><p>Rows are read on demand through a block cache, and appends are indexed as they arrive. Rotation, truncation and rewrites are detected without locking the writer.</p></div>
-      <div class="card"><h3>Multi-stream docking</h3><p>Tabs, splits and floating windows. Each stream has its own Follow, filters, search and view mode. Save the whole layout as a named session.</p></div>
-      <div class="card"><h3>Filters and highlight rules</h3><p>Include and exclude terms (text, regex or boolean expressions), a minimum level, a global filter, context lines, pinned and recent presets, and priority-ordered colour rules with sounds and notifications (Notepad++ filter files import as rules).</p></div>
-      <div class="card"><h3>Structured logs</h3><p>JSON, logfmt, Apache and syslog lines, CSV and TSV tables, and your own named log formats, shown in a column view with pinned columns. Filter on fields, units included: <code>latency&gt;=500ms</code>.</p></div>
-      <div class="card"><h3>Search, queries and statistics</h3><p>Regex and multi-line search, a results pane, search across all open streams, up to eight kept searches highlighted at once with a lane each in the timeline, a pipeline query language, field statistics, and grouping of lines into patterns.</p></div>
-      <div class="card"><h3>Time-aware</h3><p>Timestamps are detected automatically. Get a time-range filter, go to a time, a timeline histogram, Δt columns, a merged timeline of several streams, and marks on lines out of order.</p></div>
-      <div class="card"><h3>Any source</h3><p>Compressed files and archives, rotated files as one stream, folders, stdin, the clipboard, SSH, Docker, Kubernetes pods, journald, syslog, TCP and UDP, OTLP, the Windows Event Log (local or another computer), debug output, and AUTOSAR DLT files from automotive ECUs.</p></div>
-      <div class="card"><h3>Four views</h3><p>Text with inline JSON trees, a live HEX dump with byte search, x86 disassembly of PE and ELF files, and rendered Markdown or HTML.</p></div>
-      <div class="card"><h3>Integrations</h3><p>A web view for a browser, an MCP server for AI assistants, plugins, external tools, remappable shortcuts, links from stack traces to your editor, and a jump from a log message to the logging statement that printed it.</p></div>
+    <h2>A tour of the <span class="accent">window</span></h2>
+    <p class="sub">FastTail began as a successor to BareTail and has grown into a log workbench. Everything below works on files that are still being written, and every screenshot is the real application.</p>
+
+    <div class="feature">
+      <div class="text">
+        <span class="tag">Search</span>
+        <h3>See where things go wrong, at a glance</h3>
+        <p>Every stream can show a timeline histogram of its lines over time, with errors in red, and an overview strip beside the scrollbar. Click either to jump there.</p>
+        <ul>
+          <li><b>Kept searches</b>: up to eight searches highlighted at once, each with its own colour, hit count and lane on the timeline.</li>
+          <li><b>Regex and multi-line search</b>, a results pane, and <b>Search all streams</b> (<kbd>Ctrl+Shift+F</kbd>).</li>
+          <li>Highlight rules with colours, sounds and desktop notifications; Notepad++ filter files import as rules.</li>
+          <li>Bookmarks with notes, a bookmark report, hide lines by hand, collapse repeated lines.</li>
+        </ul>
+      </div>
+      <a class="zoom" href="assets/screenshots/gui-timeline-kept.png"><img class="screen" src="assets/screenshots/gui-timeline-kept.png" alt="Kept searches and timeline lanes" loading="lazy" width="1600" height="960"></a>
+    </div>
+
+    <div class="feature flip">
+      <div class="text">
+        <span class="tag">Structured logs</span>
+        <h3>JSON and logfmt as a table, filtered by field</h3>
+        <p>JSON, logfmt, Apache, syslog, CSV / TSV and your own named log formats open in a column view: pick, move and pin columns, and keep scrolling sideways.</p>
+        <ul>
+          <li><b>Field filter terms</b>: <code>status&gt;=500</code>, <code>level=error|fatal</code>, <code>user~=bot</code>.</li>
+          <li><b>Values with units</b>: <code>latency&gt;=1.5s</code> matches <code>1700ms</code> too.</li>
+          <li><b>Filter expressions</b>: <code>(payment OR refund) AND timeout NOT retry</code>, plus a global filter over every stream and saved presets.</li>
+        </ul>
+      </div>
+      <a class="zoom" href="assets/screenshots/gui-columns-filter.png"><img class="screen" src="assets/screenshots/gui-columns-filter.png" alt="Column view of a JSON log filtered with status>=500" loading="lazy" width="1600" height="960"></a>
+    </div>
+
+    <div class="feature">
+      <div class="text">
+        <span class="tag">Statistics</span>
+        <h3>Numbers, not just lines</h3>
+        <p>Right-click a column and pick <b>Statistics</b>: the top values of a field, the share of each level, <code>min · max · mean · p50 · p90 · p95 · p99</code> and a chart over time slices. Click a value to filter on it.</p>
+        <ul>
+          <li><b>Query tab</b>: <code>where status&gt;=500 | stats count(), p95(latency) by path | sort -count</code>.</li>
+          <li><b>Plot a field</b> over the timeline, <b>Explain a spike</b> (what changed in a time span), and an <b>Operations</b> view with a Gantt bar per request id.</li>
+        </ul>
+      </div>
+      <a class="zoom" href="assets/screenshots/gui-statistics.png"><img class="screen" src="assets/screenshots/gui-statistics.png" alt="Statistics tab with percentiles and a latency chart showing a spike" loading="lazy" width="1600" height="960"></a>
+    </div>
+
+    <div class="feature flip">
+      <div class="text">
+        <span class="tag">Patterns</span>
+        <h3>What kinds of lines does this log hold?</h3>
+        <p><kbd>Ctrl+Shift+G</kbd> groups thousands of lines into a handful of templates, with the parts that change shown as <code>&lt;*&gt;</code>. Each pattern has its count, its share, a sparkline of its volume, and where it was first and last seen.</p>
+        <p>The rare pattern that appears only in the incident window is usually the one you are looking for. Click it to show only those lines.</p>
+      </div>
+      <a class="zoom" href="assets/screenshots/gui-patterns.png"><img class="screen" src="assets/screenshots/gui-patterns.png" alt="Patterns tab grouping an application log into eight templates" loading="lazy" width="1600" height="960"></a>
+    </div>
+
+    <div class="feature">
+      <div class="text">
+        <span class="tag">Time</span>
+        <h3>Several logs, one timeline</h3>
+        <p>A <b>merged view</b> interleaves several streams in the order of their timestamps, and keeps following them as they grow. A colour bar tells which file each line came from.</p>
+        <ul>
+          <li>Timestamps are detected automatically: time-range filter (<code>--since -15m</code>), go to a time, a Δt column, UTC or local display.</li>
+          <li>Lines whose timestamp goes back are marked, counted and walked.</li>
+          <li>Split a big file by lines, size or time; export as text, CSV or HTML.</li>
+        </ul>
+      </div>
+      <a class="zoom" href="assets/screenshots/gui-merged.png"><img class="screen" src="assets/screenshots/gui-merged.png" alt="Merged view of an application log and a worker log by timestamp" loading="lazy" width="1600" height="960"></a>
+    </div>
+
+    <div class="feature flip">
+      <div class="text">
+        <span class="tag">Keyboard</span>
+        <h3>Every action one keystroke away</h3>
+        <p>The command palette (<kbd>Ctrl+Shift+P</kbd>) lists every action and setting with its shortcut, greys out what does not apply and says why. Shortcuts can be remapped.</p>
+        <ul>
+          <li>Tabs, splits and floating windows; save the layout as a named session.</li>
+          <li>Four views: text with inline JSON trees, a live HEX dump, x86 disassembly of PE / ELF files, rendered Markdown or HTML.</li>
+          <li><a href="#themes">Five themes</a>, sixteen languages, a PIN lock and a tray icon.</li>
+        </ul>
+      </div>
+      <a class="zoom" href="assets/screenshots/gui-palette.png"><img class="screen" src="assets/screenshots/gui-palette.png" alt="Command palette filtered on time" loading="lazy" width="1600" height="960"></a>
     </div>
   </div>
 </section>
 
 <section id="terminal">
+  <div class="wrap">
+    <h2>The same engine in the <span class="accent">terminal</span></h2>
+    <p class="sub"><code>fasttail-tui</code> (or <code>fasttail --tui</code>) brings FastTail to SSH sessions, containers and servers without a desktop. It is not a cut-down viewer: it has windows, menus, mouse support, splits, filters and rules, bookmarks, the column view, merged views and filter tabs, the analysis views, the command palette, remappable keys, five themes, and it shares the scratchpad with the window. It works in any terminal, including the Windows console, with <code>--ascii</code> borders for the old ones.</p>
+
+    <div class="pics">
+      <figure class="pic">
+        <a class="zoom" href="assets/screenshots/tui-split-search.png"><img class="screen" src="assets/screenshots/tui-split-search.png" alt="Terminal interface with two logs side by side and a search for timeout" loading="lazy" width="1600" height="960"></a>
+        <figcaption><code>fasttail-tui --split --search timeout app.log worker.log</code>: two streams side by side, hits highlighted, <kbd>n</kbd> for the next one.</figcaption>
+      </figure>
+      <figure class="pic">
+        <a class="zoom" href="assets/screenshots/tui-columns.png"><img class="screen" src="assets/screenshots/tui-columns.png" alt="Terminal interface column view of a JSON log" loading="lazy" width="1600" height="960"></a>
+        <figcaption><kbd>C</kbd> turns a JSON or logfmt stream into columns; <code>[Fields...]</code> picks them.</figcaption>
+      </figure>
+      <figure class="pic">
+        <a class="zoom" href="assets/screenshots/tui-query.png"><img class="screen" src="assets/screenshots/tui-query.png" alt="Terminal interface Query view with percentiles per module and level" loading="lazy" width="1600" height="420"></a>
+        <figcaption><kbd>Alt+A</kbd> opens Statistics, Query, Patterns, Explain a span and Operations as tables: here p50 / p95 / max per module and level.</figcaption>
+      </figure>
+      <figure class="pic">
+        <a class="zoom" href="assets/screenshots/tui-palette.png"><img class="screen" src="assets/screenshots/tui-palette.png" alt="Terminal interface command palette" loading="lazy" width="1600" height="960"></a>
+        <figcaption><kbd>:</kbd> opens the palette with every command, its key and a line number to jump to.</figcaption>
+      </figure>
+    </div>
+
+    <div class="keys">
+      <div><kbd>/</kbd> search, <kbd>n</kbd> / <kbd>N</kbd> next / previous</div>
+      <div><kbd>i</kbd> include, <kbd>x</kbd> exclude</div>
+      <div><kbd>t</kbd> time range, <kbd>Space</kbd> follow</div>
+      <div><kbd>b</kbd> bookmark, <kbd>H</kbd> hide lines</div>
+      <div><kbd>C</kbd> column view</div>
+      <div><kbd>Alt+A</kbd> analysis views</div>
+      <div><kbd>:</kbd> command palette</div>
+      <div><kbd>r</kbd> rules, <kbd>F</kbd> global filter</div>
+      <div><kbd>o</kbd> open, <kbd>O</kbd> sessions</div>
+      <div><kbd>,</kbd> settings, <kbd>Shift+T</kbd> theme</div>
+      <div><kbd>Alt+Y</kbd> copy as excerpt</div>
+      <div><kbd>?</kbd> help, <kbd>q</kbd> quit</div>
+    </div>
+  </div>
+</section>
+
+<section id="themes">
+  <div class="wrap">
+    <h2>Five <span class="accent">themes</span>, in both interfaces</h2>
+    <p class="sub">Pick a theme in Settings, or press <kbd>Shift+T</kbd> in the terminal to cycle through them (<code>fasttail-tui --theme matrix</code> from the command line). Every theme colours levels, search hits and kept searches in its own palette. In the terminal they use 24-bit colour where the terminal supports it, and fall back to 256 or 16 colours elsewhere.</p>
+    <div class="themes-switch" role="group" aria-label="Interface">
+      <button type="button" data-show="gui" aria-pressed="true">Window</button>
+      <button type="button" data-show="tui" aria-pressed="false">Terminal</button>
+    </div>
+    <div class="themes" id="theme-grid">
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-tron.png"><img class="screen" src="assets/screenshots/theme-gui-tron.png" alt="Tron theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Tron</b>: neon cyan on deep blue, the default</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-matrix.png"><img class="screen" src="assets/screenshots/theme-gui-matrix.png" alt="Matrix theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Matrix</b>: green phosphor on black</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-blade.png"><img class="screen" src="assets/screenshots/theme-gui-blade.png" alt="Blade theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Blade</b>: warm amber on near-black</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-light.png"><img class="screen" src="assets/screenshots/theme-gui-light.png" alt="Light theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Light</b>: dark text on white, for bright rooms and printouts</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-commander.png"><img class="screen" src="assets/screenshots/theme-gui-commander.png" alt="Commander theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Commander</b>: the blue panels of the classic file managers</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-tron.png"><img class="screen" src="assets/screenshots/theme-tui-tron.png" alt="Tron theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Tron</b>: neon cyan on deep blue, the default</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-matrix.png"><img class="screen" src="assets/screenshots/theme-tui-matrix.png" alt="Matrix theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Matrix</b>: green phosphor on black</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-blade.png"><img class="screen" src="assets/screenshots/theme-tui-blade.png" alt="Blade theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Blade</b>: warm amber on near-black</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-light.png"><img class="screen" src="assets/screenshots/theme-tui-light.png" alt="Light theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Light</b>: dark text on white, for bright rooms and printouts</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-commander.png"><img class="screen" src="assets/screenshots/theme-tui-commander.png" alt="Commander theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Commander</b>: the blue panels of the classic file managers</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="sources">
+  <div class="wrap">
+    <h2>Any <span class="accent">source</span>, not only files</h2>
+    <p class="sub">Each source becomes a stream with the same filters, search, rules and views. The engine reads rows on demand through a block cache and indexes appends as they arrive; rotation, truncation and rewrites are detected without locking the writer.</p>
+    <div class="grid">
+      <div class="card"><h3>Files and folders</h3><p>Plain logs of any size and encoding, folders and patterns (<code>logs/**/*.log</code>) that open new files as they appear, rotated files (<code>app.log.1</code>, <code>app.log.2.gz</code>) as one stream.</p></div>
+      <div class="card"><h3>Compressed and archives</h3><p><code>.gz</code>, <code>.bz2</code>, <code>.xz</code>, <code>.zst</code>, and entries of <code>.zip</code>, <code>.7z</code> and <code>.tar</code> archives, picked from a list.</p></div>
+      <div class="card"><h3>Remote and containers</h3><p>Files over SSH (<code>ssh://ops@web1/var/log/app.log</code>), Docker and Podman containers, Kubernetes pods (<code>k8s://</code>), journald.</p></div>
+      <div class="card"><h3>Network</h3><p>A TCP, UDP or syslog listener, and an OTLP/HTTP logs receiver for OpenTelemetry exporters.</p></div>
+      <div class="card"><h3>Windows</h3><p>Event Log channels and <code>.evtx</code> files, on this computer or another one (<code>eventlog://host/channel</code>), and debug output like DebugView.</p></div>
+      <div class="card"><h3>Pipes and the clipboard</h3><p>Standard input (<code>command | fasttail -</code>), the clipboard as a stream, and AUTOSAR DLT traces from automotive ECUs.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="integrations">
+  <div class="wrap">
+    <h2>From the log to the <span class="accent">work</span></h2>
+    <p class="sub">FastTail connects the line you are looking at to the rest of your tools.</p>
+    <div class="grid">
+      <div class="card"><h3>Your editor</h3><p>Paths and <code>file:line</code> in stack traces open in VS Code, a JetBrains IDE, Sublime Text or any editor at that line, and a log message jumps to the logging statement that printed it.</p></div>
+      <div class="card"><h3>AI assistants</h3><p>An MCP server lets Claude and other assistants read what FastTail shows: the open streams, their visible lines, searches, bookmarks and filters.</p></div>
+      <div class="card"><h3>A browser</h3><p>A read-only web page of the open streams, served by FastTail itself on <code>127.0.0.1</code> behind a token, off by default.</p></div>
+      <div class="card"><h3>Tickets and chat</h3><p>Copy as excerpt puts the selected lines with their file, line numbers and time span in a Markdown, Jira or Slack code block.</p></div>
+      <div class="card"><h3>Plugins and tools</h3><p>Source plugins (any program whose output becomes a stream) and log format bundles; external tools run on a row, from a shortcut or when a rule matches.</p></div>
+      <div class="card"><h3>Scripts</h3><p>Print mode runs the filters without a window and writes text, JSON, logfmt, CSV or templated records.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="cli">
   <div class="wrap two">
     <div>
-      <h2>A <span class="accent">terminal</span> interface too</h2>
-      <p class="sub">The terminal interface, <code>fasttail-tui</code>, brings the same engine to SSH sessions and servers without a desktop. It has windows, menus, mouse support, filters, rules, bookmarks, the column view, merged views, the analysis tabs and search across all streams.</p>
-      <p class="sub">Print mode runs FastTail's filters in scripts, with no window at all, and writes plain lines or JSON, logfmt, CSV and templated records.</p>
+      <h2>The <span class="accent">command line</span></h2>
+      <p class="sub">One binary for the window, the terminal interface, print mode and the MCP server. Files open at a line (<code>app.log:1204</code>), filters and time ranges can be given up front, and print mode makes FastTail a <code>grep</code> that knows about log levels, timestamps and fields.</p>
+      <div class="chips">
+        <span><code>--filter</code> / <code>--exclude</code></span>
+        <span><code>--filter-expr</code></span>
+        <span><code>--since</code> / <code>--until</code></span>
+        <span><code>--level</code></span>
+        <span><code>--line</code></span>
+        <span><code>--all</code></span>
+        <span><code>--rotations</code></span>
+        <span><code>--listen</code></span>
+        <span><code>--print --output json</code></span>
+        <span><code>--session</code></span>
+        <span><code>--mcp</code></span>
+      </div>
     </div>
-    <pre><span class="c"># follow a log in the window</span>
-fasttail app.log
+    <pre><span class="c"># follow a log in the window, from line 1204</span>
+fasttail app.log:1204
 
 <span class="c"># every match of a pattern, as a folder group</span>
 fasttail --all "logs/**/*.log"
@@ -152,8 +376,9 @@ fasttail --rotations /var/log/syslog
 <span class="c"># the terminal interface, over SSH</span>
 fasttail-tui ssh://ops@web1/var/log/nginx/error.log
 
-<span class="c"># the errors of a JSON log, through jq</span>
-fasttail --print --output json --level error app.json | jq .fields.status
+<span class="c"># the last 15 minutes of errors, as JSON, through jq</span>
+fasttail --print --since -15m --level error \
+  --output json app.json | jq .fields.status
 
 <span class="c"># pipe a command in, like less</span>
 docker logs -f api 2&gt;&amp;1 | fasttail -</pre>
@@ -163,16 +388,18 @@ docker logs -f api 2&gt;&amp;1 | fasttail -</pre>
 <section id="compare">
   <div class="wrap">
     <h2>How it <span class="accent">compares</span></h2>
-    <p class="sub">A short extract. See the README for the full table.</p>
+    <p class="sub">A short extract. See the <a href="https://github.com/matteobaccan/FastTail#-comparison-with-other-tail-tools">README</a> for the full table.</p>
     <div class="table"><table>
       <tr><th>Feature</th><th>FastTail</th><th>BareTail</th><th>Tailviewer</th><th><code>tail -f</code></th></tr>
       <tr><td>Windows, Linux, macOS</td><td class="y">Yes</td><td class="n">Windows</td><td class="n">Windows</td><td class="n">Linux / macOS</td></tr>
       <tr><td>Files larger than 50 GB</td><td class="y">Instant</td><td>Good</td><td class="n">Slow</td><td>Fast</td></tr>
+      <tr><td>Window and terminal interface</td><td class="y">Both</td><td class="n">Window</td><td class="n">Window</td><td class="n">Terminal</td></tr>
       <tr><td>Include / exclude filters</td><td class="y">Live, regex, expressions</td><td class="n">Pro only</td><td>Yes</td><td class="n"><code>grep</code></td></tr>
       <tr><td>Structured logs, column view</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n"><code>jq</code></td></tr>
+      <tr><td>Statistics, queries, patterns</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n"><code>awk</code></td></tr>
+      <tr><td>Merged timeline of several logs</td><td class="y">Yes</td><td class="n">No</td><td>Yes</td><td class="n">No</td></tr>
       <tr><td>Compressed logs</td><td class="y">gz, bz2, xz, zst, zip, 7z, tar</td><td class="n">No</td><td class="n">No</td><td class="n"><code>zcat</code></td></tr>
-      <tr><td>Time-range filter, timeline</td><td class="y">Yes</td><td class="n">No</td><td>Yes</td><td class="n">No</td></tr>
-      <tr><td>Terminal interface</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td>Yes</td></tr>
+      <tr><td>SSH, Docker, Kubernetes, Event Log</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n">No</td></tr>
     </table></div>
   </div>
 </section>
@@ -185,7 +412,7 @@ docker logs -f api 2&gt;&amp;1 | fasttail -</pre>
       <div class="card"><h3>Windows x86_64</h3><p>A per-user <code>.msi</code> installer (no administrator rights needed) or a <code>.zip</code> with <code>fasttail.exe</code> and <code>fasttail-tui.exe</code>.</p></div>
       <div class="card"><h3>Linux x86_64 / ARM64</h3><p><code>.deb</code>, <code>.rpm</code>, AppImage or <code>.tar.gz</code>, plus a terminal-only archive for servers. Requires glibc 2.35 or later.</p></div>
       <div class="card"><h3>macOS</h3><p>A universal <code>.dmg</code> for Apple Silicon and Intel, or a <code>.tar.gz</code> per architecture. The builds are unsigned: see the README for the first launch.</p></div>
-      <div class="card"><h3>From source</h3><p>Use Rust 1.100 or newer: <code>cargo build --release</code>. The README lists the prerequisites.</p></div>
+      <div class="card"><h3>From source</h3><p>Use Rust 1.100 or newer: <code>cargo build --release</code>, or <code>--no-default-features --features tui</code> for the terminal only. The README lists the prerequisites.</p></div>
     </div>
   </div>
 </section>
@@ -196,8 +423,20 @@ docker logs -f api 2&gt;&amp;1 | fasttail -</pre>
     FastTail is MIT licensed · © Matteo Baccan ·
     <a href="https://github.com/matteobaccan/FastTail">Source</a> ·
     <a href="https://github.com/matteobaccan/FastTail/blob/main/CHANGELOG.md">Changelog</a> ·
+    <a href="https://github.com/matteobaccan/FastTail/blob/main/docs/tui.md">Terminal guide</a> ·
     <a href="https://github.com/matteobaccan/FastTail/issues">Issues</a>
   </div>
 </footer>
+<script>
+document.querySelectorAll('.themes-switch button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var tui = b.dataset.show === 'tui';
+    document.getElementById('theme-grid').classList.toggle('tui', tui);
+    document.querySelectorAll('.themes-switch button').forEach(function (o) {
+      o.setAttribute('aria-pressed', String(o === b));
+    });
+  });
+});
+</script>
 </body>
 </html>
