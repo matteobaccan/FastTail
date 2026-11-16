@@ -133,7 +133,7 @@ and `c` clears the list (also *Clear recent files*).
 | `Alt+F`, `Alt+X`, `Alt+arrows` | float / dock a window, close a window, move a divider or a floating window |
 | `Tab`, `Alt+1..9` | next window or stream, stream N |
 | `Ctrl+W` | close the stream |
-| `o`, `O`, `S` | open a file (folder browser), load / save a session |
+| `o`, `O`, `S` | open a file (folder browser; a `.dlt` file opens as its decoded messages, as in the window), load / save a session |
 | `,`, `r`, `p`, `F` `f`, `!` | Settings, highlight rules, presets (pinned first, `*` pins, then the five applied last, then by name), global filter (edit / on-off), external tools |
 | `Ctrl+Shift+1..9` (or `L` and a digit) | the search text as a quick label |
 | `Shift+T` | next theme |

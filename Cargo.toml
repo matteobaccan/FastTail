@@ -1,6 +1,6 @@
 [package]
 name = "fasttail"
-version = "0.33.1"
+version = "0.34.0"
 edition = "2021"
 authors = ["Matteo Baccan"]
 description = "Ultra-fast multi-stream log monitor and tail viewer with Cyberpunk UI aesthetic"
@@ -11,9 +11,9 @@ readme = "README.md"
 documentation = "https://github.com/matteobaccan/FastTail#readme"
 keywords = ["log", "tail", "logging", "monitoring", "gui"]
 categories = ["command-line-utilities", "gui", "development-tools::debugging"]
-# The oldest toolchain the dependencies build on (sevenz-rust2 0.24 needs 1.93); CI
-# builds on stable.
-rust-version = "1.93"
+# The oldest toolchain supported: 1.100, the stable the CI and the releases build and lint
+# with (maintainer decision, 2026-11-15; the dependencies alone need 1.93).
+rust-version = "1.100"
 # The published crate carries the code, the licence and the docs a user reads from
 # `cargo install`; everything else in the repository (the spec workspace, the agent
 # skills, the screenshots, the release scaffolding) is repository furniture.

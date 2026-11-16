@@ -53,3 +53,10 @@ Settings SHALL offer a Log formats dialog listing the built-in and user formats 
 #### Scenario: Format from selected lines
 - **WHEN** the user selects three rows and picks "Create format from these lines…"
 - **THEN** the dialog opens a new format draft whose samples are those three lines.
+
+### Requirement: DLT Files
+FastTail SHALL open DLT storage files as streams whose rows are the messages with their time, ECU, application, context, level and decoded payload as fields.
+
+#### Scenario: A DLT file
+- **WHEN** the user opens `trace.dlt`
+- **THEN** each DLT message is a row with its ECU, APID, CTID and level as columns.
