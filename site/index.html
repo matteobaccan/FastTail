@@ -93,6 +93,19 @@ td.n { color: var(--dim); }
   color: var(--pink); margin-bottom: 6px; }
 .pics { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
 figure.pic { margin: 0; }
+.themes-switch { display: flex; gap: 8px; margin: 0 0 20px; }
+.themes-switch button {
+  background: var(--panel); color: var(--dim); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer;
+}
+.themes-switch button[aria-pressed="true"] { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+.themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+.themes figure { margin: 0; }
+.themes figcaption { margin-top: 8px; font-size: .92em; color: var(--dim); }
+.themes figcaption b { color: var(--text); }
+.themes [data-ui="tui"] { display: none; }
+.themes.tui [data-ui="gui"] { display: none; }
+.themes.tui [data-ui="tui"] { display: block; }
 .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 20px; margin-top: 28px; }
 .keys div { color: var(--dim); font-size: .93em; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
@@ -114,6 +127,7 @@ footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); 
     <nav>
       <a href="#tour">Tour</a>
       <a href="#terminal">Terminal</a>
+      <a href="#themes">Themes</a>
       <a href="#sources">Sources</a>
       <a href="#cli">Command line</a>
       <a href="#compare">Compare</a>
@@ -229,7 +243,7 @@ footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); 
         <ul>
           <li>Tabs, splits and floating windows; save the layout as a named session.</li>
           <li>Four views: text with inline JSON trees, a live HEX dump, x86 disassembly of PE / ELF files, rendered Markdown or HTML.</li>
-          <li>Five themes, sixteen languages, a PIN lock and a tray icon.</li>
+          <li><a href="#themes">Five themes</a>, sixteen languages, a PIN lock and a tray icon.</li>
         </ul>
       </div>
       <a class="zoom" href="assets/screenshots/gui-palette.png"><img class="screen" src="assets/screenshots/gui-palette.png" alt="Command palette filtered on time" loading="lazy" width="1600" height="960"></a>
@@ -274,6 +288,29 @@ footer { border-top: 1px solid var(--line); padding: 32px 0; color: var(--dim); 
       <div><kbd>,</kbd> settings, <kbd>Shift+T</kbd> theme</div>
       <div><kbd>Alt+Y</kbd> copy as excerpt</div>
       <div><kbd>?</kbd> help, <kbd>q</kbd> quit</div>
+    </div>
+  </div>
+</section>
+
+<section id="themes">
+  <div class="wrap">
+    <h2>Five <span class="accent">themes</span>, in both interfaces</h2>
+    <p class="sub">Pick a theme in Settings, or press <kbd>Shift+T</kbd> in the terminal to cycle through them (<code>fasttail-tui --theme matrix</code> from the command line). Every theme colours levels, search hits and kept searches in its own palette. In the terminal they use 24-bit colour where the terminal supports it, and fall back to 256 or 16 colours elsewhere.</p>
+    <div class="themes-switch" role="group" aria-label="Interface">
+      <button type="button" data-show="gui" aria-pressed="true">Window</button>
+      <button type="button" data-show="tui" aria-pressed="false">Terminal</button>
+    </div>
+    <div class="themes" id="theme-grid">
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-tron.png"><img class="screen" src="assets/screenshots/theme-gui-tron.png" alt="Tron theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Tron</b>: neon cyan on deep blue, the default</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-matrix.png"><img class="screen" src="assets/screenshots/theme-gui-matrix.png" alt="Matrix theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Matrix</b>: green phosphor on black</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-blade.png"><img class="screen" src="assets/screenshots/theme-gui-blade.png" alt="Blade theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Blade</b>: warm amber on near-black</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-light.png"><img class="screen" src="assets/screenshots/theme-gui-light.png" alt="Light theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Light</b>: dark text on white, for bright rooms and printouts</figcaption></figure>
+      <figure data-ui="gui"><a class="zoom" href="assets/screenshots/theme-gui-commander.png"><img class="screen" src="assets/screenshots/theme-gui-commander.png" alt="Commander theme in the window" loading="lazy" width="1600" height="960"></a><figcaption><b>Commander</b>: the blue panels of the classic file managers</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-tron.png"><img class="screen" src="assets/screenshots/theme-tui-tron.png" alt="Tron theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Tron</b>: neon cyan on deep blue, the default</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-matrix.png"><img class="screen" src="assets/screenshots/theme-tui-matrix.png" alt="Matrix theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Matrix</b>: green phosphor on black</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-blade.png"><img class="screen" src="assets/screenshots/theme-tui-blade.png" alt="Blade theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Blade</b>: warm amber on near-black</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-light.png"><img class="screen" src="assets/screenshots/theme-tui-light.png" alt="Light theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Light</b>: dark text on white, for bright rooms and printouts</figcaption></figure>
+      <figure data-ui="tui"><a class="zoom" href="assets/screenshots/theme-tui-commander.png"><img class="screen" src="assets/screenshots/theme-tui-commander.png" alt="Commander theme in the terminal" loading="lazy" width="1600" height="960"></a><figcaption><b>Commander</b>: the blue panels of the classic file managers</figcaption></figure>
     </div>
   </div>
 </section>
@@ -390,5 +427,16 @@ docker logs -f api 2&gt;&amp;1 | fasttail -</pre>
     <a href="https://github.com/matteobaccan/FastTail/issues">Issues</a>
   </div>
 </footer>
+<script>
+document.querySelectorAll('.themes-switch button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var tui = b.dataset.show === 'tui';
+    document.getElementById('theme-grid').classList.toggle('tui', tui);
+    document.querySelectorAll('.themes-switch button').forEach(function (o) {
+      o.setAttribute('aria-pressed', String(o === b));
+    });
+  });
+});
+</script>
 </body>
 </html>
