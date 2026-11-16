@@ -13,8 +13,12 @@
   <p><a href="https://matteobaccan.github.io/FastTail/"><strong>matteobaccan.github.io/FastTail</strong></a></p>
 
   <p>
-    <img src="assets/screenshots/fasttail_main_view.png" alt="FastTail Main Interface" width="850" />
+    <img src="assets/screenshots/gui-timeline-kept.png" alt="FastTail window: an application log with three kept searches, each with its own lane over the timeline" width="850" />
   </p>
+  <p>
+    <img src="assets/screenshots/tui-split-search.png" alt="FastTail terminal interface: two logs side by side with a search" width="850" />
+  </p>
+  <p><em>The window and the terminal interface (<code>fasttail-tui</code>). More screenshots, themes included, on the <a href="https://matteobaccan.github.io/FastTail/#tour">site</a>.</em></p>
 </div>
 
 > **Contributing: please send specs, not code.** If you want to contribute, open an issue with
