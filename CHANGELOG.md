@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-11-25
+
+### Changed
+
+- **Dependencies.** `zip` 9.8.2, `notify` 9.0.0 (final release, was 9.0.0-rc.9),
+  `sysinfo` 0.40.4, `regex` 1.13.2, `toml` 1.2.2, `smallvec` 1.16.6, and the lockfile
+  updates that come with them (`libc`, `regex-automata`, `regex-syntax`, `toml_parser`,
+  `windows-sys` 0.61 for the file watcher on Windows).
+- **Site and README.** The product page is rebuilt around screenshots of the window and the
+  terminal interface, with a gallery of the five themes; the README shows the current
+  screenshots.
+
 ## [0.34.0] - 2026-11-16
 
 ### Added
@@ -2561,6 +2573,7 @@ filters, highlight rules with sound alerts, search, HEX and Markdown views,
 encoding detection, localized UI and a CI pipeline that publishes Windows,
 Linux and macOS builds on every `v*` tag.
 
+[0.34.1]: https://github.com/matteobaccan/FastTail/compare/v0.34.0...v0.34.1
 [0.34.0]: https://github.com/matteobaccan/FastTail/compare/v0.33.1...v0.34.0
 [0.33.1]: https://github.com/matteobaccan/FastTail/compare/v0.33.0...v0.33.1
 [0.33.0]: https://github.com/matteobaccan/FastTail/compare/v0.32.0...v0.33.0
